@@ -6732,6 +6732,21 @@ function twoArrayDeclarationsRefusal(typeName ByteArray, member ByteArray, roste
 	return "`{spelling}` {SurfaceMemberNoun} '{String.from(member)}' — this value's type is {receiversOwn}, and '{String.from(member)}' is declared on {theOther}. Declaring an `{spelling}` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides {rosterList(roster)}"
 end 'twoArrayDeclarationsRefusal'
 
+// ⭐ **WHERE A SIZED CONTAINER'S COUNT COMES FROM, WRITTEN ONCE (W192 second review).** It is the premise
+// BOTH of this rung's refusals rest on, and it was spelled out inside each of them — one chance per builder
+// for one copy to be reworded alone, which is exactly the drift a shared template removes for the rosters one
+// surface over (`rosterRefusalSentence`). Named rather than inlined for `SurfaceMemberNoun`'s reason, three
+// paragraphs down.
+let SizedContainersCountComesFromItsType = "a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record"
+
+// ⭐ **AND WHY THE GROWABLE RECORD IS DIFFERENT — the other half of the shared premise.** A function rather
+// than a constant because the growable record's NAME is DISCOVERED (`arrayRecordDeclaredName`, whose reason
+// `twoArrayDeclarationsRefusal` states), so it arrives from the caller; what must not be written twice is the
+// CLAUSE, which is the half that can be reworded.
+function growableCountIsItsRecordsLength(growableName ByteArray) returns String
+	return "because an `{String.from(growableName)}`'s count IS its record's length"
+end 'growableCountIsItsRecordsLength'
+
 // ⭐⭐ **WHY THE MEMBER EXISTS ON THIS SURFACE AND STILL MAY NOT BE CALLED ON THIS RECEIVER — the third
 // refusal `rosterRefusalSentence` cannot word (W192).** The buffer roster serves `setLength`/`append`/
 // `clear`/`remove` and must go on serving them, because the GROWABLE `Array`'s own body calls three of them
@@ -6759,7 +6774,7 @@ end 'twoArrayDeclarationsRefusal'
 function sizedContainersBufferRefusal(member ByteArray, lengthWriters ByteArrayArray, growableName ByteArray) returns String
 	let spelling = String.from(member)
 	let growable = String.from(growableName)
-	return "`{String.from(ManagedMemoryTypeName)}` {SurfaceMemberNoun} '{spelling}' — this buffer is a `{String.from(VectorBuiltinBaseName)}`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. '{spelling}' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses {rosterList(lengthWriters)} and serves every other member of the surface; the growable `{growable}`'s buffer serves all of them, because an `{growable}`'s count IS its record's length"
+	return "`{String.from(ManagedMemoryTypeName)}` {SurfaceMemberNoun} '{spelling}' — this buffer is a `{String.from(VectorBuiltinBaseName)}`'s own record, and {SizedContainersCountComesFromItsType}. '{spelling}' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses {rosterList(lengthWriters)} and serves every other member of the surface; the growable `{growable}`'s buffer serves all of them, {growableCountIsItsRecordsLength(growableName)}"
 end 'sizedContainersBufferRefusal'
 
 // WHICH WAY A SIZED CONTAINER'S RECORD IS LEAVING ITS DECLARATION (W192 review) — a union rather than a
@@ -6816,7 +6831,8 @@ function sizedContainersRecordEscapeRefusal(escape SizedContainerRecordEscape, l
 		passedToACall gives "may not be passed to a call"
 		storedInDurableStorage gives "may not be stored into a container, a tuple or a field"
 	end 'door'
-	return "a `{spelling}`'s own record {leaving} — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `{String.from(ManagedMemoryTypeName)}` is equally the type of a `{String.from(SliceMethod)}` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and {rosterList(lengthWriters)} would be served on the record itself. Hand out `{String.from(SliceMethod)}(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `{String.from(growableName)}` has no such rule, because an `{String.from(growableName)}`'s count IS its record's length"
+	let growable = String.from(growableName)
+	return "a `{spelling}`'s own record {leaving} — {SizedContainersCountComesFromItsType}, and the two agree only while nothing moves the record's length. `{String.from(ManagedMemoryTypeName)}` is equally the type of a `{String.from(SliceMethod)}` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and {rosterList(lengthWriters)} would be served on the record itself. Hand out `{String.from(SliceMethod)}(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `{growable}` has no such rule, {growableCountIsItsRecordsLength(growableName)}"
 end 'sizedContainersRecordEscapeRefusal'
 
 // The noun `requireSurfaceMember` names a surface's entries by. Named rather than spelled at each arm
