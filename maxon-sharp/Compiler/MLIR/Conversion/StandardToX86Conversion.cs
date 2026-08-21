@@ -125,6 +125,36 @@ public static class StandardToX86Conversion {
       }
     }
 
+    // A variable's slot must hold the WIDEST store that reaches it. Sizing it from the first
+    // store this scan happens to meet is wrong twice over: the walk is in BLOCK-LIST order, which
+    // is not execution order, and one variable can carry stores of different widths (an `i32` from
+    // a narrow ranged initialiser, an `i64` from an ordinary add). The emitter picks its store
+    // width from the OP KIND — `StdStoreI64Op` always writes 8 (see its case below) — so a
+    // 4-byte slot under an 8-byte store overruns into the variable allocated 4 bytes lower.
+    //
+    // ⛔ **MEASURED, AND IT IS A SILENT HANG RATHER THAN A WRONG ANSWER.** `let dirBytes = 20 *
+    // (narrowRangedCall() + 1)` gave `running` a 4-byte slot at `[rbp-49]` and an 8-byte store,
+    // whose top half landed on the loop counter `pass` at `[rbp-45]`. Every iteration reset the
+    // counter, so `while pass < 2` never ended: measured 583,910 passes of a 2-pass loop with the
+    // bound reading 2 throughout. It reached a real build — `PeWriter.buildImportSection` hung the
+    // whole compiler — and no test caught it, because the corruption needs a narrow ranged type
+    // ADJACENT to a live loop counter.
+    //
+    // ⭐ **ARM64 IS THE CONTROL AND NEVER HAD THIS**: its twin scan allocates a flat 8 per variable
+    // (`StandardToARM64Conversion`), which is why only x64 miscompiled. The floor of 8 here matches
+    // it; the max-and-round keeps a >8-byte struct slot at its true size, which a flat 8 would
+    // under-allocate.
+    var varSlotBytes = new Dictionary<string, int>();
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is not IStoreOp sizeStore) continue;
+        if (!loadedVariables.Contains(sizeStore.VarName)) continue;
+        var bytes = sizeStore.StoredType.SizeInBytes;
+        if (!varSlotBytes.TryGetValue(sizeStore.VarName, out var seen) || bytes > seen)
+          varSlotBytes[sizeStore.VarName] = bytes;
+      }
+    }
+
     // Pre-scan: calculate stack frame from store ops, skipping dead stores.
     // A store is "dead" if the variable is never loaded (not in loadedVariables).
     // The stored value may have other uses — those uses keep it alive in registers
@@ -138,7 +168,12 @@ public static class StandardToX86Conversion {
           foreach (var fieldName in bulkZero.FieldNames()) {
             if (!loadedVariables.Contains(fieldName)) continue;
             if (!varOffsets.ContainsKey(fieldName)) {
-              varStackSize += 8;
+              // Ask the same table the store arm below asks. A field first SEEN by a bulk-zero used to be
+              // locked to a bare 8 here, and `varOffsets.ContainsKey` then short-circuits the store arm — so
+              // a later WIDER store to that field wrote past its slot, which is exactly the defect
+              // `VarSlotBytes` exists to close, one arm over. It floors at 8 and returns 8 for a name it has
+              // not seen, so this is byte-identical for every field that has no wider store.
+              varStackSize += VarSlotBytes(varSlotBytes, fieldName);
               varOffsets[fieldName] = -varStackSize;
             }
           }
@@ -150,7 +185,7 @@ public static class StandardToX86Conversion {
           continue;
         }
         if (!varOffsets.ContainsKey(store.VarName)) {
-          varStackSize += store.StoredType.SizeInBytes;
+          varStackSize += VarSlotBytes(varSlotBytes, store.VarName);
           varOffsets[store.VarName] = -varStackSize;
         }
       }
@@ -1358,6 +1393,21 @@ public static class StandardToX86Conversion {
       default:
         throw new InvalidOperationException($"Unknown float comparison predicate for branch: {predicate}");
     }
+  }
+
+  /// <summary>
+  /// Bytes to reserve for one variable's stack slot: the widest store that reaches it, never less
+  /// than a machine word and always a whole number of them.
+  ///
+  /// The floor of 8 is what makes the slot safe against a load or store WIDER than the declared
+  /// type — every integer lives in a 64-bit register here, and StdStoreI64Op/StdLoadI64Op move all
+  /// 8 bytes regardless of how narrow the source range was. Rounding up keeps each slot
+  /// machine-word aligned as a side effect, which is what the offsets looked like before narrow
+  /// ranged types started splitting them (-8, -9, -17, -21, -45, -49 in the measured hang).
+  /// </summary>
+  private static int VarSlotBytes(Dictionary<string, int> sizes, string varName) {
+    var bytes = sizes.TryGetValue(varName, out var s) ? s : 8;
+    return bytes <= 8 ? 8 : (bytes + 7) / 8 * 8;
   }
 
   /// <summary>
