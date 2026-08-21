@@ -1250,3 +1250,259 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:5:10: Unsupported: `Vector` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a vector's element is an integer, a bool or a float
 ```
+
+## A Sized Container's Buffer May Not Change Its Own Length (W192)
+
+⛔⛔ **`count()` ANSWERS FROM THE TYPE WHILE `get` AND THE WALK ANSWER FROM THE RECORD, AND UNTIL W192
+NOTHING DEFENDED THE INVARIANT BETWEEN THEM.** `stdlib/Vector.maxon`'s `count()` is `countof(Self)` —
+folded to a literal, no load — while `get` forwards to `managed.get` (LENGTH-bounded) and
+`createIterator` hands the raw buffer to a cursor that walks the same length. All three agree only
+while `managed.length() == countof(Self)`, which every route into the record establishes at
+construction. What was undefended is the record being reached PAST the surface: `managed` is visible
+to an `extension Vector`, and the buffer surface served the length-changing members. MEASURED on both
+compilers, byte-identical: `before=3 w0=3 after=3 walked=0 g0=-1`.
+
+⭐ **THE REFUSED SET IS THE MEASURED ONE — THE MEMBERS THAT WRITE THE RECORD'S LENGTH WORD, AND NO
+OTHERS.** Measured on a `Vector with 3 Int`'s buffer by printing `managed.length()` after each call:
+`setLength` 3 to 5, `remove` 5 to 4, `clear` 4 to 0 all move it; `grow(64)` moves CAPACITY 4 to 64 and
+leaves the length at 3; `swap`, `shiftRight` and `shiftLeft` move elements the buffer already owns and
+leave it alone. **`grow` is deliberately SERVED**: a vector whose buffer has room to spare still has
+the size its type states, and refusing it would be over-refusal — which is a wrong answer too.
+
+⚠ **NOT A MEMORY-SAFETY HOLE, WHICH IS WHY THE CURE IS HERE AND NOT ON `get`.** `setLength` is
+capacity-refused, so every slot the walk reaches is a slot the buffer really owns. A guard on `get`
+would cost a compare on every vector read in every program to defend a state the type's own surface
+cannot produce; this refusal costs nothing at runtime and closes the seam one level up, the way
+`push` is already refused on this surface.
+
+<!-- test: error.a-sized-containers-buffer-may-not-be-cleared -->
+**ENTRANCE A — the bare `managed` read inside an `extension Vector`**, which is the shape the defect
+was measured on. `managed` is not exported, so this is the shortest spelling that reaches the record.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function bust()
+		managed.clear()
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.bust()
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:11: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.a-sized-containers-buffer-may-not-be-relengthened -->
+`setLength` is the member the measurement caught moving the length furthest — `grow(64)` then
+`setLength(64)` read `count=3 walked=64 g40=0`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function stretch()
+		try managed.setLength(2) otherwise ignore
+	end 'stretch'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.stretch()
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'setLength' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'setLength' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.a-sized-containers-buffer-may-not-lose-an-element -->
+`remove` shrinks by one and slides the tail — measured 5 to 4.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function drop()
+		try managed.remove(0) otherwise ignore
+	end 'drop'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.drop()
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'remove' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'remove' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.a-sized-containers-buffer-may-not-be-appended-to -->
+⭐ **THIS CASE ALSO PRE-EMPTS A COMPILER PANIC, AND THAT IS A CONSEQUENCE OF THE REFUSAL RATHER THAN ITS
+POINT.** On the base, `managed.append(managed)` inside ANY generic container extension body — sized or
+growable — dies with `panic at LayoutDescriptor.maxon:571: primitiveTypeByteSize: a 'typeParameter's
+size is a runtime layout-descriptor read, not a compile-time constant`, through
+`parseArrayAppend -> requireAppendArg -> arrayAppendArgAdmits`. The refusal here runs AHEAD of
+`parseArrayAppend`, so the sized half of that panic becomes a sentence. **The growable half is
+untouched and is a separate row** — do not read this case as a fix for it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function double()
+		try managed.append(managed) otherwise ignore
+	end 'double'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.double()
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'append' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'append' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.the-chained-self-managed-reaches-the-same-refusal -->
+**ENTRANCE B — `self.managed`, which mints NO value to mark** and passes the surface along the dispatch
+instead (`viaManagedField`). It is a different carrier from entrance A and had to be closed separately;
+measured on the base at `count=3 len=0`, identically to A.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function bust()
+		self.managed.clear()
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.bust()
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:16: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.a-local-bound-to-the-buffer-reaches-the-same-refusal -->
+**ENTRANCE C — the buffer bound to a local first.** shv2 has no stack slots, so `m` binds to the
+surface's own `ValueId` and the value mark answers for it; the case exists because that is a PROPERTY
+of the binding rule rather than a thing this refusal arranges, and a rung that changed it would
+silently reopen the seam here.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function bust()
+		var m = managed
+		m.clear()
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.bust()
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.a-buffer-the-declaration-hands-out-reaches-the-same-refusal -->
+⛔⛔ **ENTRANCE D — THE ONE THE ROW DID NOT SEE, AND THE ONE THAT PROVES A VALUE MARK ALONE IS NOT THE
+CURE.** A `ValueId` mark dies at a function boundary; a DECLARED SPELLING does not. An extension that
+returns `ElementMemory` hands the record to any caller, where the value is freshly minted and nothing
+about it says the record is a sized container's. ⭐ **IT ARRIVES ON THE BUFFER SURFACE AND NOT THE
+ARRAY SURFACE, PROVED BY WHAT IT REFUSES RATHER THAN BY WHAT IT SERVES**: on the base, `got.push(7)`
+and `got.count()` are E2015 (both array-only — `clear` left the array roster at ARR4) while
+`got.length()`, `got.setLength(1)` and `got.clear()` are served.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function buf() returns ElementMemory
+		return managed
+	end 'buf'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	var got = v.buf()
+	got.clear()
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:6: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+```
+
+<!-- test: the-length-preserving-buffer-members-are-still-served -->
+⭐⭐ **THE OVER-REFUSAL CONTROL, AND IT IS THE HALF A REFUSAL RUNG USUALLY FORGETS.** Everything on the
+buffer surface that does NOT write the length word is still served on a sized container's buffer. Each
+call here was measured leaving `length()` at its start value: `grow` moves capacity 4 to 64, `swap` and
+the two shifts move elements the buffer already owns. Delete the length-writer list's gate and make the
+refusal blanket, and THIS case is what goes red.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function survey() returns Int
+		try managed.grow(64) otherwise ignore
+		try managed.swap(0, 1) otherwise ignore
+		try managed.shiftRight(0, 1) otherwise ignore
+		try managed.shiftLeft(0, 1) otherwise ignore
+		let e = try managed.get(0) otherwise panic("get")
+		try managed.set(1, e) otherwise ignore
+		return (managed.length() as Int) + (managed.capacity() as Int)
+	end 'survey'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.survey() as ExitCode
+end 'main'
+```
+```exitcode
+67
+```
+
+<!-- test: the-growable-arrays-buffer-still-changes-its-length -->
+⭐⭐ **THE UNDER-REACH CONTROL — THE GROWABLE `Array`'s BUFFER KEEPS ALL FOUR, and this one cannot be
+faked green, because `stdlib/Array.maxon` itself calls `managed.setLength` five times,
+`managed.remove` twice and `managed.clear` once. A refusal that reached the growable record would fail
+the STDLIB BUILD before it ever reached this case.** An `Array`'s count IS its record's length, so
+moving the length is not a disagreement there — it is the operation.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Ints = Array with Int
+
+function main() returns ExitCode
+	var a = Ints.create()
+	a.push(1)
+	a.push(2)
+	a.push(3)
+	try a.managed.setLength(2) otherwise ignore
+	try a.managed.remove(0) otherwise ignore
+	let afterRemove = a.managed.length()
+	a.managed.clear()
+	return ((afterRemove * 10) + a.managed.length()) as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
