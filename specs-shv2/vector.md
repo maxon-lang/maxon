@@ -1675,8 +1675,17 @@ error E2015: <fragment>:7:11: Unsupported: a `Vector`'s own record may not be st
 
 <!-- test: error.a-buffer-assigned-into-another-records-field-reaches-the-same-refusal -->
 **ROUTE H — THE RECORD ASSIGNED INTO A GROWABLE `Array`'s OWN `managed` FIELD.** The growable record's buffer
-carries no sized mark, so every length writer is served on it — and this one was not merely a wrong answer:
-before the refusal it compiled and the program **SEGFAULTED** (two owners of one record, one release each).
+carries no sized mark, so every length writer is served on it.
+
+⚠⚠ **THE CRASH THIS ROUTE ALSO PRODUCED IS NOT THIS RULE'S, AND SAYING SO IS THE POINT.** Before the
+refusal this program compiled and SEGFAULTED at run time, and the review first filed that as the escape's
+doing. It is not. **The same `x.managed = <a buffer>` store segfaults with NO `Vector` in the program at
+all** — coordinator-measured on this tip: `var b = Ints.create()` then `b.managed = a.managed` prints
+`b=4557430888798830399`, which is `0x3f3f3f3f3f3f3f3f`, **eight `__mm_free` poison bytes read back as a
+count**, and then exits **139**. The `managed` READ alone is clean (`let m = a.managed` gives `m=1 a=1`,
+exit 0), so the fault is the field STORE. That is a separate, pre-existing release fault filed as its own
+row; **this case refuses the ESCAPE, and the escape is a wrong answer, not the crash.** A refusal that
+claimed the crash would be taking credit for curing a bug that is still live.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
