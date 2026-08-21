@@ -308,9 +308,16 @@ end 'main'
 <!-- test: an-ordinary-generic-applied-to-a-count-answers-it -->
 ⭐ **THE COUNT IS A COORDINATE OF THE INSTANCE, NOT A PRIVILEGE OF ONE DECLARATION.** `Box` is an
 ordinary generic with no buffer and no container interface; written `Box with 3 Int` its instance
-states 3, and that is the whole of what `countof` asks. `maxon-shv2` refuses this program at the
-declaration, because without monomorphization it can only ask whether the enclosing declaration is
-the sized container it knows by name.
+states 3, and that is the whole of what `countof` asks.
+
+⚠ **`maxon-shv2` REFUSES THIS PROGRAM, BUT NOT WHERE THIS PARAGRAPH USED TO SAY** — it said *"at the
+declaration"*, and MEASURED on the same tree that is wrong: the refusal lands on the INSTANTIATION, two
+lines in, and the `countof(Self)` in the body is never reached at all. There a count in a `with` clause is
+only spellable for the sized container it knows by name (`Parser.readSizedBaseElementCount` returns
+`NoFixedSize` without consuming the literal for every other base), so `typealias Box3 = Box with 3 Int`
+is `error E2010: <fragment>:2:27: Expected 'a type' but got '3'`. The DIVERGENCE the bullet above states
+is real — shv2 cannot ask which instance a body was compiled for — but it bites one stage earlier than
+the body, and a reader sent to look for a refusal at `countof` would not find one.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Box3 = Box with 3 Int

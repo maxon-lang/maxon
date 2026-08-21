@@ -1888,12 +1888,18 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//
 	// ✅✅ **THE RESIDUE IS NOW NOTHING (W190): `create`, `count`, `get` AND `set` ARE ALL THE DECLARATION'S,
 	// AND `stdlib/Vector.maxon` IS THE WHOLE IMPLEMENTATION.** Three of the four were held by CHOICE and each
-	// choice was paid off rather than argued away — `count`'s constant fold became a `length@8` load through
-	// the declared body, and `get`/`set`'s constant-index bounds-check elision retired with them, because the
-	// proof is a fact about the CALL SITE and one shared body cannot see it (`Parser.elementAccessCallee`'s
+	// choice was paid off rather than argued away — `count`'s constant fold moved INTO the declared body
+	// rather than being lost, and `get`/`set`'s constant-index bounds-check elision retired with them, because
+	// the proof is a fact about the CALL SITE and one shared body cannot see it (`Parser.elementAccessCallee`'s
 	// grave; `specs-shv2/vector-static-index.md` keeps all eighteen cases and states what stopped being true).
 	// The fourth, `create`, was a FACT rather than a choice — its answer IS the size, the size is at the CALL
 	// — and `countof`'s hidden parameter is what let one shared body name it.
+	//
+	// ⚠ **THIS SAID `count` BECAME A `length@8` LOAD, AND STEP 3 ENDED THAT WITHIN THE SAME RUNG (corrected at
+	// review).** It was true of step 2 only. `stdlib/Vector.maxon`'s `count()` reads `countof(Self)` now, which
+	// IS the hidden count parameter, so the emitted `Vector.count` is `movRegReg r8, rdx` and the call site
+	// materializes the number as an immediate — no record read anywhere. The committed golden
+	// `specs-shv2/fragments/x64-windows/vector/count.test` is the whole body.
 	//
 	// ⚠ **THE ACCEPTED COST IS A CALL WHERE THERE WERE INLINE OPS**, on the `for … in` decision's own terms.
 	// MEASURED on one program that creates a vector, writes a slot, reads one and asks its count: **11,795 -> 12,550 bytes, +755 (+6.4%)**, both answering 44.
@@ -1905,6 +1911,12 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// the BYTES of one program: `create` 1 -> 10 (11,281 -> 11,862), `count` 44 -> 1 (12,550 -> 12,516),
 	// `get` 44 -> 3 and `set` 44 -> 3 (12,550 -> 13,062). `vector.the-members-are-functions-and-answer-to-
 	// their-static-spelling` is that control IN THE SUITE.
+	//
+	// ⚠⚠ **EVERY BYTE FIGURE IN THE TWO PARAGRAPHS ABOVE WAS TAKEN AT STEP 2, BEFORE `count()` MOVED TO
+	// `countof(Self)` (dated at review).** Step 3 added a hidden count argument to every `Vector.<member>` call
+	// and deleted a `__managed_count` call from `count`, so both arms of each pair moved; the DIRECTION and the
+	// sabotage ANSWERS still hold, the absolute sizes are a step-2 snapshot. `docs/optimization-log.md`'s W190
+	// row carries the tip's own numbers (5,802 -> 6,761 code bytes on a program using all four members).
 	//
 	// ⚠ **A USER `type Vector` STILL LOSES TO THE BUILTIN, AND THAT HALF IS `W114`'s, NOT THIS ENTRY'S.**
 	// Listing the module made the contest REACHABLE — the corpus declaration is renamed into the reserved

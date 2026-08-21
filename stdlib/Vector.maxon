@@ -35,6 +35,37 @@ public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 	/// a fourth slot the type has not got. A fixed size that can disagree with its own type is not
 	/// a fixed size. The two agree today for every vector `create()` builds, which is exactly why
 	/// the difference had to be closed by construction rather than left to a test to notice.
+	///
+	/// ⚠⚠ THE OTHER TWO READERS STILL ANSWER OUT OF THE RECORD, AND THE INVARIANT BETWEEN THEM IS
+	/// ESTABLISHED BY CONSTRUCTION BUT NOT DEFENDED (found by probing at review of W190). `get`
+	/// forwards to `managed.get`, which is LENGTH-bounded, and `createIterator` hands the raw buffer
+	/// to a cursor that walks the same length — so all three agree exactly while
+	/// `managed.length() == countof(Self)`, which every route into the record does establish:
+	/// `create()` grows then sets the length to the count, and `Vector from [...]` interns the
+	/// instance at the literal's own element count. `init(managed)` is not exported, so no program
+	/// can hand this type a buffer of its own choosing.
+	///
+	/// ⛔ WHAT IS NOT DEFENDED IS THE BUFFER BEING REACHED PAST THE SURFACE. `managed` is visible to
+	/// an `extension Vector`, and the buffer surface serves the length-changing members, so a program
+	/// can move the record out from under the type. MEASURED on both compilers, byte-identical
+	/// output, over an `extension Vector` whose `bust()` calls `managed.clear()` and whose `walk()`
+	/// runs `for e in self`, called on a `Vec3.create()`:
+	///     before=3 w0=3 after=3 walked=0 g0=-1
+	/// -- `count()` answers 3 from the type while iteration walks 0 and `get(0)` throws. The same
+	/// extension calling `try managed.grow(64)` then `try managed.setLength(64)` reads
+	/// `count=3 walked=64 g40=0 refusedSet=1`: `set` holds its bound (it is the guard below), `get`
+	/// and the walk do not. NOT a memory-safety hole -- `setLength` is refused past the capacity
+	/// (measured: `cap=4 len=3 count=3 refusedSetLength=1`), so every slot walked is a slot the
+	/// buffer really owns -- but it IS an answer disagreeing with itself.
+	///
+	/// ⭐ NEITHER `get` NOR THE WALK IS GUARDED HERE, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.
+	/// A guard on `get` would cost a compare on every vector read in every program to defend against
+	/// a state the type's own surface cannot produce -- unlike `set`'s guard, which defends a hole
+	/// (`v.set(3, ...)` on a `Vector with 3 Int`) that is reachable with no extension at all, because
+	/// the BUFFER's setter is CAPACITY-bounded. The seam closes by construction one level up instead:
+	/// refuse the length-changing buffer members on a SIZED container's buffer surface, the way
+	/// `push` is already refused there. That is a compiler rung, not a line in this file, and it is
+	/// recorded rather than smuggled in.
 	public function count() returns ElementCount
 		return countof(Self)
 	end 'count'
