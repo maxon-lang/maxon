@@ -1,10 +1,10 @@
-// Test: the-fused-append-path-agrees-with-the-value-path
+// Test: the-bare-fused-append-answers-the-same
 typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 extension Array
 	export function doubled() returns Int
-		self.managed.append(managed)
+		managed.append(managed)
 		return managed.length() as Int
 	end 'doubled'
 end 'Array'
@@ -31,16 +31,22 @@ func @Array.doubled {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
+    x64.callDirect __mm_retain
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
     x64.movRegReg rax, r12
     x64.callDirect __managed_append_opaque
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
@@ -52,7 +58,8 @@ func @Array.doubled {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

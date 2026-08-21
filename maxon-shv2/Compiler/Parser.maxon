@@ -50369,28 +50369,35 @@ export type Parser
 		// ⚠ It presents `internSynthesizedByteInstance()` — the instance `emitFieldLoad` mints the VIEW
 		// under — rather than the field's declared `ByteMemory`, so the two spellings of one field answer to
 		// one element rule. Deriving it from the declaration instead would let a value path and a record path
-		// disagree about the element, which is the drift this whole surface is built to prevent.
-		// The SYNTACTIC half is asked first because it is total and cheap; only then is the layout consulted,
-		// which needs a `try` and so cannot join a condition chain.
+		// disagree about the element, which is the drift this whole surface is built to prevent. ⭐ **AND
+		// THAT INSTANCE IS NOW TRUE OF EVERY RECEIVER THAT ARRIVES, NOT NEARLY SO** — see the gate below.
+		//
+		// ⛔⛔ **THE RECORD HALF IS GATED ON THE RECORD ACTUALLY BEING A BYTE RECORD, AND UNTIL W194 NOTHING
+		// HELD THE TWO HALVES TOGETHER.** `fusedManagedMemberTakesTheRecord`'s census is argued entry by entry
+		// against a **String** record — `append` is justified there by *"reads both records' `@24` and ABORTS
+		// on a mismatch, which two String records pass (1 == 1)"* — while the LAYOUT question
+		// (`conformsToBuiltinManagedWrapper`) admits `Array` and `Vector` too, whose `@24` is the element's
+		// stride and whose element may be an OPAQUE TYPE PARAMETER. The whitelist was keyed on the MEMBER and
+		// its safety on the RECORD. **MEASURED**: a bare `managed.append(managed)` inside an `extension Array`
+		// arrived at `ProgramSignatures.arrayAppendArgAdmits` with the synthesized BYTE instance for a
+		// receiver, so `containerElementIsOpaque` answered false, `sameTrivialArrayShape` asked
+		// `arrayElementSize` of the ARGUMENT, and `primitiveTypeByteSize` PANICKED on the type parameter —
+		// while `self.managed.append(…)`, the same operation on the same receiver, compiled and ran to 4
+		// (`managed-memory-methods.md`'s three W194 cases pin the subject, the value-path control and the
+		// neutrality of `length`/`byteAt` through both routes).
+		//
+		// ⇒ A wrapper whose record is not a byte record falls through to the `managed`-as-a-value door below,
+		// which carries the receiver's OWN instance and its own buffer mark, and costs the one
+		// `__mm_incref`/`__managed_decref` pair this door exists to save. **The sized container's
+		// length-writer refusal moved with it**: it is answered off the per-value mark
+		// `bufferSurfaceOfDeclaredRecord` writes, which is why `refuseLengthChangeOnASizedContainersBuffer`
+		// is no longer called from here — see its header for the census of its callers.
+		//
+		// The SYNTACTIC half is asked first because it is total and cheap; only then is the declaration
+		// consulted, which needs a `try` and so cannot join a condition chain.
 		if binding.isSelfField and self.memberCallFollows(self.pos + 1) and fusedManagedMemberTakesTheRecord(self.tokenAt(self.pos + 2).value) 'aCalledManagedFieldMember'
-			let servesTheRecord = try self.selfFieldIsInlineManaged(binding, baseTok: baseTok)
+			let servesTheRecord = try self.selfFieldIsTheEnclosingByteRecord(binding, baseTok: baseTok)
 			if servesTheRecord 'inlineManagedServesTheRecord'
-				// ⭐⭐ **W3 — THE ONE ROUTE ONTO A SIZED CONTAINER'S BUFFER THAT NEITHER CARRIER CAN SEE, AND
-				// `append` TAKES IT.** This door mints no value, so there is nothing to mark, and it presents
-				// `internSynthesizedByteInstance()` rather than the vector's own instance, so there is no
-				// `giid` to test either — the receiver handed on is the enclosing record itself. Only the
-				// ENCLOSING DECLARATION answers here, and it is asked by NAME because that is the form
-				// `enclosingType` holds (`SignatureIndex.declarationIsASizedContainerRecordNamed`, which
-				// exists for exactly this shape of caller).
-				//
-				// ⚠ **IT MUST RUN AHEAD OF `dispatchArrayMethod`, NOT INSIDE IT.** `append`'s arm reaches
-				// `parseArrayAppend` → `requireAppendArg` → `arrayAppendArgAdmits`, which asks an opaque
-				// element for a compile-time size and PANICS (`primitiveTypeByteSize: a `typeParameter`'s
-				// size is a runtime layout-descriptor read`). Refusing here turns the sized half of that into
-				// a sentence. ⛔ The GROWABLE half is untouched and is its own defect — `extension Array`
-				// reaches the identical panic, measured — so nothing about this line may be read as fixing it.
-				try self.refuseLengthChangeOnASizedContainersBuffer(self.tokenAt(self.pos + 2), onASizedContainersRecord: self.signatures.declarationIsASizedContainerRecordNamed(self.enclosingType))
-
 				let record = try self.selfFieldValueBinding(binding, baseTok: baseTok, value: try self.requireReceiverValue(baseTok))
 
 				self.advance()
@@ -50406,13 +50413,41 @@ export type Parser
 		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(box, tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: subjectName, owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
 
-	// Is this self-field alias the INLINE `managed` of a fused byte-record wrapper — the one field whose
-	// address IS the receiver's? The same two questions `emitFieldLoad`'s own arm asks, in one place because
-	// the record door above and the view mint below must agree about which field they are talking about.
+	// Is this self-field alias the INLINE `managed` of a fused wrapper — the one field whose address IS the
+	// receiver's? The same two questions `emitFieldLoad`'s own arm asks, in one place because the record door
+	// above and the view mint below must agree about which field they are talking about.
+	//
+	// ⚠ **IT ADMITS ALL FOUR CONFORMERS — `String`, `Character`, `Array` and `Vector` — AND THAT IS THE
+	// ANSWER `receiverOwnerMask` WANTS**, whose E3019 column is about a write reaching the CALLER's record and
+	// is true of every one of them. It is NOT the answer the byte-record door wants; that one composes this
+	// with the name test below.
 	function selfFieldIsInlineManaged(binding VarInfo, baseTok Token) returns bool throws ParseError
 		let layout = try self.enclosingLayout(baseTok)
 		return layout.conformsToBuiltinManagedWrapper() and binding.fieldIndex == layout.inlineManagedFieldIndex()
 	end 'selfFieldIsInlineManaged'
+
+	// ⭐⭐ **IS THIS SELF-FIELD ALIAS THE INLINE `managed` OF A WRAPPER WHOSE RECORD IS THE COMPILER'S OWN
+	// BYTE RECORD (W194)?** — the admission test of the fused record door, and the ONE question
+	// `fusedManagedMemberTakesTheRecord`'s census is actually argued against. The wider predicate above says
+	// *"this field's address is the receiver's"*, which is true of an `Array`'s 48-byte buffer record just as
+	// it is of a `String`'s 56-byte one; only this one adds *"and the seven-slot record that census assumes"*.
+	//
+	// ⚠ **THE NAME IS THE WHOLE OF THE SECOND HALF, AND IT IS EXACT** — `byteRecordTagOfTypeName` is the one
+	// table saying which type names denote a byte record, and both are on
+	// `TypeResolution.isCompilerOwnedTypeName`, so no user declaration can bind either
+	// (`requireTypeNameNotCompilerOwned`). A conformer of any other name is a wrapper the compiler mints no
+	// byte record for, whatever its fields say.
+	//
+	// ⚠ It reads `enclosingType` rather than the layout's name so the cheap total test can run before
+	// `enclosingLayout`'s lookup — the same rank order the door above states for its syntactic half. The two
+	// spellings are one fact: `enclosingLayout` resolves the layout FROM that name.
+	function selfFieldIsTheEnclosingByteRecord(binding VarInfo, baseTok Token) returns bool throws ParseError
+		if byteRecordTagOfTypeName(self.enclosingType) == ValueTypeTag.unresolved 'notOneOfTheTwoByteRecords'
+			return false
+		end 'notOneOfTheTwoByteRecords'
+
+		return try self.selfFieldIsInlineManaged(binding, baseTok: baseTok)
+	end 'selfFieldIsTheEnclosingByteRecord'
 
 	// ⭐⭐ **E3077's METHOD-CALL DOOR: THE STORAGE THE RECEIVER DENOTES, AND EVERY NAME IN THE ARGUMENT
 	// LIST.** Called at the `.`, before anything is consumed, so the whole call is still ahead of the cursor.
@@ -57497,20 +57532,21 @@ export type Parser
 	// comes from — an `Array`'s record, a `Vector`'s type — and `sizedContainersBufferRefusal` carries the
 	// argument in full.
 	//
-	// ⭐⭐ **IT IS CALLED FROM TWO SITES BECAUSE THE `append` ROUTE REACHES NO VALUE, AND ONE OF THEM PASSES
-	// THE ANSWER OFF THE ENCLOSING DECLARATION INSTEAD OF OFF A MARK.** `fusedManagedMemberTakesTheRecord`
-	// lists `append`, so a bare `managed.append(x)` inside an `extension Vector` never reaches this
-	// dispatcher's value at all — `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` hands over the
-	// RECEIVER's own record under the synthesized BYTE instance, where there is neither a value mark nor the
-	// vector's `giid`. That site therefore asks `declarationIsASizedContainerRecordNamed` of `enclosingType`
-	// — the BY-NAME form, which exists for exactly that shape of caller — and calls THIS function, so the two
-	// routes are one refusal and one sentence rather than two spellings of it. See `sizedContainerBufferValues`
-	// for the carrier the other route reads.
+	// ⭐⭐ **IT HAD A SECOND CALLER AT `dispatchMethodOnBinding`'s FUSED RECORD DOOR, AND W194 MADE THAT DOOR
+	// UNABLE TO SEE A SIZED CONTAINER AT ALL.** `fusedManagedMemberTakesTheRecord` lists `append`, so a bare
+	// `managed.append(x)` inside an `extension Vector` used to bypass this dispatcher's value entirely — the
+	// receiver's own record was handed over under the synthesized BYTE instance, where there was neither a
+	// value mark nor the vector's `giid`, so that site had to ask
+	// `declarationIsASizedContainerRecordNamed` of `enclosingType` instead. **The byte-record gate W194 put on
+	// that door admits only `String` and `Character`**, for which
+	// `declarationIsASizedContainerRecordNamed` is false by construction — so the second call could no longer
+	// throw, and a refusal that cannot fire is not a defence. The bare spelling now mints its surface through
+	// `bufferSurfaceOfDeclaredRecord` like every other, and arrives here carrying the same per-value mark:
+	// one route, one carrier, one sentence.
 	//
-	// ⚠ **THE RECEIVER ANSWER IS A PARAMETER RATHER THAN BEING DERIVED HERE, and that is what lets the two
-	// sites share the throw**: the value-mark site holds a `ValueId` and the fused site holds a declaration
-	// name, and neither can compute the other's evidence. What must not vary is the SENTENCE, which is why
-	// only the answer crosses the boundary.
+	// ⚠ **THE RECEIVER ANSWER IS STILL A PARAMETER RATHER THAN BEING DERIVED HERE.** The evidence lives on
+	// the VALUE (`sizedContainerBufferValues`) and this function's subject is the MEMBER, so keeping the two
+	// apart is what let the door move without the sentence moving with it.
 	//
 	// ⚠ It asks the length-writer list only AFTER the receiver test, so the roster it validates against is
 	// built once per member call inside a sized container's body and never in any other program.
@@ -57867,8 +57903,10 @@ export type Parser
 		// local a program binds either to — and, since the mark has to survive being re-minted, every
 		// PROMOTION (`carryDeclaredSurface`) and every MERGE (`propagateBufferSurfaceToPhi`).
 		//
-		// ⚠ **THE ONE SPELLING THAT MINTS NO VALUE IS ANSWERED ELSEWHERE**: a fused `managed.append(…)` at
-		// `dispatchMethodOnBinding`, off the ENCLOSING DECLARATION. ⛔ A `returns ElementMemory` used to be
+		// ⚠ **THE ONE SPELLING THAT MINTED NO VALUE NOW MINTS ONE (W194)**: a bare `managed.append(…)` used to
+		// take `dispatchMethodOnBinding`'s fused record door and be answered there off the ENCLOSING
+		// DECLARATION; that door is gated on the record being a BYTE record now, so a `Vector`'s comes through
+		// here and wears the mark like every other. ⛔ A `returns ElementMemory` used to be
 		// listed here as a third carrier answered at `emitCall` off the callee's name — that carrier is GONE
 		// and its removal is the first review's correction: a `slice` has the identical declared type, so the
 		// declaration cannot tell the record from a view of it. What replaced it is the ESCAPE rule
@@ -57906,6 +57944,16 @@ export type Parser
 	// `@48` is written for a BYTE record and must never be handed a plain 48-byte buffer record, where that
 	// offset is off the end.
 	//
+	// ⛔⛔ **EVERY LINE OF THE CENSUS BELOW IS AN ARGUMENT ABOUT A *BYTE* RECORD, AND FOR TWO WAVES NOTHING
+	// SAID SO (W194).** The list is keyed on the MEMBER; the door that consults it was keyed on
+	// `StructLayout.conformsToBuiltinManagedWrapper`, which admits `Array` and `Vector` as well — whose `@24`
+	// is the element's stride rather than 1, whose element may be an opaque type parameter, and which have no
+	// `@48` at all. Two of the six entries below are wrong on such a record (`append`'s `1 == 1` and
+	// `makeCharFromBytes`'s seventh slot), and the whitelist could not know, because the record was somebody
+	// else's question. **The door now asks `Parser.selfFieldIsTheEnclosingByteRecord`**, so the receiver this
+	// list is consulted about is the record its census describes — and the entries stay member-shaped, which
+	// is the only shape a name can be tested in at the token before the `(`.
+	//
 	// ⚠⚠ **IT IS A WHITELIST AND MUST STAY ONE, BECAUSE THE DEFAULT HAS TO BE THE CONSERVATIVE ANSWER.**
 	// A member absent from this list reaches its entry through `emitFieldLoad`'s `managed`-as-a-value door
 	// instead, which since W157 hands over the same record with an `__mm_incref`/`__managed_decref` pair
@@ -57923,15 +57971,22 @@ export type Parser
 	//     is listed so the two doors read one list.
 	//   • `append(other)` -> `__managed_append` — reads both records' `@24` and ABORTS on a mismatch, which two
 	//     String records pass (1 == 1); `__managed_move_elems` takes raw buffers and a stride as ARGUMENTS.
+	//     ⛔ **THIS IS THE ENTRY THE MISSING RECORD TEST BIT (W194).** It is the only one whose PARSE-TIME
+	//     admission consults the receiver's instance (`ProgramSignatures.arrayAppendArgAdmits`), so on an
+	//     `Array` record the synthesized byte instance made `containerElementIsOpaque` answer false about an
+	//     opaque element and `primitiveTypeByteSize` took the compiler down. The other five read only the
+	//     RECORD, which is why the defect showed up as one panicking member rather than five wrong answers.
 	//   • `toCString()` -> `__mm_to_cstring` — reads `@8` and `@0`. Not even `@24`.
 	//   • `makeCharFromBytes(pos, len)` -> `__char_at` — reads `@48`, the flag, and stores it into the
 	//     Character it builds (`GraphemeRuntime.buildCharAt`). ⛔⛔ **IT IS THE ONE ENTRY THAT READS THE
 	//     SEVENTH SLOT, SO IT IS THE ONE THAT MUST BE GIVEN A BYTE RECORD — and this membership is what
 	//     supplies one.** Handed a plain 48-byte buffer record it would read eight bytes PAST the record's
 	//     end; before W157 the same mis-service merely read `TrivialDestructor` as the flag, a conservative
-	//     wrong answer. Nothing reaches that door today: `makeCharFromBytes` is refused to user code outright
-	//     (`requireStdlibOnlyBufferMethod`), and its single `stdlib/` caller is `String.makeCharFromBytes`'s
-	//     `managed.makeCharFromBytes(…)` — an implicit-`self` fused read that arrives HERE.
+	//     wrong answer. Its single `stdlib/` caller is `String.makeCharFromBytes`'s
+	//     `managed.makeCharFromBytes(…)` — an implicit-`self` fused read that arrives HERE. ⭐ **AND SINCE
+	//     W194 THAT IS A STRUCTURAL FACT RATHER THAN A REACHABILITY ONE**: the door above admits only a byte
+	//     record, and `dispatchArrayMethod`'s own guard asks the RECEIVER's tag (`tagIsByteRecord`) rather
+	//     than the route it came by, so no other spelling can supply a 48-byte record either.
 	//
 	// ⭐ **`slice(start, end)` MAY NOW, AND IS DELIBERATELY STILL ABSENT.** Its exclusion was `@40`:
 	// `__managed_slice` -> `emitRecordView` LOADS that slot and STORES it into the fresh view, so a String's
@@ -58237,7 +58292,16 @@ export type Parser
 			// routes here with the String's own record. So what could fire it is an edit to a LISTED corpus
 			// module, and there is no degraded answer available: the alternative to stopping is minting a
 			// Character out of whatever byte followed the record.
-			if not viaManagedField 'notAByteRecord'
+			//
+			// ⛔⛔ **IT ASKS THE RECEIVER'S TAG, NOT THE ROUTE THE SOURCE WROTE — AND IT READ `viaManagedField`
+			// UNTIL W194, WHICH IS A DIFFERENT QUESTION.** That flag means *"the source spelled `managed`"*,
+			// and BOTH doors that set it could set it over a 48-byte buffer record: the fused door admitted
+			// `Array` and `Vector` before W194's gate, and the `.managed` re-entry below still turns any array
+			// receiver into one. A `stdlib/` line reading `a.managed.makeCharFromBytes(0, 1)` therefore passed
+			// a guard whose whole subject is the seventh slot. `tagIsByteRecord` is the representation
+			// question itself — the one `TypeRules` keeps apart from `tagIsText` for exactly this class of
+			// mistake — so the guard is now true of what the record IS rather than of how it was reached.
+			if not tagIsByteRecord(self.tagOf(arr)) 'notAByteRecord'
 				panic("dispatchArrayMethod: `{String.from(ManagedMemoryMakeCharFromBytesMethod)}` reached a receiver that is NOT a fused byte-record wrapper's own `{String.from(InlineManagedFieldName)}` — `__char_at` loads `singleByteGraphemes` at {StringSingleByteGraphemesOffset}, which is one slot PAST a {ManagedRecordBytes}-byte buffer record. Reach it through a `{String.from(StringConformerName)}`/`{String.from(CharacterConformerName)}` receiver, or give `__char_at` the flag another way")
 			end 'notAByteRecord'
 
@@ -62157,7 +62221,7 @@ export type Parser
 		// `bufferSurfaceOf`'s header measures; what this door hands back is counted.
 		//
 		// ⭐⭐⭐ **THIS USED TO BE A HEAP ALLOCATION, AND WHAT KEPT IT OFF THE HOT PATH WAS THE DOOR ABOVE
-		// IT.** A `managed` read that is immediately CALLED never arrives here at all —
+		// IT.** A BYTE RECORD's `managed` read that is immediately CALLED never arrives here at all —
 		// `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` hands the receiver's own record to the
 		// buffer entry (W49 wave 7 cure). What still reaches this line is `managed` used as a VALUE: bound,
 		// returned (`addressableBytes()`'s whole body), passed as an argument, or stored into a `String{…}`
@@ -62165,6 +62229,11 @@ export type Parser
 		// own `ValueId` uncounted is the double free `bufferSurfaceOf`'s header measures. ⭐ **W157 MADE THE
 		// REMAINING COST A REFCOUNT PAIR RATHER THAN A 48-BYTE RECORD**: a String record now IS a buffer
 		// record, so there is nothing left to mint — the whole of `__str_bytes_view` is an `__mm_incref`.
+		//
+		// ⚠ **AND SINCE W194 A CALLED `managed` REACHES HERE TOO, WHENEVER THE WRAPPER IS NOT A BYTE RECORD**
+		// — an `Array`'s or a `Vector`'s, whose census the fused door's member whitelist was never argued
+		// against. For those the arm below is the surface flip, so the refcount pair is the whole of the
+		// cost the fast path was saving them, and it buys the receiver's own instance and its buffer mark.
 		//
 		// ⛔ **WHY THAT SPLIT EXISTS, MEASURED — IT WAS 86.7x.** `String.byteLength`'s corpus body is
 		// `return managed.length()`, and before the cure that ONE expression emitted `__str_bytes_view` (a

@@ -35,32 +35,43 @@ func @Array.survey {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
+    x64.callDirect __mm_retain
     x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_count
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r13
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_count
     x64.movRegReg r14, r8
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_byte_at
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
   tryerr#2:
-    x64.movRegImm32 r13, 255
+    x64.movRegImm32 r15, 255
     x64.jmp trycont#3
   tryok#1:
-    x64.movRegReg r13, r8
+    x64.movRegReg r15, r8
     x64.jmp trycont#3
   trycont#3:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_byte_at
@@ -74,13 +85,14 @@ func @Array.survey {
     x64.movRegReg rax, r8
     x64.jmp trycont#6
   trycont#6:
-    x64.imulRegRegImm32 rcx, r12, 1000
+    x64.imulRegRegImm32 rcx, r13, 1000
     x64.imulRegRegImm32 rdx, r14, 100
     x64.leaRegRegReg rcx, rcx, rdx
-    x64.imulRegRegImm32 rdx, r13, 10
+    x64.imulRegRegImm32 rdx, r15, 10
     x64.leaRegRegReg rcx, rcx, rdx
     x64.leaRegRegReg r8, rcx, rax
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
