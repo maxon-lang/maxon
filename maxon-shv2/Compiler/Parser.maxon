@@ -2169,6 +2169,13 @@ let sharedEmptyBufferSurfaceSlots = ValueSlotSurfaceMap.create()
 // pattern, for its reason and with its invariant.
 let sharedEmptyBufferSurfaceElements = ValueMarkSet.create()
 
+// The module-level shared EMPTY SIZED-CONTAINER buffer mark set (W192) — `sharedEmptyBufferSurfaceValues`'s
+// pattern, for its reason and with its invariant. Its own anchor and not one of the three above, because
+// the `is` identity test that decides whether a column has been minted yet reads as a claim about WHICH
+// column it is. Empty for every program that never names a sized container's buffer, which is all of them
+// bar `stdlib/Vector.maxon` and an `extension Vector`.
+let sharedEmptySizedContainerBufferValues = ValueMarkSet.create()
+
 // The module-level shared EMPTY iteration-lock stack (P1.8 slice A), held as the initial value of
 // `iterationLockedBindings` AND as the COW anchor its per-function reset points at —
 // `sharedEmptyInstanceAliasMap`'s pattern, for its reason and with its invariant. It is not a micro-
@@ -5843,6 +5850,55 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	return names
 end 'bufferSurfaceMemberNames'
 
+// ⭐⭐ **WHICH BUFFER MEMBERS WRITE THE RECORD'S `length@8` (W192)** — the sub-roster a SIZED container's
+// buffer refuses, because a vector's size is a coordinate of its TYPE and a member that moves the record's
+// length leaves `count()` and `get` answering different numbers. `sizedContainersBufferRefusal` joins this
+// very list into its sentence, so **THE LIST IS THE CLAIM**: a member joins the refusal by joining this list
+// and nothing else moves.
+//
+// ⭐ **IT IS MEASURED AND THEN READ, NEVER REMEMBERED.** On a `Vector with 3 Int`'s buffer, printing
+// `managed.length()` after each call: `setLength` 3→5, `remove` 5→4, `clear` 4→0; `grow(64)` moves CAPACITY
+// 4→64 and leaves the length at 3, and `swap`/`shiftRight`/`shiftLeft` move elements the buffer already owns.
+// `append` could not be probed at all — it PANICKED the compiler on the base — and was settled by reading
+// every `emitStoreField` at `BufferOwnership.ManagedRecordLengthOffset` in `Runtime/ManagedMemoryRuntime.maxon`
+// instead: `setLength`, `clear`, `remove` and `append` (its trivial and managed arms both, and the opaque arm
+// delegates to those two). **Those four and no others** — `set` is capacity-bounded and stores no length,
+// `setByte` can move capacity through the COW detach but never length, and `slice`'s every length store is
+// into the freshly minted VIEW.
+//
+// ⛔⛔ **IT IS NOT `arrayMethodMutatesReceiver`'s BUFFER CLAUSE, AND SHARING THAT ONE WOULD BE AN
+// OVER-REFUSAL.** That clause is `{setLength, setByte, grow, swap, shiftRight, shiftLeft, remove, clear}` —
+// the strictly wider question *"does this member write the record?"* — and four of its entries leave the
+// length exactly where it was. A shared coordinate is not a shared gate:
+// `vector.the-length-preserving-buffer-members-are-still-served` is the case that goes red the moment this
+// list widens to it.
+//
+// ⚠ **EVERY ENTRY MUST ALSO BE ON THE BUFFER SURFACE, AND THE CHECK IS HERE RATHER THAN IN A REVIEWER'S
+// HEAD.** A length-writer the surface does not serve is a drifted list: the refusal would name a member the
+// roster refuses one gate earlier, so the sentence would describe a program nobody can write. It PANICS for
+// `rosterDriftMessage`'s reason one surface over — the pairing cannot be verified at install time, so the
+// check sits at the one moment it is observable.
+//
+// ⚠ **THE SURFACE ARRIVES AS AN ARGUMENT RATHER THAN BEING REBUILT HERE**: this list means nothing except
+// relative to the roster it must be a subset of, and its one caller already holds that roster in the
+// per-file cached form (`surfaceMemberNames`). Calling `bufferSurfaceMemberNames()` here instead would mint
+// all nineteen names again at every buffer-member call inside a sized container's body.
+function bufferLengthWritingMemberNames(surface ByteArrayArray) returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(ManagedMemorySetLengthMethod)
+	names.push(AppendMethod)
+	names.push(ClearMethod)
+	names.push(RemoveMethod)
+
+	for name in names 'eachLengthWriter'
+		if not namesInclude(surface, name: name) 'theSurfaceDoesNotServeIt'
+			panic("bufferLengthWritingMemberNames: '{String.from(name)}' writes the buffer record's length but is not on `bufferSurfaceMemberNames` ({rosterList(surface)}), so no receiver can reach it and `sizedContainersBufferRefusal` would name a member the roster gate has already refused. EITHER put the name back on the surface, or take it off this list")
+		end 'theSurfaceDoesNotServeIt'
+	end 'eachLengthWriter'
+
+	return names
+end 'bufferLengthWritingMemberNames'
+
 // ⭐⭐ **WHICH MEMBERS A `__ManagedMemoryCursor` HAS — the buffer roster's twin, one receiver over.** It
 // carries the identical obligations: the entries are the very constants `dispatchCursorMethod`'s arms match
 // on, the ORDER is the message's order because the message is joined from this list, and the fall-through is
@@ -6675,6 +6731,36 @@ function twoArrayDeclarationsRefusal(typeName ByteArray, member ByteArray, roste
 	let theOther = librarys if receiverIsTheProgramsOwn else programsOwn
 	return "`{spelling}` {SurfaceMemberNoun} '{String.from(member)}' — this value's type is {receiversOwn}, and '{String.from(member)}' is declared on {theOther}. Declaring an `{spelling}` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides {rosterList(roster)}"
 end 'twoArrayDeclarationsRefusal'
+
+// ⭐⭐ **WHY THE MEMBER EXISTS ON THIS SURFACE AND STILL MAY NOT BE CALLED ON THIS RECEIVER — the third
+// refusal `rosterRefusalSentence` cannot word (W192).** The buffer roster serves `setLength`/`append`/
+// `clear`/`remove` and must go on serving them, because the GROWABLE `Array`'s own body calls three of them
+// on its own record. What the roster cannot say is that the same surface hangs off two records whose COUNT
+// is answered from two different places: an `Array`'s count IS its record's `length@8`, while a sized
+// container's is a coordinate of its TYPE (`countof(Self)`, folded to a literal). So a length write is the
+// operation on one receiver and a self-contradiction on the other, and only a sentence holding both halves
+// tells the reader which one they are standing on.
+//
+// ⚠ It states the RULE and not only the fact, for `twoArrayDeclarationsRefusal`'s reason: a bare *"this
+// member is not served here"* about a member the surface plainly has reads as a compiler defect.
+//
+// ⚠ **THE SUB-LIST IS JOINED FROM `bufferLengthWritingMemberNames` THROUGH THE SHARED `rosterList`**, so the
+// sentence cannot come to hold a second opinion of which members are refused — the same property
+// `rosterRefusalSentence` has against the roster it renders, and the reason its hand-written `are not built`
+// tail was deleted.
+//
+// ⚠ **ONLY THE GROWABLE NAME IS A PARAMETER, AND THE ASYMMETRY IS REAL RATHER THAN AN OVERSIGHT.** Which
+// name the corpus declares its ARRAY record under is DISCOVERED (`arrayRecordDeclaredName`), so a constant
+// here would be a second, unchecked opinion of it — `twoArrayDeclarationsRefusal`'s stated reason. The sized
+// container's name is not discovered: it is the constant this whole rule is keyed on
+// (`SignatureIndex.VectorBuiltinBaseName`), and routing it through a parameter would dress one caller's
+// literal up as a lookup. ⚠ Both are quoted PRE-CONTEST for that refusal's other stated reason: this compile's
+// mint is a spelling `requireUnreservedName` forbids the reader from writing.
+function sizedContainersBufferRefusal(member ByteArray, lengthWriters ByteArrayArray, growableName ByteArray) returns String
+	let spelling = String.from(member)
+	let growable = String.from(growableName)
+	return "`{String.from(ManagedMemoryTypeName)}` {SurfaceMemberNoun} '{spelling}' — this buffer is a `{String.from(VectorBuiltinBaseName)}`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. '{spelling}' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses {rosterList(lengthWriters)} and serves every other member of the surface; the growable `{growable}`'s buffer serves all of them, because an `{growable}`'s count IS its record's length"
+end 'sizedContainersBufferRefusal'
 
 // The noun `requireSurfaceMember` names a surface's entries by. Named rather than spelled at each arm
 // because every surface shares it: a literal repeated once per surface is one chance per surface for one of
@@ -10986,22 +11072,53 @@ export type Parser
 	// element-yielding array member comes out of — one of two since the corpus took `last`/`pop`/`remove`
 	// (that function's ⛔⛔ header block).
 	//
-	// ⚠⚠ **WHY THESE ARE THREE CARRIERS AND NOT ONE `Map with (ValueId, DeclaredSurface)` — REVIEWED, A2m.**
-	// They are exactly the three fields of one `DeclaredSurfaceNode` (bit 0, bit 1, the slot count), so one
-	// keyed carrier COULD express all three, and the earlier reason recorded here — "a reserved slot index of
-	// the mask" — described the flat 62-bit MASK that A2m replaced, not the tree that shipped. The reason that
-	// actually holds is the WRITE side: two writers legitimately fire on ONE value, and across three carriers
-	// that is additive for free. `parseArraySlice` calls `markBufferSurface(sliced)` and then
+	// ⚠⚠ **WHY THESE ARE SEPARATE CARRIERS AND NOT ONE `Map with (ValueId, DeclaredSurface)` — REVIEWED, A2m.**
+	// The first three are exactly the three fields of one `DeclaredSurfaceNode` (bit 0, bit 1, the slot
+	// count), so one keyed carrier COULD express all three, and the earlier reason recorded here — "a reserved
+	// slot index of the mask" — described the flat 62-bit MASK that A2m replaced, not the tree that shipped.
+	// The reason that actually holds is the WRITE side: two writers legitimately fire on ONE value, and across
+	// separate carriers that is additive for free. `parseArraySlice` calls `markBufferSurface(sliced)` and then
 	// `inheritArrayElementSurface(sliced, …)`; `emitFieldLoad` calls `markDeclaredSurface` twice on one
 	// result, once for the struct field's own declaration and once for the tuple slot's. Merged, an `upsert`
 	// would silently overwrite the first — so a merge needs a COMBINE rule, whose "both trees carry slots"
 	// arm is a panic on a path nothing reaches, on the parser's hot path, to save five save/restore lines.
-	// ⇒ Three carriers, and the obligation instead: **they describe ONE value space, so every site that
-	// resets, saves or restores one resets, saves and restores all three** — `parseFunction`'s per-function
-	// reset and `parseClosure`'s save/swap/restore are the two, and both do.
+	//
+	// ⇒ Separate carriers, and the obligation instead: **they describe ONE value space, so every site that
+	// resets, saves or restores one resets, saves and restores ALL of them.**
+	//
+	// ⛔⛔ **THAT OBLIGATION USED TO NAME ITS SITES HERE AS *"`parseFunction`'s per-function reset and
+	// `parseClosure`'s save/swap/restore are the two, and both do"* — AND THE CENSUS WAS WRONG (W192).** There
+	// are FOUR sites and SIX line-groups, and `parseClosureExpression`'s own save block already says so in the
+	// paragraph headed *"AND THE ROOT CAUSE IS THAT THIS LIST IS WRITTEN THREE TIMES"*. A count stated in two
+	// places with nothing checking either copy is this project's signature bug, so it is stated here ONCE, as
+	// the list a carrier's author has to walk:
+	//
+	//     `Parser.create` initializer      · `parseFunction` reset          · `parseDefaultHelperBody` reset
+	//     `parseClosureExpression` SAVE    · its RESET                      · its RESTORE
+	//
+	// plus the promotion copy in `carryDeclaredSurface` — which is not a reset at all but carries every
+	// column across a `promoteBorrowedToOwned`, and is the site a reader counting resets walks past.
 	//
 	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
 	var bufferSurfaceElements as ValueMarkSet
+	// ⭐⭐ **WHOSE RECORD IS A *SIZED* CONTAINER'S OWN (W192)** — `bufferSurfaceValues` narrowed to the one
+	// receiver on which a length-changing buffer member is a wrong answer rather than an operation. A
+	// `Vector`'s size is a coordinate of its TYPE (`count()` is `countof(Self)`, folded to a literal), while
+	// `get` and the walk answer out of the record's `length@8`; the three agree only while the record's length
+	// is the type's count, and `setLength`/`append`/`clear`/`remove` are exactly the members that move it.
+	// Read at `dispatchArrayMethod` beside `valueIsBufferSurface`, which is already a two-carrier answer to
+	// the neighbouring question.
+	//
+	// ⚠ **IT IS A SEPARATE COLUMN AND NOT A FOURTH BIT OF `DeclaredSurface`, WHICH IS WHY IT IS NOT ON THE
+	// TRIPLE ABOVE.** That surface's slot and element columns describe what a value CONTAINS; this describes
+	// whose record the value IS, which has no per-slot and no per-element reading — a tuple of two sized
+	// containers' buffers is not a thing any declaration can spell.
+	//
+	// ⚠ **EVERY VALUE IN IT IS ALSO IN `bufferSurfaceValues`, AND THE WRITERS OWE THAT** — see
+	// `markSizedContainerBuffer`. The refusal reads this column alone for exactly that reason.
+	//
+	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
+	var sizedContainerBufferValues as ValueMarkSet
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THE BARE IDENTIFIER `parseVariableReference` LAST RESOLVED**,
 	// empty when that binding may be written through. A scalar hand-off from the ONE resolution that can
 	// answer it to the ONE consumer that needs it (`bareArgImmutableName`, at a call argument), because a
@@ -11773,6 +11890,7 @@ export type Parser
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
 			bufferSurfaceElements: sharedEmptyBufferSurfaceElements,
+			sizedContainerBufferValues: sharedEmptySizedContainerBufferValues,
 			lastBareBindingImmutableName: EmptySourceText,
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
@@ -22565,6 +22683,7 @@ export type Parser
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
 		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
+		self.sizedContainerBufferValues = sharedEmptySizedContainerBufferValues
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias name
 		// and the PARAMETER alias names are fixed by the DECLARED signature and known here, before the
 		// body is parsed and before `resolveTypes` erases either; the three site lists fill as the body
@@ -24001,6 +24120,7 @@ export type Parser
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
 		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
+		self.sizedContainerBufferValues = sharedEmptySizedContainerBufferValues
 		self.inMatchArmBody = false
 		self.rangeCheckSites = RangeCheckSiteArray.create()
 		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
@@ -24256,7 +24376,29 @@ export type Parser
 			// was read at the declaration (`parseFunctionParameters`) and this is the site that BINDS the value it
 			// named, so this is where the fact becomes the marks `dispatchArrayMethod` and `emitFieldLoad` read.
 			// Parameter `i` owns ValueId `i`, which is what makes the column's index the value's.
-			self.markDeclaredSurface(i as ValueId, declared: try paramSurfaces.get(i) otherwise panic("bindParameters: paramSurfaces.get OOB at {i} — a parameter's columns are built in lockstep"))
+			let paramSurface = try paramSurfaces.get(i) otherwise panic("bindParameters: paramSurfaces.get OOB at {i} — a parameter's columns are built in lockstep")
+			self.markDeclaredSurface(i as ValueId, declared: paramSurface)
+			// ⭐⭐ **AND WHOSE BUFFER A SIZED CONTAINER'S OWN METHOD IS HANDED (W192).** A parameter spelled
+			// `ElementMemory` inside `Vector`'s declaration or an `extension Vector` IS that vector's record —
+			// `Vector.ElementMemory` cannot be named from anywhere else (`E3011`) and `v.managed` cannot be
+			// read from anywhere else (`E3014`), so the only value such a parameter can receive is a sized
+			// container's storage. `emitCall`'s twin one door over covers the RETURN direction; this covers the
+			// ARGUMENT one, and without it the whole refusal is one helper method away from being laundered.
+			//
+			// ⛔⛔ **MEASURED AS A LIVE WRONG ANSWER, found by probing the cure rather than the defect.** With
+			// every other route closed, an `extension Vector` whose `bust()` is `wipe(managed)` and whose
+			// `wipe(m ElementMemory)` is `m.clear()` compiled, ran, and printed **`count=3 walked=0`** — the
+			// exact disagreement of the rung's own reproducer, arriving through the one carrier a per-value
+			// mark cannot follow: an argument hand-off mints a fresh `ValueId` in the callee's SSA space, so
+			// the fact has to be re-derived from the DECLARATION, which is what this line does.
+			//
+			// ⚠ It admits `stdlib/Vector.maxon`'s own `static function init(managed ElementMemory)`, and that
+			// is CORRECT rather than tolerated: the buffer the array-literal path hands `init` is about to
+			// become the record of an instance whose count the literal already fixed, so a length write there
+			// would be the same disagreement one moment earlier. Nothing in the corpus writes one.
+			if surfaceIsBuffer(paramSurface) and self.enclosingDeclarationIsTheSizedContainer() 'aSizedContainersOwnStorage'
+				self.markSizedContainerBuffer(i as ValueId)
+			end 'aSizedContainersOwnStorage'
 			// ⭐ **AND THE OTHER FACT THE DECLARATION HELD AND THE TYPE COLUMNS CANNOT (W57)** — a parameter
 			// declared at a PARAMETERIZED interface type carries `interfaceRef(Base)` and nothing about what
 			// `Base`'s associated positions were bound to, which is what a dispatch on it needs to type an
@@ -33269,15 +33411,23 @@ export type Parser
 	// roster exactly inverted. A promotion says "the same value under a new name"; an adoption says "a
 	// different view of the same record" — two operations that share an incref and must not share this.
 	//
-	// It carries all THREE carriers, because they describe one value space and a promotion preserves all
-	// three: what the value DENOTES, what its tuple SLOTS denote and what its array ELEMENTS denote are
-	// unchanged by taking a second owner (or, for a String, a copy). `markDeclaredSurface` cannot serve
-	// here — it reads a DECLARATION, and a promotion has none to read; the source value is the only thing
-	// that knows.
+	// It carries EVERY carrier, because they describe one value space and a promotion preserves all of them:
+	// what the value DENOTES, whose record it IS (W192), what its tuple SLOTS denote and what its array
+	// ELEMENTS denote are unchanged by taking a second owner (or, for a String, a copy).
+	// `markDeclaredSurface` cannot serve here — it reads a DECLARATION, and a promotion has none to read; the
+	// source value is the only thing that knows.
 	function carryDeclaredSurface(promoted ValueId, from ValueId)
 		if self.valueIsBufferSurface(from) 'sourceDenotesTheBuffer'
 			self.markBufferSurface(promoted)
 		end 'sourceDenotesTheBuffer'
+
+		// ⚠ ONE ARM PER CARRIER, not an `else if` off the arm above, even though the sized answer implies the
+		// buffer one: chaining them would make one column's carry conditional on another's, which is the
+		// coupling the "every site handles ALL of them" obligation exists to keep out. The redundant insert
+		// costs a hash on a set the promotion has already detached.
+		if self.valueIsASizedContainersBuffer(from) 'sourceIsASizedContainersOwnRecord'
+			self.markSizedContainerBuffer(promoted)
+		end 'sourceIsASizedContainersOwnRecord'
 
 		if self.valueElementIsBufferSurface(from) 'sourceHoldsBuffers'
 			self.markBufferSurfaceElements(promoted)
@@ -50083,6 +50233,22 @@ export type Parser
 		if binding.isSelfField and self.memberCallFollows(self.pos + 1) and fusedManagedMemberTakesTheRecord(self.tokenAt(self.pos + 2).value) 'aCalledManagedFieldMember'
 			let servesTheRecord = try self.selfFieldIsInlineManaged(binding, baseTok: baseTok)
 			if servesTheRecord 'inlineManagedServesTheRecord'
+				// ⭐⭐ **W3 — THE ONE ROUTE ONTO A SIZED CONTAINER'S BUFFER THAT NEITHER CARRIER CAN SEE, AND
+				// `append` TAKES IT.** This door mints no value, so there is nothing to mark, and it presents
+				// `internSynthesizedByteInstance()` rather than the vector's own instance, so there is no
+				// `giid` to test either — the receiver handed on is the enclosing record itself. Only the
+				// ENCLOSING DECLARATION answers here, and it is asked by NAME because that is the form
+				// `enclosingType` holds (`SignatureIndex.declarationIsASizedContainerRecordNamed`, which
+				// exists for exactly this shape of caller).
+				//
+				// ⚠ **IT MUST RUN AHEAD OF `dispatchArrayMethod`, NOT INSIDE IT.** `append`'s arm reaches
+				// `parseArrayAppend` → `requireAppendArg` → `arrayAppendArgAdmits`, which asks an opaque
+				// element for a compile-time size and PANICS (`primitiveTypeByteSize: a `typeParameter`'s
+				// size is a runtime layout-descriptor read`). Refusing here turns the sized half of that into
+				// a sentence. ⛔ The GROWABLE half is untouched and is its own defect — `extension Array`
+				// reaches the identical panic, measured — so nothing about this line may be read as fixing it.
+				try self.refuseLengthChangeOnASizedContainersBuffer(self.tokenAt(self.pos + 2), onASizedContainersRecord: self.enclosingDeclarationIsTheSizedContainer())
+
 				let record = try self.selfFieldValueBinding(binding, baseTok: baseTok, value: try self.requireReceiverValue(baseTok))
 
 				self.advance()
@@ -57182,6 +57348,74 @@ export type Parser
 		end 'eachArrayDeclaration'
 	end 'refuseArrayMemberTheOtherDeclarationCarries'
 
+	// ⭐ **IS THIS CALLEE A MEMBER OF THE SIZED CONTAINER'S OWN DECLARATION? (W192)** — `emitCall`'s evidence,
+	// and the composition already shipped twice in this tree (`SignatureIndex.instanceCreateIsDeclared`,
+	// `memberBelongsToTheCorpus`'s `aSizedContainerSurface` arm): the owner half of a `Type.method` name,
+	// asked of the predicate that answers for the CORPUS's declaration alone.
+	//
+	// ⚠ It composes the two in the ALLOCATION-FREE direction — `isQualifiedUnderTypeName` compares the
+	// callee's prefix in place rather than materializing a joined name — because `emitCall` runs at every
+	// call site in every compile. Its guard there is asked first and is a bit test.
+	//
+	// ⚠ **THE SECOND CONJUNCT IS NOT REDUNDANT: THE NAME ALONE IS NOT THE DECLARATION.** Under a user
+	// `type Vector` the corpus's record is keyed under this compile's MINT, so the bare name is the USER's
+	// type — whose record is shaped identically to the field (same sole `managed`, same
+	// `__ManagedMemory with Element`) and is deliberately NOT this rule's subject. Asking
+	// `declarationIsASizedContainerRecordNamed` of the owner is what says so; see its own header for the
+	// wrong answer `isVectorBaseName` produced here.
+	function calleeIsDeclaredOnTheSizedContainer(callee ByteArray) returns bool
+		let owner = self.signatures.stdlibShadowRenameOf(VectorBuiltinBaseName)
+		return isQualifiedUnderTypeName(callee, typeName: owner) and self.signatures.declarationIsASizedContainerRecordNamed(owner)
+	end 'calleeIsDeclaredOnTheSizedContainer'
+
+	// ⭐ **IS THE CURSOR INSIDE THE SIZED CONTAINER'S OWN DECLARATION? (W192)** — the twin of the predicate
+	// above for the two sites whose subject is the PARSE POSITION rather than a callee name
+	// (`dispatchMethodOnBinding`'s fused `managed` door and `bindParameters`). Written once because the two
+	// ask the identical question of the identical field, and a second spelling of it is how the door that
+	// refuses and the door that marks would come to disagree about one declaration.
+	//
+	// It is total: at file scope `enclosingType` is EMPTY, which no declaration is named, so `structOf`
+	// answers `undeclared` and this answers false without a special arm.
+	function enclosingDeclarationIsTheSizedContainer() returns bool
+		return self.signatures.declarationIsASizedContainerRecordNamed(self.enclosingType)
+	end 'enclosingDeclarationIsTheSizedContainer'
+
+	// ⭐⭐ **A SIZED CONTAINER'S BUFFER MAY NOT BE HANDED A MEMBER THAT MOVES ITS LENGTH (W192).** The sibling
+	// above's twin, placed at the same point in `dispatchArrayMethod` and for the same stated reason: it is
+	// still the question *"does this member exist ON THIS RECEIVER?"*, answered more precisely for the one
+	// receiver that can tell two answers apart. Here the two answers are the two places a container's COUNT
+	// comes from — an `Array`'s record, a `Vector`'s type — and `sizedContainersBufferRefusal` carries the
+	// argument in full.
+	//
+	// ⭐⭐ **IT IS CALLED FROM TWO SITES BECAUSE THE `append` ROUTE REACHES NO VALUE, AND ONE OF THEM PASSES
+	// THE ANSWER OFF THE ENCLOSING DECLARATION INSTEAD OF OFF A MARK.** `fusedManagedMemberTakesTheRecord`
+	// lists `append`, so a bare `managed.append(x)` inside an `extension Vector` never reaches this
+	// dispatcher's value at all — `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` hands over the
+	// RECEIVER's own record under the synthesized BYTE instance, where there is neither a value mark nor the
+	// vector's `giid`. That site therefore asks `enclosingDeclarationIsTheSizedContainer` and calls THIS
+	// function, so the two routes are one refusal and one sentence rather than two spellings of it. See
+	// `sizedContainerBufferValues` for the carrier the other route reads.
+	//
+	// ⚠ **THE RECEIVER ANSWER IS A PARAMETER RATHER THAN BEING DERIVED HERE, and that is what lets the two
+	// sites share the throw**: the value-mark site holds a `ValueId` and the fused site holds a declaration
+	// name, and neither can compute the other's evidence. What must not vary is the SENTENCE, which is why
+	// only the answer crosses the boundary.
+	//
+	// ⚠ It asks the length-writer list only AFTER the receiver test, so the roster it validates against is
+	// built once per member call inside a sized container's body and never in any other program.
+	function refuseLengthChangeOnASizedContainersBuffer(methodTok Token, onASizedContainersRecord bool) throws ParseError
+		if not onASizedContainersRecord 'anOrdinaryBuffer'
+			return
+		end 'anOrdinaryBuffer'
+
+		let lengthWriters = bufferLengthWritingMemberNames(self.surfaceMemberNames(MemberSurface.buffer))
+		if not namesInclude(lengthWriters, name: methodTok.value) 'itLeavesTheRecordsLengthAlone'
+			return
+		end 'itLeavesTheRecordsLengthAlone'
+
+		throw ParseError.unsupported(sizedContainersBufferRefusal(methodTok.value, lengthWriters: lengthWriters, growableName: self.signatures.arrayRecordDeclaredName()), line: methodTok.line, column: methodTok.column)
+	end 'refuseLengthChangeOnASizedContainersBuffer'
+
 	// ⭐⭐⭐ **DOES THE CORPUS DECLARE THIS MEMBER? — THE DOOR THAT MAKES A LISTED `stdlib/String.maxon` MEAN
 	// SOMETHING (W17).** A roster is shv2's statement of what its SYNTHESIZED surface serves; it was the whole
 	// answer while the corpus was unreadable, and it stopped being one the moment `type String` and
@@ -57442,6 +57676,21 @@ export type Parser
 			return surface
 		end 'theBufferIsItsOwnInstance'
 
+		// ⭐⭐ **W1 — THE SIZED FACT IS WRITTEN ON THE VALUE HERE BECAUSE THE VERY NEXT LINE ERASES IT FROM THE
+		// TYPE.** The retype below is what makes `stdlib/Vector.maxon:105`'s `VectorIter.create(managed)`
+		// type-check, and it is load-bearing (W189) — but it leaves the value spelled `Array with Element`, so
+		// `genericInstanceBaseName(giid)` at the dispatch answers `Array` and no `giid` test downstream can
+		// tell a vector's record from a growable array's. This `if` is the last place that knows, and it
+		// already asked the question one line up.
+		//
+		// ⇒ It carries the answer on a per-VALUE mark instead, which reaches both spellings that mint one:
+		// the bare `managed` inside an `extension Vector` (`dispatchMethodOnBinding` → `baseBoxOf` →
+		// `parseSelfFieldRead`) and the explicit `self.managed` (`parseExplicitSelfFieldRead`), plus every
+		// local a program binds either to. The two spellings that mint NO value are answered elsewhere: a
+		// fused `managed.append(…)` at `dispatchMethodOnBinding` off the enclosing declaration, and a
+		// declared `returns ElementMemory` at `emitCall` off the callee's name.
+		self.markSizedContainerBuffer(surface)
+
 		let element = self.signatures.containerElementType(self.valueNameId(box))
 		self.retypeValue(surface, valueType: MaxonType.genericInstance(self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: element)))
 		return surface
@@ -57577,6 +57826,13 @@ export type Parser
 		// still the question *"does this member exist?"*, answered more precisely for the one compile that can
 		// tell two answers apart.
 		try self.refuseArrayMemberTheOtherDeclarationCarries(giid, methodTok: methodTok, isManagedMemory: isManagedMemory)
+		// ⭐⭐ **AND THE SECOND THING THE ROSTER CANNOT SAY: THIS BUFFER'S COUNT IS ANSWERED BY ITS TYPE
+		// (W192).** Placed beside the sibling above and for its reason — still *"does this member exist on
+		// THIS receiver?"*, answered more precisely for the one receiver that can tell two answers apart. The
+		// evidence is the per-value mark and NOT the `giid`, which `bufferSurfaceOfDeclaredRecord`'s retype
+		// has already spelled `Array with Element` by the time a value reaches here; the mark implies the
+		// buffer answer, so `isManagedMemory` is not a second conjunct (`markSizedContainerBuffer`).
+		try self.refuseLengthChangeOnASizedContainersBuffer(methodTok, onASizedContainersRecord: self.valueIsASizedContainersBuffer(arr))
 		// ⭐ **THE NOUN IS THE RECEIVER'S OWN DECLARATION, AND THIS IS THE ONLY DOOR THAT KNOWS IT (ARRO).** A
 		// buffer is the compiler's own `__ManagedMemory`; an array is whichever `BuiltinArrayLiteral` conformer
 		// the value's instance was built from, which since ARR5b may be a `Bag` the program declared.
@@ -62742,6 +62998,25 @@ export type Parser
 		self.bufferSurfaceElements.insert(value)
 	end 'markBufferSurfaceElements'
 
+	// ⭐ **THE ONE WRITER OF `sizedContainerBufferValues` (W192)** — `markBufferSurface`'s twin for the one
+	// receiver whose record the TYPE also describes, on the same discipline and against the same anchor
+	// hazard.
+	//
+	// ⚠⚠ **IT TAKES THE BUFFER MARK TOO, AND THAT IS THE INVARIANT RATHER THAN A CONVENIENCE.** The refusal
+	// reads THIS column alone (`dispatchArrayMethod`), so a value marked sized and not marked as a buffer
+	// would be refused a length change while being served the `Array` roster one line down — two surfaces
+	// answering about one value, which is the disagreement the buffer mark exists to prevent. Every caller
+	// today already holds a value the buffer mark is written on — each of them marks it through
+	// `markDeclaredSurface` or through `bufferSurfaceOf` a line earlier — so this line adds nothing to any
+	// path that exists; it is what makes the invariant a property of the DOOR instead of a rule each caller
+	// remembers, which is the same argument `privateValueMarkSet` makes one level down. ⚠ **DELIBERATELY NOT
+	// A CALL-SITE LIST**: `markBufferSurface`'s header records that exact sentence being wrong five times.
+	function markSizedContainerBuffer(value ValueId)
+		self.markBufferSurface(value)
+		self.sizedContainerBufferValues = privateValueMarkSet(self.sizedContainerBufferValues, anchor: sharedEmptySizedContainerBufferValues)
+		self.sizedContainerBufferValues.insert(value)
+	end 'markSizedContainerBuffer'
+
 	// ⭐⭐ **THE ONE DECISION: A TYPE SPELLED `__ManagedMemory` DENOTES THE BUFFER (A2j).** ⚖ **USER RULING,
 	// 2026-07-31** — D11b's ("the buffer's legitimate surface is EXACTLY what its roster names",
 	// `bufferSurfaceMemberNames`) applied to the spelling that NAMES the buffer. The alternative — a declared
@@ -63030,6 +63305,14 @@ export type Parser
 	function valueIsBufferSurface(value ValueId) returns bool
 		return self.bufferSurfaceValues.contains(value)
 	end 'valueIsBufferSurface'
+
+	// Does `value` denote a SIZED container's own record (W192)? The read side of `markSizedContainerBuffer`,
+	// asked once per array-method dispatch beside the line above and on the same terms: `Set.contains` on the
+	// shared zero-capacity set returns before it hashes anything, so a program that names no sized container's
+	// buffer does not pay to ask.
+	function valueIsASizedContainersBuffer(value ValueId) returns bool
+		return self.sizedContainerBufferValues.contains(value)
+	end 'valueIsASizedContainersBuffer'
 
 	// ⭐ **THE SURFACE OF ELEMENT `slot` OF THE TUPLE `value` — A WHOLE SURFACE, NOT A BIT (A2m).** The read
 	// side of `markBufferSurfaceSlots`, asked at `emitFieldLoad`, which every `p.0`, every destructured name
@@ -63351,6 +63634,7 @@ export type Parser
 		let savedBufferSurfaceValues = self.bufferSurfaceValues
 		let savedBufferSurfaceSlots = self.bufferSurfaceSlots
 		let savedBufferSurfaceElements = self.bufferSurfaceElements
+		let savedSizedContainerBufferValues = self.sizedContainerBufferValues
 		let savedCaptureNames = self.captureNames
 		let savedCaptureValues = self.captureValues
 		let savedCaptureTypes = self.captureTypes
@@ -63481,8 +63765,17 @@ export type Parser
 		self.enclosingFunctionMayReturnAGlobalAlias = false
 		// ⭐ **NOT CLEARED — HANDED THE SET THE BODY IS ABOUT TO CAPTURE OUT OF.** The line above and this one
 		// are the two halves of the closure boundary: the RETURN fact cannot cross it (no static callee), and
-		// the per-value marks cannot cross it BY ID (another SSA space) — but a captured binding names the
-		// same record, so the marks cross by BINDING instead, at `emitCaptureRead`.
+		// the per-value marks cannot cross it BY ID (another SSA space) — but the IMMUTABLE-GLOBAL mark is
+		// carried across by BINDING instead, at `emitCaptureRead`, which is what this line supplies the set
+		// for.
+		//
+		// ⛔ **THAT USED TO READ "the marks cross by BINDING instead", PLURAL, AND IT IS FALSE OF EVERY OTHER
+		// MARK (W192).** `emitCaptureRead` carries `carryImmutableGlobalMark` and NOTHING else, so the
+		// buffer-surface family — `bufferSurfaceValues` and its siblings, reset three lines down — does not
+		// cross at all: a captured buffer loses its mark and its members meet the ordinary unknown-`Array`-
+		// method E2015. That is a REFUSAL and not a hole, so the sentence was the only thing wrong; it is
+		// corrected rather than the behaviour, because a generalisation stated about "the marks" is exactly
+		// what the next carrier's author would rely on.
 		self.capturedImmutableGlobalReads = savedImmutableGlobalReads
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
@@ -63492,6 +63785,7 @@ export type Parser
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
 		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
+		self.sizedContainerBufferValues = sharedEmptySizedContainerBufferValues
 		self.captureNames = ByteArrayArray.create()
 		self.captureValues = ValueIdArray.create()
 		self.captureTypes = MaxonTypeArray.create()
@@ -63701,6 +63995,7 @@ export type Parser
 		self.bufferSurfaceValues = savedBufferSurfaceValues
 		self.bufferSurfaceSlots = savedBufferSurfaceSlots
 		self.bufferSurfaceElements = savedBufferSurfaceElements
+		self.sizedContainerBufferValues = savedSizedContainerBufferValues
 		self.captureNames = savedCaptureNames
 		self.captureValues = savedCaptureValues
 		self.captureTypes = savedCaptureTypes
@@ -67458,7 +67753,21 @@ export type Parser
 		// rather than inside the mint chain because the mint's tail (`mintOwnedCallResult`) is handed a
 		// `MaxonType` and not the callee name — and the name is the only thing that still knows the spelling,
 		// the alias having erased it. Every direct, method and static call funnels through this one line.
-		self.markDeclaredSurface(result, declared: self.signatures.declaredReturnSurface(callee))
+		let declaredReturn = self.signatures.declaredReturnSurface(callee)
+		self.markDeclaredSurface(result, declared: declaredReturn)
+		// ⭐⭐ **W2 — AND WHOSE BUFFER IT IS, WHEN THE DECLARATION HANDS ONE OUT (W192).** A `ValueId` mark
+		// dies at a function boundary; a DECLARED SPELLING does not. An `extension Vector` whose member
+		// `returns ElementMemory` gives its caller a freshly minted value on the buffer surface with nothing
+		// about it saying the record's length is the type's count — which is `markBufferSurface`'s own
+		// recorded lesson (*"a DECLARED spelling is an entrance a sweep over value producers structurally
+		// cannot see"*) arriving one narrowing later. Answered from the callee's NAME, which is the only
+		// thing this line still holds and the same evidence the mark above uses.
+		//
+		// ⚡ Gated on the RETURN being the buffer at all, which is a bit test and false for very nearly every
+		// call in every program, before the name is looked at.
+		if surfaceIsBuffer(declaredReturn) and self.calleeIsDeclaredOnTheSizedContainer(callee) 'aSizedContainersBufferHandedOut'
+			self.markSizedContainerBuffer(result)
+		end 'aSizedContainersBufferHandedOut'
 		// ⭐⭐ **A CALLEE THAT MAY HAND BACK A `let` GLOBAL'S RECORD MARKS ITS RESULT (W117), HERE FOR THE LINE
 		// ABOVE'S REASON**: this is the one place every direct, method and static call passes with the callee's
 		// NAME still in hand, which is what the whole-program answer is keyed by. From here the value is
