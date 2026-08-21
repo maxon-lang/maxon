@@ -4444,6 +4444,15 @@ spellings carry the receiver's real instance. `arrayAppendArgAdmits` then asks
 `sameTrivialArrayShape`, and asks `arrayElementSize` of the ARGUMENT, whose element is the extension's
 opaque type parameter. `trivialElementSlot` → `primitiveTypeByteSize(typeParameter)` → panic.
 
+⭐⭐ **THE CURE IS THAT THE FAST PATH STOPS LYING ABOUT THE RECEIVER, NOT THAT IT TURNS ANYONE AWAY.** The
+door now hands each wrapper its OWN buffer-surface instance — the compiler's synthesized byte buffer for a
+`String` or a `Character`, the array's own instance for an `Array`, and `Array with T` built from the
+receiver's element for a `Vector` — which is the same answer the value door retypes its minted surface to,
+so the two spellings of one field genuinely *"answer to one element rule"* instead of merely claiming to.
+⛔ W194 first tried the other cure, ROUTING every non-byte record to the value door. It was correct and it
+cost **1.65–1.9x on `Array.hash`**: that body is not compiler-served, it loops `byteAt` once per byte, and
+every iteration then paid a refcount pair. Same three members fixed; nothing emitted.
+
 ⭐⭐ **THE LIST'S OWN CENSUS SAYS WHY, AND IT IS THIS PROJECT'S SIGNATURE BUG.** The header justifies the
 `append` entry with *"reads both records' `@24` and ABORTS on a mismatch, **which two String records pass
 (1 == 1)**"*. That argument is about a **byte record**. But the gate that selects the fast path is
@@ -4485,14 +4494,22 @@ The identical body written `self.managed.setByte(…)` — the value path, carry
 did not compile at all on that same baseline. **One member, two spellings, a leak and a stop**: exactly
 the asymmetry the three cases below pin for `append`, one member over and one severity worse.
 
-⚠ **THE GATE CLOSES THE LEAK AND LEAVES A PANIC WHERE A DIAGNOSTIC BELONGS, WHICH IS A SEPARATE ROW.**
-Both spellings now take the value path and both reach `panic at LayoutDescriptor.maxon:571:
-primitiveTypeByteSize: a 'typeParameter's size is a runtime layout-descriptor read` — the abort the
-`self.` spelling already had, via E3118's stride test rather than via `arrayAppendArgAdmits`. That is
-the right direction (silent corruption became a loud stop) and it is not the end: `setByte` on a generic
-container's buffer needs a positioned refusal, or a deferral of the stride question to instantiation, and
-choosing between those needs a spec of its own. **This rung changed which door `setByte` walks through,
-never what the door on the other side asks** — so no case here may be read as fixing it.
+✅ **THE REAL INSTANCE CLOSES THE LEAK, AND WHAT REPLACES IT DEPENDS ON WHETHER THE ELEMENT IS KNOWN.**
+Measured on the reworked tip, all three spellings of that write:
+
+    a.managed.setByte(0, 65)   on `Array with String`, concrete   E3110 at 6:16 — "a managed element is
+                                                                  stored as a POINTER … writing them
+                                                                  corrupts it"
+    managed.setByte(0, 65)     bare, inside `extension Array`     panic … primitiveTypeByteSize
+    self.managed.setByte(…)    inside `extension Array`           the SAME panic, same frames below
+
+⚠ **A BARE FUSED `setByte` ON A NON-BYTE RECORD IS ALWAYS THE OPAQUE CASE**, because the only bodies that
+can spell it are the declaration's own and its extensions, where the element IS the type parameter — so
+E3110 is unreachable from that door by construction, and a generic body meets the panic instead. **That
+panic is PRE-EXISTING on the value path and present identically on the merge base**, which is why
+replacing it with a positioned refusal — or with a deferral of the stride question to instantiation — is a
+row of its own that needs a spec to choose between them. **This rung changed which ELEMENT the door on
+the other side is asked about, never what it asks** — so no case here may be read as fixing that.
 
 <!-- test: the-fused-append-path-agrees-with-the-value-path -->
 **THE SUBJECT.** The bare, fused spelling must answer what the value spelling answers. Two elements

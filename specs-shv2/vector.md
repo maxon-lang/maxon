@@ -1354,15 +1354,18 @@ size is a runtime layout-descriptor read, not a compile-time constant`, through
 ⭐ **THE GROWABLE HALF WAS A SEPARATE ROW AND W194 CLOSED IT** — this paragraph said *"untouched … do not
 read this case as a fix for it"*, which was true for exactly one rung. `extension Array`'s
 `managed.append(managed)` now COMPILES AND RUNS (`managed-memory-methods/the-bare-fused-append-answers-the-same`,
-exit 4), because the fused record door is gated on the record actually being a byte record and the bare
-spelling no longer arrives under a synthesized BYTE instance. Nothing about THIS case changed: a sized
-container still refuses `append` on its own record, and it now does so through the SAME per-value mark
-every other entrance uses rather than through a second call the fused door used to make. Measured at the
-W194 review against that rung's own RED baseline, four reachable `Vector` spellings compiled on BOTH
-binaries — `try managed.append(…)`, the bare statement form, `self.managed.append(…)`, and the buffer
-bound to a local first — each answering the byte-identical `E2015` at its own byte-identical
-line:column. (A fifth, `v.managed.append(…)` from outside the declaration, is `E3014` on both: `managed`
-is not exported.)
+exit 4), because the fused record door hands the receiver its OWN buffer instance instead of the
+synthesized BYTE one — so `containerElementIsOpaque` answers about the element the receiver actually has.
+⚠ **NOTHING ABOUT THIS CASE CHANGED, AND THE ROUTE IT TAKES DID NOT EITHER.** The bare spelling still
+reaches the fused door, still mints no value, and is still refused there off the ENCLOSING DECLARATION —
+`declarationIsASizedContainerRecordNamed(enclosingType)`, the by-name form that exists for exactly a
+caller with no value to mark. It could not be otherwise: the instance the door now hands over is spelled
+`Array with Element` for a vector too (W189's load-bearing retype), so a `giid` test cannot tell a
+vector's record from a growable array's. Measured at the W194 review against that rung's own RED
+baseline, four reachable `Vector` spellings compiled on BOTH binaries — `try managed.append(…)`, the bare
+statement form, `self.managed.append(…)`, and the buffer bound to a local first — each answering the
+byte-identical `E2015` at its own byte-identical line:column. (A fifth, `v.managed.append(…)` from
+outside the declaration, is `E3014` on both: `managed` is not exported.)
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
