@@ -6763,12 +6763,13 @@ function sizedContainersBufferRefusal(member ByteArray, lengthWriters ByteArrayA
 end 'sizedContainersBufferRefusal'
 
 // WHICH WAY A SIZED CONTAINER'S RECORD IS LEAVING ITS DECLARATION (W192 review) — a union rather than a
-// clause each caller passes as text, because the two doors would then be two spellings of one sentence's
+// clause each caller passes as text, because the three doors would then be three spellings of one sentence's
 // variable half, free to drift while each stays "shared". `BorrowLaunderDoor` and `FunctionTypeDoor` are the
 // same shape one concern over.
 union SizedContainerRecordEscape
 	returned
-	passedToAnotherMember
+	passedToACall
+	storedInDurableStorage
 end 'SizedContainerRecordEscape'
 
 // ⭐⭐⭐ **A SIZED CONTAINER'S RECORD MAY NOT LEAVE ITS DECLARATION — the refusal that replaced two
@@ -6785,9 +6786,23 @@ end 'SizedContainerRecordEscape'
 // one operation, two answers, decided by whether it crossed a parameter.
 //
 // ⇒ **THE FACT IS CARRIED, NEVER INFERRED.** The mark exists only on the value `bufferSurfaceOfDeclaredRecord`
-// minted, and the two doors below are exactly where a marked value can still be seen leaving. A slice carries
-// no mark, so it returns and passes freely and its `clear()` is served — which is the whole point.
+// minted, and the three doors below are exactly where a marked value can still be seen leaving. A slice carries
+// no mark, so it returns, passes and is stored freely and its `clear()` is served — which is the whole point.
 //
+// ⛔⛔ **AND "LEAVING" IS THREE DOORS AND NOT TWO, WHICH IS THE SECOND CORRECTION THIS SENTENCE CARRIES
+// (W192 second review).** The first build refused the RETURN and refused an argument to *another member of
+// the sized container*, and left three routes MEASURED LIVE, every one of them printing the rung's own
+// reproducer `len=0 count=3` on a `Vector with 3 Int`:
+//   • an element of a container — `Array with ElementMemory`, `b.push(managed)` then `b.get(0).clear()`;
+//   • a TUPLE slot — `let t = (managed, 1)` then `t.0.clear()`;
+//   • an argument to ANY OTHER callee — a user's own `Box uses T` at `Box with ElementMemory`,
+//     `BufBox.create(managed)` then `b.get().clear()`.
+// ⇒ The scope on the callee is GONE and a durable STORE is a door of its own. The reason the narrow version
+// looked complete is that the value's own type is the giveaway: `bufferSurfaceOfDeclaredRecord` retypes the
+// record to `Array with Element`, so any route that drops the value MARK hands back a fully working GROWABLE
+// array over the vector's record — the corpus's `stdlib/Array.maxon` members answer on it, not merely the
+// buffer roster's. There is no third thing to test for; the only defence is that the marked value never
+// reaches a place a mark cannot follow it to.
 // ⚠ **IT NAMES THE SLICE AS THE CURE, because the reader's next question is "then how do I hand anything
 // out?"** and the answer is a real one: a view is its own record, its length is its own, and nothing about it
 // can contradict the type.
@@ -6798,7 +6813,8 @@ function sizedContainersRecordEscapeRefusal(escape SizedContainerRecordEscape, l
 	let spelling = String.from(VectorBuiltinBaseName)
 	let leaving = match escape 'door'
 		returned gives "may not be RETURNED from it"
-		passedToAnotherMember gives "may not be passed to another `{spelling}` member"
+		passedToACall gives "may not be passed to a call"
+		storedInDurableStorage gives "may not be stored into a container, a tuple or a field"
 	end 'door'
 	return "a `{spelling}`'s own record {leaving} — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `{String.from(ManagedMemoryTypeName)}` is equally the type of a `{String.from(SliceMethod)}` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and {rosterList(lengthWriters)} would be served on the record itself. Hand out `{String.from(SliceMethod)}(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `{String.from(growableName)}` has no such rule, because an `{String.from(growableName)}`'s count IS its record's length"
 end 'sizedContainersRecordEscapeRefusal'
@@ -30497,6 +30513,13 @@ export type Parser
 		// is what keeps `otherwise 0` eliding while `otherwise <wider var>` no longer does.
 		self.recordMergeAliasProof(phiId, incoming: contEdges)
 
+		// ⭐ **AND THE BUFFER-SURFACE FAMILY — THE THIRD MERGE'S SHARE OF IT (W192 second review).** Asked of
+		// `contEdges` for `recordMergeAliasProof`'s stated reason one line up: both edges are final here, and
+		// the err edge in particular is only settled after the ownership reconciliation above. MEASURED as the
+		// route this closes: `try managed.slice(0, 99) otherwise managed` inside an `extension Vector` cleared
+		// the vector's own record through the phi.
+		self.propagateBufferSurfaceToPhi(phiId, gives: contEdges)
+
 		self.currentBlock = cont
 		return phiId
 	end 'finishValueTry'
@@ -39166,6 +39189,10 @@ export type Parser
 			// actually aliases.
 			self.propagateImmutableGlobalReadToPhi(phiId, gives: finalGives)
 
+			// ⭐ **AND THE BUFFER-SURFACE FAMILY, at this merge and at `finishValueTry`'s** — the same rule for
+			// the same reason, with its own two measurements in its header.
+			self.propagateBufferSurfaceToPhi(phiId, gives: finalGives)
+
 			// ⭐ **AN E3070 ELEMENT BORROW SURVIVES THE MERGE TOO, and for the very same reason** — a borrow is
 			// keyed on the VALUE the accessor produced, and a merge MINTS A NEW VALUE, so without this a
 			// `let s = try arr.get(0) otherwise "" if c else "…"` (and the `match … gives` spelling one
@@ -39488,6 +39515,49 @@ export type Parser
 			end 'markedArm'
 		end 'eachGive'
 	end 'propagateImmutableGlobalReadToPhi'
+
+	// ⭐⭐ **THE BUFFER-SURFACE FAMILY SURVIVES A MERGE TOO — AND UNTIL W192's SECOND REVIEW IT DID NOT.**
+	// The sibling above's twin, at the same two merges and for the identical structural reason: these facts
+	// ride the VALUE, a merge MINTS A NEW VALUE, and a fact that stops at the join is bypassed by writing the
+	// same program one keyword longer.
+	//
+	// ⛔⛔ **IT WAS TWO WRONG ANSWERS AT ONCE, BOTH MEASURED.** With the mark stopping here:
+	//   • a `__ManagedMemory` value through a merge came out on the **`Array` ROSTER, EXACTLY INVERTED** —
+	//     `var m = a.managed if flag else a.managed` then `m.length()` was refused as an unknown `Array`
+	//     member while `m.count()` compiled, on a growable array, with no `Vector` in sight. That is A2j's
+	//     defect at the one position A2j did not reach, and it is what the first two arms below repair.
+	//   • a SIZED container's record laundered its identity through the join: inside an `extension Vector`,
+	//     `var m = managed if flag else managed` and `var m = try managed.slice(0, 99) otherwise managed`
+	//     each cleared the vector's own record and printed `len=0 count=3` — the rung's own reproducer,
+	//     reached by a ternary and by a `try` fallback with every other door already shut.
+	//
+	// ⚠ **ANY MARKED EDGE MARKS THE PHI, which is the conservative direction and the only sound one** —
+	// `propagateImmutableGlobalReadToPhi`'s argument word for word: the phi is one value standing for every
+	// edge's, so it must answer for the strongest claim any path can reach it holding. The arms do not chain,
+	// for `carryDeclaredSurface`'s reason: one arm per carrier, so no column's carry is conditional on
+	// another's. (`markSizedContainerBuffer` takes the buffer mark as well — that is its door invariant, not
+	// this loop's business.)
+	//
+	// ⚠ **THE TUPLE-SLOT COLUMN IS DELIBERATELY ABSENT.** It holds a `DeclaredSurface` TREE rather than a
+	// bit, so "any edge" is not a rule for it — joining two edges' trees needs the COMBINE rule the
+	// `bufferSurfaceValues` field header records as unwritten, and inventing one here on the parser's merge
+	// path is not this review's to do. What that leaves open is a TUPLE OF BUFFERS through a merge, which is
+	// the roster inversion above one container out; it is reported rather than papered over.
+	function propagateBufferSurfaceToPhi(phi ValueId, gives ValueIdArray)
+		for give in gives 'eachGive'
+			if self.valueIsASizedContainersBuffer(give) 'aSizedContainersOwnRecord'
+				self.markSizedContainerBuffer(phi)
+			end 'aSizedContainersOwnRecord'
+
+			if self.valueIsBufferSurface(give) 'aBuffer'
+				self.markBufferSurface(phi)
+			end 'aBuffer'
+
+			if self.valueElementIsBufferSurface(give) 'holdsBuffers'
+				self.markBufferSurfaceElements(phi)
+			end 'holdsBuffers'
+		end 'eachGive'
+	end 'propagateBufferSurfaceToPhi'
 
 	// The first reaching arm that names an immutable binding, or empty — the fold `finalizeMatchMerge` puts
 	// on the result phi. ANY blamed arm is enough, so the first is the answer and the walk stops there.
@@ -49297,6 +49367,21 @@ export type Parser
 		// declaration view. Asked first, before any copy or reference is taken, so no half-performed store
 		// precedes the throw.
 		try self.requireStoredNestedViewDropIsNameable(arg, range: range)
+		// ⭐⭐ **W5′ — AND A SIZED CONTAINER'S OWN RECORD MAY NOT BE STORED AT ALL (W192 second review).** This
+		// is the DURABLE-STORE half of *"the record may not leave the declaration"*, and it is asked here
+		// because this one door is every sink that will outlive the statement: a struct or TUPLE literal's
+		// field (`emitStructLiteral` → `moveInPayload`), a container ELEMENT (`moveElementIntoContainer`), a
+		// `Set`/`Map` column, a cell, a field ASSIGNMENT. A per-sink refusal would be the enumeration that
+		// misses the next sink, and two of these were MEASURED live before this line existed —
+		// `b.push(managed)` out of an `Array with ElementMemory` and `let t = (managed, 1)` — each reading
+		// back `len=0 count=3`, the rung's own reproducer.
+		//
+		// ⚠ **THE STORE IS WHAT IS REFUSED, NOT THE SINK'S TYPE.** A `slice` carries no mark and is stored
+		// freely, which is the advice the sentence itself gives; and `stdlib/Vector.maxon`'s own
+		// `Self{managed: managed}` stores a PARAMETER, which no mark is written on (see `bindParameters`).
+		// Asked before any copy or reference is taken, exactly as the line above is, so no half-performed
+		// store precedes the throw.
+		try self.refuseASizedContainersRecordEscaping(arg, escape: SizedContainerRecordEscape.storedInDurableStorage, line: range.line, column: range.column)
 		// ⭐⭐ **A TUPLE IS COPIED HERE, NOT MOVED — BECAUSE A TUPLE IS A VALUE (P1.10).** A struct is CO-OWNED
 		// below when it is borrowed and MOVED when it is owned, and both are right for a struct: it has
 		// reference identity a program can observe (an alias, a mutation through one), so a second record
@@ -57389,26 +57474,6 @@ export type Parser
 		end 'eachArrayDeclaration'
 	end 'refuseArrayMemberTheOtherDeclarationCarries'
 
-	// ⭐ **IS THIS CALLEE A MEMBER OF THE SIZED CONTAINER'S OWN DECLARATION? (W192)** — `emitCall`'s evidence,
-	// and the composition already shipped twice in this tree (`SignatureIndex.instanceCreateIsDeclared`,
-	// `memberBelongsToTheCorpus`'s `aSizedContainerSurface` arm): the owner half of a `Type.method` name,
-	// asked of the predicate that answers for the CORPUS's declaration alone.
-	//
-	// ⚠ It composes the two in the ALLOCATION-FREE direction — `isQualifiedUnderTypeName` compares the
-	// callee's prefix in place rather than materializing a joined name — because `emitCall` runs at every
-	// call site in every compile. Its guard there is asked first and is a bit test.
-	//
-	// ⚠ **THE SECOND CONJUNCT IS NOT REDUNDANT: THE NAME ALONE IS NOT THE DECLARATION.** Under a user
-	// `type Vector` the corpus's record is keyed under this compile's MINT, so the bare name is the USER's
-	// type — whose record is shaped identically to the field (same sole `managed`, same
-	// `__ManagedMemory with Element`) and is deliberately NOT this rule's subject. Asking
-	// `declarationIsASizedContainerRecordNamed` of the owner is what says so; see its own header for the
-	// wrong answer `isVectorBaseName` produced here.
-	function calleeIsDeclaredOnTheSizedContainer(callee ByteArray) returns bool
-		let owner = self.signatures.stdlibShadowRenameOf(VectorBuiltinBaseName)
-		return isQualifiedUnderTypeName(callee, typeName: owner) and self.signatures.declarationIsASizedContainerRecordNamed(owner)
-	end 'calleeIsDeclaredOnTheSizedContainer'
-
 	// ⭐⭐ **A SIZED CONTAINER'S BUFFER MAY NOT BE HANDED A MEMBER THAT MOVES ITS LENGTH (W192).** The sibling
 	// above's twin, placed at the same point in `dispatchArrayMethod` and for the same stated reason: it is
 	// still the question *"does this member exist ON THIS RECEIVER?"*, answered more precisely for the one
@@ -57452,55 +57517,64 @@ export type Parser
 	// write is *"you moved the number the type states"*, an escape is *"past here nothing can tell your
 	// record from a slice of it"* — and forcing both through one noun is what would make the sentence lie.
 	//
-	// ⚠ **IT READS THE MARK AND NOTHING ELSE, WHICH IS THE ENTIRE CORRECTION IT EMBODIES.** The two doors it
+	// ⚠ **IT READS THE MARK AND NOTHING ELSE, WHICH IS THE ENTIRE CORRECTION IT EMBODIES.** The three doors it
 	// serves used to INFER the fact from the declaration and were measured refusing a slice; see
 	// `sizedContainersRecordEscapeRefusal` for that measurement. A value with no mark is not the record, and
 	// there is no second question to ask about it.
 	//
-	// ⚠ The anchor is the caller's, because the two doors point at different tokens — the `return` keyword
-	// and the offending ARGUMENT — and a diagnostic that pointed at the function for an argument would send
-	// the reader to the wrong line of a multi-argument call.
+	// ⚠ The anchor is the caller's, because the three doors point at different tokens — the `return` keyword,
+	// the offending ARGUMENT and the stored VALUE — and a diagnostic that pointed at the function for an
+	// argument would send the reader to the wrong line of a multi-argument call.
+	//
+	// ⭐⭐ **THE ONE EXEMPTION LIVES HERE AND NOT AT A DOOR, BECAUSE IT IS ONE FACT AND THE DOORS ARE THREE
+	// (W192 second review).** `stdlib/Vector.maxon`'s `createIterator` hands the marked record to
+	// `VectorIter.create` and MUST go on working — it is what `for e in v` is built out of. That call is the
+	// declaring library's own, and the library is where the record's invariant is established (`create()`
+	// grows, then the literal's own element count sets the length), so the file that owns the type may hand
+	// its own record around. `livesUnderStdlibDirectory` is the bit the two other stdlib-only doors already
+	// use (`requireStdlibOnlyBufferMethod`), and it is a property of the FILE rather than of how a command
+	// line spelled it — see its field header for the measurement that settled that.
+	//
+	// ⚠ **IT IS ASKED AFTER THE MARK TEST AND NOT BEFORE**, so the common case pays the set probe it was
+	// already paying and nothing more; the location question is only reached by a value that really is the
+	// record, which happens in one corpus file and in an `extension Vector`.
 	function refuseASizedContainersRecordEscaping(value ValueId, escape SizedContainerRecordEscape, line LineNumber, column ColumnNumber) throws ParseError
 		if not self.valueIsASizedContainersBuffer(value) 'notTheRecordItself'
 			return
 		end 'notTheRecordItself'
 
+		if self.livesUnderStdlibDirectory 'theDeclaringLibrarysOwn'
+			return
+		end 'theDeclaringLibrarysOwn'
+
 		throw ParseError.unsupported(sizedContainersRecordEscapeRefusal(escape, lengthWriters: bufferLengthWritingMemberNames(self.surfaceMemberNames(MemberSurface.buffer)), growableName: self.signatures.arrayRecordDeclaredName()), line: line, column: column)
 	end 'refuseASizedContainersRecordEscaping'
 
-	// ⭐⭐ **THE CALL-ARGUMENT HALF OF THE ESCAPE RULE (W192 review)** — split out of `emitCall` so the two
-	// guards that make it free can be read in one place, and because a loop-invariant callee test written
-	// inside the loop is how a per-call cost becomes a per-ARGUMENT one.
+	// ⭐⭐ **THE CALL-ARGUMENT HALF OF THE ESCAPE RULE (W192 review)** — split out of `emitCall` so the guard
+	// that makes it free stands in front of the loop rather than inside it, which is how a per-CALL cost
+	// becomes a per-ARGUMENT one.
 	//
-	// ⚡ **THE FIRST GUARD IS AN `is` IDENTITY TEST AND IT IS WHY THIS COSTS NOTHING.** `emitCall` runs at
-	// every call site in every compile; a function that has not minted a single sized-container record still
-	// holds the module-level shared empty set, so the whole rule is one pointer comparison away for every
-	// program that is not inside `Vector`'s declaration. Only past it is the callee's NAME looked at.
+	// ⚡ **THE GUARD IS AN `is` IDENTITY TEST AND IT IS WHY THIS COSTS NOTHING.** `emitCall` runs at every
+	// call site in every compile; a function that has not minted a single sized-container record still holds
+	// the module-level shared empty set, so the whole rule is one pointer comparison away for every program
+	// that is not inside `Vector`'s declaration.
 	//
-	// ⭐⭐ **THE CALLEE SCOPE IS LOAD-BEARING AND IS WHAT KEEPS `stdlib/Vector.maxon`'s `createIterator` COMPILING.**
-	// `VectorIter.create(managed)` passes the marked record as an argument and MUST go on working; its callee
-	// is `ArrayIterator.create`, whose `ElementMemory` is `ArrayIterator`'s own (`stdlib/Array.maxon:522`) and
-	// not the sized container's. Scoping to a callee declared ON the sized container excludes nothing else
-	// reachable from user code: a function outside the declaration cannot name the type at all — MEASURED,
-	// `Vector.ElementMemory` there is `E3011 Unknown type` and `v.managed` is `E3014`.
-	//
-	// ⚠ **WHAT IT DOES NOT COVER IS A SECOND DECLARATION WHOSE OWN ALIAS RESOLVES TO THE SAME TYPE**, of
-	// which `ArrayIterator` is the live example. That hole is deliberate and is NOT closable by any
-	// per-declaration answer: `ArrayIterator` is compiled once for the growable `Array` and the sized
-	// `Vector` alike, so "this buffer's count comes from a type" is not a fact its declaration can hold. It
-	// is reported as its own row rather than papered over here.
-	function refuseASizedContainersRecordEscapingIntoACall(callee ByteArray, args ValueIdArray, argRanges SourceRangeArray) throws ParseError
+	// ⛔⛔ **IT USED TO BE SCOPED TO A CALLEE DECLARED ON THE SIZED CONTAINER, AND THAT SCOPE WAS A MEASURED
+	// HOLE (W192 second review).** The argument recorded for the scope was that nothing outside the
+	// declaration can name the type — which is true and beside the point: INSIDE an `extension Vector` the
+	// type IS nameable, so a user's own `type Box uses T` at `Box with ElementMemory` takes the record
+	// through `Box.create(managed)` and hands it straight back from `b.get()`, unmarked. MEASURED:
+	// `len=0 count=3`, the rung's own reproducer, one library-free generic away. ⇒ Every callee is a door,
+	// and the ONE call the corpus needs is exempted BY LOCATION at the shared refusal above rather than by a
+	// name here — a name would have to be right about which of `ArrayIterator`'s members merely read.
+	function refuseASizedContainersRecordEscapingIntoACall(args ValueIdArray, argRanges SourceRangeArray) throws ParseError
 		if self.sizedContainerBufferValues is sharedEmptySizedContainerBufferValues 'thisFunctionHoldsNoSuchRecord'
 			return
 		end 'thisFunctionHoldsNoSuchRecord'
 
-		if not self.calleeIsDeclaredOnTheSizedContainer(callee) 'notAnotherOfItsOwnMembers'
-			return
-		end 'notAnotherOfItsOwnMembers'
-
 		for i in 0 upto args.count() 'eachArgument'
 			let argRange = try argRanges.get(i) otherwise panic("refuseASizedContainersRecordEscapingIntoACall: argRanges.get OOB at {i} — `emitCall` builds the argument columns in lockstep with `args`")
-			try self.refuseASizedContainersRecordEscaping(try args.get(i) otherwise panic("refuseASizedContainersRecordEscapingIntoACall: args.get OOB at {i} — the index came from this very array's count"), escape: SizedContainerRecordEscape.passedToAnotherMember, line: argRange.line, column: argRange.column)
+			try self.refuseASizedContainersRecordEscaping(try args.get(i) otherwise panic("refuseASizedContainersRecordEscapingIntoACall: args.get OOB at {i} — the index came from this very array's count"), escape: SizedContainerRecordEscape.passedToACall, line: argRange.line, column: argRange.column)
 		end 'eachArgument'
 	end 'refuseASizedContainersRecordEscapingIntoACall'
 
@@ -57774,9 +57848,16 @@ export type Parser
 		// ⇒ It carries the answer on a per-VALUE mark instead, which reaches both spellings that mint one:
 		// the bare `managed` inside an `extension Vector` (`dispatchMethodOnBinding` → `baseBoxOf` →
 		// `parseSelfFieldRead`) and the explicit `self.managed` (`parseExplicitSelfFieldRead`), plus every
-		// local a program binds either to. The two spellings that mint NO value are answered elsewhere: a
-		// fused `managed.append(…)` at `dispatchMethodOnBinding` off the enclosing declaration, and a
-		// declared `returns ElementMemory` at `emitCall` off the callee's name.
+		// local a program binds either to — and, since the mark has to survive being re-minted, every
+		// PROMOTION (`carryDeclaredSurface`) and every MERGE (`propagateBufferSurfaceToPhi`).
+		//
+		// ⚠ **THE ONE SPELLING THAT MINTS NO VALUE IS ANSWERED ELSEWHERE**: a fused `managed.append(…)` at
+		// `dispatchMethodOnBinding`, off the ENCLOSING DECLARATION. ⛔ A `returns ElementMemory` used to be
+		// listed here as a third carrier answered at `emitCall` off the callee's name — that carrier is GONE
+		// and its removal is the first review's correction: a `slice` has the identical declared type, so the
+		// declaration cannot tell the record from a view of it. What replaced it is the ESCAPE rule
+		// (`refuseASizedContainersRecordEscaping`), which keeps the record where the mark still exists rather
+		// than trying to recognise it where the mark does not.
 		self.markSizedContainerBuffer(surface)
 
 		let element = self.signatures.containerElementType(self.valueNameId(box))
@@ -63062,6 +63143,14 @@ export type Parser
 		// The removal's "was it there?" answer is not a fact worth asking: the caller has just proved the
 		// value IS a byte view, and this door exists to make the mark's absence true, not to report on it.
 		_ = self.bufferSurfaceValues.remove(value)
+		// ⚠ **AND THE SIZED COLUMN WITH IT, BECAUSE THE INVARIANT IS "EVERY SIZED VALUE IS ALSO A BUFFER
+		// VALUE" AND A ONE-COLUMN REMOVAL WOULD BREAK IT (W192 second review).** Not reachable today — the
+		// only caller folds a `String.addressableBytes` view, which no sized container's record can be — so
+		// this line changes no program. It is here because the two columns describe ONE value and the
+		// alternative is the premise this compiler keeps finding false: a value marked sized and NOT marked
+		// as a buffer would be refused a length change while being served the `Array` roster one line down,
+		// which is the exact disagreement `markSizedContainerBuffer`'s door invariant exists to prevent.
+		_ = self.sizedContainerBufferValues.remove(value)
 	end 'unmarkBufferSurface'
 
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceSlots` (A2m)** — `markBufferSurface`'s twin for a TUPLE value,
@@ -63860,10 +63949,18 @@ export type Parser
 		// ⛔ **THAT USED TO READ "the marks cross by BINDING instead", PLURAL, AND IT IS FALSE OF EVERY OTHER
 		// MARK (W192).** `emitCaptureRead` carries `carryImmutableGlobalMark` and NOTHING else, so the
 		// buffer-surface family — `bufferSurfaceValues` and its siblings, reset three lines down — does not
-		// cross at all: a captured buffer loses its mark and its members meet the ordinary unknown-`Array`-
-		// method E2015. That is a REFUSAL and not a hole, so the sentence was the only thing wrong; it is
+		// cross at all. That is a REFUSAL and not a hole, so the sentence was the only thing wrong; it is
 		// corrected rather than the behaviour, because a generalisation stated about "the marks" is exactly
 		// what the next carrier's author would rely on.
+		//
+		// ⚠ **AND THE REFUSAL IT MEETS IS NOT THE ONE THAT SENTENCE NAMED EITHER — MEASURED (W192 second
+		// review).** This paragraph said a captured buffer's members "meet the ordinary unknown-`Array`-method
+		// E2015"; they do not get that far. Inside an `extension Vector`, `var m = managed` captured by a
+		// closure and then `m.count()` is refused **E2015 … a field access or method call on the captured 'm',
+		// which is declared 'struct' and not a struct type** — the capture layer's own door, ahead of any
+		// roster. Same code, same conclusion (nothing crosses, nothing is laundered), different sentence: a
+		// reader hunting the roster refusal would not have found it, and a reader trusting the old wording
+		// would think a roster answered here.
 		self.capturedImmutableGlobalReads = savedImmutableGlobalReads
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
@@ -67810,10 +67907,10 @@ export type Parser
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
 		// ⭐ **W4′ — THE ARGUMENT TWIN OF THE RETURN DOOR (W192 review), asked here because this is the one
-		// line every direct, method and static call passes with the arguments AND the callee's name in hand.**
+		// line every direct, method and static call passes with the whole argument list in hand.**
 		// Ahead of the mint and the consume so a refused call emits nothing — the discipline
 		// `applyCallerConsume` states below.
-		try self.refuseASizedContainersRecordEscapingIntoACall(callee, args: args, argRanges: argRanges)
+		try self.refuseASizedContainersRecordEscapingIntoACall(args, argRanges: argRanges)
 		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED HERE, BEFORE ANYTHING ELSE READS THE ARGUMENT LIST** (BATCH2
 		// slice 4). Every direct, method and static call funnels through this one line, so the fill needs no
 		// second copy at the method / static / operator-desugar doors — and by the time `applyCallerConsume`

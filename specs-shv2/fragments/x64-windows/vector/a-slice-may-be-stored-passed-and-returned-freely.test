@@ -1,0 +1,345 @@
+// Test: a-slice-may-be-stored-passed-and-returned-freely
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+type Box uses T
+	var held as T
+
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+
+	export function get() returns T
+		return held
+	end 'get'
+end 'Box'
+
+extension Vector
+	typealias Bufs = Array with ElementMemory
+	typealias BufBox = Box with ElementMemory
+
+	export function survey() returns Int
+		var b = Bufs.create()
+		b.push(try managed.slice(0, 2) otherwise panic("slice"))
+		var fromContainer = try b.get(0) otherwise panic("no element")
+		fromContainer.clear()
+
+		let t = (try managed.slice(0, 2) otherwise panic("slice"), 1)
+		t.0.clear()
+
+		let boxed = BufBox.create(try managed.slice(0, 2) otherwise panic("slice"))
+		let fromBox = boxed.get()
+		fromBox.clear()
+
+		return (fromContainer.length() as Int) + (fromBox.length() as Int) + (10 * (managed.length() as Int))
+	end 'survey'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.survey() as ExitCode
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Box.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.get {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect __retain_type_param
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Vector.survey {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.storeSlotReg slot3, r12
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 2
+    x64.movRegReg rcx, r14
+    x64.movRegReg r9, r12
+    x64.callDirect __managed_slice_opaque
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r13
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_clear
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 2
+    x64.movRegReg rcx, r14
+    x64.movRegReg r9, r12
+    x64.callDirect __managed_slice_opaque
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot2, r15
+    x64.storeBaseDispReg.word64 [r15 + 0], r12
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r15 + 8], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
+    x64.callDirect Array.clear
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 2
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot r9, slot3
+    x64.callDirect __managed_slice_opaque
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r14
+    x64.callDirect Box.create
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.leaRegRdata rdx, [rip + __layout_Box_Array_T4b39db24a89d29c9]
+    x64.movRegReg rcx, r15
+    x64.callDirect Box.get
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_clear
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_count
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_count
+    x64.leaRegRegReg r13, r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_count
+    x64.imulRegRegImm32 rax, r8, 10
+    x64.leaRegRegReg rbx, r13, rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_Box_Array_T4b39db24a89d29c9
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct___Tuple2.Array_T4b39db24a89d29c9.int
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __layout_Vector_N3_Int]
+    x64.movRegImm32 rdx, 3
+    x64.callDirect Vector.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __layout_Vector_N3_Int]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Vector.survey
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.clear {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_clear
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Vector.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.movRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
+    x64.movRegReg rcx, rax
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

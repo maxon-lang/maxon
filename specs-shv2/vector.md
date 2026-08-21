@@ -1512,11 +1512,13 @@ end 'main'
 ⛔⛔ **ENTRANCE E — THE ARGUMENT DIRECTION OF D, AND IT WAS A LIVE WRONG ANSWER WITH EVERY OTHER ROUTE
 ALREADY CLOSED.** Found by probing the CURE rather than the defect: with A–D shut, an `extension Vector` whose
 `bust()` is `wipe(managed)` and whose `wipe(m ElementMemory)` is `m.clear()` still compiled, ran, and printed
-**`count=3 walked=0`** — the rung's own reproducer, one helper method away. ⭐ **THE SCOPE IS "another member
-of the SIZED CONTAINER", AND THAT IS LOAD-BEARING RATHER THAN CAUTIOUS**: `stdlib/Vector.maxon`'s `createIterator`'s
-`VectorIter.create(managed)` passes this very record and must keep working, because its callee is
-`ArrayIterator.create`, whose `ElementMemory` is `ArrayIterator`'s own. Nothing outside the declaration can
-name the type at all — `Vector.ElementMemory` there is `E3011` and `v.managed` is `E3014`.
+**`count=3 walked=0`** — the rung's own reproducer, one helper method away.
+
+⛔ **THE REFUSAL WAS FIRST SCOPED TO "another member of the SIZED CONTAINER", AND THAT SCOPE WAS ITSELF A
+MEASURED HOLE** — see `error.a-buffer-handed-to-a-foreign-generic-reaches-the-same-refusal` below, which is
+the same injury through a callee the sized container never heard of. The scope is gone; the ONE call the
+corpus needs (`stdlib/Vector.maxon`'s `createIterator` handing the record to `VectorIter.create`) is exempted
+by LOCATION — the declaring library may hand its own record around — and no user file is.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1538,7 +1540,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:8: Unsupported: a `Vector`'s own record may not be passed to another `Vector` member — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+error E2015: <fragment>:7:8: Unsupported: a `Vector`'s own record may not be passed to a call — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
 ```
 
 <!-- test: the-slice-a-member-hands-to-a-helper-is-served -->
@@ -1602,4 +1604,321 @@ end 'main'
 ```
 ```exitcode
 30
+```
+
+## And The Record May Not LEAVE By Any Of The Other Three Doors Either (W192, second review)
+
+⛔⛔ **THREE MORE ROUTES WERE MEASURED LIVE AFTER THE FIRST CURE LANDED, EACH PRINTING THE RUNG'S OWN
+REPRODUCER `len=0 count=3` ON A `Vector with 3 Int`.** They share one cause, and it is worth stating once:
+`bufferSurfaceOfDeclaredRecord` RETYPES the record to `Array with Element` so `VectorIter.create(managed)`
+type-checks (W189). That retype makes the value indistinguishable from a growable array to everything except
+the per-value MARK — so any route that carries the record somewhere a `ValueId` mark cannot follow hands
+back a fully working `Array` over the vector's storage, and it is `stdlib/Array.maxon`'s own `clear()` that
+answers on it, not merely the buffer roster's. ⇒ There is no third thing to test for at the far end. The
+only defence is that the marked value never reaches a place the mark cannot go: a `return`, ANY call
+argument, and any durable STORE.
+
+<!-- test: error.a-buffer-pushed-into-a-container-reaches-the-same-refusal -->
+**ROUTE F — THE RECORD AS A CONTAINER'S ELEMENT.** `Array with ElementMemory` is spellable inside the
+declaration, `push` takes the record by reference, and `get` hands it back with no mark. MEASURED before this
+refusal existed: `len=0 count=3 walked=0`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	typealias Bufs = Array with ElementMemory
+
+	export function bust() returns Int
+		var b = Bufs.create()
+		b.push(managed)
+		var got = try b.get(0) otherwise panic("no element")
+		got.clear()
+		return managed.length() as Int
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.bust() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:10: Unsupported: a `Vector`'s own record may not be stored into a container, a tuple or a field — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.a-buffer-put-in-a-tuple-reaches-the-same-refusal -->
+**ROUTE G — THE RECORD AS A TUPLE SLOT**, which needs no container type spelled anywhere: two tokens of
+punctuation launder the mark. ⭐ The slot read comes back on the ARRAY surface rather than the buffer one —
+`t.0.count()` and `t.0.push(1)` both compiled, `t.0.length()` was refused as an unknown `Array` member —
+which is the clearest single measurement of what the retype costs once the mark is gone.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function bust() returns Int
+		let t = (managed, 1)
+		t.0.clear()
+		return (managed.length() as Int) + t.1
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.bust() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:11: Unsupported: a `Vector`'s own record may not be stored into a container, a tuple or a field — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.a-buffer-assigned-into-another-records-field-reaches-the-same-refusal -->
+**ROUTE H — THE RECORD ASSIGNED INTO A GROWABLE `Array`'s OWN `managed` FIELD.** The growable record's buffer
+carries no sized mark, so every length writer is served on it — and this one was not merely a wrong answer:
+before the refusal it compiled and the program **SEGFAULTED** (two owners of one record, one release each).
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	typealias Arr = Array with Element
+
+	export function bust() returns Int
+		var a = Arr.create()
+		a.managed = managed
+		a.managed.clear()
+		return managed.length() as Int
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.bust() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:3: Unsupported: a `Vector`'s own record may not be stored into a container, a tuple or a field — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.a-buffer-handed-to-a-foreign-generic-reaches-the-same-refusal -->
+⛔⛔ **ROUTE I — THE ARGUMENT ESCAPE'S CALLEE SCOPE WAS THE HOLE.** The first cure refused an argument only
+when the callee was declared on the sized container, on the argument that nothing else can name the type.
+INSIDE an `extension Vector` the type IS nameable, so a user's own generic — no library, no `stdlib`, nine
+lines — takes the record in and hands it straight back out with no mark on it. This case is why the scope is
+gone and why the corpus's one legitimate escape is exempted by LOCATION instead: a callee ALLOWLIST would
+have to be right about which of a foreign declaration's members merely read the record, which is not a fact
+any declaration holds.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+type Box uses T
+	var held as T
+
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+
+	export function get() returns T
+		return held
+	end 'get'
+end 'Box'
+
+extension Vector
+	typealias BufBox = Box with ElementMemory
+
+	export function bust() returns Int
+		let b = BufBox.create(managed)
+		let got = b.get()
+		got.clear()
+		return managed.length() as Int
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.bust() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:25: Unsupported: a `Vector`'s own record may not be passed to a call — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+```
+
+<!-- test: a-slice-may-be-stored-passed-and-returned-freely -->
+⭐⭐ **THE OVER-REFUSAL CONTROL FOR ALL THREE NEW DOORS, IN ONE PROGRAM.** Every route above is legal on a
+`slice`, because a view's `length@8` is its own and no answer about it can contradict the vector's type. The
+slice here is stored into a container, put in a tuple, passed to a foreign generic and cleared through each
+— and the vector's own record is untouched at the end. Delete the mark test in
+`refuseASizedContainersRecordEscaping` and make the three doors unconditional, and THIS case is what goes red.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+type Box uses T
+	var held as T
+
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+
+	export function get() returns T
+		return held
+	end 'get'
+end 'Box'
+
+extension Vector
+	typealias Bufs = Array with ElementMemory
+	typealias BufBox = Box with ElementMemory
+
+	export function survey() returns Int
+		var b = Bufs.create()
+		b.push(try managed.slice(0, 2) otherwise panic("slice"))
+		var fromContainer = try b.get(0) otherwise panic("no element")
+		fromContainer.clear()
+
+		let t = (try managed.slice(0, 2) otherwise panic("slice"), 1)
+		t.0.clear()
+
+		let boxed = BufBox.create(try managed.slice(0, 2) otherwise panic("slice"))
+		let fromBox = boxed.get()
+		fromBox.clear()
+
+		return (fromContainer.length() as Int) + (fromBox.length() as Int) + (10 * (managed.length() as Int))
+	end 'survey'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.survey() as ExitCode
+end 'main'
+```
+```exitcode
+30
+```
+
+## And A MERGE Is A Door Too — The Ternary And The `try` Fallback (W192, second review)
+
+⛔⛔ **A PHI IS A NEW `ValueId`, SO EVERY PER-VALUE FACT STOPS AT A MERGE UNLESS SOMETHING CARRIES IT
+ACROSS — AND THE WHOLE BUFFER-SURFACE FAMILY DID NOT.** The parser has three value merges
+(`finalizeMatchMerge`, which serves the ternary AND `match … gives`; `finishValueTry`; and a
+short-circuit's, whose phi is a bool and cannot be a buffer). Two facts were laundered by the first two,
+and both were MEASURED:
+
+* the SIZED mark — so an `extension Vector` could clear the vector's own record by routing the value
+  through a join, with every other door already shut (`len=0 count=3`, the rung's own reproducer);
+* the BUFFER mark itself — an **A2j roster inversion at the one position A2j did not reach**: on a
+  plain growable array, `var m = a.managed if flag else a.managed` then `m.length()` was refused as an
+  unknown `Array` member while `m.count()` compiled. Nothing to do with `Vector`; repaired by the same
+  carry, and pinned by the third case here.
+
+<!-- test: error.a-buffer-through-a-ternary-reaches-the-same-refusal -->
+**ROUTE J — THE TERNARY MERGE.** The degenerate `x if c else x` is deliberate: both edges are the same
+expression, so nothing about the program needs two answers — only the phi's fresh `ValueId` did.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function bust(flag bool) returns Int
+		var m = managed if flag else managed
+		m.clear()
+		return managed.length() as Int
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.bust(true) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+```
+
+<!-- test: error.a-buffer-through-a-try-fallback-reaches-the-same-refusal -->
+**ROUTE K — THE `try … otherwise` MERGE**, which needs no second spelling of the record at all: the ok
+edge is a legal `slice` and only the FALLBACK is the record, so a rule that looked at either edge alone
+would have to be right about both.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function bust() returns Int
+		var m = try managed.slice(0, 99) otherwise managed
+		m.clear()
+		return managed.length() as Int
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.bust() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+```
+
+<!-- test: a-growable-buffer-keeps-its-own-roster-through-a-merge -->
+⭐⭐ **THE OTHER HALF OF THE CARRY, AND IT IS A REPAIR RATHER THAN A REFUSAL.** The merged value here is
+an ordinary growable buffer: it must come out on the BUFFER roster, which is what A2j ruled a value
+spelled `__ManagedMemory` is on, and before the carry existed it came out on the `Array` roster instead —
+`setLength` and `length` both refused as unknown `Array` members. The exit code proves both halves: the
+length really moved to 1 through the phi, and the array's own `count()` followed it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Ints = Array with Int
+
+function main() returns ExitCode
+	var a = Ints.create()
+	a.push(1)
+	a.push(2)
+	let flag = a.count() > 0
+	var m = a.managed if flag else a.managed
+	try m.setLength(1) otherwise ignore
+	return ((m.length() as Int) * 10 + (a.count() as Int)) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: an-extension-still-walks-its-own-vector -->
+⭐⭐ **THE OVER-REFUSAL CONTROL FOR THE WIDENED CALL ESCAPE, AND IT IS THE ONE THE WIDENING COULD PLAUSIBLY
+HAVE BROKEN.** Dropping the callee scope means `for e in managed` — which hands the record to an iterator
+factory — is now refused inside an `extension Vector`, and that is deliberate: the compiler cannot know a
+foreign callee only READS, and `ArrayIterator` is compiled for the growable `Array` and the sized `Vector`
+alike, so "this record's count comes from a type" is not a fact its declaration can hold. What must survive
+is the way an extension actually walks its own vector, and both spellings do: `for e in self`, which goes
+through the declaration's own `createIterator`, and the one the refusal's sentence names, a `slice`. The
+exit code is the two walks side by side.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function walkedTwoWays() returns Int
+		var viaSelf = 0
+		for e in self 'eachOwn'
+			viaSelf = viaSelf + (e - e) + 1
+		end 'eachOwn'
+
+		var viaSlice = 0
+		for e in try managed.slice(0, countof(Self)) otherwise panic("slice") 'eachSliced'
+			viaSlice = viaSlice + (e - e) + 1
+		end 'eachSliced'
+
+		return (viaSelf * 10) + viaSlice
+	end 'walkedTwoWays'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.walkedTwoWays() as ExitCode
+end 'main'
+```
+```exitcode
+33
 ```

@@ -67,22 +67,36 @@ public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 	/// the BUFFER's setter is CAPACITY-bounded. The seam closes by construction one level up instead,
 	/// the way `push` is already refused there.
 	///
-	/// ⭐⭐ WHAT DEFENDS IT NOW (W192): the compiler refuses EXACTLY the buffer members that write the
-	/// record's length word -- `setLength`, `append`, `clear`, `remove` -- on a sized container's
-	/// buffer surface, and serves every other one. `grow` is deliberately still served: it moves
-	/// CAPACITY, not length, so the type and the record go on agreeing, and refusing it would be an
-	/// over-refusal, which is a wrong answer too. The refusal is one sentence
-	/// (`Parser.sizedContainersBufferRefusal`, E2015) reached from three sites, because `managed`
-	/// arrives here by three routes that carry three different kinds of evidence: the bare and
-	/// `self.`-qualified field reads and any local bound to one carry a per-value mark written where
-	/// the read is minted (`Parser.bufferSurfaceOfDeclaredRecord`); a fused `managed.append(...)`
-	/// mints no value at all and is answered off the enclosing declaration
-	/// (`Parser.dispatchMethodOnBinding`); and a member declared `returns ElementMemory` hands the
-	/// record to a caller where no mark survives, so it is answered off the callee's name
-	/// (`Parser.emitCall`). `specs-shv2/vector.md` pins one case per route, plus the two controls that
-	/// say the rule is neither too wide (the length-preserving members are still served) nor too
-	/// narrow (the growable `Array`'s buffer keeps all four -- as it must, since this file's sibling
-	/// `stdlib/Array.maxon` calls three of them on its own record).
+	/// ⭐⭐ WHAT DEFENDS IT NOW (W192): TWO refusals, and it takes both, because there are two ways to
+	/// break the invariant and they need two different sentences.
+	///
+	/// (1) THE LENGTH WRITERS ARE REFUSED ON A SIZED CONTAINER'S BUFFER -- `setLength`, `append`,
+	/// `clear`, `remove`, exactly the members that store the record's `length@8`, and no others.
+	/// `grow` is deliberately still served: it moves CAPACITY, not length, so the type and the record
+	/// go on agreeing, and refusing it would be an over-refusal, which is a wrong answer too.
+	/// (`Parser.sizedContainersBufferRefusal`, E2015.)
+	///
+	/// (2) THE RECORD MAY NOT LEAVE THE DECLARATION -- it may not be RETURNED, passed to ANY call, or
+	/// stored into a container, a tuple or a field. That second rule is not belt-and-braces: the read
+	/// that produces `managed` is RETYPED to `Array with Element` (which is what makes
+	/// `createIterator`'s `VectorIter.create(managed)` type-check at all, W189), so past any door
+	/// where the compiler's per-value mark cannot follow, the vector's storage is indistinguishable
+	/// from an ordinary growable array and `stdlib/Array.maxon`'s own `clear()` answers on it. Hand
+	/// out `managed.slice(...)` instead: a view's length is its own and can contradict nothing.
+	/// (`Parser.sizedContainersRecordEscapeRefusal`, E2015.)
+	///
+	/// The fact rides a per-VALUE mark written where the read is minted
+	/// (`Parser.bufferSurfaceOfDeclaredRecord`) and carried wherever a value is re-minted -- a
+	/// promotion (`carryDeclaredSurface`) and a ternary / `match … gives` / `try … otherwise` merge
+	/// (`propagateBufferSurfaceToPhi`). The one spelling that mints no value to mark is a fused
+	/// `managed.append(...)`, answered off the enclosing declaration
+	/// (`Parser.dispatchMethodOnBinding`). Rule (2) is exempt for source under `stdlib/`, which is
+	/// what lets THIS FILE's `createIterator` hand the record to its iterator: the declaring library
+	/// is where the invariant is established, and it is the only place the record legitimately
+	/// travels. `specs-shv2/vector.md` pins one case per route, plus the controls that say the rule
+	/// is neither too wide (the length-preserving members are still served; a `slice` may be stored,
+	/// passed and returned freely) nor too narrow (the growable `Array`'s buffer keeps all four -- as
+	/// it must, since this file's sibling `stdlib/Array.maxon` calls three of them on its own record).
 	///
 	/// ⚠ It is a rule about the CORPUS's `Vector` and no other declaration: a user's own
 	/// `type Vector` is shaped identically to the field and is deliberately excluded
