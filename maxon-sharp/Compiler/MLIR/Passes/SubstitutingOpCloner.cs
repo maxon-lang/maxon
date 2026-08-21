@@ -109,6 +109,7 @@ internal static class SubstitutingOpCloner {
       // --- Ops whose only type-dependent state is a name read out of the map ---
 
       case MaxonSizeofOp sz: { var c = new MaxonSizeofOp(sub.SubstituteName(sz.TypeName)); sub.RegisterResult(sz.Result, c.Result); return c; }
+      case MaxonCountofOp co: { var c = new MaxonCountofOp(sub.SubstituteName(co.TypeName), co.Line, co.Column); sub.RegisterResult(co.Result, c.Result); return c; }
       case MaxonStructParamOp sp: { var c = new MaxonStructParamOp(sp.Index, sp.Name, sub.SubstituteName(sp.StructTypeName)); sub.RegisterResult(sp.Result, c.Result); return c; }
       case MaxonStructVarRefOp sv: { var c = new MaxonStructVarRefOp(sv.VarName, sub.SubstituteName(sv.StructTypeName)); sub.RegisterResult(sv.Result, c.Result); return c; }
       case MaxonFieldAccessOp fa: { var c = fa.CloneWith(sub.MapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.ResultStructTypeName != null ? sub.SubstituteName(fa.ResultStructTypeName) : null); sub.RegisterResult(fa.Result, c.Result); return c; }

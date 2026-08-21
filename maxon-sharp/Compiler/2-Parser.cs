@@ -8637,7 +8637,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
-  private IrType ParseSizeofTypeArg() {
+  /// The two compile-time type queries, spelled once each. Both are CONTEXTUAL identifiers rather
+  /// than keywords — the lexer hands them over as plain identifiers and a program may still bind a
+  /// variable of either name — so the SPELLING is the whole of what selects them, and a literal
+  /// written at two sites is a rename that silently half-lands.
+  private const string SizeofKeyword = "sizeof";
+  private const string CountofKeyword = "countof";
+
+  /// <summary>
+  /// The operand of a compile-time TYPE QUERY — <c>sizeof(T)</c> or <c>countof(T)</c>: one type
+  /// spelling, resolved through the registry. <paramref name="keyword"/> names the intrinsic doing
+  /// the reading, so a typo inside a <c>countof</c> does not report itself as a <c>sizeof</c> one.
+  ///
+  /// ⚠ IT DELIBERATELY DOES NOT RESOLVE <c>Self</c>, which every other type position does resolve
+  /// (see <see cref="ParseTypeRef"/>). <c>Self</c> inside a generic names the DECLARATION, and a
+  /// body written there is compiled once per instance — so folding it here would answer a
+  /// per-instance question with the enclosing TEMPLATE's layout. <c>countof</c> is the only caller
+  /// with somewhere else to send that operand (monomorphization), so it handles <c>Self</c> itself
+  /// and <c>sizeof</c> keeps refusing it.
+  ///
+  /// ⭐ READING A TYPE IS USING IT. Without <see cref="MarkTypeAliasUsed"/> the alias that named
+  /// the operand is reported dead: MEASURED, <c>sizeof(Vec3)</c> over a declared
+  /// <c>typealias Vec3 = Vector with 3 Int</c> failed as <c>E3062 unused typealias: 'Vec3'</c>
+  /// with the alias read on the very next line.
+  /// </summary>
+  private IrType ParseTypeQueryArg(string keyword) {
     if (Check(TokenType.Int)) { Advance(); return IrType.I64; }
     if (Check(TokenType.Float)) { Advance(); return IrType.F64; }
     if (Check(TokenType.Bool)) { Advance(); return IrType.I1; }
@@ -8645,13 +8669,94 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (CheckIdentifierLike()) {
       var nameToken = Advance();
       if (_typeRegistry.TryGetValue(nameToken.Value, out var type))
-        return type;
+        return MarkTypeAliasUsed(nameToken.Value, type);
       throw new CompileError(ErrorCode.ParserExpectedType,
-        $"Unknown type in sizeof: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
+        $"Unknown type in {keyword}: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
     }
     throw new CompileError(ErrorCode.ParserExpectedType,
-      "Expected type name in sizeof(...)", Current().Line, Current().Column);
+      $"Expected type name in {keyword}(...)", Current().Line, Current().Column);
   }
+
+  /// <summary>
+  /// <c>countof(Self)</c>'s operand: the enclosing declaration, resolved exactly as
+  /// <see cref="ParseTypeRef"/> resolves <c>Self</c> in every other type position. It lives here
+  /// rather than in <see cref="ParseTypeQueryArg"/> because <c>countof</c> is the only reader with
+  /// somewhere to send an operand that names a declaration instead of an instance — see that
+  /// function's header for why <c>sizeof</c> must keep refusing it.
+  /// </summary>
+  private IrType ResolveSelfAsCountofOperand(Token selfToken) {
+    Advance(); // consume 'Self'
+    if (_currentTypeName == null)
+      throw new CompileError(ErrorCode.ParserExpectedType,
+        "'Self' can only be used inside a type declaration", selfToken.Line, selfToken.Column);
+    if (_typeRegistry.TryGetValue(_currentTypeName, out var selfType))
+      return MarkTypeAliasUsed(_currentTypeName, selfType);
+    throw new CompileError(ErrorCode.ParserExpectedType,
+      $"Unknown type in {CountofKeyword}: '{_currentTypeName}'", selfToken.Line, selfToken.Column);
+  }
+
+  /// <summary>
+  /// The three answers <c>countof</c> has, and the ONE place that chooses between them.
+  ///
+  /// The choice is entirely about which INSTANCE the operand denotes, because a count is a
+  /// coordinate of an instance and of nothing else. An operand that states one is answered here.
+  /// An operand naming the enclosing GENERIC declaration denotes an instance this parser does not
+  /// yet know — the body is compiled once per instantiation — so the read defers to
+  /// monomorphization. Everything else has no count to give and is refused with its line.
+  /// </summary>
+  private ExprResult EmitCountof(IrType operandType, Token operandToken) {
+    if (operandType is IrStructType stated
+        && stated.ConstParams.TryGetValue(IrStructType.CapacityConstParamName, out var count)) {
+      var litOp = new MaxonLiteralOp(count);
+      _currentBlock!.AddOp(litOp);
+      return new ExprResult.Direct(litOp.Result);
+    }
+
+    if (NamesEnclosingGenericDeclaration(operandToken, operandType)) {
+      if (_currentFunction is { IsLiftedClosure: true })
+        throw new CompileError(ErrorCode.CountofSelfInLiftedClosure,
+          $"{CountofKeyword} of '{CountofOperandSpelling(operandToken)}' inside a closure — a closure is "
+          + "lifted to its own top-level function, which is emitted once rather than compiled per "
+          + "generic instance, so the enclosing instance's element count is not in scope there. Read "
+          + $"`{CountofKeyword}(Self)` into a binding outside the closure and capture that",
+          operandToken.Line, operandToken.Column);
+
+      var countofOp = new MaxonCountofOp(operandType.Name, operandToken.Line, operandToken.Column);
+      _currentBlock!.AddOp(countofOp);
+      return new ExprResult.Direct(countofOp.Result);
+    }
+
+    throw new CompileError(ErrorCode.CountofTypeStatesNoElementCount,
+      $"{CountofKeyword} of '{CountofOperandSpelling(operandToken)}', which states no element count — only "
+      + "a generic instance applied to a count has one, which the `with N Type` form writes "
+      + "(`Vector with 3 Int`). A growable `Array`'s length is a runtime field of the record, not "
+      + "part of its type, so ask it for its `count()`",
+      operandToken.Line, operandToken.Column);
+  }
+
+  /// The name a refusal calls the operand. `Self` is reported as the declaration it denotes,
+  /// because "'Self' states no element count" tells a reader nothing they did not already write.
+  /// The null-forgiving read is sound by construction: a `Self` operand can only have reached
+  /// here through ResolveSelfAsCountofOperand, which refuses a null enclosing type outright.
+  private string CountofOperandSpelling(Token operandToken) =>
+    operandToken.Type == TokenType.SelfType ? _currentTypeName! : operandToken.Value;
+
+  /// <summary>
+  /// Whether a <c>countof</c> operand named the ENCLOSING declaration rather than an instance —
+  /// <c>Self</c>, or the declaration's own name, which denote one thing inside its own body. Both
+  /// spellings are tested because a check filed against one of them would be narrower than the
+  /// fact it is about.
+  ///
+  /// The GENERIC half is what keeps the deferral honest rather than merely postponing every
+  /// refusal: a declaration with no type parameters can never be instantiated <c>with N T</c> at
+  /// all (<see cref="PreScanTypeAlias"/> refuses it as <c>Type 'X' has no associated types</c>), so
+  /// there is no instance for monomorphization to find and the refusal belongs at the parse, with
+  /// a source position, instead of two passes later.
+  /// </summary>
+  private bool NamesEnclosingGenericDeclaration(Token operandToken, IrType operandType) =>
+    _currentTypeName != null
+    && (operandToken.Type == TokenType.SelfType || operandToken.Value == _currentTypeName)
+    && operandType is IrStructType { AssociatedTypeNames.Count: > 0 };
 
   private IrType ParseTypeRef() {
     // Function type: `function(ParamType, ...) returns ReturnType`. Only allowed
@@ -18872,9 +18977,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var token = Advance();
 
       // sizeof(TypeName) — compile-time type size query
-      if (token.Value == "sizeof" && Check(TokenType.LeftParen)) {
+      if (token.Value == SizeofKeyword && Check(TokenType.LeftParen)) {
         Advance(); // consume '('
-        var sizeType = ParseSizeofTypeArg();
+        var sizeType = ParseTypeQueryArg(SizeofKeyword);
         Expect(TokenType.RightParen);
         if (sizeType is IrTypeParameterType) {
           // Type parameter — defer to lowering (after monomorphization resolves T)
@@ -18885,6 +18990,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var litOp = new MaxonLiteralOp((long)sizeType.SizeInBytes);
         _currentBlock!.AddOp(litOp);
         return new ExprResult.Direct(litOp.Result);
+      }
+
+      // countof(TypeName) — compile-time element-count query. sizeof's twin one axis over:
+      // bytes per VALUE there, elements per INSTANCE here. See specs/countof.md.
+      if (token.Value == CountofKeyword && Check(TokenType.LeftParen)) {
+        Advance(); // consume '('
+        var operandToken = Current();
+        var countType = operandToken.Type == TokenType.SelfType
+          ? ResolveSelfAsCountofOperand(operandToken)
+          : ParseTypeQueryArg(CountofKeyword);
+        Expect(TokenType.RightParen);
+        return EmitCountof(countType, operandToken);
       }
 
       // Check for struct literal: TypeName{...} or TypeName { ... }.
@@ -26834,6 +26951,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     IrType? inferredReturnType = inferredFnType?.ReturnType;
     var closureFunc = new IrFunction<MaxonOp>(closureName, paramNames, paramTypes, inferredReturnType, null) {
       IsStdlib = _isStdlib,
+      IsLiftedClosure = true,
     };
 
     _currentFunction = closureFunc;
@@ -26942,6 +27060,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Create the final function with proper return type
     var finalClosureFunc = new IrFunction<MaxonOp>(closureName, finalParamNames, finalParamTypes, returnType, null) {
       IsStdlib = _isStdlib,
+      IsLiftedClosure = true,
     };
     // Copy the body from the temporary function
     foreach (var block in closureFunc.Body.Blocks) {

@@ -1,0 +1,21 @@
+// Test: error.countof-inside-a-closure
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function viaClosure() returns Int
+		let f = function() gives countof(Self)
+		return f()
+	end 'viaClosure'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.viaClosure()
+end 'main'
+---
+MaxoncStderr: ```
+error E2072: specs/fragments/countof/error.countof-inside-a-closure.test:7:36: countof of 'Vector' inside a closure — a closure is lifted to its own top-level function, which is emitted once rather than compiled per generic instance, so the enclosing instance's element count is not in scope there. Read `countof(Self)` into a binding outside the closure and capture that
+```
+---
+---

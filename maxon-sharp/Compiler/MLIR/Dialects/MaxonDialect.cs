@@ -126,6 +126,7 @@ public enum MaxonOpKind {
   IntToFloat,
   Cast,
   Sizeof,
+  Countof,
   Abs,
   Sqrt,
   Floor,
@@ -858,6 +859,36 @@ public sealed class MaxonSizeofOp(string typeName) : MaxonOp {
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
     new Dictionary<string, IrAttribute> { ["type"] = new StringAttr(TypeName) };
   /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
+}
+
+/// <summary>
+/// <c>countof(T)</c> — how many ELEMENTS one instance of a fixed-size container type holds, where
+/// <see cref="MaxonSizeofOp"/> answers how many BYTES one value occupies.
+///
+/// It exists for the same reason its twin does and defers for the same reason: an operand naming
+/// the enclosing declaration (<c>Self</c>, or the declaration's own name) does not yet name an
+/// INSTANCE, and the count is a coordinate of the instance. Monomorphization substitutes
+/// <see cref="TypeName"/> to the instance each copy of the body is compiled for, and the lowering
+/// folds it to a literal there — so a <c>countof</c> costs no code however it was written.
+///
+/// ⭐ IT CARRIES ITS OWN SOURCE POSITION, and that is not decoration. A Maxon op has no span (they
+/// are not a tier-wide facility here), so a refusal raised after the parse has nothing to blame:
+/// the only <c>countof</c> that can still fail at that point is one whose instance turns out to
+/// state no count, which is a fault in the user's INSTANTIATION and has to name their line.
+/// <see cref="MaxonCallOp.CallLine"/> carries a position for the same reason.
+/// </summary>
+public sealed class MaxonCountofOp(string typeName, int line, int column) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Countof;
+  public override string Mnemonic => "maxon.countof";
+  public string TypeName { get; set; } = typeName;
+  public int Line { get; } = line;
+  public int Column { get; } = column;
+  public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
+  public override IReadOnlyList<MaxonValue> Results => [Result];
+  public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
+    new Dictionary<string, IrAttribute> { ["type"] = new StringAttr(TypeName) };
+  /// Reads nothing — a leaf op, exactly as its sizeof twin is.
   public override IReadOnlyList<MaxonValue> Operands => [];
 }
 

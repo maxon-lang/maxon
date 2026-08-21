@@ -142,6 +142,35 @@ public static partial class MaxonToStandardConversion {
     };
   }
 
+  /// <summary>
+  /// The element count a deferred <c>countof</c> resolves to. By the time this runs,
+  /// monomorphization has rewritten the op's operand from the enclosing DECLARATION to the
+  /// INSTANCE this copy of the body was cloned for, and an instance either states a count or does
+  /// not.
+  ///
+  /// ⭐ THE REFUSAL IS A USER-FACING DIAGNOSTIC, NOT AN INTERNAL ERROR, and it is why the op
+  /// carries a position. What has gone wrong is an INSTANTIATION — the same declaration written
+  /// <c>Box with 3 Int</c> answers and written <c>Box with Int</c> does not — so it must name the
+  /// user's line and the instance, rather than surfacing as an E9001 with a C# stack trace the way
+  /// its <c>sizeof</c> twin's unresolved operand still does.
+  /// </summary>
+  private static long ResolveCountofElementCount(MaxonCountofOp op, IrModule<MaxonOp> module) {
+    if (module.TypeDefs.TryGetValue(op.TypeName, out var t)
+        && t is IrStructType instance
+        && instance.ConstParams.TryGetValue(IrStructType.CapacityConstParamName, out var count))
+      return count;
+
+    // No spelling is claimed: monomorphization has already rewritten the operand, so which of
+    // `Self` and the declaration's own name was written here is no longer knowable — and both
+    // denoted the instance now being named anyway.
+    throw new CompileError(ErrorCode.CountofTypeStatesNoElementCount,
+      $"countof of the enclosing generic, in a body compiled for '{op.TypeName}' — that instance "
+      + "states no element count. A count is a coordinate of the INSTANCE, and this one was applied "
+      + "to type arguments only: instantiate it with a count (`Box with 3 Int`) or read a runtime "
+      + "length instead",
+      op.Line, op.Column) { FilePath = _currentFuncSourceFile };
+  }
+
   private static void LowerUnaryFloat(
     Dictionary<MaxonValue, StdValue> valueMap,
     IrBlock<StandardOp> block,

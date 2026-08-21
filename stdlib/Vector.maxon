@@ -23,9 +23,20 @@ public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 	// Properties
 	// =========================================================================
 
-	/// Get the fixed size of the vector
+	/// Get the fixed size of the vector.
+	///
+	/// ⭐ IT ANSWERS FROM THE TYPE, NOT FROM THE RECORD. The count is a coordinate of the instance —
+	/// a `Vector with 3 Int` is a different type from a `Vector with 4 Int` — so `countof(Self)` is
+	/// the number itself, folded to a literal by both compilers, and no load happens at all.
+	///
+	/// ⛔ `managed.length()` is NOT the same question, and it is what this used to read. It answers
+	/// out of the RECORD, by a route that can disagree with the type: the buffer under a vector is
+	/// grown through the array's policy, whose minimum is 4, so a three-element vector's record has
+	/// a fourth slot the type has not got. A fixed size that can disagree with its own type is not
+	/// a fixed size. The two agree today for every vector `create()` builds, which is exactly why
+	/// the difference had to be closed by construction rather than left to a test to notice.
 	public function count() returns ElementCount
-		return managed.length()
+		return countof(Self)
 	end 'count'
 
 	/// Get element at index, throws if out of bounds

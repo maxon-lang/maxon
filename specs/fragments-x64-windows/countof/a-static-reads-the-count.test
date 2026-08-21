@@ -1,0 +1,120 @@
+// Test: a-static-reads-the-count
+typealias Int = int(i64.min to i64.max)
+typealias Box3 = Box with 3 Int
+
+var trips = 0
+
+type Box uses T
+	export var value as T
+
+	export static function counted(value T) returns Self
+		var i = 0
+		while i < countof(Self) 'each'
+			trips = trips + 1
+			i = i + 1
+		end 'each'
+		return Self{value: value}
+	end 'counted'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box3.counted(1)
+	return (b.value + trips) as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.call Box3.counted
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, qword [rip+trips]
+    x64.add rcx, rdx
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rcx, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rdi, [rbp-8]
+    x64.mov [rbp-16], rcx
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Box3.counted(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp Box3.counted.each_0.header
+  each_0.header:
+    x64.mov rax, 3
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge Box3.counted.each_0.exit
+  each_0:
+    x64.mov rax, qword [rip+trips]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov qword [rip+trips], rax
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-16]
+    x64.add rbx, rdx
+    x64.mov [rbp-16], rbx
+    x64.jmp Box3.counted.each_0.header
+  each_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-8]
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Box3(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Box3.done
+  done:
+    x64.ret
+  }
+}
+---

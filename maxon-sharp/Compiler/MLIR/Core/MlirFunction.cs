@@ -41,6 +41,15 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
   // These have no body and are never called via MaxonCallOp — they exist for type validation and LSP.
   public bool IsBuiltinSynthetic { get; set; }
 
+  // True for the top-level function a `function(...) gives ...` closure body was LIFTED into.
+  //
+  // It is emitted ONCE, and that is the whole content of the flag: monomorphization clones a
+  // generic's methods per instance, and a lifted closure is not one of them — it is a sibling at
+  // module scope that no instantiation reaches. So anything inside it that would have to be
+  // resolved against the enclosing method's instance simply cannot be, and `countof(Self)` is
+  // refused there (E2072) rather than reaching a later pass with an unsubstituted operand.
+  public bool IsLiftedClosure { get; set; }
+
   // Parameters that are directly reassigned (need pass-by-reference ABI).
   // Set by MaxonToStandardConversion before lowering.
   public HashSet<string>? ReassignedParams { get; set; }

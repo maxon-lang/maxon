@@ -146,6 +146,23 @@ end 'main'
 8
 ```
 
+<!-- test: sizeof.reads-a-typealias -->
+⭐ **READING A TYPE IS USING IT.** The operand is the only mention `Vec3` gets, and it is a real
+one. MEASURED before the operand parser marked it: `error E3062: unused typealias: 'Vec3'`, with
+the alias read on the very next line — a dead-declaration diagnostic fired by the live read it was
+looking for.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+function main() returns ExitCode
+	return sizeof(Vec3)
+end 'main'
+```
+```exitcode
+40
+```
+
 <!-- test: sizeof.type-parameter -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

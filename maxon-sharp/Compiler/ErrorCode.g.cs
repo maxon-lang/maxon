@@ -234,6 +234,40 @@ public enum ErrorCode {
   /// without knowing which intrinsic it is reading for.
   /// </summary>
   ParserUcdTableLabelUnknown = 2070,
+  /// <summary>
+  /// 'countof(T)' was asked of a type with no element count. A count is a coordinate of the
+  /// INSTANCE, which the 'with N Type' form writes -- 'Vector with 3 Int' states 3, and so does
+  /// any other generic instantiated that way. A ranged alias has no elements at all, and a
+  /// growable 'Array' keeps its length in the record rather than in its type, so neither has an
+  /// answer to give; 'arr.count()' is the runtime question.
+  /// IT ARRIVES FROM TWO STAGES, because the bootstrap decides the operand's instance in two
+  /// places. An operand that names a type outright is settled by the parser. 'Self', or the
+  /// enclosing declaration's own name, names an instance the parser does not yet know -- the
+  /// same body is compiled once per instantiation -- so it DEFERS, and monomorphization reports
+  /// it against the copy it was compiling, naming the instance. That is why an ordinary generic
+  /// written 'Box with 3 Int' answers where 'Box with Int' is refused: the declaration is not
+  /// what is being asked.
+  /// Answering 0 is not available: it is a sentinel no reader could tell from a real count.
+  /// maxon-shv2 refuses the same programs through its E2015 unsupported-construct catch-all,
+  /// and refuses more of them -- it does not monomorphize, so it can only ask whether the
+  /// enclosing declaration is the sized container it knows by name. specs/countof.md states
+  /// which shapes the two compilers part company on, and why.
+  /// </summary>
+  CountofTypeStatesNoElementCount = 2071,
+  /// <summary>
+  /// 'countof(Self)' was written inside a closure. A closure body is lifted to its own
+  /// top-level function, and that function is emitted ONCE rather than compiled per generic
+  /// instance -- so the enclosing method's instance, which is the whole source of the answer,
+  /// is not in scope there however the method itself was instantiated.
+  /// NOT E2071, which is about a type that HAS no count: here the type has one and the
+  /// position cannot reach it. The cure differs accordingly -- read 'countof(Self)' into a
+  /// binding outside the closure and capture the integer.
+  /// It is refused at the parse because the alternative is measured: the twin expression
+  /// 'sizeof' has no such gate, and 'sizeof(Element)' inside a closure in a generic body
+  /// reaches lowering with its operand unsubstituted and aborts as E9001 with a C# stack
+  /// trace and no source position at all.
+  /// </summary>
+  CountofSelfInLiftedClosure = 2072,
 
   /// <summary>
   /// The program declares no 'main' function.

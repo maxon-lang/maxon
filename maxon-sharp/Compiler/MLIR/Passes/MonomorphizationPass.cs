@@ -2217,6 +2217,12 @@ public static class MonomorphizationPass {
       case MaxonSizeofOp sz:
         sz.TypeName = sub.SubstituteName(sz.TypeName);
         break;
+      // `Self` and the declaration's own name are BOTH keys of the substitution map (see
+      // TypeSubstitution.Build), so whichever spelling the operand used lands on this copy's
+      // instance — which is where its element count lives.
+      case MaxonCountofOp co:
+        co.TypeName = sub.SubstituteName(co.TypeName);
+        break;
       case MaxonManagedMemClearOp memClear:
         memClear.IsBitPacked = memClear.IsBitPacked || sub.IsBitPackedElement(memClear.TypeParamName);
         break;

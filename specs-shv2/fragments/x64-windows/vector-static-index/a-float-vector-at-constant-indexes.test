@@ -35,6 +35,7 @@ func @main {
     x64.movsdRegRip xmm0, [rip + __fconst_4]
     x64.movqGprXmm rax, xmm0
     x64.leaRegRdata r9, [rip + __layout_Vector_N2_Float]
+    x64.movRegImm32 rsi, 2
     x64.movRegReg rcx, rbx
     x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
@@ -55,6 +56,7 @@ func @main {
     x64.movsdRegRip xmm0, [rip + __fconst_5]
     x64.movqGprXmm rax, xmm0
     x64.leaRegRdata r9, [rip + __layout_Vector_N2_Float]
+    x64.movRegImm32 rsi, 2
     x64.movRegReg rcx, rbx
     x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
@@ -161,9 +163,7 @@ func @Vector.count {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __managed_count
-    x64.epilogue 32
+    x64.movRegReg r8, rdx
     x64.popReg rbp
     x64.ret
 }
@@ -229,6 +229,7 @@ func @Vector.set {
     x64.movRegReg r13, rax
     x64.movRegReg r14, r9
     x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, rsi
     x64.callDirect Vector.count
     x64.cmpRegReg r12, r8
     x64.jcc greaterEqual, pastTheFixedSize

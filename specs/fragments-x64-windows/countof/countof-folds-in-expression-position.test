@@ -1,0 +1,37 @@
+// Test: countof-folds-in-expression-position
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Vec5 = Vector with 5 Int
+
+function main() returns ExitCode
+	let total = countof(Vec3) + countof(Vec5)
+	return total
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 3
+    x64.mov rcx, 5
+    x64.add rax, rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

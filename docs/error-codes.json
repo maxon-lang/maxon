@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "1038b43db11b9b40",
+  "sourceHash": "36cd25cf0a2f7f84",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -542,6 +542,24 @@
       "doc": "A '__Builtins.ucd*' load names a compiler-owned Unicode table its intrinsic does not read.\nEach intrinsic reads exactly ONE table, because the label and the STRIDE are one fact:\n'ucdByteAt' reads '__ucd_bmp', one byte per BMP codepoint, and 'ucdI64At' reads\n'__ucd_supp', an array of 8-byte packed range entries. Reading either with the other's\nstride cannot produce an answer -- only a wrong one -- so the pairing is refused rather\nthan assumed, and the message names the table the intrinsic DOES read.\n⚠ IT IS A SECURITY GUARD AND NOT A TYPO CHECK, which is why it is a refusal at the label\ntoken rather than a link failure later. Both reference compilers turned the label into a\nFILE NAME under the stdlib directory, so an unchecked one was a PATH TRAVERSAL: MEASURED,\nthe bootstrap answered '__Builtins.ucdByteAt(\"__ucd_../../../evil\", 0)' by reaching for\n'stdlib/helpers/string/ucd_../../../evil.bin' and reporting the miss as E9001 with a C#\nstack trace. v1 guards only the '__ucd_' PREFIX (LowerMaxonToStd.maxon:8464-8486), which\ndoes not close it: '__ucd_../../x' carries the prefix and still escapes. A ROSTER of the\ntables the compiler actually owns is what closes it, and it is the same roster in both\ncompilers.\nNOT E2010: a label that is not a string LITERAL at all is refused at the token by the\nordinary 'expected a string literal' rule, because that is a shape the parser can state\nwithout knowing which intrinsic it is reading for.",
       "emittedBy": {"csharp": "ParserUcdTableLabelUnknown", "shv2": "ucdTableLabelUnknown"},
       "notEmittedBy": ["selfhosted"]
+    },
+    {
+      "code": 2071,
+      "tag": "E2071",
+      "name": "CountofTypeStatesNoElementCount",
+      "stage": "parser",
+      "doc": "'countof(T)' was asked of a type with no element count. A count is a coordinate of the\nINSTANCE, which the 'with N Type' form writes -- 'Vector with 3 Int' states 3, and so does\nany other generic instantiated that way. A ranged alias has no elements at all, and a\ngrowable 'Array' keeps its length in the record rather than in its type, so neither has an\nanswer to give; 'arr.count()' is the runtime question.\nIT ARRIVES FROM TWO STAGES, because the bootstrap decides the operand's instance in two\nplaces. An operand that names a type outright is settled by the parser. 'Self', or the\nenclosing declaration's own name, names an instance the parser does not yet know -- the\nsame body is compiled once per instantiation -- so it DEFERS, and monomorphization reports\nit against the copy it was compiling, naming the instance. That is why an ordinary generic\nwritten 'Box with 3 Int' answers where 'Box with Int' is refused: the declaration is not\nwhat is being asked.\nAnswering 0 is not available: it is a sentinel no reader could tell from a real count.\nmaxon-shv2 refuses the same programs through its E2015 unsupported-construct catch-all,\nand refuses more of them -- it does not monomorphize, so it can only ask whether the\nenclosing declaration is the sized container it knows by name. specs/countof.md states\nwhich shapes the two compilers part company on, and why.",
+      "emittedBy": {"csharp": "CountofTypeStatesNoElementCount"},
+      "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 2072,
+      "tag": "E2072",
+      "name": "CountofSelfInLiftedClosure",
+      "stage": "parser",
+      "doc": "'countof(Self)' was written inside a closure. A closure body is lifted to its own\ntop-level function, and that function is emitted ONCE rather than compiled per generic\ninstance -- so the enclosing method's instance, which is the whole source of the answer,\nis not in scope there however the method itself was instantiated.\nNOT E2071, which is about a type that HAS no count: here the type has one and the\nposition cannot reach it. The cure differs accordingly -- read 'countof(Self)' into a\nbinding outside the closure and capture the integer.\nIt is refused at the parse because the alternative is measured: the twin expression\n'sizeof' has no such gate, and 'sizeof(Element)' inside a closure in a generic body\nreaches lowering with its operand unsubstituted and aborts as E9001 with a C# stack\ntrace and no source position at all.",
+      "emittedBy": {"csharp": "CountofSelfInLiftedClosure"},
+      "notEmittedBy": ["selfhosted", "shv2"]
     },
     {
       "code": 3001,

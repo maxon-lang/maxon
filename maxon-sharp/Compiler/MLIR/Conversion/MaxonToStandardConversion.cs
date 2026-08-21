@@ -2126,6 +2126,12 @@ public static partial class MaxonToStandardConversion {
               valueMap[sizeofOp.Result] = constOp.Result;
               break;
             }
+            case MaxonCountofOp countofOp: {
+              var constOp = new StdConstI64Op(ResolveCountofElementCount(countofOp, module));
+              newBlock.AddOp(constOp);
+              valueMap[countofOp.Result] = constOp.Result;
+              break;
+            }
             case MaxonAbsOp absOp:
               LowerUnaryFloat(valueMap, newBlock, absOp.Input, absOp.Result, i => new StdAbsF32Op(i), i => new StdAbsF64Op(i));
               break;
