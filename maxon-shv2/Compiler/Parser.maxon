@@ -57957,6 +57957,30 @@ export type Parser
 	// union of the two declared-record cases, so it is asked FIRST to send the byte records away; only then
 	// is the sized half separated from the growable one, which is the same rank order
 	// `bufferSurfaceOfDeclaredRecord` above uses and for the same reason.
+	//
+	// ⛔⛔ **THE FIRST ARM IS A NEGATION, SO IT ANSWERS FOR A FOURTH SHAPE THE CENSUS ABOVE DOES NOT NAME,
+	// AND WHAT MAKES THAT SAFE IS A REACHABILITY ARGUMENT THAT LIVES IN ANOTHER FUNCTION (W194 second
+	// review).** `declarationsValueIsTheManagedRecord` is false for `String` and `Character` — and equally
+	// false for ANY OTHER conformer of one of `stdlib/Builtins.maxon`'s three literal markers, which a user
+	// file may perfectly well declare (`type Bag implements BuiltinArrayLiteral`). Such a wrapper is handed
+	// the compiler's byte buffer here, which is the same stride lie W194 exists to delete — one shape further
+	// out.
+	//
+	// ⇒ **IT CANNOT PRODUCE A WRONG ANSWER BECAUSE THAT SHAPE CANNOT PRODUCE A VALUE**, and that is
+	// `Parser.requireFusedWrapperTag`'s doing, not this function's: shv2 mints a fused record only for the
+	// two NAMES it owns the record for, so every other marked conformer is refused at its `Self{…}` literal
+	// (`specs-shv2/interface-conformance.md` pins it, with the **exit 0xC0000005** the refusal replaced).
+	// MEASURED at this review, on this tip: a `type Bag implements BuiltinArrayLiteral` over a CONCRETE
+	// `__ManagedMemory with String`, whose `init` panics so no literal is ever written, COMPILES — and its
+	// body's `managed.setByte(0, 65)` is admitted through this arm, exactly as the pre-cure `Array` was.
+	// It leaks nothing only because no `Bag` can exist to be written into.
+	//
+	// ⚠ **SO THE ARM IS CORRECT TODAY AND ITS CORRECTNESS IS BORROWED.** It is left as a negation rather
+	// than turned into a positive `byteRecordTagOfTypeName` test with a `panic` terminal, because that
+	// panic would fire on programs the suite currently accepts — `interface-conformance.md`,
+	// `array-declared-record.md` and three more declare marked conformers under five other names, and each
+	// is pinned on the E2015 it gets today, not on a compiler abort. Widening `requireFusedWrapperTag`'s
+	// refusal from the LITERAL to the DECLARATION would retire the borrowing entirely and is its own row.
 	function bufferSurfaceInstanceOf(box ValueId, layout StructLayout) returns GenericInstanceId
 		if not self.signatures.declarationsValueIsTheManagedRecord(layout.name) 'aByteRecordsBufferIsTheCompilersOwn'
 			return self.signatures.internSynthesizedByteInstance()
@@ -58050,13 +58074,23 @@ export type Parser
 	//         LayoutDescriptor.maxon:571: primitiveTypeByteSize`, through E3118's stride test.
 	//       • OPAQUE element, `self.managed.setByte(…)` — the SAME panic, differing only in the frames
 	//         above it. That spelling did this on the base too; the bare one compiled clean and leaked.
-	//     ⚠ **A BARE FUSED `setByte` ON A NON-BYTE RECORD IS *ALWAYS* THE OPAQUE CASE**, because the only
-	//     bodies that can spell it are the declaration's own and its extensions, where the element IS the
-	//     type parameter — so E3110 is unreachable from this door by construction and the panic is what a
-	//     generic body meets. That panic is PRE-EXISTING on the value path, present identically on the merge
-	//     base, and replacing it with a positioned refusal (or a deferral of the stride question to
+	//     ⚠ **A BARE FUSED `setByte` OVER A RECORD THIS COMPILER OWNS IS *ALWAYS* THE OPAQUE CASE**, because
+	//     the only bodies that can spell it are that declaration's own and its extensions — and the two
+	//     declarations whose record the compiler owns, `Array` and `Vector`, are both GENERIC, so the element
+	//     there IS the type parameter. E3110 is therefore unreachable from this door for them, and the panic
+	//     is what a generic body meets. That panic is PRE-EXISTING on the value path, present identically on
+	//     the merge base, and replacing it with a positioned refusal (or a deferral of the stride question to
 	//     instantiation) is a row of its own: it needs a spec to choose between them. W194 changed which
 	//     ELEMENT the door on the other side is asked about, never what it asks.
+	//     ⛔ **THE SENTENCE ABOVE SAID "ON A NON-BYTE RECORD" AND THAT IS WIDER THAN THE ARGUMENT SUPPORTS
+	//     (W194 second review).** A user file may declare its own marked conformer over a CONCRETE element
+	//     — `type Bag implements BuiltinArrayLiteral` holding a `__ManagedMemory with String` — and spell
+	//     `managed.setByte(0, 65)` in its own body, which is a bare fused `setByte` on a non-byte record
+	//     that is NOT the opaque case. MEASURED on this tip: it COMPILES, and the write is admitted, because
+	//     `bufferSurfaceInstanceOf`'s first arm hands such a wrapper the compiler's BYTE buffer — the same
+	//     lie, one shape further out. It cannot leak only because no such value can be constructed
+	//     (`requireFusedWrapperTag` refuses the `Self{…}` literal); see that function's header for the
+	//     borrowing, and this door's own for why the arm is left as it is.
 	//   • `append(other)` -> `__managed_append` — reads both records' `@24` and ABORTS on a mismatch, which two
 	//     String records pass (1 == 1); `__managed_move_elems` takes raw buffers and a stride as ARGUMENTS.
 	//     ⛔ **THIS IS THE ENTRY THE MISSING RECORD TEST BIT (W194).** Its PARSE-TIME admission consults the
@@ -62415,7 +62449,14 @@ export type Parser
 				return self.bufferSurfaceOfDeclaredRecord(box, layout: layout, range: range)
 			end 'theRecordISTheBuffer'
 
-			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
+			// ⚠ **THE MINTED VIEW WEARS THE INSTANCE `bufferSurfaceInstanceOf` NAMES, AND NO LONGER A CONSTANT
+			// SPELLED HERE (W194 second review).** This is the THIRD door asking *"which instance does this fused
+			// wrapper's buffer surface wear?", and it answered by writing `internSynthesizedByteInstance()` out
+			// again — while that function's FIRST ARM answers the identical thing behind the identical predicate,
+			// `declarationsValueIsTheManagedRecord`, which is the very test the arm above just made. Provably the
+			// same value, so this is a spelling removed and not a behaviour changed; what it buys is that a second
+			// byte-record instance can never be taught to two of the three doors and missed at the third.
+			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.bufferSurfaceInstanceOf(box, layout: layout), range: range)
 			self.markBufferSurface(view)
 			return view
 		end 'inlineManagedIsTheReceiver'
