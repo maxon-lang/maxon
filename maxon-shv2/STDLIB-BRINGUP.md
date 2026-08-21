@@ -1,5 +1,16 @@
 # The stdlib bring-up table — MEASURED 2026-08-05
 
+> ## ⚠ THE LIVE STATE IS THE LAST SECTION OF THIS FILE. EVERY TABLE ABOVE IT IS DATED.
+>
+> **This file is a stack of dated measurements, not a status page** — it is appended to and corrected,
+> never edited into agreement, because that is what caught four classification errors in one day. So
+> **read the last section first**, and treat every earlier count, class and blocker as true *on its own
+> date*. The remainder is deliberately written down in ONE place here (and on `PLAN.md`'s board); a
+> second copy in this banner would be the duplicate-fact bug this file keeps filing against others.
+>
+> ⇒ **RE-PROBE BEFORE PLANNING AGAINST ANY ROW.** It is one command per module and it has changed the
+> answer every single time somebody bothered.
+
 **Tree:** `C:\Users\Eric\dev\maxon` @ `7bc83ac7d`, clean. **Binaries:** `bin/maxon.exe` and
 `maxon-shv2/.maxon/maxon-shv2.exe` both rebuilt immediately before the run.
 **Scope:** measurement only. **No source file was changed** (`git status --short` empty after the run).
@@ -726,6 +737,9 @@ code bytes** — that Δ0 was the RED. Code size 6,077 → 11,795. `Set` leaves 
 
 ### The remaining shape — 9 actionable modules
 
+⛔ **SUPERSEDED 2026-08-20** — eight of these nine have since landed or been retired; see the final
+section. Kept for its dated reading and for the `Set` control below it.
+
 | kind | modules | can an unrelated rung clear it? |
 |---|---|---|
 | **Synthesized-twin chains** | ~~`Set`~~ ✅ · `Vector` · `List` · `PrimitiveExtensions` | ⛔ no |
@@ -802,6 +816,8 @@ one instruction changed. `5890 passed, 0 failed` throughout.
 
 ### The remaining shape — 9 actionable modules, unchanged
 
+⛔ **SUPERSEDED 2026-08-20** — see the final section.
+
 `W105`/`W93` clear no bring-up row: `slotScan.maxon` is a NEW file rather than one of the 12, and the
 deletion removes compiler code rather than unlisting anything. The table under *The remaining shape — 9
 actionable modules* stands as written.
@@ -845,5 +861,182 @@ buy something real.
 `W115`'s first sabotage did not move the answer *and the executable was byte-identical*. The cause was
 not inertness: **shv2 DISCARDS a `return` and runs the code after it** (no `E3071`, and the early return
 is absent from the emitted IR). ⇒ **a sabotage placed before an existing `return` is silently
-discarded, so this file's central instrument reads INERT on a module that is LIVE.** Until `W118` lands,
+discarded, so this file's central instrument reads INERT on a module that is LIVE.** ~~Until `W118`
+lands,~~ ✅ **`W118` CLOSED 2026-08-14** — a block's terminator lived in a SLOT rather than as the last
+op, so `setTerminator` on an already-terminated block silently dropped the earlier one. The condition
+is met; keep the practice anyway, because it costs nothing:
 **place the sabotage where no earlier `return` precedes it.**
+
+---
+
+# ✅✅ `Vector` IS FINISHED AND THE REMAINDER IS ONE CONE — 2026-08-20, `W190`, main `ce302984b3`
+
+**Written back by the refresh that measured it, on this file's standing rule** — and it was six days
+overdue: nothing had refreshed the tables above since 2026-08-14, while `W153` (`List`), `W188`
+(`PrimitiveExtensions`), `W189` + `W190` (`Vector`) and the attached-subprocess runtime (`Subprocess`)
+all landed. **Every number below is one command on `ce302984b3`, clean, with BOTH binaries rebuilt
+immediately before the sweep** (`build csharp` → `build shv2`).
+
+## The census — counted, not scraped
+
+```
+find stdlib -name '*.maxon' | wc -l                                  ⇒ 52
+grep -c '^\s*try listWhitelistedModule' Compiler/StdlibLoader.maxon  ⇒ 48
+```
+
+**52 − 48 = 4 unlisted; `Internals.maxon` is EXCLUDED PERMANENTLY (§H) ⇒ 3 ACTIONABLE, AND ALL THREE
+ARE ONE CONE.** ⚠ Count the CALLS: `Builtins.maxon` is listed through the constant
+`CompilerInternalDeclaringModule`, so every argument scrape ever run against this loader has missed it
+(`W131` made that mistake three times).
+
+| module | first diagnostic, re-probed today | class |
+|---|---|---|
+| `TcpClient.maxon` | `E3004 :23:34` — `__ManagedSocket.tcpConnect`, no intrinsic of that name exists | **runtime slice** |
+| `HttpClient.maxon` | `E2015 :176:18` — member access `send` on an `unknown` value | behind `TcpClient` |
+| `helpers/http/httpHelpers.maxon` | `E3011 :4:9` — Unknown type `HttpMethod` | behind `HttpClient` |
+| `Internals.maxon` | `E2051 :26:10` — `__mm_incref` is reserved | **EXCLUDED**, user ruling 2026-08-05 |
+
+⚠ **A first error is still a LOWER BOUND.** `HttpClient` and `httpHelpers` have never been measured
+past `TcpClient`'s absence, so their rows say only *"at least this"*.
+
+## `Vector`'s residue is ZERO — the first surface ever to reach it
+
+`vectorSurfaceMemberNames`, `dispatchVectorMethod`, `elementAccessCallee`, `MemberSurface.vector`,
+`vectorMethodMutatesReceiver` and `Runtime/VectorRuntime.maxon` are **DELETED**. Six roster functions
+remain (`buffer` 19 · `cursor` 6 · `array` 9 · `string` 0 hand-written · `character` 3 ·
+`stringIndex` 2) and `vector` is not among them; the 13 surviving mentions under `Compiler/` are
+graves. **`ARR4`'s rule — *a roster is the RESIDUE of what could not retire* — has reached zero on a
+surface for the first time.**
+
+⭐ **THE DIFFERING-DECLARATIONS CONTROL, RUN HERE RATHER THAN INHERITED, ON ALL THREE MEMBERS A
+PROGRAM CAN OBSERVE.** Injected IN PLACE against a backup, `git status stdlib/` empty afterwards, and
+each sabotage placed where no earlier `return` precedes it:
+
+| sabotage in `stdlib/Vector.maxon` | intact | sabotaged |
+|---|---|---|
+| `count()` ⇒ `return countof(Self) + 100` | `count=3` | **`count=103`** |
+| `get` ⇒ `managed.get(index + 1000)` | `g0=7` | **`g0=-1`** (the `otherwise` arm) |
+| `create()` ⇒ writes `42` into slot 1 | `g1=0` | **`g1=42`** |
+
+⇒ **listed, live, and the declaration is the whole implementation.** (`W118` is CLOSED — 2026-08-14 —
+so the condition on this file's closing warning is met; the placement rule under it costs nothing and
+stays.)
+
+### ⛔ THE PLANNED MECHANISM WAS WRONG, WAS BUILT BEFORE IT WAS DISBELIEVED, AND SO WAS ITS REPAIR
+
+`W190`'s row prescribed a tenth layout-descriptor word `fixedElementCount@72`. It was built and then
+MEASURED: a `Vector with 4 Element` field reached from inside `type Holder uses Element` answered
+**exit 64 where 68 is the answer**, the capacity reading 0. `emitInstanceDescriptorAddr` FORWARDS the
+caller's descriptor blocks when the callee's instance is written over the caller's parameters — sound
+only because **every word in that blob is a fact about the type ARGUMENT, and a count is a fact about
+the INSTANCE.** The row's own fallback (*"refuse the forward, minting is always correct"*) is
+unreachable in exactly the case the forward fires, and `vector.md`'s already-green
+`capacity-is-part-of-instance-identity` is that shape. ⇒ the count travels in its own hidden trailing
+parameter, reserved by the same whole-program fixpoint over the same self-call graph, correct because
+the count is a compile-time constant at every call site. **A briefed mechanism is a prediction; this
+one was disbelieved by its own first measurement.**
+
+### ⛔⛔ THE CONSTRAINT THIS RUNG FOUND THAT NOTHING IN THE TREE HAD WRITTEN DOWN — READ IT BEFORE THE NEXT RETIREMENT
+
+**`stdlib/` IS COMPILED BY THE BOOTSTRAP, SO A NEW shv2 LANGUAGE FEATURE IS UNUSABLE BY THE CORPUS
+UNTIL THE BOOTSTRAP IMPLEMENTS IT TOO.** Measured on the first build after the corpus was edited:
+
+```
+error E2004: stdlib/Vector.maxon:30:26: Undefined function 'countof'
+    out of  ./bin/maxon.exe build maxon-shv2
+```
+
+`countof` is now in BOTH compilers (the bootstrap monomorphizes and folds it to a literal; shv2 passes
+the parameter). ⇒ **every remaining retirement that needs a new spelling costs a bootstrap change
+first**, and this file's three readiness questions do not ask about it. It is a fourth.
+
+### The cost, both numbers, and what the rung filed
+
+**5,802 → 6,761 code bytes (+16.5%)** on a program using all four retired members; **+6.4%** on image
+for another — accepted by user ruling, not discovered. `Vector.count` went from a prologue +
+`callDirect __managed_count` + epilogue to a `movRegReg`, which was **not** the argument for doing it.
+Gate: shv2 **6441/0**, C# **3397/0**, no leak; ladder A/B'd like-for-like, no bend. Three rows filed:
+**`W191`** (the deleted constant-index bounds-check elision, and why it must not come back as a
+call-site rule), **`W192`** 🔴 (`count()` answers from the TYPE while `get` and the walk answer from the
+RECORD — `managed.clear()` through an `extension Vector` gives `count=3 walked=0`), **`W193`** 🔴🔴
+(pre-existing: `sizeof(Nope)` on an undeclared name compiles and answers 8, where the bootstrap
+refuses).
+
+## ⚠ LISTED IS NOT FINISHED — the residual rosters, counted today
+
+The remaining bring-up is no longer mostly about the whitelist. **48 of 52 modules are listed; what is
+left inside them is what the compiler still serves itself:**
+
+| surface | members still compiler-served | note |
+|---|--:|---|
+| `Vector` | **0** | ✅ `W190` — the first zero |
+| `String` | **0 hand-written** | the roster is DERIVED (`builtinConformerMethodNameList`); `W49`/`W55` emptied the hand-written half |
+| `StringIndex` | 2 | `charIndex`, `bytePos` — no corpus module declares this type |
+| `Character` | 3 | `byteView`, `byteLength`, `asciiValue` |
+| `Array` | **9** | `managed` `get` `set` `first` `count` `push` `resize` `append` `appendMemory` — the `ARR3`/`ARR4` chain, and `push` alone is FIVE independent mechanisms |
+| `__ManagedMemory` buffer · cursor | 19 · 6 | **BY DESIGN** — the raw primitive the corpus is written OVER, like `__ManagedList`/`__ManagedFile`. Not bring-up residue |
+
+Two more that are not rosters:
+
+- **`PrimitiveExtensions` retains `int.toString`** (`Parser.primitiveMembersTheCompilerRetains`, `W188`):
+  the renderer reads the receiver's DECLARED RANGE and the corpus `self` erases it to a signed `i64`.
+- **`Interfaces.maxon` owes TWO CONVERGENCE RUNGS**, both stated at its own entry
+  (`StdlibLoader.maxon:1044-1075`): the ten protocol interfaces are **declared AND synthesized**, and
+  `lookupInterface` answers from the synthesized copy first — so the parsed declarations are **INERT**,
+  and moving that moves the WITNESS layout; and `HashValue`'s declared `int(0 to u32.max)` bounds are
+  not enforced (it erases to `integer` through `isSynthesizedIntAliasName`), so `insertRangeChecks`
+  guards no `hash()` return.
+
+⚠⚠ **AND ONE LIVE WRONG ANSWER SITS INSIDE THE LISTED CONE — RE-MEASURED TODAY, BOTH COMPILERS.**
+`W101`: two `Array with String` each holding `"a"` ⇒ shv2 **`equals=false`**, bootstrap **`equals=true`**.
+`Array.hash`/`equals` are byte-identity, so a managed element satisfies `Hashable` **without its
+semantics**. A retirement moves a member into the corpus; it does not make the member right.
+
+⛔ **AND ONE CLAIM THIS FILE'S NEIGHBOURS CARRY IS STALE, CORRECTED HERE RATHER THAN LEFT TO ROT:**
+`ARR3`'s *"`contains` COMPILES AND FAULTS (`0xC0000005`)"* **does not reproduce** —
+`[10,20].contains(10)` answers `true`, and the closure form
+`contains(function(x int) gives x == 10)` answers `true`. Whatever fixed it did not write back either.
+
+## The remaining shape — 2026-08-20
+
+| kind | what | can an unrelated rung clear it? |
+|---|---|---|
+| **Runtime slice** (the last listing) | `TcpClient` → `HttpClient` → `httpHelpers` | ⛔ no — no socket intrinsic exists |
+| **Roster residue** | `Array` (9) · `Character` (3) · `StringIndex` (2) · `int.toString` | ⛔ no — each is a retirement with its own blockers |
+| **Convergence** | `Interfaces.maxon`'s ten synthesized protocols · `HashValue`'s bounds | ⛔ no |
+| **Defects inside a listed module** | `W101` · `W192` · `W193` | — ordinary rungs |
+| **Excluded permanently** | `Internals.maxon` | — user ruling |
+
+**Not one of these is a whitelist line, and there has been no "ordinary gap that falls out of an
+unrelated rung" in this workstream since `Json` and `Testing` landed** — the third sweep's finding,
+still holding six days and eight modules later.
+
+## The socket slice, SIZED rather than predicted
+
+```
+grep -c ManagedSocket maxon-shv2/Compiler/Parser.maxon   ⇒  0
+```
+
+**The whole builtin type is absent — this is not one missing intrinsic.** What the two references
+agree on, and what the corpus actually calls:
+
+- **The type**: a single-i64-handle struct with a runtime-owned destructor that closes on drop —
+  bootstrap `2-Parser.cs:1458-1464`, v1 `LowerMaxonToStd.registerManagedSocketType:2118`. It is the
+  `__ManagedFile` handle mechanism `R4.1` already built in shv2, one type over.
+- **The error enum** `__ManagedSocketError` (bootstrap `2-Parser.cs:1496-1500`).
+- **Exactly four methods**, and `stdlib/TcpClient.maxon` calls all four and nothing else:
+  `tcpConnect` (`:23`), `sendFrom` (`:43`), `recv` (`:65`), `close` (`:93`) — bootstrap
+  `2-Parser.cs:1576-1583`.
+- **An x64-windows socket runtime**, with **REFUSALS and not fake lowerings** on arm64 and wasm. The
+  attached-subprocess rung (`180037f32b`, 2026-08-20) is the shape precedent in every respect,
+  including its own hard-won rule: ⛔ **the surface without the floor is worse than neither** — an
+  earlier attempt declared the names with no runtime behind them and turned a clean `E3004` into a
+  backend panic.
+
+**Acceptance material already exists and is canonical**: `managed-socket` (3 cases) · `tcp-client` (3) ·
+`async-tcp` (5) · `http-client` (7) = **18**, of which v1 excludes **7 as live-host** (`tcpbin.com`,
+`httpbin.org` — `liveNetworkFragments`) and **2 as unported async traces** ⇒ **9 deterministic
+error-path cases**, which is what a first slice can gate on. v1 runs the set host-only on
+**x64-windows only** (`targetRunsNetworking`) — narrower than subprocess's any-non-wasm gate.
+⚠ `W125` is the standing warning here: **a suite whose verdict depends on the public internet is not
+always a claim about the code.**
