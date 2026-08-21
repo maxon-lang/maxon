@@ -1,0 +1,19 @@
+// Test: field-store-after-move-on-assign
+type Point
+	export var x as int
+
+	static function create(x int) returns Point
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create(7)
+	var q = Point.create(1)
+	q = p
+	p.x = 99
+	return q.x
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:14:2: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment

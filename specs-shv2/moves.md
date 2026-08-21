@@ -259,6 +259,219 @@ end 'main'
 error E3102: <fragment>:12:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+### An Immutable Source Is Aliased at the Assignment Door Too — and the Second Name Takes Its Own Reference
+
+`s = t` MOVES when `t` is a `var` (above) and ALIASES when `t` is a `let`. That is the same ownership
+ruling (2026-08-04) the DECLARATION door already applies at `immutable-rebind-aliases`: what makes two
+names for one value safe is MUTABILITY, not linearity, so an immutable source is never left moved-from
+and every name stays readable.
+
+⚠ **THE TWO DOORS AGREE ON THE RULE AND NOT ON WHAT IT COSTS.** A declaration's alias is free — the new
+name is declared INSIDE the source's scope, so the source outlives it and keeps the one drop, and no
+refcount is involved. An assignment's destination already exists, at a scope depth this door cannot
+bound, and already owes a drop of its own — so it must hold a REFERENCE of its own, or the two names
+would release one box twice. The store takes one (`__mm_retain` / `__str_retain`) and the source keeps
+the one it has always held: the same co-ownership the 2026-08-12 durable-store ruling gives a struct
+field, a container element and a by-reference parameter's cell.
+
+<!-- test: immutable-rebind-on-assign-aliases -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	var a = build(1)
+	var b = build(2)
+	let t = build(3)
+	a = t
+	b = t
+	print(a)
+	print(b)
+	print(t)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v3v3v3
+```
+
+### The Destination May Outlive the Source, Which Is Why the Reference Has To Be Real
+
+`kept` is declared OUTSIDE the block that declares `short`, so an alias that merely skipped the poison
+would leave `kept` naming a box the block exit had already freed — a use-after-free, and a second
+release at `kept`'s own scope exit that the leak gate reports as exit 101. The retain is what makes the
+two releases match the two references. The `print(short)` inside the block is the half a MOVE rejects.
+
+<!-- test: immutable-rebind-on-assign-outlives-its-source -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	var kept = build(1)
+	if true 'inner'
+		let short = build(2)
+		kept = short
+		print(short)
+	end 'inner'
+	print(kept)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v2v2
+```
+
+### The Harness's Own Shape: One Immutable Index, Two Outer Cursors
+
+The loop `SpecParser.parseProgramArgs` is built from — a per-iteration `let next` handed to two `var`s
+declared outside the loop, because the next segment's start and the next character's position ARE that
+one index. Under a move it was `E3102` on the second assignment, for a program whose three names only
+ever read. Each iteration takes two references and releases the two the previous iteration left, so the
+box count is flat across the loop.
+
+<!-- test: immutable-rebind-on-assign-two-cursors-in-a-loop -->
+```maxon
+typealias Step = int(0 to 100)
+
+function main() returns ExitCode
+	let payload = "abcd"
+	var segmentStart = payload.startIndex()
+	var pos = payload.startIndex()
+	var at = 0 as Step
+	while at < 3 'eachCharacter'
+		let next = try payload.indexAfter(pos) otherwise panic("indexAfter failed inside the guarded range")
+		segmentStart = next
+		pos = next
+		at = at + 1
+	end 'eachCharacter'
+	print("{payload.slice(payload.startIndex(), endIndex: segmentStart)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+abc
+```
+
+### An Immutable Source Declared Outside the Loop Is Assignable From Inside It
+
+The loop-escape refusal exists because a MOVE across a loop boundary has no reconciliation — the back
+edge would re-move the binding, and a `break` would leave it live on one exit while giving it away on
+the other. An immutable source is never moved, so there is nothing to reconcile: each iteration takes
+one reference and releases the one the previous iteration took, and the source's own drop is untouched.
+
+<!-- test: immutable-rebind-on-assign-from-outside-a-loop -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Step = int(0 to 100)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	let src = build(9)
+	var dest = build(0)
+	var i = 0 as Step
+	while i < 2 'spin'
+		dest = src
+		i = i + 1
+	end 'spin'
+	print(dest)
+	print(src)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v9v9
+```
+
+### The Second Name Is a Second NAME, Not a Copy
+
+The reference the destination takes is a reference to the SAME box, so a write through it shows on the
+source — reference semantics, exactly as `let q = p` has at the declaration door and exactly as a
+container element and a struct field already do for a value read out of an immutable `let`.
+
+⚠ **THE DECLARATION SPELLING OF THESE THREE LINES IS E3078** (`error.var-from-immutable-struct`), and
+that is not an inconsistency to be tidied away: E3078 is asked where a mutable NAME IS DECLARED for an
+immutable name's value, which is a rule about declarations in all three compilers — the bootstrap asks
+it at `ParseVarOrLetDecl`, v1 at `checkVarFromImmutableForEntry`, and neither asks it at an assignment.
+shv2's move model closed this door as a SIDE EFFECT of poisoning the source rather than by any rule,
+and closing it here while a container element and a struct field stay open would be a fourth answer to
+one question rather than a guarantee.
+
+<!-- test: immutable-rebind-on-assign-is-a-second-name -->
+```maxon
+type Point
+	export var x as int
+
+	static function create(x int) returns Point
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(7)
+	var q = Point.create(1)
+	q = p
+	q.x = 99
+	print("{p.x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99
+```
+
+### A MUTABLE Source Assigned Away Still Moves, and a Write Through Its Old Name Is Still Refused
+
+The assignment twin of `field-store-after-move`, and the boundary of the exemption above: what exempts
+a rebind is the SOURCE's `let`, never the assignment. `p` is a `var`, so `q = p` MOVES it and `p.x = 99`
+writes a box `p` no longer owns.
+
+<!-- test: field-store-after-move-on-assign -->
+```maxon
+type Point
+	export var x as int
+
+	static function create(x int) returns Point
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create(7)
+	var q = Point.create(1)
+	q = p
+	p.x = 99
+	return q.x
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:14:2: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
 ### Reassign Revives a Moved-From Var
 
 `a` is moved into `b`, then `a` is reassigned a fresh value. The write REVIVES `a` — it owns the new

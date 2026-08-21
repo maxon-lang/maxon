@@ -26364,7 +26364,7 @@ export type Parser
 			// rebound — a parameter is E2013 — so a consumed owned parameter is a perfectly safe thing to
 			// alias. Two questions, two predicates; collapsing them would either leak a rebound box or refuse
 			// a legal alias.
-			if boundBareLocal and not self.scope.getInfo(sourceName).mutable 'aliasImmutableSource'
+			if boundBareLocal and self.rebindSourceIsAnImmutableAlias(sourceName) 'aliasImmutableSource'
 				// `poisonMoveSource` must now consider more than the owned set: a consume of this value
 				// (`f(b)`, `return b`) poisons its OWNER, and this name would go on reading a value the callee
 				// took. The flag keeps that scan off every function that mints no alias — the overwhelming
@@ -26806,7 +26806,7 @@ export type Parser
 
 		try self.requireMutableBinding(binding, nameTok: nameTok)
 		self.noteLocalRebind(func, nameIndex: nameIndex, anchor: nameTok)
-		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: element, rhsWasBareLocal: false)
+		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: element, rhsBareLocalName: EmptySourceText)
 	end 'rebindTupleAssignTarget'
 
 	// The tuple layout `value` must have for a destructuring pattern over `nameToks` to mean anything: a tuple
@@ -27179,10 +27179,12 @@ export type Parser
 
 		let rhsStart = self.pos
 		let parsedValue = try self.parseExpression(func, block: block)
-		// Was the RHS a bare reference to a local (`s = t`)? Only then can this assignment MOVE an owned
-		// value out of a source binding; every other RHS is a consume. Captured off the token position
-		// so `reassignBindingValue` gates the poison's owned-set scan on it (see `rhsWasBareLocalReference`).
-		let rhsWasBareLocal = self.rhsWasBareLocalReference(rhsStart)
+		// WHICH local the RHS was a bare reference to (`s = t`), empty for every other RHS. Only that shape
+		// can MOVE an owned value out of a source binding; every other RHS is a consume. The NAME rather
+		// than the bool, because the rebind asks two questions of it — may this poison anything, and was
+		// that local declared `let` (`rebindSourceIsAnImmutableAlias`) — and one walk answers both. Captured
+		// off the token position, before any further token is consumed (see `rhsBareLocalSourceName`).
+		let rhsBareLocalName = self.rhsBareLocalSourceName(rhsStart)
 
 		// ⭐ AN ASSIGNMENT IS AN INTEGER-EXPECTING POSITION when the binding declares an integral type, so a
 		// character literal RHS coerces to its codepoint — `b = '0'` into a `var b Byte`. A `Character` binding
@@ -27190,7 +27192,7 @@ export type Parser
 		let declaredTag = maxonTypeTag(binding.varType)
 		let value = try self.integerizedOperand(parsedValue, expected: declaredTag, start: rhsStart, pastEnd: self.pos)
 
-		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
+		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: value, rhsBareLocalName: rhsBareLocalName)
 	end 'parseAssignment'
 
 	// ⭐⭐ **E3070's LOCAL REBIND DOOR — the guard and the subject derivation, in one place because TWO
@@ -27216,7 +27218,7 @@ export type Parser
 	// complaints about one statement (`let x = 0` / `x = nosuch()` reports E2013 today, the RHS's error
 	// afterwards). A tuple assignment cannot ask them there — its RHS is evaluated once, ahead of every
 	// target — so it asks them per target, in target order, which is the order its own pins read in.
-	function completeLocalRebind(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
+	function completeLocalRebind(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray) throws ParseError
 		let declaredTag = maxonTypeTag(binding.varType)
 		let valueTag = self.tagOf(value)
 
@@ -27256,11 +27258,11 @@ export type Parser
 		// contents live in memory, where a later read will find them. The release of the displaced occupant is
 		// the same obligation, discharged against the memory rather than against a value id.
 		if binding.isCellBinding 'livesInACell'
-			try self.reassignCellBinding(binding, nameTok: nameTok, value: assigned, rhsWasBareLocal: rhsWasBareLocal)
+			try self.reassignCellBinding(binding, nameTok: nameTok, value: assigned, rhsBareLocalName: rhsBareLocalName)
 			return
 		end 'livesInACell'
 
-		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: assigned, rhsWasBareLocal: rhsWasBareLocal)
+		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: assigned, rhsBareLocalName: rhsBareLocalName)
 
 		// ⭐ A MATCH-ARM PAYLOAD BINDING IS ALSO A PLACE IN THE SCRUTINEE'S BOX, so the rebind above is only
 		// half of the write — the other half is the store that makes a later `match` read the new value.
@@ -27520,7 +27522,7 @@ export type Parser
 	//
 	// ⚠ **A SCALAR CELL IS A BARE STORE.** No release is owed and none is emitted, so a by-reference `int`,
 	// `float`, `bool`, byte or enum parameter costs exactly one `storeIndirect` per rebind.
-	function reassignCellBinding(binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
+	function reassignCellBinding(binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray) throws ParseError
 		let range = SourceRange.ofToken(nameTok)
 		if not self.signatures.typeIsManaged(binding.varType, from: self.artifact.typeNames) 'scalarCell'
 			self.emitCellStore(binding, value: value, range: range)
@@ -27539,13 +27541,19 @@ export type Parser
 		// — where a plain local rebind (`s = t`, `reassignBindingValue`) still MOVES, the new name inheriting the
 		// drop the old one owed. `moveManagedValueInto`'s header states the rule and names this exception; the
 		// two are stated together because "a rebind moves" is true of one door and false of this one.
-		let owned = try self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(binding.varType)), range: range)
+		let owned = try self.moveManagedValueInto(value, argBareLocal: not rhsBareLocalName.isEmpty(), isString: tagIsByteRecord(maxonTypeTag(binding.varType)), range: range)
 		self.emitDecref(self.emitCellLoad(binding, range: range), range: range)
 		self.emitCellStore(binding, value: owned, range: range)
 	end 'reassignCellBinding'
 
-	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
+	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray) throws ParseError
 		let oldValue = binding.boundValue
+		let rhsWasBareLocal = not rhsBareLocalName.isEmpty()
+		// ⭐⭐ **AN IMMUTABLE SOURCE ALIASES WHERE A MUTABLE ONE MOVES (the ownership ruling, 2026-08-04),
+		// AND THIS DOOR IS WHERE THE DECLARATION ONE'S EXEMPTION WAS MISSING.** Read once, here, because the
+		// two halves of what it means are spent far apart: the poison below is SKIPPED, and the reference
+		// that skip makes this binding owe is taken at the promotion point.
+		let aliasesImmutableSource = rhsWasBareLocal and self.rebindSourceIsAnImmutableAlias(rhsBareLocalName)
 
 		// A SELF-REBIND OF A LIVE BINDING — it is assigned the value it already holds AND still owns, so
 		// the value and its ownership are both unchanged: nothing to drop and nothing to reclassify.
@@ -27636,13 +27644,22 @@ export type Parser
 			return
 		end 'promiseReassign'
 
-		// ⭐ **MOVE-ON-ASSIGN.** A bare reference to an ALREADY-owned binding as the RHS (`s = t`) MOVES
-		// that value: poison the source so a later read of it is use-after-move and only the new owner
+		// ⭐ **MOVE-ON-ASSIGN.** A bare reference to an ALREADY-owned MUTABLE binding as the RHS (`s = t`)
+		// MOVES that value: poison the source so a later read of it is use-after-move and only the new owner
 		// drops the value. A fresh owned temp is held by no binding — a CONSUME, not a move. Gated on
 		// `rhsWasBareLocal`, so a consume never pays the owned-set scan; run BEFORE `setValue` below, so
 		// the scan matches the SOURCE's value rather than this binding's (which `setValue` is about to
 		// overwrite with the moved value).
-		if rhsWasBareLocal 'moveOnAssign'
+		//
+		// ⭐⭐ **AN IMMUTABLE SOURCE IS EXEMPT, EXACTLY AS IT IS AT THE DECLARATION DOOR.** `a = t` over a
+		// `let t` is a second REFERENCE (`rebindSourceIsAnImmutableAlias`), so nothing is poisoned and every
+		// name stays readable — the loop the harness's `parseProgramArgs` is built from hands ONE
+		// per-iteration `let next` to two outer cursors and only ever reads all three. It also drops the
+		// loop-escape refusal `poisonOwningBinding` raises, and that is the refusal becoming inapplicable
+		// rather than being suppressed: it exists because a MOVE across a back edge has no reconciliation,
+		// and an alias has nothing to reconcile — each iteration takes one reference and releases the one
+		// the previous iteration took.
+		if rhsWasBareLocal and not aliasesImmutableSource 'moveOnAssign'
 			try self.poisonMoveSource(value, anchor: nameTok)
 		end 'moveOnAssign'
 
@@ -27671,6 +27688,16 @@ export type Parser
 			newValue = try self.promoteBorrowedToOwned(value, door: BorrowLaunderDoor.binding, range: SourceRange.ofToken(nameTok))
 			newIsOwned = true
 		end 'promoteBorrowed'
+
+		// ⭐⭐ **THE REFERENCE THE SKIPPED POISON LEFT THIS BINDING OWING.** An immutable source keeps the
+		// drop it has always owed, so this binding — enrolled below, or already in the owned set — cannot
+		// inherit it and must hold one of its own (`coOwnImmutableRebindSource`). It is EXCLUSIVE with the
+		// promotion above by construction and not by ordering: that arm runs only on a BORROWED value, this
+		// one only on an owned one, and a promotion has already minted a reference this binding owns
+		// outright — retaining on top of it would leak exactly one box.
+		if aliasesImmutableSource and self.valueIsOwnedHeap(value) 'coOwnImmutableSource'
+			newValue = self.coOwnImmutableRebindSource(value, range: SourceRange.ofToken(nameTok))
+		end 'coOwnImmutableSource'
 
 		// Release the overwritten allocation BEFORE the rebind, while `oldValue` still names it. Only a
 		// LIVE owner has one to release: a moved-from binding's old value belongs to the binding it moved
@@ -33067,8 +33094,41 @@ export type Parser
 	// A BARE read is a rooted span with no field steps, so it is the two questions `rhsRootLocalName`
 	// and `rhsSpanReadsAField` answer, `and`ed — the chain grammar itself is written down once, there.
 	function rhsWasBareLocalReference(startPos TokenIndex) returns bool
-		return not self.rhsSpanReadsAField(startPos) and not self.rhsRootLocalName(startPos).isEmpty()
+		return not self.rhsBareLocalSourceName(startPos).isEmpty()
 	end 'rhsWasBareLocalReference'
+
+	// ⭐ **WHICH LOCAL A BARE-READ RHS NAMES — the same answer as `rhsWasBareLocalReference` with the NAME
+	// KEPT**, empty when the span is not one (a call, a field read, any expression). The two rules a rebind
+	// asks need different halves of it: the MOVE model wants the bool (*can this poison anything?*) and the
+	// immutable-alias rule wants the name (*was that local declared `let`?*). Answered once so the two
+	// cannot disagree about which local the RHS was — a bool that said "bare local" while the name walk
+	// said "no root" would move a value out of a binding nothing had named.
+	function rhsBareLocalSourceName(startPos TokenIndex) returns ByteArray
+		if self.rhsSpanReadsAField(startPos) 'readsAField'
+			return EmptySourceText
+		end 'readsAField'
+
+		return self.rhsRootLocalName(startPos)
+	end 'rhsBareLocalSourceName'
+
+	// ⭐⭐ **AN IMMUTABLE REBIND IS A SECOND REFERENCE, NOT A MOVE (the ownership ruling, 2026-08-04) — the
+	// ONE predicate BOTH rebind doors ask.** Maxon is single-ownership and everything is a reference; what
+	// makes a second name for one value SAFE is that neither can be written through, which is MUTABILITY and
+	// not linearity. So a bare read of a `let` never leaves its source moved-from, at a declaration
+	// (`declareInitializedBinding`) or at an assignment (`reassignBindingValue`) alike.
+	//
+	// ⚠ **THE TWO DOORS AGREE ON THE RULE AND NOT ON WHAT IT COSTS, WHICH IS WHY THIS ANSWERS THE PREDICATE
+	// AND NEITHER DOOR'S ACTION.** A DECLARATION's alias is free: the new name is declared inside the
+	// source's scope, so the source structurally outlives it and keeps the ONE drop, and no refcount is
+	// involved. An ASSIGNMENT's destination already exists at a scope depth this door cannot bound, and it
+	// already owes a drop of its own — so it takes a real reference (`coOwnImmutableRebindSource`). Written
+	// as one predicate at two doors the rule cannot drift; written as one ACTION it would have double-freed.
+	//
+	// A source with no name is no bare local read at all — the emptiness is `rhsRootLocalName`'s
+	// discriminant, not a sentinel — so it is asked here rather than at each caller.
+	function rebindSourceIsAnImmutableAlias(sourceName ByteArray) returns bool
+		return not sourceName.isEmpty() and not self.scope.getInfo(sourceName).mutable
+	end 'rebindSourceIsAnImmutableAlias'
 
 	// ⭐⭐ **WHICH LOCAL THE RHS SPAN IS ROOTED AT — the `t` of `t`, `(t)`, `t.x`, `t.0`, `(t).x`, `(t.x.y)` —
 	// or the EMPTY name when the span is not a chain of members rooted at a readable local.**
@@ -33639,6 +33699,39 @@ export type Parser
 		self.emitIncref(value, range: range)
 		return value
 	end 'coOwnBorrowedForConsume'
+
+	// ⭐⭐ **THE REFERENCE A REBIND FROM AN IMMUTABLE SOURCE OWES — the assignment door's half of the
+	// 2026-08-04 alias ruling** (`rebindSourceIsAnImmutableAlias` carries the rule; this is what it costs
+	// here). The source is NOT poisoned, so it keeps the drop it has always owed; this binding is enrolled
+	// in `ownedBindings` and owes one too, so it must hold a reference of its own or one box is released
+	// twice. That is the same co-ownership the 2026-08-12 durable-store ruling gives a field, an element and
+	// a by-reference parameter's cell (`storeOwnedValueIntoDurableSink`) — the difference is only WHO owns
+	// the result, which is why that door cannot be reused verbatim: there the new owner is a SLOT and the
+	// result is marked nothing, here it is a BINDING and the result must carry the owned-heap bit.
+	//
+	// ⚠ **THE FRESH SSA NAME IS LOAD-BEARING, NOT A BY-PRODUCT OF WHICH RUNTIME ENTRY WAS HANDY.** Both
+	// entries RETURN the reference they took (`__mm_retain`'s whole reason for existing beside the void
+	// `__mm_incref` — see `retainBorrowedAggregate`), so this binding holds an id the source does not: a
+	// later move out of either name resolves to exactly one owner, where a shared id would let
+	// `liveOwnerIndexOf` pick the wrong binding and poison — or drop — the other one's reference.
+	//
+	// ⚠ **AND IT MUST CARRY THE PER-VALUE COLUMNS ACROSS THAT FRESH NAME.** A promotion already owes this
+	// (`promoteBorrowedToOwned` wraps `carryDeclaredSurface` for exactly the W41 measurement); a retain that
+	// re-mints a name owes the identical debt, and the W117 immutable-global taint is the one whose loss is
+	// not an `E2015` but a WRITE that reaches a record the language calls immutable. The interface witness
+	// is carried inside `retainBorrowedAggregate`, where the existential arm that needs it lives.
+	function coOwnImmutableRebindSource(value ValueId, range SourceRange) returns ValueId
+		var retained = value
+		if tagIsByteRecord(self.tagOf(value)) 'byteRecord'
+			retained = self.retainBorrowedByteRecord(value, range: range)
+		end 'byteRecord' else 'aggregate'
+			retained = self.retainBorrowedAggregate(value, range: range)
+		end 'aggregate'
+
+		self.carryDeclaredSurface(retained, from: value)
+		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: value, to: retained)
+		return retained
+	end 'coOwnImmutableRebindSource'
 
 	function coOwnAggregateAsTemp(source ValueId, range SourceRange) returns ValueId
 		let owned = self.retainBorrowedAggregate(source, range: range)
