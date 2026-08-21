@@ -136,8 +136,15 @@ honestly typed `Element`, which inside `extension Vector` is a TYPE PARAMETER �
 no `Element` to offer (`E3059 … 'int' does not match expected type 'type parameter'`) and the `Int`
 return had none either. That is the shared-body thesis and not a loss: shv2 compiles ONE body for every
 size, so an element read there is opaque exactly as `sizeof(Element)` is. What the case needs of the
-static's RESULT is that it be the receiver's own instance, which `count()` states without naming an
-element at all.
+static's RESULT is that it be the receiver's own instance.
+
+⚠⚠ **AND IT MUST NOT ASK `count()` FOR THAT, WHICH IS WHAT IT DID UNTIL `count()` RETIRED TO
+`countof(Self)` IN THE SAME RUNG.** The assertion was `fresh.count() == countof(Self)`, and once the
+corpus `count()` body IS `countof(Self)` both sides are one expression: the `if` cannot be false, the
+`panic` is unreachable, and the half of this case that watches the static's result stopped being able
+to FAIL while still reading as coverage. It counts the record's SLOTS instead — a `for … in` walk is the
+one observation that goes through the record rather than through the type — so the comparison is
+record-against-type again, which is the thing being pinned.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -156,8 +163,12 @@ extension Vector
 	end 'counted'
 
 	export function rebuild() returns Int
-		var fresh = Self.counted()
-		if fresh.count() == countof(Self) 'theStaticsResultStatesTheReceiversCount'
+		let fresh = Self.counted()
+		var slots = 0
+		for _ in fresh 'countTheRecordsSlots'
+			slots = slots + 1
+		end 'countTheRecordsSlots'
+		if slots == countof(Self) 'theStaticsResultStatesTheReceiversCount'
 			return 0
 		end 'theStaticsResultStatesTheReceiversCount'
 		panic("a `Self`-returning static builds the instance its call site holds")
