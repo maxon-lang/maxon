@@ -9,6 +9,7 @@
 //   updateRequired?: bool                → --update-required
 //   log?: String                         → --log=<value>
 //   mmTrace?: bool                       → --mm-trace  (not shv2)
+//   network?: bool                       → --network  (shv2 only)
 //   target?: String                      → --target=<value> (shv2 too, since 2026-07-18)
 //
 // `mmTrace` is REJECTED for shv2 rather than dropped — see `checkSpecTestFlags` in
@@ -95,6 +96,13 @@ function buildSpecTestArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringArr
 	if mmTrace 'haveMM'
 		argv.push("--mm-trace")
 	end 'haveMM'
+	// Runs the fragments marked `<!-- network: live -->`, which the default gate excludes because a suite
+	// whose verdict depends on somebody else's uptime is not a claim about the code. REJECTED for csharp
+	// rather than dropped (`checkSpecTestFlags`) — its runner has no such gate.
+	let network = try argsDoc.getBool(argsId, key: "network") otherwise false
+	if network 'haveNetwork'
+		argv.push("--network")
+	end 'haveNetwork'
 	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
 	if not target.isEmpty() 'haveTarget'
 		argv.push("--target={target}")

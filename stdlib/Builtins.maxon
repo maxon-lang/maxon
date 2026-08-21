@@ -1065,7 +1065,10 @@ function __bigTrimLeadingZeroLimbs(limbs ParsedIntArray)
 	while used > 0 and (try limbs.get(used - 1) otherwise panic("__bigTrimLeadingZeroLimbs: used > 0 by loop guard but get({used - 1}) failed")) == 0 'trim'
 		used = used - 1
 	end 'trim'
-	limbs.resize(used)
+	// SHRINKS only — `used` counts DOWN from `limbs.count()`. `resize` is refused on an array whose element
+	// type has no default (E3106: a grown slot would hold no element), and the cure the diagnostic names for
+	// the shrink direction is `truncate`.
+	limbs.truncate(used)
 end '__bigTrimLeadingZeroLimbs'
 
 // The TEXT of a digit string. Each entry is a value 0..9, so interpolating it IS its character — no
@@ -1219,12 +1222,17 @@ function __bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
 	let wholeLimbs = bits / __LimbBits
 	if wholeLimbs > 0 'wholeLimbShift'
 		let usedBefore = limbs.count()
-		// `resize` and not the compiler-side original's `growFilled`, which shv2's `Array` does not
-		// offer yet (E2015 names it). The two are the same thing HERE and the reason is checkable: the
-		// loops below between them WRITE every slot this widens to — `moveUp` covers
-		// [wholeLimbs, usedBefore + wholeLimbs) and `clearVacated` covers [0, wholeLimbs) — so a fill
-		// value would be overwritten without ever being read.
-		limbs.resize(usedBefore + wholeLimbs)
+		// ⛔ **THIS SAID `growFilled` WAS UNAVAILABLE — MEASURED FALSE.** The comment read *"`resize` and
+		// not the compiler-side original's `growFilled`, which shv2's `Array` does not offer yet (E2015
+		// names it)"*, and on that premise it used `resize` — which E3106 refuses for an element type with
+		// no default, because a grown slot would hold NO element while `count()` claimed it did.
+		// `stdlib/Array.maxon:458` declares `growFilled` and `maxon-shv2/Compiler/Parser.maxon` calls it
+		// twice; the claim had outlived its truth and was the only thing holding this call at `resize`.
+		//
+		// The fill value is never read, and that is still checkable: the loops below WRITE every slot this
+		// widens to — `moveUp` covers [wholeLimbs, usedBefore + wholeLimbs) and `clearVacated` covers
+		// [0, wholeLimbs). So `growFilled` is `resize` here, minus the hole in the rule.
+		limbs.growFilled(usedBefore + wholeLimbs, value: 0)
 
 		var src = usedBefore
 		while src > 0 'moveUp'

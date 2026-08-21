@@ -48,6 +48,7 @@ end 'CompilerArgError'
 export enum UnsupportedFlag implements Error
 	mmTrace
 	dumpStages
+	network
 end 'UnsupportedFlag'
 
 // =============================================================================
@@ -125,6 +126,7 @@ export function unsupportedFlagReason(flag UnsupportedFlag, compiler Compiler) r
 	let capability = match flag 'f'
 		mmTrace gives "`mmTrace` (--mm-trace) — it has no memory-manager trace"
 		dumpStages gives "`dumpStages` (--dump-stages) — it emits no per-stage IR artifacts"
+		network gives "`network` (--network) — it has no live-network gate, so it cannot be asked to run the internet-dependent fragments"
 	end 'f'
 
 	return "the {compiler.name} compiler does not support {capability}."
@@ -175,14 +177,25 @@ end 'specTestNeedsVerbose'
 /// Reject the spec-test flags the chosen compiler cannot honour, BEFORE spawning
 /// it. shv2 is the only constrained one today — see this file's header.
 export function checkSpecTestFlags(argsDoc JsonDoc, argsId JsonNodeId, compiler Compiler) throws UnsupportedFlag
-	if compiler != Compiler.shv2 'unconstrained'
-		return
-	end 'unconstrained'
+	// ⚠ **THE CONSTRAINT RUNS BOTH WAYS NOW, AND THE EARLY RETURN THAT SAID OTHERWISE IS GONE.** It read
+	// `if compiler != Compiler.shv2 then return` under a comment saying *"shv2 is the only constrained one
+	// today"* — true while `mmTrace` was the only gap. `network` is the BOOTSTRAP's gap (only shv2's runner
+	// knows `--network`), so that early return would have silently DROPPED it for csharp: the one failure
+	// this whole enum exists to prevent, since a `network: true` run that quietly excluded every live
+	// fragment reports back as a clean pass.
+	if compiler == Compiler.shv2 'shv2Gaps'
+		let mmTrace = try argsDoc.getBool(argsId, key: "mmTrace") otherwise false
+		if mmTrace 'wantsMmTrace'
+			throw UnsupportedFlag.mmTrace
+		end 'wantsMmTrace'
+	end 'shv2Gaps'
 
-	let mmTrace = try argsDoc.getBool(argsId, key: "mmTrace") otherwise false
-	if mmTrace 'wantsMmTrace'
-		throw UnsupportedFlag.mmTrace
-	end 'wantsMmTrace'
+	if compiler == Compiler.csharp 'bootstrapGaps'
+		let network = try argsDoc.getBool(argsId, key: "network") otherwise false
+		if network 'wantsNetwork'
+			throw UnsupportedFlag.network
+		end 'wantsNetwork'
+	end 'bootstrapGaps'
 end 'checkSpecTestFlags'
 
 /// Reject `dumpStages: true` against a compiler with no per-stage IR emission.

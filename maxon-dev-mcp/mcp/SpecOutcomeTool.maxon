@@ -13,6 +13,7 @@
 //
 // Inputs (JSON):
 //   filter: String          — required; passed to `--filter=<filter>`
+//   network?: bool          — → --network  (shv2 only; runs the live-network fragments)
 //   compiler?: "csharp" | "shv2"   (default "csharp")
 //   target?: String         — passed to `--target=<value>` (shv2 too, since 2026-07-18)
 //
@@ -51,6 +52,11 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot 
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	argv.push("--filter={filter}")
+	// See `SpecTestTool`'s arm for why this is a flag rather than a default.
+	let network = try argsDoc.getBool(argsId, key: "network") otherwise false
+	if network 'haveNetwork'
+		argv.push("--network")
+	end 'haveNetwork'
 
 	// shv2 reports every verdict unconditionally and rejects `--verbose` outright;
 	// the bootstrap runner stays silent without it.
