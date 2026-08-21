@@ -4424,3 +4424,117 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:5:13: Unsupported: `__ManagedMemory` member 'makeCharFromBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `toCString` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `makeCharFromBytes` trusts its caller for `pos + len <= length()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `byteAt`, which is bounds-checked and throwing
 ```
+
+## The FUSED Record Path Is A Whitelist Of MEMBERS Whose Safety Argument Is About The RECORD (W194)
+
+⛔⛔ **`managed.append(x)` INSIDE AN `extension Array` PANICS THE COMPILER, AND `self.managed.append(x)` —
+THE SAME OPERATION ON THE SAME RECEIVER — RUNS.** Measured on `W194`'s base:
+
+    managed.append(managed)              panic at LayoutDescriptor.maxon:571: primitiveTypeByteSize:
+                                         a `typeParameter`'s size is a runtime layout-descriptor read,
+                                         not a compile-time constant
+    self.managed.append(self.managed)    exit 4
+    a.managed.append(b.managed)          exit 3   (concrete, from outside)
+
+⭐ **THE DIFFERENCE IS THE ROUTE, NOT THE ELEMENT.** `fusedManagedMemberTakesTheRecord` lists `append`, so
+the bare spelling takes `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` fast path, which hands
+`dispatchArrayMethod` the receiver's own record **under the synthesized BYTE instance**. The other two
+spellings carry the receiver's real instance. `arrayAppendArgAdmits` then asks
+`containerElementIsOpaque` of the BYTE instance — false, bytes are trivial — falls through to
+`sameTrivialArrayShape`, and asks `arrayElementSize` of the ARGUMENT, whose element is the extension's
+opaque type parameter. `trivialElementSlot` → `primitiveTypeByteSize(typeParameter)` → panic.
+
+⭐⭐ **THE LIST'S OWN CENSUS SAYS WHY, AND IT IS THIS PROJECT'S SIGNATURE BUG.** The header justifies the
+`append` entry with *"reads both records' `@24` and ABORTS on a mismatch, **which two String records pass
+(1 == 1)**"*. That argument is about a **byte record**. But the gate that selects the fast path is
+`conformsToBuiltinManagedWrapper`, which admits `Array` and `Vector` too — whose `@24` is 8, not 1, and
+whose element may be a type parameter. **The whitelist is keyed on the MEMBER; its safety is keyed on the
+RECORD; and nothing checked that the two agree.**
+
+⚠ `append` is the entry that BITES, not the only one mis-served: the header's own census marks
+`makeCharFromBytes` as *"the ONE ENTRY THAT READS THE SEVENTH SLOT"* (`@48`), which on a plain 48-byte
+`Array` record is eight bytes past the end. That door is unreached today only because the member is
+refused to user code and its single caller is `String`'s — a REACHABILITY argument, not a structural one.
+
+<!-- test: the-fused-append-path-agrees-with-the-value-path -->
+**THE SUBJECT.** The bare, fused spelling must answer what the value spelling answers. Two elements
+appended to themselves is four.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Ints = Array with Int
+
+extension Array
+	export function doubled() returns Int
+		self.managed.append(managed)
+		return managed.length() as Int
+	end 'doubled'
+end 'Array'
+
+function main() returns ExitCode
+	var a = Ints.create()
+	a.push(1)
+	a.push(2)
+	return a.doubled() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: the-bare-fused-append-answers-the-same -->
+⭐⭐ **THE CASE THE RUNG EXISTS FOR — the receiver written BARE, which is the spelling that takes the fused
+record path.** On the base this program did not produce a wrong answer, it **killed the compiler**; the
+control above compiled and ran to 4 the whole time, which is what says the operation was always
+expressible and only this route could not carry it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Ints = Array with Int
+
+extension Array
+	export function doubled() returns Int
+		managed.append(managed)
+		return managed.length() as Int
+	end 'doubled'
+end 'Array'
+
+function main() returns ExitCode
+	var a = Ints.create()
+	a.push(1)
+	a.push(2)
+	return a.doubled() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: the-other-fused-readers-already-agreed-and-must-go-on-agreeing -->
+⭐⭐ **THE NEUTRALITY CONTROL, AND IT IS WHAT BOUNDS THE BLAST RADIUS.** `length` and `byteAt` are on the
+same whitelist and were MEASURED answering identically through both routes on the base
+(`bareLen=2 selfLen=2 bareByteAt=7 selfByteAt=7`) — so `append` was the only entry the byte-instance
+lie corrupted, and a cure that moves the route must leave these two where they were. `byteAt` reads the
+first byte of the first element, which on a little-endian machine is the low byte of `7`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Ints = Array with Int
+
+extension Array
+	export function survey() returns Int
+		let bare = managed.length() as Int
+		let viaSelf = self.managed.length() as Int
+		let bareByte = (try managed.byteAt(0) otherwise 255) as Int
+		let selfByte = (try self.managed.byteAt(0) otherwise 255) as Int
+		return (bare * 1000) + (viaSelf * 100) + (bareByte * 10) + selfByte
+	end 'survey'
+end 'Array'
+
+function main() returns ExitCode
+	var a = Ints.create()
+	a.push(7)
+	a.push(9)
+	return a.survey() as ExitCode
+end 'main'
+```
+```exitcode
+2277
+```
