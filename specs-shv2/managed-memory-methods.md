@@ -4569,6 +4569,14 @@ same whitelist and were MEASURED answering identically through both routes on th
 (`bareLen=2 selfLen=2 bareByteAt=7 selfByteAt=7`) — so `append` was the only entry the byte-instance
 lie corrupted, and a cure that moves the route must leave these two where they were. `byteAt` reads the
 first byte of the first element, which on a little-endian machine is the low byte of `7`.
+
+⛔ **IT PRINTS THE FOUR VALUES RATHER THAN PACKING THEM INTO AN EXIT CODE, AND THAT IS NOT A STYLE
+CHOICE.** The first version of this case returned `2277` — all four answers in one number, which is
+exactly what a control of this shape wants. It passed on x64-windows and **FAILED ON x64-linux AND
+wasm32-wasi**, caught by the cross-target gate: an exit status is EIGHT BITS off Windows, so any
+answer above 255 is unrepresentable and the lane read `1`. The compiler was right on all three
+lanes — the other two cases in this section passed everywhere and this one COMPILED and RAN — the
+ENCODING was the defect. **A case that must carry more than one small number carries it on stdout.**
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
@@ -4579,7 +4587,8 @@ extension Array
 		let viaSelf = self.managed.length() as Int
 		let bareByte = (try managed.byteAt(0) otherwise 255) as Int
 		let selfByte = (try self.managed.byteAt(0) otherwise 255) as Int
-		return (bare * 1000) + (viaSelf * 100) + (bareByte * 10) + selfByte
+		print("len={bare}/{viaSelf} byte={bareByte}/{selfByte}\n")
+		return 0
 	end 'survey'
 end 'Array'
 
@@ -4591,5 +4600,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-2277
+0
+```
+```stdout
+len=2/2 byte=7/7
 ```
