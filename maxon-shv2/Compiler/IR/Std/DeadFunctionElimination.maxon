@@ -356,8 +356,9 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		stackRecordAddr then break 'op'
 		// O3: the three DebugStream host primitives call Win32 IMPORTS, so none keeps a Maxon function live.
 		osOpenNamedSegment to osTickCountMs then break 'op'
-		// And the four attached-subprocess host primitives are Win32 import calls too.
-		osHandleSetInherit to osProcessTerminate then break 'op'
+		// The rest of the appended band — the four attached-subprocess host primitives AND the `ws2_32` socket band — are import calls
+		// too (kernel32 and ws2_32), so none keeps a Maxon function live either.
+		osHandleSetInherit to osSocketClose then break 'op'
 	end 'op'
 end 'markCalleeOf'
 

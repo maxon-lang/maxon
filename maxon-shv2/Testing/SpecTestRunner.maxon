@@ -825,13 +825,16 @@ end 'TestRun'
 // including a `notRequired` observation for a test that never ran — so the third pass needs no counter,
 // no sorting and no name lookup, and a length that disagrees is a panic rather than a silently
 // misattributed result.
-export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target) returns SpecRun throws CompileError
+export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns SpecRun throws CompileError
 	var results = SpecTestResultArray.create()
 	var cpu = SuiteCpuTally.zero()
 
 	let specPath = specDir.join("{specName}{SpecFileExtension}")
 	let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
-	let tests = selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget)
+	// The worker takes only the SELECTED half: the census of what was left out is the PARENT's to
+	// report, and it is built from the parent's own walk over every spec (`buildPlans`). A worker
+	// printing it would print one spec's worth of it, once per spec, onto a stream that is a wire.
+	let tests = selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork).selected
 	if tests.count() == 0 'selectsNothing'
 		// A `draft` spec, or one every test of which the filter rejected. The pool never dispatches
 		// such a spec — its parent built the same list from the same function — so this is not the
@@ -904,10 +907,46 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 	return SpecRun.create(results, cpu: cpu)
 end 'runOneSpec'
 
-// The tests of `specFile` that this run will actually execute, in DECLARATION order.
+// ⭐ ONE CASE THIS RUN DELIBERATELY DID NOT SELECT, and everything the census needs to name it. A pair
+// rather than a pre-joined `"{spec}/{test}"` label, because the report's entry shape belongs to
+// `resultNoteEntry` — the one place every trailer's indent and layout are decided — and a joined label
+// would have to be split apart again to reach it.
+export type ExcludedCase
+	export let specName as String
+	export let testName as String
+
+	export static function create(specName String, testName String) returns ExcludedCase
+		return Self{specName: specName, testName: testName}
+	end 'create'
+end 'ExcludedCase'
+
+export typealias ExcludedCaseArray = Array with ExcludedCase
+
+// ⭐⭐ **WHAT THIS RUN WILL DO WITH ONE SPEC — BOTH HALVES, FROM ONE WALK.** The tests it will execute,
+// and the ones it left out ON PURPOSE and therefore owes the reader a sentence about.
 //
-// THE ONE PLACE THE SELECTION RULES LIVE — the `draft` skip, the `--filter` match, and the two
-// per-target gates — and it has to be, because BOTH HALVES OF THE POOL ASK THE SAME QUESTION IN DIFFERENT
+// ⚠ **THE TWO CANNOT BE TWO FUNCTIONS.** A case is network-excluded only if it would OTHERWISE have been
+// selected — the filter chose it and every target gate let it through — so a second walk would have to
+// restate that whole conjunction, and a rule added to one copy and not the other would either report
+// cases this run was never going to run anyway or quietly stop reporting ones it dropped. This is the
+// duplication `selectedTests`'s own header is about, one level in.
+export type SpecSelection
+	export let selected as SpecTestArray
+	// EMPTY on all but a handful of runs. It is the literal count of live-network cases this run passed
+	// over, never a sentinel: `reportNetworkExclusions` is silent at zero exactly as the other trailers are.
+	export let networkExcluded as ExcludedCaseArray
+
+	export static function create(selected SpecTestArray, networkExcluded ExcludedCaseArray) returns SpecSelection
+		return Self{selected: selected, networkExcluded: networkExcluded}
+	end 'create'
+end 'SpecSelection'
+
+// The tests of `specFile` that this run will actually execute, in DECLARATION order — and the ones it
+// deliberately passed over.
+//
+// THE ONE PLACE THE SELECTION RULES LIVE — the `draft` skip, the `--filter` match, the three
+// per-target gates and the network gate — and it has to be, because BOTH HALVES OF THE POOL ASK THE SAME
+// QUESTION IN DIFFERENT
 // PROCESSES. The parent asks it to decide what the run will report and to weight the job queue
 // (`buildPlans`); the worker asks it to decide what to run (`runOneSpec`). Written out twice, the two
 // copies could drift — a rule added to one and not the other — and the drift would not read as a bug:
@@ -915,12 +954,15 @@ end 'runOneSpec'
 // ran. `resultsFromLines` turns that into a panic, but ONE shared rule is what makes the panic
 // unreachable rather than merely loud. The target gate is why this discipline matters here and not only
 // in principle: it is what makes the same suite green on x64-windows AND arm64-macos, so it MUST be
-// applied identically on both sides of the pool.
-export function selectedTests(specFile SpecFile, specName String, filter String, effectiveTarget Target) returns SpecTestArray
+// applied identically on both sides of the pool. `--network` joined that list for the identical reason:
+// the parent forwards it to every worker (`spawnNoWait`), and a worker that did not read it back would
+// run live-network cases the parent never counted.
+export function selectedTests(specFile SpecFile, specName String, filter String, effectiveTarget Target, includeNetwork bool) returns SpecSelection
 	var selected = SpecTestArray.create()
+	var networkExcluded = ExcludedCaseArray.create()
 
 	if specFile.status == DraftStatus 'draftSpec'
-		return selected
+		return SpecSelection.create(selected, networkExcluded: networkExcluded)
 	end 'draftSpec'
 
 	// Resolved ONCE, not per test: the effective target is fixed for the whole run, and both halves of
@@ -936,19 +978,57 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	// that guessed at it from the `<!-- Args: -->` marker, and the guess was measurably wrong (PLAN row
 	// `X2`).
 	//
-	// ⚠ **THE TWO PER-TARGET QUESTIONS ASKED HERE ARE BOTH THE SPEC'S OWN, AND THE SECOND IS THE FIRST
-	// ONE DERIVED.** `markerAllowsTarget` reads a restriction the author SPELLED; `targetCanCheckSectionPins`
-	// reads one the author DECLARED by writing a ```RequiredData / ```RequiredRdata block, because a
-	// section pin names bytes only a native container format has. Both are properties of the spec TEXT,
-	// which is why both are answerable before a compiler is spawned and why neither is a guess.
+	// ⚠ **THE NETWORK GATE IS ASKED LAST, AND THE ORDER IS WHAT MAKES THE CENSUS TRUE.** A case the
+	// filter never chose, or one this target cannot express, was not left out because of the internet —
+	// counting it as such would make `--filter=arrays` report every live http case as excluded and would give
+	// every reader a number that means nothing.
 	for test in specFile.tests 'eachTest'
-		if selectedByFilter(specName, testName: test.name, filter: filter) and markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) and targetCanCheckSectionPins(test, effectiveTarget: effectiveTarget) and targetCanCaptureMmTrace(test, effectiveTarget: effectiveTarget) 'isSelected'
+		if not selectableThisRun(test, specName: specName, filter: filter, effectiveTarget: effectiveTarget, effectiveTargetKey: effectiveTargetKey) 'notInThisRun'
+			continue
+		end 'notInThisRun'
+
+		if networkModeAllows(test, includeNetwork: includeNetwork) 'isSelected'
 			selected.push(test)
-		end 'isSelected'
+		end 'isSelected' else 'liveNetwork'
+			networkExcluded.push(ExcludedCase.create(specName, testName: test.name))
+		end 'liveNetwork'
 	end 'eachTest'
 
-	return selected
+	return SpecSelection.create(selected, networkExcluded: networkExcluded)
 end 'selectedTests'
+
+// Everything this run asks of a case BEFORE the network gate: the `--filter` match and the three
+// per-target gates.
+//
+// ⚠ **THE TWO PER-TARGET QUESTIONS ASKED HERE ARE BOTH THE SPEC'S OWN, AND THE SECOND IS THE FIRST
+// ONE DERIVED.** `markerAllowsTarget` reads a restriction the author SPELLED; `targetCanCheckSectionPins`
+// reads one the author DECLARED by writing a ```RequiredData / ```RequiredRdata block, because a
+// section pin names bytes only a native container format has. Both are properties of the spec TEXT,
+// which is why both are answerable before a compiler is spawned and why neither is a guess.
+//
+// Named rather than left inline because the caller now asks it as a QUESTION with two answers to record,
+// not as one term of a conjunction — see `SpecSelection` for what depends on the two being separable.
+function selectableThisRun(test SpecTest, specName String, filter String, effectiveTarget Target, effectiveTargetKey String) returns bool
+	return selectedByFilter(specName, testName: test.name, filter: filter) and markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) and targetCanCheckSectionPins(test, effectiveTarget: effectiveTarget) and targetCanCaptureMmTrace(test, effectiveTarget: effectiveTarget)
+end 'selectableThisRun'
+
+// ⭐⭐ **THE ONE GATE THAT IS ABOUT THE RUN AND NOT ABOUT THE TREE.** Every other question `selectedTests`
+// asks is answered from the spec text and the target — the same answer on every invocation on this
+// machine. This one is answered from the COMMAND LINE, because whether reaching `tcpbin.com` is
+// acceptable is the caller's call and nothing in the tree can make it: a case that opens a socket to a
+// real external host is green when the public internet is up and red when it is not, so its verdict is a
+// measurement of somebody else's uptime wearing this compiler's name.
+//
+// ⚠ **AND UNLIKE `markerAllowsTarget`, A CASE IT GATES OUT IS NEVER SILENT** (see
+// `reportNetworkExclusions`). A target restriction excludes a case that this machine could not have
+// judged either way; this excludes one that WOULD have run, on a machine that could have run it, because
+// the operator did not ask for it. That is coverage a reader has to be told they are not getting.
+function networkModeAllows(test SpecTest, includeNetwork bool) returns bool
+	return match test.network 'need'
+		none gives true
+		live gives includeNetwork
+	end 'need'
+end 'networkModeAllows'
 
 // ⭐⭐ **THE THIRD DERIVED PER-TARGET GATE: CAN THIS TARGET BE TRACED AT ALL?** An mm-trace case needs the
 // DebugStream PRODUCER, which opens a named Win32 section object and is x64-windows only — the compiler
@@ -1246,6 +1326,35 @@ export function reportTargetSkips(results SpecTestResultArray, effectiveTarget T
 	let headline = "note: {entries.count()} case(s) SKIPPED on {targetToString(effectiveTarget)} — NOT RUN and NOT PASSED. The compiler refused a construct this target has no implementation for ({ErrorCode.targetUnsupportedConstruct.rawValue}), which is a fact about the TARGET and not about the case:\n"
 	reportResultNote(entries, headline: headline)
 end 'reportTargetSkips'
+
+// ⭐⭐ **THE CENSUS OF WHAT THE OPERATOR DID NOT ASK FOR — the live-network cases this run left out.**
+//
+// ⛔ **IT MAY NEVER BE SILENT, AND THAT IS A STRICTER REQUIREMENT THAN THE TWO TRAILERS ABOVE CARRY.**
+// Those name cases nothing could have judged here — a construct the target refuses, a binary this host
+// cannot start. These are cases that WOULD have run, on THIS machine, and were dropped by a default
+// nobody typed. A reader who is not told sees `N passed, 0 failed` over a spec whose headline claim was
+// never exercised, which is the shape a green suite that tested nothing takes.
+//
+// ⚠ **THE REASON IS IN THE HEADLINE AND NOT ON THE ENTRIES**, which is `reportUnrunHere`'s choice for its
+// reason: every entry shares one reason and one remedy, so a per-case copy would be one sentence printed
+// once per excluded case. The entries carry the LABELS, because which cases they are is the part that
+// differs.
+//
+// SILENT when nothing was excluded — the convention every trailer here follows, where "no note" means
+// zero. Under `--network` that is every run: `networkModeAllows` answers TRUE for every case, so the
+// list arrives empty and this note is the one thing a `--network` run does NOT print.
+export function reportNetworkExclusions(excluded ExcludedCaseArray)
+	var entries = StringArray.create()
+
+	for excludedCase in excluded 'each'
+		// No per-case detail: the label IS the entry. `resultNoteEntry` renders it so this trailer sits at
+		// the same depth as the two beside it rather than at one this function chose for itself.
+		entries.push(resultNoteEntry(excludedCase.specName, testName: excludedCase.testName, detail: ""))
+	end 'each'
+
+	let headline = "note: {entries.count()} case(s) EXCLUDED — NOT RUN and NOT PASSED. They open a socket to a REAL EXTERNAL HOST (`{NetworkMarker} {NetworkLiveValue} -->`), so a default run's verdict would measure somebody else's uptime rather than this compiler. Re-run with `{NetworkFlag}` to include them:\n"
+	reportResultNote(entries, headline: headline)
+end 'reportNetworkExclusions'
 
 // ⭐⭐ **WHAT THIS HOST COULD NOT EXECUTE, AND THE ONE REASON ALL OF IT SHARES.**
 //

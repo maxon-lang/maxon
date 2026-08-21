@@ -1040,3 +1040,96 @@ error-path cases**, which is what a first slice can gate on. v1 runs the set hos
 **x64-windows only** (`targetRunsNetworking`) — narrower than subprocess's any-non-wasm gate.
 ⚠ `W125` is the standing warning here: **a suite whose verdict depends on the public internet is not
 always a claim about the code.**
+
+---
+
+## The socket cone is LISTED — 2026-08-21
+
+`stdlib/TcpClient.maxon`, `stdlib/HttpClient.maxon` and `stdlib/helpers/http/httpHelpers.maxon` are on
+the whitelist. **That is the last runtime slice this file tracked**, and with it the "Runtime slice" row
+of every table above is closed.
+
+| module | probe before listing | outcome |
+|---|---|---|
+| `TcpClient.maxon` | `E3001` only | listed; `tcp-client/` **2 passed, 0 failed**, `memoryLeak: false` |
+| `HttpClient.maxon` | `E3001` only, *with the helper listed alongside it* | listed; `http-client/` **2 passed, 0 failed**, `memoryLeak: false` |
+| `helpers/http/httpHelpers.maxon` | ⚠ **NOT PROBEABLE AS A ROOT** — see below | listed |
+
+### ⛔ THE ROW THIS FILE CARRIED FOR `HttpClient` WAS STALE, IN BOTH DIRECTIONS
+
+`:176` recorded `E3005 :29:22 — cannot assign 'unknown' to variable 'HttpHeaders.headers' of type
+'struct'` and noted it was *"**not** a socket blocker"*. **RE-MEASURED 2026-08-21: that error does not
+reproduce.** Line 29 is `HttpHeaders.create`'s `CaseInsensitiveHeaders.create()`, and it has compiled
+since `Map.maxon` was listed. What the probe answers now, in order, as each blocker clears:
+
+| tree state | `maxon-shv2 build stdlib/HttpClient.maxon` |
+|---|---|
+| before this tick | `E2015 :176:18` — member access `send` on an `unknown` value (**this IS the socket blocker**) |
+| with `TcpClient` listed | `E3005 :219:3` — cannot return `unknown` from a function declared to return `HttpResponse` (`httpParseResponse`, in the helper) |
+| with both listed | `E3001` only ✅ |
+
+⇒ the row was right that the module has a blocker of its own and wrong about what it was: the recorded
+one had already been cleared by an unrelated rung, and the *live* first error was the socket dependency
+the row explicitly denied. **The third sweep's instruction — RE-PROBE BEFORE PLANNING AGAINST ANY ROW —
+held again.**
+
+### ⚠ A NEW BLIND SPOT IN THE READINESS CRITERION, ALONGSIDE THE CONDITIONAL-`extension` ONE
+
+This file's headline records that the criterion cannot see inside a body the compiler declines to
+specialize. **Here is a second shape it cannot see, and it is not the same one:** a module that lives in
+a `stdlib/` SUBDIRECTORY cannot be probed as a build root at all.
+
+```
+maxon-shv2 build stdlib/helpers/http/httpHelpers.maxon
+  ⇒ E3001, PLUS  E3088 :84:28 and :144:30
+     function 'String.addressableBytes' is module-scoped and not visible from this directory
+```
+
+As a build ROOT the file becomes USER source (`StdlibLoader.registeredPathsWhenTheRootIsInsideStdlib`
+deliberately skips it from the stdlib load), so it sits in `stdlib/helpers/http/` outside `stdlib/`'s
+module scope and every stdlib-only call in it is refused. **The diagnostic is an artifact of the probe's
+own root, not a property of the module** — loaded as stdlib it is stdlib source and both calls resolve.
+
+⇒ **For a `helpers/**` module the readiness probe is a PROGRAM THAT CALLS IT**, and that is the
+discriminating instrument anyway: with `let bogus = NoSuchType.definitelyUndefined(1)` injected into
+`httpBuildRequest`, `http-client.invalid-url` fails to COMPILE naming
+`stdlib\helpers\http\httpHelpers.maxon:19:25`, while `http-client.build-request` still PASSES because
+that case never reaches the function. One case proves the bodies are analyzed; the other proves the
+failure is reach-dependent rather than a whole-file refusal.
+
+### ⛔⛔ AND THE LISTING EXPOSED A `for`-LOWERING LEAK WITH NO HTTP IN IT
+
+`httpBuildRequest` writes `for (hdrName, hdrValue) in request.headers().headers`. A `for` whose source
+reads a field out of a CALL RESULT enrols that result as an owned binding of the loop's frame — the same
+frame the cursor is enrolled in — and the empty-`Iterable` entry edge deliberately skips that frame's
+drops because on it no cursor was ever created. A request with no user headers iterates an **empty**
+`Map`, so **every `HttpClient.get` leaked one `HttpHeaders`**: exit **101** where the bootstrap answers 0.
+
+Reduced to thirty lines of user code with no HTTP and no socket in it, and fixed in
+`Parser.parseForStatement` by giving the cursor a scope of its own. ⇒ **`StdlibLoader`'s own rule stands
+and is worth restating here: an entry's readiness probe answers whether the module COMPILES, and it has
+never asked whether it RUNS. Run it.**
+
+### What is left after this
+
+| kind | what | can an unrelated rung clear it? |
+|---|---|---|
+| **Runtime slice** | — **NONE. The last one landed here.** | — |
+| **Roster residue** | `Array` (9) · `Character` (3) · `StringIndex` (2) · `int.toString` | ⛔ no — each is a retirement with its own blockers |
+| **Convergence** | `Interfaces.maxon`'s ten synthesized protocols · `HashValue`'s bounds | ⛔ no |
+| **Defects inside a listed module** | `W101` · `W192` · `W193` | — ordinary rungs |
+| **Excluded permanently** | `Internals.maxon` | — user ruling |
+
+⚠ **`async-tcp` is NOT closed by this listing, and the two halves must not be confused.**
+`async-tcp.connect-error` and `.resolve-error` went red⇒green with the `TcpClient` line alone. ⛔ **The
+reason recorded here was wrong** — it said *"E3073's yield roster already carried `__ms_`"*, and
+`SemanticCheck.ioYieldingRuntimeCallee` has never named `isManagedSocketRuntimeCallee`. What accepts those
+spawns is the UNKNOWN-CALLEE FALLBACK: `checkAsyncYielding` walks the Maxon tier, where every `__ms_*` is an
+undeclared Std-tier name, and `calleeYields` resolves an unknown toward "yields". Sabotage-measured
+2026-08-21 — with the roster neutered outright, `async File.exists` and `async sleep()` still compile while
+the pure-function CONTROL still answers E3073.
+
+⛔ **And `async-tcp.trace-connect-error` / `.trace-mixed-io` are GREEN, not "still red".** They pin
+per-operation trace labels (`io_yield #1 [net_connect]`); the per-operation tag table landed after this
+paragraph was written, and `async-tcp/` now runs **4 passed, 0 failed** with the live `echo` case excluded
+(measured 2026-08-21). Neither half was ever a socket-LISTING question.

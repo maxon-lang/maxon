@@ -229,6 +229,49 @@ let AsyncTraceMarker = "<!-- AsyncTrace"
 // them at the character after "<!-- "), so the marker checks stay independent and none can swallow another.
 let MmTraceMarker = "<!-- MmTrace"
 
+// ⭐⭐ **WHAT THIS CASE NEEDS FROM THE NETWORK — `<!-- network: live -->`, the marker that keeps somebody
+// else's uptime out of this suite's verdict.** The cases carrying it across `tcp-client`, `async-tcp` and
+// `http-client` open a socket to a REAL EXTERNAL HOST (`tcpbin.com`, `httpbin.org`). A run of those is not
+// a claim about this compiler: it is green when the public internet is up and red when it is not, and the
+// difference between the two is invisible in the report. So a case carrying this marker is left OUT of a
+// default run and comes back with `--network` (see `SpecTestRunner.networkModeAllows`).
+//
+// ⚠ **IT IS PER-CASE, AND THE SPEC-LEVEL SPELLING CANNOT DO THIS JOB.** Both reference runners gate whole
+// SPECS on a `category: network` frontmatter key, and all three of these specs also hold DETERMINISTIC
+// error-path cases (`connect-error`, `resolve-error`, `invalid-url`, `build-request`) that exercise the
+// real networking runtime without leaving the machine and must keep running by default. Gating the file
+// would take those down with the live ones.
+//
+// ⚠ **AND IT IS NOT `disabled-test:`.** A shelved case is one shv2 cannot pass; these pass, and are
+// PARSED, SELECTED and RUN in full under `--network`. The two must not read alike.
+//
+// ⚠ **NEW VOCABULARY, DELIBERATELY, AND THE REFERENCES IGNORE IT SILENTLY — WHICH IS THE CORRECT
+// BEHAVIOUR FOR THEM.** v1 hard-codes seven paths in its own runner
+// (`SpecTestRunner.liveNetworkFragments`), which is the spec files' contents written down a second time in
+// a compiler; the copy that rots is always the one in the runner, and it rots SILENTLY because a path that
+// no longer names a case excludes nothing.
+//
+// ⇒ **AND IT HAS ALREADY ROTTED — MEASURED 2026-08-21.** v1's seven do not include
+// `http-client/http-client.async-trace-interleave`, which is live and would reach `httpbin.org` on v1 too.
+// Worse, the number was TRANSCRIBED from that roster into six places in THIS harness, so an argument against
+// hand-written rosters shipped with a hand-written count. Both are gone; the marker is the census.
+// ⛔ Do not write the number down again, here or anywhere.
+//
+// Stating the fact on the case itself is the same correction the section-pin markers got (see
+// `SpecTestRunner.targetCanCheckSectionPins`). The C# reference and v1 skip
+// an unrecognized `<!-- … -->` comment line, so these `.md` files keep exactly the meaning they have there
+// today — v1's hard-coded list still excludes them, the bootstrap still runs them.
+//
+// It is not a superstring or substring of any other marker ("<!-- network:" first differs from
+// "<!-- test:", "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace" and "<!-- MmTrace"
+// at the character after "<!-- "), so the marker checks stay independent and none can swallow another.
+export let NetworkMarker = "<!-- network:"
+
+// The ONE value `NetworkMarker` recognizes. Any other value is REFUSED rather than read as "no
+// restriction": a marker the harness silently declines is a claim the spec makes and nothing honours,
+// which is the failure `AsyncTraceMarker` documents having actually shipped.
+export let NetworkLiveValue = "live"
+
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
 let ArgSeparator = " "
@@ -595,6 +638,21 @@ export union SpecMmTrace
 	pinned(trace String)
 end 'SpecMmTrace'
 
+// ⭐ **WHAT A CASE NEEDS FROM THE NETWORK — see `NetworkMarker` for why this is a per-case fact.**
+//
+// A UNION rather than a bool, because the marker carries a VALUE and the value is the thing selection
+// acts on: `network: live` says "a real external host", and a second answer (a loopback server this
+// harness starts, say) would be a third state rather than the negation of one. A bool would throw the
+// distinction away at parse time, and every reader of it would then be asking a question the field can no
+// longer answer. It also makes every consumer's `match` total, which is how a new arm becomes a compile
+// error instead of a silently-selected case.
+export union SpecNetwork
+	// Reaches no external host. Selected by every run, which is every case not carrying the marker.
+	none
+	// Opens a socket to a REAL EXTERNAL HOST. Left out of a default run and selected under `--network`.
+	live
+end 'SpecNetwork'
+
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
@@ -647,11 +705,18 @@ export type SpecTest
 	// `asyncTrace` note already refuses.
 	export let mmTrace as SpecMmTrace
 
+	// What this case needs from the network (a `<!-- network: … -->` marker). It rides HERE for the reason
+	// `targets` does and is the same kind of fact: it decides whether this run SELECTS the case at all,
+	// which is a property of the case rather than of what its execution must produce. Unlike `targets` it
+	// is answered against the RUN MODE (`--network`) instead of against the effective target — see
+	// `SpecTestRunner.networkModeAllows`.
+	export let network as SpecNetwork
+
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, mmTrace SpecMmTrace) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, mmTrace SpecMmTrace, network SpecNetwork) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace, network: network}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -961,6 +1026,9 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// Starts `off`; the MARKER raises it to `unpinned` and the BLOCK to `pinned`. A case carrying both
 	// ends `pinned` whichever order they appear in, because the block never lowers the mode.
 	var mmTrace = SpecMmTrace.off
+	// `none` unless a `<!-- network: … -->` marker says otherwise — the ordinary case, and the literal
+	// answer for a case that reaches no host, not a default standing in for an unread marker.
+	var network = SpecNetwork.none
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -1021,6 +1089,15 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = i + 1
 			continue
 		end 'mmTraceMarker'
+
+		// The network gate the author SPELLED, consumed identically to the five above — including on a
+		// DISABLED case, so shelving a live-network case does not leave its marker to fall through as
+		// unread prose. The VALUE is refused rather than defaulted; see `parseNetworkValue`.
+		if line.contains(NetworkMarker) 'networkMarker'
+			network = parseNetworkValue(line, specPath: specPath, testName: name)
+			i = i + 1
+			continue
+		end 'networkMarker'
 
 		// ⛔⛔ **A PROSE SENTENCE THAT HAPPENS TO BEGIN WITH A FENCE PREFIX IS NOT A FENCE, AND EVERY ARM
 		// BELOW MATCHES BY PREFIX.** `` ```RequiredRuntime block, one name per line: `` — a real line in
@@ -1190,7 +1267,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			unpinned to pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries an mm-trace block or `{MmTraceMarker} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
 		end 'mmTraceOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace, network: network))
 		return i
 	end 'rejected'
 
@@ -1204,7 +1281,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace, network: network))
 
 	return i
 end 'scanTestFromMarker'
@@ -1502,6 +1579,24 @@ function parseTargetKeys(line String) returns TargetKeyArray
 	end 'eachTarget'
 	return result
 end 'parseTargetKeys'
+
+// What a `<!-- network: … -->` marker says this case needs, read through the same `markerValue` every
+// other valued marker goes through.
+//
+// ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A `none`.** Both failing spellings are silent otherwise and
+// both fail OPEN: a typo (`<!-- network: livee -->`) and a blank value would each be read as "reaches no
+// host", so the case would rejoin the default gate and the suite would go red on somebody else's outage
+// with nothing anywhere saying why. That is the same failure `AsyncTraceMarker` records having shipped —
+// a marker the file states and the harness declines — arriving through a value rather than through a
+// missing arm.
+function parseNetworkValue(line String, specPath FilePath, testName String) returns SpecNetwork
+	let value = markerValue(line)
+	if value == NetworkLiveValue 'live'
+		return SpecNetwork.live
+	end 'live'
+
+	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{NetworkMarker} {value} -->`, and '{NetworkLiveValue}' is the only value this marker takes. It says the case opens a socket to a REAL EXTERNAL HOST, so a default run leaves it out and `--network` brings it back; an unrecognized value would quietly read as 'reaches no host' and put the case back in the default gate")
+end 'parseNetworkValue'
 
 // The arguments an `<!-- Args: … -->` marker names, in order — its value split into the argv the
 // program is spawned with. `<!-- Args: -5.5 -->` is ONE argument, `-5.5`: a value beginning with `-`

@@ -639,6 +639,17 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// not a state an op can be in. (It said they were absent, two lines above their own arms.)
 		osHandleSetInherit then break 'result'
 		osProcessTerminate then break 'result'
+		// The socket family's six ANSWERING primitives: a Winsock startup code, a getaddrinfo status, a raw
+		// SOCKET, a connect status and two byte counts are all machine words. The other two discard their
+		// answer and take a `break` arm like every other value-less op in this exhaustive match.
+		osSocketStartup(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osSocketResolve(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osSocketFreeAddrInfo then break 'result'
+		osSocketCreate(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osSocketConnect(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osSocketSend(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osSocketRecv(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osSocketClose then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

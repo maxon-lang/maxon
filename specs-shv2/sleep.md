@@ -145,3 +145,43 @@ end 'main'
 ```stdout
 score=2
 ```
+
+<!-- test: sleep.trace-sleep-yields-the-green-thread -->
+<!-- AsyncTrace -->
+Verify that a `sleep` inside a green thread yields and resumes it, and that the trace names the SLEEP
+rather than an I/O operation.
+
+This is the pin for the `sleep_yield`/`sleep_resume` tags. Without it the tags are emitted by the runtime
+and asserted by nothing: `/specs/http-client.md`'s `async-trace-interleave` is the only canonical case that
+names them, and it is `disabled-test:` there and here — it additionally needs a sync-worker I/O pool and
+runnext scheduling, neither of which this compiler has.
+
+The shape is `async-await.trace-yield`'s, one operation over: a spawn, the yield, the scheduler taking the
+worker, the resume, and the await observing an already-yielded promise.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function napper() returns Integer
+	sleep(1)
+	return 7
+end 'napper'
+
+function main() returns ExitCode
+	let p = async napper()
+	let r = await p
+	return r
+end 'main'
+```
+```exitcode
+7
+```
+```stderr
+spawn #1
+sleep_yield #1
+worker_start #1
+sleep_resume #1
+await #1 [yield]
+worker_exit #1
+worker_start #2
+worker_exit #2
+```

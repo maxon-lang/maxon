@@ -1,0 +1,746 @@
+// Runtime/ManagedSocketRuntime.maxon — the `__ManagedSocket` box: one OS socket, closed on drop.
+//
+// ⭐ **THE ORACLE IS `specs/managed-socket.md`, AND IT IS THE ONLY ORACLE AVAILABLE**, exactly as
+// `ManagedFileRuntime`'s and `ManagedDirectoryRuntime`'s headers record for their families:
+// `run_program compiler=csharp` crashes (`E9001`) on a standalone `__Managed*` call, so the committed cases
+// are the whole of what can be asked of the reference.
+//
+// ⭐ **HOST-ONLY ON THE SAME TERMS AS THE TWO FILESYSTEM FAMILIES.** `x64-windows` is real; every other
+// target refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct` via
+// `SemanticCheck.calleeNeedsWin32Substrate`, which matches on the `__ms_` PREFIX — so a method added later is
+// gated by construction rather than by memory.
+//
+// ---
+//
+// ⭐⭐ **THE BOX IS ONE-LEVEL, WHICH IS `__ManagedFile`'s SHAPE AND DELIBERATELY NOT `__ManagedDirectory`'s.**
+// A `__ManagedSocket` is an 8-byte box holding the raw OS SOCKET and nothing else. The directory family needs
+// a second allocation because the OS WRITES THROUGH a 320-byte find record for the whole life of a search;
+// a socket has no such record — every transfer hands the kernel the CALLER's buffer — so a second level would
+// be an indirection with nothing in it. `specs/managed-socket.md`'s "Type Structure" states the single
+// `_handle` field, and `SignatureIndex.managedSocketLayout` is what holds the front end's declared shape to
+// the constants below.
+//
+// ⚠ **THE OPERATIONS ARE SYNCHRONOUS AND THE REFERENCE'S ARE NOT, AND THAT IS THIS TIER'S STANDING
+// DIVERGENCE RATHER THAN A GAP IN THIS FILE.** The bootstrap runs `connect`/`send`/`recv` on an IOCP
+// submission plus a pool of sync-fallback OS threads (`X86CodeEmitter.Runtime.cs`'s `__io_sync_op_net_*`),
+// and registers each socket with the completion port. shv2 has no such pool: every `__ms_*` entry that makes
+// a kernel call opens with `__gt_io_park`, the cooperative yield the `__mf_*`/`__md_*` bands already use, so
+// the green thread genuinely suspends at the I/O point and others run — but the syscall is not overlapped
+// with them. `GtIoParkName`'s header carries that argument in full for the filesystem bands; this family
+// inherits it unchanged, which is also why the socket entries are NOT registered with an IOCP that would have
+// nothing to complete into.
+//
+// ⚠ **"OPENS WITH" MEANS ONCE PER ENTRY POINT, NOT ONCE PER KERNEL CALL** — `emitIoPark`'s standing invariant,
+// which this family did not hold until 2026-08-21 (`__ms_tcp_connect` parked four times; see the park site).
+// `__ms_destruct` makes no kernel call of its own and parks through the `__ms_close` it delegates to, so the
+// four parking entry points are connect / send / recv / close.
+
+// ⭐ **THE BOX — its field offset and its size**, asserted against the registered `StructLayout`
+// (`SignatureIndex.managedSocketLayout`) rather than agreeing with it by inspection, exactly as
+// `ManagedFileHandleOffset`/`ManagedFileBoxBytes` are: the SHAPE is stated for the front end by that layout
+// and written here by these constants, and two readers of one shape is the pair this project keeps finding
+// drifted.
+export let ManagedSocketHandleOffset = 0 as ByteOffset
+export let ManagedSocketBoxBytes = 8 as ParsedInt
+
+// The handle value a CLOSED box carries — `ManagedFileClosedHandle`'s twin, and zero for its reason: the box
+// is allocated zeroed, so a box whose `socket()` never ran and one that has been closed carry the same value
+// and ONE guard covers both.
+let ManagedSocketClosedHandle = 0 as ParsedInt
+
+// ⚠ **`INVALID_SOCKET` IS ITS OWN CONSTANT EVEN THOUGH IT EQUALS `INVALID_HANDLE_VALUE`.** Both are -1 and
+// they are two different APIs' answers — `socket()` reports failure as `(SOCKET)(~0)`, `CreateFileA` as
+// `INVALID_HANDLE_VALUE` — so naming this one here states a fact about the socket API instead of making a
+// coincidence load-bearing across two families. It is the argument `emitErrnoClassifiedThrow`'s three flag
+// parameters already make one type over.
+let InvalidSocket = 0 - 1 as ParsedInt
+
+// `SOCKET_ERROR` — what `send` and `recv` answer on failure. Its own constant beside `InvalidSocket` for
+// that constant's reason: they are two different API answers that happen to share a value, and one name for
+// both would make the coincidence load-bearing across the two.
+let SocketError = 0 - 1 as ParsedInt
+
+// ⭐⭐ **THE IPv4/TCP PROTOCOL SELECTION — ONE HOME, TWO READERS, AND THE SECOND READER IS WHY IT MOVED HERE.**
+// These three values are `socket()`'s three arguments (spelled by `StdToX64Conversion.lowerOsSocketCreate`)
+// AND the three `addrinfo` fields `getaddrinfo` resolves against (`buildManagedSocketTcpConnect`'s `hints`,
+// below). They must AGREE: resolve for `AF_INET` and then create an `AF_INET6` socket and `connect` fails
+// with a family mismatch — a wrong answer with no diagnostic anywhere. The x64 lowering's own header used to
+// say these lived there "and nowhere else"; that was true only while nothing above the target tier had to
+// WRITE them into an OS structure, which building `hints` and `sockaddr_in` in Std now does.
+//
+// ⚠ **A POSIX OR WASI LANE STILL NAMES ITS OWN `socket()` ARGUMENTS — what it may not do is disagree with
+// the `hints` this builder fills.** These three happen to be portable (`AF_INET` is 2, `SOCK_STREAM` is 1
+// everywhere shv2 could target, and `IPPROTO_TCP` is IANA's 6); an IPv6 slice adds operands rather than
+// editing them.
+//
+// ⚠ **`AfInet`, `SockStream` and `IpprotoTcp` HERE — AND `SockaddrInBytes` BELOW — are declared WITHOUT a
+// `ParsedInt` suffix**, and that is load-bearing rather than sloppy: this file reads all four as `ParsedInt`
+// (an `emitConst` value) while the x64 lowering reads all four as `MachineWord` (`int(0 to u64.max)`, a
+// `movRegImm32` immediate). A literal type widens into both; stamping either one here would refuse the other
+// reader. ⛔ The count is written where the members are NAMED, because this sentence said "the four" while
+// standing over three declarations, with the fourth eight lines down under a comment of its own.
+export let AfInet = 2
+export let SockStream = 1
+export let IpprotoTcp = 6
+
+// `sizeof(struct sockaddr_in)` — the length `connect` is given (by the lowering) and the size this file
+// ALLOCATES for the address it builds. One fact: a box smaller than the length handed to `connect` is a read
+// past the end of an `__mm_alloc`'d block.
+export let SockaddrInBytes = 16
+
+// `sizeof(WSADATA)` on Win64. `WSAStartup` fills it and nothing here reads it back — it is a scratch buffer
+// the API demands, freed the moment the call returns.
+let WsaDataBytes = 408 as ParsedInt
+
+// ⭐ **`struct addrinfo` ON Win64 — the HINTS this file writes and the RESULT it reads.** 48 bytes:
+//
+//   [0  .. 3]   ai_flags        [4  .. 7]   ai_family
+//   [8  .. 11]  ai_socktype     [12 .. 15]  ai_protocol
+//   [16 .. 23]  ai_addrlen      [24 .. 31]  ai_canonname
+//   [32 .. 39]  ai_addr         [40 .. 47]  ai_next
+//
+// ⚠ `ai_addr` at 32 (0x20) is the one offset that is READ rather than written, and it is the bootstrap's own
+// (`X86CodeEmitter.Runtime.cs:6270`, `MOV RAX, [RAX+0x20]`).
+let AddrInfoBytes = 48 as ParsedInt
+// The two WORDS this file writes into `hints`, named for the DWORD PAIR each one carries — `emitStoreDwordPair`
+// composes two 32-bit fields into one 64-bit store, so an offset here names a word and not a field.
+let AddrInfoFlagsFamilyOffset = 0 as ByteOffset
+let AddrInfoSocktypeProtocolOffset = 8 as ByteOffset
+let AddrInfoAddrOffset = 32 as ByteOffset
+
+// ⭐ **`struct sockaddr_in` — 16 bytes, and every field is NARROWER THAN A WORD.**
+//
+//   [0 .. 1]  sin_family (u16, host order)   [2 .. 3]  sin_port (u16, NETWORK order)
+//   [4 .. 7]  sin_addr   (u32, network order) [8 .. 15] sin_zero
+//
+// The two READ offsets are used against the address `getaddrinfo` handed back; the WRITE goes through
+// `emitSockaddrInWord`, which packs the first three into one store for the reason stated there.
+let SockaddrAddrOffset = 4 as ByteOffset
+// The single word `emitSockaddrInWord` packs `sin_family`, `sin_port` and `sin_addr` into — the whole of the
+// WRITE side of this struct, which is why there is one offset here and not three.
+let SockaddrFamilyPortAddrOffset = 0 as ByteOffset
+
+// ⭐⭐ **2^32 AND 2^16 AS SCALES, BECAUSE THIS TIER HAS NO NARROW STORE.** `accessWidthFor` carries `byte` and
+// `word64` and PANICS for everything between (deliberately — a narrow access needs the `as` cast so its
+// SIGNEDNESS decides the extension), so a `u16` or `u32` FIELD cannot be stored on its own here. Every such
+// field is written by composing it into the 64-bit word that contains it, and these are the two multipliers
+// that place a field at byte 2 and at byte 4 of that word. Named rather than spelled `65536`/`4294967296` at
+// five sites: a bare power of two at a shift says nothing about which field offset it encodes.
+let ByteTwoScale = 65536 as ParsedInt
+let ByteFourScale = 4294967296 as ParsedInt
+
+// ⚠ **THE TEST-NET-1 SENTINEL, AND IT IS THE REFERENCE'S BEHAVIOUR RATHER THAN A TEST ACCOMMODATION.**
+// `192.0.2.1` is RFC 5737's documentation range: it is guaranteed to route nowhere, so a real `connect` to it
+// does not get refused — it STALLS for the OS's multi-second SYN timeout (~21 s on Windows). ALL FOUR
+// reference backends short-circuit it (`maxon-sharp` x64 `X86CodeEmitter.Runtime.cs:6277` and arm64
+// `ARM64CodeEmitter.Runtime.cs:4730`; `maxon-selfhosted`'s `X64Backend.maxon:10744` `TestNet1NetOrder` and its
+// wasm backend), and v1 states the reason in so many words: *"does not stall for the multi-second OS connect
+// timeout"*. `specs/managed-socket.md`'s `connect-refused` case connects to exactly this address, and the
+// spec suite's per-case budget is two seconds.
+//
+// The value is the address AS `sin_addr` HOLDS IT — network byte order, so `192.0.2.1` reads `0x010200C0`
+// little-endian-first. It is compared against the resolved `sin_addr` word, never against a dotted string.
+let TestNet1NetOrder = 0x010200C0 as ParsedInt
+
+// The three "the call succeeded" readings. `WSAStartup` and `getaddrinfo` answer a plain int where 0 is
+// success (`getaddrinfo` returns an EAI_* code otherwise), and `connect` answers 0 or `SOCKET_ERROR`.
+let WinsockCallOk = 0 as ParsedInt
+
+// ⭐ **THE `__ManagedSocketError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
+// `ManagedFileRuntime`/`ManagedDirectoryRuntime` discipline, and the ordinals are positional facts about the
+// case order of the enum DECLARED at `stdlib/Builtins.maxon:163-172`. `verifyManagedSocketOrdinals` below is
+// what holds these literals to that declaration.
+//
+// ⚠ **`bufferOutOfBounds` IS ORDINAL 0.** It reads like the rare edge case and it sits FIRST, so a
+// transcription that "tidied" the order into failure-severity order would silently re-point every other flag
+// by one — with no compile error, because a flag is just a number.
+//
+// ⚠ `connectionClosed` (5) has no flag here because nothing THROWS it: `specs/managed-socket.md` documents
+// `recv` as *"Returns 0 if the peer closed gracefully"*, so a graceful close is a plain 0 RETURN and the case
+// is the CALLER's to raise (`stdlib/TcpClient.maxon:69` does exactly that). The case is DECLARED — the
+// ordinals after it depend on its slot — and deliberately unthrown, which is why its ORDINAL is here even
+// though its flag is not, and why `claimManagedSocketOrdinals` states it as `neverThrown` rather than
+// leaving a gap a corpus reorder could move in silence.
+let ManagedSocketBufferOutOfBoundsOrdinal = 0 as ParsedInt
+let ManagedSocketResolveFailedOrdinal = 1 as ParsedInt
+let ManagedSocketConnectFailedOrdinal = 2 as ParsedInt
+let ManagedSocketSendFailedOrdinal = 3 as ParsedInt
+let ManagedSocketRecvFailedOrdinal = 4 as ParsedInt
+let ManagedSocketConnectionClosedOrdinal = 5 as ParsedInt
+let ManagedSocketClosedOrdinal = 6 as ParsedInt
+let ManagedSocketBufferOutOfBoundsFlag = ManagedSocketBufferOutOfBoundsOrdinal + ErrorFlagOrdinalBias
+let ManagedSocketResolveFailedFlag = ManagedSocketResolveFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedSocketConnectFailedFlag = ManagedSocketConnectFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedSocketSendFailedFlag = ManagedSocketSendFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedSocketRecvFailedFlag = ManagedSocketRecvFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedSocketClosedFlag = ManagedSocketClosedOrdinal + ErrorFlagOrdinalBias
+
+// The `__ms_` prefix that identifies EVERY socket runtime entry point — the one test `scanRuntimeUsage` reads
+// to set `usesManagedSocket`, the one `SemanticCheck` reads for E3104, and the one its yield roster reads.
+let ManagedSocketRuntimePrefix = b"__ms_"
+
+// ⭐ **THE FIVE ENTRY POINTS.** Four name a `__ManagedSocket` method — the surface BOTH references declare
+// (`maxon-sharp/Compiler/2-Parser.cs:1574-1583`) — and `__ms_destruct` is the compiler-INSERTED one: the drop
+// a box takes when its last owner goes away (`SignatureIndex.managedNameDropCallee`), which is the whole of
+// the RAII half.
+export let ManagedSocketTcpConnectName = b"__ms_tcp_connect"
+export let ManagedSocketSendFromName = b"__ms_send_from"
+export let ManagedSocketRecvName = b"__ms_recv"
+export let ManagedSocketCloseName = b"__ms_close"
+export let ManagedSocketDestructName = b"__ms_destruct"
+
+// ⭐ **WHICH `__ManagedSocket` CALLEES THROW** — the composer behind `GtRuntime.isThrowingRuntimeCallee`.
+// Held to the builders by the bidirectional drift guard in `installManagedSocketRuntime`, copied from
+// `installManagedFileRuntime` for its stated reason: a predicate and a `throws` stamp are one fact in two
+// places, and this project keeps finding that pair drifted.
+export function isThrowingManagedSocketRuntimeCallee(callee ByteArray) returns bool
+	// ⚠ **THE TWO ABSENTEES ARE EACH ABSENT FOR A STATED REASON, not by oversight.**
+	//   • `__ms_close` — `specs/managed-socket.md` documents `close()` as *"Idempotent. Also called
+	//     automatically via destructor. Does not throw."*; naming it here would make a `try` REQUIRED on a
+	//     call that cannot fail (E3055).
+	//   • `__ms_destruct` — a DROP has no caller to hand an error to; it runs at a scope exit nobody wrote.
+	return callee.equals(ManagedSocketTcpConnectName) or callee.equals(ManagedSocketSendFromName) or callee.equals(ManagedSocketRecvName)
+end 'isThrowingManagedSocketRuntimeCallee'
+
+// ⭐ **WHAT THE USER ACTUALLY WROTE, FOR THE DIAGNOSTICS THAT QUOTE A CALLEE BACK AT THEM** —
+// `managedDirectorySourceMethodName`'s twin, and its header carries the argument in full: an author never
+// writes `__ms_recv`, so E3057 ("throwing function requires try") and E3059 must name the method they did
+// write. It is a map onto the PARSER's own constants, not a second spelling, and it is asked only behind
+// `isThrowingManagedSocketRuntimeCallee` — so the panic states a case nothing can reach rather than answering
+// it. `installManagedSocketRuntime`'s drift guard asks it for every throwing `__ms_` builder it installs, so
+// a missing arm fails at INSTALL and never in front of a user's missing `try`.
+export function managedSocketSourceMethodName(callee ByteArray) returns ByteArray
+	if callee.equals(ManagedSocketTcpConnectName) 'tcpConnect'
+		return ManagedSocketTcpConnectMethod
+	end 'tcpConnect'
+	if callee.equals(ManagedSocketSendFromName) 'sendFrom'
+		return ManagedSocketSendFromMethod
+	end 'sendFrom'
+	if callee.equals(ManagedSocketRecvName) 'recv'
+		return ManagedSocketRecvMethod
+	end 'recv'
+	panic("managedSocketSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `__ManagedSocket` callee — this map is asked ONLY behind `isThrowingManagedSocketRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `ManagedSocket*Method` constant. `installManagedSocketRuntime`'s drift guard asks this for every throwing `__ms_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
+end 'managedSocketSourceMethodName'
+
+// ⭐ **THE ERROR TYPE A SOCKET CALLEE THROWS — the WHAT to the predicate's THAT**, and the twin of
+// `managedFileThrows`/`managedDirectoryThrows`. `ProgramSignatures.throwsOf` answers with it for a callee no
+// file declares, which is what types an `otherwise (e)` binding and therefore what makes `match e` see an
+// enum instead of a scalar; the three throwing builders stamp it as their `throws` clause. ONE speller for
+// one fact.
+export function managedSocketThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(ManagedSocketErrorTypeName))
+end 'managedSocketThrows'
+
+// The live OS socket of a box, or this family's `closed` throw — `ManagedFileRuntime.emitLiveHandleOrClosedThrow`
+// with THIS family's three fixed facts supplied. Every `__ManagedSocket` caller throws
+// `__ManagedSocketError.closed` from a box whose handle sits at `ManagedSocketHandleOffset`, so those three
+// are a per-SOCKET fact rather than a per-call one; this is what keeps the triple out of `sendFrom` and `recv`.
+function emitLiveSocketOrThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, box ValueId, ids ValueMinter) returns ValueId
+	return emitLiveHandleOrClosedThrow(module, func: func, entry: entry, join: join, record: box, handleOffset: ManagedSocketHandleOffset, closedSentinel: ManagedSocketClosedHandle, closedFlag: ManagedSocketClosedFlag, ids: ids)
+end 'emitLiveSocketOrThrow'
+
+// ⭐ **TWO 32-BIT FIELDS SHARING ONE 64-BIT SLOT, WRITTEN AS ONE CONSTANT STORE.** `low` lands at `offset`
+// and `high` at `offset + 4`. It exists because this tier has NO 4-byte store at all (see `ByteFourScale`),
+// so a DWORD field is only reachable through the word that contains it — and doing that inline would put the
+// "+4 is the high half" arithmetic at every `hints` field instead of once.
+//
+// ⚠ Both values are COMPILE-TIME here, so the packing is folded into a single `emitConst` rather than emitted
+// as a shift and an or.
+function emitStoreDwordPair(module StdModule, block IrBlock, record ValueId, offset ByteOffset, low ParsedInt, high ParsedInt, ids ValueMinter)
+	let packed = emitConst(module, block: block, value: low + (high * ByteFourScale), ids: ids)
+	emitStoreField(module, block: block, record: record, offset: offset, value: packed)
+end 'emitStoreDwordPair'
+
+// ⭐⭐ **THE `sockaddr_in`'s FIRST WORD — `sin_family`, `sin_port` AND `sin_addr` PACKED INTO ONE STORE.**
+// The three fields occupy bytes 0..7 of a 16-byte address (`sin_zero` fills 8..15 and the block is allocated
+// zeroed), and none of them is a word wide — so composing them is not an optimization, it is the only form
+// this tier can write them in.
+//
+// ⚠ **`sin_port` IS NETWORK BYTE ORDER AND `sin_family` IS NOT**, which is the one asymmetry in the record
+// and the one this function exists to state once. `htons` is the byte swap of the low 16 bits; `sin_addr`
+// arrives ALREADY in network order (it is copied straight out of the `sockaddr` `getaddrinfo` filled), so it
+// is placed and never swapped.
+function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip ValueId, ids ValueMinter) returns ValueId
+	// htons: `((port and 0xFF) shl 8) or ((port shrLogical 8) and 0xFF)`.
+	let lowMask = emitConst(module, block: block, value: 0xFF, ids: ids)
+	let byteBits = emitConst(module, block: block, value: 8, ids: ids)
+	let lowByte = emitBin(module, block: block, a: port, b: lowMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let lowMoved = emitBin(module, block: block, a: lowByte, b: byteBits, opcode: StdBinOpcode.shl, ids: ids)
+	let highShifted = emitBin(module, block: block, a: port, b: byteBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let highByte = emitBin(module, block: block, a: highShifted, b: lowMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let netPort = emitBin(module, block: block, a: lowMoved, b: highByte, opcode: StdBinOpcode.bitOr, ids: ids)
+
+	// `sin_family` at byte 0, `sin_port` at byte 2, `sin_addr` at byte 4.
+	let family = emitConst(module, block: block, value: AfInet, ids: ids)
+	let portScale = emitConst(module, block: block, value: ByteTwoScale, ids: ids)
+	let portPlaced = emitBin(module, block: block, a: netPort, b: portScale, opcode: StdBinOpcode.mul, ids: ids)
+	let familyAndPort = emitBin(module, block: block, a: family, b: portPlaced, opcode: StdBinOpcode.bitOr, ids: ids)
+	let addrScale = emitConst(module, block: block, value: ByteFourScale, ids: ids)
+	let addrPlaced = emitBin(module, block: block, a: ip, b: addrScale, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBin(module, block: block, a: familyAndPort, b: addrPlaced, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitSockaddrInWord'
+
+// ⭐⭐ **`__ms_tcp_connect(hostRec, port) -> (box, flag)` — RESOLVE, THEN CONNECT, OR THROW.**
+//
+// The sequence is `__io_sync_op_net_connect`'s (`maxon-sharp/Compiler/MLIR/X86CodeEmitter.Runtime.cs:6213-6350`),
+// which is the reference that WORKS:
+//
+//   WSAStartup(2.2)  →  fill a 48-byte `hints` for IPv4/TCP  →  getaddrinfo(host, NULL, hints, out)
+//   →  read `sin_addr` out of the first result's `ai_addr`  →  freeaddrinfo
+//   →  the TEST-NET-1 short circuit  →  socket()  →  build a `sockaddr_in`  →  connect()
+//
+// ⚠ **EVERY FAILURE IS `resolveFailed` OR `connectFailed`, AND THAT IS A CONTRACT THE SPEC PINS RATHER THAN
+// a convenience.** Both committed cases write `default panic("unreachable: tcpConnect reports only
+// resolveFailed or connectFailed")`, so a third variant escaping this builder is an ABORT in a user's
+// program. `getaddrinfo` answering non-zero is the resolve; **everything else — a `WSAStartup` that fails, a
+// `socket()` that fails, a `connect()` that is refused — is `connectFailed`**, because with no Winsock and no
+// socket there is no connection, which is exactly what that variant names.
+//
+// ⚠ **THE SCRATCH COPIES ARE FREED ON EVERY EXIT, THE THROWING ONES INCLUDED.** Four allocations pass through
+// this function — the host cstring, the `WSADATA`, the `hints`, the `addrinfo*` out word — and each is
+// released before the block that could leave. The `addrinfo` LIST is the OS's and goes back through
+// `freeaddrinfo`, never through `__mm_free`.
+function buildManagedSocketTcpConnect(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketTcpConnectName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedSocketThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var init = module.addBlock(func, label: b"msinit")
+	var noWinsock = module.addBlock(func, label: b"msnowsa")
+	var resolve = module.addBlock(func, label: b"msresolve")
+	var resolveFailed = module.addBlock(func, label: b"msdnsfail")
+	var resolved = module.addBlock(func, label: b"msaddr")
+	var refused = module.addBlock(func, label: b"msrefused")
+	var create = module.addBlock(func, label: b"mssock")
+	var noSocket = module.addBlock(func, label: b"msnosock")
+	var dial = module.addBlock(func, label: b"msdial")
+	var dialFailed = module.addBlock(func, label: b"msconnfail")
+	var connected = module.addBlock(func, label: b"msok")
+
+	emitParams(module, block: entry, count: 2)
+	let hostRec = 0 as ValueId
+	let port = 1 as ValueId
+
+	// The host arrives as a `__ManagedMemory` record whose buffer carries NO terminator, and `getaddrinfo`
+	// takes an `LPCSTR` — `emitPathToCString`'s whole argument, one family over, and the scratch is this
+	// function's to release.
+	let host = emitPathToCString(module, func: func, cur: entry, join: init, pathRec: hostRec, ids: ids)
+
+	// Winsock must be initialized before any other ws2_32 entry point answers. The `WSADATA` is write-only to
+	// us: it is freed the moment the call returns.
+	let wsaData = emitRawAlloc(module, block: init, byteCount: emitConst(module, block: init, value: WsaDataBytes, ids: ids), ids: ids)
+	let startupResult = ids.mint()
+
+	// ⛔ **`WSAStartup` IS NOT A PARK SITE.** It is process-cached behind `__net_wsa_init` in both references
+	// and returns without touching the network on every call after the first, so a park here would report a
+	// blocking operation that does not block. The two that DO are `getaddrinfo` and `connect()`, and each has
+	// its own park below — see `emitIoPark` for why the unit is the blocking operation rather than the
+	// function.
+	module.appendOp(init, op: StdOp.osSocketStartup(startupResult, wsaDataPtrId: wsaData))
+	emitRawFree(module, block: init, ptr: wsaData, ids: ids)
+	let startupOk = emitConst(module, block: init, value: WinsockCallOk, ids: ids)
+	let winsockReady = emitCmp(module, block: init, a: startupResult, b: startupOk, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(init, op: StdOp.condBranch(winsockReady, thenBlockId: resolve.id, elseBlockId: noWinsock.id))
+
+	emitRawFree(module, block: noWinsock, ptr: host, ids: ids)
+	emitErrorReturn(module, block: noWinsock, flag: ManagedSocketConnectFailedFlag, ids: ids)
+
+	// `hints` — 48 bytes, allocated ZEROED, so only the three fields `getaddrinfo` reads are written. They are
+	// DWORDs at 4/8/12, two to a word (see `emitStoreDwordPair`): `ai_flags`+`ai_family` in the first,
+	// `ai_socktype`+`ai_protocol` in the second.
+	// ⭐ **PARK 1 OF 2 — THE DNS RESOLVE.** `getaddrinfo` is the first of this function's two genuinely
+	// blocking calls: it goes to a resolver over the network and can take longer than the connect that follows
+	// it. The bootstrap gives it a park of its own by giving it a SYNC OP of its own — `SyncOpDnsResolve`,
+	// which reports under the `net_connect` operation name
+	// (`maxon-sharp/Compiler/MLIR/X86CodeEmitter.Runtime.cs:6754`) — so the pair a resolve prints is spelled
+	// `[net_connect]` there too, and this is the same pair rather than a new spelling.
+	emitIoPark(module, block: resolve, operation: GtIoOperation.netConnect, ids: ids)
+	let hints = emitRawAlloc(module, block: resolve, byteCount: emitConst(module, block: resolve, value: AddrInfoBytes, ids: ids), ids: ids)
+	emitStoreDwordPair(module, block: resolve, record: hints, offset: AddrInfoFlagsFamilyOffset, low: 0, high: AfInet, ids: ids)
+	emitStoreDwordPair(module, block: resolve, record: hints, offset: AddrInfoSocktypeProtocolOffset, low: SockStream, high: IpprotoTcp, ids: ids)
+
+	// The out word holds the `addrinfo*` the OS allocates. Zeroed by `__mm_alloc`, so a failed resolve leaves
+	// a NULL nothing reads.
+	let out = emitWin32OutWord(module, block: resolve, ids: ids)
+	let resolveResult = ids.mint()
+	module.appendOp(resolve, op: StdOp.osSocketResolve(resolveResult, hostPtrId: host, hintsPtrId: hints, outPtrId: out))
+	emitRawFree(module, block: resolve, ptr: hints, ids: ids)
+	emitRawFree(module, block: resolve, ptr: host, ids: ids)
+	let resolveOk = emitConst(module, block: resolve, value: WinsockCallOk, ids: ids)
+	let didResolve = emitCmp(module, block: resolve, a: resolveResult, b: resolveOk, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(resolve, op: StdOp.condBranch(didResolve, thenBlockId: resolved.id, elseBlockId: resolveFailed.id))
+
+	emitRawFree(module, block: resolveFailed, ptr: out, ids: ids)
+	emitErrorReturn(module, block: resolveFailed, flag: ManagedSocketResolveFailedFlag, ids: ids)
+
+	// The first result's address, then the list goes back to the OS. `sin_addr` is a DWORD, so it is read as
+	// the word containing it and masked — `emitLoadDword`'s reason, and the four bytes above it are `sin_zero`,
+	// inside the same 16-byte `sockaddr`.
+	let addrInfo = emitLoadField(module, block: resolved, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
+	emitRawFree(module, block: resolved, ptr: out, ids: ids)
+	let sockaddr = emitLoadField(module, block: resolved, record: addrInfo, offset: AddrInfoAddrOffset, ids: ids)
+	let ip = emitLoadDword(module, block: resolved, record: sockaddr, offset: SockaddrAddrOffset, ids: ids)
+	module.appendOp(resolved, op: StdOp.osSocketFreeAddrInfo(addrInfo))
+	let testNet = emitConst(module, block: resolved, value: TestNet1NetOrder, ids: ids)
+	let isTestNet = emitCmp(module, block: resolved, a: ip, b: testNet, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(resolved, op: StdOp.condBranch(isTestNet, thenBlockId: refused.id, elseBlockId: create.id))
+
+	// Nothing has been allocated or opened on this edge — see `TestNet1NetOrder` for why the connect is not
+	// attempted at all.
+	emitErrorReturn(module, block: refused, flag: ManagedSocketConnectFailedFlag, ids: ids)
+
+	let socket = ids.mint()
+	module.appendOp(create, op: StdOp.osSocketCreate(socket))
+	let invalidConst = emitConst(module, block: create, value: InvalidSocket, ids: ids)
+	let socketFailed = emitCmp(module, block: create, a: socket, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(create, op: StdOp.condBranch(socketFailed, thenBlockId: noSocket.id, elseBlockId: dial.id))
+
+	emitErrorReturn(module, block: noSocket, flag: ManagedSocketConnectFailedFlag, ids: ids)
+
+	// ⭐ **PARK 2 OF 2 — THE TCP CONNECT.** `connect()` waits for a handshake with a host that may never
+	// answer; it is the second blocking call and it gets the second park. `socket()` between the two does not:
+	// it allocates a descriptor and returns.
+	//
+	// ⛔ **THE TEST-NET-1 EDGE NEVER REACHES HERE, AND THAT IS WHY `async-tcp.md`'s TWO TRACE CASES STILL PIN
+	// ONE PAIR.** `192.0.2.1` short-circuits at `resolved` (see `TestNet1NetOrder`), so those programs perform
+	// the resolve and no connect — one blocking operation, one pair. Both references answer identically for
+	// the same reason: the bootstrap's `-2` sentinel comes back from the DNS sync op and
+	// `maxon_net_tcp_connect` returns before its ConnectEx phase. A host that RESOLVES and then connects prints
+	// two, which is what `specs/http-client.md` pins.
+	emitIoPark(module, block: dial, operation: GtIoOperation.netConnect, ids: ids)
+	let addr = emitRawAlloc(module, block: dial, byteCount: emitConst(module, block: dial, value: SockaddrInBytes, ids: ids), ids: ids)
+	let addrWord = emitSockaddrInWord(module, block: dial, port: port, ip: ip, ids: ids)
+	emitStoreField(module, block: dial, record: addr, offset: SockaddrFamilyPortAddrOffset, value: addrWord)
+	let dialResult = ids.mint()
+	module.appendOp(dial, op: StdOp.osSocketConnect(dialResult, sockId: socket, addrPtrId: addr))
+	emitRawFree(module, block: dial, ptr: addr, ids: ids)
+	let dialOk = emitConst(module, block: dial, value: WinsockCallOk, ids: ids)
+	let didConnect = emitCmp(module, block: dial, a: dialResult, b: dialOk, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(dial, op: StdOp.condBranch(didConnect, thenBlockId: connected.id, elseBlockId: dialFailed.id))
+
+	// A refused connect leaves an OPEN socket, which no box will ever own — so it is closed here or it leaks
+	// for the process lifetime, invisibly to the exit-101 gate because a socket is not memory.
+	module.appendOp(dialFailed, op: StdOp.osSocketClose(socket))
+	emitErrorReturn(module, block: dialFailed, flag: ManagedSocketConnectFailedFlag, ids: ids)
+
+	// The box: one 8-byte slot holding the socket, allocated through `__mm_alloc` so the ordinary ownership
+	// machinery drops it — and the drop it takes is `__ms_destruct`, which CLOSES the socket before freeing
+	// the memory (`SignatureIndex.managedNameDropCallee`). That is the whole RAII half of this type.
+	let box = emitRawAlloc(module, block: connected, byteCount: emitConst(module, block: connected, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
+	emitStoreField(module, block: connected, record: box, offset: ManagedSocketHandleOffset, value: socket)
+	emitOkReturn(module, block: connected, value: box, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedSocketTcpConnect'
+
+// `__ms_send_from(box, arrRec, offset, length) -> (bytesSent, flag)` — send `length` bytes starting at
+// `offset` in the managed buffer.
+//
+// ⭐⭐ **`offset + length > capacity` THROWS `bufferOutOfBounds`; IT IS NOT CLAMPED.** That is the spec's own
+// contract (*"Throws `__ManagedSocketError.bufferOutOfBounds` if `offset + length > capacity`"*) and the
+// bootstrap's pre-check (`2-Parser.cs:13394-13404`, which passes `capacity` down for exactly this). A
+// NEGATIVE `offset` or `length` is refused by the same guard: `send`'s `len` is an `int`, so a negative i64
+// would arrive as an enormous count and read off the end of the buffer.
+//
+// ⚠⚠ **THE BOUND IS `capacity@16` FOR AN OWNED BUFFER AND `length@8` FOR A NON-OWNED ONE — see the
+// `pickBound` block below, which carries the measurement.** `__mf_read` states the neighbouring claim (*"a
+// non-owned buffer fails it structurally"*) about its own capacity test, and that claim is FALSE on this
+// tree for the reason recorded there; it is a defect of that builder, outside this spec's cases, and is
+// reported rather than changed here.
+function buildManagedSocketSendFrom(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketSendFromName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0, throwsTypeName: managedSocketThrows())
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkOffset = module.addBlock(func, label: b"mschkoff")
+	var checkLength = module.addBlock(func, label: b"mschklen")
+	var pickBound = module.addBlock(func, label: b"msbound")
+	var viewBound = module.addBlock(func, label: b"msviewb")
+	var ownedBound = module.addBlock(func, label: b"msownb")
+	var checkCap = module.addBlock(func, label: b"mschkcap")
+	var outOfBounds = module.addBlock(func, label: b"msoob")
+	var doSend = module.addBlock(func, label: b"mssend")
+	var failed = module.addBlock(func, label: b"msfail")
+	var ok = module.addBlock(func, label: b"msdone")
+
+	emitParams(module, block: entry, count: 4)
+	let box = 0 as ValueId
+	let arrRec = 1 as ValueId
+	let offset = 2 as ValueId
+	let length = 3 as ValueId
+	let socket = emitLiveSocketOrThrow(module, func: func, entry: entry, join: checkOffset, box: box, ids: ids)
+
+	// ⚠⚠ **BOTH OPERANDS ARE TESTED SEPARATELY, AND THE ONE-TEST SHORTCUT IS A MEASURABLY WRONG GUARD.** The
+	// tempting form is "`offset + length < 0` catches either negative", and it does not: `offset: 10,
+	// length: -5` sums to 5, which is neither negative nor over any capacity ≥ 5 — so the pair sails through
+	// and `send` is handed a NEGATIVE length, which its `int` parameter turns into a ~4-billion-byte read off
+	// the end of the buffer. The sum is still computed once (the capacity test needs it), but it may not
+	// stand in for the two sign tests.
+	let zero = emitConst(module, block: checkOffset, value: 0, ids: ids)
+	let negativeOffset = emitCmp(module, block: checkOffset, a: offset, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(checkOffset, op: StdOp.condBranch(negativeOffset, thenBlockId: outOfBounds.id, elseBlockId: checkLength.id))
+
+	let negativeLength = emitCmp(module, block: checkLength, a: length, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(checkLength, op: StdOp.condBranch(negativeLength, thenBlockId: outOfBounds.id, elseBlockId: pickBound.id))
+
+	// ⭐⭐ **WHICH FIELD BOUNDS THE READ DEPENDS ON WHO OWNS THE BUFFER, AND `capacity@16` ALONE CANNOT ANSWER
+	// IT — MEASURED.** The spec's rule is *"throws `bufferOutOfBounds` if `offset + length > capacity`"*, and
+	// that sentence is exact for an OWNED record, where `capacity@16` is a count. For a NON-OWNED one it is
+	// not a count at all: a zero-copy view, an `.rdata` byte-string blob, an inline String and an immortal
+	// record each stamp a NEGATIVE SENTINEL there (`BufferOwnership`'s four values), and the readable window
+	// is `length@8`.
+	//
+	// ⛔⛔ **AND A BARE `extent > capacityExtent` DOES NOT EVEN REFUSE THE SENTINEL, WHICH IS THE TRAP THIS
+	// BLOCK EXISTS TO AVOID.** The extent goes through `emitArrayByteExtent` → `emitElementByteLen` →
+	// `emitBitsToBytes`, which ends in a LOGICAL shift right — so `capacity = -1` comes back as
+	// `0x1FFFFFFFFFFFFFFF`, an enormous POSITIVE bound that every extent is under. MEASURED on this tree:
+	// `sendFrom("ping".toByteArray().managed, 2, 9)` — a 9-byte read out of a 4-byte window — was ACCEPTED and
+	// sent, and so was every larger one. ⇒ the ownership question must be asked with `emitBufferNotOwned`,
+	// the ONE canonical decoder of that field, and never by comparing a byte extent against zero.
+	let notOwned = emitBufferNotOwned(module, block: pickBound, record: arrRec, ids: ids)
+	module.setTerminator(pickBound, op: StdOp.condBranch(notOwned, thenBlockId: viewBound.id, elseBlockId: ownedBound.id))
+
+	// The bound rides a block arg because it comes from one of two fields — the phi model is the only way a
+	// value crosses a merge at this tier.
+	let bound = ids.mint()
+	checkCap.blockArgs.push(IrBlockArg.create(bound, argType: StdType.i64))
+
+	let viewExtent = emitArrayByteExtent(module, block: viewBound, arrRec: arrRec, offset: ManagedRecordLengthOffset, ids: ids)
+	module.setTerminator(viewBound, op: StdOp.branch(checkCap.id))
+	viewBound.branchEdges.push(BranchEdge.create(checkCap.id, argIds: argsOf(viewExtent)))
+
+	let ownedExtent = emitArrayByteExtent(module, block: ownedBound, arrRec: arrRec, offset: ManagedRecordCapacityOffset, ids: ids)
+	module.setTerminator(ownedBound, op: StdOp.branch(checkCap.id))
+	ownedBound.branchEdges.push(BranchEdge.create(checkCap.id, argIds: argsOf(ownedExtent)))
+
+	// Both operands are non-negative here, so the sum is a real extent and cannot have wrapped.
+	let extent = emitBin(module, block: checkCap, a: offset, b: length, opcode: StdBinOpcode.add, ids: ids)
+	let overCapacity = emitCmp(module, block: checkCap, a: extent, b: bound, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(checkCap, op: StdOp.condBranch(overCapacity, thenBlockId: outOfBounds.id, elseBlockId: doSend.id))
+
+	emitErrorReturn(module, block: outOfBounds, flag: ManagedSocketBufferOutOfBoundsFlag, ids: ids)
+
+	let buffer = emitLoadField(module, block: doSend, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
+	let sendStart = emitBin(module, block: doSend, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	let sent = ids.mint()
+	emitIoPark(module, block: doSend, operation: GtIoOperation.netSend, ids: ids)
+	module.appendOp(doSend, op: StdOp.osSocketSend(sent, sockId: socket, bufPtrId: sendStart, lenId: length))
+	emitSocketTransferOutcome(module, block: doSend, transferred: sent, failed: failed, ok: ok, failureFlag: ManagedSocketSendFailedFlag, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedSocketSendFrom'
+
+// `__ms_recv(box, arrRec) -> (bytesRead, flag)` — receive up to the buffer's byte CAPACITY.
+//
+// ⭐ **A ZERO IS AN ANSWER, NOT A FAILURE**, per the spec: *"Returns 0 if the peer closed gracefully"*. Only a
+// `SOCKET_ERROR` reaches `recvFailed`; `connectionClosed` is the caller's to raise from the 0 (see the
+// ordinal block at the top of this file).
+//
+// ⚠ There is no length PARAMETER, and that is the reference's signature rather than a simplification: the
+// method fills `managed` up to its capacity. A caller that wants fewer bytes allocates a smaller buffer,
+// which is what `stdlib/TcpClient.maxon:62` does.
+function buildManagedSocketRecv(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketRecvName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedSocketThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkCap = module.addBlock(func, label: b"mschkcap")
+	var doRecv = module.addBlock(func, label: b"msrecv")
+	var failed = module.addBlock(func, label: b"msfail")
+	var ok = module.addBlock(func, label: b"msdone")
+
+	emitParams(module, block: entry, count: 2)
+	let box = 0 as ValueId
+	let arrRec = 1 as ValueId
+	let socket = emitLiveSocketOrThrow(module, func: func, entry: entry, join: checkCap, box: box, ids: ids)
+
+	// ⚠⚠ **A NON-OWNED BUFFER IS REFUSED BEFORE THE KERNEL EVER SEES IT, AND THIS IS A WRITE SO THE TEST IS
+	// NOT OPTIONAL.** A zero-copy view, an `.rdata` byte-string blob, an inline String and an immortal record
+	// all stamp a NEGATIVE SENTINEL in `capacity@16` (`BufferOwnership`'s four values) and none of them may be
+	// written in place — one of them is a READ-ONLY image page. Handed on, that sentinel becomes `recv`'s
+	// `int len` and the kernel writes ~4 GB through memory somebody else owns.
+	//
+	// ⭐ **THE TEST AND THE BRANCH DIRECTION ARE `BufferOwnership.emitRefuseNonOwnedFillTarget`'s, NOT THIS
+	// FILE'S.** `__mf_read` is the second surface that fills a caller's buffer from the kernel, and it made
+	// the identical mistake this guard exists to refuse — including the `byteExtent`-based form, which does
+	// NOT work: `emitArrayByteExtent` ends in a LOGICAL shift right, so a `-1` capacity comes back as
+	// `0x1FFFFFFFFFFFFFFF`, positive and enormous. The measurements for both are recorded at that function.
+	//
+	// ⚠ It throws `recvFailed` and NOT `bufferOutOfBounds`: the spec gives `recv` exactly one failure variant
+	// (*"Throws `recvFailed` on OS error"*) and documents `bufferOutOfBounds` as `sendFrom`'s alone, so the
+	// other spelling would be a variant a `match` over this method's contract need not have an arm for. The
+	// FLAG is why the shared guard takes a refusal BLOCK rather than choosing one: the two families' enums
+	// name nothing in common.
+	emitRefuseNonOwnedFillTarget(module, block: checkCap, record: arrRec, refuse: failed, fill: doRecv, ids: ids)
+
+	// The buffer is OWNED here, so `capacity@16` is a real count and its byte extent is non-negative.
+	let buffer = emitLoadField(module, block: doRecv, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
+	let byteCapacity = emitArrayByteExtent(module, block: doRecv, arrRec: arrRec, offset: ManagedRecordCapacityOffset, ids: ids)
+	let received = ids.mint()
+	emitIoPark(module, block: doRecv, operation: GtIoOperation.netRecv, ids: ids)
+	module.appendOp(doRecv, op: StdOp.osSocketRecv(received, sockId: socket, bufPtrId: buffer, lenId: byteCapacity))
+	emitSocketTransferOutcome(module, block: doRecv, transferred: received, failed: failed, ok: ok, failureFlag: ManagedSocketRecvFailedFlag, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedSocketRecv'
+
+// ⭐ **THE TAIL OF BOTH TRANSFERS — ONE HOME, TWO CALLERS.** `send` and `recv` report failure the same way
+// (`SOCKET_ERROR`, i.e. -1) and success as a COUNT, so what follows the op is one shape: test the count
+// against the sentinel, and route to this operation's failure variant or to the success exit carrying the
+// count. Only the flag differs.
+//
+// ⚠ **IT DOES NOT CAPTURE `GetLastError`, AND THAT IS THE DIFFERENCE FROM THE FILE FAMILY'S
+// `emitWin32BoolOutcome`.** Winsock reports through `WSAGetLastError`, not `GetLastError`, and
+// `__ManagedSocketError` has no errno-classified variants to route into — the spec gives one catch-all per
+// operation. Reading the wrong error API to fill a variant that does not exist would be a wrong answer
+// dressed as diagnosis.
+//
+// `failed` and `ok` arrive from the caller rather than being minted here so the function's block ORDER is
+// the caller's to state — it is what the emitted code's layout follows.
+function emitSocketTransferOutcome(module StdModule, block IrBlock, transferred ValueId, failed IrBlock, ok IrBlock, failureFlag ParsedInt, ids ValueMinter)
+	let errorConst = emitConst(module, block: block, value: SocketError, ids: ids)
+	let didFail = emitCmp(module, block: block, a: transferred, b: errorConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(didFail, thenBlockId: failed.id, elseBlockId: ok.id))
+
+	emitErrorReturn(module, block: failed, flag: failureFlag, ids: ids)
+	emitOkReturn(module, block: ok, value: transferred, ids: ids)
+end 'emitSocketTransferOutcome'
+
+// `__ms_close(box)` — close the socket, idempotently. Returns nothing and throws nothing, per the spec's
+// *"Idempotent. Also called automatically via destructor. Does not throw."*
+//
+// ⭐ **IDEMPOTENCE IS THE ZEROED HANDLE**, exactly as `__mf_close`'s is: the box is zeroed at allocation and
+// this writes the closed sentinel back, so one guard covers "never connected" and "already closed" — which is
+// what makes the documented "close then let the destructor close again" sequence safe rather than a second
+// `closesocket` on a descriptor the OS may have reused.
+function buildManagedSocketClose(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var doClose = module.addBlock(func, label: b"msdo")
+	var done = module.addBlock(func, label: b"msdone")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	let socket = emitLoadField(module, block: entry, record: box, offset: ManagedSocketHandleOffset, ids: ids)
+	let closedConst = emitConst(module, block: entry, value: ManagedSocketClosedHandle, ids: ids)
+	let alreadyClosed = emitCmp(module, block: entry, a: socket, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(alreadyClosed, thenBlockId: done.id, elseBlockId: doClose.id))
+
+	emitIoPark(module, block: doClose, operation: GtIoOperation.netClose, ids: ids)
+	module.appendOp(doClose, op: StdOp.osSocketClose(socket))
+	let zero = emitConst(module, block: doClose, value: ManagedSocketClosedHandle, ids: ids)
+	emitStoreField(module, block: doClose, record: box, offset: ManagedSocketHandleOffset, value: zero)
+	module.setTerminator(doClose, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedSocketClose'
+
+// ⭐⭐ **`__ms_destruct(box)` — THE RAII DESTRUCTOR, AND THE REASON A `__ManagedSocket` MAY BE DROPPED AT
+// ALL.** The refcount-checked teardown a box takes instead of the generic `__mm_decref`: last owner ⇒ close
+// the socket, then free the eight bytes; otherwise lower the count and keep the box.
+//
+// ⭐ **A SOCKET IS NOT MEMORY, WHICH IS WHY THIS EXISTS RATHER THAN A SYNTHESIZED CASCADE** —
+// `buildManagedFileDestruct`'s argument, one type over: `_handle` is a scalar `int` field, so
+// `structFieldIsManaged` is false and `installStructDestructors` skips the type outright. Answering
+// `__mm_decref` would free the eight bytes and leak the socket for the process lifetime, invisibly to the
+// exit-101 gate.
+//
+// ⭐ It reuses `__ms_close` rather than re-emitting the close, so idempotence is stated once: an explicit
+// `s.close()` followed by the scope-exit drop finds the sentinel already stored and does nothing.
+function buildManagedSocketDestruct(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lower = module.addBlock(func, label: b"lower")
+	var drop = module.addBlock(func, label: b"drop")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
+
+	module.appendOp(drop, op: StdOp.call(ids.mint(), callee: ManagedSocketCloseName, args: argsOf(box)))
+	emitRawFree(module, block: drop, ptr: box, ids: ids)
+	module.setTerminator(drop, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedSocketDestruct'
+
+// The name this family's ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic — one
+// constant so the lookup's message and the claim's message name the same author.
+let ManagedSocketOrdinalInstaller = b"the __ManagedSocket runtime"
+
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `__ManagedSocketError`** — the twin of `verifyManagedFileOrdinals`, which
+// carries the whole argument: the case ORDER is the wire format, the declaration it is verified against is
+// `stdlib/Builtins.maxon`'s, and it is a free function because it needs the `Project` and must run on every
+// compile.
+export function verifyManagedSocketOrdinals(project Project)
+	match declaredBuiltinErrorEnum(project, typeName: ManagedSocketErrorTypeName, installer: ManagedSocketOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimManagedSocketOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyManagedSocketOrdinals'
+
+function claimManagedSocketOrdinals(project Project, declaration EnumLayout)
+	var socketErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedSocketOrdinalInstaller)
+	socketErrors.claim(ManagedSocketBufferOutOfBoundsCaseName, ordinal: ManagedSocketBufferOutOfBoundsOrdinal)
+	socketErrors.claim(ManagedSocketResolveFailedCaseName, ordinal: ManagedSocketResolveFailedOrdinal)
+	socketErrors.claim(ManagedSocketConnectFailedCaseName, ordinal: ManagedSocketConnectFailedOrdinal)
+	socketErrors.claim(ManagedSocketSendFailedCaseName, ordinal: ManagedSocketSendFailedOrdinal)
+	socketErrors.claim(ManagedSocketRecvFailedCaseName, ordinal: ManagedSocketRecvFailedOrdinal)
+	// A graceful peer close is a plain 0 RETURN from `recv`, so the runtime never throws this — see the
+	// ordinal block at the top of this file.
+	socketErrors.neverThrown(ManagedSocketConnectionClosedCaseName, ordinal: ManagedSocketConnectionClosedOrdinal)
+	socketErrors.claim(ManagedSocketClosedCaseName, ordinal: ManagedSocketClosedOrdinal)
+	socketErrors.requireTotal()
+end 'claimManagedSocketOrdinals'
+
+// ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installManagedFileRuntime` for its stated
+// reason: the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places,
+// and a builder that gains or loses a clause without the predicate following is a `try` that silently stops
+// being required (or an E3055 on a call that cannot fail). Checked in BOTH directions, and the source-method
+// map is asked for every throwing callee in the same traversal (see `GtRuntime.runtimeCalleeSourceMethod`).
+export function installManagedSocketRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesManagedSocket 'noManagedSocket'
+		return
+	end 'noManagedSocket'
+
+	buildManagedSocketTcpConnect(module)
+	buildManagedSocketSendFrom(module)
+	buildManagedSocketRecv(module)
+	buildManagedSocketClose(module)
+	buildManagedSocketDestruct(module)
+
+	for func in module.functions 'eachFunc'
+		if not isManagedSocketRuntimeCallee(func.name) 'notOurs'
+			continue
+		end 'notOurs'
+		let named = isThrowingManagedSocketRuntimeCallee(func.name)
+		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
+		if stamped and not named 'stampedNotNamed'
+			panic("installManagedSocketRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingManagedSocketRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted")
+		end 'stampedNotNamed'
+		if named and not stamped 'namedNotStamped'
+			panic("installManagedSocketRuntime: isThrowingManagedSocketRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted")
+		end 'namedNotStamped'
+
+		if named 'hasSourceMethod'
+			requireQuotableSourceSpelling(managedSocketSourceMethodName(func.name), callee: func.name)
+		end 'hasSourceMethod'
+	end 'eachFunc'
+end 'installManagedSocketRuntime'
+
+// Every callee this file installs — what the drift guard iterates, what `scanRuntimeUsage` reads to set
+// `usesManagedSocket`, what `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows target, and
+// what its yield roster reads. A PREFIX test rather than a five-way `or`: every entry point this file
+// installs is `__ms_`-named by construction, so a sixth is covered without being remembered here as well as
+// declared above.
+export function isManagedSocketRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ManagedSocketRuntimePrefix)
+end 'isManagedSocketRuntimeCallee'

@@ -1717,6 +1717,73 @@ export union StdOp
 	// says the non-zero value IS the kill-after deadline. Without it a timed-out spawn leaves a live child and a
 	// pipe nobody drains.
 	osProcessTerminate(handleId ValueId, exitCodeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- The socket slice: the eight `ws2_32` primitives behind `__ManagedSocket` ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osProcessTerminate`, per the band-append invariant — every
+	// stale full-tail range arm now FAILS TO COMPILE until it is consciously extended, which is the mechanism
+	// that finds every site obliged to classify or lower them.
+	//
+	// ⭐ ALL EIGHT ARE x64-WINDOWS ONLY, exactly as the file-IO family is: the CALL SITE is refused on every
+	// other target with the existing E3104 (`SemanticCheck.calleeNeedsWin32Substrate`), so no other backend
+	// ever sees these ops and the non-Windows arms panic as a backstop for a compiler bug rather than stubbing
+	// an answer no oracle can check.
+	//
+	// ⭐ **THE CONSTANTS LIVE IN THE LOWERING, NOT IN THE OPERANDS** — `AF_INET`, `SOCK_STREAM`, `IPPROTO_TCP`,
+	// the `0` send/recv flags and `sizeof(sockaddr_in)` are Win32 facts, not Maxon ones, so they are spelled
+	// once in `StdToX64Conversion` the way `osFileOpenRead` spells `GENERIC_READ`. A POSIX lane supplies its
+	// own numbers for the same ops.
+
+	// `osSocketStartup(result, wsaDataPtr)` = `WSAStartup(0x0202, wsaDataPtr)`, the returned int in `result`
+	// (0 = success). Winsock REQUIRES this before any other ws2_32 call. This op is the raw call.
+	//
+	// ⚠ **THERE IS NO ONCE-ONLY GUARD ANYWHERE, AND THIS COMMENT USED TO SAY THE CALLER KEPT ONE.**
+	// `buildManagedSocketTcpConnect` calls it on EVERY connect and nothing ever calls `WSACleanup` — which is
+	// not the leak it looks like: Winsock reference-counts startups per process, an unmatched startup is
+	// reclaimed at process exit, and a repeat startup after the first is a refcount bump rather than a fresh
+	// initialization. So the cost is one cheap ws2_32 call per connect, paid on a path that is about to make
+	// a DNS query. ⛔ A guard would need a `.data` word and a compare-exchange; it is not written because
+	// nothing needs it, and that is different from it existing.
+	osSocketStartup(resultId ValueId, wsaDataPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osSocketResolve(result, hostPtr, hintsPtr, outPtr)` = `getaddrinfo(hostPtr, NULL, hintsPtr, outPtr)`,
+	// the returned int in `result` (0 = success, anything else = resolution failed).
+	//
+	// ⭐ **THE SERVICE ARGUMENT IS ALWAYS NULL, AND THAT IS WHY NO PORT IS FORMATTED ANYWHERE.** Passing a port
+	// as the service string would need an int→decimal conversion in the runtime; instead the caller reads the
+	// resolved address out of the result and writes the port into its own `sockaddr_in`. Both references do
+	// exactly this.
+	//
+	// ⭐ **IT DOES NOT CLASSIFY ITS OWN FAILURE**, for `osFileOpenRead`'s stated reason: the
+	// `resolveFailed`-vs-`connectFailed` decision is made in builder-built Std by `ManagedSocketRuntime`.
+	osSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osSocketFreeAddrInfo(addrInfoPtr)` = `freeaddrinfo(addrInfoPtr)`. No result — the call returns void, and
+	// it exists in the same slice as the resolve for `osFileClose`'s reason: a `getaddrinfo` with no matching
+	// free leaks OS memory for the process lifetime, and that leak is invisible to the exit-101 gate.
+	osSocketFreeAddrInfo(addrInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osSocketCreate(result)` = `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)`, the raw SOCKET (or
+	// `INVALID_SOCKET`, -1) in `result`. NO value operands: all three arguments are fixed Win32 constants, so
+	// the op is a pure def in the shape `osReadClock`'s direct-return siblings use.
+	//
+	// ⚠ **THE REFERENCES CALL `WSASocketW` WITH `WSA_FLAG_OVERLAPPED` AND THIS CALLS PLAIN `socket`.** Theirs is
+	// registered with an IOCP for the async lane; this slice's connect is SYNCHRONOUS, and an overlapped socket
+	// whose completions nothing drains is strictly worse than a blocking one. The async lane changes this op's
+	// lowering when it arrives, which is exactly why the flags are not operands.
+	osSocketCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osSocketConnect(result, sock, addrPtr)` = `connect(sock, addrPtr, sizeof(sockaddr_in))`, the returned int
+	// in `result` (0 = success). The length is fixed because the caller always hands an IPv4 `sockaddr_in`;
+	// an IPv6 slice takes a length operand rather than widening this one silently.
+	osSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osSocketSend(result, sock, bufPtr, len)` = `send(sock, bufPtr, len, 0)`, bytes sent (or
+	// `SOCKET_ERROR`, -1) in `result`. Flags are always 0; a partial send is a NORMAL answer the caller loops
+	// on, not a failure — `stdlib/TcpClient.send` documents exactly that loop.
+	osSocketSend(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osSocketRecv(result, sock, bufPtr, len)` = `recv(sock, bufPtr, len, 0)`, bytes received in `result`.
+	// ⭐ **ZERO IS A GRACEFUL PEER CLOSE, NOT AN ERROR** — `specs/managed-socket.md` says `recv` "Returns 0 if
+	// the peer closed gracefully", so only a negative answer is a failure. Keeping that split out of the op
+	// keeps it out of the backend.
+	osSocketRecv(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osSocketClose(sock)` = `closesocket(sock)`. No result: the int is ignored for `osFileClose`'s reason —
+	// a close that fails leaves nothing a caller could do, and `close()` is documented as non-throwing.
+	osSocketClose(sockId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1916,6 +1983,18 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osPipePeek(_, handle, availPtr) then insertUsePair(referenced, a: handle, b: availPtr)
 		osEnvRead(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
 		osProcessTerminate(handle, exitCode) then insertUsePair(referenced, a: handle, b: exitCode)
+		// The eight socket host primitives, each reporting exactly its VALUE operands; the six that answer in
+		// RAX have `resultId` as a DEF, skipped here exactly as `osPipePeek`'s is.
+		// ⚠ `osSocketCreate` reads NOTHING — its three arguments are fixed Win32 constants the lowering
+		// supplies, so it takes a `break` arm like `osTickCountMs` rather than naming an operand it has not got.
+		osSocketStartup(_, wsaDataPtr) then referenced.insert(wsaDataPtr)
+		osSocketResolve(_, hostPtr, hintsPtr, outPtr) then insertUseTriple(referenced, a: hostPtr, b: hintsPtr, c: outPtr)
+		osSocketFreeAddrInfo(addrInfoPtr) then referenced.insert(addrInfoPtr)
+		osSocketCreate then break 'u'
+		osSocketConnect(_, sock, addrPtr) then insertUsePair(referenced, a: sock, b: addrPtr)
+		osSocketSend(_, sock, bufPtr, len) then insertUseTriple(referenced, a: sock, b: bufPtr, c: len)
+		osSocketRecv(_, sock, bufPtr, len) then insertUseTriple(referenced, a: sock, b: bufPtr, c: len)
+		osSocketClose(sock) then referenced.insert(sock)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -2089,6 +2168,16 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osPipePeek(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osEnvRead(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osProcessTerminate gives DefinedValueLookup.none
+		// The eight socket host primitives: the six whose ws2_32 entry point answers in RAX capture it; the two
+		// whose answer is discarded define nothing, exactly as `osCloseHandle` does.
+		osSocketStartup(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osSocketResolve(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		osSocketFreeAddrInfo gives DefinedValueLookup.none
+		osSocketCreate(resultId) gives DefinedValueLookup.defines(resultId)
+		osSocketConnect(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osSocketSend(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		osSocketRecv(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		osSocketClose gives DefinedValueLookup.none
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -2279,6 +2368,14 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osPipePeek(resultId, handle, availPtr) gives StdOp.osPipePeek(resultId, handleId: remappedValue(handle, subst: subst), availPtrId: remappedValue(availPtr, subst: subst))
 		osEnvRead(resultId, namePtr, bufPtr, bufLen) gives StdOp.osEnvRead(resultId, namePtrId: remappedValue(namePtr, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), bufLenId: remappedValue(bufLen, subst: subst))
 		osProcessTerminate(handle, exitCode) gives StdOp.osProcessTerminate(remappedValue(handle, subst: subst), exitCodeId: remappedValue(exitCode, subst: subst))
+		osSocketStartup(resultId, wsaDataPtr) gives StdOp.osSocketStartup(resultId, wsaDataPtrId: remappedValue(wsaDataPtr, subst: subst))
+		osSocketResolve(resultId, hostPtr, hintsPtr, outPtr) gives StdOp.osSocketResolve(resultId, hostPtrId: remappedValue(hostPtr, subst: subst), hintsPtrId: remappedValue(hintsPtr, subst: subst), outPtrId: remappedValue(outPtr, subst: subst))
+		osSocketFreeAddrInfo(addrInfoPtr) gives StdOp.osSocketFreeAddrInfo(remappedValue(addrInfoPtr, subst: subst))
+		osSocketCreate(resultId) gives StdOp.osSocketCreate(resultId)
+		osSocketConnect(resultId, sock, addrPtr) gives StdOp.osSocketConnect(resultId, sockId: remappedValue(sock, subst: subst), addrPtrId: remappedValue(addrPtr, subst: subst))
+		osSocketSend(resultId, sock, bufPtr, len) gives StdOp.osSocketSend(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
+		osSocketRecv(resultId, sock, bufPtr, len) gives StdOp.osSocketRecv(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
+		osSocketClose(sock) gives StdOp.osSocketClose(remappedValue(sock, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

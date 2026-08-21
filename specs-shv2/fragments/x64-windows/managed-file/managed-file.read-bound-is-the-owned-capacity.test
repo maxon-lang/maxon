@@ -1,0 +1,540 @@
+// Test: managed-file.read-bound-is-the-owned-capacity
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openWrite'
+
+	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openRead(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openRead'
+end 'TestFile'
+
+function main() returns ExitCode
+	let path = "test_mf_read_owned_bound.txt"
+	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("openWrite: the runner's working directory is writable")
+	try wf.file.write("0123456789".toByteArray().managed) otherwise panic("write: 10 bytes to a freshly opened file")
+	wf.file.close()
+
+	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise panic("openRead: the file just written")
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create: a 4-byte owned buffer")
+	let atCapacity = try rf.file.read(mm, 4) otherwise 999
+	let overCapacity = try rf.file.read(mm, 5) otherwise 999
+	rf.file.close()
+
+	try mm.setLength(4) otherwise panic("setLength: 4 bytes of a capacity-4 buffer")
+	let first = try mm.byteAt(0) otherwise panic("byteAt: offset 0 of a 4-byte live range")
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise panic("delete: the file this case created")
+
+	print("at={atCapacity} first={first} over={overCapacity}")
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_system_stack_top@56 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_timer_capacity@80 = i64 0
+  __gt_trace_counter@88 = i64 0
+  __gt_trace_digits@96 = i64 0
+  __gt_clock_ticks@104 = i64 0
+  __gt_clock_freq@112 = i64 0
+  __gt_proc_count@120 = i64 0
+  __gt_proc_handles_base@128 = i64 0
+  __gt_proc_gts_base@136 = i64 0
+  __gt_free_list_head@144 = i64 0
+  __gt_live_count@152 = i64 0
+  __gt_startup_base@160 = i64 0
+  __gt_procinfo_base@168 = i64 0
+  __gt_exitcode_base@176 = i64 0
+  __gt_cmdline_buf_base@184 = i64 0
+  __gt_cmdline_buf_cap@192 = i64 0
+}
+
+func @TestFile.openWrite {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __mf_open_write
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_destruct
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @TestFile.openRead {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __mf_open_read
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_destruct
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 136
+    x64.leaRegRdata rbx, [rip + __str_rec_5]
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect TestFile.openWrite
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 r12, [r13 + 0]
+    x64.leaRegRdata rcx, [rip + __str_rec_6]
+    x64.callDirect String.toByteArray
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect __mf_write
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __mf_close
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect TestFile.openRead
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegImm32 rcx, 4
+    x64.movRegImm32 rdx, 1
+    x64.callDirect __managed_mem_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot2, r12
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.movRegImm32 rax, 4
+    x64.movRegReg rdx, r12
+    x64.callDirect __mf_read
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
+    x64.movRegImm32 r14, 999
+    x64.jmp trycont#11
+  tryok#9:
+    x64.movRegReg r14, r8
+    x64.jmp trycont#11
+  trycont#11:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.movRegImm32 rax, 5
+    x64.movRegReg rdx, r12
+    x64.callDirect __mf_read
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#13
+    x64.jmp tryok#12
+  tryerr#13:
+    x64.movRegImm32 r15, 999
+    x64.jmp trycont#14
+  tryok#12:
+    x64.movRegReg r15, r8
+    x64.jmp trycont#14
+  trycont#14:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __mf_close
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#16
+    x64.jmp tryok#15
+  tryerr#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#15:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_byte_at
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#18
+    x64.jmp tryok#17
+  tryerr#18:
+    x64.leaRegRdata rcx, [rip + __str_blob_12]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#17:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.toByteArray
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_delete
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#20
+    x64.jmp tryok#19
+  tryerr#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#19:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.leaRegRdata rax, [rip + __str_rec_13]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot9, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __str_rec_14]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot7, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_15]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot6, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot12, rax
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot11, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegReg rax, rbx, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r12
+    x64.loadRegSlot rcx, slot12
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, r8
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot r13, slot7
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot6
+    x64.loadRegSlot r12, slot12
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot r12, slot11
+    x64.movRegReg rdx, r12
+    x64.loadRegSlot r14, slot5
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot4
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot9
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 42
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_TestFile
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.toByteArray {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_bytes_view
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_slice
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.byteLength {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __managed_count
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

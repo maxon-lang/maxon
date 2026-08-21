@@ -12,7 +12,7 @@
 // CLI (documented):
 //   maxon-shv2 build <file|directory>... [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,…] [--target=<cpu>-<os>]
 //   maxon-shv2 verify-warm-rebuild <file>
-//   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>] [--target=<cpu>-<os>] [--compiler=<path>]
+//   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--network] [--workers=<n>] [--target=<cpu>-<os>] [--compiler=<path>]
 
 // The default spec directory `spec-test` scans when no directory is given
 // (resolved against the process cwd — the runner is invoked from the repo root).
@@ -38,6 +38,21 @@ export let SpecTestCommandName = "spec-test"
 export let WorkerPersistentFlag = "--worker-persistent"
 export let FilterFlagPrefix = "--filter="
 export let UpdateRequiredFlag = "--update-required"
+
+// ⭐ `--network` — RUN THE CASES THAT REACH A REAL EXTERNAL HOST. The cases marked `<!-- network: live -->`
+// across `tcp-client`, `async-tcp` and `http-client` open a socket to `tcpbin.com` / `httpbin.org`; a default
+// run leaves them out, because a suite whose verdict turns on somebody else's uptime is not a claim about this
+// compiler. The cases stay ACTIVE and PARSED — the marker sits on the CASE, never shelved as
+// `disabled-test:` — and this flag selects them (see `SpecTestRunner.networkModeAllows`), which is why
+// EXCLUDING them is announced rather than silent (`reportNetworkExclusions`).
+//
+// ⛔ **NO NUMBER IS WRITTEN HERE, DELIBERATELY.** "Seven" stood in six places in this harness while the
+// corpus held EIGHT — transcribed from v1's hard-coded roster by the very comment arguing such a roster rots
+// (`SpecParser.NetworkMarker`). The marker is the census; a count beside it is a second one.
+//
+// It is in the re-emitted set because the parent forwards it to every worker: both halves of the pool run
+// the same selection rule, and a worker that never heard the flag would answer for tests nobody counted.
+export let NetworkFlag = "--network"
 
 // `--compiler=<path>` — THE COMPILER UNDER TEST, which is a different fact from "the executable a
 // worker process is", and this constant exists because the two were one value until 2026-07-29.
@@ -356,7 +371,7 @@ end 'runVerifyWarmRebuild'
 // in-process branch for the single-worker case would be a second implementation of "run the suite",
 // and the two would drift — which is exactly what the worker-count-invariance gate exists to catch.
 function runSpecTest(args MaxonArgs) returns ExitCode
-	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>] [--target=<cpu>-<os>] [--compiler=<path>]") 'tooManyPaths'
+	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--network] [--workers=<n>] [--target=<cpu>-<os>] [--compiler=<path>]") 'tooManyPaths'
 		return 1
 	end 'tooManyPaths'
 
@@ -399,7 +414,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		// of asking was to PANIC for a target this host cannot execute. That refusal is gone (it threw
 		// away a whole lane's worth of checkable work), so the mint door is guarded where the writing
 		// happens instead: see `SpecTestRunner.writeFragmentFile`'s `mayMint`.
-		return runPersistentWorker(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget)
+		return runPersistentWorker(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
 	end 'isPoolWorker'
 
 	// Whether the binaries this run is ABOUT to draw conclusions from are older than the tree they
@@ -479,7 +494,7 @@ end 'acquireSuiteTreeLock'
 // The suite itself, split out so `runSpecTest` has ONE exit through which the tree lock is released —
 // see `compileAndReport` for why that shape rather than a release at each of five returns.
 function runSpecSuite(args MaxonArgs, specDir FilePath, workerExe FilePath, compilerExe FilePath, effectiveTarget Target) returns ExitCode
-	let run = try runSpecPool(compilerExe, workerExe: workerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget) otherwise (e) 'runErr'
+	let run = try runSpecPool(compilerExe, workerExe: workerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1
 	end 'runErr'
@@ -490,11 +505,24 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, workerExe FilePath, comp
 	// tell. It is worse still under `--update-required`, where an empty selection
 	// silently regenerates no goldens while looking like it did the work.
 	if run.results.count() == 0 'selectedNothing'
+		// ⚠ **ON THIS PATH THE CENSUS COMES BEFORE THE VERDICT LINE, AND ONLY ON THIS PATH**, because here
+		// it is the only thing that can explain it. A default `--filter=http-client.get` selects nothing at
+		// all: every case it named reaches the public internet. "no tests selected" on its own states the
+		// consequence and hides the cause.
+		reportNetworkExclusions(run.networkExcluded)
+
 		printError("error: no tests selected{filterSuffix(args.filter)}\n")
 		return 1
 	end 'selectedNothing'
 
 	let testsExit = reportResults(run.results)
+
+	// ⭐ WHAT THIS RUN NEVER EVEN TRIED — the live-network cases, named and counted. It heads the "not
+	// run" family below because these are the ones NOTHING about this machine prevented: a reader who is
+	// not told sees a green column over a claim nobody exercised. It sits UNDER the verdicts rather than
+	// above them for `reportTargetSkips`'s reason — a note printed ahead of a few thousand report lines
+	// has scrolled away by the time the reader reaches the summary it qualifies.
+	reportNetworkExclusions(run.networkExcluded)
 
 	// ⭐ WHAT THIS RUN DID NOT RUN, AND WHY — immediately under the verdicts, because it is a statement
 	// about the TESTS and must not sit below the two reports that are about the TREE. A skip is the one
@@ -798,6 +826,11 @@ function printUsage()
 	print("                                is CORRECT; only the pinned IR proves the code did not get\n")
 	print("                                WORSE. REVIEW THE RESULTING DIFF. Pair it with --filter: an\n")
 	print("                                unfiltered run rewrites EVERY golden in the suite.\n")
+	print("  --network                     (spec-test) Also run the cases marked `{NetworkMarker} {NetworkLiveValue} -->`,\n")
+	print("                                which open a socket to a REAL EXTERNAL HOST (tcpbin.com,\n")
+	print("                                httpbin.org). They are OUT of a default run because their\n")
+	print("                                verdict measures somebody else's uptime rather than this\n")
+	print("                                compiler; a default run NAMES every one it left out.\n")
 	print("  --workers=<n>                 (spec-test) Run the suite on <n> persistent worker\n")
 	print("                                subprocesses (default {DefaultWorkerCount}). 1 is this same pool with one\n")
 	print("                                worker in it, NOT a serial path — every worker count must\n")
@@ -941,6 +974,9 @@ export type MaxonArgs
 	// x64-windows on an arm64 host for golden verification, to select arm64-macos explicitly, and to
 	// drive the spec suite through the wasm32-wasi backend (cross-compile-and-run under wasmtime).
 	export let targetSpec as String
+	// Whether this spec run may reach a real external host (`--network`). FALSE by default, and the
+	// default is the whole point — see `NetworkFlag`.
+	export let includeNetwork as bool
 	// Set when an argument could not be understood. The driver refuses to run rather
 	// than proceed on a command line it only partly parsed — see `parse`.
 	export let badOption as String
@@ -985,6 +1021,7 @@ export type MaxonArgs
 		var note = ""
 		var resultJson = ""
 		var targetSpec = ""
+		var includeNetwork = false
 		var badOption = ""
 
 		let args = CommandLine.args()
@@ -1037,7 +1074,9 @@ export type MaxonArgs
 				filter = try CommandLine.optionValue(arg) otherwise ""
 			end 'filterFlag' else if arg == UpdateRequiredFlag 'updateRequiredFlag'
 				updateRequired = true
-			end 'updateRequiredFlag' else if arg.startsWith(WorkersFlagPrefix) 'workersFlag'
+			end 'updateRequiredFlag' else if arg == NetworkFlag 'networkFlag'
+				includeNetwork = true
+			end 'networkFlag' else if arg.startsWith(WorkersFlagPrefix) 'workersFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 				// A bad value is a BAD OPTION, not a clamp — the same door as `--rungs`. `--workers=0`
 				// asks for a pool that can run nothing; quietly running the default instead would
@@ -1115,7 +1154,7 @@ export type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, paths: paths, outputOverride: outputOverride, emitIr: emitIr, asyncTrace: asyncTrace, debugStream: debugStream, runtimeIrNames: runtimeIrNames, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
+		return Self{command: command, paths: paths, outputOverride: outputOverride, emitIr: emitIr, asyncTrace: asyncTrace, debugStream: debugStream, runtimeIrNames: runtimeIrNames, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, includeNetwork: includeNetwork, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'
 

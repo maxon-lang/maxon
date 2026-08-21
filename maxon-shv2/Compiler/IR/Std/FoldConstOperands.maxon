@@ -143,8 +143,10 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// O3: a section HANDLE, a mapped ADDRESS and a millisecond stopwatch reading are OS answers, never
 		// compile-time constants.
 		osOpenNamedSegment to osTickCountMs gives StdConstInfo.notConst
-		// And the four attached-subprocess host primitives are Win32 import calls too.
-		osHandleSetInherit to osProcessTerminate gives StdConstInfo.notConst
+		// The rest of the appended band — the four attached-subprocess host primitives AND the `ws2_32` socket band — are import
+		// calls too: a pipe's byte count, an environment string, a SOCKET and a byte count the kernel chose
+		// are OS answers, never compile-time constants.
+		osHandleSetInherit to osSocketClose gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -249,8 +251,10 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// O3: a name POINTER, a scratch BUFFER, a handle and a byte count the caller computed — none has an
 		// immediate form to fold into, and the tick read has no operand at all.
 		osOpenNamedSegment to osTickCountMs gives FoldResult.unchanged
-		// And the four attached-subprocess host primitives are Win32 import calls too.
-		osHandleSetInherit to osProcessTerminate gives FoldResult.unchanged
+		// The rest of the appended band — the four attached-subprocess host primitives AND the `ws2_32` socket band — are import
+		// calls too: every operand is an address, a handle or a length the caller computed, so none has an
+		// immediate form to fold into.
+		osHandleSetInherit to osSocketClose gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

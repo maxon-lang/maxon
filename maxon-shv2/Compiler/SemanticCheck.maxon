@@ -3562,12 +3562,34 @@ end 'calleeYields'
 // ⚠ **THE FILESYSTEM BANDS ARE A PREFIX TEST AND SO OVER-APPROXIMATE — IN THE SAFE DIRECTION, ON PURPOSE.**
 // Three members park nothing because they touch no kernel: `__mf_stat_field`, `__mf_stat_free` and
 // `__md_filename` read memory a previous call already fetched. Naming them as exceptions would put the roster
-// in TWO places — here, and at the call sites of `emitFilesystemYield` (which is where the roster's own count
-// is stated, sites and emitted entry points being two different numbers) — and the two would rot apart the
-// first time a `__mf_*` was added. The prefix cannot rot: a new filesystem entry point is covered
-// the day it exists. What it costs is that `async` over a function whose only I/O is `__mf_stat_field` is
-// accepted though it never suspends — the over-accepting direction, which by this walk's asymmetry is the one
-// that is safe to be wrong in.
+// in TWO places — here, and at the call sites of `emitIoPark` (which is where the roster's own count is
+// stated, sites and emitted entry points being two different numbers) — and the two would rot apart the first
+// time a `__mf_*` was added. The prefix cannot rot: a new filesystem entry point is covered the day it exists.
+// It over-approximates in the direction this walk's asymmetry makes safe — `__mf_stat_field` reads as yielding
+// though it never suspends — and that costs nothing on top of what the block below measures: the fallback
+// answers "yields" for the same three anyway.
+//
+// ⛔⛔ **THIS ROSTER IS BELT-AND-BRACES: `calleeYields`'s UNKNOWN-CALLEE FALLBACK ALREADY ANSWERS `true` FOR
+// EVERY NAME ON IT, AND TWO FILES USED TO EXPLAIN THE SOCKET BAND'S BEHAVIOUR BY ITS MEMBERSHIP HERE.**
+// `checkAsyncYielding` walks the **Maxon**-tier module, so `funcIndexByName` holds the functions this program
+// DECLARES. `__gt_sleep`, `__gt_resched`, `__gt_process_run` and the whole `__mf_*`/`__md_*`/`__ms_*` band are
+// **Std**-tier runtime entry points, installed after lowering and declared in no source at all
+// (`grep -rn "__mf_\|__ms_" stdlib/` is EMPTY — the parser emits calls to these names directly). None of them
+// is ever in `funcIndexByName`, so `calleeYields`'s `otherwise return true` is what actually decides them.
+//
+// ⇒ **SABOTAGE-MEASURED 2026-08-21**, this predicate replaced by `false` for every listed name and rebuilt:
+// `async` over a `File.exists` function still compiles, `async` over a `sleep()` function still compiles, and
+// the CONTROL — `async` over a pure function — still answers E3073. The roster changes no program's verdict.
+//
+// ⇒ Which is why the socket band's ABSENCE costs nothing: `async` over a function whose only I/O is a socket
+// IS accepted (measured: `async-tcp.connect-error` compiles and returns 99), by the fallback rather than by
+// this list. `isManagedSocketRuntimeCallee` is deliberately not added — it would change no answer, and
+// widening what E3073 accepts is a decision about that diagnostic rather than about the park.
+//
+// ⚠ The names stay because they are the SEEDS the walk is DESIGNED around: they say which callees suspend, so
+// the day a runtime entry point becomes locally declarable — or the fallback is tightened to refuse unknowns —
+// the roster is the fact that was already written down. What may not be said again is that a program's verdict
+// depends on it today.
 function ioYieldingRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee)
 end 'ioYieldingRuntimeCallee'
@@ -3813,7 +3835,21 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// WASI has no process-spawn primitive at all — so serving another target is a rung rather than a
 	// lowering, and on wasm it is not even that. `runProcess` and `spawnReadLine` are named individually
 	// because their entries live in the SCHEDULER band rather than behind the subprocess prefix.
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(IoReadName) or isSubprocessRuntimeCallee(callee) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee)
+	// The SOCKET band joins on the same terms and by the same PREFIX test. Its own reason is the
+	// subprocess band's, one library over: `ws2_32.dll` is a Windows shape, and while WASI does have
+	// `wasi:sockets`, this slice is not wired to it — so serving another target is a rung rather than a
+	// lowering.
+	//
+	// ⛔⛔ **IT WAS MISSING WHEN THE SOCKET RUNTIME LANDED, AND A LEGAL PROGRAM PANICKED THE COMPILER.**
+	// MEASURED 2026-08-21, `__ManagedSocket.tcpConnect` built with `--target=wasm32-wasi`:
+	// `panic at StdToWasm.maxon:1634: emitBodyOp: \`osReadClock\` is x64-windows only` — the wasm backend
+	// tripping over the green-thread park the socket entry opens with, and naming a CLOCK op at a program
+	// that opened a socket. That is `STDLIB-BRINGUP.md`'s own warning made real (*"the surface without the
+	// floor is worse than neither — an earlier attempt declared the names with no runtime behind them and
+	// turned a clean E3004 into a backend panic"*), and it is why this predicate is the FLOOR: every
+	// non-x64-windows backend panics on these ops BY DESIGN, so the refusal has to happen here, at the
+	// call's own span, or it does not happen at all.
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(IoReadName) or isSubprocessRuntimeCallee(callee) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isManagedSocketRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote

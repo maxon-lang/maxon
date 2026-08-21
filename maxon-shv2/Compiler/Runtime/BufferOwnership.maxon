@@ -208,6 +208,46 @@ export function emitBufferNotOwned(module StdModule, block IrBlock, record Value
 	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
 end 'emitBufferNotOwned'
 
+// ⭐⭐ **REFUSE A BUFFER THIS RECORD DOES NOT OWN BEFORE AN OS CALL FILLS IT — THE ONE HOME OF THE
+// WRITE-TARGET GUARD.** Asked by the two surfaces that hand a managed buffer to the KERNEL to be written
+// into: `ManagedFileRuntime.__mf_read` and `ManagedSocketRuntime.__ms_recv`. It emits the test into `block`
+// and routes the owned path to `fill`; `refuse` is the caller family's own throw block, because the two
+// families have different error enums and the flag is not this function's to choose.
+//
+// ⚠ **`refuse` NEED NOT BE TERMINATED YET, AND THIS LINE USED TO CLAIM IT ALREADY WAS.** It is false at
+// BOTH call sites — `__mf_read` terminates its `tooBig` block after this call, `__ms_recv` terminates its
+// `failed` block through `emitSocketTransferOutcome` after this call — and it never mattered, because only
+// `refuse.id` is read here. Stated as the requirement it actually is: an `IrBlock` this function may name
+// as a branch target, whose contents are the caller's business and may be filled in afterwards.
+//
+// ⛔⛔ **NEITHER CALLER MAY DERIVE THE REFUSAL FROM ITS SIZE BOUND, AND BOTH ONCE DID — MEASURED, TWICE.**
+// The tempting form is *"a non-owned record carries a NEGATIVE `capacity@16`, so any positive length is
+// above it and the size check refuses it for free."* It does not. Every size bound at these two sites goes
+// through `ManagedFileRuntime.emitArrayByteExtent` → `emitElementByteLen` → `emitBitsToBytes`, which ends in
+// a LOGICAL shift right — so a `capacity` of `-1` comes back as `0x1FFFFFFFFFFFFFFF`: enormous, POSITIVE,
+// and above every transfer either surface can be asked for. `__ms_send_from` accepted a 9-byte read out of
+// a 4-byte window and sent it; `__mf_read` accepted a 24-byte `ReadFile` into a 4-byte zero-copy VIEW,
+// answered `bytesRead = 24`, and rewrote the parent's four bytes plus 20 more past the end of its
+// allocation. ⇒ the question has exactly ONE decoder — `emitBufferNotOwned` above — and a byte extent
+// compared against anything is not it.
+//
+// ⚠ **WHAT IS EASY TO GET SILENTLY WRONG IS WHICH WAY ROUND THE `condBranch` GOES**, which is precisely the
+// argument `ManagedFileRuntime.emitLiveHandleOrClosedThrow` makes for owning its family's other guard: swap
+// the two edges in one copy and that surface stops guarding while its twin keeps working, so nothing goes
+// red. One home, one direction.
+//
+// ⚠ **IT REFUSES RATHER THAN DETACHING, WHICH IS THE OPPOSITE OF WHAT EVERY `__managed_*` MUTATOR DOES**,
+// and the asymmetry is real rather than an omission. A mutator writes bytes it already holds, so
+// `emitCowDetach` can give the record a private copy and proceed; these two are handing a POINTER to the
+// kernel and are bounded by a capacity, and a detach asks for exactly `length` elements
+// (`buildManagedCowDetach`'s ask), so it buys the transfer no room the window did not already have and the
+// capacity test would refuse the same calls one block later — after an allocation and a copy that a refused
+// call must not pay for (`__managed_set_length`'s stated rule).
+export function emitRefuseNonOwnedFillTarget(module StdModule, block IrBlock, record ValueId, refuse IrBlock, fill IrBlock, ids ValueMinter)
+	let notWritable = emitBufferNotOwned(module, block: block, record: record, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(notWritable, thenBlockId: refuse.id, elseBlockId: fill.id))
+end 'emitRefuseNonOwnedFillTarget'
+
 // `capacity == ImmortalRecordCapacity` — ⭐ **THE ONE HOME OF THE IS-THIS-RECORD-IMAGE-DATA TEST**
 // (W157), `emitBufferNotOwned`'s twin and asked by the five places that must act on it:
 // `StringRuntime.__str_bytes_view` (do not incref what cannot be written), `__str_retain` (copy it instead

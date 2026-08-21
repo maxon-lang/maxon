@@ -554,3 +554,142 @@ end 'main'
 ```maxoncstderr
 error E3057: specs/fragments/managed-file/managed-file.open-write-executable-without-try.test:3:6: throwing function requires try: 'openWrite' or 'openWriteExecutable' — the two are ONE call, so the callee cannot say which was written
 ```
+
+<!-- test: managed-file.read-into-a-non-owned-buffer-is-refused -->
+<!-- targets: x64-windows -->
+
+⛔⛔ **A `read` IS A WRITE INTO THE CALLER'S BUFFER, AND A BUFFER THE RECORD DOES NOT OWN IS REFUSED —
+NOT FILLED.** A zero-copy view, an `.rdata` byte-string blob, an inline String and an immortal record all
+stamp a NEGATIVE sentinel in `capacity@16`, and `managed.capacity()` hands that value straight to user code:
+so the documented bound *"throws `readFailed` if `size > managed.capacity`"* already refuses every
+`size >= 0` for such a record, `0` included.
+
+⚠ **THE EMITTED GUARD DID NOT DO THAT, AND THE `size` BOUND STRUCTURALLY COULD NOT.** The runtime compared
+`size` against a BYTE EXTENT derived through a logical shift right, which turns `capacity = -1` into
+`0x1FFFFFFFFFFFFFFF` — enormous and positive. MEASURED before the fix: this program answered `within=2
+over=24 parent=90,90`, i.e. `ReadFile` wrote 24 bytes through a 4-byte window into an `Array` somebody else
+owns, corrupting its live elements and 20 bytes past the end of its allocation.
+
+⭐ **THE 2-BYTE READ IS WHAT MAKES THE CASE DISCRIMINATE.** Two bytes FIT the four-byte window, so no size
+bound of any kind can refuse it and only the OWNERSHIP test can — a case that asked for 24 bytes alone would
+be satisfied by a guard that merely got its arithmetic right. The parent is read back afterwards to prove
+nothing was written through it.
+```maxon
+typealias Byte = int(0 to 255)
+typealias Bytes = Array with Byte
+
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openWrite'
+
+	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openRead(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openRead'
+end 'TestFile'
+
+function main() returns ExitCode
+	let path = "test_mf_read_non_owned.txt"
+	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("openWrite: the runner's working directory is writable")
+	try wf.file.write("ZZZZZZZZZZZZZZZZZZZZZZZZ".toByteArray().managed) otherwise panic("write: 24 bytes to a freshly opened file")
+	wf.file.close()
+
+	var arr = Bytes.create()
+	arr.push(65)
+	arr.push(66)
+	arr.push(67)
+	arr.push(68)
+	let view = try arr.slice(0, endIndex: 4) otherwise panic("slice: 0..4 of a length-4 array")
+
+	// Guard the PREMISE rather than the sentinel's value: if a slice ever stops being a zero-copy view this
+	// case stops testing its subject, and it must go red then rather than quiet.
+	if view.managed.capacity() >= 0 'sliceMustStillBeAView'
+		print("a slice is no longer a non-owned view; this case no longer tests its subject")
+		return 1
+	end 'sliceMustStillBeAView'
+
+	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise panic("openRead: the file just written")
+	let within = try rf.file.read(view.managed, 2) otherwise 999
+	let over = try rf.file.read(view.managed, 24) otherwise 999
+	rf.file.close()
+
+	let p0 = try arr.get(0) otherwise panic("get: index 0 of a length-4 array")
+	let p3 = try arr.get(3) otherwise panic("get: index 3 of a length-4 array")
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise panic("delete: the file this case created")
+
+	print("within={within} over={over} parent={p0},{p3}")
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+within=999 over=999 parent=65,68
+```
+
+<!-- test: managed-file.read-bound-is-the-owned-capacity -->
+<!-- targets: x64-windows -->
+
+⭐⭐ **THE CONTROL THAT MAKES THE REFUSAL ABOVE MEAN SOMETHING.** "A read into a non-owned buffer throws" is
+satisfied just as well by a guard that throws on EVERY buffer, so the owned path has to be pinned beside it:
+a `size` at exactly the capacity succeeds and puts the file's bytes in the buffer, and one byte above it
+THROWS rather than clamping — which is the contract's own wording (`specs/managed-file.md`: *"throws
+`readFailed` if `size > managed.capacity`"*) and the bootstrap's stated choice, *"a silent clamp in the
+runtime would hide a user contract violation"*.
+
+⚠ The file holds 10 bytes and the buffer 4, so the at-capacity read is bounded by the BUFFER and not by the
+file — `48` is `'0'`, the first byte written.
+```maxon
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openWrite'
+
+	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openRead(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openRead'
+end 'TestFile'
+
+function main() returns ExitCode
+	let path = "test_mf_read_owned_bound.txt"
+	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("openWrite: the runner's working directory is writable")
+	try wf.file.write("0123456789".toByteArray().managed) otherwise panic("write: 10 bytes to a freshly opened file")
+	wf.file.close()
+
+	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise panic("openRead: the file just written")
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create: a 4-byte owned buffer")
+	let atCapacity = try rf.file.read(mm, 4) otherwise 999
+	let overCapacity = try rf.file.read(mm, 5) otherwise 999
+	rf.file.close()
+
+	try mm.setLength(4) otherwise panic("setLength: 4 bytes of a capacity-4 buffer")
+	let first = try mm.byteAt(0) otherwise panic("byteAt: offset 0 of a 4-byte live range")
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise panic("delete: the file this case created")
+
+	print("at={atCapacity} first={first} over={overCapacity}")
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+at=4 first=48 over=999
+```

@@ -7177,8 +7177,9 @@ end 'referenceIdentityOpSpelling'
 // the corpus declares that type (`stdlib/String.maxon:917`), so the ordinary declaration fold registers it
 // in every program (W49 wave 3). `CharacterSetProducerBit` asked the identical question about
 // `CharacterSet`/`CharSet` and went the identical way once `stdlib/CharacterSet.maxon` was listed (W115) and
-// its compiler-owned layout deleted (W129). The remaining two name types the compiler still owns outright.
-typealias ProducerMask = int(0 to 15)
+// its compiler-owned layout deleted (W129). The remaining LAYOUT bits name types the compiler still owns
+// outright — `__ManagedFile`, `__ManagedDirectory` and `__ManagedSocket`.
+typealias ProducerMask = int(0 to 31)
 
 let ManagedFileProducerBit = 1 as ProducerMask
 let ManagedDirectoryProducerBit = 2 as ProducerMask
@@ -7199,7 +7200,20 @@ let AllCaseNamesProducerBit = 4 as ProducerMask
 // waits for the whole program, exactly as `noteWellKnownInstanceNeeds`' do and for the same measured
 // O(files × types) reason (`ProgramSignatures.internLiteralContainerInstances`).
 let AllCasesProducerBit = 8 as ProducerMask
-let AllProducerBits = 15 as ProducerMask
+
+// ⭐ **A `__ManagedSocket` — the THIRD compiler-owned LAYOUT this walk answers for**, and the third of the
+// three bits above that names a type the compiler still owns outright. Its own bit rather than a third name
+// in either of those probes, for `atManagedDirectoryProducer`'s stated reason: the three register DIFFERENT
+// layouts, so a file that names only `__ManagedFile` must not acquire a socket layout. It is numbered here,
+// after the two `<Enum>` questions, because a bit's VALUE is its declaration order and renumbering the
+// existing four to keep the layout probes adjacent would move facts nothing else in this file depends on.
+let ManagedSocketProducerBit = 16 as ProducerMask
+
+// ⚠ **DERIVED, NOT TRANSCRIBED.** It was `15` — a hand-summed roster of four bits, and the fifth would have
+// had to remember to change it. Nothing would have failed if it had not: the walk's early exit simply stops
+// firing, so the only symptom is a full scan of every file, which no test can see. `or` over the bits
+// themselves cannot go stale.
+let AllProducerBits = (ManagedFileProducerBit or ManagedDirectoryProducerBit or AllCaseNamesProducerBit or AllCasesProducerBit or ManagedSocketProducerBit) as ProducerMask
 
 // --- Character literals ---
 //
@@ -12298,10 +12312,11 @@ export type Parser
 		// one's producers retired onto a stdlib module that also DECLARES the type — so the layout arrives
 		// through the ordinary declaration fold, in every program, and the question the probe existed to answer
 		// is gone rather than moved. The crash they were written against cannot recur for those types: there is
-		// no per-file decision left to get wrong. The two below still name types the compiler owns outright.
+		// no per-file decision left to get wrong. The three below still name types the compiler owns outright.
 		let producers = self.fileNamesProducerMask()
 		let hasManagedFileProducer = (producers and ManagedFileProducerBit) != 0
 		let hasManagedDirectoryProducer = (producers and ManagedDirectoryProducerBit) != 0
+		let hasManagedSocketProducer = (producers and ManagedSocketProducerBit) != 0
 		let hasAllCaseNamesAccess = (producers and AllCaseNamesProducerBit) != 0
 		let hasAllCasesAccess = (producers and AllCasesProducerBit) != 0
 		while not self.isEof() 'scan'
@@ -12427,7 +12442,7 @@ export type Parser
 		// A `.bytes()` byte VIEW joins the byte-string literal's bit because it constructs the same
 		// `Array with Byte`, and `<Enum>.allCaseNames` joins the string literal's for the same reason; neither
 		// has a typealias of its own to intern from, which is the property this whole set shares.
-		index.noteWellKnownInstanceNeeds(hasIntArrayLiteral, byteStringLiteral: hasByteStringLiteral or hasByteViewCall, stringArrayLiteral: hasStringArrayLiteral or hasAllCaseNamesAccess, aggregateArrayLiteral: hasAggregateArrayLiteral, enumAllCasesAccess: hasAllCasesAccess, setFromConstruction: hasSetFromLiteral, listFromConstruction: hasListFromLiteral, vectorSizes: vectorFromSizes, managedFileProducer: hasManagedFileProducer, managedDirectoryProducer: hasManagedDirectoryProducer)
+		index.noteWellKnownInstanceNeeds(hasIntArrayLiteral, byteStringLiteral: hasByteStringLiteral or hasByteViewCall, stringArrayLiteral: hasStringArrayLiteral or hasAllCaseNamesAccess, aggregateArrayLiteral: hasAggregateArrayLiteral, enumAllCasesAccess: hasAllCasesAccess, setFromConstruction: hasSetFromLiteral, listFromConstruction: hasListFromLiteral, vectorSizes: vectorFromSizes, managedFileProducer: hasManagedFileProducer, managedDirectoryProducer: hasManagedDirectoryProducer, managedSocketProducer: hasManagedSocketProducer)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -12605,8 +12620,9 @@ export type Parser
 	// `type`'s method body never reaches the loop body. A question about the whole file is answered by reading
 	// the whole file — and `fileNamesProducerMask` asks every probe on ONE such pass.
 
-	// The `__ManagedFile` probe (R4.1) is `atManagedFileProducer` and the `__ManagedDirectory` one (R4.3) is
-	// `atManagedDirectoryProducer`, both asked on the same shared walk.
+	// The `__ManagedFile` probe (R4.1) is `atManagedFileProducer`, the `__ManagedDirectory` one (R4.3) is
+	// `atManagedDirectoryProducer` and the `__ManagedSocket` one is `atManagedSocketProducer`, all asked on
+	// the same shared walk.
 
 	// ⭐ **EVERY LAYOUT PROBE IN ONE WALK (R4.1, and a third joined at R4.3 by adding a BIT, not a pass).**
 	// Each probe needs its own COMPLETE pass over the tokens — the reason is stated at the call site and it
@@ -12616,7 +12632,7 @@ export type Parser
 	// scan. It restores the cursor, so it is invisible to the caller.
 	//
 	// ⚠ It asked FOUR until W49 wave 3 struck the `StringIndex` one and W129 the `CharacterSet` one — the
-	// corpus declares both types now.
+	// corpus declares both types now — and it is FIVE again with the `__ManagedSocket` layout probe.
 	//
 	// ⚠ It cannot stop at the first hit the way a single-probe walk does, because a later token may be the
 	// only producer for a DIFFERENT probe — so it exits early only once every bit is satisfied. That makes
@@ -12636,6 +12652,9 @@ export type Parser
 			if (mask and ManagedDirectoryProducerBit) == 0 and self.atManagedDirectoryProducer() 'md'
 				mask = (mask or ManagedDirectoryProducerBit) as ProducerMask
 			end 'md'
+			if (mask and ManagedSocketProducerBit) == 0 and self.atManagedSocketProducer() 'ms'
+				mask = (mask or ManagedSocketProducerBit) as ProducerMask
+			end 'ms'
 			if (mask and AllCaseNamesProducerBit) == 0 and self.atStaticEnumMember(EnumAllCaseNamesMemberName) 'acn'
 				mask = (mask or AllCaseNamesProducerBit) as ProducerMask
 			end 'acn'
@@ -12716,6 +12735,18 @@ export type Parser
 		end 'notAnIdentifier'
 		return self.current().value.equals(ManagedDirectoryTypeName)
 	end 'atManagedDirectoryProducer'
+
+	// The `__ManagedSocket` type name — `atManagedDirectoryProducer`'s twin, tolerant for its reason and
+	// covering the same three positions (a static call, a declared FIELD, a declared PARAMETER) with one bare
+	// identifier test. Its own probe rather than a third name in either sibling, because the three register
+	// different layouts; the `__ManagedMemory` alias every socket signature needs is registered by the FILE
+	// probe, which already matches that name.
+	function atManagedSocketProducer() returns bool
+		if not self.at(TokenKind.identifier) 'notAnIdentifier'
+			return false
+		end 'notAnIdentifier'
+		return self.current().value.equals(ManagedSocketTypeName)
+	end 'atManagedSocketProducer'
 
 	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
 	// asks, written once so a second probe cannot arrive with its own idea of what a method call looks
@@ -35280,6 +35311,28 @@ export type Parser
 		// variable that shadows its name. Empty for a range (no borrow) and for a source that names no
 		// binding, exactly as the lock is.
 		var elementBorrowSubject = EmptySourceText
+
+		// ⭐⭐ **THE CURSOR GETS A SCOPE OF ITS OWN, AND THE SOURCE EXPRESSION'S TEMPORARIES STAY OUTSIDE IT.**
+		// `forMark` above holds everything the SOURCE EXPRESSION enrolled — a record `keepFieldSourceAliveForItsRead`
+		// held alive so a field could be read out of it, which is what `for pair in makeBox().entries` produces — and
+		// those exist on EVERY path out of this statement. The cursor, when there is one, exists only on the path
+		// that got one: a throwing `createIterator()` reports an empty collection by throwing, and that edge
+		// (`emitEmptyIterableEntry`) must not reach a `__destruct_<Cursor>`.
+		//
+		// ⛔⛔ **THE TWO USED TO SHARE ONE FRAME, AND THE EMPTY EDGE THEREFORE SKIPPED BOTH — A LEAK.** MEASURED on
+		// thirty lines of user code with no stdlib container type in it: `for (k, v) in h.boxed().m` over an EMPTY
+		// `Map` exits **101**, where the same loop over a one-entry map exits 0 and the same empty map through a
+		// `let b = h.boxed()` binding exits 0. The record `h.boxed()` returned was released in `forexit` and nowhere
+		// else, so a zero-trip loop never released it. `stdlib/helpers/http/httpHelpers.maxon`'s
+		// `for (hdrName, hdrValue) in request.headers().headers` is exactly that shape over a request with no
+		// user headers, so every `HttpClient.get` leaked one `HttpHeaders`.
+		//
+		// ⚠ It is a nested BLOCK rather than a recorded height because the two batches must be emitted into two
+		// DIFFERENT blocks off one list: `closeBlock` is what takes the cursor off `ownedBindings` between them, so
+		// the second emission cannot name it. A range opens an empty one and pays nothing — it enrols no cursor and
+		// has no empty edge — and the exit's drops come out in the order they always did (cursor first, then the
+		// source's temporaries in reverse), because that is the order one call over the shared list produced.
+		let cursorMark = self.openBlock()
 		if not isRange 'collectionSource'
 			// ⚠ **A `Map` REWRITE STOOD HERE AND WENT WITH `__map_entries` (W105).** It replaced a SYNTHESIZED
 			// map source with an `Array with (Key, Value)` the runtime walk materialized, because that record
@@ -35406,10 +35459,16 @@ export type Parser
 		let entryCarried = self.edgeArgsFor(phiVars, preLoop: true)
 		self.recordBranchEdge(self.currentBlock, targetId: header.id, argIds: self.loopHeaderArgs(firstIndex, carried: entryCarried))
 
-		// ⭐⭐ **AN EMPTY `Iterable` SKIPS THE LOOP *AND ITS EXIT DROPS* (W3)**, which is why this is a BRANCH
+		// ⭐⭐ **AN EMPTY `Iterable` SKIPS THE LOOP *AND ITS CURSOR'S DROP* (W3)**, which is why this is a BRANCH
 		// and not a seeded flag. A throwing `createIterator()` reports emptiness by throwing
 		// (`stdlib/Interfaces.maxon:132-134`), and on that path it returned NO cursor — so the exit block's
-		// `emitScopeDrops`, which releases the cursor the loop owns, must not run.
+		// drop of the cursor must not run.
+		//
+		// ⚠ **IT SKIPS THE CURSOR'S DROP AND NOT "THE EXIT DROPS", AND THIS SENTENCE SAID THE SECOND UNTIL A
+		// LEAK MEASURED THE DIFFERENCE.** The exit releases TWO batches and only one of them is conditional on
+		// having got a cursor; the other is the SOURCE EXPRESSION's temporaries, built in this preheader above
+		// the branch and live on both edges. `cursorMark` is what separates them and
+		// `joinAfterEmptyIterable` is where this edge pays its half.
 		//
 		// ⚠ **MEASURED, on the first cut, which seeded the header's error flag with the factory's instead:**
 		// the loop correctly ran zero trips and then `__destruct_<Cursor>` was called on the throw path's
@@ -35657,15 +35716,32 @@ export type Parser
 
 		// The loop variable and the iteration source's binding both leave scope here — the drops for the
 		// latter land in the exit block, which every non-terminating path through the loop reaches.
+		//
+		// ⭐ TWO EMISSIONS, AND THEY GO TO TWO DIFFERENT BLOCKS. The CURSOR is the loop's own and dies in the
+		// exit, which only a path that got one can reach; the SOURCE EXPRESSION's temporaries die at the
+		// statement's single CONTINUATION, which is that same exit when the loop is the only way out and the
+		// JOIN when an empty `Iterable` supplies a second entry edge. Splitting them is the whole point —
+		// see `cursorMark` for the leak one shared frame cost.
+		//
+		// The cursor's frame is closed BETWEEN the two so the second emission cannot name it again, and the
+		// decrefs come out in the order one call over the shared list produced (that call walked in reverse
+		// and the cursor was its top entry). A loop whose source enrolled nothing emits nothing here, which
+		// is every loop in the corpus that does not read a field out of a call result.
 		self.currentBlock = exit
-		self.emitScopeDrops(exit, floor: forMark.ownedCount, anchor: forTok)
-		self.closeBlock(forMark)
+		self.emitScopeDrops(exit, floor: cursorMark.ownedCount, anchor: forTok)
+		self.closeBlock(cursorMark)
 
-		// The empty-`Iterable` path rejoins here, PAST the drops above — see `emitEmptyIterableEntry`.
+		// The empty-`Iterable` path rejoins at a JOIN, PAST the cursor's drop — see `emitEmptyIterableEntry`.
+		// EACH ARM LEAVES THE PARSER IN THE STATEMENT'S CONTINUATION and releases the source expression's
+		// temporaries INTO it, which is why the two are one decision rather than a block computed here and a
+		// drop emitted after: the block that drops is the block control is in.
 		match emptyExit 'emptied'
-			none then return exit
-			entered(empty) then return self.joinAfterEmptyIterable(func, empty: empty, exit: exit, entryCarried: entryCarried, phiVars: phiVars, forTok: forTok)
+			none then self.emitScopeDrops(exit, floor: forMark.ownedCount, anchor: forTok)
+			entered(empty) then self.joinAfterEmptyIterable(func, empty: empty, exit: exit, entryCarried: entryCarried, phiVars: phiVars, sourceFloor: forMark.ownedCount, forTok: forTok)
 		end 'emptied'
+
+		self.closeBlock(forMark)
+		return self.currentBlock
 	end 'parseForStatement'
 
 	// ⭐ **THE PREHEADER'S "DID THE FACTORY GIVE US A CURSOR?" BRANCH (W3)** — the taken edge is the ordinary
@@ -35692,7 +35768,16 @@ export type Parser
 	//
 	// The pre-loop args are the caller's own entry-edge args, reused rather than re-derived: `edgeArgsFor`
 	// answers off `pv.entryValue`, and asking it twice would be one fact computed twice.
-	function joinAfterEmptyIterable(func IrFunction, empty IrBlock, exit IrBlock, entryCarried ValueIdArray, phiVars LoopPhiVarArray, forTok Token) returns IrBlock
+	//
+	// ⭐⭐ **AND IT IS WHERE THE SOURCE EXPRESSION'S TEMPORARIES COME TO DIE, because the join is the ONE block
+	// both entry edges reach.** The empty edge got no cursor, so it must not reach a `__destruct_<Cursor>` —
+	// but everything the source expression itself enrolled was built in the preheader, ABOVE the branch, and
+	// is live on this edge exactly as it is on the loop's. `sourceFloor` is the `for` statement's own owned
+	// mark, and the caller has already closed the cursor's frame, so this releases precisely the outer batch.
+	//
+	// It hands nothing back: the join IS `currentBlock` when it returns, which is what the caller's other arm
+	// leaves too, so the statement's continuation is read from one place.
+	function joinAfterEmptyIterable(func IrFunction, empty IrBlock, exit IrBlock, entryCarried ValueIdArray, phiVars LoopPhiVarArray, sourceFloor BindingMark, forTok Token)
 		var join = self.newBlock(func, label: b"forjoin", line: forTok.line)
 
 		// Collected BEFORE the phis are minted, because minting rebinds each binding to its phi and the exit
@@ -35713,8 +35798,8 @@ export type Parser
 		self.recordBranchEdge(empty, targetId: join.id, argIds: entryCarried)
 		self.emitBranch(empty, targetId: join.id)
 
+		self.emitScopeDrops(join, floor: sourceFloor, anchor: forTok)
 		self.currentBlock = join
-		return join
 	end 'joinAfterEmptyIterable'
 
 	// ⭐ **THE `for` HEADER'S LOOP-VARIABLE PATTERN, as the LIST OF NAMES it always was.** `for (key, value) in`
@@ -49893,6 +49978,12 @@ export type Parser
 			return try self.parseManagedDirectoryStaticCall(func, typeTok: typeTok)
 		end 'managedDirectoryStatic'
 
+		// `__ManagedSocket.tcpConnect(host, port: p)` — the socket type's one static, intercepted here for the
+		// identical reason.
+		if typeTok.value.equals(ManagedSocketTypeName) 'managedSocketStatic'
+			return try self.parseManagedSocketStaticCall(func, typeTok: typeTok)
+		end 'managedSocketStatic'
+
 		// `__ManagedMemory.create(count, elementSize)` (R4.2) — intercepted BEFORE the generic-alias arm
 		// below, which would route it to `parseArrayStaticCall` (the alias IS bound to an `Array` instance)
 		// and refuse its two arguments against `Array.create()`'s none. That is the measured red:
@@ -49914,8 +50005,8 @@ export type Parser
 		// it, so the mangled `String.from` below would name a callee no file declares"*. W17 listed
 		// `stdlib/String.maxon`, which declares both, so the mangling below now names exactly the corpus
 		// functions that serve them and the interception had become a longer spelling of the fall-through.
-		// `CharacterSet`, `__ManagedFile`, `__ManagedDirectory` and `__ManagedMemory` keep theirs because that
-		// premise is still true of all four: none has a `type` declaration anywhere.
+		// `CharacterSet`, `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket` and `__ManagedMemory` keep
+		// theirs because that premise is still true of all of them: none has a `type` declaration anywhere.
 
 		// ⭐⭐ **THE GENERIC ALIAS THIS CALL'S BASE NAMES, RESOLVED ONCE — file-scope (`IntBox`) or INNER
 		// (`Plain.IntPair`) — and all FOUR of this routine's alias-driven decisions read THIS name rather than
@@ -50696,6 +50787,14 @@ export type Parser
 			return try self.dispatchManagedDirectoryMethod(recv)
 		end 'managedDirectoryMethod'
 
+		// A `__ManagedSocket` RECEIVER — `s.close()`, and (the corpus's own spelling, `stdlib/TcpClient.maxon:43`)
+		// `self.socket.sendFrom(…)`. Its own dispatcher for the reason the two arms above have one, and it
+		// accepts the same two tags for the same measured reason: a struct FIELD read carries `named`, not
+		// `structRef`, and a `__ManagedSocket` is documented as a FIELD of a wrapper type.
+		if self.isManagedSocketType(recv.tag, nameId: recv.nameId) 'managedSocketMethod'
+			return try self.dispatchManagedSocketMethod(func, recv: recv)
+		end 'managedSocketMethod'
+
 		// AN ENUM/UNION RECEIVER (D1) — `d.isNorth()`, `s.action()`, `self.isStop()`, and now also
 		// `pick().score()` and `Direction.south.score()`, which the oracle accepts (measured: 10) and which
 		// arrive here as VALUES because D1's arm was reached only from the binding door.
@@ -51343,7 +51442,7 @@ export type Parser
 			return
 		end 'cloneable'
 
-		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `Vector` field, or any other generic instance with no base struct to cascade over and no runtime copy of its own (each would need a per-instance cloner, and only a DECLARED generic's instance has one) — including one held INSIDE a struct field; an OS handle (`__ManagedFile`/`__ManagedDirectory`), which cannot be duplicated at all; a value held at an interface type; or a container holding containers that own managed elements (an `Array with (Array with String)`, a `List with (List with String)`). String, struct, boxed-union, enum, `Array`, `List` (managed elements included) and declared-generic instance (`Box with String`) fields ARE supported.", line: memberTok.line, column: memberTok.column)
+		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `Vector` field, or any other generic instance with no base struct to cascade over and no runtime copy of its own (each would need a per-instance cloner, and only a DECLARED generic's instance has one) — including one held INSIDE a struct field; an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all; a value held at an interface type; or a container holding containers that own managed elements (an `Array with (Array with String)`, a `List with (List with String)`). String, struct, boxed-union, enum, `Array`, `List` (managed elements included) and declared-generic instance (`Box with String`) fields ARE supported.", line: memberTok.line, column: memberTok.column)
 	end 'requireStructCloneSupported'
 
 	// ⭐ **THE CONDITIONAL-EXTENSION REFUSAL, AT THE ONE DOOR EVERY STRUCT METHOD CALL PASSES THROUGH.**
@@ -52684,6 +52783,71 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly the three both references declare: `next()`, `filename()` and `close()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedDirectoryMethod'
 
+	// ⭐ **THE ONE `__ManagedSocket` STATIC — `tcpConnect(host, port: p)`.** A name outside it is REFUSED BY
+	// NAME here rather than left to fall through, exactly as `parseManagedFileStaticCall` argues: falling
+	// through would mangle `__ManagedSocket.listen` into a callee no file declares and surface as E3004
+	// against a name the author did write.
+	//
+	// ⚠ **OWNERSHIP: it produces an OWNED box.** It goes through `emitOwnedRuntimeResult`, so it is tracked as
+	// an owned temporary whose drop is `__ms_destruct` — the RAII close (`SignatureIndex.managedNameDropCallee`).
+	//
+	// ⚠ Throwing-ness is NOT decided here — `isThrowingManagedSocketRuntimeCallee` names the callee and the
+	// composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and SemanticCheck's E3057
+	// reject, so a `try` is required at exactly the places those two agree on.
+	function parseManagedSocketStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(typeTok, last: methodTok)
+
+		if methodTok.value.equals(ManagedSocketTcpConnectMethod) 'tcpConnect'
+			try self.consume(TokenKind.leftParen)
+			let host = try self.parseManagedMemoryArg(func, paramName: ManagedSocketHostParamName, methodTok: methodTok)
+			try self.consumeArrayArgLabel(ManagedSocketPortParamName, required: false)
+			let port = try self.parseBuiltinIntegerArg(func, paramName: ManagedSocketPortParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitOwnedRuntimeResult(ManagedSocketTcpConnectName, args: pairArgs(host, second: port), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
+		end 'tcpConnect'
+
+		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly the one both references declare: `tcpConnect`", line: methodTok.line, column: methodTok.column)
+	end 'parseManagedSocketStaticCall'
+
+	// ⭐ **THE THREE `__ManagedSocket` INSTANCE METHODS — `sendFrom`, `recv`, `close`.** The cursor sits on the
+	// method NAME (`dispatchMethodOnReceiver` consumed the `.`).
+	//
+	// ⚠ The buffer is BORROWED by all three, not consumed: `__ms_send_from` reads out of it and `__ms_recv`
+	// writes into it, and neither takes ownership — which is what lets the caller keep using it afterwards,
+	// exactly as `__mf_read`/`__mf_write` do one family over.
+	//
+	// An unknown method is refused by name here rather than mangled into a callee no file declares.
+	function dispatchManagedSocketMethod(func IrFunction, recv MethodReceiver) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(recv.anchor, last: methodTok)
+
+		// ⚠ **THREE ARGUMENTS, AND THE SECOND AND THIRD LABELS ARE OPTIONAL** — the `__ManagedMemory` surface's
+		// rule (`consumeArrayArgLabel`, whose header carries the measurement), and the spelling the corpus
+		// uses: `stdlib/TcpClient.maxon:43` writes all three positionally.
+		if methodTok.value.equals(ManagedSocketSendFromMethod) 'sendFrom'
+			try self.consume(TokenKind.leftParen)
+			let buffer = try self.parseManagedMemoryArg(func, paramName: ManagedFileManagedParamName, methodTok: methodTok)
+			try self.consumeArrayArgLabel(ManagedMemoryOffsetParamName, required: false)
+			let offset = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryOffsetParamName, methodTok: methodTok)
+			try self.consumeArrayArgLabel(ManagedSocketLengthParamName, required: false)
+			let length = try self.parseBuiltinIntegerArg(func, paramName: ManagedSocketLengthParamName, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ManagedSocketSendFromName, args: quadArgs(recv.value, second: buffer, third: offset, fourth: length), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'sendFrom'
+		if methodTok.value.equals(ManagedSocketRecvMethod) 'recv'
+			let buffer = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFileManagedParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ManagedSocketRecvName, args: pairArgs(recv.value, second: buffer), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'recv'
+		if methodTok.value.equals(ManagedSocketCloseMethod) 'close'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ManagedSocketCloseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'close'
+
+		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly the three both references declare: `sendFrom()`, `recv()` and `close()`", line: methodTok.line, column: methodTok.column)
+	end 'dispatchManagedSocketMethod'
+
 	// ⭐ **AN OWNED `__ManagedMemory` OUT OF A RUNTIME CALL — the shape `filename()`, `currentPath()` (R4.3)
 	// and `__Builtins.commandLineArg(i)` share.** Three facts have to travel together and each of them is a
 	// silent wrong answer on its own: the value is an OWNED heap record (so its scope exit must drop it), it
@@ -53067,6 +53231,11 @@ export type Parser
 		return self.artifact.typeNames.intern(ManagedDirectoryTypeName)
 	end 'managedDirectoryNameId'
 
+	// The `__ManagedSocket` type's interned name — `managedDirectoryNameId`'s twin, against the same interner.
+	function managedSocketNameId() returns TypeNameId
+		return self.artifact.typeNames.intern(ManagedSocketTypeName)
+	end 'managedSocketNameId'
+
 	// Is this receiver a `__ManagedFile`? A TAG cannot answer it — every struct box is `structRef` — so it
 	// is the interned NAME behind the tag, exactly as `isStringIndexType` asks.
 	//
@@ -53100,6 +53269,12 @@ export type Parser
 	function isManagedDirectoryType(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return self.receiverIsNamedAggregate(tag, nameId: nameId, typeName: ManagedDirectoryTypeName)
 	end 'isManagedDirectoryType'
+
+	// Is this receiver a `__ManagedSocket`? `isManagedDirectoryType`'s twin, in every respect including WHY it
+	// admits both aggregate tags.
+	function isManagedSocketType(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return self.receiverIsNamedAggregate(tag, nameId: nameId, typeName: ManagedSocketTypeName)
+	end 'isManagedSocketType'
 
 	// ⭐ **"IS THIS RECEIVER THE AGGREGATE CALLED `typeName`?" — THE SHARED BODY OF THE THREE TYPE TESTS
 	// ABOVE AND BELOW** (`__ManagedFile`, `__ManagedDirectory`, `StringIndex`). Each spelled the tag gate and
@@ -60239,10 +60414,16 @@ export type Parser
 		return arg
 	end 'parseArrayOneArg'
 
-	// The ` , <label> : ` separating a two-argument array method's positional first argument from its second —
-	// `set`/`insert`'s `value:`, `slice`'s `endIndex:`. ONE home for that shape, so a two-arg array method names
-	// its label and inherits the same "must be labelled `<label>:`" diagnostic; the cursor is left on the token
-	// that begins the second argument's value.
+	// The ` , <label> : ` separating one of a builtin method's positional arguments from the next —
+	// `set`/`insert`'s `value:`, `slice`'s `endIndex:`, `sendFrom`'s `offset:` and `length:`. ONE home for that
+	// shape, so a builtin method names its label and inherits the same "must be labelled `<label>:`"
+	// diagnostic; the cursor is left on the token that begins that argument's value.
+	//
+	// ⚠ **IT IS NOT A TWO-ARGUMENT RULE, AND THE DIAGNOSTIC SAID IT WAS.** `__ManagedSocket.sendFrom` is the
+	// compiler's first THREE-argument builtin method and calls this TWICE, so the throw below may not name an
+	// arity or a position: it once read "the second argument of a two-argument builtin method", which told an
+	// author about the second argument of a two-argument method while complaining about the third of a
+	// three-argument one. The label is the only thing this reader knows and the only thing it now says.
 	//
 	// ⭐⭐ **THE LABEL IS REQUIRED ON AN `Array` AND OPTIONAL ON THE `__ManagedMemory` BUFFER, AND BOTH HALVES ARE
 	// MEASURED (R4.4).** `stdlib/Array.maxon` declares `set`/`slice` as ordinary methods, so E2053's "second and
@@ -60264,7 +60445,7 @@ export type Parser
 
 		let labelTok = try self.consumeArgLabel()
 		if not labelTok.value.equals(label) 'wrongLabel'
-			throw ParseError.unsupported("the second argument of a two-argument builtin method must be labelled `{String.from(label)}:` (got '{String.from(labelTok.value)}:')", line: labelTok.line, column: labelTok.column)
+			throw ParseError.unsupported("this builtin method's argument must be labelled `{String.from(label)}:` (got '{String.from(labelTok.value)}:')", line: labelTok.line, column: labelTok.column)
 		end 'wrongLabel'
 	end 'consumeArrayArgLabel'
 

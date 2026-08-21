@@ -324,6 +324,17 @@ export type RuntimeUsage
 	// ALSO on `usesManagedMemory`: `__md_filename`/`__md_current_path` build their `__ManagedMemory` answer through
 	// `__managed_create`/`__managed_reserve`, calls that live in a Std body this Maxon-module scan cannot see.
 	export var usesManagedDirectory as bool
+	// The program opens a SOCKET. Its own bit, so a program that touches only the filesystem carries none of
+	// the socket runtime — and, unlike either filesystem family, this one is also what makes the IMAGE carry a
+	// `ws2_32.dll` import directory at all (`IrModule.usesSockets`, read by the PE writer's `dllIsEmitted`).
+	// Its transitive dependencies are the FILE family's, not the directory family's: `usesHeap` (the host
+	// cstring, the `WSADATA`, the `addrinfo` hints, the out word, the `sockaddr_in` and the box are all
+	// `__mm_alloc`'d) and the whole SCHEDULER, because every `__ms_*` that makes a kernel call opens with
+	// `__gt_io_park` — a `__gt_` call one tier down that this Maxon-module scan cannot see.
+	// ⛔ It does NOT carry `usesManagedMemory`, and this line used to claim the directory family's pair: the
+	// socket family never BUILDS an `Array` record, it fills one the caller already owns. `recordCallUsage`
+	// is where the three families' bits are actually set, and it has always said so.
+	export var usesManagedSocket as bool
 	// The program reads its COMMAND LINE. Like the directory family it declares a transitive dependency on
 	// `usesHeap` (the scratch buffer is a raw alloc) AND on `usesManagedMemory`: `__cl_arg` builds its
 	// `__ManagedMemory` answer through `__managed_create`/`__managed_reserve` inside a Std body this Maxon-module
@@ -341,7 +352,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -523,6 +534,16 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesManagedMemory = true
 		recordGtUsage(usage)
 	end 'managedDirectory'
+	// A `__ms_*` call. It carries `usesHeap` (six raw allocations pass through `__ms_tcp_connect` alone) and
+	// the whole scheduler, for the filesystem families' reason: every socket entry that makes a kernel call
+	// opens with `__gt_io_park`. It does NOT carry `usesManagedMemory` — the socket family never BUILDS an
+	// `Array` record, it fills one the caller already owns, which is the file family's shape rather than the
+	// directory family's.
+	if isManagedSocketRuntimeCallee(callee) 'managedSocket'
+		usage.usesManagedSocket = true
+		usage.usesHeap = true
+		recordGtUsage(usage)
+	end 'managedSocket'
 	// A `__cl_*` call. Same two transitive bits as the directory family and for the same reasons: the scratch
 	// buffer is a raw alloc, and `__cl_arg` answers with an `Array` record it builds one tier down.
 	if isCommandLineRuntimeCallee(callee) 'commandLine'

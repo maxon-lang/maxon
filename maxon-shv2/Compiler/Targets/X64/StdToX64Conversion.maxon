@@ -206,6 +206,26 @@ let CreateAlways = 2  // dwCreationDisposition — create, truncating an existin
 // straight after the call cannot lose the new name. Both are the bootstrap's, kept for its stated reasons.
 let MoveFileReplaceWriteThrough = 9  // MOVEFILE_REPLACE_EXISTING (1) | MOVEFILE_WRITE_THROUGH (8)
 let FileAttributeNormal = 0x80  // dwFlagsAndAttributes
+
+// --- The socket slice's ws2_32 constants ---
+//
+// ⚠⚠ **`AfInet` / `SockStream` / `IpprotoTcp` / `SockaddrInBytes` DO NOT LIVE HERE ANY MORE — THEY ARE
+// `ManagedSocketRuntime`'s, AND THIS FILE READS THEM.** The note this paragraph replaces said they lived here
+// "and nowhere else", on the argument that only the x64-windows lowering knows a "create a TCP socket" op
+// means `AF_INET`/`SOCK_STREAM`/`IPPROTO_TCP`. That held only while nothing above the target tier had to
+// WRITE those values into an OS structure. `__ms_tcp_connect` does: it fills a 48-byte `addrinfo` hints
+// record with the SAME three values `socket()` is called with, and a 16-byte `sockaddr_in` whose length must
+// equal what `connect` is handed below. Resolve for one family and create a socket in another and `connect`
+// fails on a family mismatch, with no diagnostic anywhere — one fact, so one home. See
+// `ManagedSocketRuntime`'s protocol block for the full argument and for what a POSIX or IPv6 lane changes.
+
+// `MAKEWORD(2, 2)` - the Winsock version `WSAStartup` is asked for. Both references request 2.2. This one IS
+// still only this file's: nothing above the target tier reads a Winsock version.
+let WinsockVersion22 = 0x0202
+
+// The `flags` argument of `send`/`recv`, always zero: no `MSG_OOB`, no `MSG_PEEK`. `specs/managed-socket.md`
+// documents a plain stream send and receive, and a partial transfer is a normal answer rather than a flag.
+let SendRecvNoFlags = 0
 let HandleFlagInherit = 1  // SetHandleInformation dwMask/HANDLE_FLAG_INHERIT — stripped from a parent pipe end, SET on a child stdio handle
 let HandleFlagClear = 0  // SetHandleInformation dwFlags = 0 (strip inheritance)
 let IocpNoCompletionKey = 0x0  // CreateIoCompletionPort CompletionKey for an associate
@@ -850,14 +870,20 @@ type StdToX64Lowering
 			// exact displacement, so the store lands on a spilled value — the silent stack corruption this
 			// band's own header exists to prevent.
 			osMapNamedSegment gives win64OutgoingArgBytes(MapViewOfFileStackArgWords)
-			// The ONLY subprocess op with outgoing stack args: CreateProcessA passes its last six of ten arguments
-			// on the stack (see `win64OutgoingArgDisp`). The other four subprocess ops are ≤4-argument, register-only.
+			// CreateProcessA passes its last six of ten arguments on the stack (see `win64OutgoingArgDisp`).
+			// Every other op of the ORIGINAL subprocess band is ≤4-argument and register-only.
 			osProcessSpawn gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
-			// PeekNamedPipe passes its last two of six arguments on the stack; the other three appended ops
-			// are ≤3-argument and register-only.
+			// PeekNamedPipe passes its last two of six arguments on the stack — so `osProcessSpawn` above is
+			// not the only stack-arg subprocess op, and this comment used to claim it was.
 			osPipePeek gives win64OutgoingArgBytes(PeekPipeStackArgWords)
 			osHandleSetInherit gives 0
-			osEnvRead to osProcessTerminate gives 0
+			// ⚠ **THIS ARM NOW COVERS TEN OPS, AND ITS COMMENT SAID "the other three appended ops".**
+			// `osEnvRead` and `osProcessTerminate` finish the attached-subprocess band, then the eight
+			// `ws2_32` socket ops follow. All ten are register-only because the widest Win64 call any of them
+			// marshals takes FOUR arguments — `getaddrinfo`, `send` and `recv` — which is exactly the register
+			// file's capacity, so nothing overflows onto the stack. ⛔ A ws2_32 call with a fifth argument
+			// (`WSARecv`, `WSASend`) would belong on its OWN arm with a reserved slot count, never in here.
+			osEnvRead to osSocketClose gives 0
 			const to param gives 0
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
@@ -1096,7 +1122,7 @@ type StdToX64Lowering
 				// A frame address is a value-producing body op, never a terminator.
 				stackRecordAddr then break 'term'
 				osOpenNamedSegment to osTickCountMs then break 'term'
-				osHandleSetInherit to osProcessTerminate then break 'term'
+				osHandleSetInherit to osSocketClose then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1177,7 +1203,7 @@ type StdToX64Lowering
 				// A frame address, not the compare — the scan stops.
 				stackRecordAddr then break 'isTheCompare'
 				osOpenNamedSegment to osTickCountMs then break 'isTheCompare'
-				osHandleSetInherit to osProcessTerminate then break 'isTheCompare'
+				osHandleSetInherit to osSocketClose then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1290,6 +1316,14 @@ type StdToX64Lowering
 			osPipePeek(resultId, handleId, availPtrId) then self.lowerOsPipePeek(resultId, handleId: handleId, availPtrId: availPtrId, dstBlock: dstBlock)
 			osEnvRead(resultId, namePtrId, bufPtrId, bufLenId) then self.lowerOsEnvRead(resultId, namePtrId: namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstBlock: dstBlock)
 			osProcessTerminate(handleId, exitCodeId) then self.lowerOsProcessTerminate(handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
+			osSocketStartup(resultId, wsaDataPtrId) then self.lowerOsSocketStartup(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
+			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstBlock: dstBlock)
+			osSocketFreeAddrInfo(addrInfoPtrId) then self.lowerOsSocketFreeAddrInfo(addrInfoPtrId, dstBlock: dstBlock)
+			osSocketCreate(resultId) then self.lowerOsSocketCreate(resultId, dstBlock: dstBlock)
+			osSocketConnect(resultId, sockId, addrPtrId) then self.lowerOsSocketConnect(resultId, sockId: sockId, addrPtrId: addrPtrId, dstBlock: dstBlock)
+			osSocketSend(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketSend(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
+			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketRecv(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
+			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
 			osProcessExitCode(handleId, codePtrId) then self.lowerOsProcessExitCode(handleId, codePtrId: codePtrId, dstBlock: dstBlock)
 			osWaitHandles(handleArrayPtrId, countId, timeoutMsId) then self.lowerOsWaitHandles(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstBlock: dstBlock)
@@ -1392,6 +1426,7 @@ type StdToX64Lowering
 			osSleepMs then panic("lowerStdToX64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op)")
 			osProcessSpawn to osWaitHandle then panic("lowerStdToX64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 			osHandleSetInherit to osProcessTerminate then panic("lowerStdToX64: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops)")
+			osSocketStartup to osSocketClose then panic("lowerStdToX64: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
 			osFreePages then panic("lowerStdToX64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 			witnessCall then panic("lowerStdToX64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 			witnessTryCall then panic("lowerStdToX64: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
@@ -2544,6 +2579,84 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'emitWin64CreateFileA'
 
+	// --- The socket slice: eight ws2_32 lowerings ---
+	//
+	// ⭐ Each spells the Win32 constants its Std op deliberately does not carry, exactly as
+	// `emitWin64CreateFileA` spells `GENERIC_READ`. Every one guards with `requireWin64FileIo` first: these
+	// are Win32 imports, so a non-Windows target reaching them is a compiler bug that got past E3104 rather
+	// than a user-facing rejection.
+
+	function lowerOsSocketStartup(resultId ValueId, wsaDataPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osSocketStartup")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: WinsockVersion22))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(wsaDataPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WSAStartup)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketStartup'
+
+	// `getaddrinfo(host, NULL, hints, out)` - the service argument is always NULL; see the op's own header
+	// for why no port is ever formatted as a string.
+	function lowerOsSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osSocketResolve")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(hostPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(hintsPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(outPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.getaddrinfo)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketResolve'
+
+	function lowerOsSocketFreeAddrInfo(addrInfoPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osSocketFreeAddrInfo")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(addrInfoPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.freeaddrinfo)))
+	end 'lowerOsSocketFreeAddrInfo'
+
+	function lowerOsSocketCreate(resultId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osSocketCreate")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: AfInet))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: SockStream))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IpprotoTcp))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.socket)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketCreate'
+
+	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osSocketConnect")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(sockId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(addrPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: SockaddrInBytes))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.connect)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketConnect'
+
+	// `send`/`recv` differ ONLY in their import slot, so the register setup is written once. Two near-identical
+	// emitters is the duplication this file's own conventions refuse.
+	function emitWin64SocketTransfer(slot IatSlot, resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(sockId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(lenId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: SendRecvNoFlags))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(slot)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'emitWin64SocketTransfer'
+
+	function lowerOsSocketSend(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osSocketSend")
+		self.emitWin64SocketTransfer(IatSlot.send, resultId: resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
+	end 'lowerOsSocketSend'
+
+	function lowerOsSocketRecv(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osSocketRecv")
+		self.emitWin64SocketTransfer(IatSlot.recv, resultId: resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
+	end 'lowerOsSocketRecv'
+
+	function lowerOsSocketClose(sockId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osSocketClose")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(sockId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.closesocket)))
+	end 'lowerOsSocketClose'
+
 	// ⭐ **THE x64-WINDOWS GATE FOR THE WHOLE FILE-IO BAND, ASKED ONCE.** All nine file ops are
 	// x64-windows only by the R4.1 ruling, and `SemanticCheck.requireTargetSupportsCallee` refuses such a
 	// program at its own source span (E3104) long before lowering — so this is the backstop for a compiler
@@ -3305,7 +3418,7 @@ type StdToX64Lowering
 			// Nor is a frame address.
 			stackRecordAddr gives false
 			osOpenNamedSegment to osTickCountMs gives false
-			osHandleSetInherit to osProcessTerminate gives false
+			osHandleSetInherit to osSocketClose gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3456,6 +3569,7 @@ type StdToX64Lowering
 			stackRecordAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `stackRecordAddr`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osOpenNamedSegment to osTickCountMs panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a DebugStream host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osHandleSetInherit to osProcessTerminate panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an attached-subprocess host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osSocketStartup to osSocketClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a socket host primitive, not a condBranch")
 		end 'term'
 	end 'condBranchFieldsOf'
 

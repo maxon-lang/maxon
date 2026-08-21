@@ -1,0 +1,14 @@
+# A gate is driven by a real `spec-test` sub-run, so the runner makes its usual scratch here:
+# `.spec-tmp/` (already ignored repo-wide) and a `fragments/<target>/` tree.
+#
+# ⚠ **MEASURED 2026-08-21: TODAY THAT TREE IS EMPTY DIRECTORIES AND NOTHING ELSE**, so it was never
+# dirtying `git status` — git tracks no empty directory. This line is not fixing a live leak; it is the
+# same insurance `harness-fixtures/.gitignore` carries, and it is here because the gate is ONE assertion
+# away from producing files. The gate's case is deliberately made to FAIL (its pinned stdout is wrong on
+# purpose — see `requireNetworkGateHolds`, which asserts on the FAIL verdict line), and a case that fails
+# never reaches the golden write. Correct that stdout, or add a gate whose case passes, and every
+# `spec-test` in this checkout starts minting `.test` goldens into a tracked path.
+#
+# Those goldens would be the SUB-RUN's, not the suite's: nothing reads them back and no gate asserts on
+# them.
+fragments/

@@ -398,6 +398,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	if not projectHasErrors(project) 'wellFormedSoFar'
 		verifyManagedFileOrdinals(project)
 		verifyManagedDirectoryOrdinals(project)
+		verifyManagedSocketOrdinals(project)
 		verifyManagedMemoryRuntimeOrdinals(project)
 		verifyDivisionByZeroOrdinals(project)
 		// ⚠ **`StringError` WAS THE SIXTH AND IS NO LONGER CHECKED, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS
@@ -686,6 +687,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// exactly this reason and its header says so; the second flag needed the same seam, not the same
 	// paragraph one screen earlier.
 	pipeline.stdModule.usesSubprocess = usage.usesStreaming
+	// ⭐ **AND THE ws2_32 IMPORT DIRECTORY, ON THE SAME SEAM AND FOR THE SAME MEASURED REASON.** It gates a
+	// WHOLE DLL rather than a trailing band (see `IrModule.usesSockets`), and it must be written AFTER
+	// `pipeline.run()` for the paragraph above's reason: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a
+	// flag set any earlier lands on a module that is thrown away — and the symptom is not a missing import but
+	// `iatCall`s at slot indices past the end of the table that was actually emitted.
+	pipeline.stdModule.usesSockets = usage.usesManagedSocket
 
 	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
 
@@ -751,6 +758,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// functions are appended to one module and the backend resolves calls by name — and the `usesManagedMemory` bit
 	// that makes the managed-memory runtime present was settled by `scanRuntimeUsage` before any install ran.
 	installManagedDirectoryRuntime(pipeline.stdModule, usage: usage)
+
+	// The socket runtime (`__ms_tcp_connect`/`__ms_send_from`/…) — installed the same already-lowered way, on
+	// its own `usesManagedSocket` bit. It sits beside the two filesystem installs because it shares their
+	// helpers (the raw alloc/free, the cstring scratch copy, the `Array`-record byte extent, the closed-handle
+	// guard and the refcounted teardown), and it needs no ordering against the Array install below for the
+	// reason stated there.
+	installManagedSocketRuntime(pipeline.stdModule, usage: usage)
 
 	// The command-line runtime (`__cl_count`/`__cl_arg`/`__cl_scan_one`) — installed the same already-lowered
 	// way, on its own `usesCommandLine` bit. It sits beside the two families above because it shares their

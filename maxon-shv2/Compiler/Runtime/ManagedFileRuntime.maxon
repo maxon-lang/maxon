@@ -179,6 +179,12 @@ export let Win32False = 0 as ParsedInt
 // allocator already makes — the precise habit `MmRuntime` warns against.
 let Win32OutWordBytes = 8 as ParsedInt
 
+// Where the OUT-PARAMETER's answer sits inside that word: at the front of it, because the word IS the answer.
+// ⭐ Named rather than spelled `0 as ByteOffset` at each read — three files reach `emitWin32OutWord`'s block
+// (here, `ConsoleRuntime`, `ManagedSocketRuntime`) and a bare literal at each of them is the SAME fact about
+// this allocation's layout, transcribed three times, in three files, none of which declares it.
+export let Win32OutWordAnswerOffset = 0 as ByteOffset
+
 // ⭐ **THE THIRTEEN ENTRY POINTS.** Twelve name a `__ManagedFile` method; `__mf_destruct` is the
 // compiler-INSERTED one — the drop a `__ManagedFile` box takes when its last owner goes away
 // (`SignatureIndex.managedNameDropCallee`), which is the whole of the RAII half of this type.
@@ -379,7 +385,7 @@ end 'emitWin32OutWord'
 function emitWin32BoolOutcome(module StdModule, func IrFunction, block IrBlock, verdict ValueId, out ValueId, failed IrBlock, ok IrBlock, fallbackFlag ParsedInt, ids ValueMinter)
 	let err = ids.mint()
 	module.appendOp(block, op: StdOp.osLastError(err))
-	let answer = emitLoadField(module, block: block, record: out, offset: 0 as ByteOffset, ids: ids)
+	let answer = emitLoadField(module, block: block, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
 	emitRawFree(module, block: block, ptr: out, ids: ids)
 	let falseConst = emitConst(module, block: block, value: Win32False, ids: ids)
 	let failedCall = emitCmp(module, block: block, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
@@ -489,13 +495,17 @@ end 'emitOpenHandleOrThrow'
 // and this one does not merely compute a wrong number, it becomes `osReadFile`/`osWriteFile`'s LENGTH, where
 // DWORD truncation reads it as an enormous unsigned count.
 //
+// ⚠ **EXPORTED FOR THE SOCKET FAMILY**, whose `sendFrom` bounds `offset + length` against the same byte
+// CAPACITY and whose `recv` fills up to it. The conversion — and the SIGNED `element_size@24` trap above —
+// is one fact about the `Array` record, not one about files.
+//
 // ⚠ **NO PACKED RECORD CAN REACH HERE TODAY, AND THAT IS EXACTLY WHY THIS SITE ASKS RATHER THAN ASSUMES.**
 // Both callers are gated by `Parser.requireManagedMemoryValue` → `valueIsByteArray` →
 // `ProgramSignatures.isBytePackedArrayInstance`, which is `element_size == 1` and so false for every packed
 // stride. That is a real guarantee — and it lives in two OTHER files, where nothing points at this
 // arithmetic. Asking the shared formula costs one call, is byte-identical for every positive stride, and
 // does not depend on a front-end predicate staying exactly as strict as it is now.
-function emitArrayByteExtent(module StdModule, block IrBlock, arrRec ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+export function emitArrayByteExtent(module StdModule, block IrBlock, arrRec ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let count = emitLoadField(module, block: block, record: arrRec, offset: offset, ids: ids)
 	let es = emitLoadField(module, block: block, record: arrRec, offset: ManagedRecordElementSizeOffset, ids: ids)
 	return emitElementByteLen(module, block: block, count: count, es: es, ids: ids)
@@ -531,7 +541,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	// them. The error is captured BEFORE the free (rather than re-read on the failure branch) so nothing
 	// between the call and the classification can be allowed to disturb it.
 	let handle = ids.mint()
-	emitFilesystemYield(module, block: afterCopy, ids: ids)
+	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
 	match mode 'op'
 		read then module.appendOp(afterCopy, op: StdOp.osFileOpenRead(handle, pathPtrId: scratch))
 		write then module.appendOp(afterCopy, op: StdOp.osFileOpenWrite(handle, pathPtrId: scratch))
@@ -581,7 +591,7 @@ function buildManagedFileClose(module StdModule)
 	let alreadyClosed = emitCmp(module, block: entry, a: handle, b: closedConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(alreadyClosed, thenBlockId: done.id, elseBlockId: doClose.id))
 
-	emitFilesystemYield(module, block: doClose, ids: ids)
+	emitIoPark(module, block: doClose, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(doClose, op: StdOp.osFileClose(handle))
 	let zero = emitConst(module, block: doClose, value: ManagedFileClosedHandle, ids: ids)
 	module.appendOp(doClose, op: StdOp.storeIndirect(box, offset: ManagedFileHandleOffset, valueId: zero, valueType: StdType.i64))
@@ -650,7 +660,7 @@ function buildManagedFileSize(module StdModule)
 
 	let out = emitWin32OutWord(module, block: doSize, ids: ids)
 	let verdict = ids.mint()
-	emitFilesystemYield(module, block: doSize, ids: ids)
+	emitIoPark(module, block: doSize, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(doSize, op: StdOp.osFileSize(verdict, handleId: handle, sizeOutPtrId: out))
 	emitWin32BoolOutcome(module, func: func, block: doSize, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileSizeFailedFlag, ids: ids)
 
@@ -665,17 +675,37 @@ end 'buildManagedFileSize'
 // test: `ReadFile`'s `nNumberOfBytesToRead` is a DWORD, so a negative i64 would arrive as an enormous
 // unsigned count and read off the end of the buffer.
 //
-// ⚠ **THE BOUND IS THE RECORD'S BYTE CAPACITY, AND A NON-OWNED BUFFER FAILS IT STRUCTURALLY.** A zero-copy
-// view or an `.rdata`-backed byte-string literal carries a NEGATIVE `capacity@16` (the `BufferOwnership`
-// encoding), so any positive `size` is above it and the read is refused rather than writing through a
-// buffer somebody else is reading — which is the answer that path wants, since a read into a shared buffer
-// would silently rewrite the parent's bytes. Only `__ManagedMemory.create` makes a buffer this may fill.
+// ⛔⛔ **THE BOUND IS THE RECORD'S BYTE CAPACITY, AND IT CANNOT REFUSE A NON-OWNED BUFFER — THIS HEADER
+// CLAIMED THE OPPOSITE, AND THE CLAIM WAS FALSE FOR AS LONG AS IT STOOD.** It said a zero-copy view or an
+// `.rdata`-backed literal "FAILS IT STRUCTURALLY", because such a record carries a NEGATIVE `capacity@16`
+// (the `BufferOwnership` encoding) and every positive `size` is therefore above it. The negative never
+// reaches the comparison: `emitArrayByteExtent` → `emitElementByteLen` → `emitBitsToBytes` ends in a
+// LOGICAL shift right, so `capacity = -1` arrives as `0x1FFFFFFFFFFFFFFF` — enormous and POSITIVE, and
+// every `size` below 2^61 is UNDER it and accepted. **MEASURED on this tree before the fix: a 24-byte
+// `read` into a 4-byte zero-copy view over a heap `Array` was ACCEPTED, answered `bytesRead = 24`, and
+// `ReadFile` rewrote the parent's four bytes plus 20 more past the end of its allocation.** The identical
+// premise was copied into the socket runtime's `sendFrom` and caught there the same way.
+//
+// ⇒ **THE OWNERSHIP QUESTION IS ASKED BY ITS OWN TEST, AND IT IS `emitRefuseNonOwnedFillTarget` —
+// `emitBufferNotOwned`'s guard, shared with `__ms_recv`, which fills a caller's buffer from the kernel for
+// the same reasons.** A `read` is a WRITE into memory the caller handed in: of the four non-owned
+// provenances one is a READ-ONLY `.rdata` image page and the other three are bytes somebody else is still
+// reading. Only a buffer the record OWNS may be filled — `__ManagedMemory.create`'s, or one a mutator has
+// already detached.
+//
+// ⭐ **AND THE REFUSAL IS THE DOCUMENTED CONTRACT RATHER THAN A NEW RULE.** `specs/managed-file.md` says
+// *"throws `readFailed` if `size > managed.capacity`"*, and `managed.capacity()` hands `capacity@16` to
+// user code unchanged (`__managed_capacity`) — so for a non-owned record the observable capacity is a
+// NEGATIVE sentinel and EVERY `size >= 0` is above it, `0` included. That is exactly what this guard now
+// does. The byte conversion stays for the OWNED bound, where an Array counts ELEMENTS and a file counts
+// BYTES (`emitArrayByteExtent`); what it may not also do is answer the ownership question.
 function buildManagedFileRead(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var checkLow = module.addBlock(func, label: b"mfchklo")
+	var checkOwned = module.addBlock(func, label: b"mfchkown")
 	var checkCap = module.addBlock(func, label: b"mfchkcap")
 	var tooBig = module.addBlock(func, label: b"mfbig")
 	var doRead = module.addBlock(func, label: b"mfrd")
@@ -690,8 +720,14 @@ function buildManagedFileRead(module StdModule)
 
 	let zero = emitConst(module, block: checkLow, value: 0, ids: ids)
 	let negative = emitCmp(module, block: checkLow, a: size, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(checkLow, op: StdOp.condBranch(negative, thenBlockId: tooBig.id, elseBlockId: checkCap.id))
+	module.setTerminator(checkLow, op: StdOp.condBranch(negative, thenBlockId: tooBig.id, elseBlockId: checkOwned.id))
 
+	// The sign test reads only the ARGUMENT, so it comes first; the ownership test reads the RECORD and must
+	// clear before the capacity below is treated as a count at all. All three leave through one exit — the
+	// enum has a single `readFailed` variant and none of the three is a different complaint to a caller.
+	emitRefuseNonOwnedFillTarget(module, block: checkOwned, record: arrRec, refuse: tooBig, fill: checkCap, ids: ids)
+
+	// The buffer is OWNED here, so `capacity@16` is a real count and its byte extent is non-negative.
 	let byteCapacity = emitArrayByteExtent(module, block: checkCap, arrRec: arrRec, offset: ManagedRecordCapacityOffset, ids: ids)
 	let overCapacity = emitCmp(module, block: checkCap, a: size, b: byteCapacity, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(checkCap, op: StdOp.condBranch(overCapacity, thenBlockId: tooBig.id, elseBlockId: doRead.id))
@@ -701,7 +737,7 @@ function buildManagedFileRead(module StdModule)
 	let buffer = emitLoadField(module, block: doRead, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
 	let out = emitWin32OutWord(module, block: doRead, ids: ids)
 	let verdict = ids.mint()
-	emitFilesystemYield(module, block: doRead, ids: ids)
+	emitIoPark(module, block: doRead, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(doRead, op: StdOp.osReadFile(verdict, handleId: handle, bufId: buffer, lenId: size, bytesOutPtrId: out))
 	emitWin32BoolOutcome(module, func: func, block: doRead, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileReadFailedFlag, ids: ids)
 
@@ -714,6 +750,20 @@ end 'buildManagedFileRead'
 // method writes `managed`'s live extent, so the byte count is what `length@8` elements occupy at
 // `element_size@24` (`emitArrayByteExtent`), read off the record. A caller that wants fewer bytes calls `setLength` first, which is exactly what
 // `managed-file.write-and-read` does on the read side.
+//
+// ⭐⭐ **IT DELIBERATELY HAS NO `emitRefuseNonOwnedFillTarget`, AND THAT IS NOT THE READ PATH'S OMISSION.**
+// The two differ in the DIRECTION of the transfer, which is the whole of it: `read` hands the kernel a
+// pointer to WRITE THROUGH, so a buffer the record does not own is a read-only image page or somebody
+// else's live bytes; `write` hands it a pointer to READ FROM, and every provenance's bytes are readable —
+// that is what makes a byte-string literal or a zero-copy view a legal thing to write out at all. Refusing
+// non-owned here would refuse `File.writeText("…")`, whose content buffer is a view over the literal's
+// blob, and take `file-io.md` red with it.
+//
+// ⭐ **AND ITS EXTENT IS `length@8`, WHICH IS NEVER A SENTINEL.** The negative values the `BufferOwnership`
+// encoding uses live in `capacity@16` alone; `length@8` is a real element count for an owner, for a view
+// (its window), for an inline String and for an `.rdata` blob. So the logical-shift trap that made the read
+// path's capacity bound useless has no counterpart here — this site reads the one field that cannot carry a
+// provenance marker.
 function buildManagedFileWrite(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileWriteName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(2)
@@ -732,7 +782,7 @@ function buildManagedFileWrite(module StdModule)
 	let byteLength = emitArrayByteExtent(module, block: doWrite, arrRec: arrRec, offset: ManagedRecordLengthOffset, ids: ids)
 	let out = emitWin32OutWord(module, block: doWrite, ids: ids)
 	let verdict = ids.mint()
-	emitFilesystemYield(module, block: doWrite, ids: ids)
+	emitIoPark(module, block: doWrite, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(doWrite, op: StdOp.osWriteFile(verdict, handleId: handle, bufId: buffer, lenId: byteLength, bytesOutPtrId: out))
 	emitWin32BoolOutcome(module, func: func, block: doWrite, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileWriteFailedFlag, ids: ids)
 
@@ -764,7 +814,7 @@ function buildManagedFileExists(module StdModule)
 	let dataSize = emitConst(module, block: afterCopy, value: FindDataBytes, ids: ids)
 	let findData = emitRawAlloc(module, block: afterCopy, byteCount: dataSize, ids: ids)
 	let search = ids.mint()
-	emitFilesystemYield(module, block: afterCopy, ids: ids)
+	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osFileFindFirst(search, pathPtrId: scratch, findDataPtrId: findData))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
 	let invalidConst = emitConst(module, block: afterCopy, value: InvalidHandleValue, ids: ids)
@@ -821,7 +871,7 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 	let secondPath = emitOptionalSecondPath(module, func: func, cur: afterFirst, join: afterSecond, mode: mode, ids: ids)
 
 	let verdict = ids.mint()
-	emitFilesystemYield(module, block: afterSecond, ids: ids)
+	emitIoPark(module, block: afterSecond, operation: GtIoOperation.fileExists, ids: ids)
 	match mode 'op'
 		delete then module.appendOp(afterSecond, op: StdOp.osFileDelete(verdict, pathPtrId: firstPath))
 		rename then module.appendOp(afterSecond, op: StdOp.osFileRename(verdict, oldPathPtrId: firstPath, newPathPtrId: secondPath))
@@ -891,7 +941,7 @@ function buildManagedFileStat(module StdModule)
 	let dataSize = emitConst(module, block: afterCopy, value: FindDataBytes, ids: ids)
 	let findData = emitRawAlloc(module, block: afterCopy, byteCount: dataSize, ids: ids)
 	let search = ids.mint()
-	emitFilesystemYield(module, block: afterCopy, ids: ids)
+	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osFileFindFirst(search, pathPtrId: scratch, findDataPtrId: findData))
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
@@ -937,11 +987,15 @@ function buildManagedFileStat(module StdModule)
 	module.functions.push(func)
 end 'buildManagedFileStat'
 
-// One unsigned DWORD out of the find record — see `DwordMask` for why it is a word load and a mask rather
-// than a 4-byte access. ⚠ Not exported: R4.3 exported it for the directory family and the directory family
-// does not load a DWORD out of MEMORY — `__md_exists` masks a value `GetFileAttributesA` returned in a
-// REGISTER, which is `DwordMask` (exported) and no load at all.
-function emitLoadDword(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+// One unsigned DWORD out of a record — see `DwordMask` for why it is a word load and a mask rather than a
+// 4-byte access.
+//
+// ⚠ **EXPORTED WHEN THE SOCKET FAMILY BECAME THE FIRST SECOND CALLER THAT REALLY LOADS ONE.** R4.3 exported
+// it for the directory family and took it back: `__md_exists` masks a value `GetFileAttributesA` returned in
+// a REGISTER, which is `DwordMask` and no load at all. `__ms_tcp_connect` reads `sin_addr` — a genuine
+// 4-byte FIELD inside a `sockaddr` the OS filled — so it needs exactly this pair, and a second copy would be
+// free to disagree about whether the mask or the load came first.
+export function emitLoadDword(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let word = emitLoadField(module, block: block, record: record, offset: offset, ids: ids)
 	let mask = emitConst(module, block: block, value: DwordMask, ids: ids)
 	return emitBin(module, block: block, a: word, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)

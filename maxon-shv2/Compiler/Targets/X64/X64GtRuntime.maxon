@@ -408,6 +408,19 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// two on the stack — so it is the only one of this pair with a non-zero count.
 		PeekNamedPipe gives PeekPipeStackArgWords  // 6: hNamedPipe, lpBuffer, nBufferSize, lpBytesRead, lpTotalBytesAvail, lpBytesLeftThisMessage
 		TerminateProcess gives 0  // 2: hProcess, uExitCode
+		// ⭐ **THE EIGHT `ws2_32` SOCKET IMPORTS — EVERY ONE TAKES FOUR ARGUMENTS OR FEWER**, so every one
+		// passes entirely in registers and needs no stack words. That is not a coincidence worth relying on
+		// silently: `getaddrinfo`, `send` and `recv` sit exactly AT the four-register limit, so a future
+		// socket import with a fifth argument (`WSARecv`, `select`) must state its count here like
+		// `PeekNamedPipe` does, or the shim will hand it a frame too small and it will read the caller's.
+		WSAStartup gives 0  // 2: wVersionRequested, lpWSAData
+		getaddrinfo gives 0  // 4: pNodeName, pServiceName, pHints, ppResult
+		freeaddrinfo gives 0  // 1: pAddrInfo
+		socket gives 0  // 3: af, type, protocol
+		connect gives 0  // 3: s, name, namelen
+		send gives 0  // 4: s, buf, len, flags
+		recv gives 0  // 4: s, buf, len, flags
+		closesocket gives 0  // 1: s
 	end 'k'
 end 'gtShimStackArgWordsOf'
 

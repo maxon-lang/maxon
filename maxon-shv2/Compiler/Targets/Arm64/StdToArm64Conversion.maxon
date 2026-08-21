@@ -479,9 +479,10 @@ type StdToArm64Lowering
 			// A frame address computes an address; it calls nothing and so passes no outgoing argument.
 			stackRecordAddr gives 0
 			osOpenNamedSegment to osTickCountMs gives 0
-			// The four attached-subprocess host primitives are x64-windows only and never reach an arm64
-			// frame; they reserve nothing here for the same reason every other refused op does.
-			osHandleSetInherit to osProcessTerminate gives 0
+			// The rest of the appended band — the four attached-subprocess host primitives AND the `ws2_32` socket band — is x64-windows
+			// only and never reaches an arm64 frame; it reserves nothing here for the same reason every other
+			// refused op does.
+			osHandleSetInherit to osSocketClose gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -644,6 +645,7 @@ type StdToArm64Lowering
 			// reaches one at its own source span (E3104) — so this is the backstop for a compiler bug that got
 			// past that gate, never the user-facing rejection.
 			osHandleSetInherit to osProcessTerminate then panic("lowerStdToArm64: the attached-subprocess host primitives are x64-windows only — the subprocess substrate is x64-windows-gated, and SemanticCheck refuses such a program at its source span (E3104)")
+			osSocketStartup to osSocketClose then panic("lowerStdToArm64: the socket host primitives are x64-windows only — `ws2_32` is a Win32 library, and SemanticCheck refuses such a program at its own source span (E3104), so reaching here is a compiler bug that got one past that gate rather than the user-facing rejection")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -694,6 +696,7 @@ type StdToArm64Lowering
 			stackRecordAddr then panic("lowerStdToArm64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
 			osOpenNamedSegment to osTickCountMs then panic("lowerStdToArm64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops; they are also x64-windows only)")
 			osHandleSetInherit to osProcessTerminate then panic("lowerStdToArm64: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops; they are also x64-windows only)")
+			osSocketStartup to osSocketClose then panic("lowerStdToArm64: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

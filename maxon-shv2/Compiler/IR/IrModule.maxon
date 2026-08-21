@@ -71,6 +71,36 @@ export type IrModule uses Op
 	// nothing has a byte-identical import table.
 	export var usesSubprocess as bool = false
 
+	// ⭐ **DOES THIS IMAGE REACH THE SOCKET RUNTIME?** Set by the `__ms_` prefix scan, and read in exactly
+	// one place — the PE writer's `dllIsEmitted`, which decides whether the image carries a `ws2_32.dll`
+	// import directory entry at all.
+	//
+	// ⚠ **IT IS NOT `usesSubprocess`'s TWIN, AND THE DIFFERENCE IS THE GRANULARITY.** That bit gates a
+	// trailing BAND inside kernel32's run, so it shares one gate with `debugStream` (see
+	// `isOptionalTrailingImport`). This bit gates a WHOLE DLL, so it stands alone and nothing else may be
+	// folded into it: a traced or spawning program must not acquire a Winsock dependency it never uses.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that opens no
+	// socket has a byte-identical import table.
+	export var usesSockets as bool = false
+
+	// ⭐⭐ **THE ASYNC-TRACE TAG TABLE (`--async-trace`), AND IT IS A FIELD FOR `debugStream`'s REASON, ONE
+	// SIGNATURE OVER.** `__gt_io_park` prints the OPERATION its caller is parked in — `[file_exists]`,
+	// `[net_connect]` — so in a traced build it takes that suffix as two parameters and every one of its
+	// eighteen call sites passes them. Those sites are runtime builders in three OTHER files
+	// (`ManagedFileRuntime`, `ManagedDirectoryRuntime`, `ManagedSocketRuntime`), none of which is handed the
+	// green-thread install's tags. Threaded as an argument, a builder that failed to pass it along would not
+	// be a compile error: it would be a call whose ARGUMENT COUNT disagrees with the park's arity. Asked of
+	// the module — by the sites AND by `buildGtIoPark` — there is one answer and nothing to forget.
+	//
+	// Set once by `installGtRuntime` from the tags it registered, before it builds anything.
+	//
+	// ⚠ It defaults to the UNTRACED table, whose empty operation list is what `GtTraceTags.ioTag` reads as
+	// "no suffix" — so every `IrModule.create()` site is unchanged, the park keeps its zero arity and an
+	// ordinary build is byte-identical. The Maxon and Target modules carry the field and neither reads it,
+	// which is the price of one generic container that `debugStream` already records.
+	export var asyncTraceTags as GtTraceTags = GtTraceTags.none()
+
 	export static function create() returns Self
 		return Self{}
 	end 'create'

@@ -502,12 +502,17 @@ export let GtReschedName = b"__gt_resched"
 // the kernel call is not overlapped with them. Stated plainly because the trace pair (`io_yield [file_exists]`
 // … `io_resume [file_exists]`) must not be read as a claim that the syscall executed between those two lines.
 //
-// ⚠ **AND THE `[file_exists]` SUFFIX NAMES THE FAMILY, NOT THE OPERATION.** `__gt_io_park` takes no argument
-// and `emitFilesystemYield` passes none, so all fourteen `__mf_*`/`__md_*` park sites emit the one suffix
-// `buildGtIoPark` was written with: a `File.write` traces as `[file_exists]` too. Naming the actual operation
-// means threading an identity from each site through the park (a parameter, plus a `.rdata` tag per member)
-// AND re-pinning the trace text, which `specs/async-await.md`'s `trace-yield` case fixes — so it is a change
-// to that spec's contract, not a tidy-up. Read the suffix as "parked in the filesystem band".
+// ⭐⭐ **THE SUFFIX NAMES THE OPERATION, AND IT IS THE CALL SITE THAT SAYS WHICH — see `GtIoOperation`.** In a
+// TRACED build `__gt_io_park` takes the suffix as a `(ptr, len)` pair and both its trace lines write whatever
+// the site handed in, so a socket connect reports `[net_connect]` while a `File.exists` reports
+// `[file_exists]` on the same green thread's timeline. The pair is what `specs-shv2/async-tcp.md`'s
+// `trace-mixed-io` case asserts, and it is why the tag may not be a per-thread or per-family word: those two
+// parks happen inside ONE green thread, one after the other.
+//
+// ⚠ **IN AN UNTRACED BUILD THE FUNCTION TAKES NO ARGUMENT AT ALL**, exactly as it did before the suffix
+// existed — the arity follows `asyncTrace`, so a normal program's park sites emit one argument-less call and
+// its image is byte-identical. That is the same compile-time gating the six trace SITES already take (see
+// `GtTraceEmitName`), applied to a signature rather than to a call.
 //
 // ⭐ **WHY THE TIMER PARK AND NOT `__gt_resched`.** They are different promises. `Runtime.yield()` is "let
 // someone else have a turn IF anyone wants one", so its run-queue handoff correctly degenerates to a poll and
@@ -518,8 +523,9 @@ export let GtReschedName = b"__gt_resched"
 export let GtIoParkName = b"__gt_io_park"
 
 // ⭐⭐ **THE ASYNC TRACE (`--async-trace`).** `__gt_trace_emit(tagRecord, value, suffixRecord)` prints one line
-// — `<tag><value><suffix?>\n` — to stderr, and the four sites that call it (`spawn #`, `io_yield #`,
-// `io_resume #`, `await #`) are what `specs/async-await.md`'s `trace-yield` case pins.
+// — `<tag><value><suffix?>\n` — to stderr, and the six sites that call it (`spawn #`, `io_yield #`,
+// `io_resume #`, `sleep_yield #`, `sleep_resume #`, `await #`) are what `specs/async-await.md`'s `trace-yield`
+// and `specs/http-client.md`'s `async-trace-interleave` cases pin between them.
 //
 // ⭐ **THE TRACE CALLS ARE GATED AT COMPILE TIME, NOT BY A RUNTIME FLAG WORD.** v1 bakes an
 // `__at_trace_enabled` global and branches on it at every site; shv2 simply does not EMIT the calls unless the
@@ -528,8 +534,8 @@ export let GtIoParkName = b"__gt_io_park"
 //
 // ⚠ **A YIELD IS NOT TRACED, AND THAT IS A DECISION RATHER THAN AN OMISSION.** `Runtime.yield()` /
 // `__gt_resched` emits nothing, so a yield storm is invisible to `--async-trace`. That IS a real debugging
-// hole and worth closing later. It is not closed here because no spec pins a yield tag, and inventing a fifth
-// tag beside the four that ARE pinned would mean landing an untested spelling next to the tested ones — the
+// hole and worth closing later. It is not closed here because no spec pins a yield tag, and inventing a seventh
+// tag beside the six that ARE pinned would mean landing an untested spelling next to the tested ones — the
 // bootstrap has the same gap on its side (`maxon_yield` emits no tags), so closing it is one change across
 // both compilers with a case to hold it, not a rider on this one.
 let GtTraceEmitName = b"__gt_trace_emit"
@@ -538,18 +544,81 @@ let GtTraceEmitName = b"__gt_trace_emit"
 // they are raw `.rdata` bytes rather than String records (see `GtTraceTag`).
 let GtTraceEmitArity = 5
 
+// `__gt_io_park`'s arity IN A TRACED BUILD: the operation suffix, as the same `(ptr, len)` pair `.rdata` text
+// travels in everywhere else here. An UNTRACED park takes zero — see `buildGtIoPark`.
+let IoParkSuffixArity = 2 as ParamCount
+
 // The tag TEXTS, spelled once. Each becomes an immortal `.rdata` String record whose label the emitting sites
 // carry (`GtTraceTags`). They are the wire format the spec compares against, so a change here is a change to
 // what `trace-yield` asserts.
 let GtTraceSpawnText = b"spawn #"
 let GtTraceAwaitText = b"await #"
+
+// ⭐ **`try await` HAS ITS OWN TAG, BECAUSE IT IS ITS OWN DRIVER.** `__gt_await` and `__gt_try_await` are two
+// entry points (`buildGtAwaitDriver`'s `throwing` selects between them), the references print two spellings,
+// and both `specs-shv2/async-tcp.md`'s trace cases pin `try_await #` against `async-await.md`'s `await #`.
+// One tag for both would make the trace unable to say which of the two a program took.
+let GtTraceTryAwaitText = b"try_await #"
+
 let GtTraceIoYieldText = b"io_yield #"
 let GtTraceIoResumeText = b"io_resume #"
+
+// ⭐⭐ **`sleep(ms)` HAS ITS OWN PAIR, AND IT IS NOT THE I/O PAIR.** A timer park and an I/O park take the same
+// exit (`emitGtParkOnDeadline`), so spelling both `io_yield` would make a trace unable to say whether a green
+// thread is waiting on the clock or on the disk — and `specs/http-client.md`'s `async-trace-interleave` reads
+// exactly that distinction, pinning `sleep_yield #0` from `main`'s own `sleep(100)` beside `io_yield #1
+// [net_connect]` from the fibre it spawned. The spellings are the BOOTSTRAP's, to the byte
+// (`maxon-sharp/Compiler/MLIR/X86CodeEmitter.Runtime.cs:3313`, and the arm64 emitter's copy at
+// `ARM64CodeEmitter.Runtime.cs:2751`).
+//
+// ⚠ **NO SUFFIX, WHERE AN I/O PARK HAS ONE.** `[net_connect]` answers "which operation" — a question a
+// sleep does not have, because a sleep IS the operation. So the sleep lines take `GtTraceTag.absent()`, the
+// same no-suffix signal `spawn #` takes.
+let GtTraceSleepYieldText = b"sleep_yield #"
+let GtTraceSleepResumeText = b"sleep_resume #"
 let GtTraceYieldSuffixText = b" [yield]"
 let GtTraceImmediateSuffixText = b" [immediate]"
-let GtTraceFileExistsSuffixText = b" [file_exists]"
 let GtTraceNewlineText = b"
 "
+
+// The five I/O-operation suffixes, beside the rest of the wire format for that block's reason. Which one a
+// park prints is `GtIoOperation`'s question; these are the bytes it answers with.
+let GtTraceFileExistsSuffixText = b" [file_exists]"
+let GtTraceNetConnectSuffixText = b" [net_connect]"
+let GtTraceNetSendSuffixText = b" [net_send]"
+let GtTraceNetRecvSuffixText = b" [net_recv]"
+let GtTraceNetCloseSuffixText = b" [net_close]"
+
+// ⭐⭐ **THE I/O OPERATION A PARK SITE IS PARKED IN — the suffix `__gt_io_park` prints on both of its trace
+// lines.** It is a property of the CALL SITE and of nothing else: `trace-mixed-io` runs a `File.exists` and a
+// `TcpClient.connect` inside ONE green thread and asserts the two suffixes differ across that single
+// timeline, so a per-thread, per-runtime-install or per-callee-family tag cannot express it.
+//
+// ⚠ **THE WHOLE FILESYSTEM BAND SHARES `fileExists`, AND THAT IS THE PINNED SPELLING RATHER THAN AN
+// OVERSIGHT.** All fourteen `__mf_*`/`__md_*` park sites name this case, so a `File.write` still traces
+// `[file_exists]` — every committed expectation that mentions a filesystem park (`async-await.md`'s
+// `trace-yield`, `async-tcp.md`'s `trace-mixed-io`) spells it that way, and giving `__mf_write` a
+// `[file_write]` of its own would be minting a spelling no spec has. Splitting the band is a spec change; the
+// MECHANISM here is already per-site, so it is one word per site when a spec asks for it.
+export enum GtIoOperation
+	fileExists
+	netConnect
+	netSend
+	netRecv
+	netClose
+end 'GtIoOperation'
+
+// The suffix text each operation prints. The ONE place an operation is spelled — `registerIoOperationTags`
+// reads it for every case, so a new case cannot be added without one.
+function ioOperationSuffixText(operation GtIoOperation) returns ByteArray
+	return match operation 'operation'
+		fileExists gives GtTraceFileExistsSuffixText
+		netConnect gives GtTraceNetConnectSuffixText
+		netSend gives GtTraceNetSendSuffixText
+		netRecv gives GtTraceNetRecvSuffixText
+		netClose gives GtTraceNetCloseSuffixText
+	end 'operation'
+end 'ioOperationSuffixText'
 
 // The `.rdata` label prefix every async-trace tag is interned under.
 let GtTraceTagPrefix = "__at_tag_"
@@ -579,40 +648,94 @@ type GtTraceTag
 	end 'absent'
 end 'GtTraceTag'
 
+export typealias GtTraceTagArray = Array with GtTraceTag
+
 // The registered tags, resolved ONCE per build and handed to the sites that emit.
-type GtTraceTags
+export type GtTraceTags
 	export let spawn as GtTraceTag
 	export let awaitTag as GtTraceTag
+	export let tryAwaitTag as GtTraceTag
 	export let ioYield as GtTraceTag
 	export let ioResume as GtTraceTag
+	export let sleepYield as GtTraceTag
+	export let sleepResume as GtTraceTag
 	export let yieldSuffix as GtTraceTag
 	export let immediateSuffix as GtTraceTag
-	export let fileExistsSuffix as GtTraceTag
+
+	// The I/O-operation suffixes, INDEXED BY `GtIoOperation.ordinal` — see `registerIoOperationTags` for why
+	// an array rather than one field per case: the enum is then the only place an operation's existence and
+	// its position are written down. EMPTY in an untraced build, which is what `ioTag` reads as "no suffix".
+	export let ioOperations as GtTraceTagArray
+
 	export let newline as GtTraceTag
 
 	export static function register(globalData GlobalDataTable) returns GtTraceTags
 		return Self{
 			spawn: registerGtTraceTag(globalData, text: GtTraceSpawnText),
 			awaitTag: registerGtTraceTag(globalData, text: GtTraceAwaitText),
+			tryAwaitTag: registerGtTraceTag(globalData, text: GtTraceTryAwaitText),
 			ioYield: registerGtTraceTag(globalData, text: GtTraceIoYieldText),
 			ioResume: registerGtTraceTag(globalData, text: GtTraceIoResumeText),
+			sleepYield: registerGtTraceTag(globalData, text: GtTraceSleepYieldText),
+			sleepResume: registerGtTraceTag(globalData, text: GtTraceSleepResumeText),
 			yieldSuffix: registerGtTraceTag(globalData, text: GtTraceYieldSuffixText),
 			immediateSuffix: registerGtTraceTag(globalData, text: GtTraceImmediateSuffixText),
-			fileExistsSuffix: registerGtTraceTag(globalData, text: GtTraceFileExistsSuffixText),
+			ioOperations: registerIoOperationTags(globalData),
 			newline: registerGtTraceTag(globalData, text: GtTraceNewlineText)
 		}
 	end 'register'
 
 	// The tags an UNTRACED build carries: none. No rdata is registered and no site emits.
 	export static function none() returns GtTraceTags
-		return Self{spawn: GtTraceTag.absent(), awaitTag: GtTraceTag.absent(), ioYield: GtTraceTag.absent(), ioResume: GtTraceTag.absent(), yieldSuffix: GtTraceTag.absent(), immediateSuffix: GtTraceTag.absent(), fileExistsSuffix: GtTraceTag.absent(), newline: GtTraceTag.absent()}
+		return Self{spawn: GtTraceTag.absent(), awaitTag: GtTraceTag.absent(), tryAwaitTag: GtTraceTag.absent(), ioYield: GtTraceTag.absent(), ioResume: GtTraceTag.absent(), sleepYield: GtTraceTag.absent(), sleepResume: GtTraceTag.absent(), yieldSuffix: GtTraceTag.absent(), immediateSuffix: GtTraceTag.absent(), ioOperations: GtTraceTagArray.create(), newline: GtTraceTag.absent()}
 	end 'none'
+
+	// ⭐ **THE ONE ANSWER TO "WHAT SUFFIX DOES THIS PARK PRINT?"** — and it is also how a park site asks
+	// whether the build is traced at all: an untraced build registered no operation tags, so the ABSENT tag
+	// comes back, and `GtTraceTag.absent()`'s zero length is already this file's "no suffix" signal
+	// (`emitGtTraceLine` tests exactly it). No suffix text is empty, so the two can never be confused.
+	export function ioTag(operation GtIoOperation) returns GtTraceTag
+		if not self.tracesIoOperations() 'untracedBuild'
+			return GtTraceTag.absent()
+		end 'untracedBuild'
+		return try self.ioOperations.get(operation.ordinal) otherwise panic("GtTraceTags.ioTag: no registered tag at ordinal {operation.ordinal} for '{operation.name}' — registerIoOperationTags walks GtIoOperation.allCases, so a gap here means the array was built somewhere else")
+	end 'ioTag'
+
+	// ⭐⭐ **THE ONE FACT `__gt_io_park`'s SIGNATURE AND ITS CALL SITES BOTH READ.** The park takes a suffix
+	// pair exactly when there is a suffix to hand it, so the builder's ARITY and the sites' ARGUMENT COUNT
+	// are the same question asked twice — and asked of one place, they cannot disagree. Answered twice (a
+	// `asyncTrace` bool over here, a registered-tag test over there) a build could emit argument-less calls
+	// into a two-parameter park, which is not a wrong trace but a wrong FRAME.
+	export function tracesIoOperations() returns bool
+		return self.ioOperations.count() != 0
+	end 'tracesIoOperations'
 end 'GtTraceTags'
 
 // One tag's bytes, interned in `.rdata` and deduped by content like every other rdata constant.
 function registerGtTraceTag(globalData GlobalDataTable, text ByteArray) returns GtTraceTag
 	return GtTraceTag.create(globalData.registerRdataConstant(GtTraceTagPrefix, bytes: text).toByteArray(), length: text.count() as ParsedInt)
 end 'registerGtTraceTag'
+
+// ⭐ The operation suffixes in `GtIoOperation` ORDINAL ORDER, because the walk IS `allCases` — the enum's
+// declaration order is the array's index order by construction, so the two cannot drift the way a hand-written
+// list of pushes beside a hand-written enum can. Adding an operation is one case plus one arm of
+// `ioOperationSuffixText`; nothing here has to be remembered as well.
+//
+// ⛔ **AN EMPTY SUFFIX TEXT IS REFUSED HERE, BECAUSE ZERO LENGTH ALREADY MEANS SOMETHING ELSE.**
+// `GtTraceTag.absent()` spells "this line has no suffix" as a zero length, and `emitGtTraceLine` tests exactly
+// that — so a registered empty suffix would be a tag that IS registered and reads as absent. The panic keeps
+// that collision impossible instead of leaving it to every future operation's author to notice.
+function registerIoOperationTags(globalData GlobalDataTable) returns GtTraceTagArray
+	var tags = GtTraceTagArray.create()
+	for operation in GtIoOperation.allCases 'eachOperation'
+		let text = ioOperationSuffixText(operation)
+		if text.count() == 0 'emptySuffix'
+			panic("registerIoOperationTags: '{operation.name}' registers an EMPTY suffix text — a zero length is `GtTraceTag.absent()`'s no-suffix signal, so a registered empty suffix is a tag that reads as absent")
+		end 'emptySuffix'
+		tags.push(registerGtTraceTag(globalData, text: text))
+	end 'eachOperation'
+	return tags
+end 'registerIoOperationTags'
 
 // ⭐ **EXPORTED BECAUSE THE FRONT END TARGETS IT DIRECTLY** — `__Builtins.currentTimeNanos()` and
 // `currentTimeMs()` lower to a call to THIS function rather than to a monotonic clock of their own
@@ -880,7 +1003,7 @@ end 'isThrowingGtRuntimeCallee'
 // belonged: `managedMemorySourceMethodName` names `__ManagedMemory.byteAt`, and after the retirement that
 // IS the construct the author wrote.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingManagedMemoryRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
+	return isThrowingManagedMemoryRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingManagedSocketRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -919,6 +1042,20 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	if isThrowingManagedDirectoryRuntimeCallee(callee) 'directoryFamily'
 		return managedDirectoryThrows()
 	end 'directoryFamily'
+
+	// THE SOCKET FAMILY, ADDED WITH THE CASES THAT NEED IT - exactly as the note above prescribes.
+	// `specs-shv2/managed-socket.md`'s `connect-bad-host` and `connect-refused` BIND the error and
+	// discriminate `resolveFailed` from `connectFailed`, so this family's ordinals are a checked claim rather
+	// than an untested one. Without this arm `throwsOf` answers `none`, `tryErrorEnumType` types the `(e)`
+	// binding `integer`, and `match e` reports a MISSING FEATURE for a program whose feature is present - the
+	// defect R4.1 and R4.2 each paid for once.
+	//
+	// It asks the THROWING predicate rather than `isManagedSocketRuntimeCallee`, for the directory arm's
+	// reason: `__ms_close` is `__ms_`-prefixed and does not throw, and typing a non-throwing callee's clause
+	// as `throwing` is exactly what makes `try` required on a call that cannot fail (E3055).
+	if isThrowingManagedSocketRuntimeCallee(callee) 'socketFamily'
+		return managedSocketThrows()
+	end 'socketFamily'
 
 	if isManagedMemoryMemberCallee(callee) 'memoryFamily'
 		return managedMemoryThrows()
@@ -1040,7 +1177,7 @@ end 'RuntimeCalleeSourceMethod'
 // binary, triggered by source nobody has written yet.
 //
 // ⇒ **Each family's install-time drift guard now ASKS ITS OWN MAP for every throwing callee it installed**
-// (`installManagedFileRuntime`, `installManagedDirectoryRuntime`, and
+// (`installManagedFileRuntime`, `installManagedDirectoryRuntime`, `installManagedSocketRuntime`, and
 // `ManagedMemoryRuntime.verifyThrowingAccessorsMatchPredicate` for the buffer members). A missing arm is the map's
 // own `panic`, fired at INSTALL of any program that uses the family — which the spec suite does on every
 // run — instead of at a user's missing `try`. The builder set is already held equal to the predicate in
@@ -1078,6 +1215,12 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	if isThrowingManagedDirectoryRuntimeCallee(callee) 'directoryFamily'
 		return RuntimeCalleeSourceMethod.found(managedDirectorySourceMethodName(callee))
 	end 'directoryFamily'
+
+	// The socket family - three callees, three distinct spellings the author writes, so it is the
+	// several-names map shape rather than the `Character` family's one-name identity.
+	if isThrowingManagedSocketRuntimeCallee(callee) 'socketFamily'
+		return RuntimeCalleeSourceMethod.found(managedSocketSourceMethodName(callee))
+	end 'socketFamily'
 
 	// ⚠ The file family answers the union DIRECTLY where its three siblings answer a NAME the composer wraps,
 	// and the asymmetry is a fact about the families rather than a style drift: `__mf_open_write` is reached
@@ -1232,6 +1375,13 @@ end 'ioRuntimeGlobals'
 export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesIocp bool, usesStreaming bool)
 	// The tag records exist only in a traced build; an untraced one registers no rdata and emits no calls.
 	let tags = GtTraceTags.register(globalData) if asyncTrace else GtTraceTags.none()
+
+	// ⭐ Published on the MODULE before anything is built, because the nineteen `__gt_io_park` CALL SITES
+	// live in three other files and cannot be handed the table: `emitIoPark` asks the module for the suffix its
+	// operation prints, and `buildGtIoPark` asks the same field for the arity to receive it in. Threaded as an
+	// argument instead, a park site added later that did not pass it along would emit a call with the WRONG
+	// ARGUMENT COUNT rather than a compile error — the same reasoning `IrModule.debugStream` records.
+	module.asyncTraceTags = tags
 	if asyncTrace 'traceEmitter'
 		buildGtTraceEmit(module, tags: tags)
 	end 'traceEmitter'
@@ -1247,14 +1397,14 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags)
 	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true, asyncTrace: asyncTrace, tags: tags)
 	buildGtPromiseDrop(module, usesIocp: usesIocp)
-	buildGtSleep(module)
+	buildGtSleep(module, asyncTrace: asyncTrace, tags: tags)
 	buildGtProcAdd(module)
 	buildGtProcCount(module)
 	buildGtProcCheck(module, usesIocp: usesIocp)
 	// After the two checkers it polls (`__gt_timer_check` / `__gt_proc_check`), so the install order reads in
 	// dependency order like the rest of this list.
 	buildGtResched(module)
-	buildGtIoPark(module, asyncTrace: asyncTrace, tags: tags)
+	buildGtIoPark(module)
 	buildGtProcessRun(module)
 
 	if usesIocp 'io'
@@ -2352,15 +2502,21 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asy
 	// The trace line, on whichever arm the entry status chose. An UNTRACED build takes none of this and its
 	// emitted code is byte-identical to one built before the trace existed — `cur` stays `entry`, and no id is
 	// minted on the way here (see the guard above).
+	//
+	// ⭐ **THE TAG FOLLOWS `throwing`, WHICH IS THE ONE THING THAT ALREADY TELLS THESE TWO DRIVERS APART.**
+	// `await` prints `await #` and `try await` prints `try_await #`, so a trace says which of the two entry
+	// points a program took rather than collapsing them (`specs-shv2/async-tcp.md`'s cases pin the second
+	// spelling against `async-await.md`'s first).
+	let awaitTag = tags.tryAwaitTag if throwing else tags.awaitTag
 	var cur = entry
 	if asyncTrace 'emitAwaitTrace'
 		var immediateBlock = module.addBlock(func, label: b"awaitimm")
 		var yieldedBlock = module.addBlock(func, label: b"awaityield")
 		let joinBlock = module.addBlock(func, label: b"awaitjoin")
 		module.setTerminator(entry, op: StdOp.condBranch(alreadyDone, thenBlockId: immediateBlock.id, elseBlockId: yieldedBlock.id))
-		emitGtTraceLine(module, block: immediateBlock, traced: asyncTrace, tag: tags.awaitTag, gtId: awaitedTraceId, suffix: tags.immediateSuffix, ids: ids)
+		emitGtTraceLine(module, block: immediateBlock, traced: asyncTrace, tag: awaitTag, gtId: awaitedTraceId, suffix: tags.immediateSuffix, ids: ids)
 		module.setTerminator(immediateBlock, op: StdOp.branch(joinBlock.id))
-		emitGtTraceLine(module, block: yieldedBlock, traced: asyncTrace, tag: tags.awaitTag, gtId: awaitedTraceId, suffix: tags.yieldSuffix, ids: ids)
+		emitGtTraceLine(module, block: yieldedBlock, traced: asyncTrace, tag: awaitTag, gtId: awaitedTraceId, suffix: tags.yieldSuffix, ids: ids)
 		module.setTerminator(yieldedBlock, op: StdOp.branch(joinBlock.id))
 		cur = joinBlock
 	end 'emitAwaitTrace'
@@ -2954,7 +3110,7 @@ end 'emitGtProcStoreRemove'
 // stack and switches back INTO it when its timer fires. A top-level GT0 has `waiter == 0`, so it cannot switch
 // away — it self-drives the scheduler (`__gt_drive_until(self, ready)`) until its own timer fires, which
 // degenerates to a plain `Sleep` when the run queue is empty (the sleep-basic case).
-function buildGtSleep(module StdModule)
+function buildGtSleep(module StdModule, asyncTrace bool, tags GtTraceTags)
 	var func = IrFunction.createFromStd(GtSleepName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -2978,7 +3134,11 @@ function buildGtSleep(module StdModule)
 	let deadline = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(deadline, lhs: now, rhs: msNs, opcode: StdBinOpcode.add, operandType: StdType.i64))
 
-	let resumed = emitGtParkOnDeadline(module, func: func, cur: entry, deadline: deadline, ids: ids)
+	// The trace pair BRACKETS the park, exactly as `__gt_io_park`'s does — same exit, different tag, and the
+	// tag is the only thing that tells a reader which kind of wait this green thread is in.
+	emitCurrentGtTraceLine(module, block: entry, traced: asyncTrace, tag: tags.sleepYield, ids: ids)
+	var resumed = emitGtParkOnDeadline(module, func: func, cur: entry, deadline: deadline, ids: ids)
+	emitCurrentGtTraceLine(module, block: resumed, traced: asyncTrace, tag: tags.sleepResume, ids: ids)
 	module.setTerminator(resumed, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -3280,7 +3440,7 @@ function buildGtTraceEmit(module StdModule, tags GtTraceTags)
 	module.setTerminator(withSuffix, op: StdOp.branch(doneBlock.id))
 
 	// The NEWLINE is part of the line, not of the caller: every trace site ends one, so ending it here is what
-	// keeps the four sites from each remembering to.
+	// keeps the six sites from each remembering to.
 	let newlineAddr = ids.mint()
 	module.appendOp(doneBlock, op: StdOp.rdataAddr(newlineAddr, label: tags.newline.label))
 	let newlineLen = ids.mint()
@@ -3301,10 +3461,6 @@ function emitGtTraceLine(module StdModule, block IrBlock, traced bool, tag GtTra
 		return
 	end 'untracedBuild'
 
-	let tagAddr = ids.mint()
-	module.appendOp(block, op: StdOp.rdataAddr(tagAddr, label: tag.label))
-	let tagLen = ids.mint()
-	module.appendOp(block, op: StdOp.const(tagLen, value: tag.length, valueType: StdType.i64))
 	let suffixAddr = ids.mint()
 	let suffixLen = ids.mint()
 	if suffix.length == 0 'noSuffix'
@@ -3313,6 +3469,19 @@ function emitGtTraceLine(module StdModule, block IrBlock, traced bool, tag GtTra
 		module.appendOp(block, op: StdOp.rdataAddr(suffixAddr, label: suffix.label))
 	end 'haveSuffix'
 	module.appendOp(block, op: StdOp.const(suffixLen, value: suffix.length, valueType: StdType.i64))
+	emitGtTraceLineOfSuffix(module, block: block, tag: tag, gtId: gtId, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
+end 'emitGtTraceLine'
+
+// ⭐ The same line with the suffix arriving as a `(ptr, len)` PAIR OF VALUES rather than as a compile-time
+// tag — which is what `__gt_io_park` has: its suffix is its own two PARAMETERS, chosen by whichever site
+// called it (see `GtIoOperation`). It carries no `traced` guard, because a runtime value can only exist in a
+// build that emitted the parameter holding it; the constant-suffix door above keeps the guard for the five
+// sites whose suffix is decided here.
+function emitGtTraceLineOfSuffix(module StdModule, block IrBlock, tag GtTraceTag, gtId ValueId, suffixAddr ValueId, suffixLen ValueId, ids ValueMinter)
+	let tagAddr = ids.mint()
+	module.appendOp(block, op: StdOp.rdataAddr(tagAddr, label: tag.label))
+	let tagLen = ids.mint()
+	module.appendOp(block, op: StdOp.const(tagLen, value: tag.length, valueType: StdType.i64))
 	var callArgs = ValueIdArray.create()
 	callArgs.push(tagAddr)
 	callArgs.push(tagLen)
@@ -3321,44 +3490,89 @@ function emitGtTraceLine(module StdModule, block IrBlock, traced bool, tag GtTra
 	callArgs.push(suffixLen)
 	let emitted = ids.mint()
 	module.appendOp(block, op: StdOp.call(emitted, callee: GtTraceEmitName, args: callArgs))
-end 'emitGtTraceLine'
+end 'emitGtTraceLineOfSuffix'
 
-// `__gt_io_park()` — the filesystem yield point. See `GtIoParkName` for what it does and does not promise, and
-// for why it parks rather than taking `__gt_resched`'s run-queue handoff.
-function buildGtIoPark(module StdModule, asyncTrace bool, tags GtTraceTags)
-	var func = IrFunction.createFromStd(GtIoParkName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
+// ⭐ **THE CURRENT GREEN THREAD'S TRACE ID — the `#N` every trace line prints.** Read out of the GT STRUCT at
+// the point of the line rather than carried across in a value, because a park's two lines sit either side of a
+// CONTEXT SWITCH and nothing in a register survives one — which is also why the id lives on the struct at all
+// (see `GtOffTraceId`). Both of `__gt_io_park`'s reads and both of `__gt_sleep`'s are this sequence; one
+// spelling, so a fifth reader cannot name the offset differently.
+function emitCurrentGtTraceId(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let curAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
+	let selfGt = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(selfGt, addrId: curAddr, offset: 0, valueType: StdType.i64))
+	let traceId = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(traceId, addrId: selfGt, offset: GtOffTraceId, valueType: StdType.i64))
+	return traceId
+end 'emitCurrentGtTraceId'
+
+// One `<tag><gtId>` line about the CURRENT green thread with NO operation suffix — the shape both of
+// `__gt_sleep`'s lines take.
+//
+// ⚠ **IT ASKS THE `traced` QUESTION BEFORE READING THE STRUCT, WHICH `buildGtIoPark` DOES NOT**, and the
+// difference is deliberate rather than an inconsistency: the park hoists its two reads above its guard because
+// they were there before the tags were, so an untraced park's image is what it always was. A sleep had no such
+// reads, so emitting them unconditionally would put three new ops into every untraced program that sleeps.
+// The `traced` it hands on to `emitGtTraceLine` is that same value travelling on, not a second answer to the
+// question — the two guards gate different things (a STRUCT READ here, a LINE there) off one fact.
+function emitCurrentGtTraceLine(module StdModule, block IrBlock, traced bool, tag GtTraceTag, ids ValueMinter)
+	if not traced 'untracedBuild'
+		return
+	end 'untracedBuild'
+
+	let gtId = emitCurrentGtTraceId(module, block: block, ids: ids)
+	emitGtTraceLine(module, block: block, traced: traced, tag: tag, gtId: gtId, suffix: GtTraceTag.absent(), ids: ids)
+end 'emitCurrentGtTraceLine'
+
+// `__gt_io_park(suffixPtr, suffixLen)` — the I/O yield point. See `GtIoParkName` for what it does and does not
+// promise, for why it parks rather than taking `__gt_resched`'s run-queue handoff, and for why the SUFFIX is a
+// pair of parameters in a traced build and no parameter at all in an untraced one.
+function buildGtIoPark(module StdModule)
+	// ⭐ The tags are asked of the MODULE rather than taken as a parameter, because the park's call sites —
+	// nineteen of them across three other files — have no way to be handed them and must ask the same
+	// question there (see `emitIoPark` and `GtTraceTags.tracesIoOperations`). One reader, one answer.
+	let tags = module.asyncTraceTags
+	let traced = tags.tracesIoOperations()
+
+	// The arity IS the gating: a traced park is handed its operation's suffix by the site that called it, an
+	// untraced one takes nothing and is byte-identical to the park built before the suffix existed.
+	var paramCount = 0 as ParamCount
+	var paramTypes = StdTypeArray.create()
+	if traced 'suffixParams'
+		paramCount = IoParkSuffixArity
+		paramTypes = twoI64Params()
+	end 'suffixParams'
+	var func = IrFunction.createFromStd(GtIoParkName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry")
+	if traced 'readSuffixParams'
+		emitParams(module, block: entry, count: paramCount)
+	end 'readSuffixParams'
+	let suffixAddr = 0 as ValueId
+	let suffixLen = 1 as ValueId
 
 	// Lazy one-time scheduler init — a program can open a file having never spawned a green thread, and the
 	// park below writes the timer store `__gt_init` allocates.
 	let initResult = ids.mint()
 	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
 
-	// The trace pair BRACKETS the park, and the id is read from the GT struct on both sides: the yield line is
-	// emitted on the way down, the resume line after the scheduler has switched back into us. Reading `traceId`
-	// twice rather than carrying it across is deliberate — the value is on the struct precisely because the
-	// suspension crosses a context switch, and a register would not survive it.
-	let curAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
-	let selfGt = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(selfGt, addrId: curAddr, offset: 0, valueType: StdType.i64))
-	let traceIdBefore = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(traceIdBefore, addrId: selfGt, offset: GtOffTraceId, valueType: StdType.i64))
-	emitGtTraceLine(module, block: entry, traced: asyncTrace, tag: tags.ioYield, gtId: traceIdBefore, suffix: tags.fileExistsSuffix, ids: ids)
+	// The trace pair BRACKETS the park: the yield line is emitted on the way down, the resume line after the
+	// scheduler has switched back into us. Both read the id afresh — see `emitCurrentGtTraceId`.
+	let traceIdBefore = emitCurrentGtTraceId(module, block: entry, ids: ids)
+	if traced 'yieldLine'
+		emitGtTraceLineOfSuffix(module, block: entry, tag: tags.ioYield, gtId: traceIdBefore, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
+	end 'yieldLine'
 
 	let now = ids.mint()
 	module.appendOp(entry, op: StdOp.call(now, callee: GtNowNsName, args: ValueIdArray.create()))
 	var resumed = emitGtParkOnDeadline(module, func: func, cur: entry, deadline: now, ids: ids)
 
-	let resumedCurAddr = ids.mint()
-	module.appendOp(resumed, op: StdOp.globalAddr(resumedCurAddr, label: GtCurrentGtLabel))
-	let resumedGt = ids.mint()
-	module.appendOp(resumed, op: StdOp.loadIndirect(resumedGt, addrId: resumedCurAddr, offset: 0, valueType: StdType.i64))
-	let traceIdAfter = ids.mint()
-	module.appendOp(resumed, op: StdOp.loadIndirect(traceIdAfter, addrId: resumedGt, offset: GtOffTraceId, valueType: StdType.i64))
-	emitGtTraceLine(module, block: resumed, traced: asyncTrace, tag: tags.ioResume, gtId: traceIdAfter, suffix: tags.fileExistsSuffix, ids: ids)
+	let traceIdAfter = emitCurrentGtTraceId(module, block: resumed, ids: ids)
+	if traced 'resumeLine'
+		emitGtTraceLineOfSuffix(module, block: resumed, tag: tags.ioResume, gtId: traceIdAfter, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
+	end 'resumeLine'
 	module.setTerminator(resumed, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -3369,20 +3583,66 @@ end 'buildGtIoPark'
 // expressed as the single gesture each member makes, and `SemanticCheck.ioYieldingRuntimeCallee` covers
 // exactly the functions that call it (by prefix, so it cannot rot).
 //
-// ⚠ **EXACTLY ONE PARK PER RUNTIME FUNCTION.** A second call in one builder would put a second `io_yield` in
-// the async trace for a single operation, which is what `specs/async-await.md`'s `trace-yield` case would see.
+// ⛔⛔ **ONE PARK PER BLOCKING OPERATION — NOT PER ENTRY POINT, AND NOT PER KERNEL CALL.** The park is what the
+// async trace reports as `io_yield`/`io_resume`, so the pair must count the things that make a green thread
+// WAIT. Both of the wrong readings of that have been in this tree and both were wrong for the same reason —
+// they counted something other than a wait:
 //
-// ⚠ **THE COUNT IS FOURTEEN CALL SITES AND SIXTEEN EMITTED ENTRY POINTS, AND THOSE ARE DIFFERENT NUMBERS.**
-// MEASURED: eight sites in `ManagedFileRuntime`, six in `ManagedDirectoryRuntime`; two of those builders are
-// parameterised and each is invoked twice (`buildManagedFileOpen` for read/write, `buildManagedFilePathOperation`
-// for delete/rename), so the emitted `__mf_*`/`__md_*` band is two larger than the site count. Say which noun
-// is being counted wherever either number is quoted.
+//   • **FOUR was wrong**: `__ms_tcp_connect` parked around each of `WSAStartup`, `getaddrinfo`, `socket()`
+//     and `connect()`, i.e. once per KERNEL CALL. `WSAStartup` is process-cached behind `__net_wsa_init` and
+//     `socket()` allocates a descriptor; neither blocks, so two of those four pairs reported a wait that never
+//     happened.
+//   • **ONE was wrong too**, and it is the correction that over-corrected: the rule was restated as one park
+//     per FUNCTION and the connect collapsed to a single park at its entry join. That reads a `TcpClient.connect`
+//     to a hostname — a DNS round trip AND a TCP handshake, two independent waits either of which can be the
+//     slow one — as a single indivisible operation, and it makes the trace unable to say which of the two a
+//     hung connect is hung in. It also disagreed with both references, which park twice
+//     (`maxon-sharp/.../X86CodeEmitter.Runtime.cs`: `SyncOpDnsResolve` then the overlapped ConnectEx, both
+//     reporting under `__at_io_op_net_connect`; v1's `X64Backend.maxon` does the same), and with
+//     `specs/http-client.md`'s `async-trace-interleave`, which pins TWO `[net_connect]` pairs for one
+//     `HttpClient.get`.
+//
+// ⭐ A single-wait member therefore still parks exactly once, which is every filesystem site and
+// `send`/`recv`/`close`; `__ms_tcp_connect` parks twice because it waits twice. `specs-shv2/async-tcp.md`'s
+// two trace cases still read ONE pair and are not in tension with this: they dial `192.0.2.1`, which
+// short-circuits on the TEST-NET-1 sentinel after the resolve and never attempts a connect.
+//
+// ⚠ **THE COUNT IS NINETEEN CALL SITES AND TWENTY-ONE EMITTED ENTRY POINTS, AND THOSE ARE DIFFERENT NUMBERS.**
+// MEASURED 2026-08-21: eight sites in `ManagedFileRuntime`, six in `ManagedDirectoryRuntime`, five in
+// `ManagedSocketRuntime` (two in connect, one each in send/recv/close — `__ms_destruct` parks through
+// `__ms_close` and has none of its own). Two of the filesystem builders are parameterised and each is invoked
+// twice (`buildManagedFileOpen` for read/write, `buildManagedFilePathOperation` for delete/rename), so the
+// emitted `__mf_*`/`__md_*` band is two larger than its fourteen sites. Say which noun is being counted
+// wherever either number is quoted. ⛔ This census read FOURTEEN SITES and named only the two FILESYSTEM files
+// until 2026-08-21: it was written before the socket family existed, and nothing made it follow.
 //
 // A void call mints an unread result id.
-export function emitFilesystemYield(module StdModule, block IrBlock, ids ValueMinter)
+export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperation, ids ValueMinter)
+	// The suffix travels as `(rdata address, byte length)`, and an untraced build's park has no suffix
+	// parameters to fill, so the call carries no arguments at all.
+	//
+	// ⛔ **THE ARITY IS DECIDED BY `tracesIoOperations()` AT BOTH ENDS — THE SAME QUESTION, NOT MERELY THE
+	// SAME FIELD.** This site used to branch on `tag.length != 0` while `buildGtIoPark` branched on
+	// `tracesIoOperations()`; reading one field is not asking one question, and those two agreed only for as
+	// long as every registered suffix text happened to be non-empty. A zero-length suffix would have put an
+	// argument-less call into a two-parameter park — a wrong FRAME, not a wrong trace. The coincidence is now
+	// an enforced precondition (`registerIoOperationTags` panics on an empty suffix) AND no longer relied on
+	// here.
+	let tags = module.asyncTraceTags
+	var args = ValueIdArray.create()
+	if tags.tracesIoOperations() 'tracedBuild'
+		let tag = tags.ioTag(operation)
+		let suffixAddr = ids.mint()
+		module.appendOp(block, op: StdOp.rdataAddr(suffixAddr, label: tag.label))
+		let suffixLen = ids.mint()
+		module.appendOp(block, op: StdOp.const(suffixLen, value: tag.length, valueType: StdType.i64))
+		args.push(suffixAddr)
+		args.push(suffixLen)
+	end 'tracedBuild'
+
 	let parked = ids.mint()
-	module.appendOp(block, op: StdOp.call(parked, callee: GtIoParkName, args: ValueIdArray.create()))
-end 'emitFilesystemYield'
+	module.appendOp(block, op: StdOp.call(parked, callee: GtIoParkName, args: args))
+end 'emitIoPark'
 
 // `__gt_resched()` — the cooperative yield. See `GtReschedName` for the design, the netpoll-starvation hazard
 // the poll arm closes, and why GT0 takes that arm rather than driving the run queue itself.

@@ -1348,9 +1348,13 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     not move again — this declaration is the same bounds a second time. **MEASURED rather than argued:
 	//     `--filter=byte-string-literal` and `--filter=bytearray-element-size` are green and their goldens are
 	//     unmoved.**
-	//   • `typealias ByteCount = int(0 to u64.max)` (`:29`) is the one ranged alias genuinely NEW to the listed
-	//     set — `stdlib/String.maxon` and `stdlib/TcpClient.maxon` declare the name, and the loader can list
-	//     neither. Its FORM is already declared under four other names by `Clock.maxon`, the same
+	//   • `typealias ByteCount = int(0 to u64.max)` (`:29`) was the one ranged alias genuinely NEW to the listed
+	//     set when this entry was written. ⚠ **THE REASON GIVEN HAS SINCE EXPIRED AND IS STRUCK RATHER THAN LEFT
+	//     TO ROT**: it said `stdlib/String.maxon` and `stdlib/TcpClient.maxon` declare the name and *"the loader
+	//     can list neither"*, and the loader now lists BOTH — `String.maxon` at `W90`'s block above and
+	//     `TcpClient.maxon` at the socket entry below. All three declarations are `int(0 to u64.max)` to the
+	//     digit, so `settleRangeContests` still has nothing to settle and this bullet's CONCLUSION is unchanged;
+	//     only its premise was dated. Its FORM is already declared under four other names by `Clock.maxon`, the same
 	//     same-form-different-name shape every entry since that one has carried, and the compiler mints no
 	//     instance over a `ByteCount` element.
 	//   • ⚠⚠⚠ **THE "TYPE-PARAMETERIZED BY A USER DECLARATION" CLAUSE HAS THE EXACT SHAPE THAT BROKE
@@ -2334,6 +2338,192 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// pays LESS of the step rather than more — the direction this explanation predicts, and the opposite of
 	// what a term growing with the program would do.
 	try listWhitelistedModule(stdlibDir, relative: "Subprocess.maxon", into: listed)
+
+	// ⭐⭐ **`stdlib/TcpClient.maxon` — TCP CLIENT SOCKETS, AND THE FIRST ENTRY THAT DECLARES NO FREE FUNCTION
+	// AT ALL.** 95 lines: two exported nominal declarations (`TcpClient`, `NetworkError`) over the four
+	// `__ManagedSocket` methods, plus two file-private ranged typealiases. Its one blocker — the
+	// `__ManagedSocket` builtin type, its x64-windows runtime (`Compiler/Runtime/ManagedSocketRuntime.maxon`)
+	// and its parser dispatch — landed with `specs-shv2/managed-socket.md`, and was not this module's own work.
+	//
+	// ⭐ **WHAT IT DELIVERS IS A CAPABILITY, MEASURED RATHER THAN LOADED.** `TcpClient.connect` reaches a real
+	// resolver and a real connect, and `specs-shv2/tcp-client.md`'s two host cases DISCRIMINATE its two failure
+	// modes: `192.0.2.1:1` (TEST-NET-1, RFC 5737 — routable nowhere) answers `connectFailed` and
+	// `this.host.does.not.exist.invalid` answers `resolveFailed`. Each `match`es on a case of THIS enum, so
+	// neither can pass against an inert entry — and the point was PROVED rather than argued: rewriting the
+	// `resolveFailed` arm of `connect` to `throw NetworkError.sendFailed` turns `tcp-client.resolve-error` from
+	// exit 0 to exit 1 AND moves `tcp-client.connect-error`'s golden (`movRegImm32 rbx, 0` becomes `rbx, 2`,
+	// the new ordinal). That is the check the withdrawn `Set.maxon` paragraph below exists to demand.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • ⭐ FREE FUNCTIONS (E3006): **NONE, IN EITHER DIRECTION.** It DECLARES none, so neither the bare-name
+	//     surface nor the listed set's own free functions (the W5-review sixth surface) has anything to contest
+	//     from this side. And it CONSUMES none: every call in its bodies is receiver-dot (`socket.sendFrom`,
+	//     `data.addressableBytes`, `managed.setLength`) or `Type.`-qualified (`String.init`,
+	//     `__ManagedSocket.tcpConnect`, `__ManagedMemory.create`). The one bare spelling in the file is
+	//     `panic`, which `parsePanicStatement` takes as a STATEMENT and which never reaches `parseCallNamed`
+	//     at all. Checked at `parseCallNamed`'s chain AT THE CHAIN, as that rule's last bullet insists — the
+	//     roster standing there is `calleeTakesPositionalArgsOnly`'s math intrinsics plus `runProcess`,
+	//     `spawnReadLine` and the seven `subp*` — and not one of them is a name this file writes.
+	//   • TYPE NAMES: `TcpClient` and `NetworkError` are exported nominal declarations, and NO other file under
+	//     `stdlib/` declares either — checked at the source across every `.maxon` file there, listed or not. A
+	//     user program spelling one wins and this module's moves into the reserved space (A1s wave 2,
+	//     directory-scoped by N1).
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: neither is on
+	//     `TypeResolution.isCompilerOwnedTypeName` nor answered by `builtinTypeNameTag`, and no
+	//     `type`/`enum`/`union`/`interface`/`typealias` under `maxon-shv2/Compiler/` or `maxon-shv2/Testing/`
+	//     spells either — so there is no SYNTHESIZED TWIN of the kind that made `Set`/`Vector`/
+	//     `unicodeCategory` inert when listed. ⚠ `__ManagedSocket` IS compiler-owned, and that is the point
+	//     rather than a collision: this module declares nothing of that name, it RECEIVES the type from the
+	//     parser — the shape the type-parameterized clause below is about.
+	//   • ⚠ THE RANGED-TYPEALIAS CLAUSE IS LIVE and lands on TWO names, both file-PRIVATE — which this file's
+	//     header measured to be irrelevant at the folds that matter (`export` is not read by
+	//     `settleRangeContests` or `widenStorageBytesFor`), so both are weighed. `ByteCount` (`:4`,
+	//     `int(0 to u64.max)`) is `stdlib/String.maxon:11`'s and `stdlib/Console.maxon:29`'s declaration TO THE
+	//     DIGIT, so the contest has nothing to settle and the stride is one the fold already saw.
+	//     `NetworkPort` (`:3`, `int(1 to 65535)`) is a name NO other file under `stdlib/` declares, so it is
+	//     uncontested; its FORM is new to the listed set and that is inert, because a form is not a key at
+	//     either fold. **The compiler mints instances over NEITHER name** — `SignatureIndex.isByteElementName`
+	//     is the mint that matters and `Byte` is the only name on it.
+	//   • It declares NO `X with …` alias, so it adds no generic INSTANTIATION and cannot flip an
+	//     already-listed generic's compilation mode the way `Subprocess.maxon`'s `EnvMap` flipped `Map`'s.
+	//   • NO TOP-LEVEL STATE — not one top-level `let` or `var` — so the `S2h` shape that cost `Log.maxon`
+	//     +87% code bytes on a program that never spelled `Log` has nothing to price here. The byte A/B is run
+	//     anyway, at the foot of the HTTP entry below, because the invariant it checks is this file's central
+	//     one and the two entries landed together.
+	//   • E3112 fires only when a user program actually contests a spelling, so there is nothing to clear ahead
+	//     of time — and the surface is small enough to count rather than wave: NINE spellings, of which the
+	//     field `socket` and the labels `port`, `data`, `bufferSize` are new to the listed set and `connect`,
+	//     `send`, `recv`, `close`, `host` were already contested.
+	//   • ⚠⚠ THE "TYPE-PARAMETERIZED BY A USER DECLARATION" CLAUSE IS LIVE, and it is the one that broke
+	//     `URL.maxon`, then `CommandLine.maxon`, then `Console.maxon`. `recv` (`:63`) takes a `__ManagedMemory`
+	//     from `__ManagedMemory.create` straight into `String.init`, and `send` (`:37`) hands
+	//     `data.addressableBytes()` to `socket.sendFrom` — the exact `__ManagedMemory`/`Byte` shape those three
+	//     met. Both sides of the cure are already in place (`SignatureIndex.SynthesizedByteElementName` at the
+	//     mint, `ProgramSignatures.byteBufferBoundaryAdmits` at the doors), and the clause says checking it is
+	//     a BUILD and not a reading, so it was built: a program declaring `typealias Byte = int(0 to 1000)`
+	//     that calls NOTHING here compiles, runs and prints `byte=900 total=900` under shv2 and BYTE-IDENTICALLY
+	//     under the bootstrap.
+	//   • It has NO imports. It calls into ONE listed module by name — `String.init` — and into no unlisted one.
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes:
+	// `maxon-shv2 build stdlib/TcpClient.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING
+	// ELSE. ⚠ And the criterion was PROVED ABLE TO FAIL for THESE bodies rather than assumed to be evidence —
+	// `let bogus = NoSuchType.definitelyUndefined(1)` injected into `close` answers `E3001` plus
+	// `E3004 stdlib\TcpClient.maxon:93:26: call to undefined function 'NoSuchType.definitelyUndefined'`, so its
+	// bodies are analyzed. The injection is made IN PLACE against a backup and the tree restored, not on a copy
+	// outside `stdlib/`: `__ManagedSocket`/`__ManagedMemory` are stdlib-only doors and a copy elsewhere dies
+	// before reaching any body — the correction `Testing.maxon`'s entry records.
+	//
+	// ⭐ **AND IT CLEARED TWO CASES OF A SPEC BEYOND ITS OWN, REPORTED HERE RATHER THAN LEFT TO BE NOTICED.**
+	// `async-tcp.connect-error` and `async-tcp.resolve-error` — `async tryConnect()` wrappers around
+	// `TcpClient.connect` — went from red to PASS with this one line and no other change: E3073 refuses a spawn
+	// whose callee can never suspend, and a socket call is not one, so the SURFACE was the only thing missing.
+	//
+	// ⛔ **AND THE REASON WRITTEN HERE WAS FALSE: `__ms_` IS NOT ON `SemanticCheck.ioYieldingRuntimeCallee`'s
+	// ROSTER AND NEVER WAS** (measured 2026-08-21). What accepts these spawns is the UNKNOWN-CALLEE FALLBACK —
+	// `checkAsyncYielding` walks the Maxon tier, where every `__ms_*` is an undeclared Std-tier name, and
+	// `calleeYields`'s `otherwise return true` resolves an unknown toward "yields". That predicate's header
+	// carries the sabotage measurement; the point for THIS entry is that listing a module cannot have depended
+	// on a roster membership that does not exist.
+	//
+	// ⚠ **`async-tcp.trace-connect-error` AND `.trace-mixed-io` ARE GREEN, AND THIS ENTRY RECORDED THEM AS
+	// "STILL RED".** They were, when it was written: the socket parks all reported `[file_exists]` because
+	// `__gt_io_park` carried no per-operation suffix. The per-operation tag table (`GtRuntime`'s
+	// `GtIoOperation`) landed in the same working diff as this line, so `async-tcp/` now runs 4 of 4 with the
+	// live `echo` case excluded — measured 2026-08-21. Neither is a socket-listing question either way.
+	try listWhitelistedModule(stdlibDir, relative: "TcpClient.maxon", into: listed)
+
+	// ⭐⭐ **`stdlib/HttpClient.maxon` + `stdlib/helpers/http/httpHelpers.maxon` — ONE CONE ENTRY IN TWO LINES,
+	// BECAUSE NEITHER FILE COMPILES WITHOUT THE OTHER.** 248 lines and 154: seven exported nominal declarations
+	// (`HttpError`, `HttpMethod`, `HttpHeaders`, `HttpRequest`, `StatusCode`, `HttpResponse`, `HttpClient`) and
+	// three exported free functions (`httpMethodToString`, `httpBuildRequest`, `httpParseResponse`) that the
+	// types call and that name those types in their own signatures. `STDLIB-BRINGUP.md:178` had already sized it
+	// as one cone, and the readiness probe confirms the shape from both sides rather than assuming it.
+	//
+	// ⛔ **AND THE BLOCKER RECORDED FOR IT WAS STALE, WHICH IS WHY THIS FILE'S RULE IS TO RE-MEASURE.**
+	// `STDLIB-BRINGUP.md:176` recorded `E3005 :29:22 cannot assign 'unknown' to variable 'HttpHeaders.headers'
+	// of type 'struct'`. RE-MEASURED at this entry: that line is `HttpHeaders.create`'s
+	// `CaseInsensitiveHeaders.create()`, and it has compiled since `Map.maxon` was listed. What the probe
+	// actually answered was `E2015 :176:18 member access 'send' on an 'unknown' value` — `TcpClient` — which
+	// the entry above cleared, after which the probe answered `E3005 :219:3 cannot return 'unknown'`, which is
+	// `httpParseResponse` living in the file that is not loaded yet. Two blockers deep, both this cone's own.
+	//
+	// MEASURED before listing: with BOTH lines in place, `maxon-shv2 build stdlib/HttpClient.maxon` exits 1 with
+	// `E3001: No 'main' function found` AND NOTHING ELSE.
+	// ⚠ **THE HELPER CANNOT BE PROBED THAT WAY AND SAYING IT COULD WOULD BE FALSE.** As a build ROOT the file
+	// becomes USER source (`registeredPathsWhenTheRootIsInsideStdlib`), so it sits in `stdlib/helpers/http/`
+	// outside the `stdlib/` module scope and reports `E3088 function 'String.addressableBytes' is module-scoped
+	// and not visible from this directory` twice — an artifact of the probe's own root, not a defect: LOADED as
+	// stdlib it is stdlib source and both calls resolve. ⇒ **its readiness is measured by a program that CALLS
+	// it**, which is the discriminating instrument anyway.
+	//
+	// ⭐⭐ **AND BOTH LINES WERE SABOTAGE-VERIFIED LIVE, SEPARATELY, because two lines are two entries.**
+	//   • `HttpClient.maxon`: rewriting `HttpRequest.create` to parse `"http://wrong.example.org/other?src={url}"`
+	//     instead of its argument turns `http-client.build-request` from exit 0 to **exit 2** — its own
+	//     `host != "example.com"` arm. Reverted.
+	//   • `helpers/http/httpHelpers.maxon`: `let bogus = NoSuchType.definitelyUndefined(1)` injected into
+	//     `httpBuildRequest` fails `http-client.invalid-url`'s COMPILE with
+	//     `E3004 stdlib\helpers\http\httpHelpers.maxon:19:25`, naming the helper's own line — while
+	//     `http-client.build-request` still PASSES, because that case never reaches `httpBuildRequest`. The pair
+	//     is what makes it evidence: one case proves the helper's bodies are analyzed, the other proves the
+	//     failure is reach-dependent rather than a whole-file refusal. Reverted.
+	//
+	// It clears every entry in this file's collision rule:
+	//   • FREE FUNCTIONS (E3006), BOTH SURFACES: `httpMethodToString`, `httpBuildRequest` and `httpParseResponse`
+	//     are on `parseCallNamed`'s bare-name chain nowhere (checked AT the chain), and no other file under
+	//     `stdlib/` declares any of the three — the ONLY free-function name declared twice anywhere under
+	//     `stdlib/` is `stripTrailingCR`, the Console/Subprocess overload pair `Subprocess.maxon`'s entry
+	//     documents. This module CONSUMES no chain name either: its bare calls are its own three.
+	//   • TYPE NAMES: the seven are exported nominal declarations; NO other file under `stdlib/` declares any of
+	//     them, and no `type`/`enum`/`union`/`interface`/`typealias` under `maxon-shv2/Compiler/` or
+	//     `maxon-shv2/Testing/` does either — so no listed-listed collision and no SYNTHESIZED TWIN.
+	//     ⚠ `StatusCode` is the one worth stopping on: it is an ordinary English compound and a plausible user
+	//     spelling. It costs a user program nothing (A1s wave 2 moves the stdlib declaration and the user keeps
+	//     the bare name), and it is not a MEMBER spelling anywhere under `stdlib/`, so it cannot reach E3112.
+	//   • TYPE-NAME-vs-BUILTIN: none of the seven is on `TypeResolution.isCompilerOwnedTypeName` — `HttpError`
+	//     in particular is NOT one of the four compiler-owned `*Error`s (`ArrayError`, `StringError`,
+	//     `MapError`, `IterationError`, `CharacterError`) — nor answered by `builtinTypeNameTag`.
+	//   • NO RANGED TYPEALIAS AT ALL, in either file. This is the first entry since `Clock` with nothing to
+	//     weigh at `settleRangeContests` or `widenStorageBytesFor`.
+	//   • ⚠ ONE GENERIC-INSTANCE ALIAS, and the clause `Subprocess.maxon`'s entry added is CHECKED rather than
+	//     waved: `typealias CaseInsensitiveHeaders = Map with String, String` (`HttpClient.maxon:24`) is a
+	//     SECOND spelling of a FORM the listed set already instantiates — `Subprocess.maxon:127`'s
+	//     `EnvMap = Map with String, String`, to the type argument. A generic-instance alias is file-local per
+	//     alias FORM, so this adds no NEW instantiation and cannot flip `Map`'s compilation mode again: that
+	//     flip (specialized ⇒ shared, dictionary-passing) already happened when `Subprocess` landed, and the
+	//     leak it woke was fixed there (`W183`).
+	//   • NO TOP-LEVEL STATE in either file.
+	//   • E3112: 45 member spellings across fields, methods and argument labels, of which the ones new to the
+	//     listed set are the `HttpRequest`/`HttpResponse` field names (`httpMethod`, `requestUrl`,
+	//     `requestHeaders`, `requestBody`, `reasonPhrase`, `responseHeaders`, `responseBody`) and the API's own
+	//     method names (`setHeader`, `setBody`, `statusCode`, `reason`, `header`); `create`, `get`, `set`,
+	//     `has`, `send`, `post`, `put`, `delete`, `url`, `method`, `headers`, `body`, `code`, `name`, `value`,
+	//     `data`, `request` were already contested.
+	//   • ⚠ THE "TYPE-PARAMETERIZED BY A USER DECLARATION" CLAUSE IS LIVE in the helper:
+	//     `httpParseResponse` (`:85`, `:145`) takes `data.addressableBytes()` slices into `String.init`. It is
+	//     the same `__ManagedMemory`/`Byte` boundary the `TcpClient` entry above measured, and the same build
+	//     clears it: a program declaring its own wide `Byte` and calling NOTHING here compiles and runs.
+	//   • Neither file has imports. They call into LISTED modules only — `String`, `Map`, `Array`, `URL`,
+	//     `StringBuilder`, `Sleep` (`sleep(100)` under `#if testing(true)`) and `TcpClient`, listed above.
+	//
+	// ⭐⭐ **THE BYTE A/B, FOR BOTH ENTRIES AT ONCE.** MEASURED in one tree, two binaries differing only by the
+	// three `listWhitelistedModule` lines, on `function main() returns ExitCode / return 7`: **1,592 code bytes
+	// both ways**, and the two executables are **byte-for-byte identical at 5,567 bytes** (`cmp` clean). Three
+	// modules with no top-level state cost a program that never spells them nothing at all.
+	//
+	// ⛔⛔ **AND LISTING THE PAIR EXPOSED A LEAK IN THE `for` LOWERING THAT HAS NOTHING TO DO WITH HTTP —
+	// FIXED IN THIS SAME TREE, in `Parser.parseForStatement`.** `httpBuildRequest` writes
+	// `for (hdrName, hdrValue) in request.headers().headers`, and a `for` whose source reads a field out of a
+	// CALL RESULT enrols that result as an owned binding of the loop's frame — the same frame the CURSOR is
+	// enrolled in. The empty-`Iterable` entry edge deliberately skips that frame's drops, because on it no
+	// cursor was ever created; it therefore skipped the source expression's temporaries too. A request with no
+	// user headers iterates an EMPTY `Map`, so **every `HttpClient.get` leaked one `HttpHeaders`** — exit 101
+	// where the bootstrap answers 0. Reduced to thirty lines of user code with no HTTP and no socket in it, and
+	// cured by giving the cursor a scope of its own so the two batches can be released into two different
+	// blocks. ⇒ **the rule this file's `Subprocess` entry wrote still binds: an entry's readiness probe answers
+	// whether the module COMPILES, and it has never asked whether it RUNS. Run it.**
+	try listWhitelistedModule(stdlibDir, relative: "HttpClient.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "helpers/http/httpHelpers.maxon", into: listed)
 
 	// ⛔⛔ **A `stdlib/Set.maxon` IS NOT LISTED` PARAGRAPH STOOD HERE UNTIL W105, AND IT HAD BEEN FALSE SINCE
 	// W90 LISTED THE MODULE 390 LINES ABOVE.** It was a W63/BATCH36 measurement — the entry was added, built

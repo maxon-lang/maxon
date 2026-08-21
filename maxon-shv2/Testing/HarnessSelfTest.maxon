@@ -1,4 +1,5 @@
-// Testing/HarnessSelfTest.maxon — the gate over the SPEC HARNESS'S OWN REFUSALS.
+// Testing/HarnessSelfTest.maxon — the gate over the SPEC HARNESS'S OWN REFUSALS, and over the one
+// selection rule no spec case can reach.
 //
 // ⭐⭐ **A REFUSAL NOTHING RUNS IS A CLAIM, NOT A DOOR** — this project's own rule, and until this
 // file the harness broke it in six places at once. `SpecParser` refuses an empty ```RequiredRuntime
@@ -32,6 +33,13 @@
 // the walk does not recurse" is a property of the walk, and the whole point of these files is that
 // they detonate if anything ever reads them as ordinary specs. Living under `maxon-shv2/Testing/`,
 // they are not in the corpus at all, whatever the walk grows into.
+//
+// ⭐ **AND ONE THING HERE IS NOT A REFUSAL AT ALL** — `requireNetworkGateHolds`, which proves the
+// live-network gate still keeps `<!-- network: live -->` cases out of a default run, still lets
+// `--network` back in, and still SAYS which cases it dropped. It is in this file because it is the
+// same shape and the same instrument (spawn this harness at a fixture corpus, read exit code and
+// output), and it is in a SECOND corpus root because its fixture must be accepted rather than
+// refused — see `GatesRelativeDir`.
 
 // Where the fixture corpus lives, relative to the repo root — anchored at the working directory for
 // the reason `LadderIndex` and `spec-test`'s own default spec directory are: the suite is invoked from
@@ -39,6 +47,26 @@
 // It is ALSO the recursion guard's one source: `isFixtureCaseDir` reads this path's last segment rather
 // than a second constant naming the same directory.
 let FixturesRelativeDir = "maxon-shv2/Testing/harness-fixtures"
+
+// ⭐ **THE SECOND CORPUS ROOT — the harness's BEHAVIOUR gates, not its refusals**, and it is a second
+// root rather than another case directory under the first for one reason: `requireHarnessRefusalsFire`
+// sweeps EVERY subdirectory of its root and requires each to be a deliberately-malformed spec that the
+// harness REFUSES. This corpus's fixture is the opposite — a well-formed spec that must be ACCEPTED,
+// parsed in full, and then partly left out of the run. Filed under one root, each sweep would read the
+// other's cases as its own kind and report a defect that is not there.
+//
+// It is a corpus root all the same, which is the part that matters to `isHarnessFixtureSubRun`: its case
+// directories are driven by SPAWNING this harness at them, so a sub-run must recognise itself here
+// exactly as it does there — see `harnessCorpusRoots`.
+let GatesRelativeDir = "maxon-shv2/Testing/harness-gates"
+
+// The one gate case: `<gates root>/<this>/network-gate.md`, holding a single case marked
+// `<!-- network: live -->`. The directory name and the spec's `<spec>/<test>` label are both named here
+// because the assertions below are ABOUT that exact case, and a gate that silently ran some other
+// directory would be a gate that proves nothing.
+let NetworkGateCaseDir = "network"
+let NetworkGateSpecName = "network-gate"
+let NetworkGateTestName = "network-gate.live"
 
 let FixtureSpecExtension = ".md"
 
@@ -135,9 +163,30 @@ typealias FixtureTally = int(0 to u64.max)
 // would otherwise turn a lock into a refusal against itself. One question, one answer; two spellings
 // of "am I a fixture" is precisely the drift this function's own warning below is about.
 export function isHarnessFixtureSubRun(specDir FilePath) returns bool
-	let root = try FilePath.from(FixturesRelativeDir) otherwise panic("HarnessSelfTest: '{FixturesRelativeDir}' is not a valid path")
-	return isFixtureCaseDir(specDir, root: root)
+	let roots = harnessCorpusRoots()
+	for root in roots 'eachRoot'
+		if isFixtureCaseDir(specDir, root: root) 'underThisRoot'
+			return true
+		end 'underThisRoot'
+	end 'eachRoot'
+
+	return false
 end 'isHarnessFixtureSubRun'
+
+// EVERY corpus under `Testing/` whose case directories are driven by SPAWNING this harness at them —
+// the refusal fixtures and the behaviour gates.
+//
+// ⭐ **ONE LIST, BECAUSE "AM I A SUB-RUN?" HAS ONE ANSWER.** A second corpus that the recognition
+// question did not know about is not a smaller version of that question going wrong: its sub-runs would
+// each fail to recognise themselves, re-run the WHOLE self-test (an unbounded process fan-out — see
+// `isFixtureCaseDir` for the measurement) and then be turned away by the tree lock their own parent is
+// holding. Adding a corpus is adding a line here, and nothing else.
+function harnessCorpusRoots() returns FilePathArray
+	var roots = FilePathArray.create()
+	roots.push(try FilePath.from(FixturesRelativeDir) otherwise panic("HarnessSelfTest: '{FixturesRelativeDir}' is not a valid path"))
+	roots.push(try FilePath.from(GatesRelativeDir) otherwise panic("HarnessSelfTest: '{GatesRelativeDir}' is not a valid path"))
+	return roots
+end 'harnessCorpusRoots'
 
 // Is `specDir` one of the fixture case directories — i.e. is this process a fixture sub-run? A fixture
 // case is driven by spawning this harness at `<root>/<case>`, so the question is whether `specDir`'s
@@ -151,8 +200,9 @@ end 'isHarnessFixtureSubRun'
 // `".../harness-fixtures"` — the same directory written down twice, with nothing making the two agree.
 // Rename the corpus and update only the constant that names the PATH (the obvious edit, and the only
 // one anything reads for the listing) and this guard silently stops matching: every sub-run then fails
-// to recognise itself and re-runs the whole self-test, whose eight sub-runs each do the same. That is
-// an unbounded 8-ary process fan-out on every `spec-test` invocation, and no compile error anywhere.
+// to recognise itself and re-runs the whole self-test, whose own sub-runs each do the same. That is an
+// unbounded fan-out on every `spec-test` invocation — one branch per fixture directory plus the gate's two
+// runs, so it widens every time a fixture is added — and no compile error anywhere.
 // (Measured before the fix: pointing a run at a case directory whose parent was spelled differently
 // took 0.575s against the guarded 0.061s — the self-test running inside what is structurally a
 // sub-run.)
@@ -189,10 +239,7 @@ function checkFixture(workerExe FilePath, compilerExe FilePath, caseDir FilePath
 	let caseName = caseDir.filename()
 	let expected = expectedRefusalIn(caseDir, caseName: caseName)
 
-	var argv = StringArray.create()
-	argv.push(SpecTestCommandName)
-	argv.push(caseDir.toString())
-	argv.push("{CompilerFlagPrefix}{compilerExe.toString()}")
+	let argv = fixtureArgv(caseDir, compilerExe: compilerExe)
 
 	let run = try runProcess(Executable.path(workerExe), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
 		panic("HarnessSelfTest: could not run the '{caseName}' fixture ({e.displayReason()}) — it proves a harness refusal still fires, and a refusal nothing runs is a claim")
@@ -200,7 +247,7 @@ function checkFixture(workerExe FilePath, compilerExe FilePath, caseDir FilePath
 
 	// BOTH streams: a `SpecParser` refusal panics the sub-run's parent onto stderr, while the two
 	// printer refusals reach the reader as a FAILED TEST's reason on stdout. One rule reads either.
-	let said = "{run.stdout}\n{run.stderr}"
+	let said = everythingSaid(run)
 
 	if run.exitCode == 0 'harnessAcceptedIt'
 		return FixtureVerdict.didNotFire("'{caseName}' was ACCEPTED (exit 0). It is a deliberately-malformed spec, and the refusal that should have caught it — the one that says '{expected}' — did not fire. Either that refusal was removed, or this fixture no longer trips it.")
@@ -212,6 +259,122 @@ function checkFixture(workerExe FilePath, compilerExe FilePath, caseDir FilePath
 
 	return FixtureVerdict.fired
 end 'checkFixture'
+
+// The command line EVERY sub-run of a fixture corpus starts from: this harness, pointed at ONE case
+// directory, told which compiler the run is about.
+//
+// Shared by the refusal sweep and the network gate below so the two cannot drift into asking different
+// questions of the same harness. `--compiler=` is forwarded for `requireHarnessRefusalsFire`'s stated
+// reason — half of what a fixture asks is asked of the COMPILER UNDER TEST rather than of whatever
+// compiler this harness happens to be — and that is true of any sub-run, not just a refusal's.
+function fixtureArgv(caseDir FilePath, compilerExe FilePath) returns StringArray
+	var argv = StringArray.create()
+	argv.push(SpecTestCommandName)
+	argv.push(caseDir.toString())
+	argv.push("{CompilerFlagPrefix}{compilerExe.toString()}")
+	return argv
+end 'fixtureArgv'
+
+// EVERYTHING a sub-run said, both streams joined. One rule, because which stream carries the evidence
+// is not something a caller should have to know: a parser refusal panics onto stderr, a failed test's
+// reason lands on stdout, and a trailer note is on stderr again.
+function everythingSaid(run ProcessCapture) returns String
+	return "{run.stdout}\n{run.stderr}"
+end 'everythingSaid'
+
+// ⭐⭐ **PROVE THE LIVE-NETWORK GATE STILL GATES.** The cases across `tcp-client`, `async-tcp` and
+// `http-client` that open a socket to a REAL EXTERNAL HOST are marked `<!-- network: live -->`, left out
+// of a default run and selected by `--network`. Three things have to hold, and each is a separate way for
+// the mechanism to be quietly gone:
+//
+//   1. a marked case is NOT SELECTED by a default run — the marker is read at all;
+//   2. it IS selected, compiled and run under `--network` — the flag reaches BOTH halves of the pool;
+//   3. the exclusion is REPORTED — the excluded cases do not simply vanish out of the count.
+//
+// ⚠ **(3) IS THE ONE THAT WOULD ROT SILENTLY.** (1) and (2) are visible the moment somebody runs the
+// suite either way. A census that stopped printing looks exactly like a suite with nothing to say, and
+// the cases it stopped naming look exactly like cases that were never written.
+//
+// ⛔ **AND (1) IS WHY THIS CANNOT BE AN ORDINARY SPEC CASE.** What is under test is which cases the
+// harness SELECTS, and a spec case is something the harness has already selected. So the shape is
+// `requireHarnessRefusalsFire`'s: spawn this harness at a fixture corpus and read what it did.
+//
+// Called ONCE by the suite's parent, beside the other tree-level guards, and PANICS naming every
+// property that failed — all of them together, because one careless edit breaks several.
+export function requireNetworkGateHolds(workerExe FilePath, compilerExe FilePath, specDir FilePath)
+	if isHarnessFixtureSubRun(specDir) 'thisIsAFixtureSubRun'
+		return
+	end 'thisIsAFixtureSubRun'
+
+	let root = try FilePath.from(GatesRelativeDir) otherwise panic("HarnessSelfTest: '{GatesRelativeDir}' is not a valid path")
+	// Interpolated rather than passed as the bare constant: a top-level `let` String is ambiguous between
+	// `join`'s String and FilePath overloads (the same constraint `Main.resolveSpecDir` documents).
+	let caseDir = root.join("{NetworkGateCaseDir}")
+	if not Directory.isDirectory(caseDir) 'noFixture'
+		panic("HarnessSelfTest: the live-network gate fixture is not at {GatesRelativeDir}/{NetworkGateCaseDir}, so nothing proves that a `{NetworkMarker} {NetworkLiveValue} -->` case is kept out of a default run — or that `{NetworkFlag}` brings it back. Run the suite from the repo root.")
+	end 'noFixture'
+
+	let label = "{NetworkGateSpecName}/{NetworkGateTestName}"
+
+	// ⭐ WHAT "THE CASE RAN" LOOKS LIKE, BUILT FROM THE REPORT'S OWN RENDERER rather than from a second
+	// spelling of the verdict token. An empty reason makes this a PREFIX of the real line, which is what
+	// `contains` needs; the reason itself is the fixture's deliberately-wrong stdout and is not the point.
+	// ⚠ It is a verdict line and NOT merely the label, because the label ALSO appears in the exclusion
+	// census — an assertion on the label alone would be satisfied by the very run it is meant to exclude.
+	let ranVerdict = verdictLine(TestOutcome.fail(""), label: label)
+
+	// The census entry for this case, from the one function that renders a trailer entry. Same argument:
+	// what is asserted is the harness's own output, so a change to how a note is laid out reaches this
+	// gate instead of stranding it.
+	let censusEntry = resultNoteEntry(NetworkGateSpecName, testName: NetworkGateTestName, detail: "")
+
+	var broken = StringArray.create()
+
+	let byDefault = everythingSaid(runNetworkGate(workerExe, compilerExe: compilerExe, caseDir: caseDir, includeNetwork: false))
+	if byDefault.contains(ranVerdict) 'defaultRanIt'
+		broken.push("a DEFAULT run of the fixture RAN '{label}', which is marked `{NetworkMarker} {NetworkLiveValue} -->`. Every suite in this tree would then be a coin toss on a third party's uptime.\n")
+	end 'defaultRanIt'
+
+	if not byDefault.contains(censusEntry) 'defaultSaidNothing'
+		broken.push("a DEFAULT run left '{label}' out and did not NAME it. An excluded case nobody counts is indistinguishable from one that was never written, and the run said:\n{byDefault}\n")
+	end 'defaultSaidNothing'
+
+	if not byDefault.contains(NetworkMarker) 'defaultGaveNoReason'
+		broken.push("a DEFAULT run named the case it left out but not the REASON: the census headline no longer mentions `{NetworkMarker}`, so a reader is told coverage is missing and not what would bring it back.\n")
+	end 'defaultGaveNoReason'
+
+	let withNetwork = everythingSaid(runNetworkGate(workerExe, compilerExe: compilerExe, caseDir: caseDir, includeNetwork: true))
+	if not withNetwork.contains(ranVerdict) 'flagDidNotIncludeIt'
+		broken.push("a `{NetworkFlag}` run did NOT run '{label}'. The flag no longer reaches selection, so every `{NetworkMarker} {NetworkLiveValue} -->` case is unreachable by any command line — shelved in all but name. It said:\n{withNetwork}\n")
+	end 'flagDidNotIncludeIt'
+
+	if withNetwork.contains(censusEntry) 'flagStillExcludedIt'
+		broken.push("a `{NetworkFlag}` run reported '{label}' as EXCLUDED. The gate and the census disagree about what the flag means, and the report says a case was skipped that the same run went on to execute.\n")
+	end 'flagStillExcludedIt'
+
+	if broken.isEmpty() 'everyPropertyHeld'
+		return
+	end 'everyPropertyHeld'
+
+	// ⚠ `panic` takes a STRING LITERAL — see `requireHarnessRefusalsFire` for the constraint this shape
+	// comes from.
+	let report = indentedList(broken, indent: BrokenHarnessFixtureIndent)
+	panic("HarnessSelfTest: the live-network gate FAILED {broken.count()} of its checks. It is what keeps a suite's verdict from depending on tcpbin.com and httpbin.org being up, and what keeps the cases it drops from vanishing silently.{report}")
+end 'requireNetworkGateHolds'
+
+// One run of the gate fixture, with or without `NetworkFlag`. A spawn failure PANICS on the spot
+// rather than joining the report, for `checkFixture`'s reason: that is the instrument being broken
+// rather than the property being gone, and the two must not read alike.
+function runNetworkGate(workerExe FilePath, compilerExe FilePath, caseDir FilePath, includeNetwork bool) returns ProcessCapture
+	var argv = fixtureArgv(caseDir, compilerExe: compilerExe)
+	if includeNetwork 'wantsLiveNetwork'
+		argv.push(NetworkFlag)
+	end 'wantsLiveNetwork'
+
+	return try runProcess(Executable.path(workerExe), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
+		panic("HarnessSelfTest: could not run the live-network gate fixture ({e.displayReason()}) — it proves a marked case stays out of a default run and comes back under `{NetworkFlag}`, and a gate nothing runs is a claim")
+	end 'spawnFailed'
+end 'runNetworkGate'
 
 // The substring `caseDir`'s one `.md` says its refusal must print — see `ExpectRefusalMarker`.
 //

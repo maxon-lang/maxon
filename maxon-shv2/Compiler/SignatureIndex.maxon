@@ -4083,6 +4083,10 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 	match compilerOwnedAggregateOf(declaredName) 'compilerOwned'
 		managedFile then return ManagedFileDestructName
 		managedDirectory then return ManagedDirectoryDestructName
+		//   • **`__ManagedSocket` OWNS AN OS SOCKET, WHICH IS NOT MEMORY** — the file bullet's argument
+		//     unchanged, one type over. `MmDecrefName` here would free eight bytes and leak the socket for the
+		//     process lifetime, which the exit-101 gate cannot see at all.
+		managedSocket then return ManagedSocketDestructName
 		userDeclared then break 'compilerOwned'
 	end 'compilerOwned'
 
@@ -4233,7 +4237,7 @@ end 'managedFieldCloneStrategy'
 // admit a clone nobody can emit."*
 function managedNameCloneStrategy(signatures ProgramSignatures, declaredName ByteArray) returns ManagedCloneStrategy
 	match compilerOwnedAggregateOf(declaredName) 'compilerOwned'
-		managedFile to managedDirectory then return ManagedCloneStrategy.unsupported
+		managedFile to managedSocket then return ManagedCloneStrategy.unsupported
 		userDeclared then break 'compilerOwned'
 	end 'compilerOwned'
 
@@ -4282,6 +4286,10 @@ export enum CompilerOwnedAggregate
 	// once `stdlib/CharacterSet.maxon` declares the type, its box is an ordinary declared struct.
 	managedFile
 	managedDirectory
+	// ⚠ **KEPT ADJACENT TO ITS TWO SIBLINGS ON PURPOSE.** Every reader below answers the same way for all
+	// three, so they are matched as ONE RANGE — which is also what makes a FOURTH compiler-owned aggregate
+	// that needs a different answer fail to compile at each of those arms rather than inherit theirs.
+	managedSocket
 	// An ordinary declaration, whose drop and clone are the synthesized per-type entries.
 	userDeclared
 end 'CompilerOwnedAggregate'
@@ -4293,6 +4301,9 @@ export function compilerOwnedAggregateOf(name ByteArray) returns CompilerOwnedAg
 	if name.equals(ManagedDirectoryTypeName) 'managedDirectory'
 		return CompilerOwnedAggregate.managedDirectory
 	end 'managedDirectory'
+	if name.equals(ManagedSocketTypeName) 'managedSocket'
+		return CompilerOwnedAggregate.managedSocket
+	end 'managedSocket'
 
 	return CompilerOwnedAggregate.userDeclared
 end 'compilerOwnedAggregateOf'
@@ -5898,8 +5909,18 @@ export let ManagedFileClosedCaseName = b"closed"
 export let ManagedMemoryFieldName = b"managed"
 
 // ⭐ **THE ONE PLACE THAT ANSWERS "is this a compiler builtin MANAGED type?"** — read by
-// `Parser.requireConstructible` to raise E3072, and the list a later slice extends when
-// `__ManagedMemory` and `__ManagedDirectory` arrive (E3072's own registry doc already names all three).
+// `Parser.requireConstructible` to raise E3072.
+//
+// ⚠⚠ **IT NAMED TWO OF FOUR FOR TWO SLICES, AND A PORTED SPEC SAID OTHERWISE THE WHOLE TIME.**
+// `specs-shv2/struct-construction-restriction.md:29` reads *"Compiler builtin managed types
+// (`__ManagedMemory`, `__ManagedFile`, ...) are never constructible with a struct literal and report E3072
+// instead"* — naming `__ManagedMemory` FIRST — while this roster held only file and directory, so
+// `__ManagedMemory{_block: 0}` answered **E3076** (*"use a static factory method instead"*, a cure that
+// cannot be written for an OS-handle type). MEASURED before the fix, and no `maxoncstderr` block pinned the
+// wrong answer, which is exactly why prose disagreed with code unwatched. ⇒ **Both missing names join here
+// at the socket slice**: `__ManagedMemory` as the defect, `__ManagedSocket` as the new arrival. The census
+// this header used to carry (*"a later slice extends the list"*) is deleted rather than re-dated — a
+// roster that states its own completeness is the thing that rots.
 //
 // ⚠ **DELIBERATELY NOT FOLDED INTO `isCompilerOwnedTypeName`, and the distinction is load-bearing rather
 // than tidy.** That predicate answers "does the compiler RESERVE this name?" — it gates D4's
@@ -5909,7 +5930,7 @@ export let ManagedMemoryFieldName = b"managed"
 // bare alias) and they are asked at different doors for different reasons; merging them would give one
 // predicate two meanings and make the next `CharacterSet`-shaped misreport inevitable.
 export function isBuiltinManagedTypeName(name ByteArray) returns bool
-	return name.equals(ManagedFileTypeName) or name.equals(ManagedDirectoryTypeName)
+	return name.equals(ManagedFileTypeName) or name.equals(ManagedDirectoryTypeName) or name.equals(ManagedMemoryTypeName) or name.equals(ManagedSocketTypeName)
 end 'isBuiltinManagedTypeName'
 
 // Its one field, per the spec's "Type Structure". Unexported and immutable: the corpus never reads or
@@ -5964,6 +5985,65 @@ export let ManagedDirectoryIteratorInvalidCaseName = b"iteratorInvalid"
 export let ManagedDirectoryCreateFailedCaseName = b"createFailed"
 export let ManagedDirectoryCurrentPathFailedCaseName = b"currentPathFailed"
 export let ManagedDirectoryClosedCaseName = b"closed"
+
+// ⭐ **THE COMPILER-OWNED `__ManagedSocket` TYPE** — an 8-byte box holding one raw OS socket handle, with
+// a runtime-owned destructor that closes it on drop. `specs/managed-socket.md`’s "Type Structure" states the
+// single `_handle` field and the RAII contract; it is the `__ManagedFile` handle mechanism one type over,
+// and deliberately NOT the two-level box `__ManagedDirectory` needs (a socket has no find-block to carry).
+//
+// ⚠ Like `__ManagedFile` and `__ManagedDirectory`, the registry name and the user-facing name are the SAME
+// bytes — which is what lets the type cross a function boundary, and `stdlib/TcpClient.maxon:16` requires
+// exactly that: it declares `var socket as __ManagedSocket` as a field of `TcpClient`.
+export let ManagedSocketTypeName = b"__ManagedSocket"
+
+// Its one field, per the spec’s "Type Structure". No corpus file writes it — `__ManagedSocket{_handle: 0}`
+// is E3072 (`managed-socket.error-direct-construction`) precisely so the handle cannot be forged.
+export let ManagedSocketHandleFieldName = b"_handle"
+export let ManagedSocketHandleFieldIndex = 0 as FieldIndex
+
+// ⭐ **THE FOUR `__ManagedSocket` METHODS — the surface BOTH references declare** (`maxon-sharp/Compiler/
+// 2-Parser.cs:1576-1583`, `maxon-selfhosted/.../LowerMaxonToStd.maxon`). One static and three instance
+// methods; a name outside this set is refused by name at its own span rather than mangled into a callee no
+// file declares. ⚠ `stdlib/TcpClient.maxon` calls ALL FOUR and nothing else (`:23`, `:43`, `:65`, `:93`),
+// so this set is the whole contract the corpus needs.
+export let ManagedSocketTcpConnectMethod = b"tcpConnect"
+export let ManagedSocketSendFromMethod = b"sendFrom"
+export let ManagedSocketRecvMethod = b"recv"
+export let ManagedSocketCloseMethod = b"close"
+
+// ⭐ **THE ERROR EVERY THROWING `__ManagedSocket` OPERATION THROWS**, and the type a handler’s `match e`
+// discriminates. DECLARED at `stdlib/Builtins.maxon:164` and read from there (A1s), exactly as the file and
+// directory families are; the reason its case ORDER is load-bearing is `Project.BuiltinErrorOrdinalCheck`’s,
+// which holds this file’s ordinals to it.
+export let ManagedSocketErrorTypeName = b"__ManagedSocketError"
+
+// The seven case names in `stdlib/Builtins.maxon:165-171`’s order — which IS their ordinal order, and
+// therefore the error flag the runtime returns. Not reorderable.
+//
+// ⚠ **`bufferOutOfBounds` IS ORDINAL 0, NOT A LATER ONE.** It reads like a rare edge case and sits first,
+// so a transcription that "tidied" the order would silently re-point every other flag by one. The
+// declaration is the authority; this list is checked against it by the ordinal guard.
+export let ManagedSocketBufferOutOfBoundsCaseName = b"bufferOutOfBounds"
+export let ManagedSocketResolveFailedCaseName = b"resolveFailed"
+export let ManagedSocketConnectFailedCaseName = b"connectFailed"
+export let ManagedSocketSendFailedCaseName = b"sendFailed"
+export let ManagedSocketRecvFailedCaseName = b"recvFailed"
+export let ManagedSocketConnectionClosedCaseName = b"connectionClosed"
+export let ManagedSocketClosedCaseName = b"closed"
+
+// ⭐ **THE PARAMETER NAMES A `__ManagedSocket` ARGUMENT MISMATCH QUOTES BACK.** They are the reference's own
+// (`maxon-sharp/Compiler/2-Parser.cs:1574-1583` registers `tcpConnect(host, port)` and
+// `sendFrom(managed, offset, length)`), so each is a fact about the SIGNATURE rather than a word this
+// compiler picks — and each is also the LABEL an author may write at the call site
+// (`stdlib/TcpClient.maxon:23` writes `port:`).
+//
+// ⚠ **ONLY THREE ARE DECLARED HERE, AND THE OTHER TWO ARE DELIBERATELY NOT COPIES.** `sendFrom`'s buffer is
+// `ManagedFileManagedParamName` and its byte offset is `ManagedMemoryOffsetParamName` — the same words for
+// the same two concepts (a `__ManagedMemory` argument, a byte offset into one), reused for
+// `ManagedFilePathParamName`'s stated reason: one word for one fact rather than a per-family copy.
+export let ManagedSocketHostParamName = b"host"
+export let ManagedSocketPortParamName = b"port"
+export let ManagedSocketLengthParamName = b"length"
 
 // ⭐ **THE ERROR A POSSIBLY-ZERO `/` OR `mod` THROWS (A1)**, and the type an `otherwise (e)` handler's
 // `match e` discriminates. Its ONE case lives with the layout, in `Project.builtinDivisionByZeroErrorEnum`.
@@ -8257,6 +8337,7 @@ export type ProgramSignatures
 	var sawSetFromConstruction as bool
 	var sawManagedFileProducer as bool
 	var sawManagedDirectoryProducer as bool
+	var sawManagedSocketProducer as bool
 	// The one need with a PAYLOAD rather than a bit: a vector's instance is keyed by its SIZE as well as its
 	// element, so the set of sizes the program constructs is what has to be carried (see
 	// `Parser.foldDeclaredSignaturesInto`'s `vectorFromSizes`). Accumulated across files with duplicates left
@@ -9062,7 +9143,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -15846,6 +15927,41 @@ export type ProgramSignatures
 		return layout
 	end 'managedDirectoryLayout'
 
+	// ⭐ **REGISTER THE COMPILER-OWNED `__ManagedSocket` TYPE** — `registerManagedFileType`'s twin, called by
+	// the declaration SWEEP when a file's tokens name it (`Parser.atManagedSocketProducer`). Idempotent, so
+	// the sweep is the WRITE and every parser read is a pure read.
+	//
+	// ⚠ It interns the byte instance for the SAME reason `registerManagedDirectoryType` does: a socket
+	// signature is written in terms of `__ManagedMemory` (`tcpConnect`'s host, `sendFrom`'s and `recv`'s
+	// buffer), and a program can reach one without writing any of the sweep's other byte-instance triggers.
+	// ⚠ The `__ManagedMemory` ALIAS itself is `registerManagedFileType`'s to upsert and is not repeated here:
+	// a file that annotates one has written the name, which is what that probe matches on.
+	export function registerManagedSocketType()
+		_ = self.bareArrayByteInstance()
+
+		if self.structTypes.contains(ManagedSocketTypeName) 'alreadyRegistered'
+			return
+		end 'alreadyRegistered'
+		self.structTypes.upsert(ManagedSocketTypeName, value: managedSocketLayout())
+	end 'registerManagedSocketType'
+
+	// The `__ManagedSocket` layout, held to the runtime's own constants by the same drift check
+	// `managedFileLayout` uses and for the same reason — the front end states the shape here, the runtime
+	// writes the socket through `ManagedSocketHandleOffset`, and two readers of one shape is the pair that
+	// drifts.
+	function managedSocketLayout() returns StructLayout
+		var layout = StructLayout.createCompilerOwned(ManagedSocketTypeName)
+		layout.addField(ManagedSocketHandleFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+
+		if layout.offsetOfField(ManagedSocketHandleFieldIndex) != ManagedSocketHandleOffset 'offsetDrift'
+			panic("managedSocketLayout: the struct layout puts `_handle` at {layout.offsetOfField(ManagedSocketHandleFieldIndex)} but the runtime reads it at {ManagedSocketHandleOffset} — the front end's shape and the runtime's field access have drifted")
+		end 'offsetDrift'
+		if layout.sizeBytes() as ParsedInt != ManagedSocketBoxBytes 'sizeDrift'
+			panic("managedSocketLayout: the struct layout is {layout.sizeBytes()} bytes but the runtime allocates {ManagedSocketBoxBytes} — the box the runtime builds and the shape the front end states have drifted")
+		end 'sizeDrift'
+		return layout
+	end 'managedSocketLayout'
+
 	// The `Set with Character` instance a `CharSet from [...]` constructs (P1.8 Slice D) — the
 	// `builtinInstanceForElement` twin. Keyed as `MaxonType.character`, the SAME arg a
 	// `typealias CharSet = Set with Character` interns, so the instance a `from` literal builds and the one the
@@ -20351,9 +20467,10 @@ export type ProgramSignatures
 			_ = self.vectorInstanceForElement(MaxonType.boolean, size: size)
 		end 'eachVectorSize'
 
-		// The two compiler-owned TYPES ride the same call, and for this function's own reason:
-		// `registerManagedFileType` and `registerManagedDirectoryType` intern the byte and word array
-		// instances themselves, so leaving them in the per-file fold would have left half the defect in place.
+		// The three compiler-owned TYPES ride the same call, and for this function's own reason:
+		// `registerManagedFileType`, `registerManagedDirectoryType` and `registerManagedSocketType` intern the
+		// byte and word array instances themselves, so leaving them in the per-file fold would have left half
+		// the defect in place.
 		// (A third, `registerCharacterSetType`, rode it until W129.)
 		if self.sawManagedFileProducer 'managedFileProducer'
 			self.registerManagedFileType()
@@ -20362,6 +20479,10 @@ export type ProgramSignatures
 		if self.sawManagedDirectoryProducer 'managedDirectoryProducer'
 			self.registerManagedDirectoryType()
 		end 'managedDirectoryProducer'
+
+		if self.sawManagedSocketProducer 'managedSocketProducer'
+			self.registerManagedSocketType()
+		end 'managedSocketProducer'
 	end 'internWellKnownContainerInstances'
 
 	// ⛔⛔ **EVERY ROW THIS WALK MINTS IS A GUESS, AND ONE READER TOOK THEM FOR FACTS (A4q).** The header above
@@ -20413,7 +20534,7 @@ export type ProgramSignatures
 	// ⚠ **TEN PARAMETERS AND NOT TEN FUNCTIONS**: ten one-line setters is ten chances to add an
 	// eleventh need and wire it at nine of the ten call sites. There is exactly one call site, so a need that
 	// is not passed does not compile.
-	export function noteWellKnownInstanceNeeds(intArrayLiteral bool, byteStringLiteral bool, stringArrayLiteral bool, aggregateArrayLiteral bool, enumAllCasesAccess bool, setFromConstruction bool, listFromConstruction bool, vectorSizes FixedSizeArray, managedFileProducer bool, managedDirectoryProducer bool)
+	export function noteWellKnownInstanceNeeds(intArrayLiteral bool, byteStringLiteral bool, stringArrayLiteral bool, aggregateArrayLiteral bool, enumAllCasesAccess bool, setFromConstruction bool, listFromConstruction bool, vectorSizes FixedSizeArray, managedFileProducer bool, managedDirectoryProducer bool, managedSocketProducer bool)
 		self.sawIntArrayLiteral = self.sawIntArrayLiteral or intArrayLiteral
 		self.sawByteStringLiteral = self.sawByteStringLiteral or byteStringLiteral
 		self.sawStringArrayLiteral = self.sawStringArrayLiteral or stringArrayLiteral
@@ -20423,6 +20544,7 @@ export type ProgramSignatures
 		self.sawListFromConstruction = self.sawListFromConstruction or listFromConstruction
 		self.sawManagedFileProducer = self.sawManagedFileProducer or managedFileProducer
 		self.sawManagedDirectoryProducer = self.sawManagedDirectoryProducer or managedDirectoryProducer
+		self.sawManagedSocketProducer = self.sawManagedSocketProducer or managedSocketProducer
 
 		for size in vectorSizes 'eachVectorSize'
 			self.vectorFromSizes.push(size)
@@ -24413,7 +24535,7 @@ export type ProgramSignatures
 	// for, so the two callers now ask one function rather than two spellings of it.
 	function aggregateNameSupportsDeepClone(name ByteArray, visited ClonerSet) returns bool
 		match compilerOwnedAggregateOf(name) 'compilerOwned'
-			managedFile to managedDirectory then return false
+			managedFile to managedSocket then return false
 			userDeclared then break 'compilerOwned'
 		end 'compilerOwned'
 		if visited.contains(name) 'cycle'

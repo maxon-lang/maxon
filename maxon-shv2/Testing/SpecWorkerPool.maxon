@@ -345,22 +345,46 @@ typealias SpecPlanArray = Array with SpecPlan
 // concatenated in plan order at the end. This is where worker-count invariance is actually won.
 typealias SpecResultBuckets = Array with SpecTestResultArray
 
-// Decide, before a single worker starts, exactly what this run will report. Specs are visited in
-// directory-listing order — which is the report order — and a spec that selects no test gets no
-// plan, and therefore no job.
+// The parent's whole answer about the run: one plan per spec that has work, and the cases the run left
+// out on purpose across ALL of them. The second half is a run-level fact and belongs to the run-level
+// walk — the workers each see one spec and could never assemble it.
+type SuitePlan
+	export let plans as SpecPlanArray
+	export let networkExcluded as ExcludedCaseArray
+
+	export static function create(plans SpecPlanArray, networkExcluded ExcludedCaseArray) returns SuitePlan
+		return Self{plans: plans, networkExcluded: networkExcluded}
+	end 'create'
+end 'SuitePlan'
+
+// Decide, before a single worker starts, exactly what this run will report — and what it will report
+// NOT running. Specs are visited in directory-listing order — which is the report order — and a spec
+// that selects no test gets no plan, and therefore no job.
+//
+// ⚠ **A SPEC WITH NO PLAN CAN STILL OWE THE CENSUS AN ENTRY**, which is why the excluded cases are
+// collected BEFORE the `selectsNothing` skip. `--filter=http-client.get` selects nothing at all on a
+// default run: every case it matched is live-network. Collecting after the skip would make that run say
+// only "no tests selected", which is true and tells the reader nothing about WHY.
 //
 // The parent parses the specs even though every worker will parse its own again, and the
 // redundancy is the point: the parent's list is the oracle the answers are checked against. It is
 // also nearly free — parsing nineteen markdown files costs less than one of the compiles it is
 // about to dispatch.
-function buildPlans(specDir FilePath, filter String, effectiveTarget Target) returns SpecPlanArray throws CompileError
+function buildPlans(specDir FilePath, filter String, effectiveTarget Target, includeNetwork bool) returns SuitePlan throws CompileError
 	var plans = SpecPlanArray.create()
+	var networkExcluded = ExcludedCaseArray.create()
 
 	let specPaths = try specFilePaths(specDir)
 	for specPath in specPaths 'eachSpec'
 		let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
 		let specName = specPath.stem()
-		let tests = selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget)
+		let selection = selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+
+		for excludedCase in selection.networkExcluded 'eachExcluded'
+			networkExcluded.push(excludedCase)
+		end 'eachExcluded'
+
+		let tests = selection.selected
 		if tests.count() == 0 'selectsNothing'
 			continue
 		end 'selectsNothing'
@@ -375,7 +399,7 @@ function buildPlans(specDir FilePath, filter String, effectiveTarget Target) ret
 		plans.push(SpecPlan.create(specName, testNames: testNames, weight: weight))
 	end 'eachSpec'
 
-	return plans
+	return SuitePlan.create(plans, networkExcluded: networkExcluded)
 end 'buildPlans'
 
 // ============================================================================================
@@ -463,7 +487,7 @@ end 'popHeaviestJob'
 // included. Print none and the parent waits forever on a line that is never coming; print two and
 // the NEXT job's drain ends early, with that job's records read as the job after it. A blank line,
 // which consumed no job, therefore owes no READY. All three READY sites are below.
-export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target) returns ExitCode
+export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
 	var stdin = Console.stdin()
 	print("{WorkerReadyMarker}\n")
 
@@ -493,7 +517,7 @@ export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filt
 			continue
 		end 'unknownJob'
 
-		runSinglesJob(compilerExe, specDir: specDir, specName: sliceAfterPrefix(job, prefix: JobSinglesPrefix), filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		runSinglesJob(compilerExe, specDir: specDir, specName: sliceAfterPrefix(job, prefix: JobSinglesPrefix), filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 		print("{WorkerReadyMarker}\n")
 	end 'jobLoop'
 
@@ -509,8 +533,8 @@ end 'runPersistentWorker'
 // when it dies, so panicking routes this diagnostic through `abortOnDeadWorker`, which prints it.
 // Returning quietly instead would leave the parent to notice a missing record and abort with no
 // idea why.
-function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target)
-	let run = try runOneSpec(compilerExe, specDir: specDir, specName: specName, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget) otherwise (e) 'specFailed'
+function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool)
+	let run = try runOneSpec(compilerExe, specDir: specDir, specName: specName, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'specFailed'
 		reportCompileError(e)
 		panic("spec worker: could not run spec '{specName}' — see the error above")
 	end 'specFailed'
@@ -947,12 +971,17 @@ type PersistentWorkerHandle
 	// have made a harness compiled by maxon.exe delegate every verdict back to maxon-shv2.exe's own
 	// in-tree harness and call the resulting agreement a pass.
 	//
-	// `filter`, `updateRequired`, the COMPILER and the effective TARGET MUST be forwarded. A worker
-	// that selected a different set of tests than the parent counted would return records the parent
-	// never asked for and omit ones it did — `resultsFromLines` turns that into a panic, but
-	// forwarding is the actual fix, and the panic is only there to make forgetting it impossible to
-	// miss.
-	export static function spawnNoWait(compilerExe FilePath, workerExe FilePath, workerId WorkerId, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target) returns PersistentWorkerHandle throws SubprocessError
+	// `filter`, `updateRequired`, `includeNetwork` (`--network`), the COMPILER and the effective TARGET
+	// MUST be forwarded. A worker that selected a different set of tests than the parent counted would
+	// return records the parent never asked for and omit ones it did — `resultsFromLines` turns that
+	// into a panic, but forwarding is the actual fix, and the panic is only there to make forgetting it
+	// impossible to miss.
+	//
+	// ⚠ **THE LIST IS THIS FUNCTION'S PARAMETERS AND NOTHING ELSE — READ IT AGAINST THE SIGNATURE.**
+	// `--network` was added below and NOT added here, so the one header whose whole job is naming what a
+	// worker must hear about went a whole slice without mentioning the flag that changes what it selects.
+	// A new selection input belongs in this sentence in the same edit that gives it a parameter.
+	export static function spawnNoWait(compilerExe FilePath, workerExe FilePath, workerId WorkerId, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
 		var argv = StringArray.create()
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
@@ -978,6 +1007,15 @@ type PersistentWorkerHandle
 		if updateRequired 'isUpdate'
 			argv.push(UpdateRequiredFlag)
 		end 'isUpdate'
+
+		// ⭐ FORWARDED FOR THE REASON `--filter` IS, and it is the same failure if it is not: the parent
+		// counted the live-network cases in its plan, and a worker that never heard about the flag would
+		// select a DIFFERENT set and answer with records the parent never asked for. Conditional like
+		// `--update-required` above rather than unconditional, so a default run's worker command line is
+		// byte-identical to what it was before this flag existed.
+		if includeNetwork 'wantsLiveNetwork'
+			argv.push(NetworkFlag)
+		end 'wantsLiveNetwork'
 
 		// Forward the effective target ONLY when it differs from the host the worker would otherwise
 		// default to. A worker is this exe relaunched; with no `--target` it resolves
@@ -1181,9 +1219,13 @@ export type PoolRun
 	export let failedWorkers as WorkerTally
 	export let cpu as SuiteCpuTally
 	export let poolSize as WorkerCount
+	// The live-network cases this run passed over, from the parent's own plan walk. It rides HERE rather
+	// than being re-derived by the reporter because deciding it a second time would need a second parse of
+	// every spec — and a second copy of the selection rules to decide it with.
+	export let networkExcluded as ExcludedCaseArray
 
-	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, poolSize WorkerCount) returns PoolRun
-		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, poolSize: poolSize}
+	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, poolSize WorkerCount, networkExcluded ExcludedCaseArray) returns PoolRun
+		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, poolSize: poolSize, networkExcluded: networkExcluded}
 	end 'create'
 end 'PoolRun'
 
@@ -1199,7 +1241,7 @@ end 'NoSlot'
 //
 // `compilerExe` is what each test is BUILT with; `workerExe` is what each worker process IS. See
 // `spawnNoWait` for why those are two parameters and not one.
-export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, effectiveTarget Target) returns PoolRun throws CompileError
+export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, effectiveTarget Target, includeNetwork bool) returns PoolRun throws CompileError
 	// ⭐ **THE TREND LOG'S OWN REFUSALS, PROVEN TO FIRE.** `ScaleHistory` reads a document a human edits
 	// and refuses around thirty ways it can be edited into a lie; nothing in the tree ran one of them.
 	// It is wired here rather than into `scale-test` because a gate only the instrument's own command
@@ -1209,9 +1251,10 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 	//
 	// ⚠ **IT GOES FIRST, AND THAT ORDER IS LOAD-BEARING.** The harness self-test below drives its
 	// fixtures by SPAWNING this harness, and a sub-run reaches this same function — so a broken trend
-	// refusal panics inside all eight sub-runs, every one of which the parent then reads as a harness
-	// fixture that "failed for the WRONG REASON". Measured: the suite's headline became `8 of 8 harness
-	// refusals did not fire`, which was false, with the real cause buried eight times in the body.
+	// refusal panics inside EVERY sub-run (one per fixture directory, plus the network gate's two), and the
+	// parent reads each fixture one as a harness fixture that "failed for the WRONG REASON". Measured when
+	// there were eight fixtures: the suite's headline became `8 of 8 harness refusals did not fire`, which
+	// was false, with the real cause buried eight times in the body.
 	// Asking this question before any sub-run exists means the parent panics on its own terms and says
 	// exactly what broke. (A green run still answers it once per sub-run, which is string work on a
 	// document of a few hundred bytes.)
@@ -1224,7 +1267,14 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 	// `HarnessSelfTest` for why a committed malformed spec cannot do this job.
 	requireHarnessRefusalsFire(workerExe, compilerExe: compilerExe, specDir: specDir)
 
-	let plans = try buildPlans(specDir, filter: filter, effectiveTarget: effectiveTarget)
+	// ⭐ **AND THAT THE LIVE-NETWORK GATE STILL GATES**, in the same slot and driven the same way. It is
+	// the other half of "the harness selects what it says it selects": the sweep above proves the harness
+	// REFUSES what it must, this proves it LEAVES OUT what it must — and says so. Ahead of `buildPlans`
+	// for that function's reason: the selection it checks is the one about to be made.
+	requireNetworkGateHolds(workerExe, compilerExe: compilerExe, specDir: specDir)
+
+	let suitePlan = try buildPlans(specDir, filter: filter, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+	let plans = suitePlan.plans
 	if plans.count() == 0 'selectsNothing'
 		// Main owns the "no tests selected" diagnostic and reads it off an empty result array.
 		// Spawning a pool only to tell it there is nothing to do would add a way for that message
@@ -1233,7 +1283,10 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 		// `poolSize` is the REQUESTED count here, and it is the same kind of placeholder as
 		// `SpecJob.idle()`: no pool was sized because none was spawned, and Main returns on the empty
 		// result array before anything reads it.
-		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0, cpu: SuiteCpuTally.zero(), poolSize: workerCount)
+		// The excluded census rides out even here — ESPECIALLY here. A run whose whole selection was
+		// live-network reaches exactly this return, and "no tests selected" on its own would state the
+		// consequence and hide the cause.
+		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0, cpu: SuiteCpuTally.zero(), poolSize: workerCount, networkExcluded: suitePlan.networkExcluded)
 	end 'selectsNothing'
 
 	try prepareSharedDirs(specDir, effectiveTarget: effectiveTarget)
@@ -1251,7 +1304,7 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 		poolSize = jobQueue.count() as WorkerCount
 	end 'moreWorkersThanJobs'
 
-	var workers = spawnPool(compilerExe, workerExe: workerExe, count: poolSize, specDir: specDir, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+	var workers = spawnPool(compilerExe, workerExe: workerExe, count: poolSize, specDir: specDir, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 
 	// Per-slot state as PARALLEL ARRAYS rather than one array of slot structs: the in-flight drain
 	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
@@ -1402,7 +1455,7 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 		panic("runSpecPool: the compile-CPU tally covers {cpu.tests()} test(s) but the run reported {results.count()} — a job's {WorkerJobCpuMarker} record was counted against the wrong job")
 	end 'cpuCoverageGap'
 
-	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, poolSize: poolSize)
+	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, poolSize: poolSize, networkExcluded: suitePlan.networkExcluded)
 end 'runSpecPool'
 
 // The buckets, in plan order — the suite's report, assembled at last from answers that arrived in
@@ -1457,11 +1510,11 @@ end 'prepareSharedDirs'
 // A worker that cannot be spawned, or that says anything other than WORKER_READY, is a PANIC.
 // There is no degraded mode to fall back to, and a pool that quietly ran with fewer workers than
 // it was asked for would be a harness lying about what it did.
-function spawnPool(compilerExe FilePath, workerExe FilePath, count WorkerCount, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target) returns PersistentWorkerHandleArray
+function spawnPool(compilerExe FilePath, workerExe FilePath, count WorkerCount, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
 	var workers = PersistentWorkerHandleArray.create()
 
 	for i in 0 upto count 'spawnPhase'
-		let handle = try PersistentWorkerHandle.spawnNoWait(compilerExe, workerExe: workerExe, workerId: i, specDir: specDir, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget) otherwise (e) 'spawnFailed'
+		let handle = try PersistentWorkerHandle.spawnNoWait(compilerExe, workerExe: workerExe, workerId: i, specDir: specDir, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'spawnFailed'
 			panic("spec worker pool: could not spawn worker {i}: {e.displayReason()}")
 		end 'spawnFailed'
 		workers.push(handle)

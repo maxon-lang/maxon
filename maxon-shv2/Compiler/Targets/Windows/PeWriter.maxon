@@ -7,10 +7,12 @@
 // debuggers when debug symbols are present. P1.0d.5b added `.data`: a WRITABLE section
 // holding the initial image of every top-level `var`. The `.rsrc` manifest opts every
 // produced binary out of Windows' UAC installer-detection heuristic (see buildRsrcSection).
-// v1's writer additionally lays down a heap arena in `.data`, a `.covdata` coverage section,
-// and an 84-slot multi-DLL import table (kernel32 / shell32 / ws2_32); those GROW back at
-// their milestones (P1.2 heap, coverage, networking). The arm64 relocation paths are
-// likewise deferred to the arm64 milestone — x64 only today.
+// The import table is MULTI-DLL as of the socket slice — kernel32 and ws2_32, one thunk run,
+// one directory entry and one Hint/Name region each, derived from `ImportDll` rather than from
+// a hard-coded count (see `ImportDll`, and `emittedDllCount` for the derivation). v1's writer
+// additionally lays down a heap arena in `.data` and a `.covdata` coverage section, and imports
+// shell32 as a third DLL; those GROW back at their milestones (P1.2 heap, coverage). The arm64
+// relocation paths are likewise deferred to the arm64 milestone — x64 only today.
 
 typealias Rva = int(0 to u64.max)
 typealias SectionFlags = int(0 to u64.max)
@@ -80,7 +82,26 @@ let TextSectionNumber = 1
 // --- Import table layout ---
 let PointerSize = 8
 let ImportDirEntrySize = 20  // one IMAGE_IMPORT_DESCRIPTOR
-let Kernel32DirEntries = 1  // M1 imports from kernel32 only
+let ImportHintFieldBytes = 2  // the hint word that precedes the name in an IMAGE_IMPORT_BY_NAME
+let ImportHintNameNulBytes = 1  // the NUL that terminates that name
+
+// ⭐ **WHICH DLL PROVIDES AN IMPORT.** Every import was kernel32 until the socket slice, and the writer
+// hard-coded ONE import directory entry — the constant was literally called `Kernel32DirEntries = 1`, under
+// this file's header note that v1's 84-slot multi-DLL import table (kernel32 / shell32 / ws2_32) grows back
+// at its milestone. Sockets are that milestone: `ws2_32.dll` is a SECOND DLL, so the table now carries one
+// thunk run, one directory entry and one Hint/Name region PER DLL, and the header has been rewritten to say
+// so rather than to promise it. shell32 remains v1's alone — see `GetCommandLineA` for why shv2 does not
+// need it.
+//
+// ⚠ **THE ORDER HERE IS THE EMISSION ORDER AND IT MUST AGREE WITH `IatSlot`'s.** Every kernel32 slot
+// precedes every ws2_32 slot in `IatSlot`, which is precisely what keeps a kernel32 slot's IAT byte offset
+// equal to `ordinal * PointerSize` — unchanged by this slice, so **no existing `iatCall` relocation moved**.
+// A ws2_32 slot pays for the null qword that terminates kernel32's run; see `iatSlotByteOffset`, which is the
+// one place that arithmetic is written.
+enum ImportDll
+	kernel32
+	ws2_32
+end 'ImportDll'
 let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 
 // --- IAT slots ---
@@ -142,8 +163,12 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // APPENDED AFTER `CancelIoEx` so every existing slot INDEX (and hence every existing `iatCall` relocation) is
 // unchanged — a reorder would silently repoint every prior import.
 //
-// ⚠ All are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
-// that constant counts import DIRECTORY entries (DLLs), not imports.
+// ⛔ **THIS IS NO LONGER ONE DLL, AND THIS LINE CLAIMED IT WAS.** It closed with *"All are kernel32, so
+// this is still ONE DLL and `Kernel32DirEntries` stays 1"* while the eight `ws2_32` cases sat a few lines
+// below it and `Kernel32DirEntries` had been DELETED. The directory count is now DERIVED —
+// `emittedDllCount` walks `ImportDll` and asks `dllIsEmitted` — so there is no constant to keep at any
+// value, and which DLL a slot belongs to is `slotDll`'s single answer. See `ImportDll` for the layout rule
+// the two runs obey.
 export enum IatSlot
 	ExitProcess
 	GetStdHandle
@@ -193,8 +218,8 @@ export enum IatSlot
 	CreateFileA
 	// ⭐ **R4.2 — THE REST OF THE FILE-IO IMPORTS.** APPENDED AFTER `CreateFileA` so every existing slot
 	// INDEX (and hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint
-	// every prior import. All five are kernel32, so `Kernel32DirEntries` stays 1 — that constant counts
-	// import DIRECTORY entries (DLLs), not imports.
+	// every prior import. All five are kernel32, so they extend that DLL's existing run and add no import
+	// DIRECTORY entry (see `ImportDll`).
 	//
 	// `GetFileSizeEx` answers `size()`; `DeleteFileA` and `MoveFileExA` are `delete`/`rename`.
 	//
@@ -213,8 +238,8 @@ export enum IatSlot
 	FindClose
 	// ⭐ **R4.3 — THE FOUR DIRECTORY IMPORTS.** APPENDED AFTER `FindClose` so every existing slot INDEX (and
 	// hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint every prior
-	// import. All four are kernel32, so `Kernel32DirEntries` stays 1 — that constant counts import DIRECTORY
-	// entries (DLLs), not imports.
+	// import. All four are kernel32, so they extend that DLL's existing run and add no import DIRECTORY
+	// entry (see `ImportDll`).
 	//
 	// ⚠ **`FindNextFileA` IS NEW, EVEN THOUGH `FindFirstFileA` AND `FindClose` ARE NOT.** R4.2 imported the
 	// first and the last for `stat`/`exists`, which open a search only to read ONE record and close it —
@@ -233,8 +258,8 @@ export enum IatSlot
 	GetFileAttributesA
 	// ⭐ **THE COMMAND-LINE IMPORT.** APPENDED AFTER `GetFileAttributesA` so every existing slot INDEX (and
 	// hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint every prior
-	// import. It is kernel32, so `Kernel32DirEntries` stays 1 — that constant counts import DIRECTORY entries
-	// (DLLs), not imports, and that is exactly what makes this a ONE-LINE addition rather than a new directory.
+	// import. It is kernel32, so it extends that DLL's existing run and adds no import DIRECTORY entry (see
+	// `ImportDll`) — which is exactly what makes this a ONE-LINE addition rather than a new directory.
 	//
 	// ⚠⚠ **THE `A` VARIANT, AND HERE IT IS NOT MERELY CONSISTENT — IT IS WHAT KEEPS THE LANE SHUT.** The
 	// bootstrap uses `GetCommandLineW` and then needs shell32's `CommandLineToArgvW` plus `WideCharToMultiByte`
@@ -251,7 +276,7 @@ export enum IatSlot
 	GetCommandLineA
 	// ⭐ **THE PROCESS-INTROSPECTION IMPORT (W5).** APPENDED AFTER `GetCommandLineA` for the reason that
 	// case states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
-	// kernel32 again, so `Kernel32DirEntries` stays 1.
+	// kernel32 again, so it adds no import DIRECTORY entry (see `ImportDll`).
 	//
 	// ⚠ **`GetStdHandle` IS NOT ADDED HERE — IT HAS BEEN A SLOT SINCE P1.2 wave A**, where `print` needed
 	// it, and `osStdHandle` reaches the same slot with the selector it is handed. That is the whole reason
@@ -264,8 +289,8 @@ export enum IatSlot
 	GetModuleFileNameA
 	// ⭐ **THE FOUR DEBUGSTREAM IMPORTS (Workstream O3).** APPENDED AFTER `GetModuleFileNameA` for the reason
 	// every entry above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is
-	// unchanged — a reorder would silently repoint every prior import. kernel32 again, so `Kernel32DirEntries`
-	// stays 1; that constant counts import DIRECTORY entries (DLLs), not imports.
+	// unchanged — a reorder would silently repoint every prior import. kernel32 again, so they add no import
+	// DIRECTORY entry (see `ImportDll`).
 	//
 	// They are emitted ONLY into a `--debugstream` build, and an import nothing references still costs its
 	// Hint/Name entry and its thunk — which is why the whole family is gated at the install rather than being
@@ -286,7 +311,7 @@ export enum IatSlot
 	GetTickCount64
 	// ⭐ **THE TWO ATTACHED-SUBPROCESS IMPORTS.** APPENDED AFTER `GetTickCount64` for the reason every entry
 	// above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
-	// kernel32 again, so `Kernel32DirEntries` stays 1.
+	// kernel32 again, so they add no import DIRECTORY entry (see `ImportDll`).
 	//
 	// `PeekNamedPipe` is what makes collecting a child's stdout AND stderr deadlock-free — see `osPipePeek`,
 	// which carries the argument in full. `TerminateProcess` is the kill a `timeoutMs` deadline owes.
@@ -297,7 +322,57 @@ export enum IatSlot
 	// two. See `isOptionalTrailingImport`.
 	PeekNamedPipe
 	TerminateProcess
+	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
+	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
+	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
+	// (the DNS half, whose failure IS `resolveFailed`), `socket`/`connect` (whose failure IS `connectFailed`),
+	// `send`/`recv`, and `closesocket` for both the explicit `close()` and the RAII drop.
+	//
+	// ⚠ **THEY ARE APPENDED AFTER EVERY kernel32 SLOT, AND THAT POSITION IS LOAD-BEARING TWICE OVER.**
+	// It keeps every pre-existing ordinal — and therefore every emitted `iatCall` relocation — byte-for-byte
+	// where it was, which is the invariant every append comment above this one states. And it puts the DLL
+	// boundary AFTER the whole kernel32 run, so `iatSlotByteOffset` needs one gap term rather than a general
+	// interleaving. **Never insert a kernel32 import below this line.**
+	WSAStartup
+	getaddrinfo
+	freeaddrinfo
+	socket
+	connect
+	send
+	recv
+	closesocket
 end 'IatSlot'
+
+// Which DLL an import comes from. A TOTAL match for `isOptionalTrailingImport`'s stated reason: an import
+// appended past the last band must fail to COMPILE here rather than quietly joining the wrong DLL's run,
+// which would point its thunk at another library's Hint/Name entry.
+function slotDll(slot IatSlot) returns ImportDll
+	return match slot 'dll'
+		ExitProcess to TerminateProcess gives ImportDll.kernel32
+		WSAStartup to closesocket gives ImportDll.ws2_32
+	end 'dll'
+end 'slotDll'
+
+// The DLL's import-table name string.
+function dllFileName(dll ImportDll) returns String
+	return match dll 'name'
+		kernel32 gives "kernel32.dll"
+		ws2_32 gives "ws2_32.dll"
+	end 'name'
+end 'dllFileName'
+
+// ⭐ **DOES THIS BINARY CARRY `dll`'s IMPORT DIRECTORY ENTRY AT ALL?** kernel32 always — `ExitProcess` is
+// how every emitted program terminates. `ws2_32` only when a producer reached the socket runtime, on exactly
+// the argument `isOptionalTrailingImport` makes for the kernel32 optional band: an import nothing references
+// still costs its thunk, its lookup entry and its Hint/Name record, and a whole unused DLL additionally costs
+// the loader a `LoadLibrary` of Winsock in every binary in the language. A program that opens no socket
+// should not pay to have Winsock mapped.
+function dllIsEmitted(dll ImportDll, sockets bool) returns bool
+	return match dll 'emitted'
+		kernel32 gives true
+		ws2_32 gives sockets
+	end 'emitted'
+end 'dllIsEmitted'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer
 // patches against. ONE accessor over the enum rather than a named function per import: a
@@ -330,22 +405,96 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
 		GetEnvironmentVariableA to TerminateProcess gives true
 		ExitProcess to GetModuleFileNameA gives false
+		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
+		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
+		// whether ws2_32's run exists at all. Answering `true` here would gate them on the DebugStream /
+		// subprocess producers — an unrelated question — and a socket binary built without a traced or
+		// spawning producer would lose its imports entirely.
+		WSAStartup to closesocket gives false
 	end 'band'
 end 'isOptionalTrailingImport'
 
-// kernel32 import names in slot (declaration) order, stopping before the optional trailing band on a build
-// that carries no producer for it — see `isOptionalTrailingImport`.
-function kernel32ImportNames(optionalImports bool) returns StringArray
+// How many DLLs this binary's import directory describes. Small by construction — one entry per
+// `ImportDll` case — but ranged rather than bare so a future DLL cannot silently overflow a tighter type.
+typealias DllTally = int(0 to 16)
+
+// The imports `dll` contributes, in slot (declaration) order, minus any optional trailing band this build
+// carries no producer for. ⭐ **ONE WALK SERVES BOTH DLLs** — the previous `kernel32ImportNames` hard-coded
+// the single-DLL assumption in its name, and a second copy for ws2_32 is exactly the one-fact-written-twice
+// bug this project keeps paying for.
+function importNamesFor(dll ImportDll, optionalImports bool) returns StringArray
 	var names = StringArray.create()
 	for slot in IatSlot.allCases 'each'
-		if isOptionalTrailingImport(slot) and not optionalImports 'noProducer'
-			continue
-		end 'noProducer'
-
-		names.push(slot.name)
+		if slotDll(slot) == dll and slotIsEmitted(slot, optionalImports: optionalImports) 'include'
+			names.push(slot.name)
+		end 'include'
 	end 'each'
 	return names
-end 'kernel32ImportNames'
+end 'importNamesFor'
+
+// ⭐ **DOES THIS IMPORT APPEAR IN ITS DLL'S RUN AT ALL?** ONE home for the membership test, asked by the
+// walk that BUILDS a run (`importNamesFor`) and by the walk that LOCATES a slot within it
+// (`slotPositionInRun`). Spelling it twice is how a thunk ends up pointing at its neighbour's Hint/Name
+// entry — the table would still be well-formed, and every call through that slot would enter the wrong
+// function.
+function slotIsEmitted(slot IatSlot, optionalImports bool) returns bool
+	return optionalImports or not isOptionalTrailingImport(slot)
+end 'slotIsEmitted'
+
+// Bytes one DLL's thunk run occupies in ONE pass: its emitted imports plus the null qword ending the run.
+// ⭐ **THAT TRAILING NULL IS THE WHOLE DIFFERENCE A SECOND DLL MAKES.** With one DLL it sat past every slot
+// and no offset had to account for it, which is why `iatSlotByteOffset` could be `slotIndex * PointerSize`.
+function dllThunkRunBytes(dll ImportDll, optionalImports bool) returns ByteCount
+	return (importNamesFor(dll, optionalImports: optionalImports).count() + 1) * PointerSize
+end 'dllThunkRunBytes'
+
+// Byte offset of `dll`'s thunk run within one pass of the thunk table.
+function dllRunOffset(dll ImportDll, optionalImports bool, sockets bool) returns ByteOffset
+	var cursor = 0
+	for d in ImportDll.allCases 'walk'
+		if dllIsEmitted(d, sockets: sockets) 'live'
+			if d == dll 'found'
+				return cursor
+			end 'found'
+
+			cursor = cursor + dllThunkRunBytes(d, optionalImports: optionalImports)
+		end 'live'
+	end 'walk'
+	panic("dllRunOffset: '{dllFileName(dll)}' has no thunk run in this binary. Every caller asks only about a DLL `dllIsEmitted` admitted, so reaching this means an `iatCall` names a slot whose DLL was gated OFF — i.e. a producer emitted a socket call without the usage scan setting `usesSockets`")
+end 'dllRunOffset'
+
+// Total bytes of the thunk table in one pass, across every emitted DLL.
+function thunkTableBytes(optionalImports bool, sockets bool) returns ByteCount
+	var total = 0
+	for d in ImportDll.allCases 'walk'
+		if dllIsEmitted(d, sockets: sockets) 'live'
+			total = total + dllThunkRunBytes(d, optionalImports: optionalImports)
+		end 'live'
+	end 'walk'
+	return total
+end 'thunkTableBytes'
+
+// Total bytes of the Hint/Name table across every emitted DLL — where the DLL-name strings begin.
+function totalHintBytes(optionalImports bool, sockets bool) returns ByteCount
+	var total = 0
+	for d in ImportDll.allCases 'walk'
+		if dllIsEmitted(d, sockets: sockets) 'live'
+			total = total + sumHintSizes(importNamesFor(d, optionalImports: optionalImports))
+		end 'live'
+	end 'walk'
+	return total
+end 'totalHintBytes'
+
+// How many import directory entries this binary carries (excluding the null terminator).
+function emittedDllCount(sockets bool) returns DllTally
+	var n = 0
+	for d in ImportDll.allCases 'walk'
+		if dllIsEmitted(d, sockets: sockets) 'live'
+			n = n + 1
+		end 'live'
+	end 'walk'
+	return n
+end 'emittedDllCount'
 
 type ImportSection
 	export var data as ByteArray
@@ -360,25 +509,43 @@ type ImportSection
 	end 'create'
 end 'ImportSection'
 
-// Byte size of one Hint/Name entry for `name`: 2-byte hint + name + NUL, padded
-// up to an even total (PE requires even alignment).
+// The bytes an IMAGE_IMPORT_BY_NAME occupies BEFORE PE's even-alignment pad: the 2-byte hint, the name,
+// the NUL.
+//
+// ⭐⭐ **THE ONE TRANSCRIPTION OF THE ENTRY'S LAYOUT.** The sizer and the appender below both read it, and
+// they are NOT interchangeable readers of one number: every thunk RVA `appendThunkPass` writes is advanced
+// by the SIZE, while the TABLE those RVAs point into is laid down by the APPENDER. Both used to spell
+// `2 + name.count() + 1` and decide the even-pad independently — one fact in two places, on a path where a
+// one-byte disagreement yields a perfectly well-formed import table in which every thunk after the first
+// points into the middle of its neighbour's entry, and the loader binds the wrong function with no
+// diagnostic anywhere.
+function importHintNameBodyBytes(name String) returns ByteCount
+	return ImportHintFieldBytes + name.toByteArray().count() + ImportHintNameNulBytes
+end 'importHintNameBodyBytes'
+
+// Byte size of one Hint/Name entry for `name`: the body, padded up to an even total (PE requires even
+// alignment). This is the number a thunk RVA advances by.
 function importHintNameEntrySize(name String) returns ByteCount
-	var total = 2 + name.toByteArray().count() + 1
-	if total mod 2 != 0 'odd'
-		total = total + 1
+	let body = importHintNameBodyBytes(name)
+	if body mod 2 != 0 'odd'
+		return body + 1
 	end 'odd'
-	return total
+	return body
 end 'importHintNameEntrySize'
 
-// Append one Hint/Name entry: `\x00\x00` (hint=0) + name + NUL + even pad.
+// Append one Hint/Name entry: `\x00\x00` (hint=0) + name + NUL + even pad. The pad is whatever the SIZER
+// says the entry costs beyond its body, so the two cannot come to disagree about the alignment rule — and
+// this loop needs no assumption about how wide the pad is.
 function appendImportHintNameEntry(data ByteArray, name String)
 	data.append(b"\x00\x00")
-	let nameBytes = name.toByteArray()
-	data.append(nameBytes)
+	data.append(name.toByteArray())
 	data.push(0)
-	if (2 + nameBytes.count() + 1) mod 2 != 0 'odd'
+	var written = importHintNameBodyBytes(name)
+	let target = importHintNameEntrySize(name)
+	while written < target 'pad'
 		data.push(0)
-	end 'odd'
+		written = written + 1
+	end 'pad'
 end 'appendImportHintNameEntry'
 
 // Sum of Hint/Name entry sizes across a run of imports — the offset delta from
@@ -403,63 +570,152 @@ function dllNameField(name String) returns ByteArray
 	return field
 end 'dllNameField'
 
-// Build the `.idata` import section: a single kernel32 DLL run importing the
-// IatSlot names. Layout: IAT [thunks + null], ILT [identical], import directory
-// [kernel32 + null], Hint/Name table, DLL-name string.
-function buildImportSection(idataRva Rva, optionalImports bool) returns ImportSection
+// ONE pass of the thunk table: every emitted DLL's run, each holding the RVA of its Hint/Name entry and
+// each closed by the all-zero qword the loader reads as "this library's imports end here". The IAT and the
+// ILT are byte-identical, which is why the caller simply runs this twice.
+//
+// ⭐ **THIS BODY FOUND A REAL BOOTSTRAP MISCOMPILE, AND THE HISTORY IS WORTH THE LINES.** Written inline in
+// `buildImportSection`, the enclosing `for _ in 0 upto ImportThunkPasses` DID NOT TERMINATE — measured
+// 583,910 passes of a 2-pass loop, with `ImportThunkPasses` reading 2 throughout — and it hung the whole
+// compiler at "Writing PE file".
+//
+// ⚠ **THE FIRST DIAGNOSIS WAS WRONG AND IS RECORDED SO NOBODY RE-DERIVES IT.** It looked like register
+// pressure, because the same four-level loop shape in a small standalone program terminated correctly. It was
+// not pressure: `StandardToX86Conversion` sized each variable's stack slot from the FIRST store it met while
+// walking blocks in LIST order, so a variable carrying both an `i32` store (from a narrow ranged initialiser
+// like this file's `DllTally`) and an `i64` store got a FOUR-byte slot under an EIGHT-byte store — and the
+// overrun landed on the loop counter allocated four bytes above it. ARM64's twin scan never had it: it
+// allocates a flat 8 per variable. ✅ **FIXED** in the bootstrap (`VarSlotBytes`), with
+// `specs/while-loops.md`’s `while-loops.counter-survives-a-narrow-ranged-neighbour` as the regression pin.
+//
+// ⇒ The hoist is therefore NO LONGER load-bearing, and it is kept on its own merits: one pass of the thunk
+// table is a coherent unit and the caller reads better for it. Inlining it back is safe now.
+function appendThunkPass(data ByteArray, idataRva Rva, hintNameOffset ByteOffset, optionalImports bool, sockets bool)
+	var running = hintNameOffset
+	for dll in ImportDll.allCases 'perDll'
+		if dllIsEmitted(dll, sockets: sockets) 'live'
+			let names = importNamesFor(dll, optionalImports: optionalImports)
+			for name in names 'thunk'
+				writeQword(data, value: idataRva + running)
+				running = running + importHintNameEntrySize(name)
+			end 'thunk'
+			writeQword(data, value: 0)
+		end 'live'
+	end 'perDll'
+end 'appendThunkPass'
+
+// Build the `.idata` import section: ONE null-terminated thunk run, directory entry and Hint/Name region
+// per emitted DLL. Layout: IAT [run per DLL, each null-terminated], ILT [identical], import directory
+// [one descriptor per DLL + null], Hint/Name table (all DLLs, in order), DLL-name strings (same order).
+//
+// ⚠ **THE FOUR CURSORS BELOW ALL WALK `ImportDll.allCases` IN THE SAME ORDER, AND THAT IS THE CONTRACT.**
+// A descriptor's `Name` RVA is computed by one walk while the string it points at is written by another; if
+// the two disagreed on order, every DLL would be loaded under its neighbour's name. Emission order is the
+// enum's declaration order, once, in every loop here.
+function buildImportSection(idataRva Rva, optionalImports bool, sockets bool) returns ImportSection
 	var data = ByteArray.create()
 	data.reserve(256)
 
-	let names = kernel32ImportNames(optionalImports)
-	let count = names.count()
-
-	let thunkTableBytes = (count + 1) * PointerSize
+	let thunkBytes = thunkTableBytes(optionalImports, sockets: sockets)
 	let iatOffset = 0
-	let iltOffset = thunkTableBytes
-	let importDirOffset = thunkTableBytes * 2
-	let importDirBytes = ImportDirEntrySize * (Kernel32DirEntries + 1)
+	let iltOffset = thunkBytes
+	// ⚠ `ImportThunkPasses`, not a literal 2: the SAME constant drives the emission loop below, so the
+	// directory can never land on top of a pass this writer actually wrote.
+	let importDirOffset = thunkBytes * ImportThunkPasses
+	let importDirBytes = ImportDirEntrySize * (emittedDllCount(sockets) + 1)
 	let hintNameOffset = importDirOffset + importDirBytes
-	let dllNameOffset = hintNameOffset + sumHintSizes(names)
 
-	// IAT then ILT (identical): each thunk holds the RVA of its Hint/Name entry,
-	// then an all-zero qword terminates the run.
+	// IAT then ILT (identical): each thunk holds the RVA of its Hint/Name entry, and an all-zero qword
+	// terminates EACH DLL's run — that per-run terminator is what the loader reads as "this library's
+	// imports end here".
 	for _ in 0 upto ImportThunkPasses 'iatIltPasses'
-		var running = hintNameOffset
-		for name in names 'thunk'
-			writeQword(data, value: idataRva + running)
-			running = running + importHintNameEntrySize(name)
-		end 'thunk'
-		writeQword(data, value: 0)
+		appendThunkPass(data, idataRva: idataRva, hintNameOffset: hintNameOffset, optionalImports: optionalImports, sockets: sockets)
 	end 'iatIltPasses'
 
-	// Import directory: the kernel32 descriptor, then a null terminator.
-	writeDword(data, value: idataRva + iltOffset)  // OriginalFirstThunk (ILT RVA)
-	writeZeros(data, n: 8)  // TimeDateStamp + ForwarderChain
-	writeDword(data, value: idataRva + dllNameOffset)  // Name RVA
-	writeDword(data, value: idataRva + iatOffset)  // FirstThunk (IAT RVA)
+	// Import directory: one IMAGE_IMPORT_DESCRIPTOR per emitted DLL, then a null terminator.
+	var nameCursor = hintNameOffset + totalHintBytes(optionalImports, sockets: sockets)
+	for dll in ImportDll.allCases 'descriptors'
+		if dllIsEmitted(dll, sockets: sockets) 'live'
+			let runOffset = dllRunOffset(dll, optionalImports: optionalImports, sockets: sockets)
+			writeDword(data, value: idataRva + iltOffset + runOffset)  // OriginalFirstThunk (ILT RVA)
+			writeZeros(data, n: 8)  // TimeDateStamp + ForwarderChain
+			writeDword(data, value: idataRva + nameCursor)  // Name RVA
+			writeDword(data, value: idataRva + iatOffset + runOffset)  // FirstThunk (IAT RVA)
+			nameCursor = nameCursor + dllNameField(dllFileName(dll)).count()
+		end 'live'
+	end 'descriptors'
 	writeZeros(data, n: ImportDirEntrySize)  // null directory terminator
 
-	// Hint/Name table + DLL-name string.
-	for name in names 'hintName'
-		appendImportHintNameEntry(data, name: name)
-	end 'hintName'
-	data.append(dllNameField("kernel32.dll"))
+	// Hint/Name table, then the DLL-name strings — both in `ImportDll` declaration order.
+	for dll in ImportDll.allCases 'hintNames'
+		if dllIsEmitted(dll, sockets: sockets) 'live'
+			let names = importNamesFor(dll, optionalImports: optionalImports)
+			for name in names 'entry'
+				appendImportHintNameEntry(data, name: name)
+			end 'entry'
+		end 'live'
+	end 'hintNames'
+	for dll in ImportDll.allCases 'dllNames'
+		if dllIsEmitted(dll, sockets: sockets) 'live'
+			data.append(dllNameField(dllFileName(dll)))
+		end 'live'
+	end 'dllNames'
 
-	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: ImportDirEntrySize * Kernel32DirEntries, iatDirSize: thunkTableBytes)
+	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: ImportDirEntrySize * emittedDllCount(sockets), iatDirSize: thunkBytes)
 end 'buildImportSection'
 
-// Byte offset of a slot within the IAT. M1's IAT is a single kernel32 run with no
-// DLL-boundary null gaps before a slot, so it is simply `slotIndex * PointerSize`.
-function iatSlotByteOffset(slotIndex RelocSlotIndex) returns ByteOffset
-	return slotIndex * PointerSize
+// ⭐⭐ **BYTE OFFSET OF A SLOT WITHIN THE IAT — and it ASKS `slotDll` rather than deducing the DLL.**
+//
+// ⛔ **IT USED TO DEDUCE IT, AND THAT WAS A SECOND DECIDER FOR A FACT `slotDll` ALREADY OWNS.** The old form
+// was `if slotIndex < iatSlotIndex(IatSlot.WSAStartup)` — a bare ordinal comparison — which is exactly the
+// `ordinal >=` test `isOptionalTrailingImport` and `slotDll` each forbid in their own headers, for the
+// reason this function proves: **add a third DLL** (the file header's roadmap names `shell32`) and
+// `slotDll`'s total match FAILS TO COMPILE, which is the guard working — but once its arm is added, the
+// ordinal test still reads "not kernel32, therefore ws2_32" and lands the new slots inside ws2_32's run or
+// on its null terminator. Silently, past the only guard built to catch it.
+//
+// Asking `slotDll` also removes the old kernel32 arm's blind spot: an index past kernel32's emitted run no
+// longer resolves to `ordinal * PointerSize` (which, with the optional band absent, pointed at a live
+// Winsock slot) — it reaches `dllRunOffset`'s panic instead.
+function iatSlotByteOffset(slotIndex RelocSlotIndex, optionalImports bool, sockets bool) returns ByteOffset
+	for slot in IatSlot.allCases 'find'
+		if iatSlotIndex(slot) == slotIndex 'found'
+			return dllRunOffset(slotDll(slot), optionalImports: optionalImports, sockets: sockets) + slotPositionInRun(slot, optionalImports: optionalImports) * PointerSize
+		end 'found'
+	end 'find'
+
+	panic("iatSlotByteOffset: slot index {slotIndex} names no IatSlot — every `iatCall` relocation is minted from `iatSlotIndex(IatSlot.…)`, so an index outside the enum means the op carried a hand-built number")
 end 'iatSlotByteOffset'
+
+// How many of `slot`'s OWN DLL's emitted imports precede it — its index within that DLL's thunk run.
+// Counts through the same `slotIsEmitted` membership test `importNamesFor` builds the run with, so the
+// position and the run cannot disagree.
+function slotPositionInRun(slot IatSlot, optionalImports bool) returns ByteCount
+	let dll = slotDll(slot)
+	var position = 0
+	for other in IatSlot.allCases 'walk'
+		if iatSlotIndex(other) == iatSlotIndex(slot) 'reached'
+			if not slotIsEmitted(slot, optionalImports: optionalImports) 'omitted'
+				panic("iatSlotByteOffset: '{slot.name}' is in the optional trailing band and this build carries no producer for it, so it has no IAT slot to point at. An `iatCall` naming it means the band's gate and the emitter disagree")
+			end 'omitted'
+
+			return position
+		end 'reached'
+
+		if slotDll(other) == dll and slotIsEmitted(other, optionalImports: optionalImports) 'counts'
+			position = position + 1
+		end 'counts'
+	end 'walk'
+
+	panic("slotPositionInRun: '{slot.name}' is not in `IatSlot.allCases`, which cannot happen for a value of that type")
+end 'slotPositionInRun'
 
 // Patch each x64 IAT relocation (a disp32 in a `call [rip+disp32]`) to the RVA of
 // its IAT entry, relative to the end of the instruction.
-function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva)
+function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva, optionalImports bool, sockets bool)
 	for reloc in relocations 'patch'
 		let ripAtReloc = textRva + reloc.codeOffset + X64Disp32Width
-		let iatEntryRva = idataRva + iatSlotByteOffset(reloc.slotIndex)
+		let iatEntryRva = idataRva + iatSlotByteOffset(reloc.slotIndex, optionalImports: optionalImports, sockets: sockets)
 		let rel = iatEntryRva - ripAtReloc
 		patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rel, what: PatchSite.x64IatDisp32, targetAddr: iatEntryRva)
 	end 'patch'
@@ -774,7 +1030,12 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	// .idata
 	let idataRva = dataRva + dataSizeVirtual
-	let idata = buildImportSection(idataRva, optionalImports: codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess)
+	// Both the table builder and the relocation patcher must answer these two questions the SAME way — the
+	// builder decides where each thunk lands and the patcher points call sites at it, so a disagreement
+	// would aim every call at the wrong import. Read once, passed to both.
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess
+	let sockets = codeResult.stdModule.usesSockets
+	let idata = buildImportSection(idataRva, optionalImports: optionalImports, sockets: sockets)
 	let idataSize = idata.data.count()
 	let idataSizeAligned = alignUp(idataSize, alignment: FileAlignment)
 	let idataSizeVirtual = alignUp(idataSize, alignment: SectionAlignment)
@@ -792,7 +1053,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let imageSize = rsrcRva + rsrcSizeVirtual
 
 	// Patch IAT + rdata relocations in the code image before it is written.
-	patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
+	patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva, optionalImports: optionalImports, sockets: sockets)
 	patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, dataRva: dataRva)
 	// Bake each String literal's `buffer@0` into the `.rdata` IMAGE now that `rdataRva` is fixed.
 	patchStringBufferFixups(codeResult.rdata, fixups: codeResult.globalData.stringBufferFixups, globalData: codeResult.globalData, rdataRva: rdataRva)
