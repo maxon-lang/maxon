@@ -2,8 +2,8 @@
 /// @category Text
 // Character receives __ManagedMemory directly for literal initialization via BuiltinCharLiteral.
 
-export typealias AsciiValue = int(0 to 127)
-export typealias Codepoint = int(0 to 1114111)
+public typealias AsciiValue = int(0 to 127)
+public typealias Codepoint = int(0 to 1114111)
 typealias Utf8ByteCount = int(0 to u64.max)
 
 // File-private. The canonical `Byte` declaration lives in
@@ -12,11 +12,11 @@ typealias Utf8ByteCount = int(0 to u64.max)
 typealias Byte = int(0 to u8.max)
 
 // CharacterError - errors for character operations
-export enum CharacterError implements Error
+public enum CharacterError implements Error
 	notAscii
 end 'CharacterError'
 
-export type Character implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Cloneable
+public type Character implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 	var managed as ByteMemory
 
@@ -31,7 +31,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	end 'init'
 
 	/// Create a deep copy of this character with independent backing storage
-	export function clone() returns Character
+	public function clone() returns Character
 		let len = managed.length()
 		let newManaged = try managed.slice(0, len) otherwise 'sliceErr'
 			panic("Character.clone: slice OOB — 0..len is always valid")
@@ -40,7 +40,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	end 'clone'
 
 	// Basic properties
-	export function byteLength() returns Utf8ByteCount
+	public function byteLength() returns Utf8ByteCount
 		return managed.length()
 	end 'byteLength'
 
@@ -50,16 +50,16 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	// Through `toString()`, because a view holds a `String` since Stage 4b-1b — see views.maxon's
 	// header for why it must. That costs this grapheme one String record; `Character.bytes()` is a
 	// rare, cold call, and the alternative was to make every `for b in someString.bytes()` allocate.
-	export function bytes() returns ByteView
+	public function bytes() returns ByteView
 		return ByteView.create(toString())
 	end 'bytes'
 
-	export function codepoints() returns CodepointView
+	public function codepoints() returns CodepointView
 		return CodepointView.create(toString())
 	end 'codepoints'
 
 	// Equatable conformance
-	export function equals(other Character) returns bool
+	public function equals(other Character) returns bool
 		let len1 = managed.length()
 		let len2 = other.managed.length()
 		if len1 != len2 'length_check'
@@ -77,7 +77,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
 	// Comparable conformance
 	// Compares characters byte-by-byte (lexicographic comparison)
-	export function compare(other Character) returns Ordering
+	public function compare(other Character) returns Ordering
 		let len1 = managed.length()
 		let len2 = other.managed.length()
 		var minLen = managed.length()
@@ -104,7 +104,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	end 'compare'
 
 	// Hashable conformance (djb2 hash algorithm)
-	export function hash() returns HashValue
+	public function hash() returns HashValue
 		var h = 5381
 		let len = managed.length()
 		for i in 0 upto len 'hash_loop'
@@ -115,12 +115,12 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	end 'hash'
 
 	// Stringable conformance - convert Character to String
-	export function toString() returns String
+	public function toString() returns String
 		return String.init(managed)
 	end 'toString'
 
 	// Decode the first Unicode codepoint from the UTF-8 bytes
-	export function codepoint() returns Codepoint
+	public function codepoint() returns Codepoint
 		let i0 = try managed.byteAt(0) otherwise 'b0Err'
 			panic("Character.codepoint: empty character — invariant violation")
 		end 'b0Err'
@@ -146,12 +146,12 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	end 'codepoint'
 
 	// Called by range-loop codegen for 'for c in start to end' over Characters.
-	export function advanceBy(n IterStep) returns Character
+	public function advanceBy(n IterStep) returns Character
 		return Character.fromCodepoint(codepoint() + n)
 	end 'advanceBy'
 
 	// Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
-	export function asciiValue() returns AsciiValue throws CharacterError
+	public function asciiValue() returns AsciiValue throws CharacterError
 		let len = managed.length()
 		if len != 1 'check_len'
 			throw CharacterError.notAscii

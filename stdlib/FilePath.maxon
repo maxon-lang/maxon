@@ -10,7 +10,7 @@
 	let otherSeparatorByte = 92
 #endif
 
-export enum FilePathError implements Error
+public enum FilePathError implements Error
 	invalidCharacter
 	notFileURL
 	noParent
@@ -20,8 +20,8 @@ typealias PathByteOffset = int(0 to u64.max)
 
 // Caller guarantees index is in bounds
 
-export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
-	export let path as String
+public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
+	public let path as String
 
 	/// Create FilePath from a string literal via `FilePath from "..."` syntax.
 	/// Panics if the path contains invalid characters or is a non-file URL.
@@ -31,7 +31,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Create FilePath from an explicit string.
 	/// Accepts file:// URLs (extracts the path) or regular path strings.
-	export static function from (path String) returns FilePath throws FilePathError
+	public static function from (path String) returns FilePath throws FilePathError
 		return try create(path)
 	end 'from'
 
@@ -148,12 +148,12 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'resolveFileURL'
 
 	/// The platform-native path separator string.
-	export static function separator() returns String
+	public static function separator() returns String
 		return pathSeparator
 	end 'separator'
 
 	// --- Stringable ---
-	export function toString() returns String
+	public function toString() returns String
 		return path
 	end 'toString'
 
@@ -178,7 +178,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Path equality matching the host filesystem's semantics:
 	/// case-insensitive on Windows, exact byte match on POSIX.
-	export function equals(other FilePath) returns bool
+	public function equals(other FilePath) returns bool
 		return canonicalForCompare(path) == canonicalForCompare(other.path)
 	end 'equals'
 
@@ -187,7 +187,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	/// Hash that agrees with `equals`: case-insensitive on Windows
 	/// so map lookups find an entry inserted with `C:\foo` when
 	/// queried with `c:\Foo`.
-	export function hash() returns HashValue
+	public function hash() returns HashValue
 		return canonicalForCompare(path).hash()
 	end 'hash'
 
@@ -199,7 +199,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	/// prefix so `/foo/bar` is NOT considered to be inside `/foo/ba`.
 	/// Case semantics match `equals` (case-insensitive on Windows,
 	/// exact on POSIX).
-	export function isInside(dir FilePath) returns bool
+	public function isInside(dir FilePath) returns bool
 		if equals(dir) 'same'
 			return true
 		end 'same'
@@ -213,11 +213,11 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	// --- Query ---
 
-	export function isEmpty() returns bool
+	public function isEmpty() returns bool
 		return path.isEmpty()
 	end 'isEmpty'
 
-	export function isAbsolute() returns bool
+	public function isAbsolute() returns bool
 		let len = path.byteLength()
 		#if os(Windows)
 			// Drive letter: X:\ (e.g. C:\)
@@ -258,7 +258,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		return false
 	end 'isAbsolute'
 
-	export function isRelative() returns bool
+	public function isRelative() returns bool
 		return not isAbsolute()
 	end 'isRelative'
 
@@ -282,7 +282,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'lastSepPlusOne'
 
 	/// Get the filename (last path component). Returns the full path if no separator.
-	export function filename() returns String
+	public function filename() returns String
 		let sepPlusOne = lastSepPlusOne()
 		if sepPlusOne == 0 'noSep'
 			return path
@@ -296,7 +296,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Get the file extension including the dot, or empty string if none.
 	/// Leading dots are not treated as extension separators (e.g. ".gitignore" has no extension).
-	export function fileExtension() returns String
+	public function fileExtension() returns String
 		let name = filename()
 		let nameLen = name.byteLength()
 		if nameLen <= 1 'tooShort'
@@ -318,7 +318,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'fileExtension'
 
 	/// Get the filename without extension (stem).
-	export function stem() returns String
+	public function stem() returns String
 		let name = filename()
 		let nameLen = name.byteLength()
 		if nameLen <= 1 'tooShort'
@@ -339,7 +339,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'stem'
 
 	/// Get the parent directory path. Throws if no parent exists.
-	export function parent() returns FilePath throws FilePathError
+	public function parent() returns FilePath throws FilePathError
 		let sepPlusOne = lastSepPlusOne()
 		if sepPlusOne == 0 'noSep'
 			throw FilePathError.noParent
@@ -354,7 +354,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	// --- Manipulation ---
 
 	/// Join this path with a child component using the platform-native separator.
-	export function join(component String) returns FilePath
+	public function join(component String) returns FilePath
 		if path.isEmpty() 'emptyBase'
 			return FilePath{path: normalizeSeparators(component)}
 		end 'emptyBase'
@@ -368,13 +368,13 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'join'
 
 	/// Join with another FilePath component.
-	export function join(component FilePath) returns FilePath
+	public function join(component FilePath) returns FilePath
 		return join(component.path)
 	end 'join'
 
 	/// Replace the file extension. newExt should include the dot (e.g. ".exe").
 	/// If no extension exists, the new extension is appended.
-	export function changeExtension(newExt String) returns FilePath
+	public function changeExtension(newExt String) returns FilePath
 		let sepPlusOne = lastSepPlusOne()
 		let name = filename()
 		let nameLen = name.byteLength()
@@ -418,7 +418,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'changeExtension'
 
 	/// Returns self (paths are normalized on construction).
-	export function normalize() returns FilePath
+	public function normalize() returns FilePath
 		return self
 	end 'normalize'
 
@@ -426,7 +426,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Resolve this path against a base directory, returning an absolute FilePath.
 	/// If this path is already absolute, returns self unchanged.
-	export function resolve(base FilePath) returns FilePath
+	public function resolve(base FilePath) returns FilePath
 		if isAbsolute() 'alreadyAbsolute'
 			return self
 		end 'alreadyAbsolute' else 'relative'
@@ -447,7 +447,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	///   - base="/proj",   self="/proj"                     -> ""
 	///   - base="/proj/",  self="/proj/main.maxon"          -> "main.maxon"
 	///   - base="/proj",   self="/other/x.maxon"            -> throws noParent
-	export function relativeTo(base FilePath) returns FilePath throws FilePathError
+	public function relativeTo(base FilePath) returns FilePath throws FilePathError
 		// Normalize away any trailing separator on `base` so callers that pass
 		// a directory with a trailing slash don't trip `startsWith`'s
 		// component-boundary check (which expects a separator AFTER the prefix
@@ -491,7 +491,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Check whether this path starts with the given directory prefix.
 	/// Compares full path components, so "/foo/bar" starts with "/foo" but not "/fo".
-	export function startsWith(prefix FilePath) returns bool
+	public function startsWith(prefix FilePath) returns bool
 		let selfStr = path
 		let prefixStr = prefix.path
 		if not selfStr.startsWith(prefixStr) 'noMatch'

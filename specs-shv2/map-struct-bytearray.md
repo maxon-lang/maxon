@@ -118,9 +118,9 @@ Multi-file version: accessing global struct fields inside an untaken if branch m
 // --- file: api/0-Types.maxon
 typealias Byte = int(0 to u8.max)
 export typealias EntryBytes = Array with Byte
-export typealias EntryCount = int(0 to u64.max)
+public typealias EntryCount = int(0 to u64.max)
 
-export type Entry
+public type Entry
 	export var data as EntryBytes
 	export var tag as EntryCount
 end 'Entry'

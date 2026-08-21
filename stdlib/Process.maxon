@@ -5,27 +5,27 @@
 ///
 /// @category System
 #if os(Windows)
-	export typealias ExitCode = int(0 to u32.max)
+	public typealias ExitCode = int(0 to u32.max)
 #else
 	// POSIX-style byte-sized exit codes on Linux and macOS. WASI shares this
 	// range: the wasm backend exits via `wasi:cli/exit.exit-with-code`, whose
 	// `status-code` is a `u8` (0..255) — wasmtime masks it to the low 8 bits.
 	// (The legacy `proc_exit` path, which wasmtime capped to [0..126), is no
 	// longer used; see `emitOsExit` in MirToWasm.)
-	export typealias ExitCode = int(0 to 255)
+	public typealias ExitCode = int(0 to 255)
 #endif
 
 /// Errors raised by current-process introspection APIs (e.g. `Process.executablePath`).
-export enum ProcessIntrospectionError implements Error
+public enum ProcessIntrospectionError implements Error
 	pathUnavailable
 end 'ProcessIntrospectionError'
 
 /// Information about the currently-running process.
-export type Process
+public type Process
 	/// Returns the absolute path to the current executable.
 	/// Uses OS-specific APIs: GetModuleFileNameA (Windows),
 	/// _NSGetExecutablePath (macOS), /proc/self/exe (Linux).
-	export static function executablePath() returns FilePath throws ProcessIntrospectionError
+	public static function executablePath() returns FilePath throws ProcessIntrospectionError
 		let managed = __Builtins.executablePath()
 		let path = String.init(managed)
 		return try FilePath.from(path) otherwise throw ProcessIntrospectionError.pathUnavailable

@@ -829,7 +829,7 @@ end 'main'
 ```maxon
 // --- file: outcome.maxon
 
-export typealias Code = int(0 to 1000)
+public typealias Code = int(0 to 1000)
 
 export union Outcome
 	ok

@@ -1,0 +1,737 @@
+// UnusedExportCheck — E3092 / E3093 / E3094: a declaration more widely visible than its uses require.
+//
+// Three diagnostics, one walk (`specs/unused-export.md`):
+//   • E3092 `semanticUnusedExportedSymbol`  — an `export` decl no file outside its declaring one names
+//   • E3093 `semanticExportableAsModule`    — an `export` decl named only inside its declaring subtree
+//   • E3094 `semanticUnusedModuleSymbol`    — a `module` decl no file outside its declaring one names
+//
+// ⭐⭐ **`public` IS THE WHOLE REASON THIS PASS EXISTS AT ALL, AND IT IS WHY THERE IS NO STDLIB
+// CARVE-OUT HERE.** The family was implemented once before (2026-08-03) and REMOVED IN FULL by user
+// ruling: *"exporting something effectively makes it part of a public api. it could be a shared module
+// that doesn't happen to use that symbol in this particular app. that doesn't mean it is dead."* That
+// objection is correct, and it is about a CONFLATION rather than about the lint — `export` was being
+// read as a claim about USE when it states only VISIBILITY. `public` separates the two:
+//   • `export` — other files may see this, AND I expect this program to use it. Audited here.
+//   • `public` — this is API surface. Exempt, because "no caller in THIS compilation" is not "dead".
+//
+// ⇒ **v1 needs TWO stdlib exemptions and this pass needs NONE.** `maxon-selfhosted` skips the whole
+// pass for the stdlib's own compile (`PassPipeline:321`) AND filters every stdlib declaration out of
+// the seed by PATH when compiling user code (`UnusedExportCheck:106`), whose comment says exactly why:
+// *"Without this filter the pass would emit E3092 against every stdlib typealias the user happens not
+// to mention."* Every one of `stdlib/`'s 680 exported declarations is `public` now, so they fall out at
+// the `isProgramWideTier`-and-not-`global` test below like any other author's API surface would. The
+// exemption became a fact the author states instead of a path this pass has to know about.
+//
+// ⚠ **WHAT IS STILL AUDITED IN `stdlib/`: its six `module` declarations** (all in `String.maxon`).
+// That is deliberate — `module` is the marked, narrower tier there, and E3094 is exactly the signal its
+// author wants if a door stops being reached. MEASURED at the time of writing: all six are named from
+// outside `String.maxon`, so none fires.
+
+// ── Gates ────────────────────────────────────────────────────────────────────────────────────────
+
+// ⭐ **THE STRUCTURAL GATE IS THE PIPELINE'S, NOT THIS PASS'S — AND THAT IS STRICTLY STRONGER THAN v1'S.**
+// v1 opens with `projectHasStructuralErrors`, skipping the audit when any lexer (1xxx), parser (2xxx) or
+// IR-stage (4xxx) diagnostic exists, so that a half-resolved reader cannot produce spurious findings. Here
+// the schedule already guarantees it: `PassPipeline.run` throws the moment ANY pass reports a diagnostic,
+// and this pass is scheduled after `semanticCheck`, so reaching it means the project's diagnostic list is
+// empty. Re-testing it here would be a second answer to a question the driver has already answered.
+
+// A one-file program's exports are its public surface and nothing outside can name them, so every
+// `export` in one would be E3092 and the diagnostic would be noise rather than a finding. v1 short-circuits
+// the same way (`UnusedExportCheck:893-899`).
+//
+// ⚠ **IT COUNTS USER FILES, NOT SOURCE PATHS.** `project.db.sourcePaths` holds every stdlib file the loader
+// pulled in, so the raw count is in the dozens for a one-file program and the gate would never fire. v1's
+// `sourcePaths` excludes the stdlib, which is what makes its `< 2` test mean what it says; shv2's does not,
+// so the stdlib half is filtered here and the question stays "how many files did the AUTHOR write?".
+let MinimumUserFilesToAudit = 2
+
+// ── What is seeded ───────────────────────────────────────────────────────────────────────────────
+
+// Which namespace a tracked declaration lives in. A reference names a FUNCTION, a TYPE or a top-level
+// BINDING, and the three cannot be confused for one another at a use site, so they are keyed apart.
+enum TrackedDeclKind
+	trackedFunction
+	trackedType
+	trackedBinding
+end 'TrackedDeclKind'
+
+// One `export`/`module` declaration and the widest scope anything has been seen to read it from.
+//
+// ⚠ **THE TWO BITS ARE MONOTONIC AND ARE NEVER NARROWED.** A declaration read from two files is read
+// from the wider of them, so every `note` widens or does nothing; a `set` that could clear one would make
+// the answer depend on which reader was visited last.
+type TrackedDecl
+	export var kind as TrackedDeclKind
+	// The key a reference is matched against — a function's compiled name, a type's name, or a binding's
+	// name. NOT the display spelling: `displayName` is what the message prints.
+	export var key as ByteArray
+	export var displayName as String
+	// The word the message calls this declaration: "function", "type", "typealias", "constant", "variable".
+	// Taken from the reference compiler's own vocabulary (`UnusedExportCheck.emitOne*`), which the spec's
+	// expectations quote verbatim.
+	export var noun as String
+	export var visibility as Visibility
+	export var declFilePath as FilePath
+	export var declModuleDirectory as String
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
+	export var sawOutsideFile as bool
+	export var sawOutsideModule as bool
+
+	export static function create(kind TrackedDeclKind, key ByteArray, displayName String, noun String, visibility Visibility, declFilePath FilePath, declModuleDirectory String, nameLine LineNumber, nameColumn ColumnNumber) returns TrackedDecl
+		return Self{kind: kind, key: key, displayName: displayName, noun: noun, visibility: visibility, declFilePath: declFilePath, declModuleDirectory: declModuleDirectory, nameLine: nameLine, nameColumn: nameColumn, sawOutsideFile: false, sawOutsideModule: false}
+	end 'create'
+end 'TrackedDecl'
+
+typealias TrackedDeclArray = Array with TrackedDecl
+typealias TrackedDeclIndex = int(0 to u64.max)
+
+// ⛔⛔ **A BARE NAME IS NOT A DECLARATION'S IDENTITY, AND KEYING THIS BY ONE PANICKED.** Two files in
+// DIFFERENT DIRECTORIES may each declare `type NsDeep` or `function pick` — that is what a namespace is
+// FOR, and `specs-shv2/namespace-qualified-resolution.md` is thirty cases about it. The index was a
+// `Map with (ByteArray, TrackedDeclIndex)`, so the second declaration's `insert` threw `keyAlreadyExists`
+// and the pass aborted the compile: MEASURED by `scale-test`'s generated corpus, which emits a namespace
+// ladder — and NOT by any of the 6,377 spec cases, because none of them declares a contested name in a
+// program that also compiles clean.
+//
+// ⇒ One name maps to EVERY declaration wearing it, and a reference to that name credits all of them.
+// That OVER-approximates where two namespaces contest a name — a use of `alpha.pick` also credits
+// `beta.pick` — and the direction is deliberate: crediting a reference too widely can only SUPPRESS a
+// finding, while resolving to the wrong one of two claimants would report a live declaration as dead.
+// Telling them apart needs the reader's own namespace precedence, which is `ProgramSignatures`' answer to
+// give, not this pass's to re-derive.
+typealias TrackedDeclIndexArray = Array with TrackedDeclIndex
+typealias TrackedDeclIndexMap = Map with (ByteArray, TrackedDeclIndexArray)
+
+// The type names one transitive walk has already been through - what makes a self-referential type
+// terminate. Per walk, not per pass: the answer depends on the READER file, so a pass-wide memo would
+// credit the second reader with the first one's result.
+typealias VisitedTypeNameSet = Set with ByteArray
+
+// The seed, plus the three by-name indexes a reference is resolved through. One array so emission order
+// is DECLARATION order and therefore deterministic — a map iteration would make the diagnostic order an
+// artifact of hashing, and two runs of one compiler must print the same bytes.
+type TrackedDecls
+	export var entries as TrackedDeclArray
+	export var functionIndex as TrackedDeclIndexMap
+	export var typeIndex as TrackedDeclIndexMap
+	export var bindingIndex as TrackedDeclIndexMap
+
+	export static function create() returns TrackedDecls
+		return Self{entries: TrackedDeclArray.create(), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create()}
+	end 'create'
+
+	export function add(decl TrackedDecl)
+		let at = self.entries.count()
+		self.entries.push(decl)
+		match decl.kind 'kind'
+			trackedFunction then self.indexUnder(self.functionIndex, key: decl.key, at: at)
+			trackedType then self.indexUnder(self.typeIndex, key: decl.key, at: at)
+			trackedBinding then self.indexUnder(self.bindingIndex, key: decl.key, at: at)
+		end 'kind'
+	end 'add'
+
+	// `upsert`, not `insert`: a contested bare name is a legal program, not a collision — see
+	// `TrackedDeclIndexMap`.
+	// ⚠ The existing list is COPIED out before the write rather than pushed to in place: `get` hands back a
+	// borrow of the map's own slot, and mutating the map through `upsert` while that borrow is live is
+	// E3070. Built fresh, the borrow ends at the `if`.
+	function indexUnder(index TrackedDeclIndexMap, key ByteArray, at TrackedDeclIndex)
+		var claimants = TrackedDeclIndexArray.create()
+		if let existing = try index.get(key) 'alreadyClaimed'
+			claimants.append(existing)
+		end 'alreadyClaimed'
+
+		claimants.push(at)
+		index.upsert(key, value: claimants)
+	end 'indexUnder'
+
+	export function at(index TrackedDeclIndex) returns TrackedDecl
+		return try self.entries.get(index) otherwise panic("TrackedDecls.at: OOB at {index} — every index handed out is one this seed minted")
+	end 'at'
+end 'TrackedDecls'
+
+// ── The pass ─────────────────────────────────────────────────────────────────────────────────────
+
+export function checkUnusedExports(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
+	let userFiles = try userSourcePaths(project)
+	if userFiles.count() < MinimumUserFilesToAudit 'tooFewFilesToHaveAnOutside'
+		return
+	end 'tooFewFilesToHaveAnOutside'
+
+	var tracked = TrackedDecls.create()
+	seedFunctions(module, signatures: signatures, tracked: tracked)
+	try seedTypes(project, signatures: signatures, userFiles: userFiles, tracked: tracked)
+	seedBindings(signatures, tracked: tracked)
+
+	if tracked.entries.count() == 0 'nothingWiderThanAFile'
+		return
+	end 'nothingWiderThanAFile'
+
+	collectReferences(module, signatures: signatures, tracked: tracked)
+	try collectTypePositionReferences(project, signatures: signatures, userFiles: userFiles, tracked: tracked)
+	emitDiagnostics(project, tracked: tracked)
+end 'checkUnusedExports'
+
+// The files the AUTHOR wrote — see `MinimumUserFilesToAudit` for why the stdlib half cannot be counted.
+function userSourcePaths(project Project) returns FilePathArray throws CompileError
+	var paths = FilePathArray.create()
+	for path in project.db.sourcePaths 'eachFile'
+		if isStdlibSourceFile(project, path: path) 'stdlibFile'
+			continue
+		end 'stdlibFile'
+		paths.push(path)
+	end 'eachFile'
+
+	return paths
+end 'userSourcePaths'
+
+// ── Seeding ──────────────────────────────────────────────────────────────────────────────────────
+
+// Is this tier one the audit has anything to say about? `file` is already as narrow as a declaration
+// gets, and `public` is the author's statement that "nobody here calls it" is not a finding.
+function tierIsAudited(visibility Visibility) returns bool
+	return match visibility 'tier'
+		file gives false
+		public gives false
+		module gives true
+		global gives true
+	end 'tier'
+end 'tierIsAudited'
+
+// ⭐ **THE NAMES NO SOURCE LINE DECLARES.** A synthesized helper has no `export` an author could drop, so
+// a finding about one is a finding about the compiler. v1 filters the same three shapes
+// (`UnusedExportCheck.isSyntheticName`).
+function isSynthesizedName(name ByteArray) returns bool
+	let text = String.from(name)
+	return text.startsWith("__") or text.contains("$closure_") or text.contains(".unionCases")
+end 'isSynthesizedName'
+
+// `main` is called by the entry stub and every module-init helper by the runtime, so neither has a
+// source-level caller to find. v1 seeds the same set plus `project.livenessRoots`, which shv2 has no
+// equivalent of — see `collectReferences` for what stands in its place.
+function isEntrypointName(name ByteArray) returns bool
+	return String.from(name).equals("main")
+end 'isEntrypointName'
+
+function seedFunctions(module MaxonModule, signatures ProgramSignatures, tracked TrackedDecls)
+	for func in module.functions 'eachFunc'
+		if not tierIsAudited(func.visibility) 'narrowEnoughAlready'
+			continue
+		end 'narrowEnoughAlready'
+
+		if func.sourceFilePath.toString().isEmpty() 'synthesizedFunction'
+			continue
+		end 'synthesizedFunction'
+
+		if isSynthesizedName(func.name) or isEntrypointName(func.name) 'noSourceLevelCaller'
+			continue
+		end 'noSourceLevelCaller'
+
+		// ⭐ **A METHOD TAKES ITS TIER FROM ITS DECLARING TYPE, SO THE TYPE OWNS THE DIAGNOSTIC.** Auditing
+		// `Point.sum` on its own reports an internal helper of a public type as dead, and — worse — an
+		// un-`export`ed method of a `module` type would report as E3093, advising a narrowing that is not
+		// expressible. v1 states the identical rule and the identical reason
+		// (`UnusedExportCheck.isMethodOnTrackedType`), and `specs/unused-export.md`'s
+		// `error.unused-exported-type` PINS it: `LocalPoint` declares two exported methods and the case
+		// expects exactly ONE diagnostic, about the type.
+		if namesAMethodOnATrackedType(signatures, qualifiedName: func.name) 'theTypeOwnsIt'
+			continue
+		end 'theTypeOwnsIt'
+
+		// ⭐ **THE MESSAGE SPELLS A FUNCTION WITH ITS NAMESPACE, AND THE SPELLING IS ASKED FOR RATHER THAN
+		// BUILT.** `specs/unused-export.md` expects `'api.unusedHelper'`, not the bare registration name the
+		// IR carries. `diagnosticCalleeSpelling` is the door every other visibility diagnostic already
+		// spells a callee through — including the guard against re-qualifying a name that is already
+		// qualified (`alpha.alpha.pick`), which a second copy of the join here would have got wrong.
+		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedFunction, key: func.name, displayName: String.from(signatures.diagnosticCalleeSpelling(func.name)), noun: "function", visibility: func.visibility, declFilePath: func.sourceFilePath, declModuleDirectory: signatures.moduleDirectoryOf(func.sourceFilePath), nameLine: func.nameLine, nameColumn: func.nameColumn))
+	end 'eachFunc'
+end 'seedFunctions'
+
+// `Owner.method` where `Owner` is a declared struct or enum. The owner is split off the LAST dot, so a
+// namespace-qualified free function (`api.helper`) is only a method if `api` is itself a type name.
+function namesAMethodOnATrackedType(signatures ProgramSignatures, qualifiedName ByteArray) returns bool
+	return match splitQualifiedName(qualifiedName) 'split'
+		notQualified gives false
+		parts(owner, _) gives signatures.containsStruct(owner) or signatures.containsEnum(owner)
+	end 'split'
+end 'namesAMethodOnATrackedType'
+
+// ⭐ **TYPES ARE SEEDED FROM THE PARSE ARTIFACTS, NOT FROM THE LAYOUT REGISTRIES, BECAUSE THE POSITION
+// LIVES THERE.** `StructLayout` and `EnumLayout` carry a `declFilePath` and no name position, and that is
+// a DELIBERATE design this pass must not undo: `TypeNameDecl`'s own header records why one array in source
+// order beats a position added to each of the four layout types (which of a file's `type Box` and
+// `typealias Box` came second is a fact no single registry holds). So the walk is per file, in source
+// order, and the tier is looked up per name.
+function seedTypes(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
+	for path in userFiles 'eachFile'
+		let artifact = try queryParseOps(project, path: path)
+		for decl in artifact.typeNameDecls 'eachTypeName'
+			seedOneTypeName(signatures, decl: decl, tracked: tracked)
+		end 'eachTypeName'
+	end 'eachFile'
+end 'seedTypes'
+
+function seedOneTypeName(signatures ProgramSignatures, decl TypeNameDecl, tracked TrackedDecls)
+	if isSynthesizedName(decl.name) 'compilerOwned'
+		return
+	end 'compilerOwned'
+
+	let visibility = declaredTypeVisibility(signatures, decl: decl)
+	if not tierIsAudited(visibility) 'narrowEnoughAlready'
+		return
+	end 'narrowEnoughAlready'
+
+	tracked.add(TrackedDecl.create(TrackedDeclKind.trackedType, key: decl.name, displayName: String.from(decl.name), noun: typeDeclNoun(decl.kind), visibility: visibility, declFilePath: decl.declFilePath, declModuleDirectory: signatures.moduleDirectoryOf(decl.declFilePath), nameLine: decl.nameLine, nameColumn: decl.nameColumn))
+end 'seedOneTypeName'
+
+// The tier a type name was declared with, asked of whichever registry holds that kind. A kind whose
+// registry has no entry answers `file`, which the caller reads as "nothing to audit" — that is the honest
+// answer for a declaration the fold dropped, not a sentinel.
+function declaredTypeVisibility(signatures ProgramSignatures, decl TypeNameDecl) returns Visibility
+	match decl.kind 'kind'
+		structType then return declaredStructVisibility(signatures, name: decl.name)
+		enumType then return declaredEnumVisibility(signatures, name: decl.name)
+		unionType then return declaredEnumVisibility(signatures, name: decl.name)
+		interfaceType then return Visibility.file
+		rangedAlias then return declaredAliasVisibility(signatures, decl: decl)
+		functionAlias then return Visibility.file
+		genericAlias then return Visibility.file
+		tupleAlias then return Visibility.file
+	end 'kind'
+end 'declaredTypeVisibility'
+
+function declaredStructVisibility(signatures ProgramSignatures, name ByteArray) returns Visibility
+	return match signatures.structOf(name) 'lookup'
+		declared(layout) gives layout.visibility
+		undeclared gives Visibility.file
+	end 'lookup'
+end 'declaredStructVisibility'
+
+function declaredEnumVisibility(signatures ProgramSignatures, name ByteArray) returns Visibility
+	return match signatures.enumOf(name) 'lookup'
+		declared(layout) gives layout.visibility
+		undeclared gives Visibility.file
+	end 'lookup'
+end 'declaredEnumVisibility'
+
+function declaredAliasVisibility(signatures ProgramSignatures, decl TypeNameDecl) returns Visibility
+	return match signatures.aliasOf(decl.name, readerFilePath: decl.declFilePath) 'lookup'
+		declared(alias) gives alias.visibility
+		undeclared gives Visibility.file
+	end 'lookup'
+end 'declaredAliasVisibility'
+
+// The word the diagnostic calls a type declaration, matching the reference compiler's vocabulary: a
+// struct, enum or union is a "type" and an alias is a "typealias".
+function typeDeclNoun(kind TypeDeclKind) returns String
+	return match kind 'kind'
+		structType gives "type"
+		enumType gives "type"
+		unionType gives "type"
+		interfaceType gives "type"
+		rangedAlias gives "typealias"
+		functionAlias gives "typealias"
+		genericAlias gives "typealias"
+		tupleAlias gives "typealias"
+	end 'kind'
+end 'typeDeclNoun'
+
+function seedBindings(signatures ProgramSignatures, tracked TrackedDecls)
+	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
+		let decl = signatures.declAt(i)
+		if not tierIsAudited(decl.visibility) 'narrowEnoughAlready'
+			continue
+		end 'narrowEnoughAlready'
+
+		if isSynthesizedName(decl.name) 'compilerOwned'
+			continue
+		end 'compilerOwned'
+
+		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedBinding, key: decl.name, displayName: String.from(decl.name), noun: "variable" if decl.mutable else "constant", visibility: decl.visibility, declFilePath: decl.declFilePath, declModuleDirectory: signatures.moduleDirectoryOf(decl.declFilePath), nameLine: decl.nameLine, nameColumn: decl.nameColumn))
+	end 'eachDecl'
+end 'seedBindings'
+
+// ── Reference collection ─────────────────────────────────────────────────────────────────────────
+
+// ⭐⭐ **EVERY REFERENCE IS READ OFF WHAT THE RESOLUTION ALREADY PRODUCED — nothing here re-derives what a
+// name means.** That is `DeadGlobalElimination`'s discipline and it is adopted for its reason: a use
+// resolves local → capture → top-level, and re-deriving that order has produced a silent wrong answer
+// every time something tried. So a call is a `call`/`tryCall`/`asyncCall`/`functionRef` op's own callee
+// name, a stored global is a `globalAddr`'s own label, and a type is an id the type layer already interned.
+//
+// ⚠ **WHAT STANDS IN FOR v1'S `livenessRoots`:** nothing needs to. v1 pins witness-table entries and
+// function-backed enum case targets by hand because its IR loses the edge; shv2 emits a `functionRef` for
+// a function VALUE, so the same functions are reached by the ordinary walk below.
+function collectReferences(module MaxonModule, signatures ProgramSignatures, tracked TrackedDecls)
+	for func in module.functions 'eachFunc'
+		let readerFilePath = func.sourceFilePath
+		if readerFilePath.toString().isEmpty() 'synthesizedReaderNamesNothingAnAuthorWrote'
+			continue
+		end 'synthesizedReaderNamesNothingAnAuthorWrote'
+
+		let readerModuleDirectory = signatures.moduleDirectoryOf(readerFilePath)
+		noteSignatureTypes(func, signatures: signatures, tracked: tracked, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		noteBodyReferences(module, func: func, signatures: signatures, tracked: tracked, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'eachFunc'
+
+	noteCrossFileConstantReads(signatures, tracked: tracked)
+	noteTopLevelInitializerCallees(signatures, tracked: tracked)
+end 'collectReferences'
+
+// A declared signature names types in the DECLARING file — its parameters, its return and its `throws`.
+// That is a reference like any other: `function consumeAlias(value UnusedAlias)` is what keeps
+// `UnusedAlias` alive for its own file, and `specs/unused-export.md`'s
+// `error.unused-exported-typealias` is the case that pins it (the alias IS named, in-file, and is still
+// E3092 because nothing OUTSIDE names it).
+function noteSignatureTypes(func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, readerFilePath FilePath, readerModuleDirectory String)
+	for paramType in func.maxonParamTypes 'eachParam'
+		noteSignatureType(signatures, tracked: tracked, type: paramType, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'eachParam'
+
+	// A `void` return names no type. `unresolved` is the arm the walk below already drops, so it stands in
+	// for "no type" rather than a second shape of "nothing" invented here.
+	let returned = match func.maxonReturnType 'ret'
+		value(t) gives t
+		void gives MaxonType.unresolved
+	end 'ret'
+	noteSignatureType(signatures, tracked: tracked, type: returned, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+
+	noteThrowsType(func, signatures: signatures, tracked: tracked, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+
+	// ⛔⛔ **`IrFunction.valueNameIds` IS DELIBERATELY NOT READ HERE, AND THE ATTEMPT PRODUCED A WRONG
+	// ANSWER.** It is the obvious source for "what named types does this body mention?" — a dense
+	// per-SSA-value column of interned `TypeNameId`s. But it is dense by ValueId over a column that
+	// includes slots no value in THIS function occupies, and such a slot carries a leftover tag and a
+	// leftover id rather than the `UnnamedTypeId` filler its header describes.
+	//
+	// **MEASURED:** `function main() returns ExitCode / return entry()` — a body naming no type at all,
+	// with no parameters — reports `v0 tag=named nameId=1`, and project-global id 1 was whatever alias
+	// happened to intern first. So `export typealias UnusedAlias`, used only as an IN-FILE parameter
+	// type, was credited with a read from `app/main.maxon` and `specs/unused-export.md`'s
+	// `error.unused-exported-typealias` compiled CLEAN instead of reporting E3092. Gating on the parallel
+	// `valueTags` does not cure it: the leftover slot's TAG is `named` too. Renaming the aliases moved the
+	// false read to whichever one then held id 1, which is what identified it.
+	//
+	// ⇒ The coverage it was reaching for — "another file names this type" — is served precisely, and
+	// without any interner id, by `noteQualifiedOwner` on the callee walk: a file that uses a type
+	// CALLS something on it (`LocalPoint.origin()`, `p.sum()`), and the owner half of that qualified
+	// callee name is the reference.
+end 'noteSignatureTypes'
+
+function noteBodyReferences(module MaxonModule, func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, readerFilePath FilePath, readerModuleDirectory String)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("checkUnusedExports: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("checkUnusedExports: opRef {opIdx} not in module.ops")
+			noteOpReferences(signatures, tracked: tracked, op: op, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		end 'eachOp'
+	end 'eachBlock'
+end 'noteBodyReferences'
+
+// A `throws E` clause names `E` in the declaring file. Split out because a match arm is ONE statement,
+// and `throwsClauseName` already answers "is there one?" by throwing rather than by a second predicate.
+function noteThrowsType(func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, readerFilePath FilePath, readerModuleDirectory String)
+	let errorName = try throwsClauseName(func.throwsTypeName) otherwise return
+	noteTypeName(signatures, tracked: tracked, name: errorName.toByteArray(), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+end 'noteThrowsType'
+
+// ⭐⭐ **CALLING A FUNCTION USES ITS SIGNATURE, AND THE CALLER'S FILE IS WHERE THAT USE HAPPENS.** A file
+// can depend on a type through a callee without ever writing the name: `try risky(9) otherwise (e)` binds
+// `e` to `risky`'s declared error union, and `var a = Outer.build()` binds `a` to a record declared in a
+// third file. Both were MEASURED reporting E3092 against the very type the case exists to pass across a
+// file boundary. The return type is asked through `returnTypeOf`, which ADOPTS the id into the reader's
+// interner — the discipline that door exists for, and the reason this is not a raw id read.
+function noteCalleeSignature(signatures ProgramSignatures, tracked TrackedDecls, callee ByteArray, readerFilePath FilePath, readerModuleDirectory String)
+	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return
+	noteTypeName(signatures, tracked: tracked, name: errorName.toByteArray(), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+end 'noteCalleeSignature'
+
+function noteOpReferences(signatures ProgramSignatures, tracked TrackedDecls, op MaxonOp, readerFilePath FilePath, readerModuleDirectory String)
+	// `direct` and `functionValue` are one answer here: both name a function this file reaches, and the
+	// distinction between them is about whether a RESOLVER may rewrite the name, which this pass never does.
+	if maxonOpCalleeKind(op) != MaxonCalleeKind.noCallee 'namesACallee'
+		noteFunctionName(signatures, tracked: tracked, name: maxonOpCalleeName(op), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		noteCalleeSignature(signatures, tracked: tracked, callee: maxonOpCalleeName(op), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'namesACallee'
+
+	if maxonOpNamesAGlobalLabel(op) 'namesAStoredGlobal'
+		noteGlobalLabel(signatures, tracked: tracked, label: maxonOpGlobalLabelName(op), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'namesAStoredGlobal'
+end 'noteOpReferences'
+
+// ⭐⭐ **EVERY TYPE NAME EACH FILE WROTE IN A TYPE POSITION — the one source that survives ERASURE.**
+// A ranged typealias in a signature is `integer` by the time any pass sees it (MEASURED: `scoreOf(s Score)`
+// declared in another file leaves `maxonParamTypes` holding `integer` with `UnnamedTypeId`), so reading
+// declared types alone reports a genuinely-used `export typealias` as E3092 — a wrong answer. The parser
+// already records this set for E3062, which asks the same question one scope narrower ("did this FILE use
+// its own alias?"), so the answer is shared rather than re-derived.
+function collectTypePositionReferences(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
+	for path in userFiles 'eachFile'
+		let artifact = try queryParseOps(project, path: path)
+		let readerModuleDirectory = signatures.moduleDirectoryOf(path)
+		for name in artifact.usedTypeNames 'eachUsedName'
+			noteTypeName(signatures, tracked: tracked, name: name, readerFilePath: path, readerModuleDirectory: readerModuleDirectory)
+		end 'eachUsedName'
+	end 'eachFile'
+end 'collectTypePositionReferences'
+
+// v1's `crossFileConstReads`, in shv2's spelling — see `ProgramSignatures.notedConstantValue` for why an
+// inlined constant cannot be found in the IR at all.
+function noteCrossFileConstantReads(signatures ProgramSignatures, tracked TrackedDecls)
+	for i in 0 upto signatures.crossFileConstantReadCount() 'eachRead'
+		let read = signatures.crossFileConstantReadAt(i)
+		noteBindingName(signatures, tracked: tracked, name: read.name, readerFilePath: read.readerFilePath, readerModuleDirectory: signatures.moduleDirectoryOf(read.readerFilePath))
+	end 'eachRead'
+end 'noteCrossFileConstantReads'
+
+// ── Matching a reference to a seeded declaration ─────────────────────────────────────────────────
+
+function noteFunctionName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String)
+	noteQualifiedOwner(signatures, tracked: tracked, callee: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	if let claimants = try tracked.functionIndex.get(name) 'tracked'
+		noteEveryClaimant(tracked, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'tracked'
+end 'noteFunctionName'
+
+// ⭐ **A CALL TO `Owner.member` IS A REFERENCE TO `Owner`.** This is how one file names another file's
+// TYPE in practice — `LocalPoint.origin()`, `p.sum()`, `Status.fromRawValue(…)` — and it is read off the
+// callee name the resolution already produced, so it needs no interner id and cannot collide the way
+// `IrFunction.valueNameIds` did (see `noteSignatureTypes`). A callee whose owner half is not a tracked
+// type simply matches nothing: a namespace-qualified free function (`api.helper`) resolves against the
+// FUNCTION index above, not this one.
+function noteQualifiedOwner(signatures ProgramSignatures, tracked TrackedDecls, callee ByteArray, readerFilePath FilePath, readerModuleDirectory String)
+	match splitQualifiedName(callee) 'split'
+		notQualified then return
+		parts(owner, _) then noteTypeName(signatures, tracked: tracked, name: owner, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'split'
+end 'noteQualifiedOwner'
+
+// ⭐⭐ **USING A TYPE USES THE TYPES IT IS MADE OF, AND WITHOUT THAT THE CHECK REPORTS A WRONG ANSWER.**
+// A file can depend on a type without ever writing its name: `let c = Gate.make().c` names `Gate` and
+// consumes a `Color`, and `try f() otherwise …` catches a `Woe` its file never spells. MEASURED — those
+// two shapes were 9 of the corpus's failures, every one of them a spec whose SUBJECT is that the
+// cross-file reference works. v1 propagates the same way and for the same reason
+// (`UnusedExportCheck.propagateFieldTypeUse`, memoized by `UseVisited`).
+//
+// The walk is bounded by `visited`, which is what makes a self-referential type (`type Node { next as
+// Node }`) terminate rather than recurse forever.
+function noteTypeName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String)
+	var visited = VisitedTypeNameSet.create()
+	noteTypeNameTransitively(signatures, tracked: tracked, name: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+end 'noteTypeName'
+
+function noteTypeNameTransitively(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	if visited.contains(name) 'alreadyWalked'
+		return
+	end 'alreadyWalked'
+	visited.insert(name)
+
+	if let claimants = try tracked.typeIndex.get(name) 'tracked'
+		noteEveryClaimant(tracked, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'tracked'
+
+	// A type this pass does not TRACK is still walked through: a file-private struct may hold a field of
+	// an exported type, and a reader that reaches the one reaches the other.
+	noteStructFieldTypes(signatures, tracked: tracked, name: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+	noteEnumPayloadTypes(signatures, tracked: tracked, name: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+end 'noteTypeNameTransitively'
+
+function noteStructFieldTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	match signatures.structOf(name) 'lookup'
+		undeclared then return
+		declared(layout) then noteComponentTypes(signatures, tracked: tracked, types: layout.fieldTypes, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+	end 'lookup'
+end 'noteStructFieldTypes'
+
+function noteEnumPayloadTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	match signatures.enumOf(name) 'lookup'
+		undeclared then return
+		declared(layout) then noteEveryPayloadType(signatures, tracked: tracked, layout: layout, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+	end 'lookup'
+end 'noteEnumPayloadTypes'
+
+function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls, layout EnumLayout, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	for payloadFields in layout.casePayloads 'eachCase'
+		for field in payloadFields 'eachField'
+			noteComponentType(signatures, tracked: tracked, type: field.declaredType, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		end 'eachField'
+	end 'eachCase'
+end 'noteEveryPayloadType'
+
+function noteComponentTypes(signatures ProgramSignatures, tracked TrackedDecls, types MaxonTypeArray, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	for fieldType in types 'eachField'
+		noteComponentType(signatures, tracked: tracked, type: fieldType, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+	end 'eachField'
+end 'noteComponentTypes'
+
+// ⛔ **`typeNameIdOf` IS NOT A NAME-ID GETTER FOR EVERY ARM, AND USING IT AS ONE CONFLATES TWO ID
+// SPACES.** Its `typeParameter` and `genericInstance` arms return a type-parameter DIGEST and a
+// `GenericInstanceId` — both ride the same column so the value round-trips, but neither indexes the type
+// NAME interner. Resolving one through `typeNameOf` asks the wrong table and answers with whatever name
+// happens to occupy that slot, which is the same shape of defect `IrFunction.valueNameIds` produced.
+//
+// ⭐ And a generic instance's TYPE ARGUMENTS are references in their own right: `Array with Item` names
+// `Item`, and nothing else in this walk would ever reach it.
+function noteComponentType(signatures ProgramSignatures, tracked TrackedDecls, type MaxonType, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	match type 'type'
+		named(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		structRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		interfaceRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		function(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		genericInstance(id) then noteInstanceArgs(signatures, tracked: tracked, id: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		// A type PARAMETER's id is a digest, not a name, and the parameter itself names no declaration.
+		typeParameter then return
+		boolean to float then return
+		exitCode to unresolved then return
+		string then return
+		character then return
+	end 'type'
+end 'noteComponentType'
+
+function noteInstanceArgs(signatures ProgramSignatures, tracked TrackedDecls, id GenericInstanceId, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArg'
+		noteComponentType(signatures, tracked: tracked, type: signatures.substitutedInstanceArg(id, position: position), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+	end 'eachArg'
+end 'noteInstanceArgs'
+
+function noteComponentTypeName(signatures ProgramSignatures, tracked TrackedDecls, nameId TypeNameId, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	if nameId == UnnamedTypeId 'namesNothing'
+		return
+	end 'namesNothing'
+
+	let componentName = try signatures.typeNameOf(nameId) otherwise return
+	noteTypeNameTransitively(signatures, tracked: tracked, name: componentName, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+end 'noteComponentTypeName'
+
+function noteBindingName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String)
+	noteQualifiedOwner(signatures, tracked: tracked, callee: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	if let claimants = try tracked.bindingIndex.get(name) 'tracked'
+		noteEveryClaimant(tracked, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'tracked'
+end 'noteBindingName'
+
+// A stored global is reached by its `.data` LABEL, which is what the op carries; the seed is keyed by
+// source name. The arena holds both, so the label is translated here rather than the seed being keyed by
+// something a `let` does not have (an immutable binding has no label at all — see `TopLevelDecl.dataLabel`).
+function noteGlobalLabel(signatures ProgramSignatures, tracked TrackedDecls, label ByteArray, readerFilePath FilePath, readerModuleDirectory String)
+	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
+		let decl = signatures.declAt(i)
+		if decl.hasStorage and decl.dataLabel.equals(label) 'thisOne'
+			noteBindingName(signatures, tracked: tracked, name: decl.name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+			noteSlotType(signatures, tracked: tracked, index: i, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+			return
+		end 'thisOne'
+	end 'eachDecl'
+end 'noteGlobalLabel'
+
+// ⭐⭐ **THE CLASSIFICATION RULE, AND ITS ONE DELIBERATE DIVERGENCE FROM WHAT `module` MEANS.** A reader in
+// the SAME DIRECTORY as the declaration counts as OUTSIDE its module subtree, even though
+// `Visibility.module` would make the declaration visible to it. That is v1's rule
+// (`UnusedExportCheck.recordRead`) and it is not an oversight: without it, every flat two-file program
+// would be told to downgrade its `export`s to `module`, which is advice about a program's directory
+// layout rather than about its visibility. Only a STRICTLY NESTED reader keeps a declaration
+// downgradable — which is why the equality case is excluded here rather than left to
+// `moduleDirectoryContains`, whose own answer includes it.
+function noteRead(tracked TrackedDecls, index TrackedDeclIndex, readerFilePath FilePath, readerModuleDirectory String)
+	var decl = tracked.at(index)
+	if decl.declFilePath.toString().equals(readerFilePath.toString()) 'itsOwnFile'
+		return
+	end 'itsOwnFile'
+
+	decl.sawOutsideFile = true
+
+	let strictlyNested = moduleDirectoryContains(decl.declModuleDirectory, inner: readerModuleDirectory) and not decl.declModuleDirectory.equals(readerModuleDirectory)
+	if not strictlyNested 'outsideTheSubtree'
+		decl.sawOutsideModule = true
+	end 'outsideTheSubtree'
+
+	try tracked.entries.set(index, value: decl) otherwise panic("checkUnusedExports: entries.set OOB at {index} — the index came from this seed")
+end 'noteRead'
+
+// ── Emission ─────────────────────────────────────────────────────────────────────────────────────
+
+// In DECLARATION order, which is the order the seed was built in — see `TrackedDecls`.
+function emitDiagnostics(project Project, tracked TrackedDecls)
+	for i in 0 upto tracked.entries.count() 'eachTracked'
+		emitOne(project, decl: tracked.at(i))
+	end 'eachTracked'
+end 'emitDiagnostics'
+
+function emitOne(project Project, decl TrackedDecl)
+	match decl.visibility 'tier'
+		file then panic("checkUnusedExports: a `file` declaration reached emit ({decl.noun} '{decl.displayName}') — `tierIsAudited` filters it at seed time")
+		public then panic("checkUnusedExports: a `public` declaration reached emit ({decl.noun} '{decl.displayName}') — `tierIsAudited` filters it at seed time, which is the whole of the exemption")
+		module then emitForModuleTier(project, decl: decl)
+		global then emitForGlobalTier(project, decl: decl)
+	end 'tier'
+end 'emitOne'
+
+function emitForModuleTier(project Project, decl TrackedDecl)
+	if not decl.sawOutsideFile 'nothingOutsideNamesIt'
+		reportPositioned(project, code: ErrorCode.semanticUnusedModuleSymbol, message: "module {decl.noun} '{decl.displayName}' is never referenced outside its declaring file", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+	end 'nothingOutsideNamesIt'
+end 'emitForModuleTier'
+
+function emitForGlobalTier(project Project, decl TrackedDecl)
+	if not decl.sawOutsideFile 'nothingOutsideNamesIt'
+		reportPositioned(project, code: ErrorCode.semanticUnusedExportedSymbol, message: "exported {decl.noun} '{decl.displayName}' is never referenced outside its declaring file", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+		return
+	end 'nothingOutsideNamesIt'
+
+	if not decl.sawOutsideModule 'onlyItsOwnSubtreeNamesIt'
+		reportPositioned(project, code: ErrorCode.semanticExportableAsModule, message: "exported {decl.noun} '{decl.displayName}' is only referenced inside its declaring module subtree; consider 'module' visibility", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+	end 'onlyItsOwnSubtreeNamesIt'
+end 'emitForGlobalTier'
+
+// ⭐ **A TOP-LEVEL INITIALIZER'S CALLS, ATTRIBUTED TO THE FILE THAT WROTE THEM.** `var a = Outer.build()`
+// is lowered into the synthesized `__module_init`, whose `sourceFilePath` is empty — so the body walk
+// skips it and the call is invisible. Asked per DECLARATION instead, which is what carries the declaring
+// file, rather than off `globalInitCallees()`, whose flat list has lost it. MEASURED on
+// `top-level-factory-globals/factory-returning-a-record-declared-in-another-file`.
+function noteTopLevelInitializerCallees(signatures ProgramSignatures, tracked TrackedDecls)
+	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
+		let decl = signatures.declAt(i)
+		noteOneInitializersCallees(signatures, tracked: tracked, decl: decl)
+	end 'eachDecl'
+end 'noteTopLevelInitializerCallees'
+
+function noteOneInitializersCallees(signatures ProgramSignatures, tracked TrackedDecls, decl TopLevelDecl)
+	match signatures.declScopeInitializerCall(decl) 'initializer'
+		none then return
+		calls(callees) then noteEveryInitializerCallee(signatures, tracked: tracked, callees: callees, readerFilePath: decl.declFilePath, readerModuleDirectory: signatures.moduleDirectoryOf(decl.declFilePath))
+	end 'initializer'
+end 'noteOneInitializersCallees'
+
+function noteEveryInitializerCallee(signatures ProgramSignatures, tracked TrackedDecls, callees ByteArrayArray, readerFilePath FilePath, readerModuleDirectory String)
+	for callee in callees 'eachCallee'
+		noteFunctionName(signatures, tracked: tracked, name: callee, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		noteCalleeSignature(signatures, tracked: tracked, callee: callee, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'eachCallee'
+end 'noteEveryInitializerCallee'
+
+// A declared signature type, walked with the same arm-correct rules the component walk uses — so a
+// parameter typed `Array with Item` credits `Item` exactly as a field of that type would.
+function noteSignatureType(signatures ProgramSignatures, tracked TrackedDecls, type MaxonType, readerFilePath FilePath, readerModuleDirectory String)
+	var visited = VisitedTypeNameSet.create()
+	noteComponentType(signatures, tracked: tracked, type: type, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+end 'noteSignatureType'
+
+// Every declaration wearing the referenced name — see `TrackedDeclIndexMap` for why there can be more
+// than one and why crediting all of them is the safe direction.
+function noteEveryClaimant(tracked TrackedDecls, claimants TrackedDeclIndexArray, readerFilePath FilePath, readerModuleDirectory String)
+	for at in claimants 'eachClaimant'
+		noteRead(tracked, index: at, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'eachClaimant'
+end 'noteEveryClaimant'
+
+// ⭐ **REFERENCING A BINDING USES ITS TYPE** — see `ProgramSignatures.globalSlotType` for the measurement.
+// The slot type is walked with the same transitive rules a field type is, so naming `db` reaches
+// `Database`, the `EntryMap` it holds and the `Entry` inside that.
+function noteSlotType(signatures ProgramSignatures, tracked TrackedDecls, index TopLevelDeclIndex, readerFilePath FilePath, readerModuleDirectory String)
+	match signatures.globalSlotType(index) 'slot'
+		notFound then return
+		found(_, valueType, _) then noteSignatureType(signatures, tracked: tracked, type: valueType, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'slot'
+end 'noteSlotType'

@@ -26,24 +26,24 @@ typealias TraceKeyArray = Array with String
 var capturing = false
 var captured = TraceKeyArray.create()
 
-export type Log
+public type Log
 	/// Emit a trace key. No-op when capture is off.
 	/// Pass a stable identifier like "partitionMerge.fire" — keys are matched
 	/// literally by tests, so they should not embed run-specific data.
-	export static function trace(key String)
+	public static function trace(key String)
 		if capturing 'on'
 			captured.push(key)
 		end 'on'
 	end 'trace'
 
 	/// Begin recording trace keys. Discards any previously captured keys.
-	export static function startCapture()
+	public static function startCapture()
 		captured.clear()
 		capturing = true
 	end 'startCapture'
 
 	/// Stop recording and return the captured keys in emission order.
-	export static function stopCapture() returns TraceKeyArray
+	public static function stopCapture() returns TraceKeyArray
 		capturing = false
 		let result = captured.clone()
 		captured.clear()
@@ -53,7 +53,7 @@ export type Log
 	/// Predicate: did `key` appear at least once in `capturedKeys`?
 	/// Tests assert on this — never on counts or payloads — so a refactor that
 	/// legitimately changes how often a path fires does not break the suite.
-	export static function fired(capturedKeys TraceKeyArray, key String) returns bool
+	public static function fired(capturedKeys TraceKeyArray, key String) returns bool
 		for emittedKey in capturedKeys 'scan'
 			if emittedKey == key 'match'
 				return true

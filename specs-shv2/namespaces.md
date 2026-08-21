@@ -365,7 +365,7 @@ end 'main'
 // --- file: sub/helper.maxon
 typealias Slot = int(0 to 100)
 
-export function pick(slot Slot)
+public function pick(slot Slot)
 	print("sub {slot}\n")
 end 'pick'
 ```
@@ -385,7 +385,7 @@ the fault rather than the contest itself.
 // --- file: sub/helper.maxon
 typealias Slot = int(0 to 100)
 
-export function pick(slot Slot)
+public function pick(slot Slot)
 	print("sub {slot}\n")
 end 'pick'
 
@@ -447,7 +447,7 @@ end 'SubError'
 
 typealias Slot = int(0 to 100)
 
-export function pick(slot Slot) returns Slot throws SubError
+public function pick(slot Slot) returns Slot throws SubError
 	if slot > 50 'tooBig'
 		throw SubError.subBad
 	end 'tooBig'

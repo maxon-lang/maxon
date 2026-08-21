@@ -309,7 +309,7 @@ error E3014: other/<fragment>:16:11: cannot access unexported field: 'v' outside
 // --- file: feature/box.maxon
 typealias Integer = int(i64.min to i64.max)
 
-export type Box
+public type Box
 	module var v as Integer
 
 	export static function create(v Integer) returns Self

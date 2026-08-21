@@ -207,7 +207,7 @@ cascade skips it. Declared in a sibling file it was refused exactly as the alias
 program in one file (below) ran.
 ```maxon
 // --- file: color.maxon
-export enum Color
+public enum Color
 	red
 	green
 end 'Color'
@@ -355,7 +355,7 @@ skips it and the read copies it. Declared in a sibling file it is the same scala
 typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
 
-export function inc(v Integer) returns Integer
+public function inc(v Integer) returns Integer
 	return v + 1
 end 'inc'
 
@@ -635,7 +635,7 @@ against any interner. It is what localises the defect above to the NAME RESOLUTI
 unions, to cross-file layouts, or to the drop cascade itself.
 ```maxon
 // --- file: bag.maxon
-export union Payloaded
+public union Payloaded
 	some(v String)
 	none
 end 'Payloaded'

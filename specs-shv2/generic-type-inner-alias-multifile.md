@@ -90,7 +90,7 @@ end 'main'
 typealias Count = int(0 to u64.max)
 typealias Integer = int(i64.min to i64.max)
 
-export type Item
+public type Item
 	export var value as Integer
 	export static function create(value Integer) returns Self
 		return Self{value: value}

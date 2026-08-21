@@ -137,6 +137,7 @@ export enum TokenKind
 	let = "let"
 	typealias = "typealias"
 	export = "export"
+	public = "public"
 	// Control flow
 	if = "if"
 	else = "else"
@@ -1653,6 +1654,12 @@ var keywordMap = [
 	b"enum": KeywordInfo.create(TokenKind.enum, helpText: "Declares an enum type with named cases, optional raw values, and methods.", canHaveBlockLabel: false),
 	b"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
 	b"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
+	// ⭐ **A REAL LEXER KEYWORD, UNLIKE `module`, AND THAT IS A MEASUREMENT TOO.** `module` cannot be one
+	// because the word is an ordinary identifier 6,537 times in `maxon-shv2/` alone (see
+	// `Parser.atModuleModifier`). `public` is used ZERO times as an identifier anywhere in the tree — 45
+	// occurrences, every one inside a comment or a string — so it costs nothing to reserve program-wide and
+	// needs none of `module`'s contextual machinery.
+	b"public": KeywordInfo.create(TokenKind.public, helpText: "Makes a declaration visible to other modules AND marks it as public API surface, exempting it from the unused-export diagnostics (E3092/E3093). Visibility is identical to `export`; the difference is that `public` states the symbol exists for callers outside this program, so \"nobody here references it\" is not a finding.", canHaveBlockLabel: false),
 	b"static": KeywordInfo.create(TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false),
 	b"interface": KeywordInfo.create(TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false),
 	b"extension": KeywordInfo.create(TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false),

@@ -13,8 +13,8 @@ typealias BytePos = int(0 to u64.max)
 /// A handle into a `JsonDoc`'s node arena. The root of every parsed document
 /// is `0`; allocator order is deterministic but otherwise unspecified.
 /// Exported so callers can hold and pass node ids by name across files.
-export typealias JsonNodeId = int(0 to u64.max)
-export typealias JsonNodeIdArray = Array with JsonNodeId
+public typealias JsonNodeId = int(0 to u64.max)
+public typealias JsonNodeIdArray = Array with JsonNodeId
 typealias ChildCount = int(0 to u64.max)
 typealias ChildIndex = int(0 to u64.max)
 
@@ -48,7 +48,7 @@ end 'JsonAccessError'
 /// Discriminant for `JsonNode`. Payload lives in the node's typed fields per
 /// kind; readers should `match` on the kind before reading payload fields.
 /// Exported so callers can switch on `doc.rootKind()` from outside this file.
-export enum JsonKind
+public enum JsonKind
 	jsonNull
 	jsonBool
 	jsonNumber
@@ -65,40 +65,40 @@ end 'JsonKind'
 ///   jsonString      → stringValue
 ///   jsonArray       → children
 ///   jsonObject      → keys parallel to children
-// JsonNode's fields and static constructors are `export`-marked because
+// JsonNode's fields and static constructors are `public`-marked because
 // sibling types (`JsonDoc`, the parser, the emitter) read/construct nodes
 // by field. Maxon's field visibility is type-scoped rather than file-scoped.
-// The type itself is also exported because callers in other files build
+// The type itself is also `public` because callers in other files build
 // nodes via `JsonNode.stringNode(...)` when constructing response payloads.
-export type JsonNode
-	export var kind as JsonKind
-	export var boolValue = false
-	export var numberValue = 0.0
-	export var stringValue as String = ""
-	export var keys as StringArray = StringArray.create()
-	export var children as JsonNodeIdArray = JsonNodeIdArray.create()
+public type JsonNode
+	public var kind as JsonKind
+	public var boolValue = false
+	public var numberValue = 0.0
+	public var stringValue as String = ""
+	public var keys as StringArray = StringArray.create()
+	public var children as JsonNodeIdArray = JsonNodeIdArray.create()
 
-	export static function nullNode() returns JsonNode
+	public static function nullNode() returns JsonNode
 		return Self{kind: JsonKind.jsonNull}
 	end 'nullNode'
 
-	export static function boolNode(value bool) returns JsonNode
+	public static function boolNode(value bool) returns JsonNode
 		return Self{kind: JsonKind.jsonBool, boolValue: value}
 	end 'boolNode'
 
-	export static function numberNode(value JsonFloat) returns JsonNode
+	public static function numberNode(value JsonFloat) returns JsonNode
 		return Self{kind: JsonKind.jsonNumber, numberValue: value}
 	end 'numberNode'
 
-	export static function stringNode(value String) returns JsonNode
+	public static function stringNode(value String) returns JsonNode
 		return Self{kind: JsonKind.jsonString, stringValue: value}
 	end 'stringNode'
 
-	export static function arrayNode(children JsonNodeIdArray) returns JsonNode
+	public static function arrayNode(children JsonNodeIdArray) returns JsonNode
 		return Self{kind: JsonKind.jsonArray, children: children}
 	end 'arrayNode'
 
-	export static function objectNode(keys StringArray, children JsonNodeIdArray) returns JsonNode
+	public static function objectNode(keys StringArray, children JsonNodeIdArray) returns JsonNode
 		return Self{kind: JsonKind.jsonObject, keys: keys, children: children}
 	end 'objectNode'
 end 'JsonNode'
@@ -107,47 +107,47 @@ typealias JsonNodeArray = Array with JsonNode
 
 // Exported so callers building response objects can construct the parallel
 // key/child arrays for `JsonNode.objectNode(...)`.
-export typealias StringArray = Array with String
+public typealias StringArray = Array with String
 
 /// Owns the parsed JSON tree. Cheap to pass by reference; clone via `clone()`
 /// if independent mutation is needed.
 // Field/method visibility in Maxon is type-scoped, not file-scoped. The
 // emitter functions (`writeNode` etc.) and the parser (`JsonParser`) live
 // outside `JsonDoc` but need to read `root`/`nodes` and call `get`/`add` —
-// so those are `export`-marked.
-// `JsonDoc` is exported so callers in other files can hold one (returned
+// so those are `public`-marked.
+// `JsonDoc` is `public` so callers in other files can hold one (returned
 // from `Json.parse`) and pass it to other entry points. Methods on it
 // (other than `create`/`add`/`get`/`rootKind`, which the parser needs) are
-// instance-callable through inferred receiver types without an export tag.
-export type JsonDoc
-	export var nodes as JsonNodeArray = JsonNodeArray.create()
-	export var root as JsonNodeId = 0
+// instance-callable through inferred receiver types without a visibility modifier.
+public type JsonDoc
+	public var nodes as JsonNodeArray = JsonNodeArray.create()
+	public var root as JsonNodeId = 0
 
-	export static function create() returns JsonDoc
+	public static function create() returns JsonDoc
 		return Self{}
 	end 'create'
 
 	/// Allocate a new node and return its id.
-	export function add(node JsonNode) returns JsonNodeId
+	public function add(node JsonNode) returns JsonNodeId
 		let id = nodes.count()
 		nodes.push(node)
 		return id
 	end 'add'
 
-	export function get(id JsonNodeId) returns JsonNode
+	public function get(id JsonNodeId) returns JsonNode
 		return try nodes.get(id) otherwise 'getErr'
 			panic("JsonDoc.get: id {id} out of arena bounds (count={nodes.count()})")
 		end 'getErr'
 	end 'get'
 
-	export function rootKind() returns JsonKind
+	public function rootKind() returns JsonKind
 		return get(root).kind
 	end 'rootKind'
 
 	/// Object-key lookup. Throws if `parent` isn't a jsonObject, or if the
 	/// key is absent. Returns the child node id; use the typed `getString` /
 	/// `getInt` / `getBool` helpers when you want the leaf value directly.
-	export function getChild(parent JsonNodeId, key String) returns JsonNodeId throws JsonAccessError
+	public function getChild(parent JsonNodeId, key String) returns JsonNodeId throws JsonAccessError
 		let node = get(parent)
 		match node.kind 'k'
 			jsonObject then return try findKeyInNode(node, key: key)
@@ -155,7 +155,7 @@ export type JsonDoc
 		end 'k'
 	end 'getChild'
 
-	export function getString(parent JsonNodeId, key String) returns String throws JsonAccessError
+	public function getString(parent JsonNodeId, key String) returns String throws JsonAccessError
 		let childId = try getChild(parent, key: key)
 		let child = get(childId)
 		match child.kind 'k'
@@ -164,7 +164,7 @@ export type JsonDoc
 		end 'k'
 	end 'getString'
 
-	export function getInt(parent JsonNodeId, key String) returns JsonInt throws JsonAccessError
+	public function getInt(parent JsonNodeId, key String) returns JsonInt throws JsonAccessError
 		let childId = try getChild(parent, key: key)
 		let child = get(childId)
 		match child.kind 'k'
@@ -173,7 +173,7 @@ export type JsonDoc
 		end 'k'
 	end 'getInt'
 
-	export function getBool(parent JsonNodeId, key String) returns bool throws JsonAccessError
+	public function getBool(parent JsonNodeId, key String) returns bool throws JsonAccessError
 		let childId = try getChild(parent, key: key)
 		let child = get(childId)
 		match child.kind 'k'
@@ -183,7 +183,7 @@ export type JsonDoc
 	end 'getBool'
 
 	/// Array length. Throws if the node isn't an array.
-	export function arrayLength(id JsonNodeId) returns ChildCount throws JsonAccessError
+	public function arrayLength(id JsonNodeId) returns ChildCount throws JsonAccessError
 		let node = get(id)
 		match node.kind 'k'
 			jsonArray then return node.children.count()
@@ -192,7 +192,7 @@ export type JsonDoc
 	end 'arrayLength'
 
 	/// Array element by index.
-	export function arrayAt(id JsonNodeId, index ChildIndex) returns JsonNodeId throws JsonAccessError
+	public function arrayAt(id JsonNodeId, index ChildIndex) returns JsonNodeId throws JsonAccessError
 		let node = get(id)
 		match node.kind 'k'
 			jsonArray then return try node.children.get(index) otherwise throw JsonAccessError.outOfBounds
@@ -209,10 +209,10 @@ end 'JsonDoc'
 /// `Json.parse(text)` / `Json.stringify(doc)`. The free-function form would
 /// clash with other stdlib parsers (e.g. `URL.parse`), so this is the
 /// canonical entry point.
-export type Json
+public type Json
 	/// Parse a JSON document. The returned `JsonDoc` owns the full node arena;
 	/// `doc.root` is the top-level value's id.
-	export static function parse(text String) returns JsonDoc throws JsonError
+	public static function parse(text String) returns JsonDoc throws JsonError
 		var doc = JsonDoc.create()
 		var parser = JsonParser.create(text.toByteArray(), doc: doc)
 		parser.skipWhitespace()
@@ -227,7 +227,7 @@ export type Json
 
 	/// Serialize a `JsonDoc` rooted at `doc.root` to compact RFC 8259 output.
 	/// Non-finite numbers (NaN, Infinity) are emitted as `null` to stay valid JSON.
-	export static function stringify(doc JsonDoc) returns String
+	public static function stringify(doc JsonDoc) returns String
 		var out = ByteArray.create()
 		writeNode(doc, id: doc.root, out: out)
 		return String.from(out)
@@ -238,7 +238,7 @@ export type Json
 	/// framing differs. Pass `doc.root` to pretty-print the whole document, or any
 	/// node id to serialize one value out of a shared arena without first copying
 	/// it into a doc of its own.
-	export static function stringifyPrettyNode(doc JsonDoc, root JsonNodeId) returns String
+	public static function stringifyPrettyNode(doc JsonDoc, root JsonNodeId) returns String
 		var out = ByteArray.create()
 		writeNodePretty(doc, id: root, depth: 0, out: out)
 		return String.from(out)
@@ -271,7 +271,7 @@ end 'findKeyInNode'
 type JsonParser
 	var bytes as ByteArray
 	var pos as BytePos = 0
-	export var doc as JsonDoc
+	public var doc as JsonDoc
 
 	static function create(bytes ByteArray, doc JsonDoc) returns JsonParser
 		return Self{bytes: bytes, doc: doc}

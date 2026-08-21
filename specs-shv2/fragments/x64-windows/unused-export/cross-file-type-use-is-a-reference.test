@@ -1,0 +1,55 @@
+// Test: cross-file-type-use-is-a-reference
+// --- file: api/shapes.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type UsedPoint
+	export var x as Integer
+
+	export static function origin() returns UsedPoint
+		return UsedPoint{x: 4}
+	end 'origin'
+end 'UsedPoint'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let p = UsedPoint.origin()
+	return p.x
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.leaRegSlot rax, slot0
+    x64.movRegImm32 rcx, 4
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

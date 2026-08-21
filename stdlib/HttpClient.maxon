@@ -1,7 +1,7 @@
 /// HTTP/1.1 client for making HTTP requests over TCP.
 /// @category Network
 /// HTTP client errors
-export enum HttpError implements Error
+public enum HttpError implements Error
 	invalidUrl
 	connectFailed
 	sendFailed
@@ -10,7 +10,7 @@ export enum HttpError implements Error
 end 'HttpError'
 
 /// HTTP request methods
-export enum HttpMethod
+public enum HttpMethod
 	get
 	post
 	put
@@ -20,23 +20,23 @@ export enum HttpMethod
 end 'HttpMethod'
 
 /// Case-insensitive HTTP header map.
-export type HttpHeaders
+public type HttpHeaders
 	typealias CaseInsensitiveHeaders = Map with String, String
 
-	export var headers as CaseInsensitiveHeaders
+	public var headers as CaseInsensitiveHeaders
 
-	export static function create() returns HttpHeaders
+	public static function create() returns HttpHeaders
 		return HttpHeaders{headers: CaseInsensitiveHeaders.create()}
 	end 'create'
 
 	/// Set a header (name is lowercased for case-insensitive storage).
-	export function set(name String, value String)
+	public function set(name String, value String)
 		var key = name
 		headers.upsert(key.toLower(), value: value)
 	end 'set'
 
 	/// Get a header value by name. Throws if not present.
-	export function get(name String) returns String throws HttpError
+	public function get(name String) returns String throws HttpError
 		var key = name
 		let val = try headers.get(key.toLower()) otherwise 'notFound'
 			throw HttpError.invalidResponse
@@ -45,21 +45,21 @@ export type HttpHeaders
 	end 'get'
 
 	/// Check if a header is present.
-	export function has(name String) returns bool
+	public function has(name String) returns bool
 		var key = name
 		return headers.contains(key.toLower())
 	end 'has'
 end 'HttpHeaders'
 
 /// An HTTP request with method, URL, headers, and body.
-export type HttpRequest
+public type HttpRequest
 	var httpMethod as HttpMethod
 	var requestUrl as URL
 	var requestHeaders as HttpHeaders
 	var requestBody as String
 
 	/// Create a request from a method and URL string.
-	export static function create(method HttpMethod, url String) returns HttpRequest throws HttpError
+	public static function create(method HttpMethod, url String) returns HttpRequest throws HttpError
 		let parsed = try URL.parse(url) otherwise 'badUrl'
 			throw HttpError.invalidUrl
 		end 'badUrl'
@@ -72,34 +72,34 @@ export type HttpRequest
 	end 'create'
 
 	/// Set a request header.
-	export function setHeader(name String, value String)
+	public function setHeader(name String, value String)
 		requestHeaders.set(name, value: value)
 	end 'setHeader'
 
 	/// Set the request body.
-	export function setBody(body String)
+	public function setBody(body String)
 		requestBody = body
 	end 'setBody'
 
-	export function url() returns URL
+	public function url() returns URL
 		return requestUrl
 	end 'url'
 
-	export function method() returns HttpMethod
+	public function method() returns HttpMethod
 		return httpMethod
 	end 'method'
 
-	export function headers() returns HttpHeaders
+	public function headers() returns HttpHeaders
 		return requestHeaders
 	end 'headers'
 
-	export function body() returns String
+	public function body() returns String
 		return requestBody
 	end 'body'
 end 'HttpRequest'
 
 /// HTTP status codes.
-export enum StatusCode
+public enum StatusCode
 	ok = 200
 	created = 201
 	noContent = 204
@@ -120,44 +120,44 @@ export enum StatusCode
 end 'StatusCode'
 
 /// An HTTP response with status code, headers, and body.
-export type HttpResponse
+public type HttpResponse
 	var code as StatusCode
 	var reasonPhrase as String
 	var responseHeaders as HttpHeaders
 	var responseBody as String
 
-	export static function create(code StatusCode, reasonPhrase String, responseHeaders HttpHeaders, responseBody String) returns HttpResponse
+	public static function create(code StatusCode, reasonPhrase String, responseHeaders HttpHeaders, responseBody String) returns HttpResponse
 		return HttpResponse{code: code, reasonPhrase: reasonPhrase, responseHeaders: responseHeaders, responseBody: responseBody}
 	end 'create'
 
-	export function statusCode() returns StatusCode
+	public function statusCode() returns StatusCode
 		return code
 	end 'statusCode'
 
-	export function reason() returns String
+	public function reason() returns String
 		return reasonPhrase
 	end 'reason'
 
-	export function headers() returns HttpHeaders
+	public function headers() returns HttpHeaders
 		return responseHeaders
 	end 'headers'
 
-	export function body() returns String
+	public function body() returns String
 		return responseBody
 	end 'body'
 
 	/// Get a response header by name. Throws if not present.
-	export function header(name String) returns String throws HttpError
+	public function header(name String) returns String throws HttpError
 		return try responseHeaders.get(name)
 	end 'header'
 end 'HttpResponse'
 
 /// Stateless HTTP/1.1 client. All methods are static.
 /// HTTP only (no TLS). Uses Connection: close for simple response reading.
-export type HttpClient
+public type HttpClient
 
 	/// Send an HTTP request and return the response.
-	export static function send(request HttpRequest) returns HttpResponse throws HttpError
+	public static function send(request HttpRequest) returns HttpResponse throws HttpError
 		let url = request.url()
 		let host = try url.host() otherwise 'noHost'
 			throw HttpError.invalidUrl
@@ -220,13 +220,13 @@ export type HttpClient
 	end 'send'
 
 	/// Perform an HTTP GET request.
-	export static function get(url String) returns HttpResponse throws HttpError
+	public static function get(url String) returns HttpResponse throws HttpError
 		let request = try HttpRequest.create(HttpMethod.get, url: url)
 		return try send(request)
 	end 'get'
 
 	/// Perform an HTTP POST request with a body.
-	export static function post(url String, body String) returns HttpResponse throws HttpError
+	public static function post(url String, body String) returns HttpResponse throws HttpError
 		var request = try HttpRequest.create(HttpMethod.post, url: url)
 		request.setBody(body)
 		request.setHeader("content-type", value: "application/x-www-form-urlencoded")
@@ -234,14 +234,14 @@ export type HttpClient
 	end 'post'
 
 	/// Perform an HTTP PUT request with a body.
-	export static function put(url String, body String) returns HttpResponse throws HttpError
+	public static function put(url String, body String) returns HttpResponse throws HttpError
 		var request = try HttpRequest.create(HttpMethod.put, url: url)
 		request.setBody(body)
 		return try send(request)
 	end 'put'
 
 	/// Perform an HTTP DELETE request.
-	export static function delete(url String) returns HttpResponse throws HttpError
+	public static function delete(url String) returns HttpResponse throws HttpError
 		let request = try HttpRequest.create(HttpMethod.delete, url: url)
 		return try send(request)
 	end 'delete'

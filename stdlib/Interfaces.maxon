@@ -3,8 +3,8 @@
 /// Iterable, Stringable/FormattedStringable, plus the base `Error` interface
 /// that every error enum implements.
 /// @category Core
-export typealias HashValue = int(0 to u32.max)
-export typealias IterStep = int(i64.min to i64.max)
+public typealias HashValue = int(0 to u32.max)
+public typealias IterStep = int(i64.min to i64.max)
 
 // Error - marker interface for throwable error types
 // Only enums can conform to Error. Error enums represent distinct error conditions
@@ -19,26 +19,26 @@ export typealias IterStep = int(i64.min to i64.max)
 //       notFound = 404
 //       serverError = 500
 //   end 'HttpError'
-export interface Error
+public interface Error
 end 'Error'
 
 // IterationError - errors for iterator navigation
 // exhausted: advance() past the last element
 // atStart:   retreat() before the first element
-export enum IterationError implements Error
+public enum IterationError implements Error
 	exhausted
 	atStart
 end 'IterationError'
 
 // Ordering - result of comparing two values
-export enum Ordering
+public enum Ordering
 	lessThan
 	equalTo
 	greaterThan
 end 'Ordering'
 
 // Hashable - types that can be hashed to an integer
-export interface Hashable
+public interface Hashable
 	function hash() returns HashValue
 end 'Hashable'
 
@@ -102,7 +102,7 @@ let HashMixWidthMask = 0xFFFFFFFF as HashMixWord
 // is already the index, so both operations become one bounds-checked array access with no hash, no
 // rehash chain and two columns instead of four. That is what shv2's `BlockKeyedTable` is, and why
 // it exists even though this function had already made the quadratic above unreachable.
-export function spreadHash(hash HashValue) returns HashValue
+public function spreadHash(hash HashValue) returns HashValue
 	var h = hash as HashMixWord
 	h = h xor (h shr 16)
 	h = (h * HashMixMultiplierA) and HashMixWidthMask
@@ -113,17 +113,17 @@ export function spreadHash(hash HashValue) returns HashValue
 end 'spreadHash'
 
 // Equatable - types that can be compared for equality
-export interface Equatable
+public interface Equatable
 	function equals(other Self) returns bool
 end 'Equatable'
 
 // Comparable - types that can be ordered
-export interface Comparable
+public interface Comparable
 	function compare(other Self) returns Ordering
 end 'Comparable'
 
 // Cloneable - types that can be copied
-export interface Cloneable
+public interface Cloneable
 	function clone() returns Self
 end 'Cloneable'
 
@@ -140,7 +140,7 @@ end 'Cloneable'
 // advance() moves to the next element; throws IterationError.exhausted when
 // called while positioned on the final element. A thrown advance() leaves the
 // position unchanged, so current() still returns that final element.
-export interface Iterator uses Element
+public interface Iterator uses Element
 	function current() returns Element
 	function advance() throws IterationError
 end 'Iterator'
@@ -148,8 +148,8 @@ end 'Iterator'
 // Extension methods for Iterator - available on all conforming types.
 // advanceBy(n) defaults to calling advance() n times; concrete iterators may
 // override with a faster implementation.
-export extension Iterator
-	export function advanceBy(n IterStep) throws IterationError
+public extension Iterator
+	public function advanceBy(n IterStep) throws IterationError
 		var i = 0
 		while i < n 'loop'
 			try self.advance()
@@ -161,12 +161,12 @@ end 'Iterator'
 // BidirectionalIterator - iterators that can walk backward as well as forward.
 // Types implementing this must also supply retreat(); retreatBy(n) is supplied
 // as an extension method.
-export interface BidirectionalIterator extends Iterator
+public interface BidirectionalIterator extends Iterator
 	function retreat() throws IterationError
 end 'BidirectionalIterator'
 
-export extension BidirectionalIterator
-	export function retreatBy(n IterStep) throws IterationError
+public extension BidirectionalIterator
+	public function retreatBy(n IterStep) throws IterationError
 		var i = 0
 		while i < n 'loop'
 			try self.retreat()
@@ -186,17 +186,17 @@ end 'BidirectionalIterator'
 // declares it (Array, List, Map, Set, Vector, Range, String and the three String views — 11 of 11);
 // the requirement did not, and a dispatch is typed off the REQUIREMENT, so the flag those impls
 // write was read by nobody and the error was dropped.
-export interface Iterable uses Element, Iter
+public interface Iterable uses Element, Iter
 	function createIterator() returns Iter throws IterationError
 end 'Iterable'
 
 // Extension methods for Iterable - available on all conforming types
-export extension Iterable
+public extension Iterable
 	typealias ElementArray = Array with Element
 	typealias ElementTransform = function(Element) returns Element
 	typealias ElementPredicate = function(Element) returns bool
 
-	export function map(transform ElementTransform) returns ElementArray
+	public function map(transform ElementTransform) returns ElementArray
 		var result = ElementArray{}
 		for item in self 'loop'
 			result.push(transform(item))
@@ -204,7 +204,7 @@ export extension Iterable
 		return result
 	end 'map'
 
-	export function filter(keep ElementPredicate) returns ElementArray
+	public function filter(keep ElementPredicate) returns ElementArray
 		var result = ElementArray{}
 		for item in self 'loop'
 			if keep(item) 'match'
@@ -214,7 +214,7 @@ export extension Iterable
 		return result
 	end 'filter'
 
-	export function contains(predicate ElementPredicate) returns bool
+	public function contains(predicate ElementPredicate) returns bool
 		for item in self 'loop'
 			if predicate(item) 'match'
 				return true
@@ -225,7 +225,7 @@ export extension Iterable
 
 	typealias WithIterSelf = WithIterIterator with Iter, Element
 
-	export function withIterator() returns WithIterSelf throws IterationError
+	public function withIterator() returns WithIterSelf throws IterationError
 		let iter = try self.createIterator()
 		return WithIterSelf.create(iter)
 	end 'withIterator'
@@ -235,13 +235,13 @@ end 'Iterable'
 // Built-in types (int, float, bool, byte, character, string) are handled by the
 // compiler directly and do not need to implement this interface.
 // Implement this for user-defined types: "{myValue}" calls toString()
-export interface Stringable
+public interface Stringable
 	function toString() returns String
 end 'Stringable'
 
 // FormattedStringable - enables format specifiers in string interpolation
 // Implement this for user-defined types that support: "{myValue:format}"
 // The format string after the colon is passed to toString(format)
-export interface FormattedStringable
+public interface FormattedStringable
 	function toString(format String) returns String
 end 'FormattedStringable'

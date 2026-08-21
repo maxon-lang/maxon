@@ -660,6 +660,29 @@ export enum ErrorCode
 	symbolNotInModuleScope = "E3088"
 	// A typealias chain refers back to itself.
 	semanticTypeResolutionCycle = "E3091"
+	// An 'export' symbol is never referenced outside its declaring file. Drop the modifier, make it 'module', or say 'public' if it is API surface.
+	// an `export` (global) decl is never referenced from any file
+	// outside its declaring file. The decl could be file-private (drop the
+	// modifier) or `module`-visible. Applies to functions, types, enums,
+	// typealiases, top-level constants, top-level vars, and exported struct
+	// fields. Emitted by `checkUnusedExports` after all files have been
+	// parsed and type-resolved.
+	// A `public` declaration is EXEMPT. `export` says "other files may see
+	// this, and I expect this program to use it"; `public` says "this is API
+	// surface", so "no caller in this compilation" is not a finding about it.
+	// That distinction is what makes this diagnostic answerable at all: see
+	// `Visibility` in maxon-shv2/Compiler/Project.maxon.
+	semanticUnusedExportedSymbol = "E3092"
+	// An 'export' symbol is referenced only inside its declaring directory subtree. It could be 'module', or 'public' if it is API surface.
+	// an `export` (global) decl is referenced only from files inside
+	// its declaring directory subtree. The decl could be downgraded to
+	// `module`-visible. Emitted by `checkUnusedExports`.
+	semanticExportableAsModule = "E3093"
+	// A 'module' symbol is never referenced outside its declaring file. It could be file-private.
+	// a `module` decl is never referenced from any file other than
+	// the one it was declared in. The decl could be file-private (drop the
+	// `module` modifier). Emitted by `checkUnusedExports`.
+	semanticUnusedModuleSymbol = "E3094"
 	// A bare function name has more than one reachable definition; qualify it as 'dir.name()'.
 	// a bare-name function call has more than one reachable
 	// definition under directory-as-module rules. The user must write the

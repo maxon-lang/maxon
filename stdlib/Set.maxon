@@ -8,7 +8,7 @@ typealias MemberCount = int(0 to u64.max)
 // three-state space, whose failure mode was a state added to ONE of them: a compile error there and
 // SILENCE here, i.e. a wrong iteration answer from a container that still compiles.
 
-export type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, SetIter) where Element is Hashable and Equatable
+public type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, SetIter) where Element is Hashable and Equatable
 	typealias ElementArray = Array with Element
 	typealias StateArray = Array with SlotState
 	typealias HashSlotArray = Array with HashValue
@@ -21,7 +21,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	var capacity = 0  // Total slots
 
 	/// Create an empty set
-	export static function create() returns Self
+	public static function create() returns Self
 		return Self{}
 	end 'create'
 
@@ -59,7 +59,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	/// Insert an element into the set
 	/// If the element already exists, this is a no-op
 	/// Automatically resizes the set when load factor exceeds 75%
-	export function insert(element Element)
+	public function insert(element Element)
 		// Initialize if empty struct was created with zero capacity
 		if capacity == 0 'init_empty'
 			var newElements = ElementArray{}
@@ -156,7 +156,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	end 'insert'
 
 	/// Check if element exists in the set
-	export function contains(element Element) returns bool
+	public function contains(element Element) returns bool
 		// Empty set contains nothing
 		if capacity == 0 'empty_check'
 			return false
@@ -206,7 +206,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	end 'contains'
 
 	/// Remove element from set, returns true if element was present
-	export function remove(element Element) returns bool
+	public function remove(element Element) returns bool
 		// Empty set has nothing to remove
 		if capacity == 0 'empty_check'
 			return false
@@ -261,18 +261,18 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	end 'remove'
 
 	/// Get number of elements in the set
-	export function count() returns MemberCount
+	public function count() returns MemberCount
 		return count
 	end 'count'
 
 	/// Create a fresh iterator positioned at the first occupied slot.
 	/// Throws IterationError.exhausted if the set is empty.
-	export function createIterator() returns SetIter throws IterationError
+	public function createIterator() returns SetIter throws IterationError
 		return try SetIter.create(elements, states: states, capacity: capacity)
 	end 'createIterator'
 
 	/// Get current capacity (total number of slots)
-	export function getCapacity() returns TableCapacity
+	public function getCapacity() returns TableCapacity
 		return capacity
 	end 'getCapacity'
 
@@ -351,7 +351,7 @@ end 'Set'
 
 /// Iterator for Set — scans hash table slots for occupied entries.
 /// Positioning invariant: iterIndex always points at an occupied slot.
-export type SetIterator uses Element implements Iterator with Element where Element is Hashable and Equatable
+public type SetIterator uses Element implements Iterator with Element where Element is Hashable and Equatable
 	typealias IterElementArray = Array with Element
 	typealias IterStateArray = Array with SlotState
 	var elements as IterElementArray
@@ -359,16 +359,16 @@ export type SetIterator uses Element implements Iterator with Element where Elem
 	var capacity as TableCapacity
 	var iterIndex as TableSlotIndex
 
-	export static function create(elements IterElementArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
+	public static function create(elements IterElementArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
 		let first = try findNextOccupied(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
 		return Self{elements: elements, states: states, capacity: capacity, iterIndex: first}
 	end 'create'
 
-	export function current() returns Element
+	public function current() returns Element
 		return try elements.get(iterIndex) otherwise panic("SetIterator.current: invariant violated — slot not populated")
 	end 'current'
 
-	export function advance() throws IterationError
+	public function advance() throws IterationError
 		iterIndex = try findNextOccupied(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
 	end 'advance'
 end 'SetIterator'

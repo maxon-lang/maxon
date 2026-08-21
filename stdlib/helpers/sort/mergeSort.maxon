@@ -18,7 +18,7 @@
 //   - `mergeSort.pass`    — one pass of the doubling loop completed
 //   - `merge.twoPointer`  — the two-pointer merge ran on a pair of runs
 
-export extension Array
+public extension Array
 	// Local typealias so `scratch` can be typed as the same generic
 	// `Array with Element`. Maxon parameter types can't carry `Array with X`
 	// inline — they need a named alias to resolve.
@@ -27,7 +27,7 @@ export extension Array
 	// Two-pointer stable merge of two adjacent runs in [lo, mid) and [mid, hi)
 	// using `scratch` as auxiliary storage. Both runs must already be sorted.
 	// Stable: when both heads compare equal, the left head wins.
-	export function mergeTwoPointer(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
+	public function mergeTwoPointer(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
 		Log.trace("merge.twoPointer")
 		// Copy the entire range [lo, hi) into scratch[0..n), then merge back.
 		// Using two halves of `managed` directly would clobber the source.
@@ -82,7 +82,7 @@ export extension Array
 	// merging `managed[lo, hi)` in place; `scratch` must be at least
 	// `min(mid-lo, hi-mid)` slots. Saves O(n) scratch when one side is
 	// much smaller than the other — common in driftsort's merges.
-	export function mergeBuffered(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
+	public function mergeBuffered(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
 		let leftLen = mid - lo
 		let rightLen = hi - mid
 		if leftLen <= rightLen 'leftIsSmaller'
@@ -227,7 +227,7 @@ export extension Array
 	// block to bring the partition point of one side adjacent to the
 	// partition point of the other; recurse on the two sub-merges.
 	// Logs `rotationMerge.fire` per recursive call.
-	export function mergeRotation(lo SortIndex, mid SortIndex, hi SortIndex, cmp SortComparator)
+	public function mergeRotation(lo SortIndex, mid SortIndex, hi SortIndex, cmp SortComparator)
 		Log.trace("rotationMerge.fire")
 		let leftLen = mid - lo
 		let rightLen = hi - mid
@@ -305,7 +305,7 @@ export extension Array
 	// rotation merge for the large-both-sides case instead; this function is
 	// kept compiled and directly tested so we can benchmark and potentially
 	// re-enable it after profiling, but nothing on the hot path calls it.
-	export function mergePartition(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
+	public function mergePartition(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
 		Log.trace("partitionMerge.fire")
 		let leftLen = mid - lo
 		let rightLen = hi - mid
@@ -363,7 +363,7 @@ export extension Array
 	// a glidesort-style optimization for the large-both-sides case that we may
 	// benchmark and re-enable after profiling, but it is not part of the
 	// driftsort default. See `mergePartition` below.
-	export function mergeAdaptive(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
+	public function mergeAdaptive(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
 		let leftLen = mid - lo
 		let rightLen = hi - mid
 		let smaller = leftLen if leftLen < rightLen else rightLen
@@ -378,7 +378,7 @@ export extension Array
 
 	// Public entry. Bottom-up stable merge sort over [lo, hi). Allocates an
 	// O(n) scratch buffer once and reuses it across every pass.
-	export function mergeSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
+	public function mergeSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		let n = hi - lo
 		if n <= 1 'trivial'
 			return
@@ -409,7 +409,7 @@ export extension Array
 	// Public wrapper that callers (mostly tests) can invoke with no setup,
 	// matching the surface of `Array.sort` / `sortUnstable`. Calls the
 	// comparator-based variant after computing the full-array bounds.
-	export function referenceMergeSort(cmp SortComparator)
+	public function referenceMergeSort(cmp SortComparator)
 		let lo = 0 as SortIndex
 		let hi = managed.length()
 		self.mergeSortRange(lo, hi: hi, cmp: cmp)

@@ -24,13 +24,13 @@
 /// ⚠ **THE ORDER IS NOT LOAD-BEARING TO ANY COMPILER-SIDE CLAIM** — no runtime transcribes these ordinals
 /// (the `__set_*`/`__map_*` runtime that once did was deleted at W105). It is the declaration order both
 /// containers already used, kept so the change is a MOVE and not a renumber.
-export enum SlotState
+public enum SlotState
 	Empty
 	Occupied
 	Deleted
 end 'SlotState'
 
-export typealias SlotStateArray = Array with SlotState
+public typealias SlotStateArray = Array with SlotState
 
 /// A slot's position in the table, and the table's total slot count. Both are non-negative and both were
 /// declared, identically, in `Map.maxon` and `Set.maxon`; they are the parameter types of the scan below,
@@ -42,15 +42,15 @@ export typealias SlotStateArray = Array with SlotState
 /// of `stdlib/` — and `SlotIndex` is already a local binding inside
 /// `maxon-shv2/Compiler/Targets/X64/X64Runtime.maxon`. A shared home has to be checked against the whole
 /// tree, not only against the two files it is being shared by (`StdlibLoader`'s collision rule).
-export typealias TableSlotIndex = int(0 to u64.max)
-export typealias TableCapacity = int(0 to u64.max)
+public typealias TableSlotIndex = int(0 to u64.max)
+public typealias TableCapacity = int(0 to u64.max)
 
 /// Find the next slot index >= `from` whose state is Occupied. Throws `IterationError.exhausted` if no
 /// occupied slot is found before `capacity`.
 ///
 /// It is what a `MapIterator` and a `SetIterator` each advance through, and it is the ONE `match` over
 /// `SlotState` that a fourth state would break in a file that has to be edited anyway.
-export function findNextOccupied(states SlotStateArray, capacity TableCapacity, from TableSlotIndex) returns TableSlotIndex throws IterationError
+public function findNextOccupied(states SlotStateArray, capacity TableCapacity, from TableSlotIndex) returns TableSlotIndex throws IterationError
 	var i = from
 	while i < capacity 'scan'
 		let state = try states.get(i) otherwise SlotState.Empty

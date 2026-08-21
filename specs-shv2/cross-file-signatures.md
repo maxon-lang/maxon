@@ -228,7 +228,7 @@ order is the compiled order, so the two halves cover the two orders between them
 whichever one the host's directory walk happened to serve.
 ```maxon
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
+public typealias Int = int(i64.min to i64.max)
 export typealias IntArray = Array with Int
 
 // --- file: main.maxon

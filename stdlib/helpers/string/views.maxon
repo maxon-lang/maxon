@@ -28,29 +28,29 @@ typealias Byte = int(0 to u8.max)
 // ByteView / ByteIterator — iterate over raw UTF-8 bytes
 // ============================================
 
-export type ByteView implements Iterable with (Byte, ByteIterator)
+public type ByteView implements Iterable with (Byte, ByteIterator)
 	var s as String
 
-	export static function create(s String) returns ByteView
+	public static function create(s String) returns ByteView
 		return ByteView{s: s}
 	end 'create'
 
-	export function createIterator() returns ByteIterator throws IterationError
+	public function createIterator() returns ByteIterator throws IterationError
 		return try ByteIterator.create(s)
 	end 'createIterator'
 
 	/// Number of bytes
-	export function count() returns ByteCount
+	public function count() returns ByteCount
 		return s.byteLength()
 	end 'count'
 end 'ByteView'
 
-export type ByteIterator implements Iterator with Byte
+public type ByteIterator implements Iterator with Byte
 	var s as String
 	var pos as BytePos
 	var currentByte as Byte
 
-	export static function create(s String) returns Self throws IterationError
+	public static function create(s String) returns Self throws IterationError
 		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
@@ -60,11 +60,11 @@ export type ByteIterator implements Iterator with Byte
 		return Self{s: s, pos: 0, currentByte: firstByte}
 	end 'create'
 
-	export function current() returns Byte
+	public function current() returns Byte
 		return currentByte
 	end 'current'
 
-	export function advance() throws IterationError
+	public function advance() throws IterationError
 		let nextPos = pos + 1
 		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
@@ -80,19 +80,19 @@ end 'ByteIterator'
 // CodepointView / CodepointIterator — iterate over Unicode codepoints
 // ============================================
 
-export type CodepointView implements Iterable with (Codepoint, CodepointIterator)
+public type CodepointView implements Iterable with (Codepoint, CodepointIterator)
 	var s as String
 
-	export static function create(s String) returns CodepointView
+	public static function create(s String) returns CodepointView
 		return CodepointView{s: s}
 	end 'create'
 
-	export function createIterator() returns CodepointIterator throws IterationError
+	public function createIterator() returns CodepointIterator throws IterationError
 		return try CodepointIterator.create(s)
 	end 'createIterator'
 
 	/// Number of codepoints (linear scan)
-	export function count() returns CodepointCount
+	public function count() returns CodepointCount
 		var count = 0
 		var pos = 0
 		let len = s.byteLength()
@@ -105,13 +105,13 @@ export type CodepointView implements Iterable with (Codepoint, CodepointIterator
 	end 'count'
 end 'CodepointView'
 
-export type CodepointIterator implements Iterator with Codepoint
+public type CodepointIterator implements Iterator with Codepoint
 	var s as String
 	var pos as BytePos
 	var cp as Codepoint
 	var cpByteLen as Utf8ByteWidth
 
-	export static function create(s String) returns Self throws IterationError
+	public static function create(s String) returns Self throws IterationError
 		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
@@ -120,11 +120,11 @@ export type CodepointIterator implements Iterator with Codepoint
 		return Self{s: s, pos: 0, cp: cp, cpByteLen: len}
 	end 'create'
 
-	export function current() returns Codepoint
+	public function current() returns Codepoint
 		return cp
 	end 'current'
 
-	export function advance() throws IterationError
+	public function advance() throws IterationError
 		let nextPos = pos + cpByteLen
 		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
@@ -144,19 +144,19 @@ end 'CodepointIterator'
 //   onTrailSurrogate = false → current() returns the BMP cp or the lead surrogate
 //   onTrailSurrogate = true  → current() returns the trail surrogate of the pending supplementary
 
-export type UTF16View implements Iterable with (CodeUnit16, UTF16Iterator)
+public type UTF16View implements Iterable with (CodeUnit16, UTF16Iterator)
 	var s as String
 
-	export static function create(s String) returns UTF16View
+	public static function create(s String) returns UTF16View
 		return UTF16View{s: s}
 	end 'create'
 
-	export function createIterator() returns UTF16Iterator throws IterationError
+	public function createIterator() returns UTF16Iterator throws IterationError
 		return try UTF16Iterator.create(s)
 	end 'createIterator'
 
 	/// Number of UTF-16 code units (linear scan)
-	export function count() returns Utf16UnitCount
+	public function count() returns Utf16UnitCount
 		var count = 0
 		var pos = 0
 		let len = s.byteLength()
@@ -174,14 +174,14 @@ export type UTF16View implements Iterable with (CodeUnit16, UTF16Iterator)
 	end 'count'
 end 'UTF16View'
 
-export type UTF16Iterator implements Iterator with CodeUnit16
+public type UTF16Iterator implements Iterator with CodeUnit16
 	var s as String
 	var bytePos as BytePos
 	var cp as Codepoint
 	var cpByteLen as Utf8ByteWidth
 	var onTrailSurrogate as bool
 
-	export static function create(s String) returns Self throws IterationError
+	public static function create(s String) returns Self throws IterationError
 		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
@@ -190,7 +190,7 @@ export type UTF16Iterator implements Iterator with CodeUnit16
 		return Self{s: s, bytePos: 0, cp: cp, cpByteLen: len, onTrailSurrogate: false}
 	end 'create'
 
-	export function current() returns CodeUnit16
+	public function current() returns CodeUnit16
 		if onTrailSurrogate 'trail'
 			return utf16TrailSurrogate(cp)
 		end 'trail'
@@ -200,7 +200,7 @@ export type UTF16Iterator implements Iterator with CodeUnit16
 		return utf16LeadSurrogate(cp)
 	end 'current'
 
-	export function advance() throws IterationError
+	public function advance() throws IterationError
 		if not onTrailSurrogate and cp >= 65536 'emitTrail'
 			onTrailSurrogate = true
 			return

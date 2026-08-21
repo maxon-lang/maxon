@@ -3128,12 +3128,13 @@ end 'reportCalleeNotVisible'
 // `calleeNotVisible` arm, off the sweep's own visibility column, because that call is decided before this
 // pass exists. Two askers, one wording — the discipline the `unknownTypeName` arm states.
 //
-// A `global` callee cannot be refused by any door, so reaching here with one is an invariant break.
+// A program-wide callee (`global` or `public`) cannot be refused by any door, so reaching here with one is
+// an invariant break.
 export function reportHiddenCallee(project Project, noun String, tier Visibility, line LineNumber, column ColumnNumber, filePath FilePath)
 	match tier 'tier'
 		file then reportPositioned(project, code: ErrorCode.symbolNotExported, message: "function '{noun}' is not exported", line: line, column: column, filePath: filePath)
 		module then reportPositioned(project, code: ErrorCode.symbolNotInModuleScope, message: "function '{noun}' is module-scoped and not visible from this directory", line: line, column: column, filePath: filePath)
-		global then panic("reportHiddenCallee: '{noun}' is `global` and visible from every file — no visibility door can have refused it")
+		global or public then panic("reportHiddenCallee: '{noun}' is program-wide and visible from every file — no visibility door can have refused it")
 	end 'tier'
 end 'reportHiddenCallee'
 

@@ -2,14 +2,14 @@
 /// Backed by a ManagedList for efficient node management with automatic memory cleanup.
 /// @category Collections
 // ListError - errors for list operations
-export enum ListError implements Error
+public enum ListError implements Error
 	empty
 end 'ListError'
 
 typealias NodeCount = int(0 to u64.max)
 typealias NodeIndex = int(0 to u64.max)
 
-export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, ListIter), Cloneable
+public type List uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, ListIter), Cloneable
 	typealias ElementArray = Array with Element
 	typealias EManagedList = __ManagedList with Element
 	typealias ENode = __ManagedListNode with Element
@@ -17,7 +17,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	var chain as EManagedList
 
 	/// Create an empty list
-	export static function create() returns Self
+	public static function create() returns Self
 		return Self{chain: EManagedList.create()}
 	end 'create'
 
@@ -31,17 +31,17 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'init'
 
 	/// Get the number of elements in the list
-	export function count() returns NodeCount
+	public function count() returns NodeCount
 		return chain.count()
 	end 'count'
 
 	/// Check if the list is empty
-	export function isEmpty() returns bool
+	public function isEmpty() returns bool
 		return chain.isEmpty()
 	end 'isEmpty'
 
 	/// Get the first element, throws if empty
-	export function first() returns Element throws ArrayError
+	public function first() returns Element throws ArrayError
 		let node = try chain.head() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
@@ -49,7 +49,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'first'
 
 	/// Get the last element, throws if empty
-	export function last() returns Element throws ArrayError
+	public function last() returns Element throws ArrayError
 		let node = try chain.tail() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
@@ -70,18 +70,18 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'walkTo'
 
 	/// Get element at index (0-based, front to back), throws if out of bounds
-	export function get(index NodeIndex) returns Element throws ArrayError
+	public function get(index NodeIndex) returns Element throws ArrayError
 		let node = try walkTo(index)
 		return node.value()
 	end 'get'
 
 	/// Add an element to the front of the list. O(1).
-	export function prepend(value Element)
+	public function prepend(value Element)
 		chain.insertFirst(value)
 	end 'prepend'
 
 	/// Add an element to the back of the list. O(1).
-	export function append(value Element)
+	public function append(value Element)
 		chain.insertLast(value)
 	end 'append'
 
@@ -89,7 +89,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	/// Valid range is `[0, count]` — `count` appends at the end. An index
 	/// past `count` is out of bounds and throws `ArrayError.indexOutOfBounds`
 	/// rather than silently clamping to the tail.
-	export function insert(at NodeIndex, value Element) throws ArrayError
+	public function insert(at NodeIndex, value Element) throws ArrayError
 		if at > chain.count() 'oob'
 			throw ArrayError.indexOutOfBounds
 		end 'oob'
@@ -109,7 +109,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'insert'
 
 	/// Remove and return the first element, throws if empty. O(1).
-	export function removeFirst() returns Element throws ArrayError
+	public function removeFirst() returns Element throws ArrayError
 		let node = try chain.head() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
@@ -117,7 +117,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'removeFirst'
 
 	/// Remove and return the last element, throws if empty. O(1).
-	export function removeLast() returns Element throws ArrayError
+	public function removeLast() returns Element throws ArrayError
 		let node = try chain.tail() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
@@ -125,18 +125,18 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'removeLast'
 
 	/// Remove and return element at index, throws if out of bounds. O(n).
-	export function remove(at NodeIndex) returns Element throws ArrayError
+	public function remove(at NodeIndex) returns Element throws ArrayError
 		let node = try walkTo(at)
 		return chain.remove(node)
 	end 'remove'
 
 	/// Remove all elements
-	export function clear()
+	public function clear()
 		chain.clear()
 	end 'clear'
 
 	/// Create a deep copy of this list
-	export function clone() returns Self
+	public function clone() returns Self
 		var result = Self{chain: EManagedList.create()}
 		for item in self 'copy'
 			result.append(item)
@@ -147,7 +147,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	typealias ListIter = ListIterator with Element
 
 	/// Create a fresh iterator for traversal. Throws IterationError.exhausted on empty lists.
-	export function createIterator() returns ListIter throws IterationError
+	public function createIterator() returns ListIter throws IterationError
 		return try ListIter.create(chain)
 	end 'createIterator'
 end 'List'
@@ -155,21 +155,21 @@ end 'List'
 /// Iterator for List — traverses nodes using the safe node API.
 /// Positioning invariant: the iterator always points at a valid node; current()
 /// reads its value without bounds checks.
-export type ListIterator uses Element implements Iterator with Element
+public type ListIterator uses Element implements Iterator with Element
 	typealias EManagedList = __ManagedList with Element
 	typealias ENode = __ManagedListNode with Element
 	var node as ENode
 
-	export static function create(chain EManagedList) returns Self throws IterationError
+	public static function create(chain EManagedList) returns Self throws IterationError
 		let head = try chain.head() otherwise throw IterationError.exhausted
 		return Self{node: head}
 	end 'create'
 
-	export function current() returns Element
+	public function current() returns Element
 		return node.value()
 	end 'current'
 
-	export function advance() throws IterationError
+	public function advance() throws IterationError
 		node = try node.next() otherwise throw IterationError.exhausted
 	end 'advance'
 end 'ListIterator'

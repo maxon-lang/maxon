@@ -153,14 +153,14 @@ after a type moves no existing call.
 // --- file: Point/free.maxon
 typealias Integer = int(0 to 125)
 
-export function make() returns Integer
+public function make() returns Integer
 	return 11
 end 'make'
 
 // --- file: app/main.maxon
 typealias Integer = int(0 to 125)
 
-export type Point
+public type Point
 	export var x as Integer
 
 	export static function make() returns Integer
@@ -346,7 +346,7 @@ Same 3/5/35 discrimination as the case above, reached through a bare call in eac
 // --- file: alpha/a.maxon
 typealias Integer = int(0 to 125)
 
-export function pick() returns Integer
+public function pick() returns Integer
 	return 3
 end 'pick'
 
@@ -357,7 +357,7 @@ end 'localCaller'
 // --- file: beta/b.maxon
 typealias Integer = int(0 to 125)
 
-export function pick() returns Integer
+public function pick() returns Integer
 	return 5
 end 'pick'
 
@@ -621,7 +621,7 @@ in which a contested name still answers to bare bytes.
 // --- file: r.maxon
 typealias Integer = int(0 to 125)
 
-export function pick() returns Integer
+public function pick() returns Integer
 	return 3
 end 'pick'
 
@@ -848,14 +848,14 @@ end 'helper'
 // --- file: other/o.maxon
 typealias Integer = int(0 to 125)
 
-export function helper() returns Integer
+public function helper() returns Integer
 	return 5
 end 'helper'
 
 // --- file: app/main.maxon
 typealias Integer = int(0 to 125)
 
-export type Point
+public type Point
 	export var x as Integer
 
 	export static function create() returns Integer
@@ -887,7 +887,7 @@ end 'helper'
 // --- file: app/main.maxon
 typealias Integer = int(0 to 125)
 
-export type Point
+public type Point
 	export var x as Integer
 
 	export static function create() returns Integer

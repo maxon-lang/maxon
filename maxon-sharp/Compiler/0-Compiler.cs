@@ -1123,17 +1123,10 @@ public class Compiler {
       if (t.Type == TokenType.RightParen) { parenDepth--; continue; }
       if (parenDepth != 0) continue;
 
-      bool isExported = false;
-      bool isModuleVisible = false;
-      if (t.Type == TokenType.Export && i + 1 < tokens.Count) {
-        isExported = true;
-        i++;
-        t = tokens[i];
-      } else if (t.Type == TokenType.Identifier && t.Value == Lexer.ModuleKeyword && i + 1 < tokens.Count
-          && IsModuleModifierFollowedByDecl(tokens[i + 1].Type)) {
-        // `module` is a contextual keyword. Recognize it here when followed by
-        // a declaration token so module-scoped types are tracked correctly.
-        isModuleVisible = true;
+      // `export` / `public` / `module` — the set and the contextual-`module` rule both live on
+      // Parser, which is the only party that gets to say what a modifier is.
+      var (isExported, isModuleVisible) = Parser.VisibilityAt(tokens, i);
+      if ((isExported || isModuleVisible) && i + 1 < tokens.Count) {
         i++;
         t = tokens[i];
       }
@@ -1221,16 +1214,6 @@ public class Compiler {
     type.SourceLine = nameToken.Line;
     type.SourceColumn = nameToken.Column;
   }
-
-  // `module` is a contextual keyword (see Parser.CheckModuleKeyword). At the
-  // pre-register pass we recognise it only when followed by a token that starts
-  // a declaration; otherwise we leave the identifier alone so user code can
-  // still use `module` as a parameter or local variable name.
-  private static bool IsModuleModifierFollowedByDecl(TokenType nextType) =>
-    nextType is TokenType.Type or TokenType.Enum or TokenType.Union
-              or TokenType.Interface or TokenType.TypeAlias
-              or TokenType.Function or TokenType.Var or TokenType.Let
-              or TokenType.Static or TokenType.Extension;
 
   /// <summary>
   /// Token-level extraction of `uses A, B, C` clause from a type declaration.

@@ -169,7 +169,7 @@ end 'checkA'
 // --- file: b.maxon
 typealias Limit = int(0 to 2000)
 
-export function checkB() returns Limit
+public function checkB() returns Limit
 	return 0
 end 'checkB'
 
@@ -1049,7 +1049,7 @@ typealias Num = int(0 to 125)
 typealias Bag = Array with Num
 typealias Pair = (Bag, Num)
 
-export type Keeper
+public type Keeper
 	export var p as Pair
 	export static function make() returns Self
 		var b = Bag.create()
@@ -1142,7 +1142,7 @@ early once `allFilesFolded` and every name crossing out of the index is canonica
 typealias Bag = Array with String
 typealias Pair = (Bag, int)
 
-export type Holder
+public type Holder
 	export var q as Pair
 	export static function make() returns Self
 		var b = Bag.create()
@@ -1166,7 +1166,7 @@ typealias Num = int(0 to 125)
 typealias Bag = Array with Num
 typealias Pair = (Bag, int)
 
-export type Keeper
+public type Keeper
 	export var p as Pair
 	export static function make() returns Self
 		var b = Bag.create()

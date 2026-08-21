@@ -4,7 +4,7 @@ typealias NetworkPort = int(1 to 65535)
 typealias ByteCount = int(0 to u64.max)
 
 /// TCP networking errors
-export enum NetworkError implements Error
+public enum NetworkError implements Error
 	resolveFailed
 	connectFailed
 	sendFailed
@@ -13,13 +13,13 @@ export enum NetworkError implements Error
 end 'NetworkError'
 
 /// TCP client connection. Automatically closes when it goes out of scope.
-export type TcpClient
+public type TcpClient
 	var socket as __ManagedSocket
 
 	/// Connect to a TCP server by hostname and port.
 	/// Resolves the hostname, creates a TCP socket, and connects.
 	/// The returned TcpClient auto-closes when it goes out of scope.
-	export static function connect(host String, port NetworkPort) returns TcpClient throws NetworkError
+	public static function connect(host String, port NetworkPort) returns TcpClient throws NetworkError
 		let sock = try __ManagedSocket.tcpConnect(host.addressableBytes(), port: port) otherwise (e) 'connErr'
 			match e 'matchConn'
 				resolveFailed then throw NetworkError.resolveFailed
@@ -32,7 +32,7 @@ export type TcpClient
 	/// Send all bytes of a string over this connection.
 	/// Loops internally to handle partial sends.
 	/// Returns the total number of bytes sent.
-	export function send(data String) returns ByteCount throws NetworkError
+	public function send(data String) returns ByteCount throws NetworkError
 		// Materialized ONCE, outside the loop: a partial send drives this round again, and under
 		// Stage 4b asking a short string for its bytes allocates and copies. Per-string, not per-send.
 		let bytes = data.addressableBytes()
@@ -57,7 +57,7 @@ export type TcpClient
 
 	/// Receive data as a string (up to bufferSize bytes).
 	/// Returns the received data. Throws connectionClosed if the peer closed.
-	export function recv(bufferSize ByteCount) returns String throws NetworkError
+	public function recv(bufferSize ByteCount) returns String throws NetworkError
 		var managed = try __ManagedMemory.create(bufferSize + 1, 1) otherwise 'createErr'
 			panic("TcpClient.recv: create — bufferSize+1 >= 0 guaranteed")
 		end 'createErr'
@@ -89,7 +89,7 @@ export type TcpClient
 	/// Explicitly close the connection.
 	/// Safe to call multiple times (idempotent).
 	/// Also called automatically when the last reference goes out of scope.
-	export function close()
+	public function close()
 		socket.close()
 	end 'close'
 end 'TcpClient'

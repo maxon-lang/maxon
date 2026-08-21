@@ -605,14 +605,14 @@ exported one must still be found.
 // --- file: a.maxon
 export typealias Score = int(0 to 100)
 
-export function fromA() returns Score
+public function fromA() returns Score
 	return 7
 end 'fromA'
 
 // --- file: b.maxon
 typealias Score = int(0 to 50)
 
-export function fromB() returns Score
+public function fromB() returns Score
 	return 3
 end 'fromB'
 

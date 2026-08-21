@@ -1373,12 +1373,19 @@ export union ParseError implements Error
 	// `DeferredNameDiagnostic` instead of throwing — see `Parser.recordHiddenCastTarget` for the whole
 	// argument, and `hiddenAliasCastTarget` for the one predicate both spellings decide by.
 	hiddenCastTargetType(line LineNumber, column ColumnNumber)
-	// ⭐ BOTH VISIBILITY MODIFIERS ON ONE DECLARATION (`export module function f()`). Renders as **E2001**,
-	// positioned at the `module` — the modifier that cannot be there is the one the message is about, and it
-	// is the oracle's anchor. The two are mutually exclusive by `specs/module-keyword.md`: `export` is
-	// program-wide and `module` is a directory subtree, so a declaration wearing both states two different
-	// answers to one question rather than a narrowing of either.
-	exportAndModuleCombined(line LineNumber, column ColumnNumber)
+	// ⭐ TWO VISIBILITY MODIFIERS ON ONE DECLARATION (`export module function f()`). Renders as **E2001**,
+	// positioned at the SECOND modifier — the one that cannot be there is the one the message is about, and
+	// it is the oracle's anchor. The three are mutually exclusive by `specs/module-keyword.md` and
+	// `specs/public-keyword.md`: `export` is program-wide, `module` is a directory subtree, and `public` is
+	// program-wide API surface, so a declaration wearing two states two different answers to one question
+	// rather than a narrowing of either.
+	//
+	// ⚠ **THE PAIR IS CARRIED, NOT THE SENTENCE, AND THE RENDER ORDERS IT CANONICALLY.**
+	// `'export' and 'module' cannot be combined` is pinned byte-for-byte by SIX live cases
+	// (`module-keyword`, `module-scope` ×5), so the words cannot be emitted in encounter order — writing
+	// `module export` has to render the same sentence as writing `export module`. See
+	// `VisibilityModifierWord`, whose DECLARATION ORDER is that canonical order.
+	visibilityModifiersCombined(earlier VisibilityModifierWord, later VisibilityModifierWord, line LineNumber, column ColumnNumber)
 	// ⭐ A FIELD READ THROUGH A VALUE WHOSE TYPE THE READING FILE MAY NOT SEE (N1a) — a `type` another file
 	// declared without `export`, or with `module` from outside its subtree. Renders as **E4006** with the
 	// reference's exact wording, positioned at the FIELD. See `Parser.requireFieldAccessible` for why the
@@ -1865,7 +1872,7 @@ export typealias UsedTypeNameSet = Set with ByteArray
 // The set every file that names no type at all shares — most files name several, but the sweep's and
 // the const evaluator's `Parser`s reach no type position whatever, and neither should allocate one.
 // Copy-on-write, exactly as `sharedEmptyInnerAliases` is (`Parser.recordTypeNameUse`).
-let sharedEmptyUsedTypeNames = UsedTypeNameSet.create()
+export let sharedEmptyUsedTypeNames = UsedTypeNameSet.create()
 
 // ⭐ THE ONE EMPTY `DeferredNameDiagnosticArray` every list of that type starts as — the parser's
 // candidate list and both of the artifact's. A SINGLE singleton, because the copy-on-write test is an
@@ -5265,8 +5272,20 @@ let HeapAnnotationName = b"heap"
 // column — `dispatchTopLevel` had already declined to consume the modifier, so the `extension` it would
 // have dispatched on was never reached. Found by `first-class-functions/
 // first-class-function.cross-file-extension-typealias-param`, whose declaring file writes exactly that.
+// ⛔ **THE OTHER VISIBILITY MODIFIERS WERE LEFT OUT TOO, AND IT IS THE `extension` BUG ONE TOKEN CLASS
+// FURTHER OUT.** `module export function f()` and `module public function f()` reported **E2001 `Expected
+// function declaration, got 'module'`** at column 1 — because `module`'s successor was a MODIFIER rather
+// than a declaration keyword, `atModuleModifier` declined to recognize it, and the combination that should
+// have been refused by name was never seen as a combination at all. The reverse order (`export module`)
+// reported the real `'export' and 'module' cannot be combined` the whole time, so ONE illegal program had
+// TWO diagnostics depending on which word came first.
+//
+// ⚠ It is safe because no EXPRESSION can put a modifier keyword after an identifier: `export` and `public`
+// are real lexer keywords and start nothing. So the widening can only turn a mis-parse into the refusal
+// that was always meant. **MEASURED before the fix: the C# bootstrap gives the identical wrong answer**, so
+// this is a shared gap and both compilers are corrected together rather than made to disagree.
 function declarationOpensAt(kind TokenKind) returns bool
-	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.extension or kind == TokenKind.typealias or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.static
+	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.extension or kind == TokenKind.typealias or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.static or kind == TokenKind.export or kind == TokenKind.public
 end 'declarationOpensAt'
 
 // ⭐ **THE CORPUS'S NAME FOR SLOT@40, READ BACK RATHER THAN INVENTED** (`stdlib/String.maxon:86`). It is
@@ -11864,6 +11883,15 @@ export type Parser
 		// it cannot be answered before the last declaration has been read. A file that threw never gets
 		// here, which is right — its later uses were never parsed, so every alias would look unused.
 		self.reportUnusedTypeAliases()
+
+		// ⭐ **THE SAME SET, KEPT.** `reportUnusedTypeAliases` has just answered "did THIS file use its own
+		// alias?" from `usedTypeNames`; `checkUnusedExports` asks "did any OTHER file use this one?" and is
+		// answered from the identical fact one scope wider. Published rather than re-derived — a second walk
+		// looking for type references would be a second answer to what a written name denotes, and the
+		// column that looked like an alternative (`IrFunction.valueNameIds`) is filler-bearing and gave a
+		// measured wrong answer. It is the shared empty set unless this file wrote a type name, so a file
+		// that names none costs nothing.
+		self.artifact.usedTypeNames = self.usedTypeNames
 		return self.artifact
 	end 'parseModule'
 
@@ -12560,6 +12588,10 @@ export type Parser
 		if self.kindAt(modifier) == TokenKind.export 'exported'
 			return Visibility.global
 		end 'exported'
+
+		if self.kindAt(modifier) == TokenKind.public 'publicApi'
+			return Visibility.public
+		end 'publicApi'
 
 		// `moduleModifierAt`, not `atModuleModifier`: `keyword` names the declaration keyword, so "the next
 		// token opens a declaration" is that position's own premise, and the forward test would ask it of the
@@ -16063,23 +16095,68 @@ export type Parser
 	function consumeOptionalVisibility() returns Visibility throws ParseError
 		if self.at(TokenKind.export) 'exported'
 			self.advance()
-			// The anchor is the `module` token and not the `export`: the modifier that cannot be there is the
-			// one the message is about, and it is the oracle's position (`module-keyword`'s 4:8).
-			if self.atModuleModifier() 'bothModifiers'
-				let tok = self.current()
-				throw ParseError.exportAndModuleCombined(tok.line, column: tok.column)
-			end 'bothModifiers'
+			// The anchor is the SECOND modifier's token and not the first: the modifier that cannot be there is
+			// the one the message is about, and it is the oracle's position (`module-keyword`'s 4:8).
+			try self.refuseSecondVisibilityModifier(VisibilityModifierWord.wordExport)
 
 			return Visibility.global
 		end 'exported'
 
+		if self.at(TokenKind.public) 'publicApi'
+			self.advance()
+			try self.refuseSecondVisibilityModifier(VisibilityModifierWord.wordPublic)
+
+			return Visibility.public
+		end 'publicApi'
+
 		if self.atModuleModifier() 'moduleScoped'
 			self.advance()
+			try self.refuseSecondVisibilityModifier(VisibilityModifierWord.wordModule)
+
 			return Visibility.module
 		end 'moduleScoped'
 
 		return Visibility.file
 	end 'consumeOptionalVisibility'
+
+	// A modifier has just been consumed; refuse a second one. Split out because there are now THREE words
+	// and so three arms that would otherwise each re-spell "which other modifiers could be here", which is
+	// the modifier SET written down a fourth time.
+	function refuseSecondVisibilityModifier(consumed VisibilityModifierWord) throws ParseError
+		if not self.atVisibilityModifier() 'onlyOne'
+			return
+		end 'onlyOne'
+
+		let tok = self.current()
+		let offending = self.visibilityModifierWordAt(self.pos)
+
+		// Sorted into `VisibilityModifierWord`'s declaration order, NOT the order they were written. Six
+		// live cases pin `'export' and 'module' cannot be combined`, so `module export` must render exactly
+		// what `export module` renders. The POSITION stays the offending token's either way.
+		if consumed.ordinal <= offending.ordinal 'alreadyInOrder'
+			throw ParseError.visibilityModifiersCombined(consumed, later: offending, line: tok.line, column: tok.column)
+		end 'alreadyInOrder'
+
+		throw ParseError.visibilityModifiersCombined(offending, later: consumed, line: tok.line, column: tok.column)
+	end 'refuseSecondVisibilityModifier'
+
+	// Which modifier word sits at `index`. Only ever asked where `visibilityModifierAt` already answered
+	// true, so a token that is none of the three is a caller bug rather than an input.
+	function visibilityModifierWordAt(index TokenIndex) returns VisibilityModifierWord
+		if self.kindAt(index) == TokenKind.export 'exported'
+			return VisibilityModifierWord.wordExport
+		end 'exported'
+
+		if self.kindAt(index) == TokenKind.public 'publicApi'
+			return VisibilityModifierWord.wordPublic
+		end 'publicApi'
+
+		if self.moduleModifierAt(index) 'moduleScoped'
+			return VisibilityModifierWord.wordModule
+		end 'moduleScoped'
+
+		panic("visibilityModifierWordAt: token at {index} is not a visibility modifier")
+	end 'visibilityModifierWordAt'
 
 	// ⭐⭐ **`module` IS A CONTEXTUAL MODIFIER, NEVER A LEXER KEYWORD, AND THAT IS A MEASUREMENT.** The word is
 	// used as an ORDINARY IDENTIFIER **6,537 times in `maxon-shv2/` alone** (`var module = try
@@ -16118,9 +16195,9 @@ export type Parser
 	// it cannot ask a cursor-relative predicate. One rule, two entry points, and the cursor form is now the
 	// indexed one asked at `self.pos`.
 	function visibilityModifierAt(index TokenIndex) returns bool
-		if self.kindAt(index) == TokenKind.export 'exported'
+		if self.kindAt(index) == TokenKind.export or self.kindAt(index) == TokenKind.public 'realKeyword'
 			return true
-		end 'exported'
+		end 'realKeyword'
 		return self.moduleModifierAt(index) and declarationOpensAt(self.kindAt(index + 1))
 	end 'visibilityModifierAt'
 
@@ -18596,10 +18673,7 @@ export type Parser
 	// ⚠ It reads the ONE token `readTypeAliasDeclaration` discriminates the function form on, at the position
 	// that reader would read it, so the two cannot disagree about which declarations are per-instance.
 	function nestedAliasAtIsFunctionForm(index TokenIndex) returns bool
-		var at = index
-		if self.kindAt(at) == TokenKind.export or self.moduleModifierAt(at) 'visibilityModifier'
-			at = at + 1
-		end 'visibilityModifier'
+		let at = self.pastVisibilityModifier(index)
 
 		// `typealias` at `at`, the member name at `at + 1`, and the `=` at `at + 2` — a malformed declaration
 		// that lacks the `=` simply is not the function form, and the real parse reports it with a position.
@@ -18645,10 +18719,7 @@ export type Parser
 	// token is not one. A PEEK — the pre-scan above must not consume — and it reads the header in the order
 	// `atTypeAliasDeclaration` recognizes it: an optional visibility modifier, then `typealias <name>`.
 	function nestedAliasNameAt(index TokenIndex) returns ByteArray
-		var at = index
-		if self.kindAt(at) == TokenKind.export or self.moduleModifierAt(at) 'visibilityModifier'
-			at = at + 1
-		end 'visibilityModifier'
+		var at = self.pastVisibilityModifier(index)
 
 		if self.kindAt(at) != TokenKind.typealias 'notATypeAlias'
 			return EmptySourceText
@@ -19900,10 +19971,7 @@ export type Parser
 	// decision has to be taken BEFORE the member is consumed, and a member the decision skips is stepped over
 	// whole rather than parsed.
 	function extensionMemberMethodNameAt(index TokenIndex) returns ByteArray
-		var at = index
-		if self.kindAt(at) == TokenKind.export or self.moduleModifierAt(at) 'visibilityModifier'
-			at = at + 1
-		end 'visibilityModifier'
+		var at = self.pastVisibilityModifier(index)
 		if self.kindAt(at) == TokenKind.static 'staticMember'
 			at = at + 1
 		end 'staticMember'
@@ -20783,14 +20851,17 @@ export type Parser
 	end 'atEnumMethodStart'
 
 	// The index the enum member starting at `index` declares its `function` keyword at, having stepped over
-	// the optional `export`/`static` modifiers. THE one spelling of that modifier list, read by the
+	// the optional visibility and `static` modifiers. THE one spelling of that modifier list, read by the
 	// peek-only predicate above AND by the sweep's cursor step (`recordScannedEnum`) — taught to one and not
-	// the other, the sweep would count an `export` token as the method's block opener and mis-close the enum.
+	// the other, the sweep would count a modifier token as the method's block opener and mis-close the enum.
+	//
+	// ⛔ **IT SPELLED `TokenKind.export` DIRECTLY AND SO NEVER STEPPED OVER `module`**, which is the defect
+	// the "one spelling" sentence above exists to prevent — the paragraph was right about the risk and the
+	// code was a second answer anyway. `module function` on an enum was already reachable; `public function`
+	// would have been the second body to trip it. It asks `pastVisibilityModifier` now, so the modifier SET
+	// is the parser's one copy.
 	function enumMethodKeywordIndex(index TokenIndex) returns TokenIndex
-		var p = index
-		if self.kindAt(p) == TokenKind.export 'exported'
-			p = p + 1
-		end 'exported'
+		var p = self.pastVisibilityModifier(index)
 		if self.kindAt(p) == TokenKind.static 'static'
 			p = p + 1
 		end 'static'
@@ -24369,6 +24440,19 @@ export type Parser
 					try self.consume(TokenKind.dot)
 					self.advance()
 				end 'eachSegment'
+
+				// ⭐ **THE FINAL SEGMENT IS THE TYPE NAME, AND THE RECORDING ABOVE CAUGHT ONLY THE HEAD.**
+				// `recordTypeNameUse` runs before the chain is assembled, so `api.Score` recorded `api` — the
+				// DIRECTORY — and never `Score`. E3062 could not see the difference (a namespace is not one of
+				// this file's own typealiases either way), but `checkUnusedExports` asks which DECLARATION was
+				// named, and a declaration is registered under its bare name: MEASURED, seven cases across
+				// `typealias-collision` and `namespace-qualified-resolution` reported `export typealias 'Score'`
+				// as unreferenced while their whole subject is that the qualified reference reaches it.
+				match splitQualifiedName(qualified) 'member'
+					notQualified then panic("parseTypeReference: assembleDottedChainAt built a chain from {qualifierDots} dot(s) that splitQualifiedName reads as unqualified")
+					parts(_, member) then self.recordTypeNameUse(member)
+				end 'member'
+
 				return MaxonType.named(self.artifact.typeNames.intern(qualified))
 			end 'qualifiedMember'
 
@@ -47428,6 +47512,24 @@ export type Parser
 		// rather than assumed. It is stated once, in `baseNamesAValueInScope`, with the measurements.
 		let baseTok = try self.typeBaseTokenAt(self.pos)
 
+		// ⭐ **A DOTTED PRIMARY WHOSE HEAD NAMES A TYPE IS A MENTION OF THAT TYPE** — `Color.blue`,
+		// `Point.create(…)`, `Config.MAX_SIZE`. Recorded HERE, above the arms that decide WHICH of those
+		// it is, for exactly the reason `recordTypeNameUse` states about its other site: a recording site
+		// does not know what a written name denotes and must not have to ask, and hooking the arms instead
+		// would need one hook per arm and silently miss the next one added.
+		//
+		// ⚠ **AN EXPRESSION-POSITION MENTION COUNTS, AND IT DID NOT BEFORE.** Only type POSITIONS were
+		// recorded, which is all E3062 needs — an alias is used when something is typed by it. But
+		// `checkUnusedExports` asks the wider question, and an enum used cross-file is used almost entirely
+		// from expression position: MEASURED, `export enum Color` read as `Color.blue` in another file was
+		// reported E3092 by `export-keyword/exported-enum-cross-file`, whose whole subject is that the
+		// cross-file reference WORKS. E3062 only ever filters this set against a file's own non-exported
+		// typealiases, so a widened set can make it report LESS, never wrongly — and a name mentioned in
+		// any position is a name the file uses, which is the question E3062 asks too.
+		if self.signatures.containsStruct(baseTok.value) or self.signatures.containsEnum(baseTok.value) 'headNamesAType'
+			self.recordTypeNameUse(baseTok.value)
+		end 'headNamesAType'
+
 		// `Color.red` and `Move.walk(Direction.east)` — an ENUM CASE reference or a UNION CONSTRUCT,
 		// the base being a declared enum/union. Asked AFTER the scope-based forms above (a bound base
 		// outranks a type name, exactly as `u16.max` is the last resort) but BEFORE the qualified STATIC
@@ -60617,7 +60719,7 @@ export type Parser
 		return match layout.fieldTier(index) 'tier'
 			file gives false
 			module gives self.signatures.isVisibleFrom(Visibility.module, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
-			global gives true
+			global or public gives true
 		end 'tier'
 	end 'fieldReachableFromOutsideItsType'
 

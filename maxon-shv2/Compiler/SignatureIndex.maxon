@@ -602,6 +602,20 @@ let FileScopedKeySeparator = "|"
 // are unbounded.
 export typealias TopLevelDeclIndex = int(0 to u64.max)
 export typealias TopLevelDeclIndexArray = Array with TopLevelDeclIndex
+
+// ONE cross-file read of an inlined top-level constant â the trace `ProgramSignatures.constantValueOf`
+// keeps because the IR keeps none (see `notedConstantValue`). Read by `checkUnusedExports` alone.
+export type ConstantRead
+	export let name as ByteArray
+	export let readerFilePath as FilePath
+
+	export static function create(name ByteArray, readerFilePath FilePath) returns ConstantRead
+		return Self{name: name, readerFilePath: readerFilePath}
+	end 'create'
+end 'ConstantRead'
+
+export typealias ConstantReadArray = Array with ConstantRead
+export typealias ConstantReadIndex = int(0 to u64.max)
 typealias TopLevelDeclIndexMap = Map with (ByteArray, TopLevelDeclIndex)
 
 // How many of those declarations have a `.data` slot — a SUBSET of the arena, so the same wide range.
@@ -8496,6 +8510,9 @@ export type ProgramSignatures
 	// TypeResolution.maxon:8268-8304). Here there is nothing to sort: the sweep builds the array in
 	// the order the message needs.
 	var decls as TopLevelDeclArray
+	// The cross-file reads of INLINED constants â see `notedConstantValue` for why the IR cannot hold them.
+	// Empty for every single-file program.
+	var crossFileConstantReads as ConstantReadArray
 	// Storage key -> its index in `decls`. FIRST-WINS on a duplicate key (see `recordDecl`).
 	var declIndex as TopLevelDeclIndexMap
 	// ⭐ Function name -> its per-parameter CONSUME bits (P1.4a wave 2). `paramIsConsumed(callee, i)` is
@@ -9013,7 +9030,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -9067,7 +9084,11 @@ export type ProgramSignatures
 	// directly, and both wider tiers contain their own file by construction.
 	export function isVisibleFrom(visibility Visibility, declFilePath FilePath, readerFilePath FilePath) returns bool
 		match visibility 'tier'
-			global then return true
+			// `public` is `global`'s REACH and a different CLAIM — see the `Visibility` header. The claim is
+			// the unused-export family's business and never this function's: anything asking "may this file
+			// name that symbol?" must answer identically for the two, or `public` would silently narrow what
+			// it was written to widen.
+			global or public then return true
 			file then return declFilePath.toString().equals(readerFilePath.toString())
 			module then return moduleDirectoryContains(self.moduleDirectoryOf(declFilePath), inner: self.moduleDirectoryOf(readerFilePath))
 		end 'tier'
@@ -12832,10 +12853,21 @@ export type ProgramSignatures
 	// get for a name nobody declared — which is exactly the diagnostic the reference produces.
 	export function evaluateNamed(name ByteArray, readerFilePath FilePath, stack TopLevelDeclIndexArray) returns ConstEvalOutcome
 		match self.constantDeclFor(name, readerFilePath: readerFilePath) 'lookup'
-			found(index) then return self.evaluateDecl(index, stack: stack)
+			found(index) then return self.notedConstantEvaluation(index, name: name, readerFilePath: readerFilePath, stack: stack)
 			notFound then return ConstEvalOutcome.notFound
 		end 'lookup'
 	end 'evaluateNamed'
+
+	// ⚠ **THE EVALUATOR IS A SECOND CONSTANT-READ DOOR, AND HOOKING ONLY `constantValueOf` MISSED IT.**
+	// `let FINAL = MIDDLE + 2` reads `MIDDLE` from inside an INITIALIZER, which is resolved here rather
+	// than at a use site — so a cross-file constant CHAIN left no trace and `checkUnusedExports` reported
+	// every link of it as unreferenced. MEASURED on `top-level-let/cross-file-constant-chain` and five of
+	// its neighbours. Both doors note through the same recorder, so the two cannot come to disagree about
+	// what counts as a read.
+	function notedConstantEvaluation(index TopLevelDeclIndex, name ByteArray, readerFilePath FilePath, stack TopLevelDeclIndexArray) returns ConstEvalOutcome
+		self.noteCrossFileConstantRead(index, name: name, readerFilePath: readerFilePath)
+		return self.evaluateDecl(index, stack: stack)
+	end 'notedConstantEvaluation'
 
 	// The value `name` denotes when read from `readerFilePath` — the door a USE SITE asks through
 	// (`Parser.topLevelConstantReference`), after every constant has been evaluated.
@@ -12851,10 +12883,70 @@ export type ProgramSignatures
 	// asks `globalDeclFor` next, and emits a LOAD.
 	export function constantValueOf(name ByteArray, readerFilePath FilePath) returns TopLevelConstantLookup
 		match self.constantDeclFor(name, readerFilePath: readerFilePath) 'lookup'
-			found(index) then return self.resolvedValueOf(index)
+			found(index) then return self.notedConstantValue(index, name: name, readerFilePath: readerFilePath)
 			notFound then return TopLevelConstantLookup.notFound
 		end 'lookup'
 	end 'constantValueOf'
+
+	// ⭐⭐ **THE ONE PLACE A CROSS-FILE CONSTANT READ LEAVES A TRACE, AND IT HAS TO BE HERE BECAUSE
+	// NOWHERE ELSE KEEPS ONE.** A `let` with no storage is INLINED at its use site — it becomes a
+	// `literal` op carrying the number — so unlike a `var` (which emits a `globalAddr` naming its
+	// `.data` label) a constant reference is invisible in the IR by the time any whole-module pass
+	// runs. `checkUnusedExports` would therefore see `export let LIMIT` read from three other files as
+	// read from NONE, and report E3092 on a genuinely-used constant: a WRONG ANSWER, not a missed one.
+	// v1 meets the identical problem and answers it the identical way, with a side channel its
+	// TypeResolution writes (`project.crossFileConstReads`).
+	//
+	// ⚠ **ONLY CROSS-FILE READS ARE KEPT, WHICH IS WHAT MAKES IT FREE.** The array is empty for every
+	// single-file program and holds one entry per cross-file constant SITE otherwise — the question the
+	// check asks is "was it read from outside its declaring file?", so a same-file read is not merely
+	// uninteresting, it is not part of the answer.
+	function notedConstantValue(index TopLevelDeclIndex, name ByteArray, readerFilePath FilePath) returns TopLevelConstantLookup
+		self.noteCrossFileConstantRead(index, name: name, readerFilePath: readerFilePath)
+		return self.resolvedValueOf(index)
+	end 'notedConstantValue'
+
+	function noteCrossFileConstantRead(index TopLevelDeclIndex, name ByteArray, readerFilePath FilePath)
+		let decl = self.declAt(index)
+		if decl.declFilePath.toString().equals(readerFilePath.toString()) 'sameFile'
+			return
+		end 'sameFile'
+
+		self.crossFileConstantReads.push(ConstantRead.create(name, readerFilePath: readerFilePath))
+	end 'noteCrossFileConstantRead'
+
+	// The cross-file constant reads this compile has seen, for `checkUnusedExports` to replay.
+	export function crossFileConstantReadCount() returns ConstantReadIndex
+		return self.crossFileConstantReads.count()
+	end 'crossFileConstantReadCount'
+
+	export function crossFileConstantReadAt(index ConstantReadIndex) returns ConstantRead
+		return try self.crossFileConstantReads.get(index) otherwise panic("ProgramSignatures.crossFileConstantReadAt: OOB at {index} — the caller walks this list's own count()")
+	end 'crossFileConstantReadAt'
+
+	// The top-level `let`/`var` arena, walked by `checkUnusedExports`. `declAt` is exported for the same
+	// reason: the check seeds from every declaration, so it needs the arena and not a by-name probe.
+	// The name behind an interned id. The interner is this index's, so the answer is only meaningful
+	// against it â which is why it is asked HERE rather than the table being handed out.
+	export function typeNameOf(id TypeNameId) returns ByteArray throws TypeNameInternerError
+		return try self.typeNames.nameOf(id)
+	end 'typeNameOf'
+
+	// ⭐ **THE TYPE A TOP-LEVEL SLOT HOLDS — for `checkUnusedExports`, because REFERENCING A BINDING USES
+	// ITS TYPE.** A file can write `db.sourceFiles.contains(key)` and name `db` and nothing else, while
+	// depending on `Database`, on the `EntryMap` it is made of and on the `Entry` inside that. MEASURED on
+	// `map-struct-bytearray/multi-file-struct-param-after-global-branch`, which reported all three.
+	//
+	// It supplies the interner rather than taking one, which is the whole reason it exists as its own
+	// door: `resolvedGlobalOf` adopts the type INTO the table it is handed, and the only table whose ids
+	// `typeNameOf` can answer for is this index's own.
+	export function globalSlotType(index TopLevelDeclIndex) returns TopLevelGlobalLookup
+		return self.resolvedGlobalOf(index, into: self.typeNames)
+	end 'globalSlotType'
+
+	export function topLevelDeclCount() returns TopLevelDeclIndex
+		return self.decls.count()
+	end 'topLevelDeclCount'
 
 	// ⭐ **THE STORED-BINDING DOOR** — what `name` denotes as a top-level global with a `.data` slot, read
 	// from `readerFilePath`. The twin of `constantValueOf`, and the reason the two are separate: an inlined
@@ -13024,7 +13116,10 @@ export type ProgramSignatures
 	// is `assignDataLabels`' lazy branch, which files them under the slot's label for
 	// `lazyStaticInitCalleesOf` to answer AT THE ACCESS. The split still earns its keep for the same reason,
 	// against a different second reader.
-	function declScopeInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
+	// Exported for `checkUnusedExports`: a top-level initializer runs inside the synthesized `__module_init`,
+	// whose `sourceFilePath` is empty, so its calls are invisible to a walk over function bodies. Asked per
+	// DECL, which is what carries the declaring file the reference must be attributed to.
+	export function declScopeInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
 		if self.declSlotIsLazy(decl) 'runsOnFirstAccessOrNotAtAll'
 			return TopLevelInitializerCall.none
 		end 'runsOnFirstAccessOrNotAtAll'
@@ -14002,7 +14097,7 @@ export type ProgramSignatures
 		return self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.inlined)
 	end 'constantDeclFor'
 
-	function declAt(index TopLevelDeclIndex) returns TopLevelDecl
+	export function declAt(index TopLevelDeclIndex) returns TopLevelDecl
 		return try self.decls.get(index) otherwise panic("ProgramSignatures.declAt: decls.get OOB at {index} — every index handed out is one this arena minted")
 	end 'declAt'
 

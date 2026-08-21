@@ -1,0 +1,57 @@
+// Test: public-enum
+public enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.blue
+	match c 'check'
+		blue then return 7
+		red then return 0
+		green then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.je main.check_0.case1
+  check_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.je main.check_0.case2
+  check_0.dispatch1:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.je main.check_0.case0
+  check_0.dispatch2:
+    x64.jmp main.check_0.merge
+  check_0.case0:
+    x64.mov rax, 7
+    x64.epilogue
+    x64.ret
+  check_0.case1:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.case2:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+}
+---

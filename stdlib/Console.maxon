@@ -33,15 +33,15 @@ typealias ByteCount = int(0 to u64.max)
 let chunkSize = 4096
 
 // `Console.stdin()` constructs a Stdin via Stdin.create(), so the static
-// factory stays `export`-marked. The instance methods don't need export —
+// factory stays visibility-marked (`public`). The instance methods need none —
 // Maxon resolves method calls through inferred receiver types regardless of
-// the type's own export status. `Stdin` itself is unexported; callers bind
+// the type's own visibility. `Stdin` itself is file-private; callers bind
 // it through inference (`let stdin = Console.stdin()`).
 type Stdin
 	var pending as ByteArray
 	var eofSeen as bool
 
-	export static function create() returns Stdin
+	public static function create() returns Stdin
 		return Self{pending: ByteArray.create(), eofSeen: false}
 	end 'create'
 
@@ -76,7 +76,7 @@ type Stdin
 	/// Throws `ConsoleError.endOfFile` when nothing is left and the underlying
 	/// stream has reached EOF. At a final partial line with no terminator
 	/// before EOF, the partial line is returned and the next call throws.
-	export function readLine() returns String throws ConsoleError
+	public function readLine() returns String throws ConsoleError
 		// Pull chunks until we either find a newline or hit EOF. `findNewline`
 		// throws when no `\n` is in the buffer; the simple `try ... otherwise`
 		// form below catches that and converts it into "need more input".
@@ -199,8 +199,8 @@ function stripTrailingCR(bytes ByteArray) returns ByteArray
 end 'stripTrailingCR'
 
 /// Convenience factory namespace. `Console.stdin()` is the typical entry point.
-export type Console
-	export static function stdin() returns Stdin
+public type Console
+	public static function stdin() returns Stdin
 		return Stdin.create()
 	end 'stdin'
 end 'Console'

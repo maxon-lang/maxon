@@ -3,7 +3,7 @@
 // Map receives managed memory buffers directly for literal initialization via BuiltinDictionaryLiteral.
 
 // MapError - errors for dictionary/map operations
-export enum MapError implements Error
+public enum MapError implements Error
 	keyNotFound
 	keyAlreadyExists
 end 'MapError'
@@ -15,7 +15,7 @@ typealias EntryCount = int(0 to u64.max)
 // Two byte-identical copies of a three-state enum fail ASYMMETRICALLY — a fourth state is a compile
 // error at one file's `match`es and silence at the other's — so there is one.
 
-export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable with (Entry, MapIterator) where Key is Hashable and Equatable
+public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable with (Entry, MapIterator) where Key is Hashable and Equatable
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
 	typealias StateArray = Array with SlotState
@@ -32,7 +32,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	var capacity = 0  // Total slots
 
 	/// Create an empty map
-	export static function create() returns Self
+	public static function create() returns Self
 		return Self{}
 	end 'create'
 
@@ -108,7 +108,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	/// Insert a key-value pair into the map
 	/// Throws if the key already exists
 	/// Automatically resizes the map when load factor exceeds 75%
-	export function insert(key Key, value Value) throws MapError
+	public function insert(key Key, value Value) throws MapError
 		ensureCapacity()
 
 		let hash = key.hash()
@@ -124,7 +124,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	/// Insert or update a key-value pair in the map
 	/// If the key already exists, updates the value
 	/// Automatically resizes the map when load factor exceeds 75%
-	export function upsert(key Key, value Value)
+	public function upsert(key Key, value Value)
 		ensureCapacity()
 
 		let hash = key.hash()
@@ -139,7 +139,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	end 'upsert'
 
 	/// Get the value for a key, throws if not found
-	export function get(key Key) returns Value throws MapError
+	public function get(key Key) returns Value throws MapError
 		let slotIndex = findSlot(key, hash: key.hash())
 		if slotIndex >= 0 'found'
 			if let v = try values.get(slotIndex) 'get_value'
@@ -150,12 +150,12 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	end 'get'
 
 	/// Check if key exists in the map
-	export function contains(key Key) returns bool
+	public function contains(key Key) returns bool
 		return findSlot(key, hash: key.hash()) >= 0
 	end 'contains'
 
 	/// Remove key from map, returns true if key was present
-	export function remove(key Key) returns bool
+	public function remove(key Key) returns bool
 		let slotIndex = findSlot(key, hash: key.hash())
 		if slotIndex >= 0 'found'
 			// Only the Deleted state marks the slot as removed. The cached hash is
@@ -169,18 +169,18 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	end 'remove'
 
 	/// Get number of entries in the map
-	export function count() returns EntryCount
+	public function count() returns EntryCount
 		return count
 	end 'count'
 
 	/// Create a fresh iterator positioned at the first occupied entry.
 	/// Throws IterationError.exhausted if the map is empty.
-	export function createIterator() returns MapIterator throws IterationError
+	public function createIterator() returns MapIterator throws IterationError
 		return try MapIterator.create(keys, values: values, states: states, capacity: capacity)
 	end 'createIterator'
 
 	/// Get current capacity (total number of slots)
-	export function getCapacity() returns TableCapacity
+	public function getCapacity() returns TableCapacity
 		return capacity
 	end 'getCapacity'
 
@@ -343,7 +343,7 @@ end 'Map'
 /// Positioning invariant: iterIndex always points at an occupied slot (or ==
 /// capacity after the final advance throws). current() reads that slot without
 /// a state check.
-export type MapIterator uses Key, Value implements Iterator with Entry where Key is Hashable and Equatable
+public type MapIterator uses Key, Value implements Iterator with Entry where Key is Hashable and Equatable
 	typealias Entry = (Key, Value)
 	typealias IterKeyArray = Array with Key
 	typealias IterValueArray = Array with Value
@@ -354,18 +354,18 @@ export type MapIterator uses Key, Value implements Iterator with Entry where Key
 	var capacity as TableCapacity
 	var iterIndex as TableSlotIndex
 
-	export static function create(keys IterKeyArray, values IterValueArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
+	public static function create(keys IterKeyArray, values IterValueArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
 		let first = try findNextOccupied(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
 		return Self{keys: keys, values: values, states: states, capacity: capacity, iterIndex: first}
 	end 'create'
 
-	export function current() returns Entry
+	public function current() returns Entry
 		let k = try keys.get(iterIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
 		let v = try values.get(iterIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
 		return (k, v)
 	end 'current'
 
-	export function advance() throws IterationError
+	public function advance() throws IterationError
 		iterIndex = try findNextOccupied(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
 	end 'advance'
 end 'MapIterator'

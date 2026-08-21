@@ -35,6 +35,10 @@ export union PassKind
 	// Phase 2: Maxon-level. Chunk C bodies (placeholders in M1).
 	resolveTypes
 	semanticCheck
+	// Phase 2b: the cross-file unused-export audit (E3092/E3093/E3094). Scheduled AFTER `semanticCheck`
+	// and therefore reached only on a project with no diagnostics at all — which is what supplies v1's
+	// structural gate for free (see UnusedExportCheck's header).
+	checkUnusedExports
 	// Phase 3: Maxon → Std.
 	lowerMaxonToStd
 	// Phase 3.4: Std → Std ranged-typealias narrowing guards (P1.9). Turns the parser's recorded
@@ -105,6 +109,8 @@ export function classifyPass(pass PassKind) returns PassClassification
 	return match pass 'classify'
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
+		// Whole-module by nature: "does any OTHER file name this?" cannot be answered per function.
+		checkUnusedExports gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
 		insertRangeChecks gives PassClassification.perFunction
 		pruneDeadBlockArgs gives PassClassification.perFunction
@@ -125,6 +131,7 @@ export function compilePhaseOfPass(pass PassKind) returns CompilePhase
 	return match pass 'phase'
 		resolveTypes gives CompilePhase.resolveTypes
 		semanticCheck gives CompilePhase.semanticCheck
+		checkUnusedExports gives CompilePhase.checkUnusedExports
 		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
 		insertRangeChecks gives CompilePhase.insertRangeChecks
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
@@ -139,6 +146,7 @@ export function passKindToString(pass PassKind) returns String
 	return match pass 'name'
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"
+		checkUnusedExports gives "checkUnusedExports"
 		lowerMaxonToStd gives "lowerMaxonToStd"
 		insertRangeChecks gives "insertRangeChecks"
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
@@ -174,6 +182,7 @@ export function buildMaxonTierPasses() returns PassKindArray
 	var passes = PassKindArray.create()
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
+	passes.push(PassKind.checkUnusedExports)
 	return passes
 end 'buildMaxonTierPasses'
 
@@ -310,7 +319,7 @@ export type PassPipeline
 	export function run(passes PassKindArray) throws CompileError
 		for pass in passes 'eachPass'
 			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {passKindToString(pass)} ===")
-			self.dispatch(pass)
+			try self.dispatch(pass)
 			if projectHasErrors(self.project) 'errorGate'
 				throw CompileError.compileError
 			end 'errorGate'
@@ -329,12 +338,13 @@ export type PassPipeline
 	// calls another, so the phases are disjoint with nothing to subtract.
 	// The name index comes off `self` rather than riding a parameter: it is the PIPELINE's, built once for
 	// both stages, and threading it would have made a per-run copy of a fact the type already owns.
-	function dispatch(pass PassKind)
+	function dispatch(pass PassKind) throws CompileError
 		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
 
 		match pass 'dispatch'
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
+			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)

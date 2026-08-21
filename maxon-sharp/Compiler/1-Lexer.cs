@@ -34,6 +34,7 @@ public enum TokenType {
   Static,
   TypeAlias,
   Export,
+  Public,
   Self,
   SelfType,  // Self (the type)
   Interface,
@@ -224,6 +225,7 @@ public class Lexer(string source) {
     { "with", new(TokenType.With, "Specifies interface conformance requirements.", false) },
     { "static", new(TokenType.Static, "Declares a static method that doesn't require an instance.", false) },
     { "export", new(TokenType.Export, "Makes a function or type visible to other modules.", false) },
+    { "public", new(TokenType.Public, "Makes a declaration visible to other modules AND marks it as public API surface, exempting it from the unused-export diagnostics (E3092/E3093). Visibility is identical to `export`; the difference is only that `public` states the symbol exists for callers outside this program, so \"nobody here calls it\" is not a finding.", false) },
     { "self", new(TokenType.Self, "Refers to the current instance in a method.", false) },
     { "Self", new(TokenType.SelfType, "Refers to the current type in a method signature.", false) },
     { "interface", new(TokenType.Interface, "Declares an interface that types can conform to.\n\nExample:\n```maxon\ninterface Printable\n    function print() returns int\nend 'Printable'\n```", false) },

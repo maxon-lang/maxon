@@ -2,12 +2,12 @@
 /// values are platform-defined (e.g. milliseconds since boot) and only
 /// meaningful when subtracted.
 /// @category System
-export typealias DurationMs = int(0 to u64.max)
-export typealias InstantMs = int(0 to u64.max)
-export typealias DurationNanos = int(0 to u64.max)
-export typealias InstantNanos = int(0 to u64.max)
+public typealias DurationMs = int(0 to u64.max)
+public typealias InstantMs = int(0 to u64.max)
+public typealias DurationNanos = int(0 to u64.max)
+public typealias InstantNanos = int(0 to u64.max)
 
-export type Clock
+public type Clock
 	/// Monotonic time in milliseconds. Differences between two `nowMs()`
 	/// readings are meaningful; the absolute value is not.
 	///
@@ -15,14 +15,14 @@ export type Clock
 	/// (`GetTickCount64` on Windows), whose period is ~15.6 ms. Anything that
 	/// needs to resolve durations shorter than a scheduler tick — profiling,
 	/// benchmarking, latency accounting — must use `nowNanos()` instead.
-	export static function nowMs() returns InstantMs
+	public static function nowMs() returns InstantMs
 		return __Builtins.currentTimeMs()
 	end 'nowMs'
 
 	/// Milliseconds elapsed since a prior `nowMs()` reading. Clamps to 0 if
 	/// the system clock somehow moves backwards between the two readings
 	/// (shouldn't happen on a monotonic source, but guards against bugs).
-	export static function elapsedMs(since InstantMs) returns DurationMs
+	public static function elapsedMs(since InstantMs) returns DurationMs
 		let now = Clock.nowMs()
 		if now < since 'clockSkew'
 			return 0
@@ -39,13 +39,13 @@ export type Clock
 	/// The value is always expressed in nanoseconds, but the counter's PERIOD is
 	/// platform-defined — typically 100 ns on Windows and 1 ns elsewhere — so
 	/// successive readings taken back-to-back may compare equal.
-	export static function nowNanos() returns InstantNanos
+	public static function nowNanos() returns InstantNanos
 		return __Builtins.currentTimeNanos()
 	end 'nowNanos'
 
 	/// Nanoseconds elapsed since a prior `nowNanos()` reading. Clamps to 0 on
 	/// apparent backwards movement, mirroring `elapsedMs`.
-	export static function elapsedNanos(since InstantNanos) returns DurationNanos
+	public static function elapsedNanos(since InstantNanos) returns DurationNanos
 		let now = Clock.nowNanos()
 		if now < since 'clockSkew'
 			return 0
@@ -55,7 +55,7 @@ export type Clock
 end 'Clock'
 
 /// Whole seconds since the Unix epoch, 1970-01-01 00:00:00 UTC.
-export typealias UnixSeconds = int(0 to u64.max)
+public typealias UnixSeconds = int(0 to u64.max)
 
 /// The WALL clock — the calendar, as opposed to `Clock`, which is a stopwatch.
 ///
@@ -74,11 +74,11 @@ export typealias UnixSeconds = int(0 to u64.max)
 ///   date     → WallClock.nowUnixSeconds
 ///
 /// @category System
-export type WallClock
+public type WallClock
 	/// Seconds since the Unix epoch, UTC. No timezone is applied — the caller converts if it
 	/// wants local time, because the offset is a policy decision the stdlib has no business
 	/// guessing.
-	export static function nowUnixSeconds() returns UnixSeconds
+	public static function nowUnixSeconds() returns UnixSeconds
 		return __Builtins.currentUnixTimeSeconds()
 	end 'nowUnixSeconds'
 end 'WallClock'

@@ -293,6 +293,13 @@ export type FileParseArtifact
 	// it holds is one none of them can hold: they are five arrays, so which of a file's `type Box` and
 	// `typealias Box` came SECOND is nowhere in them, and a collision must blame the later one.
 	export var typeNameDecls as TypeNameDeclArray
+	// Every type NAME this file wrote in a TYPE POSITION â the set `Parser.recordTypeNameUse` builds for
+	// E3062, kept past the parse because `checkUnusedExports` asks the same question one scope wider:
+	// E3062 asks "did this FILE use its own alias?" and E3092 asks "did any OTHER file use this one?".
+	// Shares E3062's answer rather than deriving a second one â and it is the only source that survives
+	// ERASURE, which is why the check cannot read param types instead: a ranged alias in a signature is
+	// `integer` by the time any pass sees it.
+	export var usedTypeNames as UsedTypeNameSet
 	// This file's `type X implements …` conformance declarations (P1.7a slice 1). Each carries the
 	// type-name token position so the whole-program `checkConformance` can anchor an E3015/E3016 on it.
 	// Remap-free (all names are plain ByteArrays). Folded into `project.conformances` by `mergeArtifact`.
@@ -379,6 +386,7 @@ export type FileParseArtifact
 			enumTypes: EnumLayoutArray.create(),
 			interfaces: sharedEmptyInterfaces,
 			typeNameDecls: sharedEmptyTypeNameDecls,
+			usedTypeNames: sharedEmptyUsedTypeNames,
 			conformances: sharedEmptyConformances,
 			literalInitSites: sharedEmptyLiteralInitSites,
 			inferredInstantiationSites: sharedEmptyInferredInstantiationSites,

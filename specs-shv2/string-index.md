@@ -389,7 +389,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at String.maxon:336: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
+panic at String.maxon:342: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
 Stack trace:
   in String.sliceBytes
   in String.slice
@@ -417,7 +417,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at String.maxon:336: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
+panic at String.maxon:342: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
 Stack trace:
   in String.sliceBytes
   in String.slice

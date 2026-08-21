@@ -1,52 +1,52 @@
 /// File reading, writing, and manipulation operations.
 /// @category System
 /// Error for file read operations
-export enum FileReadError implements Error
+public enum FileReadError implements Error
 	notFound
 end 'FileReadError'
 
 /// Error for file write operations
-export enum FileWriteError implements Error
+public enum FileWriteError implements Error
 	failed
 end 'FileWriteError'
 
 /// Error for file delete operations
-export enum FileDeleteError implements Error
+public enum FileDeleteError implements Error
 	notFound
 end 'FileDeleteError'
 
 /// Error for file rename operations
-export enum FileRenameError implements Error
+public enum FileRenameError implements Error
 	failed
 end 'FileRenameError'
 
-export typealias FileSize = int(0 to u64.max)
-export typealias Timestamp = int(0 to u64.max)
+public typealias FileSize = int(0 to u64.max)
+public typealias Timestamp = int(0 to u64.max)
 
 /// Error for file info operations
-export enum FileInfoError implements Error
+public enum FileInfoError implements Error
 	notFound
 end 'FileInfoError'
 
 /// Metadata about a file
-export type FileInfo
-	export let size as FileSize
-	export let modifiedTime as Timestamp
-	export let createdTime as Timestamp
-	export let accessedTime as Timestamp
-	export let isDirectory as bool
-	export let isReadOnly as bool
+public type FileInfo
+	public let size as FileSize
+	public let modifiedTime as Timestamp
+	public let createdTime as Timestamp
+	public let accessedTime as Timestamp
+	public let isDirectory as bool
+	public let isReadOnly as bool
 
-	export static function create(size FileSize, modifiedTime Timestamp, createdTime Timestamp, accessedTime Timestamp, isDirectory bool, isReadOnly bool) returns FileInfo
+	public static function create(size FileSize, modifiedTime Timestamp, createdTime Timestamp, accessedTime Timestamp, isDirectory bool, isReadOnly bool) returns FileInfo
 		return FileInfo{size: size, modifiedTime: modifiedTime, createdTime: createdTime, accessedTime: accessedTime, isDirectory: isDirectory, isReadOnly: isReadOnly}
 	end 'create'
 end 'FileInfo'
 
-export typealias Byte = int(0 to u8.max)
-export typealias ByteArray = Array with Byte
+public typealias Byte = int(0 to u8.max)
+public typealias ByteArray = Array with Byte
 
 /// File permission mode for write operations
-export enum FilePermission
+public enum FilePermission
 	normal  // 0666 - standard file permissions
 	executable  // 0755 - executable permissions (Unix)
 end 'FilePermission'
@@ -107,10 +107,10 @@ type FileWriter
 end 'FileWriter'
 
 /// Static file operations.
-export type File
+public type File
 
 	/// Read text file content as a UTF-8 string
-	export static function readText(path FilePath) returns String throws FileReadError
+	public static function readText(path FilePath) returns String throws FileReadError
 		var reader = try FileReader.open(path.path)
 		var managed = try reader.readAll(1)
 		let len = managed.length()
@@ -129,32 +129,32 @@ export type File
 	end 'readText'
 
 	/// Read file content as raw bytes
-	export static function readBinary(path FilePath) returns ByteArray throws FileReadError
+	public static function readBinary(path FilePath) returns ByteArray throws FileReadError
 		var reader = try FileReader.open(path.path)
 		let managed = try reader.readAll(0)
 		return ByteArray.init(managed)
 	end 'readBinary'
 
 	/// Write string content to a text file
-	export static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
+	public static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
 		var writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
 		try writer.writeAll(content.addressableBytes())
 	end 'writeText'
 
 	/// Write binary content to a file
-	export static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
+	public static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
 		var writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
 		try writer.writeAll(content.managed)
 	end 'writeBinary'
 
 	/// Check if a file exists at the given path
-	export static function exists(path FilePath) returns bool
+	public static function exists(path FilePath) returns bool
 		let result = __ManagedFile.exists(path.path.addressableBytes())
 		return result != 0
 	end 'exists'
 
 	/// Delete a file at the given path
-	export static function delete(path FilePath) throws FileDeleteError
+	public static function delete(path FilePath) throws FileDeleteError
 		try __ManagedFile.delete(path.path.addressableBytes()) otherwise 'failed'
 			throw FileDeleteError.notFound
 		end 'failed'
@@ -164,14 +164,14 @@ export type File
 	/// destination exists it is replaced in a single step, so a reader of the
 	/// destination never observes a partially written file. Used to publish
 	/// freshly written files (e.g. cache entries) without a torn-read window.
-	export static function rename(from FilePath, to FilePath) throws FileRenameError
+	public static function rename(from FilePath, to FilePath) throws FileRenameError
 		try __ManagedFile.rename(from.path.addressableBytes(), to.path.addressableBytes()) otherwise 'failed'
 			throw FileRenameError.failed
 		end 'failed'
 	end 'rename'
 
 	/// Get file metadata
-	export static function info(path FilePath) returns FileInfo throws FileInfoError
+	public static function info(path FilePath) returns FileInfo throws FileInfoError
 		let statResult = try __ManagedFile.stat(path.path.addressableBytes()) otherwise 'notFound'
 			throw FileInfoError.notFound
 		end 'notFound'

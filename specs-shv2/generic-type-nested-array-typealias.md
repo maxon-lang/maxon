@@ -2577,7 +2577,7 @@ extension Vault
 	end 'stashIf'
 end 'Vault'
 // --- file: b_type.maxon
-export typealias Count = int(0 to u64.max)
+public typealias Count = int(0 to u64.max)
 
 export type Vault uses Element
 	typealias ElementArray = Array with Element

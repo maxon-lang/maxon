@@ -28,7 +28,7 @@ let Utf8FourByteLeadMask = 7
 
 /// Get the number of bytes in a UTF-8 sequence from its lead byte
 /// Returns 1-4 for valid lead bytes
-export function utf8ByteLength(leadByte RawByte) returns ByteWidth
+public function utf8ByteLength(leadByte RawByte) returns ByteWidth
 	// ASCII (0xxxxxxx)
 	if leadByte < 128 'ascii'
 		return 1
@@ -54,23 +54,23 @@ export function utf8ByteLength(leadByte RawByte) returns ByteWidth
 end 'utf8ByteLength'
 
 /// Check if a byte is a UTF-8 continuation byte (10xxxxxx)
-export function utf8IsContinuation(b RawByte) returns bool
+public function utf8IsContinuation(b RawByte) returns bool
 	return b >= 128 and b < 192
 end 'utf8IsContinuation'
 
 /// Check if a byte is a valid UTF-8 lead byte
-export function utf8IsLead(b RawByte) returns bool
+public function utf8IsLead(b RawByte) returns bool
 	// Lead byte is either ASCII (< 128) or starts with 11xxxxxx (>= 192)
 	return b < 128 or b >= 192
 end 'utf8IsLead'
 
 /// Check if a byte is ASCII (0-127)
-export function utf8IsAscii(b RawByte) returns bool
+public function utf8IsAscii(b RawByte) returns bool
 	return b < 128
 end 'utf8IsAscii'
 
 /// Get the number of bytes needed to encode a codepoint in UTF-8
-export function utf8EncodeLength(codepoint Codepoint) returns ByteWidth
+public function utf8EncodeLength(codepoint Codepoint) returns ByteWidth
 	if codepoint < 128 'ascii'
 		return 1
 	end 'ascii'
@@ -88,7 +88,7 @@ end 'utf8EncodeLength'
 
 /// Check if an integer is a valid Unicode codepoint
 /// Returns false for negative values, values > 0x10FFFF, and surrogate pairs (0xD800-0xDFFF)
-export function utf8IsValidCodepoint(cp Codepoint) returns bool
+public function utf8IsValidCodepoint(cp Codepoint) returns bool
 	// Valid range: 0x0000-0x10FFFF, excluding surrogate pairs (0xD800-0xDFFF)
 	if cp < 0 or cp > 1114111 'range_check'
 		return false
@@ -132,7 +132,7 @@ function utf8WidthFits(s String, pos BytePos, width ByteWidth) returns bool
 end 'utf8WidthFits'
 
 /// Get the UTF-8 sequence length from the lead byte at `pos`
-export function utf8ByteLengthAt(s String, pos BytePos) returns ByteWidth
+public function utf8ByteLengthAt(s String, pos BytePos) returns ByteWidth
 	let b0 = try s.byteAt(pos) otherwise 'b0Err'
 		panic("utf8ByteLengthAt: pos out of bounds — caller guarantees valid position")
 	end 'b0Err'
@@ -158,7 +158,7 @@ export function utf8ByteLengthAt(s String, pos BytePos) returns ByteWidth
 end 'utf8ByteLengthAt'
 
 /// Decode the UTF-8 codepoint at the given byte position
-export function utf8DecodeAt(s String, pos BytePos) returns Codepoint
+public function utf8DecodeAt(s String, pos BytePos) returns Codepoint
 	let b0 = try s.byteAt(pos) otherwise 'b0Err'
 		panic("utf8DecodeAt: pos out of bounds — caller guarantees valid position")
 	end 'b0Err'

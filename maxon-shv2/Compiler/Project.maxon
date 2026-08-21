@@ -23,13 +23,35 @@ export typealias BoolArray = Array with bool
 // declaration time; consumed by cross-file name resolution and the unused-export
 // check. `file` is the default (positively widened to `module`/`global`).
 //
-// ⭐ **THREE TIERS, AND THE MODIFIER THAT SELECTS EACH (N1a, `specs/module-keyword.md`):**
+// ⭐ **FOUR TIERS, AND THE MODIFIER THAT SELECTS EACH (N1a, `specs/module-keyword.md`;
+// `public` added by `specs/public-keyword.md`):**
 //   • `file`   — no modifier. Visible only inside the declaring FILE.
 //   • `module` — the `module` modifier. Visible to every file in the declaring file's DIRECTORY and
 //                in every subdirectory of it — i.e. every file whose NAMESPACE is the declaring
 //                file's namespace or a descendant of it.
 //   • `global` — the `export` modifier. Visible everywhere.
-// `export` and `module` are mutually exclusive (E2001, `Parser.consumeOptionalVisibility`).
+//   • `public` — the `public` modifier. Visible everywhere, EXACTLY as `global` is.
+// The three modifiers are mutually exclusive (E2001, `Parser.consumeOptionalVisibility`).
+//
+// ⭐⭐ **`global` AND `public` ARE THE SAME VISIBILITY AND A DIFFERENT CLAIM, WHICH IS WHY THEY ARE TWO
+// CASES AND NOT ONE.** `isVisibleFrom` answers `true` for both and always will; anything that asks *"can
+// this file name that symbol?"* must treat them as identical, and a reader that distinguishes them there
+// is a bug. The ONE question they answer differently is the unused-export family's:
+//   • `export` — other files may see this, **and I expect this program to use it**. Linted: if nothing
+//     outside the declaring file references it, that is E3092, and it is a real finding.
+//   • `public` — this is **API surface**. Exempt from E3092/E3093, because "no caller in THIS
+//     compilation" is not the same fact as "dead" — it could be a shared module an app happens not to
+//     use. That objection is a 2026-08-03 user ruling which withdrew the lint entirely; `public` is what
+//     answers it, by letting the author say which of the two things they meant.
+//
+// ⚠ **THERE IS DELIBERATELY NO `module public`.** E3094 (an unused `module` decl) keeps its full force; a
+// `module` declaration that wants exemption is PROMOTED to `public`, which changes its visibility and
+// says so. A tier and an exemption flag would be two axes, and every reader would then have to know it
+// must ask about both — the `public` case exists precisely so there is one axis to ask about.
+//
+// ⚠ **`public` IS APPENDED LAST, AND MUST STAY LAST.** These ordinals feed the incremental-build content
+// hash (`SignatureIndex.tierOrdinal`, `mixDeclaration`). Inserting a case mid-enum renumbers `global` and
+// silently invalidates every cached signature under a name that still looks current.
 //
 // ⚠ **`export` USED TO MINT `Visibility.module`**, back when the enum had three cases and the
 // language had two: every reader asked `!= Visibility.file` and the middle case merely happened to
@@ -42,7 +64,44 @@ export enum Visibility
 	file
 	module
 	global
+	public
 end 'Visibility'
+
+// ⭐ **"IS THIS DECLARATION VISIBLE OUTSIDE ITS DECLARING FILE'S SUBTREE?" — ASKED ONCE.** `global` and
+// `public` are the same visibility (see the header above), so every reader that cares about REACH rather
+// than about the unused-export claim asks here instead of spelling `== global or == public`. That
+// disjunction written out at N sites is a set written down N times, and the N+1th tier reaches N-1 of them.
+export function isProgramWideTier(visibility Visibility) returns bool
+	return visibility == Visibility.global or visibility == Visibility.public
+end 'isProgramWideTier'
+
+// The three WORDS that select a tier — the source-level surface of `Visibility`, which the tier enum
+// itself cannot carry because `file` has no word and `global` is not spelled "global".
+//
+// ⚠ **DECLARATION ORDER IS THE ORDER A COMBINED-MODIFIER DIAGNOSTIC NAMES THEM**, and it is NOT encounter
+// order. `'export' and 'module' cannot be combined` is pinned byte-for-byte by six live cases, so
+// `module export` has to render the same sentence as `export module`. `Parser.refuseSecondVisibilityModifier`
+// sorts the pair by `.ordinal` before throwing, which is the only reason this order is load-bearing.
+//
+// Cases are prefixed `word` because the unprefixed spellings are keywords; v1's `UseKindTag` prefixes
+// `kind_` for exactly this reason.
+export enum VisibilityModifierWord
+	wordExport
+	wordModule
+	wordPublic
+end 'VisibilityModifierWord'
+
+// The quoted spelling a diagnostic prints. The words themselves are reserved in `Lexer.keywordMap`
+// (`export`, `public`) and in `Parser.ModuleModifierName` (`module`, which is contextual and so has no
+// keyword entry) — two different mechanisms, which is why the display spelling is written here once
+// rather than derived from whichever of them happens to hold a given word.
+export function visibilityModifierSpelling(word VisibilityModifierWord) returns String
+	match word 'word'
+		wordExport then return "'export'"
+		wordModule then return "'module'"
+		wordPublic then return "'public'"
+	end 'word'
+end 'visibilityModifierSpelling'
 
 // ⭐⭐ **WHAT JOINS A MODULE DIRECTORY'S SEGMENTS — AND IT IS `/`, NOT `.`, BECAUSE THE JOIN HAS TO BE
 // INVERTIBLE.** `moduleDirectoryContains` is a SEGMENT test, and a segment test on a joined string is
@@ -325,10 +384,11 @@ export function tierOrdinal(visibility Visibility) returns VisibilityTier
 		file gives 0
 		module gives 1
 		global gives 2
+		public gives 3
 	end 'tier'
 end 'tierOrdinal'
 
-export typealias VisibilityTier = int(0 to 2)
+export typealias VisibilityTier = int(0 to 3)
 
 // One `Visibility` per struct field, in declaration order. See `StructLayout.fieldVisibility`.
 export typealias VisibilityArray = Array with Visibility

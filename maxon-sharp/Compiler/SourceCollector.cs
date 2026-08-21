@@ -12,6 +12,12 @@ public enum SourceSelection {
   /// Ship-able program source only — <c>*.test.maxon</c> is left out. What <c>maxon build</c>
   /// wants: test code is unreferenced by the program, so it is dead weight in the emitted binary,
   /// and under shv2's <c>checkUnusedExports</c> it would refuse the build outright.
+  ///
+  /// ⚠ That last clause was written about a pass that existed for a few hours on 2026-08-03 and was
+  /// then removed in full by user ruling, so it spent two and a half weeks being FALSE while reading
+  /// as a justification. It became true again on 2026-08-21, when the family landed for good behind
+  /// the <c>public</c> tier: an exported helper in a test file that the program never calls is
+  /// E3092, and including one really would fail the build.
   /// </summary>
   ProductionOnly,
 
@@ -217,8 +223,9 @@ public static class SourceCollector {
   /// <paramref name="selection"/> defaults to <see cref="SourceSelection.ProductionOnly"/> so
   /// that a caller which says nothing gets a shippable program: including test code has to be
   /// asked for, because the cost of accidentally including it (dead weight in every binary, and a
-  /// refused build under shv2's unused-export check) is paid silently, whereas the cost of
-  /// accidentally excluding it is a missing test the runner reports by name.
+  /// refused build under shv2's unused-export check, live again since 2026-08-21; see
+  /// ProductionOnly) is paid silently, whereas the cost of accidentally excluding it is a missing
+  /// test the runner reports by name.
   /// </summary>
   public static SourceFile[] FromDirectory(
     string directory,

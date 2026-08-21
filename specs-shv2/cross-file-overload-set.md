@@ -304,7 +304,7 @@ about. MEASURED against the bootstrap: `11` then `44`.
 // --- file: a.maxon
 typealias Integer = int(i64.min to i64.max)
 
-export type Box
+public type Box
 	export var first as Integer
 	export var second as Integer
 
@@ -320,7 +320,7 @@ end 'pick'
 // --- file: b.maxon
 typealias Count = int(i64.min to i64.max)
 
-export type Bag
+public type Bag
 	export var second as Count
 	export var first as Count
 
@@ -370,14 +370,14 @@ overload set may span two files.
 typealias Num = int(0 to 125)
 typealias Bag = Array with Num
 
-export function makeBag() returns Bag
+public function makeBag() returns Bag
 	var b = Bag.create()
 	b.push(4)
 	b.push(9)
 	return b
 end 'makeBag'
 
-export function makeBag(tag String) returns String
+public function makeBag(tag String) returns String
 	return "t{tag}"
 end 'makeBag'
 

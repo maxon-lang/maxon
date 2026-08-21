@@ -8,28 +8,28 @@
 // BuiltinStringLiteral - default type for string literals when no explicit type requested.
 // The compiler searches for the type implementing this interface when encountering "..."
 // Only one type should implement this interface (typically String).
-export interface BuiltinStringLiteral
+public interface BuiltinStringLiteral
 	static function init(value __ManagedMemory) returns Self
 end 'BuiltinStringLiteral'
 
 // BuiltinCharLiteral - default type for character literals when no explicit type requested.
 // The compiler searches for the type implementing this interface when encountering '...'
 // Only one type should implement this interface (typically Character).
-export interface BuiltinCharLiteral
+public interface BuiltinCharLiteral
 	static function init(value __ManagedMemory) returns Self
 end 'BuiltinCharLiteral'
 
 // BuiltinArrayLiteral - default type for array literals when no explicit type requested.
 // The compiler searches for the type implementing this interface when encountering [...]
 // Only one type should implement this interface (typically Array).
-export interface BuiltinArrayLiteral
+public interface BuiltinArrayLiteral
 	static function init(value __ManagedMemory) returns Self
 end 'BuiltinArrayLiteral'
 
 // BuiltinDictionaryLiteral - default type for map literals when no explicit type requested.
 // The compiler searches for the type implementing this interface when encountering ["key": value, ...]
 // Only one type should implement this interface (typically Map).
-export interface BuiltinDictionaryLiteral
+public interface BuiltinDictionaryLiteral
 	static function init(keys __ManagedMemory, values __ManagedMemory) returns Self
 end 'BuiltinDictionaryLiteral'
 
@@ -37,14 +37,14 @@ end 'BuiltinDictionaryLiteral'
 // The compiler creates a String from the literal and passes it to init().
 // Follows the Swift ExpressibleByStringLiteral pattern.
 // Example: var x MyType = "hello" -> var x = MyType.init(String from literal)
-export interface InitableFromStringLiteral
+public interface InitableFromStringLiteral
 	static function init(value String) returns Self
 end 'InitableFromStringLiteral'
 
 // InitableFromCharLiteral - types that can be initialized from character literals.
 // Similar to InitableFromStringLiteral but for single-character literals like 'A' or '🎉'.
 // The compiler creates a Character from the literal and passes it to init().
-export interface InitableFromCharLiteral
+public interface InitableFromCharLiteral
 	static function init(value Character) returns Self
 end 'InitableFromCharLiteral'
 
@@ -52,7 +52,7 @@ end 'InitableFromCharLiteral'
 // The compiler creates an Array from the literal and passes it to init().
 // Follows the Swift ExpressibleByArrayLiteral pattern.
 // Note: Array itself is special-cased by the compiler (uses __ManagedMemory directly).
-export interface InitableFromArrayLiteral uses Element
+public interface InitableFromArrayLiteral uses Element
 	typealias ElementArray = Array with Element
 	static function init(value ElementArray) returns Self
 end 'InitableFromArrayLiteral'
@@ -62,7 +62,7 @@ end 'InitableFromArrayLiteral'
 // The compiler creates two Arrays (keys and values) and passes them to init().
 // Both arrays have the same length and corresponding indices represent key-value pairs.
 // Note: Map itself is special-cased by the compiler (uses __ManagedMemory directly).
-export interface InitableFromDictionaryLiteral uses Key, Value
+public interface InitableFromDictionaryLiteral uses Key, Value
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
 	static function init(keys KeyArray, values ValueArray) returns Self
@@ -107,7 +107,7 @@ end 'InitableFromDictionaryLiteral'
 // AWAIT IS LINEAR: a promise is awaited exactly once. The thunk owns its result
 // and hands it over at the await; a second await of the same promise would take a
 // second +1 on a payload the thunk only owns once, and free it twice. E3100.
-export type Promise uses Element, ErrorType
+public type Promise uses Element, ErrorType
 	// Inner representation: the green-thread handle. Normally accessed via `await`,
 	// `try await`, and `.cancel()`. Written by the compiler's promise-boxing path
 	// (BoxPromiseIntoStruct in the C# bootstrap) and read by the await unbox path.
@@ -121,27 +121,27 @@ export type Promise uses Element, ErrorType
 	// `inner` is exported (read-only via `let`) so non-blocking pollers like the spec
 	// test dispatcher can peek at the underlying GT's status. Don't mutate; the field
 	// is a raw GT pointer and the compiler depends on its stability through await.
-	export let inner = 0
+	public let inner = 0
 end 'Promise'
 
 // Parsable - types that can be initialized from a string representation.
-export interface Parsable
+public interface Parsable
 	static function fromString(input String) returns Self throws Error
 end 'Parsable'
 
 // ParseError - errors for string-to-value parsing operations
-export enum ParseError implements Error
+public enum ParseError implements Error
 	invalidFormat
 end 'ParseError'
 
 // CursorError - errors for cursor navigation (companion to __ManagedMemoryCursor).
-export enum CursorError implements Error
+public enum CursorError implements Error
 	exhausted
 	atStart
 end 'CursorError'
 
 // __ManagedListError - errors for managed list operations
-export enum __ManagedListError implements Error
+public enum __ManagedListError implements Error
 	empty
 	endOfList
 	nodeNotInList  // insertAfter/Before, detach, remove where node does not belong to self
@@ -149,7 +149,7 @@ export enum __ManagedListError implements Error
 end '__ManagedListError'
 
 // __ManagedMemoryError - errors for __ManagedMemory builtin operations
-export enum __ManagedMemoryError implements Error
+public enum __ManagedMemoryError implements Error
 	indexOutOfBounds  // get, set, remove, byteAt, setByte with bad index
 	emptySlot  // get on a slot that was never filled (e.g. after resize() of struct array)
 	sliceOutOfBounds  // slice(start, end) with start > end, end > length, or start > length
@@ -161,7 +161,7 @@ export enum __ManagedMemoryError implements Error
 end '__ManagedMemoryError'
 
 // __ManagedSocketError - errors for __ManagedSocket builtin operations
-export enum __ManagedSocketError implements Error
+public enum __ManagedSocketError implements Error
 	bufferOutOfBounds  // sendFrom offset+length > capacity
 	resolveFailed  // DNS resolution failed
 	connectFailed  // TCP connect refused/timeout
@@ -172,7 +172,7 @@ export enum __ManagedSocketError implements Error
 end '__ManagedSocketError'
 
 // __ManagedFileError - errors for __ManagedFile builtin operations
-export enum __ManagedFileError implements Error
+public enum __ManagedFileError implements Error
 	notFound  // path does not exist
 	accessDenied  // permission error
 	openFailed  // other open errors (invalid path, IO, etc.)
@@ -187,7 +187,7 @@ export enum __ManagedFileError implements Error
 end '__ManagedFileError'
 
 // __ManagedDirectoryError - errors for __ManagedDirectory builtin operations
-export enum __ManagedDirectoryError implements Error
+public enum __ManagedDirectoryError implements Error
 	notFound
 	accessDenied
 	openSearchFailed
@@ -205,13 +205,13 @@ end '__ManagedDirectoryError'
 // There is no matching `SourceFilePath` alias for `__file__`: a typealias whose right-hand
 // side is a struct type is rejected today (E2003, "Type 'String' has no associated types"),
 // so a `__file__` parameter is declared `String` directly. Add one here if that ever lifts.
-export typealias SourceLineNumber = int(1 to i32.max)
+public typealias SourceLineNumber = int(1 to i32.max)
 
 // Wide-signed integer used as the return type of __int_fromString /
 // __byte_fromString and propagated through user-facing parse APIs.
 typealias ParsedInt = int(i64.min to i64.max)
 
-export function __int_fromString(input String) returns ParsedInt throws ParseError
+public function __int_fromString(input String) returns ParsedInt throws ParseError
 	var result = 0
 	var negative = false
 	var hasDigits = false
@@ -273,14 +273,14 @@ typealias ParsedFloat = float(f64.min to f64.max)
 // and not a stdlib detail (`__FloatTextResult`'s header carries the full argument). It costs nothing
 // real here — a magnitude past `f64.max` is not a representable float, so text naming one is text this
 // function cannot turn into its return type, which is exactly what `invalidFormat` says.
-export function __float_fromString(input String) returns ParsedFloat throws ParseError
+public function __float_fromString(input String) returns ParsedFloat throws ParseError
 	match __float_bitsFromText(input) 'decoded'
 		bits(value) then return __Builtins.bitsToFloat(value)
 		overflow to malformed then throw ParseError.invalidFormat
 	end 'decoded'
 end '__float_fromString'
 
-export function __bool_fromString(input String) returns bool throws ParseError
+public function __bool_fromString(input String) returns bool throws ParseError
 	if input == "true" 'is_true'
 		return true
 	end 'is_true'
@@ -290,7 +290,7 @@ export function __bool_fromString(input String) returns bool throws ParseError
 	throw ParseError.invalidFormat
 end '__bool_fromString'
 
-export function __byte_fromString(input String) returns ParsedInt throws ParseError
+public function __byte_fromString(input String) returns ParsedInt throws ParseError
 	let result = try __int_fromString(input) otherwise 'err'
 		throw ParseError.invalidFormat
 	end 'err'
@@ -385,7 +385,7 @@ typealias ParsedIntArray = Array with ParsedInt
 // question only the compiler asks, and the compiler already owns the vocabulary it must be reported in
 // (E2011 for one arm, an internal-invariant panic for the other). Handing back a value it maps lets it
 // keep that vocabulary without this file publishing a second public error type.
-export union __FloatTextResult
+public union __FloatTextResult
 	bits(value ParsedInt)
 	// The magnitude is past f64.max — a real program saying a real thing too big to hold.
 	overflow
@@ -514,7 +514,7 @@ let __SignificantDigitBudget = 768
 // `__float_bitsFromDecimal` already makes: below this line everything is a MAGNITUDE. It also keeps
 // `negative` out of the scan's loops, which matters for the register reason that function's header
 // gives at length.
-export function __float_bitsFromText(text String) returns __FloatTextResult
+public function __float_bitsFromText(text String) returns __FloatTextResult
 	let negative = text.startsWith(__FloatMinusSignText)
 	let signMask = __FloatSignBit if negative else 0
 	match __float_magnitudeBitsFromText(text, startAt: 1 if negative else 0) 'magnitude'
@@ -1400,7 +1400,7 @@ end '__float_exactDigits'
 // BOUNDS of a ranged float alias into a diagnostic (`Value 500 is outside the range of 'Pct'
 // (float(0 to 100))`), so it prints `0`, `100` and `-0` — no forced decimal point — and switches to
 // .NET's `1E+17` outside the fixed window. `specs-shv2/ranged-typealias.md` pins those spellings.
-export function __float_textFromBits(bits ParsedInt) returns String
+public function __float_textFromBits(bits ParsedInt) returns String
 	let negative = bits < 0
 	let magnitude = bits and __FloatMagnitudeMask
 	let exponentField = (magnitude shr __SignificandFieldBits) and __ExponentFieldMask
@@ -1459,8 +1459,8 @@ end '__shortestRoundTrip'
 // A digit string with its decimal-point scale — `value = 0.<digits> × 10^scale`. Rounding can carry
 // out of the top (`999` to 4 digits becomes `1` at one higher scale), so the two travel together.
 type __ScaledDigits
-	export var digits as DigitString
-	export var scale as DecimalPointScale
+	public var digits as DigitString
+	public var scale as DecimalPointScale
 
 	static function create(digits DigitString, scale DecimalPointScale) returns __ScaledDigits
 		return Self{digits: digits, scale: scale}
@@ -1657,7 +1657,7 @@ let __NegativeSignText = "-"
 // The Maxon spelling of `value`: the shortest decimal that reads back as the same double, always with
 // a decimal point, never in exponent notation. THE entry point `"{x}"` lowers to for a float part
 // (shv2's `Parser.materializeInterpExpr`; the bootstrap's `RewriteFloatPartAsStdlibText`).
-export function __float_toString(value ParsedFloat) returns String
+public function __float_toString(value ParsedFloat) returns String
 	let bits = __Builtins.floatToBits(value)
 
 	// ⭐ **THE ZERO-WIDE FIELD IS NOT CEREMONY — IT IS HOW THE SIGN MEETS THE MAGNITUDE EXACTLY ONCE.**
@@ -1739,13 +1739,13 @@ let __SpaceFillText = " "
 // `"{x}"` asks for no field at all, which is the same thing as a field nothing can be short of.
 let __NoFieldWidth = 0
 
-export function __float_toStringPadded(value ParsedFloat, width PadWidth, zeroFill bool) returns String
+public function __float_toStringPadded(value ParsedFloat, width PadWidth, zeroFill bool) returns String
 	let bits = __Builtins.floatToBits(value)
 	return __numericFieldText(__floatSignText(bits), magnitude: __floatMagnitudeText(bits and __FloatMagnitudeMask), width: width, zeroFill: zeroFill)
 end '__float_toStringPadded'
 
 // `value` written with EXACTLY `precision` digits after the point, in a `width`-wide field.
-export function __float_toStringFixed(value ParsedFloat, precision DecimalPrecision, width PadWidth, zeroFill bool) returns String
+public function __float_toStringFixed(value ParsedFloat, precision DecimalPrecision, width PadWidth, zeroFill bool) returns String
 	let bits = __Builtins.floatToBits(value)
 	let magnitude = bits and __FloatMagnitudeMask
 	let sign = __floatSignText(bits)
@@ -1866,7 +1866,7 @@ let __FirstLetterRadixDigit = 10
 // TYPE, so `"{u:d}"` printed `-1` for the same `u64.max` that `"{u}"` printed in full. The parser
 // passes it false for every base but decimal, because `"{n:x}"`, `"{n:o}"` and `"{n:b}"` spell the bit
 // pattern and never a sign.
-export function __int_toStringFormatted(value ParsedInt, signed bool, halfRadix HalfRadix, uppercase bool, width PadWidth, zeroFill bool) returns String
+public function __int_toStringFormatted(value ParsedInt, signed bool, halfRadix HalfRadix, uppercase bool, width PadWidth, zeroFill bool) returns String
 	let negative = signed and value < 0
 
 	// Negating i64.min overflows every SIGNED reading of the result, and is exactly right here: the
@@ -1898,8 +1898,8 @@ end '__unsignedDigits'
 
 // One place of `bits` in the base `2 * halfRadix`, and what is left above it.
 type __UnsignedDigitStep
-	export var quotient as ParsedInt
-	export var digit as RadixDigit
+	public var quotient as ParsedInt
+	public var digit as RadixDigit
 
 	static function create(quotient ParsedInt, digit RadixDigit) returns __UnsignedDigitStep
 		return Self{quotient: quotient, digit: digit}

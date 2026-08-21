@@ -80,13 +80,13 @@ end 'ResultStatusKind'
 
 /// Error raised when an `Executable.name(...)` lookup fails to find a matching
 /// binary on the PATH.
-export enum ExecutableError implements Error
+public enum ExecutableError implements Error
 	notFound
 end 'ExecutableError'
 
 /// What to run. Either a bare name (`"dotnet"`, looked up through PATH on the
 /// host) or an explicit `FilePath` (used verbatim).
-export union Executable
+public union Executable
 	name(value String)
 	path(value FilePath)
 
@@ -104,7 +104,7 @@ export union Executable
 	/// the opposite, and a caller believed it: it built "is this tool
 	/// installed?" on top of `resolve()` and got a confident `notFound` for a
 	/// tool that was plainly on PATH. To probe for a tool, SPAWN it.
-	export function resolve() returns FilePath throws ExecutableError
+	public function resolve() returns FilePath throws ExecutableError
 		return match self 'r'
 			name(n) gives try FilePath.from(n) otherwise throw ExecutableError.notFound
 			path(p) gives p
@@ -112,7 +112,7 @@ export union Executable
 	end 'resolve'
 
 	/// Human-readable form for diagnostics.
-	export function displayName() returns String
+	public function displayName() returns String
 		return match self 'd'
 			name(n) gives n
 			path(p) gives p.path
@@ -135,7 +135,7 @@ typealias EnvMap = Map with String, String
 ///
 /// The three-arm union (rather than a single `Map` field) makes
 /// `inherit`-vs-empty unambiguous.
-export union Environment
+public union Environment
 	inherit
 	inheritUpdating(overrides EnvMap)
 	custom(vars EnvMap)
@@ -155,7 +155,7 @@ end 'Environment'
 /// Each variant routes its payload through the `subprocessSpawn` stdio
 /// triple; the runtime stubs currently fail spawns with -1 until the real
 /// OS-side implementation lands.
-export union InputSource
+public union InputSource
 	none
 	inherit
 	bytes(data String)
@@ -173,7 +173,7 @@ end 'InputSource'
 /// Each variant routes through the `subprocessSpawn` stdio triple; the
 /// runtime stubs currently fail spawns with -1 until the real OS-side
 /// implementation lands.
-export union OutputDestination
+public union OutputDestination
 	discard
 	inherit
 	collect(limitBytes ByteLimit)
@@ -195,12 +195,12 @@ end 'OutputDestination'
 ///
 /// The current runtime stubs never produce `signalled`; that decoding lands
 /// alongside the real OS implementation of `subprocessWaitCollect`.
-export union TerminationStatus
+public union TerminationStatus
 	exited(code ExitInt)
 	signalled(code ExitInt)
 
 	/// True iff the child exited cleanly with code 0.
-	export function isSuccess() returns bool
+	public function isSuccess() returns bool
 		return match self 's'
 			exited(c) gives c == 0
 			signalled gives false
@@ -209,7 +209,7 @@ export union TerminationStatus
 
 	/// The raw integer code, regardless of how the child terminated. Useful
 	/// for logging; for control flow prefer matching on the union directly.
-	export function code() returns ExitInt
+	public function code() returns ExitInt
 		return match self 'c'
 			exited(c) gives c
 			signalled(c) gives c
@@ -223,7 +223,7 @@ end 'TerminationStatus'
 
 /// Errors raised by `Subprocess.run` / `Configuration.run`. Each carries the
 /// actionable detail rather than just a kind tag.
-export union SubprocessError implements Error
+public union SubprocessError implements Error
 	executableNotFound(name String)
 	spawnFailed(reason String)
 	ioFailed(reason String)
@@ -233,7 +233,7 @@ export union SubprocessError implements Error
 	/// Human-readable rendering for diagnostics. Centralises the wording so
 	/// every callsite produces the same single-line description of a spawn /
 	/// timeout / I/O failure.
-	export function displayReason() returns String
+	public function displayReason() returns String
 		return match self 'e'
 			executableNotFound(name) gives "executable not found: {name}"
 			spawnFailed(reason) gives "spawn failed: {reason}"
@@ -249,24 +249,24 @@ end 'SubprocessError'
 // =============================================================================
 
 /// Result of a synchronous (or awaited-async) run that captured its output.
-export type CollectedOutput
-	export var status as TerminationStatus
-	export var stdout as String
-	export var stderr as String
-	export var pid as Pid
-	export var durationMs as DurationMs
+public type CollectedOutput
+	public var status as TerminationStatus
+	public var stdout as String
+	public var stderr as String
+	public var pid as Pid
+	public var durationMs as DurationMs
 
-	export static function create(status TerminationStatus, stdout String, stderr String, pid Pid, durationMs DurationMs) returns CollectedOutput
+	public static function create(status TerminationStatus, stdout String, stderr String, pid Pid, durationMs DurationMs) returns CollectedOutput
 		return CollectedOutput{status: status, stdout: stdout, stderr: stderr, pid: pid, durationMs: durationMs}
 	end 'create'
 
 	/// True iff `status.isSuccess()` — exited cleanly with code 0.
-	export function succeeded() returns bool
+	public function succeeded() returns bool
 		return status.isSuccess()
 	end 'succeeded'
 
 	/// Convenience for callers that only care about a raw integer.
-	export function exitCode() returns ExitInt
+	public function exitCode() returns ExitInt
 		return status.code()
 	end 'exitCode'
 end 'CollectedOutput'
@@ -276,11 +276,11 @@ end 'CollectedOutput'
 // =============================================================================
 
 /// OS-specific knobs that don't fit cleanly into the cross-platform surface.
-export type PlatformOptions
-	export var windowsHideWindow as bool
-	export var windowsCreateNewProcessGroup as bool
+public type PlatformOptions
+	public var windowsHideWindow as bool
+	public var windowsCreateNewProcessGroup as bool
 
-	export static function defaults() returns PlatformOptions
+	public static function defaults() returns PlatformOptions
 		return PlatformOptions{windowsHideWindow: false, windowsCreateNewProcessGroup: false}
 	end 'defaults'
 end 'PlatformOptions'
@@ -296,23 +296,23 @@ let defaultCaptureLimit = 16 * 1024 * 1024
 /// then call `.run()` or `.runDetached()`. There's no chained-setter form
 /// because Maxon mutating methods can't return `Self` without forcing a
 /// per-setter struct copy.
-export type Configuration
-	export var executable as Executable
-	export var arguments as StringArray
+public type Configuration
+	public var executable as Executable
+	public var arguments as StringArray
 	/// Empty path means "inherit the parent's working directory".
-	export var workingDirectory as FilePath
-	export var environment as Environment
-	export var standardInput as InputSource
-	export var standardOutput as OutputDestination
-	export var standardError as OutputDestination
+	public var workingDirectory as FilePath
+	public var environment as Environment
+	public var standardInput as InputSource
+	public var standardOutput as OutputDestination
+	public var standardError as OutputDestination
 	/// 0 means "wait forever". Non-zero is the kill-after deadline.
-	export var timeoutMs as DurationMs
-	export var platformOptions as PlatformOptions
+	public var timeoutMs as DurationMs
+	public var platformOptions as PlatformOptions
 
 	/// Build a Configuration with sensible defaults: empty argv, inherited
 	/// cwd, inherited env, no stdin, both output streams collected up to
 	/// 16 MiB, no timeout.
-	export static function create(executable Executable) returns Configuration
+	public static function create(executable Executable) returns Configuration
 		return Configuration{
 			executable: executable,
 			arguments: StringArray.create(),
@@ -329,14 +329,14 @@ export type Configuration
 	/// Run the configured subprocess and collect its output. Blocks the
 	/// caller; from a green thread the spawn yields to the scheduler so
 	/// other green threads make progress while the child runs.
-	export function run() returns CollectedOutput throws SubprocessError
+	public function run() returns CollectedOutput throws SubprocessError
 		return try Subprocess.runConfiguration(self)
 	end 'run'
 
 	/// Spawn the configured subprocess detached from the parent and return
 	/// its pid. stdin/stdout/stderr are forced to discard since the parent
 	/// won't be around to drain pipe ends.
-	export function runDetached() returns Pid throws SubprocessError
+	public function runDetached() returns Pid throws SubprocessError
 		return try Subprocess.runDetachedConfiguration(self)
 	end 'runDetached'
 end 'Configuration'
@@ -345,16 +345,16 @@ end 'Configuration'
 // Subprocess — top-level entry
 // =============================================================================
 
-export type Subprocess
+public type Subprocess
 	/// Run `executable arguments...` with default options and collect output.
-	export static function run(executable Executable, arguments StringArray) returns CollectedOutput throws SubprocessError
+	public static function run(executable Executable, arguments StringArray) returns CollectedOutput throws SubprocessError
 		var c = Configuration.create(executable)
 		c.arguments = arguments
 		return try c.run()
 	end 'run'
 
 	/// Same as above, with an explicit working directory.
-	export static function run(executable Executable, arguments StringArray, workingDirectory FilePath) returns CollectedOutput throws SubprocessError
+	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath) returns CollectedOutput throws SubprocessError
 		var c = Configuration.create(executable)
 		c.arguments = arguments
 		c.workingDirectory = workingDirectory
@@ -362,7 +362,7 @@ export type Subprocess
 	end 'run'
 
 	/// Same as above, with an explicit working directory and timeout.
-	export static function run(executable Executable, arguments StringArray, workingDirectory FilePath, timeoutMs DurationMs) returns CollectedOutput throws SubprocessError
+	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath, timeoutMs DurationMs) returns CollectedOutput throws SubprocessError
 		var c = Configuration.create(executable)
 		c.arguments = arguments
 		c.workingDirectory = workingDirectory
@@ -373,7 +373,7 @@ export type Subprocess
 	/// Internal entry — `Configuration.run()` routes through here. Lowers to
 	/// the `__Builtins.subprocess*` runtime contract: build argv/cwd/stdio
 	/// payloads, spawn, wait-collect, decode the result struct, release.
-	export static function runConfiguration(config Configuration) returns CollectedOutput throws SubprocessError
+	public static function runConfiguration(config Configuration) returns CollectedOutput throws SubprocessError
 		let exePath = try resolveExecutablePath(config.executable)
 		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
 		let argc = config.arguments.count() + 1
@@ -417,7 +417,7 @@ export type Subprocess
 	/// the detach flag bit set; the runtime returns the OS pid (or -1) instead
 	/// of an attached handle. stdin/stdout/stderr are forced to discard so the
 	/// child doesn't inherit pipe ends the caller would have to drain.
-	export static function runDetachedConfiguration(config Configuration) returns Pid throws SubprocessError
+	public static function runDetachedConfiguration(config Configuration) returns Pid throws SubprocessError
 		let exePath = try resolveExecutablePath(config.executable)
 		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
 		let argc = config.arguments.count() + 1
@@ -456,11 +456,11 @@ typealias SpawnFlagsValue = int(0 to 7)
 /// has no payload (e.g. inherit/discard), pass the empty string and the
 /// runtime treats the leading-NUL cstring as "no payload".
 type StdioRuntimeTriple
-	export var kind as StdioKindValue
-	export var data as String
-	export var limit as ByteLimit
+	public var kind as StdioKindValue
+	public var data as String
+	public var limit as ByteLimit
 
-	export static function create(kind StdioKindValue, data String, limit ByteLimit) returns StdioRuntimeTriple
+	public static function create(kind StdioKindValue, data String, limit ByteLimit) returns StdioRuntimeTriple
 		return StdioRuntimeTriple{kind: kind, data: data, limit: limit}
 	end 'create'
 end 'StdioRuntimeTriple'
@@ -643,25 +643,25 @@ typealias StreamingHandle = int(0 to i64.max)
 ///
 /// Forgetting `release()` leaks the handle and an OS process slot. Treat
 /// `release()` like `close()` on a file.
-export type StreamingSubprocess
+public type StreamingSubprocess
 	// Raw runtime handle from subprocessSpawnStreaming. Valid until release()
 	// is called; the runtime owns the underlying pipe + process objects keyed
 	// off this integer.
-	export var handle as StreamingHandle
+	public var handle as StreamingHandle
 	// Latched once release() runs so subsequent release() calls are no-ops
 	// (matches the "treat like file close" contract documented above).
-	export var released as bool
+	public var released as bool
 
 	/// Spawn `executable arguments...` with stdin/stdout/stderr as pipes the
 	/// caller drives. Working directory defaults to the parent's cwd; pass
 	/// `spawnWithCwd` if you need to set it.
-	export static function spawn(executable Executable, arguments StringArray) returns StreamingSubprocess throws SubprocessError
+	public static function spawn(executable Executable, arguments StringArray) returns StreamingSubprocess throws SubprocessError
 		let inheritCwd = try FilePath.from("") otherwise panic("StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'")
 		return try Self.spawnWithCwd(executable, arguments: arguments, workingDirectory: inheritCwd)
 	end 'spawn'
 
 	/// Same as `spawn` with an explicit working directory.
-	export static function spawnWithCwd(executable Executable, arguments StringArray, workingDirectory FilePath) returns StreamingSubprocess throws SubprocessError
+	public static function spawnWithCwd(executable Executable, arguments StringArray, workingDirectory FilePath) returns StreamingSubprocess throws SubprocessError
 		let exePath = try resolveExecutablePath(executable)
 		let argvBlob = buildArgvBlob(exePath, args: arguments)
 		let argc = arguments.count() + 1
@@ -681,7 +681,7 @@ export type StreamingSubprocess
 
 	/// Write `line + "\n"` to the child's stdin. Throws on broken pipe.
 	/// Embeds the newline; pass payload WITHOUT a trailing newline.
-	export function writeStdinLine(line String) throws SubprocessError
+	public function writeStdinLine(line String) throws SubprocessError
 		let withNewline = "{line}\n"
 		let rc = __Builtins.subprocessWriteStdinAll(handle, withNewline.cstr())
 		if rc != 0 'writeFailed'
@@ -698,11 +698,11 @@ export type StreamingSubprocess
 	/// Blocks until a line is available or EOF is reached. Lines longer than
 	/// `maxBytes` are truncated and the remainder is delivered on the next
 	/// call. Default cap is 1 MiB which suits log-line / IPC-frame workloads.
-	export function readStdoutLine() returns String throws SubprocessError
+	public function readStdoutLine() returns String throws SubprocessError
 		return try Self.readStdoutLineCapped(self, maxBytes: defaultReadLineCap)
 	end 'readStdoutLine'
 
-	export function readStdoutLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
+	public function readStdoutLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
 		let raw = __Builtins.subprocessReadStdoutLine(handle, maxBytes)
 		return readLineResultToString(raw)
 	end 'readStdoutLineCapped'
@@ -710,11 +710,11 @@ export type StreamingSubprocess
 	/// Read one line from the child's stderr. Same contract as
 	/// `readStdoutLine` (LF stripped by the runtime, trailing CR trimmed
 	/// here, empty string on EOF).
-	export function readStderrLine() returns String throws SubprocessError
+	public function readStderrLine() returns String throws SubprocessError
 		return try Self.readStderrLineCapped(self, maxBytes: defaultReadLineCap)
 	end 'readStderrLine'
 
-	export function readStderrLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
+	public function readStderrLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
 		let raw = __Builtins.subprocessReadStderrLine(handle, maxBytes)
 		return readLineResultToString(raw)
 	end 'readStderrLineCapped'
@@ -723,14 +723,14 @@ export type StreamingSubprocess
 	/// will see EOF on its stdin and (for typical line-reading workers) exit
 	/// gracefully. Idempotent at the runtime layer; calling it on an
 	/// already-closed pipe is a no-op.
-	export function closeStdin()
+	public function closeStdin()
 		__Builtins.subprocessCloseStdin(handle)
 	end 'closeStdin'
 
 	/// Block indefinitely until the child exits, then return its exit code.
 	/// Throws `SubprocessError.ioFailed` on a wait error (e.g. the runtime
 	/// can no longer locate the handle).
-	export function wait() returns ExitInt throws SubprocessError
+	public function wait() returns ExitInt throws SubprocessError
 		return try Self.waitWithTimeout(self, timeoutMs: 0)
 	end 'wait'
 
@@ -738,7 +738,7 @@ export type StreamingSubprocess
 	/// Returns the exit code on success; throws `SubprocessError.timeout` if
 	/// the timeout fires (the runtime forcibly terminates the child in that
 	/// case) or `SubprocessError.ioFailed` on a wait error.
-	export function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
+	public function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
 		let rc = __Builtins.subprocessWaitExit(handle, timeoutMs)
 		if rc == -2 'timedOut'
 			throw SubprocessError.timeout(timeoutMs)
@@ -753,7 +753,7 @@ export type StreamingSubprocess
 	/// using-block or from a guard path. Calling any other method after
 	/// `release` is a bug — the handle slot is invalid and future calls
 	/// would target whatever process happens to be reusing the slot.
-	export function release()
+	public function release()
 		if not released 'notYet'
 			__Builtins.subprocessReleaseHandle(handle)
 			released = true

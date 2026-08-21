@@ -21,7 +21,7 @@
 //   - `pdq.commonPrefix`      — already-partitioned-prefix optimization engaged
 //   - `pdq.equalElements`     — equal-elements fast path engaged
 
-export extension Array
+public extension Array
 	// Type alias is declared in insertionSort.maxon as `SortComparator`;
 	// the parser folds extension-time aliases into Array.innerAliases so
 	// this file's body sees them through `chaseTypealiasToFunctionType`.
@@ -29,7 +29,7 @@ export extension Array
 	// Three-element comparator-based median: returns the index (a, b, or c)
 	// whose value is the median of arr[a], arr[b], arr[c]. Doesn't reorder
 	// the array — the partition pass does that with `swap`.
-	export function medianOf3Index(a SortIndex, b SortIndex, c SortIndex, cmp SortComparator) returns SortIndex
+	public function medianOf3Index(a SortIndex, b SortIndex, c SortIndex, cmp SortComparator) returns SortIndex
 		let va = try managed.get(a) otherwise panic("medianOf3Index: get OOB at a")
 		let vb = try managed.get(b) otherwise panic("medianOf3Index: get OOB at b")
 		let vc = try managed.get(c) otherwise panic("medianOf3Index: get OOB at c")
@@ -81,7 +81,7 @@ export extension Array
 	// Pick a pivot index for [lo, hi). Uses median-of-3 for small slices,
 	// median-of-medians for large ones. Returns the index of the pivot
 	// element; partition swaps it into its sorted position.
-	export function choosePivot(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
+	public function choosePivot(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
 		let n = hi - lo
 		if n > 128 'large'
 			return self.medianOfMediansIndex(lo, hi: hi, cmp: cmp)
@@ -289,7 +289,7 @@ export extension Array
 	// of ⌊log2(n)⌋ × 2 and recurses. For n ≤ 32 short-circuits to
 	// smallSortRange — pdqsort's pivot/partition overhead beats insertion
 	// sort only on bigger inputs.
-	export function pdqsortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
+	public function pdqsortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		let n = hi - lo
 		if n <= 32 'small'
 			self.smallSortRange(lo, hi: hi, cmp: cmp)

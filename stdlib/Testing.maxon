@@ -5,7 +5,7 @@
 /// `throws TestFailure`, which is why a call to an assertion inside a test body
 /// must be written with `try` — a forgotten one is a compile error rather than
 /// an assertion whose failure nothing observes.
-export enum TestFailure implements Error
+public enum TestFailure implements Error
 	assertion
 end 'TestFailure'
 
@@ -31,12 +31,12 @@ end 'TestFailure'
 var wireWrapper = ""
 var wireSeparator = ""
 
-export type __TestReport
+public type __TestReport
 	/// Install the runner's wire format. Called once by the generated dispatcher,
 	/// before the first test runs. `wrapper` brackets a report line on both sides so
 	/// the runner can find it among whatever the test itself printed; `separator`
 	/// divides the fields within one.
-	export static function useWireFormat(wrapper String, separator String)
+	public static function useWireFormat(wrapper String, separator String)
 		wireWrapper = wrapper
 		wireSeparator = separator
 	end 'useWireFormat'
@@ -49,7 +49,7 @@ export type __TestReport
 	/// for a union and for a plain enum, the raw value for an enum that declared one --
 	/// so a report never spells an error differently from the program that printed it.
 	/// `file` and `line` locate the `try` that threw, not this function.
-	export static function threw(errorType String, errorCase String, file String, line SourceLineNumber)
+	public static function threw(errorType String, errorCase String, file String, line SourceLineNumber)
 		printError("{wireWrapper}{errorType}{wireSeparator}{errorCase}{wireSeparator}{file}{wireSeparator}{line}{wireWrapper}\n")
 	end 'threw'
 end '__TestReport'
@@ -82,7 +82,7 @@ typealias Tolerance = float(0.0 to f64.max)
 ///
 /// `file` and `line` default to `__file__` / `__line__`, which expand at the CALL SITE, so a
 /// report names the test author's line and never a line in this file.
-export type Expect
+public type Expect
 	// --- Report vocabulary ---------------------------------------------------------------------
 	// Every string that reaches the printed report is declared here. Two reasons, and both bite:
 	// the format is then readable in one place rather than reconstructed from twenty call sites,
@@ -173,19 +173,19 @@ export type Expect
 	// the argument type, including through a method call, so `equal(parts.count(), expected: 3)`
 	// resolves. There is deliberately no float arm — see `close`.
 
-	export static function equal(actual AssertedInt, expected AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function equal(actual AssertedInt, expected AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual != expected 'mismatch'
 			try Expect.raiseMismatch(Expect.equalName, expected: "{expected}", received: "{actual}", note: message, file: file, line: line)
 		end 'mismatch'
 	end 'equal'
 
-	export static function equal(actual String, expected String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function equal(actual String, expected String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual != expected 'mismatch'
 			try Expect.raiseMismatch(Expect.equalName, expected: Expect.quoted(expected), received: Expect.quoted(actual), note: message, file: file, line: line)
 		end 'mismatch'
 	end 'equal'
 
-	export static function equal(actual bool, expected bool, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function equal(actual bool, expected bool, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual != expected 'mismatch'
 			try Expect.raiseMismatch(Expect.equalName, expected: "{expected}", received: "{actual}", note: message, file: file, line: line)
 		end 'mismatch'
@@ -193,19 +193,19 @@ export type Expect
 
 	// --- notEqual ------------------------------------------------------------------------------
 
-	export static function notEqual(actual AssertedInt, expected AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function notEqual(actual AssertedInt, expected AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual == expected 'matched'
 			try Expect.raiseMismatch(Expect.notEqualName, expected: "{Expect.negatedPrefix}{expected}", received: "{actual}", note: message, file: file, line: line)
 		end 'matched'
 	end 'notEqual'
 
-	export static function notEqual(actual String, expected String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function notEqual(actual String, expected String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual == expected 'matched'
 			try Expect.raiseMismatch(Expect.notEqualName, expected: "{Expect.negatedPrefix}{Expect.quoted(expected)}", received: Expect.quoted(actual), note: message, file: file, line: line)
 		end 'matched'
 	end 'notEqual'
 
-	export static function notEqual(actual bool, expected bool, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function notEqual(actual bool, expected bool, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual == expected 'matched'
 			try Expect.raiseMismatch(Expect.notEqualName, expected: "{Expect.negatedPrefix}{expected}", received: "{actual}", note: message, file: file, line: line)
 		end 'matched'
@@ -226,49 +226,49 @@ export type Expect
 	// The INT arms are left in their direct form — an integer has no NaN, so there is no second
 	// question for them to answer differently.
 
-	export static function greaterThan(actual AssertedInt, than AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function greaterThan(actual AssertedInt, than AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual <= than 'notGreater'
 			try Expect.raiseMismatch(Expect.greaterThanName, expected: "{Expect.greaterPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'notGreater'
 	end 'greaterThan'
 
-	export static function greaterThan(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function greaterThan(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not (actual > than) 'notGreater'
 			try Expect.raiseMismatch(Expect.greaterThanName, expected: "{Expect.greaterPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'notGreater'
 	end 'greaterThan'
 
-	export static function lessThan(actual AssertedInt, than AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function lessThan(actual AssertedInt, than AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual >= than 'notLess'
 			try Expect.raiseMismatch(Expect.lessThanName, expected: "{Expect.lessPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'notLess'
 	end 'lessThan'
 
-	export static function lessThan(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function lessThan(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not (actual < than) 'notLess'
 			try Expect.raiseMismatch(Expect.lessThanName, expected: "{Expect.lessPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'notLess'
 	end 'lessThan'
 
-	export static function atLeast(actual AssertedInt, than AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function atLeast(actual AssertedInt, than AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual < than 'below'
 			try Expect.raiseMismatch(Expect.atLeastName, expected: "{Expect.atLeastPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'below'
 	end 'atLeast'
 
-	export static function atLeast(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function atLeast(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not (actual >= than) 'below'
 			try Expect.raiseMismatch(Expect.atLeastName, expected: "{Expect.atLeastPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'below'
 	end 'atLeast'
 
-	export static function atMost(actual AssertedInt, than AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function atMost(actual AssertedInt, than AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual > than 'above'
 			try Expect.raiseMismatch(Expect.atMostName, expected: "{Expect.atMostPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'above'
 	end 'atMost'
 
-	export static function atMost(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function atMost(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not (actual <= than) 'above'
 			try Expect.raiseMismatch(Expect.atMostName, expected: "{Expect.atMostPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'above'
@@ -283,7 +283,7 @@ export type Expect
 	// section gives: NaN satisfies no comparison, so `abs(NaN - expected) > within` is FALSE and
 	// the negated form reported a NaN as close to anything.
 
-	export static function close(actual AssertedReal, expected AssertedReal, within Tolerance, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function close(actual AssertedReal, expected AssertedReal, within Tolerance, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not (abs(actual - expected) <= within) 'apart'
 			try Expect.raiseMismatch(Expect.closeName, expected: "{expected} ({Expect.withinLabel} {within})", received: "{actual}", note: message, file: file, line: line)
 		end 'apart'
@@ -294,13 +294,13 @@ export type Expect
 	// predicate and `message` carries the rendering, so
 	// `isTrue(a == b, message: "expected {b}, got {a}")` works for any Equatable + Stringable type.
 
-	export static function isTrue(actual bool, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function isTrue(actual bool, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not actual 'notTrue'
 			try Expect.raiseMismatch(Expect.isTrueName, expected: Expect.trueRendering, received: Expect.falseRendering, note: message, file: file, line: line)
 		end 'notTrue'
 	end 'isTrue'
 
-	export static function isFalse(actual bool, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function isFalse(actual bool, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual 'notFalse'
 			try Expect.raiseMismatch(Expect.isFalseName, expected: Expect.falseRendering, received: Expect.trueRendering, note: message, file: file, line: line)
 		end 'notFalse'
@@ -308,25 +308,25 @@ export type Expect
 
 	// --- String --------------------------------------------------------------------------------
 
-	export static function contains(haystack String, needle String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function contains(haystack String, needle String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not haystack.contains(needle) 'absent'
 			try Expect.raiseMismatch(Expect.containsName, expected: "{Expect.containsPrefix}{Expect.quoted(needle)}", received: Expect.quoted(haystack), note: message, file: file, line: line)
 		end 'absent'
 	end 'contains'
 
-	export static function startsWith(haystack String, needle String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function startsWith(haystack String, needle String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not haystack.startsWith(needle) 'absent'
 			try Expect.raiseMismatch(Expect.startsWithName, expected: "{Expect.startsWithPrefix}{Expect.quoted(needle)}", received: Expect.quoted(haystack), note: message, file: file, line: line)
 		end 'absent'
 	end 'startsWith'
 
-	export static function endsWith(haystack String, needle String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function endsWith(haystack String, needle String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not haystack.endsWith(needle) 'absent'
 			try Expect.raiseMismatch(Expect.endsWithName, expected: "{Expect.endsWithPrefix}{Expect.quoted(needle)}", received: Expect.quoted(haystack), note: message, file: file, line: line)
 		end 'absent'
 	end 'endsWith'
 
-	export static function isEmpty(haystack String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function isEmpty(haystack String, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if not haystack.isEmpty() 'notEmpty'
 			try Expect.raiseMismatch(Expect.isEmptyName, expected: Expect.quoted(""), received: Expect.quoted(haystack), note: message, file: file, line: line)
 		end 'notEmpty'
@@ -337,7 +337,7 @@ export type Expect
 	// The escape hatch, for a branch the author believes unreachable. It has no pair of values to
 	// compare, so it goes straight to `raise` with an empty detail and reports the message alone —
 	// which is also why the message is required here and optional everywhere else.
-	export static function fail(message String, file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	public static function fail(message String, file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		try Expect.raise(Expect.failName, detail: "", note: message, file: file, line: line)
 	end 'fail'
 end 'Expect'

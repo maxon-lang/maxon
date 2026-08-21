@@ -1272,7 +1272,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       // Skip the visibility modifier (export / module) — pre-scan only cares
       // about declaration kinds, not visibility.
-      if (Check(TokenType.Export) || CheckModuleKeyword()) Advance();
+      if (CheckVisibilityModifier()) Advance();
 
       if (Check(TokenType.HashIf)) {
         HandleConditionalCompilation();
@@ -4199,10 +4199,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Mirrors the shape struct-body parsing accepts so enums and unions can opt
     // methods into cross-file or module visibility the same way structs do.
     int p = _pos;
-    if (p < _tokens.Count
-        && (_tokens[p].Type == TokenType.Export
-            || (_tokens[p].Type == TokenType.Identifier && _tokens[p].Value == "module")))
-      p++;
+    if (IsVisibilityModifierAt(_tokens, p)) p++;
     if (p >= _tokens.Count || _tokens[p].Type != TokenType.Function) return false;
     if (p + 2 >= _tokens.Count) return false;
     return _tokens[p + 1].Type == TokenType.Identifier && _tokens[p + 2].Type == TokenType.LeftParen;
@@ -4506,7 +4503,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // rule struct bodies follow. Methods without `export` stay file-local
     // and are usable as private helpers from other methods on the same
     // type.
-    while ((Check(TokenType.Function) || Check(TokenType.Export) || CheckModuleKeyword()) && !IsAtEnd()) {
+    while ((Check(TokenType.Function) || CheckVisibilityModifier()) && !IsAtEnd()) {
       var (methodIsExported, methodIsModuleVisible) = ParseVisibilityModifier();
       PreScanInstanceMethod(module, enumName, methodIsExported, methodIsModuleVisible);
       SkipNewlines();
@@ -4870,7 +4867,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (Check(TokenType.End)) break;
 
       // Skip visibility modifier (export / module) on interface members
-      if (Check(TokenType.Export) || CheckModuleKeyword()) Advance();
+      if (CheckVisibilityModifier()) Advance();
 
       // Track static methods (factory methods, static requirements)
       bool isStatic = false;
@@ -4947,10 +4944,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ProcessExtensionBlock(module, (m, positions, typeName) => {
       foreach (var pos in positions) {
         _pos = pos;
-        bool isExported = pos > 0 && _tokens[pos - 1].Type == TokenType.Export;
-        bool isModuleVisible = pos > 0
-          && _tokens[pos - 1].Type == TokenType.Identifier
-          && _tokens[pos - 1].Value == "module";
+        var (isExported, isModuleVisible) = VisibilityAt(_tokens, pos - 1);
         PreScanInstanceMethod(m, typeName, isExported, isModuleVisible);
       }
     }, (m, typeName, conformances, nameToken) => {
@@ -6936,7 +6930,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // Visibility info was recorded at pre-scan; just skip the modifier here.
-    if (Check(TokenType.Export) || CheckModuleKeyword()) {
+    if (CheckVisibilityModifier()) {
       Advance();
     }
 
@@ -7038,7 +7032,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       // Handle visibility modifier (export / module). Visibility itself was
       // recorded at pre-scan — here we just consume the token and dispatch.
-      if (Check(TokenType.Export) || CheckModuleKeyword()) {
+      if (CheckVisibilityModifier()) {
         Advance();
 
         // visibility-modified function (instance method)
@@ -7172,7 +7166,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Optional visibility modifier (`export` or `module`) — pre-scan already
     // recorded it on the function stub, so this consume is a parser-state
     // sync only.
-    if (Check(TokenType.Export) || CheckModuleKeyword()) {
+    if (CheckVisibilityModifier()) {
       Advance();
     }
     Expect(TokenType.Function);
@@ -27217,22 +27211,55 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // This keeps the identifier name `module` available to user code (the selfhosted
   // compiler uses it heavily), while still letting `module function foo()` parse
   // as a directory-scoped declaration.
-  private bool CheckModuleKeyword() {
-    if (IsAtEnd()) return false;
-    var t = Current();
-    if (t.Type != TokenType.Identifier || t.Value != Lexer.ModuleKeyword) return false;
-    if (_pos + 1 >= _tokens.Count) return false;
-    var next = _tokens[_pos + 1].Type;
-    return next == TokenType.Function
-        || next == TokenType.Type
-        || next == TokenType.Enum
-        || next == TokenType.Union
-        || next == TokenType.Interface
-        || next == TokenType.TypeAlias
-        || next == TokenType.Var
-        || next == TokenType.Let
-        || next == TokenType.Static
-        || next == TokenType.Extension;
+  private bool CheckModuleKeyword() => !IsAtEnd() && IsModuleModifierAt(_tokens, _pos);
+
+  /// The complete set of tokens a declaration may open with — the follow-set that turns the
+  /// contextual word `module` into a modifier rather than an ordinary identifier.
+  ///
+  /// ONE list. Compiler.PreRegisterTypeNames' raw token walk asks exactly this question and used to
+  /// keep its own copy of the answer, which is the shape of duplication that rots: a list written
+  /// twice is a list the eleventh declaration keyword gets added to once.
+  ///
+  /// ⛔ The OTHER visibility modifiers were left out, so `module export function f()` reported
+  /// `Expected function declaration, got 'module'` at column 1: `module`'s successor was a MODIFIER
+  /// rather than a declaration keyword, CheckModuleKeyword declined to recognise it, and the
+  /// combination that should have been refused by name was never seen as one. The reverse order
+  /// (`export module`) reported the real `'export' and 'module' cannot be combined` throughout, so ONE
+  /// illegal program had TWO diagnostics depending on which word came first. Safe to widen because no
+  /// expression can put a modifier keyword after an identifier — both are real keywords and start
+  /// nothing. shv2's `declarationOpensAt` had the identical gap and is corrected in the same change.
+  internal static bool OpensDeclaration(TokenType type) =>
+    type is TokenType.Function or TokenType.Type or TokenType.Enum or TokenType.Union
+         or TokenType.Interface or TokenType.TypeAlias or TokenType.Var or TokenType.Let
+         or TokenType.Static or TokenType.Extension or TokenType.Export or TokenType.Public;
+
+  /// Indexed form of CheckModuleKeyword, for the raw token walkers that have no parser position.
+  internal static bool IsModuleModifierAt(List<Token> tokens, int pos) =>
+    pos >= 0 && pos + 1 < tokens.Count
+    && tokens[pos].Type == TokenType.Identifier && tokens[pos].Value == Lexer.ModuleKeyword
+    && OpensDeclaration(tokens[pos + 1].Type);
+
+  /// ⭐ THE VISIBILITY-MODIFIER SET, ASKED IN ONE PLACE. Every peek, skip and pre-scan site calls
+  /// here instead of respelling `export || module`. It was spelled out at eight sites before
+  /// `public` existed, and two of those eight had drifted already — one compared the literal
+  /// `"module"` instead of `Lexer.ModuleKeyword`, and neither of the two indexed ones applied the
+  /// follow-token half that makes the word contextual at all.
+  private bool CheckVisibilityModifier() =>
+    Check(TokenType.Export) || Check(TokenType.Public) || CheckModuleKeyword();
+
+  /// Indexed form, for the raw walkers.
+  internal static bool IsVisibilityModifierAt(List<Token> tokens, int pos) =>
+    pos >= 0 && pos < tokens.Count
+    && (tokens[pos].Type is TokenType.Export or TokenType.Public || IsModuleModifierAt(tokens, pos));
+
+  /// The (isExported, isModuleVisible) that a modifier token at `pos` implies — the indexed twin of
+  /// ParseVisibilityModifier, for walkers that read a modifier without consuming it. `public`
+  /// answers exported here for the same reason it does there.
+  internal static (bool IsExported, bool IsModuleVisible) VisibilityAt(List<Token> tokens, int pos) {
+    if (pos < 0 || pos >= tokens.Count) return (false, false);
+    if (tokens[pos].Type is TokenType.Export or TokenType.Public) return (true, false);
+
+    return (false, IsModuleModifierAt(tokens, pos));
   }
 
   // `test` is a contextual keyword, like `module` above — it lexes as an Identifier and is
@@ -27259,34 +27286,61 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     && tokens[pos].Value == Lexer.TestKeyword
     && tokens[pos + 1].Type == TokenType.CharacterLiteral;
 
-  // Parse the visibility modifier (`export`, `module`, or none). `export` and
-  // `module` are mutually exclusive — combining them is a parse error.
+  /// The three visibility modifiers, in the order a combined-modifier diagnostic names them.
+  /// That order is FIXED rather than encounter order, because `'export' and 'module' cannot be
+  /// combined` is pinned byte-for-byte by six live spec cases and has to read the same whichever
+  /// word the author wrote first.
+  private enum VisibilityModifier { Export, Module, Public }
+
+  private static string VisibilityModifierName(VisibilityModifier modifier) => modifier switch {
+    VisibilityModifier.Export => Token.DisplayName(TokenType.Export),
+    VisibilityModifier.Public => Token.DisplayName(TokenType.Public),
+    // `module` is contextual, so it has no TokenType and no DisplayNames entry.
+    VisibilityModifier.Module => $"'{Lexer.ModuleKeyword}'",
+    _ => throw new InvalidOperationException($"unhandled visibility modifier {modifier}"),
+  };
+
+  private CompileError CombinedVisibilityModifiers(VisibilityModifier seen, VisibilityModifier found) {
+    var (first, second) = seen < found ? (seen, found) : (found, seen);
+    var t = Current();
+    return new CompileError(ErrorCode.ParserUnexpectedToken,
+      $"{VisibilityModifierName(first)} and {VisibilityModifierName(second)} cannot be combined", t.Line, t.Column);
+  }
+
+  // Parse the visibility modifier (`export`, `module`, `public`, or none). The three are mutually
+  // exclusive — combining any two is a parse error naming the pair.
   // Returns (isExported, isModuleVisible).
+  //
+  // ⭐ `public` COLLAPSES INTO `isExported` HERE, AND DELIBERATELY GOES NO FURTHER. The only thing
+  // that separates the two tiers is exemption from the unused-export family (E3092/E3093), and THIS
+  // COMPILER HAS NO SUCH CHECK — shv2 is where that lint lives, and shv2 keeps the tiers apart in its
+  // own `Visibility` enum because shv2 is the one that has to answer with them. Threading a third flag
+  // through every AST record here would encode a distinction nothing downstream ever asks about: a
+  // second answer to "is this visible outside its file?", which is exactly the shape of defect this
+  // tree keeps paying for. What the bootstrap owes the keyword is that it PARSES, that illegal
+  // combinations are REFUSED, and that `maxon fmt` round-trips the spelling — and the formatter works
+  // from raw tokens, so it does that for free.
   private (bool IsExported, bool IsModuleVisible) ParseVisibilityModifier() {
-    bool isExported = false;
-    bool isModuleVisible = false;
+    VisibilityModifier? seen = null;
     while (true) {
+      VisibilityModifier found;
       if (Check(TokenType.Export)) {
-        if (isModuleVisible) {
-          var t = Current();
-          throw new CompileError(ErrorCode.ParserUnexpectedToken,
-            "'export' and 'module' cannot be combined", t.Line, t.Column);
-        }
-        isExported = true;
-        Advance();
+        found = VisibilityModifier.Export;
+      } else if (Check(TokenType.Public)) {
+        found = VisibilityModifier.Public;
       } else if (CheckModuleKeyword()) {
-        if (isExported) {
-          var t = Current();
-          throw new CompileError(ErrorCode.ParserUnexpectedToken,
-            "'export' and 'module' cannot be combined", t.Line, t.Column);
-        }
-        isModuleVisible = true;
-        Advance();
+        found = VisibilityModifier.Module;
       } else {
         break;
       }
+
+      if (seen.HasValue && seen.Value != found) throw CombinedVisibilityModifiers(seen.Value, found);
+
+      seen = found;
+      Advance();
     }
-    return (isExported, isModuleVisible);
+
+    return (seen is VisibilityModifier.Export or VisibilityModifier.Public, seen == VisibilityModifier.Module);
   }
 
   private Token Advance() {
@@ -27534,7 +27588,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // (SynchronizeToNextTopLevel), which is the statement-start half CheckTestKeyword relies on.
   private bool IsTopLevelStart() =>
     Current().Type is TokenType.Function or TokenType.Type or TokenType.Union or TokenType.Enum
-      or TokenType.Extension or TokenType.Export or TokenType.Let
+      or TokenType.Extension or TokenType.Export or TokenType.Public or TokenType.Let
       or TokenType.Var or TokenType.TypeAlias or TokenType.Interface
       or TokenType.HashIf
     || CheckTestKeyword();

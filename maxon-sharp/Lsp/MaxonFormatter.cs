@@ -278,13 +278,13 @@ private record SourceComment(string Text, bool WholeLine);
     bool blankDecisionPending = false;     // true after a Newline, until next real line-start token decides the blank
 
     // Derive the tentative group-key for a line whose first meaningful token is `first`.
-    // `lookahead` is the token immediately after `first` (or null), used to classify `export ...`.
+    // `lookahead` is the token immediately after `first` (or null), used to classify `export ...` / `public ...`.
     // Returns a key that may later be overridden to "unique:N" at line-end if the line opens a block.
     string DeriveGroupKey(TokenType first, TokenType? lookahead) {
       if (first == TokenType.DocComment) return "doc";
       // Whole-line '//' comments are handled separately (not tokenized); this helper only sees real tokens.
       TokenType kind = first;
-      if (first == TokenType.Export && lookahead.HasValue) kind = lookahead.Value;
+      if ((first is TokenType.Export or TokenType.Public) && lookahead.HasValue) kind = lookahead.Value;
       return kind switch {
         TokenType.Let or TokenType.Var => "let",
         TokenType.TypeAlias => "typealias",
@@ -678,12 +678,12 @@ private record SourceComment(string Text, bool WholeLine);
       }
 
       // Labelless block openers push a block and indent the next line.
-      // Only trigger when at line start (or after 'export'/'static'/'module') — not as enum case values (handled above).
+      // Only trigger when at line start (or after 'export'/'public'/'static'/'module') — not as enum case values (handled above).
       // `module` is a contextual keyword (lexed as Identifier) so it's matched
       // by value rather than token type.
       // Skip if the next non-newline token is 'end' (bodyless declaration, e.g. interface method signature).
       bool prevWasModuleKeyword = prevToken == TokenType.Identifier && prevTokenValue == "module";
-      if (LabellessBlockOpeners.Contains(tok.Type) && (wasAtLineStart || prevToken == TokenType.Export || prevToken == TokenType.Static || prevWasModuleKeyword) && !InMatchBlock()) {
+      if (LabellessBlockOpeners.Contains(tok.Type) && (wasAtLineStart || prevToken is TokenType.Export or TokenType.Public or TokenType.Static || prevWasModuleKeyword) && !InMatchBlock()) {
         // Inside an interface block, function/type declarations are bodyless signatures — don't open a block.
         bool bodylessDecl = InInterfaceBlock() && tok.Type == TokenType.Function;
         if (!bodylessDecl) {

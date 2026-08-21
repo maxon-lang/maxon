@@ -72,6 +72,7 @@ The return value becomes the program's exit code. The `ExitCode` range is platfo
 - Namespace derived from file path
 - Use `export` keyword for cross-file visibility (applies to functions, types, enums, and typealiases)
 - Use `module` keyword for directory-scoped visibility (visible to files in the same directory and subdirectories)
+- Use `public` for API surface: the same visibility as `export`, but exempt from the unused-export diagnostics (E3092/E3093) because "no caller in this compilation" is not the same fact as "dead"
 
 ### Conditional Compilation
 
@@ -4180,6 +4181,49 @@ end 'deepCaller'
 `module` and `export` are mutually exclusive — combining them is a parse error. The keyword applies in every position where `export` does: top-level functions, types, enums, unions, typealiases, top-level vars/lets, and per-method or per-field modifiers inside types. A code outside the declarer's directory subtree that tries to use a `module` symbol gets error `E3088: function 'X' is module-scoped and not visible from this directory`.
 
 In Maxon, "module" in this context means a directory subtree — useful for sharing helpers across a feature folder without leaking them to the rest of the program.
+
+### Public Keyword (API surface)
+
+`public` is the fourth visibility tier. It makes a declaration visible to every file — **exactly as
+`export` does** — and additionally states that the declaration is API surface.
+
+| modifier | visible to | audited by the unused-export family? |
+|---|---|---|
+| *(none)* | the declaring FILE | — |
+| `module` | the declaring DIRECTORY and its subdirectories | yes (E3094) |
+| `export` | every file | yes (E3092, E3093) |
+| `public` | every file | **no** |
+
+Anything that asks *"may this file name that symbol?"* answers identically for `export` and `public`.
+They differ in one thing only, which is what the author is saying about USE:
+
+- `export` — other files may see this, **and I expect this program to use it**. If nothing outside the
+  declaring file references it, that is a real finding (`E3092`).
+- `public` — this is **API surface**; do not ask who calls it. A shared module may legitimately publish
+  a symbol that this particular program never reaches, and "no caller in this compilation" is not the
+  same fact as "dead".
+
+```maxon
+// A library's surface: reported by nothing, whoever does or does not call it.
+public function parse(text String) returns Score
+	return 0
+end 'parse'
+
+// An expectation about THIS program: E3092 if no other file calls it.
+export function usedByTheApp() returns Score
+	return 1
+end 'usedByTheApp'
+```
+
+`stdlib/` marks its whole public surface this way, which is why the compiler needs no special knowledge
+of where the standard library lives.
+
+There is deliberately no `module public`: `E3094` keeps its full force, and a `module` declaration that
+wants exemption is promoted to `public`, which changes its visibility and says so.
+
+All three modifiers are mutually exclusive. Combining any two is `E2001`, positioned at the second one,
+and the pair is named in a fixed order (`export`, then `module`, then `public`) whichever order they
+were written in — so one illegal program has exactly one diagnostic.
 
 ### Qualified Names
 Call functions with full namespace:

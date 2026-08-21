@@ -50,9 +50,15 @@ readonly LOGDIR="$REPO/temp"
 # ⇒ Add a name here ONLY for an explicit user ruling, and name the ruling on the line. Never to make a
 #   hard spec go away — that is §4, and §4 says build it.
 #
-#   unused-export — user ruling 2026-08-03 (`be29fbbe3`): an `export` is a PUBLIC API SURFACE, so
-#   "no caller in this compilation" is not the same fact as "dead". E3092/E3093/E3094 do not land.
-readonly SKIP_SPECS="unused-export"
+# ✅ THE LIST IS NOW EMPTY. Its only entry, `unused-export`, was REINSTATED 2026-08-20 by user ruling:
+#   the 2026-08-03 withdrawal (`be29fbbe3`) held that an `export` is a PUBLIC API SURFACE, so "no caller
+#   in this compilation" is not the same fact as "dead" — a correct objection to a lint that read a
+#   VISIBILITY modifier as a claim about USE. The answer is a `public` tier that says which: `export`
+#   means "other files may see this, and I expect this program to use it"; `public` means "this is API
+#   surface, do not ask who calls it". With the two facts spelled separately the lint asks a question
+#   the author can answer, so E3092/E3093/E3094 land after all. Keep the machinery below — the next
+#   ruling will need it.
+readonly SKIP_SPECS=""
 
 die()  { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }

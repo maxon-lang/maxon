@@ -3,15 +3,15 @@
 // String receives __ManagedMemory directly for literal initialization via BuiltinStringLiteral.
 
 // StringError - errors for string operations
-export enum StringError implements Error
+public enum StringError implements Error
 	notFound
 	invalidIndex
 end 'StringError'
 
-export typealias ByteCount = int(0 to u64.max)
-export typealias GraphemeCount = int(0 to u64.max)
-export typealias BytePos = int(0 to u64.max)
-export typealias GraphemeIndex = int(0 to u64.max)
+public typealias ByteCount = int(0 to u64.max)
+public typealias GraphemeCount = int(0 to u64.max)
+public typealias BytePos = int(0 to u64.max)
+public typealias GraphemeIndex = int(0 to u64.max)
 
 // File-private. The stdlib's canonical declarations of `Byte` and
 // `ByteArray` live in `stdlib/File.maxon`, which the self-hosted compiler
@@ -46,7 +46,7 @@ let AsciiLimit = 128 as Byte
 // it by sabotage before trusting it, as this rung's review did.
 let CarriageReturnByte = 13 as Byte
 
-export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
+public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 
 	/// The raw bytes. Since the envelope collapse a `String` IS its `__ManagedMemory`, so this is not
@@ -86,7 +86,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	var singleByteGraphemesFlag as bool
 
 	/// Check whether this string contains only ASCII bytes.
-	export function isAscii() returns bool
+	public function isAscii() returns bool
 		// The flag is the STRONGER fact, so when it is set it settles this outright. When it is
 		// clear the cause may be a non-ASCII byte OR a CR, and only a walk tells those apart.
 		//
@@ -111,12 +111,12 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// Default type for string literals - compiler discovers this via BuiltinStringLiteral interface.
 	// The C# compiler bypasses this for literals and writes fields directly (including the flag).
 	// For runtime-created strings, scan the bytes to classify them.
-	export static function init(managed ByteMemory) returns String
+	public static function init(managed ByteMemory) returns String
 		return String{managed: managed, singleByteGraphemesFlag: scanSingleByteGraphemes(managed)}
 	end 'init'
 
 	/// Create a String from a byte array (zero-copy slice of the array's backing memory)
-	export static function from (bytes ByteArray) returns String
+	public static function from (bytes ByteArray) returns String
 		return String{managed: bytes.managed, singleByteGraphemesFlag: scanSingleByteGraphemes(bytes.managed)}
 	end 'from'
 
@@ -153,7 +153,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// was therefore FALSE for a heap string, and `specs/string-type-2` pinned it at five bytes, short
 	/// enough that the freed block still held its bytes. `managed.slice` is the one operation that
 	/// knows the difference: it COPIES an owned buffer and views an rdata/slice one.
-	export function toByteArray() returns ByteArray
+	public function toByteArray() returns ByteArray
 		let ownBytes = try managed.slice(0, byteLength()) otherwise 'toByteArraySliceErr'
 			panic("String.toByteArray: slice 0..byteLength() is in bounds by construction")
 		end 'toByteArraySliceErr'
@@ -164,15 +164,21 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// that stays put for the duration of the call. Use it when the intrinsic's parameter is declared
 	/// `__ManagedMemory`; when it is declared `cstring`, use `cstr()`.
 	///
-	/// `module`, not `export`, and deliberately so: this is meant to be the stdlib's own door to the
-	/// bytes — open to `stdlib/` and its subdirectories, shut to everyone else. The marker is
+	/// `module`, not `public`, and deliberately so: this is meant to be the stdlib's own door to the
+	/// bytes — open to `stdlib/` and its subdirectories, shut to everyone else. ⚠ It is one of only SIX
+	/// `module` declarations left in the stdlib, every other of which is in this file; everything else
+	/// here is `public`, so `module` is the marked case and reads as the deliberate narrowing it is.
+	/// **`public` would be the wrong widening AND the wrong claim** — see `Visibility` in
+	/// `maxon-shv2/Compiler/Project.maxon`: `public` exempts a declaration from the unused-export
+	/// family, and this one wants exactly the opposite, to be told when nothing outside its file
+	/// reaches it any more. The marker is
 	/// load-bearing already, and not decoration: `helpers/http` and `helpers/url` live in
 	/// SUBDIRECTORIES of `stdlib/` and reach this, which file-private visibility would refuse.
 	///
 	/// This is ENFORCED. It was not, when this method was first written: `StdlibLoader` used to
 	/// force-export EVERY stdlib function after the stdlib's own compile, so no stdlib function
 	/// could be internal whatever it declared, and this door was de-facto public — the raw-write
-	/// hole rebuilt under a new name. Removing that force-export cost exactly TEN `export` keywords
+	/// hole rebuilt under a new name. Removing that force-export cost exactly TEN visibility keywords
 	/// across the whole stdlib — `Iterable.map`/`filter`/`contains`, `Stdin.readLine`, and six
 	/// `JsonDoc` accessors — all genuine public API that had been riding it rather than declaring
 	/// itself. Nothing else in the stdlib wanted to be public. No single gate saw them all: the C#
@@ -191,7 +197,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// `__ManagedMemory` happens to be packed tight against its allocated
 	/// capacity (where `strlen` would otherwise walk past the end into adjacent
 	/// heap).
-	export function cstr() returns cstring
+	public function cstr() returns cstring
 		return managed.toCString()
 	end 'cstr'
 
@@ -223,7 +229,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	///
 	/// A literal is rdata, so it still costs one view and no copy — the shape that dominates the
 	/// stdlib's own `clone()` calls (the `return self, unchanged` early-outs below).
-	export function clone() returns String
+	public function clone() returns String
 		return sliceBytes(0, endPos: byteLength(), singleByteGraphemes: singleByteGraphemesFlag)
 	end 'clone'
 
@@ -250,7 +256,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// workload, with mm-trace byte-identical, so no allocation gate could see it. The bodies below
 	/// stay as the NORMATIVE definition of what the compiler emits for them (2-Parser.cs,
 	/// TryEmitBuiltinStringMethod), and are what any future compiler must reproduce.
-	export function byteLength() returns ByteCount
+	public function byteLength() returns ByteCount
 		return managed.length()
 	end 'byteLength'
 
@@ -337,22 +343,22 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return String{managed: result, singleByteGraphemesFlag: singleByteGraphemes}
 	end 'sliceBytes'
 
-	export function isEmpty() returns bool
+	public function isEmpty() returns bool
 		return byteLength() == 0
 	end 'isEmpty'
 
 	/// Get grapheme cluster count (number of user-perceived characters).
 	/// Cost is O(n) in the byte length for non-ASCII strings; callers that
 	/// need the count repeatedly should cache it themselves.
-	export function count() returns GraphemeCount
+	public function count() returns GraphemeCount
 		return countGraphemes(self)
 	end 'count'
 
-	export function hash() returns HashValue
+	public function hash() returns HashValue
 		return hashString(self)
 	end 'hash'
 
-	export function equals(other String) returns bool
+	public function equals(other String) returns bool
 		let len = byteLength()
 		if len != other.byteLength() 'lenMismatch'
 			return false
@@ -362,29 +368,29 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Create a fresh iterator for grapheme cluster traversal.
 	/// Throws IterationError.exhausted if the string is empty.
-	export function createIterator() returns StringIterator throws IterationError
+	public function createIterator() returns StringIterator throws IterationError
 		return try StringIterator.create(self)
 	end 'createIterator'
 
 	// String index methods
-	export function startIndex() returns StringIndex
+	public function startIndex() returns StringIndex
 		return StringIndex.create(0, bytePos: 0)
 	end 'startIndex'
 
-	export function endIndex() returns StringIndex
+	public function endIndex() returns StringIndex
 		let charCount = count()
 		return StringIndex.create(charCount, bytePos: byteLength())
 	end 'endIndex'
 
 	/// Get character at the given index. Returns the grapheme cluster at that position.
-	export function charAt(idx StringIndex) returns Character
+	public function charAt(idx StringIndex) returns Character
 		let byteStart = idx.bytePos()
 		let endPos = findGraphemeEnd(self, startPos: byteStart)
 		return makeCharFromBytes(byteStart, len: endPos - byteStart)
 	end 'charAt'
 
 	/// Get the index after the given position (for iteration)
-	export function indexAfter(idx StringIndex) returns StringIndex throws StringError
+	public function indexAfter(idx StringIndex) returns StringIndex throws StringError
 		if idx.bytePos() >= byteLength() 'atEnd'
 			throw StringError.invalidIndex
 		end 'atEnd'
@@ -395,7 +401,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Mirror of indexAfter: stepping backward from `idx` to the previous
 	/// grapheme boundary. Throws when called on `startIndex()` since there
 	/// is no prior grapheme.
-	export function indexBefore(idx StringIndex) returns StringIndex throws StringError
+	public function indexBefore(idx StringIndex) returns StringIndex throws StringError
 		if idx.bytePos() == 0 'atStart'
 			throw StringError.invalidIndex
 		end 'atStart'
@@ -411,7 +417,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// makes the caller retain it. Routing this one line through it added an `mm_incref`/`mm_decref`
 	/// pair around the RECEIVER at every `String.append` call site in user code — visible as a moved
 	/// golden in `specs/fragments-x64-windows/static-variables/`. A field read costs nothing.
-	export function append(other String)
+	public function append(other String)
 		managed.append(other.managed)
 		if not other.singleByteGraphemesFlag 'clearFlag'
 			singleByteGraphemesFlag = false
@@ -419,7 +425,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'append'
 
 	// Search methods
-	export function startsWith(prefix String) returns bool
+	public function startsWith(prefix String) returns bool
 		let prefixLen = prefix.byteLength()
 		if prefixLen > byteLength() 'tooLong'
 			return false
@@ -427,7 +433,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return bytesEqual(self, aOffset: 0, b: prefix, bOffset: 0, len: prefixLen)
 	end 'startsWith'
 
-	export function endsWith(suffix String) returns bool
+	public function endsWith(suffix String) returns bool
 		let suffixLen = suffix.byteLength()
 		let len = byteLength()
 		if suffixLen > len 'tooLong'
@@ -436,11 +442,11 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return bytesEqual(self, aOffset: len - suffixLen, b: suffix, bOffset: 0, len: suffixLen)
 	end 'endsWith'
 
-	export function contains(needle String) returns bool
+	public function contains(needle String) returns bool
 		return needleOccursIn(self, len: byteLength(), needle: needle)
 	end 'contains'
 
-	export function contains(character Character) returns bool
+	public function contains(character Character) returns bool
 		return needleOccursIn(self, len: byteLength(), needle: character.toString())
 	end 'contains'
 
@@ -450,41 +456,41 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return StringIndex.create(byteIndexToGraphemeIndex(self, byteIdx: byteIdx), bytePos: byteIdx)
 	end 'indexAtByte'
 
-	export function findFirst(needle String) returns StringIndex throws StringError
+	public function findFirst(needle String) returns StringIndex throws StringError
 		return indexAtByte(try findIn(self, offset: 0, len: byteLength(), needle: needle))
 	end 'findFirst'
 
-	export function findLast(needle String) returns StringIndex throws StringError
+	public function findLast(needle String) returns StringIndex throws StringError
 		return indexAtByte(try findLastIn(self, needle: needle))
 	end 'findLast'
 
 	// Slicing - returns a new String backed by slice into this string's buffer
 	// Use endIndex for end position, or length for character count
-	export function slice(start StringIndex, endIndex StringIndex) returns String
+	public function slice(start StringIndex, endIndex StringIndex) returns String
 		return sliceBytes(start.bytePos(), endPos: endIndex.bytePos(), singleByteGraphemes: singleByteGraphemesFlag)
 	end 'slice'
 
-	export function slice(start StringIndex, length GraphemeCount) returns String
+	public function slice(start StringIndex, length GraphemeCount) returns String
 		let endBytePos = graphemeOffsetToBytePos(self, startBytePos: start.bytePos(), count: length)
 		return sliceBytes(start.bytePos(), endPos: endBytePos, singleByteGraphemes: singleByteGraphemesFlag)
 	end 'slice'
 
 	// View methods - returns lazy Iterable views over bytes/codepoints/UTF-16
 	// code units. View construction is cheap; iterating an empty view yields zero elements.
-	export function bytes() returns ByteView
+	public function bytes() returns ByteView
 		return ByteView.create(self)
 	end 'bytes'
 
-	export function codepoints() returns CodepointView
+	public function codepoints() returns CodepointView
 		return CodepointView.create(self)
 	end 'codepoints'
 
-	export function utf16() returns UTF16View
+	public function utf16() returns UTF16View
 		return UTF16View.create(self)
 	end 'utf16'
 
 	// Replace methods
-	export function replace(old String, with String) returns String
+	public function replace(old String, with String) returns String
 		let oldLen = old.byteLength()
 		if oldLen == 0 'empty_old'
 			return clone()
@@ -555,7 +561,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return out.build()
 	end 'replace'
 
-	export function replaceFirst(old String, with String) returns String
+	public function replaceFirst(old String, with String) returns String
 		let oldLen = old.byteLength()
 		if oldLen == 0 'empty_old'
 			return clone()
@@ -596,7 +602,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// Split method
 	typealias StringArray = Array with String
 
-	export function split(delimiter String) returns StringArray
+	public function split(delimiter String) returns StringArray
 		var result = StringArray.create()
 		let delimLen = delimiter.byteLength()
 
@@ -655,12 +661,12 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'mapAsciiCase'
 
 	// ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
-	export function toLower() returns String
+	public function toLower() returns String
 		return mapAsciiCase(65, hi: 90, delta: 32)
 	end 'toLower'
 
 	// ASCII lowercase a-z (97-122) -> uppercase A-Z (65-90)
-	export function toUpper() returns String
+	public function toUpper() returns String
 		return mapAsciiCase(97, hi: 122, delta: -32)
 	end 'toUpper'
 
@@ -704,7 +710,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'scanTrimEnd'
 
 	/// Trim characters in the given set from both ends of the string.
-	export function trim(chars CharacterSet) returns String
+	public function trim(chars CharacterSet) returns String
 		let len = byteLength()
 		if len == 0 'empty'
 			return clone()
@@ -720,7 +726,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'trim'
 
 	/// Trim characters in the given set from the start of the string.
-	export function trimStart(chars CharacterSet) returns String
+	public function trimStart(chars CharacterSet) returns String
 		let len = byteLength()
 		if len == 0 'empty'
 			return clone()
@@ -735,7 +741,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'trimStart'
 
 	/// Trim characters in the given set from the end of the string.
-	export function trimEnd(chars CharacterSet) returns String
+	public function trimEnd(chars CharacterSet) returns String
 		let len = byteLength()
 		if len == 0 'empty'
 			return clone()
@@ -750,17 +756,17 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'trimEnd'
 
 	/// Trim Unicode whitespace from both ends.
-	export function trim() returns String
+	public function trim() returns String
 		return trim(CharacterSet.whitespacesAndNewlines())
 	end 'trim'
 
 	/// Trim Unicode whitespace from the start.
-	export function trimStart() returns String
+	public function trimStart() returns String
 		return trimStart(CharacterSet.whitespacesAndNewlines())
 	end 'trimStart'
 
 	/// Trim Unicode whitespace from the end.
-	export function trimEnd() returns String
+	public function trimEnd() returns String
 		return trimEnd(CharacterSet.whitespacesAndNewlines())
 	end 'trimEnd'
 end 'String'
@@ -785,14 +791,14 @@ end 'String'
 /// It is Go's split, for Go's reason: an immutable `string` whose `+` copies, and a
 /// `strings.Builder` that grows. The two costs are paid by different code — a program HOLDS many
 /// strings and BUILDS few.
-export type StringBuilder
+public type StringBuilder
 	var bytes as ByteArray
 	// Tracked as the pieces arrive rather than re-scanned at the end: the builder already sees every
 	// byte that goes in. An empty builder trivially has one-byte graphemes, and one piece that does
 	// not settles it — the property is per-byte, so a join of qualifying pieces qualifies.
 	var singleByteGraphemesFlag as bool
 
-	export static function create() returns StringBuilder
+	public static function create() returns StringBuilder
 		return StringBuilder{bytes: ByteArray.create(), singleByteGraphemesFlag: true}
 	end 'create'
 
@@ -803,11 +809,11 @@ export type StringBuilder
 	/// the answer can have ONE allocation of exactly the right size, with no re-copies and nothing
 	/// wasted, which is strictly better than any growth policy can be. (It is what the compiler
 	/// already does for an interpolated string: it measures every part, then allocates once.)
-	export function reserve(byteCount ByteCount)
+	public function reserve(byteCount ByteCount)
 		bytes.reserve(byteCount)
 	end 'reserve'
 
-	export function append(other String)
+	public function append(other String)
 		appendBytes(other.addressableBytes(), singleByteGraphemes: other.hasSingleByteGraphemes())
 	end 'append'
 
@@ -827,17 +833,17 @@ export type StringBuilder
 		end 'clearFlag'
 	end 'appendBytes'
 
-	export function byteLength() returns ByteCount
+	public function byteLength() returns ByteCount
 		return bytes.count()
 	end 'byteLength'
 
-	export function isEmpty() returns bool
+	public function isEmpty() returns bool
 		return bytes.count() == 0
 	end 'isEmpty'
 
 	/// Throw away what has been built, KEEPING the capacity — so a builder reused across many strings
 	/// pays for its growth once instead of once per string.
-	export function clear()
+	public function clear()
 		bytes.clear()
 		singleByteGraphemesFlag = true
 	end 'clear'
@@ -850,7 +856,7 @@ export type StringBuilder
 	/// `StringBuilder` sharing one buffer that the builder's very next `append` may REALLOCATE out
 	/// from under it, and the string would be reading freed memory. So there is exactly one way to
 	/// finish, and it cannot alias.
-	export function build() returns String
+	public function build() returns String
 		let built = String.fromOwnedBytes(self.bytes, singleByteGraphemes: self.singleByteGraphemesFlag)
 		self.bytes = ByteArray.create()
 		self.singleByteGraphemesFlag = true
@@ -881,23 +887,23 @@ end 'StringBuilder'
 /// `makeCharFromBytes` copies the grapheme's bytes straight out of whichever representation the
 /// String has, and `byteLength` is a field load. Neither reaches for a record, so there is nothing
 /// to materialize on either path. Measured, not assumed — `for c in s` was timed across this change.
-export type StringIterator implements Iterator with Character
+public type StringIterator implements Iterator with Character
 	var s as String
 	var iterPos as BytePos
 	var graphemeEnd as BytePos
 
-	export static function create(s String) returns Self throws IterationError
+	public static function create(s String) returns Self throws IterationError
 		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{s: s, iterPos: 0, graphemeEnd: findGraphemeEnd(s, startPos: 0)}
 	end 'create'
 
-	export function current() returns Character
+	public function current() returns Character
 		return s.makeCharFromBytes(iterPos, len: graphemeEnd - iterPos)
 	end 'current'
 
-	export function advance() throws IterationError
+	public function advance() throws IterationError
 		if graphemeEnd >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
@@ -907,27 +913,27 @@ export type StringIterator implements Iterator with Character
 end 'StringIterator'
 
 // StringIndex type - type-safe string position
-export type StringIndex implements Equatable, Comparable
+public type StringIndex implements Equatable, Comparable
 	var charIdx as GraphemeIndex
 	var bytePosition as BytePos
 
-	export static function create(charIndex GraphemeIndex, bytePos BytePos) returns StringIndex
+	public static function create(charIndex GraphemeIndex, bytePos BytePos) returns StringIndex
 		return StringIndex{charIdx: charIndex, bytePosition: bytePos}
 	end 'create'
 
-	export function charIndex() returns GraphemeIndex
+	public function charIndex() returns GraphemeIndex
 		return charIdx
 	end 'charIndex'
 
-	export function bytePos() returns BytePos
+	public function bytePos() returns BytePos
 		return bytePosition
 	end 'bytePos'
 
-	export function equals(other StringIndex) returns bool
+	public function equals(other StringIndex) returns bool
 		return charIdx == other.charIdx
 	end 'equals'
 
-	export function compare(other StringIndex) returns Ordering
+	public function compare(other StringIndex) returns Ordering
 		if charIdx < other.charIdx 'less'
 			return Ordering.lessThan
 		end 'less'

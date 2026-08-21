@@ -449,7 +449,7 @@ public static class FlatNamespaceCheck {
   static bool DeclaresBuildFunction(string manifestPath) {
     var tokens = new Lexer(File.ReadAllText(manifestPath)).Tokenize();
     for (var i = 0; i + 2 < tokens.Count; i++)
-      if (tokens[i].Type == TokenType.Export
+      if (Parser.IsVisibilityModifierAt(tokens, i)
           && tokens[i + 1].Type == TokenType.Function
           && tokens[i + 2].Type == TokenType.Identifier
           && tokens[i + 2].Value == SourceCollector.BuildFunctionName)
