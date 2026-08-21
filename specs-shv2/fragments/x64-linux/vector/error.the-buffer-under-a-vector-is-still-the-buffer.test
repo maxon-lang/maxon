@@ -1,0 +1,18 @@
+// Test: error.the-buffer-under-a-vector-is-still-the-buffer
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function grow() returns Int
+		managed.push(4)
+		return 0
+	end 'grow'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.grow()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:7:11: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here

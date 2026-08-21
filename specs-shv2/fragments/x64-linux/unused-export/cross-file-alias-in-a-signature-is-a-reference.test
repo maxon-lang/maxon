@@ -1,0 +1,52 @@
+// Test: cross-file-alias-in-a-signature-is-a-reference
+// --- file: api/lib.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: app/main.maxon
+function scoreOf(s Score) returns Score
+	return s
+end 'scoreOf'
+
+function main() returns ExitCode
+	return scoreOf(5)
+end 'main'
+---
+ExitCode: 5
+---
+func @scoreOf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect scoreOf
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

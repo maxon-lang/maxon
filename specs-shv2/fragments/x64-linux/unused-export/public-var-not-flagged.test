@@ -1,0 +1,56 @@
+// Test: public-var-not-flagged
+// --- file: api/counter.maxon
+typealias Integer = int(i64.min to i64.max)
+
+public var unusedCounter = 99
+
+export function readCounter() returns Integer
+	return unusedCounter
+end 'readCounter'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return readCounter()
+end 'main'
+---
+ExitCode: 99
+---
+data {
+  __data_unusedCounter@0 = i64 99
+}
+
+func @readCounter {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_unusedCounter
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect readCounter
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
