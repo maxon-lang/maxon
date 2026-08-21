@@ -3424,6 +3424,31 @@ export type StructLayout
 		return self.fieldCount()
 	end 'inlineManagedFieldIndex'
 
+	// ⭐⭐ **IS FIELD `index` THE INLINE `managed` WHOSE ADDRESS *IS* THE RECEIVER'S? — THE ONE HOME OF A
+	// TEST THAT WAS SPELLED TWICE (W194 review).** Both halves matter and neither implies the other: the
+	// marker says this declaration's `managed` is embedded WHOLE rather than as a pointer, and the index says
+	// this particular field is that one.
+	//
+	// ⛔⛔ **THE TWO ASKERS ARE THE FUSED RECORD DOOR AND THE VIEW MINT, AND THEY MUST NOT COME TO DISAGREE
+	// ABOUT WHICH FIELD THEY MEAN.** `Parser.selfFieldIsInlineManaged` decides whether a self-field alias
+	// denotes the receiver itself; `Parser.emitFieldLoad`'s `inlineManagedIsTheReceiver` arm decides whether
+	// a field READ is a load at all or the surface flip. The first function's own header already stated the
+	// obligation — *"the same two questions `emitFieldLoad`'s own arm asks, in one place because the record
+	// door above and the view mint below must agree about which field they are talking about"* — while the
+	// arm went on spelling the conjunction itself, so the sentence was a promise and not a mechanism. A
+	// wrapper that ever gains a second embedded field would be taught to one of them and not the other, and
+	// the disagreement is a WRONG ANSWER rather than a compile error: one door hands back the receiver's own
+	// record and the other emits a `loadIndirect` at that field's offset, which for field 0 reads `buffer@0`
+	// — a raw byte pointer where a buffer RECORD is wanted.
+	//
+	// ⚠ **THE MARKER CONJUNCT IS NOT REDUNDANT AND IS ASKED FIRST.** A FIELDLESS layout answers
+	// `fieldCount()` — zero — from the index above, which is its "not found" spelling; an index-only test
+	// would therefore read `index == 0` as TRUE about a field that does not exist. Both callers relied on the
+	// conjunction for that, separately, which is one more reason it belongs in one place.
+	export function fieldIsTheInlineManagedRecord(index FieldIndex) returns bool
+		return self.conformsToBuiltinManagedWrapper() and index == self.inlineManagedFieldIndex()
+	end 'fieldIsTheInlineManagedRecord'
+
 	// ⭐ **REPLACE FIELD `index`'s DECLARED TYPE — the ONE write that is not an append (N3).** The declaration
 	// SWEEP records a field's type before any generic alias is interned, so a field declared with an alias two
 	// files declare differently carries a name that cannot be resolved until every file has folded. That

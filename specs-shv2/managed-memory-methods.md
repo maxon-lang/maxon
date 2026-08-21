@@ -4456,6 +4456,44 @@ RECORD; and nothing checked that the two agree.**
 `Array` record is eight bytes past the end. That door is unreached today only because the member is
 refused to user code and its single caller is `String`'s — a REACHABILITY argument, not a structural one.
 
+⛔⛔ **AND A THIRD ENTRY, FOUND AT THIS RUNG'S REVIEW AND MEASURED AS A *LEAK* RATHER THAN A STOP —
+`setByte`.** Its arm asks `requireBufferBytesAreNotAPointer` (E3110, "may a raw byte be written into this
+element?") and `requireRawByteWriteFitsItsSlot` (E3118, "does the write fit the stride?"), and BOTH read
+the **giid**, not the record. Handed the synthesized byte instance they answer about a `Byte` — trivial,
+one byte wide — whatever the receiver's real element is. On this rung's RED baseline this program
+**COMPILED CLEAN and EXITED 101, a memory leak**, because the byte landed in a `String` POINTER slot that
+E3110 exists to refuse:
+
+```text
+typealias Strs = Array with String
+
+extension Array
+	export function poke()
+		try managed.setByte(0, 65) otherwise ignore
+	end 'poke'
+end 'Array'
+
+function main() returns ExitCode
+	var a = Strs.create()
+	a.push("hi")
+	a.poke()
+	return 0 as ExitCode
+end 'main'
+```
+
+The identical body written `self.managed.setByte(…)` — the value path, carrying the real instance —
+did not compile at all on that same baseline. **One member, two spellings, a leak and a stop**: exactly
+the asymmetry the three cases below pin for `append`, one member over and one severity worse.
+
+⚠ **THE GATE CLOSES THE LEAK AND LEAVES A PANIC WHERE A DIAGNOSTIC BELONGS, WHICH IS A SEPARATE ROW.**
+Both spellings now take the value path and both reach `panic at LayoutDescriptor.maxon:571:
+primitiveTypeByteSize: a 'typeParameter's size is a runtime layout-descriptor read` — the abort the
+`self.` spelling already had, via E3118's stride test rather than via `arrayAppendArgAdmits`. That is
+the right direction (silent corruption became a loud stop) and it is not the end: `setByte` on a generic
+container's buffer needs a positioned refusal, or a deferral of the stride question to instantiation, and
+choosing between those needs a spec of its own. **This rung changed which door `setByte` walks through,
+never what the door on the other side asks** — so no case here may be read as fixing it.
+
 <!-- test: the-fused-append-path-agrees-with-the-value-path -->
 **THE SUBJECT.** The bare, fused spelling must answer what the value spelling answers. Two elements
 appended to themselves is four.
