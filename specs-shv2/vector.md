@@ -1422,13 +1422,14 @@ error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — t
 ```
 
 <!-- test: error.a-buffer-the-declaration-hands-out-reaches-the-same-refusal -->
-⛔⛔ **ENTRANCE D — THE ONE THE ROW DID NOT SEE, AND THE ONE THAT PROVES A VALUE MARK ALONE IS NOT THE
-CURE.** A `ValueId` mark dies at a function boundary; a DECLARED SPELLING does not. An extension that
-returns `ElementMemory` hands the record to any caller, where the value is freshly minted and nothing
-about it says the record is a sized container's. ⭐ **IT ARRIVES ON THE BUFFER SURFACE AND NOT THE
-ARRAY SURFACE, PROVED BY WHAT IT REFUSES RATHER THAN BY WHAT IT SERVES**: on the base, `got.push(7)`
-and `got.count()` are E2015 (both array-only — `clear` left the array roster at ARR4) while
-`got.length()`, `got.setLength(1)` and `got.clear()` are served.
+⛔⛔ **ENTRANCE D — THE RECORD LEAVING BY `return`, AND THE CASE THAT SETTLED *WHERE* THE RULE BELONGS.**
+A `ValueId` mark dies at a function boundary, so the first build re-derived the fact in the CALLER from the
+callee's declaration — and that was measured over-refusing a `slice`, which has the very same type as the
+record (see `the-slice-a-member-returns-is-served`). ⇒ The refusal moved to the one place the mark still
+EXISTS: the `return` itself, inside the declaration. Note where it now points — line 6, the `return managed`,
+not the caller's `got.clear()` — and that it is a DIFFERENT refusal from a length change, with its own
+sentence, because *"you moved the number the type states"* and *"past here nothing can tell your record from
+a slice of it"* are two injuries with two cures.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1447,7 +1448,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:14:6: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:7:3: Unsupported: a `Vector`'s own record may not be RETURNED from it — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
 ```
 
 <!-- test: the-length-preserving-buffer-members-are-still-served -->
@@ -1508,15 +1509,14 @@ end 'main'
 ```
 
 <!-- test: error.a-buffer-handed-to-the-declarations-own-helper-reaches-the-same-refusal -->
-⛔⛔ **ENTRANCE E — THE ARGUMENT DIRECTION OF ENTRANCE D, AND IT WAS A LIVE WRONG ANSWER WITH EVERY OTHER
-ROUTE ALREADY CLOSED.** A `ValueId` mark dies at a function boundary in BOTH directions: D is the buffer a
-member RETURNS, this is the buffer a member is HANDED. An argument mints a fresh value in the callee's SSA
-space, so nothing about it says the record is a sized container's — and MEASURED while this case did not
-exist, an `extension Vector` whose `bust()` is `wipe(managed)` and whose `wipe(m ElementMemory)` is
-`m.clear()` compiled, ran, and printed **`count=3 walked=0`**: the rung's own reproducer, one helper method
-away from the refusal. The fact is re-derived from the DECLARATION at the parameter's binding site, which is
-sound because `Vector.ElementMemory` is unnameable from outside (`E3011`) and `v.managed` unreadable from
-outside (`E3014`), so a `Vector` method's `ElementMemory` parameter can only ever be a vector's own storage.
+⛔⛔ **ENTRANCE E — THE ARGUMENT DIRECTION OF D, AND IT WAS A LIVE WRONG ANSWER WITH EVERY OTHER ROUTE
+ALREADY CLOSED.** Found by probing the CURE rather than the defect: with A–D shut, an `extension Vector` whose
+`bust()` is `wipe(managed)` and whose `wipe(m ElementMemory)` is `m.clear()` still compiled, ran, and printed
+**`count=3 walked=0`** — the rung's own reproducer, one helper method away. ⭐ **THE SCOPE IS "another member
+of the SIZED CONTAINER", AND THAT IS LOAD-BEARING RATHER THAN CAUTIOUS**: `stdlib/Vector.maxon`'s `createIterator`'s
+`VectorIter.create(managed)` passes this very record and must keep working, because its callee is
+`ArrayIterator.create`, whose `ElementMemory` is `ArrayIterator`'s own. Nothing outside the declaration can
+name the type at all — `Vector.ElementMemory` there is `E3011` and `v.managed` is `E3014`.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1538,5 +1538,68 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:11:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
+error E2015: <fragment>:7:8: Unsupported: a `Vector`'s own record may not be passed to another `Vector` member — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+```
+
+<!-- test: the-slice-a-member-hands-to-a-helper-is-served -->
+⭐⭐ **THE OVER-REFUSAL CONTROL FOR THE ARGUMENT ESCAPE, AND IT CAUGHT A REAL ONE.** The escape rule is about
+the RECORD, and `managed.slice(0, 2)` is not the record — `__managed_slice` mints a fresh VIEW whose
+`length@8` is its own, so clearing it cannot move the vector's length and no answer can disagree with the
+type. ⛔ **The first build of this rung keyed the rule on the DECLARATION instead of on the value** — "a
+`Vector` member's `ElementMemory` parameter is the vector's storage" — and a slice has exactly that type, so
+THIS PROGRAM WAS REFUSED, with the sentence *"this buffer is a `Vector`'s own record"* about a thing that is
+not. A legal program refused by a false claim, while the identical `s.clear()` written in place compiled and
+ran. ⇒ The fact is carried on the value and never inferred from the declaration; delete that carry and this
+case is what goes red. The exit code proves BOTH halves: the slice really was cleared (0) and the vector's
+own record was untouched (3).
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function sliceThenClear() returns Int
+		var s = try managed.slice(0, 2) otherwise panic("slice")
+		return wipe(s) + (10 * (managed.length() as Int))
+	end 'sliceThenClear'
+
+	function wipe(m ElementMemory) returns Int
+		m.clear()
+		return m.length() as Int
+	end 'wipe'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.sliceThenClear() as ExitCode
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: the-slice-a-member-returns-is-served -->
+⭐⭐ **THE OVER-REFUSAL CONTROL FOR THE RETURN ESCAPE — the twin of the case above, in the direction entrance
+D refuses.** A member may hand a `slice` of its record to any caller and the caller may change it freely:
+that is precisely what the escape refusal's own sentence tells the reader to do instead of returning the
+record. So the two are one decision seen from both sides — the record may not leave, a view of it always may
+— and a rule that could not tell them apart would make the advice impossible to follow.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function part() returns ElementMemory
+		return try managed.slice(0, 2) otherwise panic("slice")
+	end 'part'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	var got = v.part()
+	got.clear()
+	return ((got.length() as Int) + (10 * (v.count() as Int))) as ExitCode
+end 'main'
+```
+```exitcode
+30
 ```

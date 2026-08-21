@@ -6762,6 +6762,47 @@ function sizedContainersBufferRefusal(member ByteArray, lengthWriters ByteArrayA
 	return "`{String.from(ManagedMemoryTypeName)}` {SurfaceMemberNoun} '{spelling}' — this buffer is a `{String.from(VectorBuiltinBaseName)}`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. '{spelling}' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses {rosterList(lengthWriters)} and serves every other member of the surface; the growable `{growable}`'s buffer serves all of them, because an `{growable}`'s count IS its record's length"
 end 'sizedContainersBufferRefusal'
 
+// WHICH WAY A SIZED CONTAINER'S RECORD IS LEAVING ITS DECLARATION (W192 review) — a union rather than a
+// clause each caller passes as text, because the two doors would then be two spellings of one sentence's
+// variable half, free to drift while each stays "shared". `BorrowLaunderDoor` and `FunctionTypeDoor` are the
+// same shape one concern over.
+union SizedContainerRecordEscape
+	returned
+	passedToAnotherMember
+end 'SizedContainerRecordEscape'
+
+// ⭐⭐⭐ **A SIZED CONTAINER'S RECORD MAY NOT LEAVE ITS DECLARATION — the refusal that replaced two
+// declaration-keyed marks after they were MEASURED over-refusing a slice (W192 review).**
+//
+// ⛔⛔ **THE DEFECT THIS SENTENCE EXISTS BECAUSE OF, so nobody re-derives the discarded design.** The first
+// build marked a `returns ElementMemory` RESULT and an `ElementMemory` PARAMETER from the DECLARATION, on
+// the reasoning that only the sized container's own storage can reach either. That reasoning is false for
+// one value and it is the important one: `managed.slice(0, 2)` mints a fresh VIEW record whose type is the
+// very same `__ManagedMemory with Element`. So the declaration marked the view too, and clearing a slice —
+// which cannot move the vector's length by construction — was refused with *"this buffer is a `Vector`'s own
+// record"*, a FALSE sentence on a LEGAL program. MEASURED both ways on one tree: the slice cleared through a
+// helper was refused, while the identical `s.clear()` written in place compiled and ran (exit 30). One value,
+// one operation, two answers, decided by whether it crossed a parameter.
+//
+// ⇒ **THE FACT IS CARRIED, NEVER INFERRED.** The mark exists only on the value `bufferSurfaceOfDeclaredRecord`
+// minted, and the two doors below are exactly where a marked value can still be seen leaving. A slice carries
+// no mark, so it returns and passes freely and its `clear()` is served — which is the whole point.
+//
+// ⚠ **IT NAMES THE SLICE AS THE CURE, because the reader's next question is "then how do I hand anything
+// out?"** and the answer is a real one: a view is its own record, its length is its own, and nothing about it
+// can contradict the type.
+//
+// ⚠ The refused members are joined from `bufferLengthWritingMemberNames` through the shared `rosterList`, so
+// this sentence and the length-change refusal cannot come to disagree about which members are at stake.
+function sizedContainersRecordEscapeRefusal(escape SizedContainerRecordEscape, lengthWriters ByteArrayArray, growableName ByteArray) returns String
+	let spelling = String.from(VectorBuiltinBaseName)
+	let leaving = match escape 'door'
+		returned gives "may not be RETURNED from it"
+		passedToAnotherMember gives "may not be passed to another `{spelling}` member"
+	end 'door'
+	return "a `{spelling}`'s own record {leaving} — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `{String.from(ManagedMemoryTypeName)}` is equally the type of a `{String.from(SliceMethod)}` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and {rosterList(lengthWriters)} would be served on the record itself. Hand out `{String.from(SliceMethod)}(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `{String.from(growableName)}` has no such rule, because an `{String.from(growableName)}`'s count IS its record's length"
+end 'sizedContainersRecordEscapeRefusal'
+
 // The noun `requireSurfaceMember` names a surface's entries by. Named rather than spelled at each arm
 // because every surface shares it: a literal repeated once per surface is one chance per surface for one of
 // them to be reworded alone, which is the drift a shared sentence template removes one level up. Its `"static"` twin went with
@@ -24376,29 +24417,17 @@ export type Parser
 			// was read at the declaration (`parseFunctionParameters`) and this is the site that BINDS the value it
 			// named, so this is where the fact becomes the marks `dispatchArrayMethod` and `emitFieldLoad` read.
 			// Parameter `i` owns ValueId `i`, which is what makes the column's index the value's.
-			let paramSurface = try paramSurfaces.get(i) otherwise panic("bindParameters: paramSurfaces.get OOB at {i} — a parameter's columns are built in lockstep")
-			self.markDeclaredSurface(i as ValueId, declared: paramSurface)
-			// ⭐⭐ **AND WHOSE BUFFER A SIZED CONTAINER'S OWN METHOD IS HANDED (W192).** A parameter spelled
-			// `ElementMemory` inside `Vector`'s declaration or an `extension Vector` IS that vector's record —
-			// `Vector.ElementMemory` cannot be named from anywhere else (`E3011`) and `v.managed` cannot be
-			// read from anywhere else (`E3014`), so the only value such a parameter can receive is a sized
-			// container's storage. `emitCall`'s twin one door over covers the RETURN direction; this covers the
-			// ARGUMENT one, and without it the whole refusal is one helper method away from being laundered.
-			//
-			// ⛔⛔ **MEASURED AS A LIVE WRONG ANSWER, found by probing the cure rather than the defect.** With
-			// every other route closed, an `extension Vector` whose `bust()` is `wipe(managed)` and whose
-			// `wipe(m ElementMemory)` is `m.clear()` compiled, ran, and printed **`count=3 walked=0`** — the
-			// exact disagreement of the rung's own reproducer, arriving through the one carrier a per-value
-			// mark cannot follow: an argument hand-off mints a fresh `ValueId` in the callee's SSA space, so
-			// the fact has to be re-derived from the DECLARATION, which is what this line does.
-			//
-			// ⚠ It admits `stdlib/Vector.maxon`'s own `static function init(managed ElementMemory)`, and that
-			// is CORRECT rather than tolerated: the buffer the array-literal path hands `init` is about to
-			// become the record of an instance whose count the literal already fixed, so a length write there
-			// would be the same disagreement one moment earlier. Nothing in the corpus writes one.
-			if surfaceIsBuffer(paramSurface) and self.enclosingDeclarationIsTheSizedContainer() 'aSizedContainersOwnStorage'
-				self.markSizedContainerBuffer(i as ValueId)
-			end 'aSizedContainersOwnStorage'
+			self.markDeclaredSurface(i as ValueId, declared: try paramSurfaces.get(i) otherwise panic("bindParameters: paramSurfaces.get OOB at {i} — a parameter's columns are built in lockstep"))
+			// ⛔⛔ **NO SIZED-CONTAINER MARK IS WRITTEN HERE, AND THE ATTEMPT TO IS RECORDED BECAUSE IT WAS A
+			// MEASURED OVER-REFUSAL (W192 review).** A parameter spelled `ElementMemory` inside the sized
+			// container's declaration looks like the record and is not necessarily one: `managed.slice(0, 2)`
+			// mints a fresh VIEW whose type is the SAME `__ManagedMemory with Element`, so a declaration-keyed
+			// mark cannot tell the two apart and marked the view as well. MEASURED: passing a slice to a
+			// `Vector` helper that calls `clear()` on it was refused *"this buffer is a `Vector`'s own
+			// record"* — a legal program refused by a FALSE sentence, while the identical `s.clear()` written
+			// in place compiled and ran (exit 30). ⇒ The fact is CARRIED, never inferred: the mark lives on
+			// the value that `bufferSurfaceOfDeclaredRecord` minted, and the escape is refused at the two
+			// points where that mark still exists (`refuseASizedContainersRecordEscaping`).
 			// ⭐ **AND THE OTHER FACT THE DECLARATION HELD AND THE TYPE COLUMNS CANNOT (W57)** — a parameter
 			// declared at a PARAMETERIZED interface type carries `interfaceRef(Base)` and nothing about what
 			// `Base`'s associated positions were bound to, which is what a dispatch on it needs to type an
@@ -29145,6 +29174,18 @@ export type Parser
 	// READS the box; dropping first would free the memory the loads are about to read. BEFORE the
 	// terminator, because a `ret` ENDS the block. `returned` is already in a register by then.
 	function emitOwnedValueReturn(retVal ValueId, anchor Token) throws ParseError
+		// ⭐⭐ **W2′ — THE SIZED CONTAINER'S RECORD MAY NOT BE RETURNED (W192 review).** Asked on `retVal`
+		// BEFORE the promotion below, which mints a fresh id and would carry the mark onto it
+		// (`carryDeclaredSurface`): the value the SOURCE named is the one the sentence is about.
+		//
+		// ⚠ **UNSCOPED, AND THE MISSING "…from a member of the sized container" CONJUNCT IS REDUNDANT RATHER
+		// THAN FORGOTTEN.** The mark's only producer is `bufferSurfaceOfDeclaredRecord`, reached only by an
+		// `emitFieldLoad` of the sized container's own inline `managed` — visible nowhere but inside that
+		// declaration (`v.managed` from outside is E3014) — and the marks reset per function, so a marked
+		// value at a `return` proves the enclosing function is one of the declaration's own. Its ARGUMENT twin
+		// IS scoped, and that asymmetry is real: a foreign callee is deliberately excluded there.
+		try self.refuseASizedContainersRecordEscaping(retVal, escape: SizedContainerRecordEscape.returned, line: anchor.line, column: anchor.column)
+
 		var returned = retVal
 
 		// The ONE promotion door (see the header): a borrowed String COPIES, a borrowed TRIVIAL TUPLE gets its
@@ -50247,7 +50288,7 @@ export type Parser
 				// size is a runtime layout-descriptor read`). Refusing here turns the sized half of that into
 				// a sentence. ⛔ The GROWABLE half is untouched and is its own defect — `extension Array`
 				// reaches the identical panic, measured — so nothing about this line may be read as fixing it.
-				try self.refuseLengthChangeOnASizedContainersBuffer(self.tokenAt(self.pos + 2), onASizedContainersRecord: self.enclosingDeclarationIsTheSizedContainer())
+				try self.refuseLengthChangeOnASizedContainersBuffer(self.tokenAt(self.pos + 2), onASizedContainersRecord: self.signatures.declarationIsASizedContainerRecordNamed(self.enclosingType))
 
 				let record = try self.selfFieldValueBinding(binding, baseTok: baseTok, value: try self.requireReceiverValue(baseTok))
 
@@ -57368,18 +57409,6 @@ export type Parser
 		return isQualifiedUnderTypeName(callee, typeName: owner) and self.signatures.declarationIsASizedContainerRecordNamed(owner)
 	end 'calleeIsDeclaredOnTheSizedContainer'
 
-	// ⭐ **IS THE CURSOR INSIDE THE SIZED CONTAINER'S OWN DECLARATION? (W192)** — the twin of the predicate
-	// above for the two sites whose subject is the PARSE POSITION rather than a callee name
-	// (`dispatchMethodOnBinding`'s fused `managed` door and `bindParameters`). Written once because the two
-	// ask the identical question of the identical field, and a second spelling of it is how the door that
-	// refuses and the door that marks would come to disagree about one declaration.
-	//
-	// It is total: at file scope `enclosingType` is EMPTY, which no declaration is named, so `structOf`
-	// answers `undeclared` and this answers false without a special arm.
-	function enclosingDeclarationIsTheSizedContainer() returns bool
-		return self.signatures.declarationIsASizedContainerRecordNamed(self.enclosingType)
-	end 'enclosingDeclarationIsTheSizedContainer'
-
 	// ⭐⭐ **A SIZED CONTAINER'S BUFFER MAY NOT BE HANDED A MEMBER THAT MOVES ITS LENGTH (W192).** The sibling
 	// above's twin, placed at the same point in `dispatchArrayMethod` and for the same stated reason: it is
 	// still the question *"does this member exist ON THIS RECEIVER?"*, answered more precisely for the one
@@ -57392,9 +57421,10 @@ export type Parser
 	// lists `append`, so a bare `managed.append(x)` inside an `extension Vector` never reaches this
 	// dispatcher's value at all — `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` hands over the
 	// RECEIVER's own record under the synthesized BYTE instance, where there is neither a value mark nor the
-	// vector's `giid`. That site therefore asks `enclosingDeclarationIsTheSizedContainer` and calls THIS
-	// function, so the two routes are one refusal and one sentence rather than two spellings of it. See
-	// `sizedContainerBufferValues` for the carrier the other route reads.
+	// vector's `giid`. That site therefore asks `declarationIsASizedContainerRecordNamed` of `enclosingType`
+	// — the BY-NAME form, which exists for exactly that shape of caller — and calls THIS function, so the two
+	// routes are one refusal and one sentence rather than two spellings of it. See `sizedContainerBufferValues`
+	// for the carrier the other route reads.
 	//
 	// ⚠ **THE RECEIVER ANSWER IS A PARAMETER RATHER THAN BEING DERIVED HERE, and that is what lets the two
 	// sites share the throw**: the value-mark site holds a `ValueId` and the fused site holds a declaration
@@ -57415,6 +57445,64 @@ export type Parser
 
 		throw ParseError.unsupported(sizedContainersBufferRefusal(methodTok.value, lengthWriters: lengthWriters, growableName: self.signatures.arrayRecordDeclaredName()), line: methodTok.line, column: methodTok.column)
 	end 'refuseLengthChangeOnASizedContainersBuffer'
+
+	// ⭐⭐ **THE SECOND HALF OF THE RULE: THE RECORD MAY NOT LEAVE (W192 review).** The refusal above keeps a
+	// sized container's record honest WHILE it is in the declaration's hands; this keeps it in them. They are
+	// two refusals and not one because they are two different injuries with two different cures — a length
+	// write is *"you moved the number the type states"*, an escape is *"past here nothing can tell your
+	// record from a slice of it"* — and forcing both through one noun is what would make the sentence lie.
+	//
+	// ⚠ **IT READS THE MARK AND NOTHING ELSE, WHICH IS THE ENTIRE CORRECTION IT EMBODIES.** The two doors it
+	// serves used to INFER the fact from the declaration and were measured refusing a slice; see
+	// `sizedContainersRecordEscapeRefusal` for that measurement. A value with no mark is not the record, and
+	// there is no second question to ask about it.
+	//
+	// ⚠ The anchor is the caller's, because the two doors point at different tokens — the `return` keyword
+	// and the offending ARGUMENT — and a diagnostic that pointed at the function for an argument would send
+	// the reader to the wrong line of a multi-argument call.
+	function refuseASizedContainersRecordEscaping(value ValueId, escape SizedContainerRecordEscape, line LineNumber, column ColumnNumber) throws ParseError
+		if not self.valueIsASizedContainersBuffer(value) 'notTheRecordItself'
+			return
+		end 'notTheRecordItself'
+
+		throw ParseError.unsupported(sizedContainersRecordEscapeRefusal(escape, lengthWriters: bufferLengthWritingMemberNames(self.surfaceMemberNames(MemberSurface.buffer)), growableName: self.signatures.arrayRecordDeclaredName()), line: line, column: column)
+	end 'refuseASizedContainersRecordEscaping'
+
+	// ⭐⭐ **THE CALL-ARGUMENT HALF OF THE ESCAPE RULE (W192 review)** — split out of `emitCall` so the two
+	// guards that make it free can be read in one place, and because a loop-invariant callee test written
+	// inside the loop is how a per-call cost becomes a per-ARGUMENT one.
+	//
+	// ⚡ **THE FIRST GUARD IS AN `is` IDENTITY TEST AND IT IS WHY THIS COSTS NOTHING.** `emitCall` runs at
+	// every call site in every compile; a function that has not minted a single sized-container record still
+	// holds the module-level shared empty set, so the whole rule is one pointer comparison away for every
+	// program that is not inside `Vector`'s declaration. Only past it is the callee's NAME looked at.
+	//
+	// ⭐⭐ **THE CALLEE SCOPE IS LOAD-BEARING AND IS WHAT KEEPS `stdlib/Vector.maxon`'s `createIterator` COMPILING.**
+	// `VectorIter.create(managed)` passes the marked record as an argument and MUST go on working; its callee
+	// is `ArrayIterator.create`, whose `ElementMemory` is `ArrayIterator`'s own (`stdlib/Array.maxon:522`) and
+	// not the sized container's. Scoping to a callee declared ON the sized container excludes nothing else
+	// reachable from user code: a function outside the declaration cannot name the type at all — MEASURED,
+	// `Vector.ElementMemory` there is `E3011 Unknown type` and `v.managed` is `E3014`.
+	//
+	// ⚠ **WHAT IT DOES NOT COVER IS A SECOND DECLARATION WHOSE OWN ALIAS RESOLVES TO THE SAME TYPE**, of
+	// which `ArrayIterator` is the live example. That hole is deliberate and is NOT closable by any
+	// per-declaration answer: `ArrayIterator` is compiled once for the growable `Array` and the sized
+	// `Vector` alike, so "this buffer's count comes from a type" is not a fact its declaration can hold. It
+	// is reported as its own row rather than papered over here.
+	function refuseASizedContainersRecordEscapingIntoACall(callee ByteArray, args ValueIdArray, argRanges SourceRangeArray) throws ParseError
+		if self.sizedContainerBufferValues is sharedEmptySizedContainerBufferValues 'thisFunctionHoldsNoSuchRecord'
+			return
+		end 'thisFunctionHoldsNoSuchRecord'
+
+		if not self.calleeIsDeclaredOnTheSizedContainer(callee) 'notAnotherOfItsOwnMembers'
+			return
+		end 'notAnotherOfItsOwnMembers'
+
+		for i in 0 upto args.count() 'eachArgument'
+			let argRange = try argRanges.get(i) otherwise panic("refuseASizedContainersRecordEscapingIntoACall: argRanges.get OOB at {i} — `emitCall` builds the argument columns in lockstep with `args`")
+			try self.refuseASizedContainersRecordEscaping(try args.get(i) otherwise panic("refuseASizedContainersRecordEscapingIntoACall: args.get OOB at {i} — the index came from this very array's count"), escape: SizedContainerRecordEscape.passedToAnotherMember, line: argRange.line, column: argRange.column)
+		end 'eachArgument'
+	end 'refuseASizedContainersRecordEscapingIntoACall'
 
 	// ⭐⭐⭐ **DOES THE CORPUS DECLARE THIS MEMBER? — THE DOOR THAT MAKES A LISTED `stdlib/String.maxon` MEAN
 	// SOMETHING (W17).** A roster is shv2's statement of what its SYNTHESIZED surface serves; it was the whole
@@ -57677,7 +57765,7 @@ export type Parser
 		end 'theBufferIsItsOwnInstance'
 
 		// ⭐⭐ **W1 — THE SIZED FACT IS WRITTEN ON THE VALUE HERE BECAUSE THE VERY NEXT LINE ERASES IT FROM THE
-		// TYPE.** The retype below is what makes `stdlib/Vector.maxon:105`'s `VectorIter.create(managed)`
+		// TYPE.** The retype below is what makes `stdlib/Vector.maxon`'s `createIterator`'s `VectorIter.create(managed)`
 		// type-check, and it is load-bearing (W189) — but it leaves the value spelled `Array with Element`, so
 		// `genericInstanceBaseName(giid)` at the dispatch answers `Array` and no `giid` test downstream can
 		// tell a vector's record from a growable array's. This `if` is the last place that knows, and it
@@ -67721,6 +67809,11 @@ export type Parser
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
+		// ⭐ **W4′ — THE ARGUMENT TWIN OF THE RETURN DOOR (W192 review), asked here because this is the one
+		// line every direct, method and static call passes with the arguments AND the callee's name in hand.**
+		// Ahead of the mint and the consume so a refused call emits nothing — the discipline
+		// `applyCallerConsume` states below.
+		try self.refuseASizedContainersRecordEscapingIntoACall(callee, args: args, argRanges: argRanges)
 		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED HERE, BEFORE ANYTHING ELSE READS THE ARGUMENT LIST** (BATCH2
 		// slice 4). Every direct, method and static call funnels through this one line, so the fill needs no
 		// second copy at the method / static / operator-desugar doors — and by the time `applyCallerConsume`
@@ -67753,21 +67846,10 @@ export type Parser
 		// rather than inside the mint chain because the mint's tail (`mintOwnedCallResult`) is handed a
 		// `MaxonType` and not the callee name — and the name is the only thing that still knows the spelling,
 		// the alias having erased it. Every direct, method and static call funnels through this one line.
-		let declaredReturn = self.signatures.declaredReturnSurface(callee)
-		self.markDeclaredSurface(result, declared: declaredReturn)
-		// ⭐⭐ **W2 — AND WHOSE BUFFER IT IS, WHEN THE DECLARATION HANDS ONE OUT (W192).** A `ValueId` mark
-		// dies at a function boundary; a DECLARED SPELLING does not. An `extension Vector` whose member
-		// `returns ElementMemory` gives its caller a freshly minted value on the buffer surface with nothing
-		// about it saying the record's length is the type's count — which is `markBufferSurface`'s own
-		// recorded lesson (*"a DECLARED spelling is an entrance a sweep over value producers structurally
-		// cannot see"*) arriving one narrowing later. Answered from the callee's NAME, which is the only
-		// thing this line still holds and the same evidence the mark above uses.
-		//
-		// ⚡ Gated on the RETURN being the buffer at all, which is a bit test and false for very nearly every
-		// call in every program, before the name is looked at.
-		if surfaceIsBuffer(declaredReturn) and self.calleeIsDeclaredOnTheSizedContainer(callee) 'aSizedContainersBufferHandedOut'
-			self.markSizedContainerBuffer(result)
-		end 'aSizedContainersBufferHandedOut'
+		self.markDeclaredSurface(result, declared: self.signatures.declaredReturnSurface(callee))
+		// ⛔ **AND NO SIZED-CONTAINER MARK, for `bindParameters`' recorded reason**: a `returns ElementMemory`
+		// hands back the record OR a view of it and the declaration cannot tell which, so the fact is refused
+		// at the RETURN inside the declaration (`emitOwnedValueReturn`) rather than inferred at the call.
 		// ⭐⭐ **A CALLEE THAT MAY HAND BACK A `let` GLOBAL'S RECORD MARKS ITS RESULT (W117), HERE FOR THE LINE
 		// ABOVE'S REASON**: this is the one place every direct, method and static call passes with the callee's
 		// NAME still in hand, which is what the whole-program answer is keyed by. From here the value is
