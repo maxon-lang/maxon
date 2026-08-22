@@ -9089,6 +9089,14 @@ end 'divergentHandlerOpensAt'
 // ⚠ **`throws` IS DELIBERATELY ABSENT, and it is not the same word as `throw`.** It opens a DIVERGING
 // TERMINAL FORM in a match arm or a block-`try` handler (`divergentHandlerOpensAt` above), never a
 // statement in a statement list, so a statement list can never be positioned on one.
+//
+// ⚠⚠ **THIS IS THE E3071 ROSTER, NOT THE ROSTER OF EVERYTHING THAT TERMINATES A BLOCK, AND THE TWO STOPPED
+// BEING THE SAME LIST AT G17.** A bare-call statement to a function that never returns also ends its block
+// (`terminateAfterDivergingCall`), and it is NOT admitted here — deliberately. This roster is read off a
+// statement's FIRST TOKEN before that statement is parsed, and whether a call comes back is a whole-program
+// fact about its callee, not a property of the token. So the tail under such a call is parsed into a `dead`
+// block instead of refused, exactly as the tail under an `if`/`else` whose branches all `return` already is:
+// neither opens with one of these five keywords, and neither is E3071's to report.
 function statementEndsItsBlockAt(kind TokenKind) returns bool
 	return kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.panic or kind == TokenKind.break or kind == TokenKind.continue
 end 'statementEndsItsBlockAt'
@@ -12255,6 +12263,9 @@ export type Parser
 		// ⭐ Per-function `throws E` clauses (P1.4b) — the call-site dual of the return type, from the SAME
 		// token walk. One entry per THROWING function so a call site can decide whether it needs `try`.
 		var throwsEntries = ThrowsClauseEntryArray.create()
+		// ⭐ Per-function DIVERGENCE (G17) — recorded from the SAME token walk. One entry per function whose body
+		// PROVABLY cannot return, so a bare call to it can be told that it ends its caller's block.
+		var divergingDecls = DivergingDeclEntryArray.create()
 		// ⭐ Inner ranged typealiases (P1.6-C) — one entry per `typealias Idx` declared inside a generic type,
 		// keyed whole-program by `base.member` so `Instance.Idx` resolves in any file.
 		var innerAliases = InnerAliasEntryArray.create()
@@ -12427,7 +12438,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
 				continue
 			end 'isFunction'
 
@@ -12449,7 +12460,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, bindingOut: bindings)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, bindingOut: bindings)
 				continue
 			end 'isTypeDecl'
 
@@ -12459,7 +12470,7 @@ export type Parser
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
 			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
 			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
-				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -12486,7 +12497,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED (ARRO).**
 		// Every one of these instances is one the COMPILER mints because the source names no type for it, so
@@ -12913,7 +12924,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		let nameTok = self.current()
 		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
 		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
@@ -13021,7 +13032,13 @@ export type Parser
 		// `paramConsumes` recording only consuming functions. Gated on the `throws` KEYWORD being present so
 		// the overwhelmingly common non-throwing function allocates neither a `ThrowsClause.none` nor a
 		// `ThrowsClauseEntry` — its cursor already sits at the block label with nothing to consume.
-		if self.at(TokenKind.throws) 'throwing'
+		// ⚠ **CAPTURED, BECAUSE A THROWING DECLARATION CAN NEVER BE A DIVERGING ONE** (G17). A bare `try f()`
+		// inside the body RE-THROWS to the caller and spells no `throw` of its own, so it is an exit path
+		// the body walk below cannot see — and the `throws` clause is exactly the declaration-level
+		// evidence that such a path may exist. Read here rather than re-probed at the scan, because the cursor
+		// has moved past the clause by then.
+		let declaresThrows = self.at(TokenKind.throws)
+		if declaresThrows 'throwing'
 			let throwsClause = try self.parseOptionalThrowsClause() otherwise return
 			throwsEntries.push(ThrowsClauseEntry.create(funcName, clause: throwsClause, takesReceiver: takesReceiver))
 		end 'throwing'
@@ -13084,7 +13101,7 @@ export type Parser
 		// much a forwarder as a free function is, and three of `specs/pass-by-reference.md`'s transitive cases
 		// are exactly that program — whereas the consume half deliberately declines to read one. Hence two
 		// lists into one walk rather than a second walk of the same tokens.
-		self.scanBodyFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, sourceParamNames: sourceParamNames, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
+		self.scanBodyFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, sourceParamNames: sourceParamNames, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, divergingDecls: divergingDecls, declaresThrows: declaresThrows, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
 	end 'recordScannedSignature'
 
 	// ⭐ **THE CALL-ALIGNED PARAMETER NAMES PBR-2's SCAN IS INDEXED BY.** For everything the consume scan
@@ -13309,7 +13326,7 @@ export type Parser
 	// the reason the walk exists at all — it already stands on every token of the body carrying the bracket
 	// and block-depth state a second walk would have to rebuild — so the name says "this body's facts" and the
 	// list of them is the paragraphs below.
-	function scanBodyFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, detectFieldStores bool, takesReceiver bool)
+	function scanBodyFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, divergingDecls DivergingDeclEntryArray, declaresThrows bool, detectFieldStores bool, takesReceiver bool)
 		// ⚠ **TWO NAME LISTS, AND THEY ARE NOT THE SAME LIST.** The CONSUME half reads `paramNames`, which the
 		// caller leaves EMPTY for a non-generic instance method (a direct `Self{f: p}` store there is left to the
 		// callee-side borrowed-value refusal — see the call site). The BY-REFERENCE half reads `byRefParamNames`,
@@ -13364,15 +13381,54 @@ export type Parser
 		var braceStack = BoolArray.create() if scansParams else sharedEmptyBoolColumn
 		var openBrackets = TokenIndexArray.create() if scansParams else sharedEmptyBracketOpeners
 		var blockDepth = 0 as BlockDepth
+		// ⭐⭐ **G17's COLUMNS — the whole of "can this body return?", read off the same walk.** There are exactly
+		// three ways out of a body that are not its tail: a `return`, a `throw`
+		// (or the `otherwise throws` re-throw, which spells the OTHER keyword), and falling off the end. The
+		// first two are tokens; the third is ruled out by the tail statement itself being a `panic`. The fourth
+		// way — a bare `try f()` propagating the callee's error — is invisible here and is excluded at the
+		// declaration by `declaresThrows`, which is the only evidence of it the sweep can hold.
+		//
+		// ⚠ **THE SAFE DIRECTION IS "IT RETURNS", AND EVERY UNCERTAINTY HERE RESOLVES THAT WAY.** A body this
+		// declines to mark compiles exactly as it did before the fact existed; a body wrongly marked stops
+		// emitting the edge control really takes, which is a wrong ANSWER with no diagnostic anywhere.
+		var bodyCanExitBeforeItsTail = false
+		var atStatementStart = false
+		var lastTopLevelStatement = bodyStart
+		var sawATopLevelStatement = false
+		var sawTheFunctionsOwnEnd = false
 
 		var q = bodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			// The function's own `end` (at block depth 0) closes the scan.
 			if blockDepth == 0 and self.closesBlockAt(q) 'funcEnd'
+				sawTheFunctionsOwnEnd = true
 				break
 			end 'funcEnd'
 
 			let kind = self.kindAt(q)
+
+			// The body's statements are newline-separated, so the first token after a newline at BODY depth
+			// opens a top-level statement. `atStatementStart` seeds FALSE rather than true: `bodyStart` is the
+			// newline that ends a well-formed header, and a malformed declaration the tolerant sweep landed
+			// mid-line on must not have that line read as a statement.
+			if kind == TokenKind.newline 'aLineEnds'
+				atStatementStart = true
+			end 'aLineEnds' else 'aRealToken'
+				if blockDepth == 0 and atStatementStart 'aTopLevelStatementOpensHere'
+					lastTopLevelStatement = q
+					sawATopLevelStatement = true
+				end 'aTopLevelStatementOpensHere'
+				atStatementStart = false
+			end 'aRealToken'
+
+			// `throws` rides beside `throw` because they are two spellings of one exit: the divergent handler
+			// form (`otherwise throws E.case`) and a `match` `default throws` both re-throw to the caller
+			// without spelling `throw`. Both need an enclosing `throws` clause, so `declaresThrows` already
+			// excludes every body that can hold one — this is the guard that keeps that true of a form the
+			// grammar has not grown yet.
+			if kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.throws 'anExitThatIsNotTheTail'
+				bodyCanExitBeforeItsTail = true
+			end 'anExitThatIsNotTheTail'
 
 			// ⭐⭐ **W117's SEED AND EDGE, both read off a `return` statement's own first tokens.** Probed here
 			// rather than in a walk of its own because this walk already stands on every token of the body with
@@ -13495,6 +13551,22 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
+
+		// ⭐⭐ **G17: A BODY THAT CANNOT RETURN.** Every condition, in one place, because leaving any one of them
+		// out is a MISCOMPILE rather than a missed diagnostic — see the columns' own header:
+		//
+		//   • the walk reached the declaration's OWN `end`, so the tail below really is the body's tail and
+		//     not wherever a malformed body ran the scan off the end of the file;
+		//   • the declaration states no `throws`, so no bare `try` inside it can propagate to the caller;
+		//   • no `return`/`throw`/`throws` anywhere in it;
+		//   • its LAST top-level statement is a `panic(…)`, which is what rules out falling off the end.
+		//
+		// ⚠ **THE TAIL TEST IS `panic (`, NOT THE KEYWORD ALONE.** A statement-position `panic` is the abort
+		// statement whatever follows it, but the pairing is what says the scan is standing where it thinks it
+		// is; a lone keyword at a line start is a malformed body the real parse is about to report.
+		if sawTheFunctionsOwnEnd and not declaresThrows and not bodyCanExitBeforeItsTail and sawATopLevelStatement and self.kindAt(lastTopLevelStatement) == TokenKind.panic and self.kindAt((lastTopLevelStatement + 1) as TokenIndex) == TokenKind.leftParen 'neverReturns'
+			divergingDecls.push(DivergingDeclEntry.create(funcName, takesReceiver: takesReceiver))
+		end 'neverReturns'
 
 		if any 'consumes'
 			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds), takesReceiver: takesReceiver))
@@ -16786,7 +16858,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, bindingOut TopLevelDeclArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, bindingOut TopLevelDeclArray)
 		// The DECLARATION keyword, taken before anything moves the cursor — the position
 		// `Queries.foldConformanceClauses` puts a reader back down on. See `ConformanceClauseDeclSite`.
 		let declStart = self.pos
@@ -16949,7 +17021,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 				continue
 			end 'isMethod'
 
@@ -17249,6 +17321,9 @@ export type Parser
 		var globalAliasReturns = GlobalAliasReturnEntryArray.create()
 		var paramDefaults = ParamDefaultEntryArray.create()
 		var throwsEntries = ThrowsClauseEntryArray.create()
+		// ⭐ Per-function DIVERGENCE (G17) — recorded from the SAME token walk. One entry per function whose body
+		// PROVABLY cannot return, so a bare call to it can be told that it ends its caller's block.
+		var divergingDecls = DivergingDeclEntryArray.create()
 		var methodInnerAliasParamOut = MethodInnerAliasParamEntryArray.create()
 		// ⭐⭐ **AN EXTENSION BODY'S NESTED TYPEALIASES, KEYED WHOLE-PROGRAM UNDER EACH CONFORMER (W3).** They
 		// were not, and the two things that followed were both real: a `typealias` member ENDED this walk, so
@@ -17438,7 +17513,7 @@ export type Parser
 				end 'theConformerDeclaresItsOwn'
 
 				match verdict 'verdict'
-					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName)
 				end 'verdict'
 				// `recordScannedSignature` leaves the cursor at the method BODY's first token, i.e. inside the
@@ -17453,7 +17528,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -17717,9 +17792,9 @@ export type Parser
 	// The published name is noted so `conformerDeclaresOwnMethod` can tell a conformer's own declaration from
 	// an extension's the next time it is asked — see that door for why the distinction is what keeps the
 	// verdict independent of fold order.
-	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		if shadowed 'theConformerDeclaresItsOwn'
-			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
 			return
 		end 'theConformerDeclaresItsOwn'
 
@@ -17733,18 +17808,18 @@ export type Parser
 		// standing where the user's belongs whenever the sweep folds `stdlib/` last.
 		let beaten = index.noteExtensionPublishedMethod(qualifiedMethodName, declFilePath: self.filePath, isStdlibSource: self.isStdlibSource)
 		if beaten 'aUserFileDeclaresIt'
-			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
 			return
 		end 'aUserFileDeclaresIt'
 
-		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 	end 'publishOrShadowExtensionMethod'
 
 	// Read a WITHHELD method's signature into arrays that are discarded, and file why it is missing. The read
 	// is what keeps the cursor where a published method's leaves it (see the call site); the filing is what
 	// lets the call site say something better than "no such method".
 	function foldWithheldExtensionMethod(index ProgramSignatures, conformer ByteArray, methodName ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray)
-		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
 		index.recordConditionalExtensionSkip(qualifiedMethodName(conformer, methodName: methodName), skip: ConditionalExtensionSkip.create(conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName))
 	end 'foldWithheldExtensionMethod'
 
@@ -17769,7 +17844,7 @@ export type Parser
 	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
-	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, isUnion bool)
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, isUnion bool)
 		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
 		// read this modifier forwards. `declStart` is that same position kept for the whole-program clause
 		// re-read (`recordScannedType`'s twin, and `ConformanceClauseDeclSite`).
@@ -17811,7 +17886,7 @@ export type Parser
 				self.pos = self.enumMethodKeywordIndex(self.pos)
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 				continue
 			end 'method'
 
@@ -26147,7 +26222,10 @@ export type Parser
 				// `function` value, applied by `parsePostfix` as an indirect call, the statement-position twin of the
 				// value-position `pick()(21)` (#97). A plain direct call leaves no trailing `(`, so `parsePostfix` is a
 				// no-op and every existing direct-call statement lowers to the same IR.
+				let calleeTok = self.current()
+				let callTempFloor = self.pendingTempDrops.count()
 				_ = try self.parsePostfix(func, value: try self.parseCall(func, resultUsed: false), resultUsed: false)
+				self.terminateAfterDivergingCall(func, calleeTok: calleeTok, tempFloor: callTempFloor)
 			end 'directCallStmt'
 		end 'callStmt' else if self.peekKind() == TokenKind.dot 'memberExprStmt'
 			// `h.op` / `arr.managed` / `Point.create()` / `Self.make(1)` — a MEMBER ACCESS written on a line
@@ -26201,13 +26279,15 @@ export type Parser
 		// (`seedInUse`, several passes later). See `drainPendingTemps`' region list.
 		//
 		// ⇒ **THE OBLIGATION THIS SKIP HANDS TO EVERY TERMINATING STATEMENT THAT CARRIES AN EXPRESSION: DRAIN
-		// YOUR OWN TEMPORARIES BEFORE YOUR TERMINATOR.** All FOUR do, and the list is the whole argument, so
-		// keep it complete when a fifth arrives:
+		// YOUR OWN TEMPORARIES BEFORE YOUR TERMINATOR.** All FIVE do, and the list is the whole argument, so
+		// keep it complete when a sixth arrives:
 		//   • `return wrap("v{x}")` — `parseReturnStatement` → `emitHandoffExitDrops`, ahead of the `ret`.
 		//   • `throw E.p(len("v{x}"))` — `emitThrowError` → the same routine, ahead of the `throwError`.
 		//   • `panic("v{x}")` — `parsePanicStatement`, ahead of the abort op. NOT via `emitHandoffExitDrops`:
 		//     it drains from the statement's own FLOOR (a match arm's scrutinee temporary sits below it and
 		//     must survive) and emits no scope drops at all, control never leaving `mrt_panic`.
+		//   • `abort("v{x}")` where `abort` NEVER RETURNS (G17) — `terminateAfterDivergingCall`, on
+		//     `panic`'s own terms and for its reasons: the statement's own floor, and no scope drops.
 		//   • `break`/`continue` — nothing to drain: they carry no expression, so they build no temporary.
 		// The A3n bug was this list being written down as `break`/`continue` alone, with `panic` missing.
 		//
@@ -29800,6 +29880,60 @@ export type Parser
 		let zero = self.emitLiteral(0, valueType: self.deadReturnZeroType(func), range: SourceRange.ofToken(anchor))
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(zero), range: SourceRange.ofToken(anchor))
 	end 'emitDeadReturn'
+
+	// ⭐⭐ **A BARE-CALL STATEMENT TO A FUNCTION THAT NEVER RETURNS ENDS ITS BLOCK (G17)** — the same
+	// `emitDeadReturn` a `panic` statement written in its place would reach, because it is the same fact:
+	// control does not continue past this line. This is the ONLY consumer of `functionNeverReturns`, and it
+	// is deliberately ONE consumer: the fact reaches every construct that asks `isTerminated()` — an
+	// `otherwise` handler's fall-through gate (E3059), a function body's missing-return gate (E3013), an
+	// `if`/`match` arm's merge — through the block's terminator rather than through a reader of its own.
+	//
+	// ⚠ **NO SCOPE DROPS, EXACTLY AS `panic` EMITS NONE.** Control never leaves the callee, so this frame's
+	// owned bindings are never released and never can be; a drop emitted here would be code on a path that
+	// does not exist. What IS drained is this statement's own temporaries — the obligation
+	// `parseStatement`'s terminated-block skip hands to every terminating statement, and this is the FIFTH
+	// (the list is at that skip). The floor is the statement's own, `parsePanicStatement`'s rule and for its
+	// reason: an enclosing construct's temporary (a match scrutinee, a `for` element) sits below it, is not
+	// this statement's to release, and taking it off the pending list would leak it on every OTHER path.
+	//
+	// ⭐ **WHAT FOLLOWS GOES INTO A FRESH `dead` BLOCK, AND THAT IS THE PRECEDENT RATHER THAN AN INVENTION.**
+	// `finalizeIfElse` does exactly this for the continuation of an `if` whose branches all terminate: the
+	// tail is parsed for syntax and emits into a block nothing reaches. It is also what keeps a second
+	// terminator off THIS block — `emitTerminator` panics on one, and a `return` written under a diverging
+	// call is one unless the parser has moved on. E3071 is not widened to refuse that tail: its roster is
+	// KEYWORDS at a statement's first token (`statementEndsItsBlockAt`), a call is not one, and a statement
+	// after a fully-terminating `if`/`else` is accepted today for the identical reason.
+	//
+	// ⚠ **THE DOOR IS THE BARE-NAME CALL STATEMENT, AND THE OTHER CALL SHAPES ARE OUT BY A BOUNDARY RATHER
+	// THAN BY OVERSIGHT.** A METHOD call's key is `Type.method`, which needs the receiver's type and so is not
+	// knowable from the statement's first token; a NAMESPACE-QUALIFIED call's key is assembled by
+	// `parseNamespaceQualifiedCall` from the contest state. Each would be a second reader of the same fact
+	// deriving the key a second way — and every uncertainty about the key must resolve to "it returns", which
+	// is exactly what not asking gives. A shape left out here compiles as it did before; one asked with the
+	// WRONG key could answer yes for a declaration that comes back.
+	function terminateAfterDivergingCall(func IrFunction, calleeTok Token, tempFloor TempDropMark)
+		// ⚡ A single `Set.contains` on a set that is EMPTY for every program declaring no `panic` helper,
+		// asked once per bare-call statement.
+		if not self.signatures.functionNeverReturns(calleeTok.value) 'theCalleeComesBack'
+			return
+		end 'theCalleeComesBack'
+
+		// A short-circuit `and`/`or` in an argument leaves control in a fresh merge block, which is where the
+		// call landed and which is what `emitDeadReturn` terminates. It cannot already be terminated — the
+		// call op was just appended to it — but a `dead` one can arrive here from an unreachable tail, and
+		// `Terminator.dead` is not an op `emitTerminator` may replace.
+		if self.currentBlock.isTerminated() 'nothingReachesThisCallAnyway'
+			return
+		end 'nothingReachesThisCallAnyway'
+
+		if self.pendingTempDrops.count() > tempFloor 'dropArgumentTemps'
+			self.drainPendingTemps(tempFloor, anchor: calleeTok)
+		end 'dropArgumentTemps'
+
+		self.emitDeadReturn(func, anchor: calleeTok)
+
+		self.currentBlock = self.newDeadBlock(func, label: b"afterdiverge", line: calleeTok.line)
+	end 'terminateAfterDivergingCall'
 
 	// The type a dead return's zero is born with — `float` when the declared return occupies XMM, `integer`
 	// otherwise. Every non-float return type keeps the integer zero it always had, so no existing golden
@@ -35018,11 +35152,9 @@ export type Parser
 		let elseTerminated = elseEnd.isTerminated()
 
 		if thenTerminated and elseTerminated 'bothReturn'
-			// Nothing reaches the continuation — mark it dead rather than leave it
-			// unterminated (assertAllBlocksTerminated forbids an unset block).
-			var cont = self.newBlock(func, label: b"ifcont", line: ifTok.line)
-			cont.terminator = Terminator.dead
-			return cont
+			// Nothing reaches the continuation — see `newDeadBlock` for why it is marked rather than left
+			// unterminated, and why the unreachable tail may still be parsed into it.
+			return self.newDeadBlock(func, label: b"ifcont", line: ifTok.line)
 		end 'bothReturn'
 
 		var cont = self.newBlock(func, label: b"ifcont", line: ifTok.line)
@@ -38121,9 +38253,7 @@ export type Parser
 		// would have to remember to consult: `parseArmBody` must not enrol this arm a SECOND time,
 		// `dropArmScopedOwned` must not re-drop what was just dropped, and `parseOtherwiseHandler`'s
 		// caught-box drop must not double-free after an `otherwise break`.
-		var afterBreak = self.newBlock(func, label: b"afterbreak", line: breakTok.line)
-		afterBreak.terminator = Terminator.dead
-		self.currentBlock = afterBreak
+		self.currentBlock = self.newDeadBlock(func, label: b"afterbreak", line: breakTok.line)
 	end 'breakToMatchMerge'
 
 	// ⭐⭐ **BREAK TARGETS ARE MATCHES ∪ LOOPS; CONTINUE TARGETS ARE LOOPS ONLY.**
@@ -38912,9 +39042,7 @@ export type Parser
 			// chain's final `else` target IS that block (`currentTestBlock`). Either way the miss is
 			// unreachable (every value matches some arm).
 			if usePlan 'planDeadMiss'
-				var deadBlock = self.newBlock(func, label: b"matchdead", line: matchTok.line)
-				deadBlock.terminator = Terminator.dead
-				planMissBlockId = deadBlock.id
+				planMissBlockId = self.newDeadBlock(func, label: b"matchdead", line: matchTok.line).id
 			end 'planDeadMiss' else 'chainDeadMiss'
 				currentTestBlock.terminator = Terminator.dead
 			end 'chainDeadMiss'
@@ -42549,6 +42677,19 @@ export type Parser
 	function newBlock(func IrFunction, label ByteArray, line LineNumber) returns IrBlock
 		return self.artifact.module.addBlockAt(func, label: label, filePath: self.filePath.toString(), firstLine: line)
 	end 'newBlock'
+
+	// ⭐⭐ **A FRESH BLOCK NOTHING REACHES.** Four constructs need one — the continuation of an `if` whose
+	// branches all terminate, the miss target of an exhaustive planned `match`, the tail after a `break` that
+	// left its match, and the tail after a call that never returns — and all four need it for the ONE reason
+	// stated here rather than four times: `assertAllBlocksTerminated` forbids a block leaving the parse with
+	// `Terminator.unset`, and a block control cannot arrive at has no terminator to give it. `dead` is what
+	// says so, and it is deliberately NOT an op: `emitTerminator` refuses a second op on a block that has
+	// one, so an unreachable tail's `return`/`throw` may still be parsed into this block for its syntax.
+	function newDeadBlock(func IrFunction, label ByteArray, line LineNumber) returns IrBlock
+		var block = self.newBlock(func, label: label, line: line)
+		block.terminator = Terminator.dead
+		return block
+	end 'newDeadBlock'
 
 	// Set `block`'s terminator to a two-way conditional branch, anchored on the `if`
 	// keyword's span.

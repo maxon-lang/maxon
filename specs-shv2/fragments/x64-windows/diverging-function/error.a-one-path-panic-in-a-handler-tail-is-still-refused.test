@@ -1,0 +1,30 @@
+// Test: error.a-one-path-panic-in-a-handler-tail-is-still-refused
+typealias Integer = int(i64.min to i64.max)
+
+enum DrainError implements Error
+	pipeDied
+end 'DrainError'
+
+function notFatal(b bool)
+	if b 'y'
+		panic("boom")
+	end 'y'
+	print("survived\n")
+end 'notFatal'
+
+function drain(fail bool) returns Integer throws DrainError
+	if fail 'broken'
+		throw DrainError.pipeDied
+	end 'broken'
+	return 41
+end 'drain'
+
+function main() returns ExitCode
+	let lines = try drain(false) otherwise (e) 'workerDied'
+		notFatal(false)
+	end 'workerDied'
+	return lines + 1
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:23:14: type mismatch: 'a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)'
