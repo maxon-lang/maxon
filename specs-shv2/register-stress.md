@@ -264,7 +264,7 @@ phi becomes `φ(k, k)` and is never asked again. Fifteen of those survive, they 
 therefore unspillable, and the compiler refuses a program whose real working set is two:
 
   error E5001: the loop at …:25 needs 4 more register(s) than are available
-    …:5:29   used 0 times in the loop
+    …:5:29   read 0 times in the loop
 
 which is the same false E5001, from the same cause, arrived at down a longer chain. A worklist
 must therefore RE-FILE a folded phi's readers onto the value it folded TO, so the next fold in the

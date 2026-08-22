@@ -786,7 +786,8 @@ dead phi in the second loop's header. Then `maxlive` inflates by one per dead va
 **forced-spills them around the second loop's call** (a store *and* a reload every iteration,
 for values nothing reads), and past the pool of 14 the compiler raises `E5001` against a program
 that fits the machine comfortably — ranking the dead phis first among the values to delete,
-described as "used 0 times in the loop". Which they were. They were used nowhere.
+described as "read 0 times in the loop". Which they were. They were read nowhere, and written
+nowhere either.
 
 **Usefulness is a LEAST FIXPOINT, not a use count.** A block-arg is useful iff (a) an *op* reads
 it, or (b) it is what some edge passes to a *useful* block-arg. A self-sustaining dead phi
@@ -1937,13 +1938,16 @@ The message reports:
   the deficit computed from it asks the author to remove **nine more values than the program needs**.
   Measuring an `E5001` against a reduced pool is the false-positive class of "Known limits" #2; the
   witness makes it structurally unspellable.
-- **Each blocking value's source def site**, ranked cheapest-to-move first (fewest uses inside the
-  loop = fewest reloads after the array rewrite).
+- **Each blocking value's source def site**, ranked cheapest-to-move first (fewest **reads** inside
+  the loop = fewest reloads after the array rewrite). It counts op operands and **not** branch-edge
+  args, which is why the word is `read`: a loop-carried `var` the loop only *assigns* is a block arg
+  handed on at every join, so every one of its in-loop uses is an edge and its count is 0 — and it
+  is still, correctly, in the blocking set (see "Known limits" #1).
 - **The transformation**, named: hold the working set in an array. Array elements are never promoted
   into registers, so the hand-spill *stays* spilled.
 
 It is **deterministic byte-for-byte** — no map iteration anywhere, values swept in id order,
-candidates sorted by a total order (uses-in-loop, then value id). `specs-shv2/register-pressure.md`
+candidates sorted by a total order (reads-in-loop, then value id). `specs-shv2/register-pressure.md`
 gates the exact text through a ` ```maxoncstderr ` block.
 
 **`ValueOrigin` is what lets a Target-tier diagnostic point at source.** Source spans die at the
@@ -2575,7 +2579,21 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
    carries a value the author did not write.** Chordal ⇒ χ = ω = maxlive, and liveness is
    per-program-point, so values live on disjoint paths correctly do **not** interfere. The
    diagnostic can only be wrong if something *upstream* put a surplus value into the IR, and the
-   tell is always the same: a blocking value the ranking reports as **"used 0 times in the loop"**.
+   tell is a blocking value the ranking reports as **"read 0 times in the loop"**.
+
+   > ⚠⚠ **THAT TELL IS NECESSARY, NOT SUFFICIENT, AND THIS ENTRY SAID "always".** A **0** means
+   > only that no *op* of the loop names the value; branch-edge args are not counted (they are not
+   > reloads after the author's array rewrite, so the rank key is right to exclude them). A
+   > **loop-carried `var` the loop only ASSIGNS** — written in one arm, read after the loop —
+   > reads 0 for exactly that reason and is **not** a surplus: it is a loop-header phi the author
+   > wrote, defined inside the loop, and no live-range split shortens its range (its store would
+   > anchor at its own header block, its reloads at its in-loop edge uses), so `isColdSpillable`
+   > refuses it on the DEPTH of that def. MEASURED on the spec harness's own `MaxonArgs.parse`
+   > (BATCH43): **33** values at the peak, **22** of them loop-header phis of that shape (21 `var`
+   > flags plus the counter), **11** printing 0. Nothing upstream over-produced; the loop's working
+   > set really is 33 **as lowered**, and the remedy is the one the message names — hold the flags
+   > in one record or array so the loop carries one value instead of twenty-one. ⇒ **Read a 0 as
+   > "look at the IR", not as "the IR is wrong".**
 
    > **CORRECTED (this cost real debugging time).** This entry used to claim the surplus was a
    > *copy-related pair* — a block arg and what the back edge passes it — "counted twice" unless

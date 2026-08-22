@@ -29,8 +29,11 @@
 //   • the splitter forced-spills them around the loop's call — a store AND a reload every
 //     iteration for a value nothing reads;
 //   • and past the 14-register pool the compiler raises E5001 against a program that fits
-//     the machine, ranking the dead phis first among the values to delete ("used 0 times in
-//     the loop" — the tell).
+//     the machine, ranking the dead phis first among the values to delete ("read 0 times in
+//     the loop" — the tell). ⚠ That tell is NECESSARY, NOT SUFFICIENT: a loop-carried `var` the
+//     loop only ASSIGNS reads 0 there too, because the count excludes branch-edge args, and it is
+//     no surplus at all (ARCHITECTURE, "Known limits" #1). A 0 says "look at the IR", not "a pass
+//     over-produced".
 //
 // The parser has always PROMISED this pruning ("phis for unmutated vars turn out trivial and
 // collapse in the Std-tier phi-elim pass"), but that pass was M4b's `eliminatePhis`, RETIRED

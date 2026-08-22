@@ -19,7 +19,7 @@
 // let the agent converge in ONE step (design Phase 7):
 //   • the EXACT deficit ("remove N values"), not "too many";
 //   • each blocking value's SOURCE def site (via ValueOrigin -> Maxon op -> SourceRange),
-//     ranked cheapest-to-move first (fewest uses inside the region — the fewest reloads after
+//     ranked cheapest-to-move first (fewest READS inside the region — the fewest reloads after
 //     the array rewrite);
 //   • the concrete transformation (hold the working set in an array).
 //
@@ -30,7 +30,7 @@
 //
 // **Deterministic byte-for-byte** (the `maxoncstderr` spec block gates it): no map iteration
 // anywhere, values are swept in id order, and the candidate list is sorted by a TOTAL order
-// (uses-in-region asc, then value id).
+// (reads-in-region asc, then value id).
 //
 // **RULE 3 (design):** no compiler-introduced value may appear in the blocking set — an agent
 // told to delete a value that is not in its source cannot converge. Every blocking value is
@@ -50,23 +50,35 @@
 // by `SplitLiveRanges.confinedOverflowAtPeak`, which is what stops the full-pool ranking from refusing
 // a peak whose values the ABI had already sent to memory. See its header.
 
-// How many times a blocking value is USED inside the OVERFLOWING REGION — the move-cost rank key
-// (fewer uses in it => fewer reloads after the array rewrite). A count of USES, so it is neither a
-// `UseOrdinal` (which use, of one value) nor a `UseRecordIndex` (which record, of the function).
-typealias RegionUseCount = int(0 to u64.max)
+// How many times a blocking value is READ inside the OVERFLOWING REGION — the move-cost rank key
+// (fewer reads in it => fewer reloads after the array rewrite). A count of READS, so it is neither
+// a `UseOrdinal` (which use, of one value) nor a `UseRecordIndex` (which record, of the function).
+//
+// ⚠⚠ **IT COUNTS OP OPERANDS AND NOT BRANCH-EDGE ARGS, AND THE PRINTED WORD USED TO BE "used" —
+// WHICH IS A DIFFERENT CLAIM, AND A FALSE ONE.** A loop-carried `var` — one the loop only ASSIGNS,
+// read after it — is a block ARG at the loop header and is handed on at every join inside the loop,
+// so ALL of its in-loop uses are EDGE uses and this count is 0. Printed as "used 0 times in the
+// loop" that told the author the loop does not touch a value they can see being assigned further
+// down in that same loop, and an agent told to remove such a value cannot converge — the one failure the
+// message exists to avoid. MEASURED on the spec harness's own `MaxonArgs.parse` (BATCH43): eleven
+// of thirty-three blocking values printed "used 0 times in the loop", and every one of them was a
+// loop-header phi for a `var` that loop assigns. The NUMBER is right for what it ranks — after the
+// array rewrite the phi web is gone and only the reads come back as loads — so what was wrong was
+// the word, and the word is now `read`.
+typealias RegionReadCount = int(0 to u64.max)
 
 // One blocking value the user must consider removing from the region: its id, the SOURCE span
 // that declares it (a parameter's declaration, an op-defined value's op, or — for a phi — the
 // incoming value it copies; a rematerialized/reloaded value chases to what it derives from —
-// see `defRangeOf`), and how many times it is USED inside the region (the rank key).
+// see `defRangeOf`), and how many times it is READ inside the region (the rank key).
 type PressureCandidate
 	export var valueId as ValueId
 	export var line as LineNumber
 	export var column as ColumnNumber
-	export var usesInRegion as RegionUseCount
+	export var readsInRegion as RegionReadCount
 
-	static function create(valueId ValueId, line LineNumber, column ColumnNumber, usesInRegion RegionUseCount) returns PressureCandidate
-		return Self{valueId: valueId, line: line, column: column, usesInRegion: usesInRegion}
+	static function create(valueId ValueId, line LineNumber, column ColumnNumber, readsInRegion RegionReadCount) returns PressureCandidate
+		return Self{valueId: valueId, line: line, column: column, readsInRegion: readsInRegion}
 	end 'create'
 end 'PressureCandidate'
 
@@ -160,7 +172,7 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	if peakInLoop 'inLoop'
 		msg.append("the loop at {filePath}:{anchorLine} needs {deficit} more register(s) than are available\n")
 		msg.append("  {heldCount} values must be held in registers at once inside this loop, but\n  only {available} registers are available. The values idle across the loop were already\n  spilled around it at no cost; spilling any of these would put a load or store inside\n  the loop body, which is exactly what this error exists to prevent.\n")
-		msg.append("\n  remove {deficit} of these {heldCount} value(s) from the loop, cheapest first (ranked by uses inside the loop):\n")
+		msg.append("\n  remove {deficit} of these {heldCount} value(s) from the loop, cheapest first (ranked by reads inside the loop):\n")
 		msg.append(candidateList(candidates, order: order, filePath: filePath, regionNoun: "the loop"))
 		msg.append("\n  to fix: hold the loop's working set in an array and index it inside the loop.\n")
 		msg.append("  array elements are never promoted into registers, so the values stay in memory\n")
@@ -173,7 +185,7 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	// remedy is to stop them being live together rather than to lift them out of a repeated region.
 	msg.append("the code at {filePath}:{anchorLine} needs {deficit} more register(s) than are available\n")
 	msg.append("  {heldCount} values must be held in registers at once at this point, but\n  only {available} registers are available. Every value that could be moved out of the\n  way already was; the ones listed below are all live across this point at the same\n  time, so no further spill can relieve it.\n")
-	msg.append("\n  remove {deficit} of these {heldCount} value(s) from this point, cheapest first (ranked by uses in the function):\n")
+	msg.append("\n  remove {deficit} of these {heldCount} value(s) from this point, cheapest first (ranked by reads in the function):\n")
 	msg.append(candidateList(candidates, order: order, filePath: filePath, regionNoun: "the function"))
 	msg.append("\n  to fix: hold this working set in an array and index it, or split the function so\n")
 	msg.append("  fewer of these values are live at the same time.\n")
@@ -187,19 +199,19 @@ function minCount(a RegCount, b RegCount) returns RegCount
 	return a if a <= b else b
 end 'minCount'
 
-// Render the ranked worklist, one line per candidate: its source def site + its in-loop use
+// Render the ranked worklist, one line per candidate: its source def site + its in-loop READ
 // count. The location is what identifies the value to the user — shv2 carries no value NAMES
 // (see IrValueId), so the def site IS the handle, and it is exactly what ValueOrigin exists
 // to recover.
-// `regionNoun` names what the use count was counted over — "the loop" or "the function", the same region
-// `collectRegionOps` gathered the ops `usesInRegion` counted in. Passed in rather than re-derived here, so
+// `regionNoun` names what the read count was counted over — "the loop" or "the function", the same region
+// `collectRegionOps` gathered the ops `readsInRegion` counted in. Passed in rather than re-derived here, so
 // a count and the noun describing it cannot come apart.
 function candidateList(candidates PressureCandidateArray, order CandidateOrder, filePath String, regionNoun String) returns String
 	var out = StringBuilder.create()
 	for idx in order 'each'
 		let c = try candidates.get(idx) otherwise panic("candidateList: candidates.get OOB at {idx}")
-		let plural = "" if c.usesInRegion == 1 else "s"
-		out.append("    {filePath}:{c.line}:{c.column}   used {c.usesInRegion} time{plural} in {regionNoun}\n")
+		let plural = "" if c.readsInRegion == 1 else "s"
+		out.append("    {filePath}:{c.line}:{c.column}   read {c.readsInRegion} time{plural} in {regionNoun}\n")
 	end 'each'
 	return out.build()
 end 'candidateList'
@@ -348,7 +360,7 @@ end 'firstOriginLineOfOp'
 // ==========================================================================
 
 // The blocking values (everything live at the peak op), each resolved to its source def site
-// and its use count within the overflowing region. `peak.liveBefore` IS the working set the deficit was
+// and its READ count within the overflowing region. `peak.liveBefore` IS the working set the deficit was
 // measured against, so listing it is exactly the set the user chooses from. UNSORTED here (swept in id
 // order); `sortedOrder` produces the ranked view — sorting a scalar index permutation rather
 // than moving the reference-typed candidates around (moving them would mutate the array while
@@ -362,14 +374,14 @@ function collectCandidates(project Project, module TargetModule, func IrFunction
 			continue
 		end 'notLive'
 		let range = defRangeOf(project, module: module, func: func, topo: cfg.topo, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
-		let useCount = usesInRegion(module, regionOps: regionOps, valueId: v)
-		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, usesInRegion: useCount))
+		let readCount = readsInRegion(module, regionOps: regionOps, valueId: v)
+		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, readsInRegion: readCount))
 	end 'eachValue'
 
 	return candidates
 end 'collectCandidates'
 
-// A permutation of `candidates`' indices, sorted by the TOTAL order (uses-in-loop ASC, then
+// A permutation of `candidates`' indices, sorted by the TOTAL order (reads-in-loop ASC, then
 // value id ASC) — cheapest to move out first, ties broken by id so the output is byte-
 // deterministic. Sorts a SCALAR index array (int copies, never a borrow) via insertion sort,
 // leaving the reference-typed `candidates` untouched: the blocking set is tiny (bounded by the
@@ -393,31 +405,39 @@ function sortedOrder(candidates PressureCandidateArray) returns CandidateOrder
 	return order
 end 'sortedOrder'
 
-// True iff `candidates[aIndex]` sorts AFTER `candidates[bIndex]` under (uses-in-loop asc, then
+// True iff `candidates[aIndex]` sorts AFTER `candidates[bIndex]` under (reads-in-loop asc, then
 // value id asc). Reads two candidates (shared borrows, no mutation), so no borrow conflict.
 function candidateAtGreater(candidates PressureCandidateArray, aIndex CandidateIndex, bIndex CandidateIndex) returns bool
 	let a = try candidates.get(aIndex) otherwise panic("candidateAtGreater: get OOB at {aIndex}")
 	let b = try candidates.get(bIndex) otherwise panic("candidateAtGreater: get OOB at {bIndex}")
-	if a.usesInRegion != b.usesInRegion 'byUses'
-		return a.usesInRegion > b.usesInRegion
-	end 'byUses'
+	if a.readsInRegion != b.readsInRegion 'byReads'
+		return a.readsInRegion > b.readsInRegion
+	end 'byReads'
 	return a.valueId > b.valueId
 end 'candidateAtGreater'
 
-// The number of times `valueId` is USED (as a virtual operand) by an op of the OVERFLOWING REGION — the
-// move-cost rank key (fewer uses => fewer reloads after the array rewrite), and the number the message
-// prints beside each candidate. It is counted over `collectRegionOps`' list and NOTHING else, so it means
-// exactly what the wording beside it says: uses inside the loop the headline names, or — for a
-// straight-line peak, which has no loop to count in — uses in the function.
+// The number of times `valueId` is READ (named by a virtual USE operand) by an op of the OVERFLOWING
+// REGION — the move-cost rank key (fewer reads => fewer reloads after the array rewrite), and the number
+// the message prints beside each candidate. It is counted over `collectRegionOps`' list and NOTHING else,
+// so it means exactly what the wording beside it says: reads inside the loop the headline names, or — for
+// a straight-line peak, which has no loop to count in — reads in the function.
 //
-// ⚠ A value in the blocking set can be used ZERO times in the region, and that is not a defect: it is
-// live ACROSS the region without being read there, holding a register the region's own values cannot use.
-// It is then the CHEAPEST thing to move out of the way, which is exactly where the ranking puts it.
-function usesInRegion(module TargetModule, regionOps OpIndexArray, valueId ValueId) returns RegionUseCount
-	var count = 0 as RegionUseCount
+// ⚠ A value in the blocking set can be read ZERO times in the region, and that is not a defect. TWO
+// different shapes read 0 here, and telling them apart is why the word is `read` and not `used`
+// (see `RegionReadCount`):
+//
+//  • live ACROSS the region without being read there — holding a register the region's own values
+//    cannot use. Such a value is normally COLD-split away before this file is reached.
+//  • CARRIED BY the region — a loop-carried `var` the loop only assigns is a block arg defined at the
+//    loop header, and every one of its in-loop uses is a branch-edge arg, which this does not count.
+//
+// Either way it is the CHEAPEST thing to move out, which is exactly where the ranking puts it: after the
+// author's array rewrite the phi web is gone and only the reads come back as loads.
+function readsInRegion(module TargetModule, regionOps OpIndexArray, valueId ValueId) returns RegionReadCount
+	var count = 0 as RegionReadCount
 	var buf = OperandList.create()
 	for opIdx in regionOps 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("usesInRegion: op {opIdx} not in module.ops")
+		let op = try module.ops.get(opIdx) otherwise panic("readsInRegion: op {opIdx} not in module.ops")
 		targetOpOperands(op, buf: buf)
 		for o in buf 'eachOperand'
 			if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'use'
@@ -426,7 +446,7 @@ function usesInRegion(module TargetModule, regionOps OpIndexArray, valueId Value
 		end 'eachOperand'
 	end 'eachOp'
 	return count
-end 'usesInRegion'
+end 'readsInRegion'
 
 // ==========================================================================
 // Source mapping (Target ValueId -> Maxon op -> source), with phi chasing

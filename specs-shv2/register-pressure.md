@@ -132,24 +132,24 @@ error E5001: the loop at <fragment>:21 needs 3 more register(s) than are availab
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 3 of these 17 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:3:11   used 1 time in the loop
-    <fragment>:4:11   used 1 time in the loop
-    <fragment>:5:11   used 1 time in the loop
-    <fragment>:6:11   used 1 time in the loop
-    <fragment>:7:11   used 1 time in the loop
-    <fragment>:8:11   used 1 time in the loop
-    <fragment>:9:11   used 1 time in the loop
-    <fragment>:10:11   used 1 time in the loop
-    <fragment>:11:11   used 1 time in the loop
-    <fragment>:12:12   used 1 time in the loop
-    <fragment>:13:12   used 1 time in the loop
-    <fragment>:14:12   used 1 time in the loop
-    <fragment>:15:12   used 1 time in the loop
-    <fragment>:16:12   used 1 time in the loop
-    <fragment>:17:12   used 1 time in the loop
-    <fragment>:18:12   used 1 time in the loop
-    <fragment>:19:10   used 18 times in the loop
+  remove 3 of these 17 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+    <fragment>:3:11   read 1 time in the loop
+    <fragment>:4:11   read 1 time in the loop
+    <fragment>:5:11   read 1 time in the loop
+    <fragment>:6:11   read 1 time in the loop
+    <fragment>:7:11   read 1 time in the loop
+    <fragment>:8:11   read 1 time in the loop
+    <fragment>:9:11   read 1 time in the loop
+    <fragment>:10:11   read 1 time in the loop
+    <fragment>:11:11   read 1 time in the loop
+    <fragment>:12:12   read 1 time in the loop
+    <fragment>:13:12   read 1 time in the loop
+    <fragment>:14:12   read 1 time in the loop
+    <fragment>:15:12   read 1 time in the loop
+    <fragment>:16:12   read 1 time in the loop
+    <fragment>:17:12   read 1 time in the loop
+    <fragment>:18:12   read 1 time in the loop
+    <fragment>:19:10   read 18 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
@@ -235,37 +235,150 @@ error E5001: the loop at <fragment>:32 needs 4 more register(s) than are availab
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 4 of these 30 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:3:11   used 1 time in the loop
-    <fragment>:4:11   used 1 time in the loop
-    <fragment>:5:11   used 1 time in the loop
-    <fragment>:6:11   used 1 time in the loop
-    <fragment>:7:11   used 1 time in the loop
-    <fragment>:8:11   used 1 time in the loop
-    <fragment>:9:11   used 1 time in the loop
-    <fragment>:10:11   used 1 time in the loop
-    <fragment>:11:11   used 1 time in the loop
-    <fragment>:12:12   used 1 time in the loop
-    <fragment>:13:12   used 1 time in the loop
-    <fragment>:14:12   used 1 time in the loop
-    <fragment>:15:12   used 1 time in the loop
-    <fragment>:16:12   used 1 time in the loop
-    <fragment>:17:12   used 1 time in the loop
-    <fragment>:18:12   used 1 time in the loop
-    <fragment>:19:12   used 1 time in the loop
-    <fragment>:20:12   used 1 time in the loop
-    <fragment>:21:12   used 1 time in the loop
-    <fragment>:22:12   used 1 time in the loop
-    <fragment>:23:12   used 1 time in the loop
-    <fragment>:24:12   used 1 time in the loop
-    <fragment>:25:12   used 1 time in the loop
-    <fragment>:26:12   used 1 time in the loop
-    <fragment>:27:12   used 1 time in the loop
-    <fragment>:28:12   used 1 time in the loop
-    <fragment>:29:12   used 1 time in the loop
-    <fragment>:30:12   used 1 time in the loop
-    <fragment>:32:10   used 1 time in the loop
-    <fragment>:31:10   used 30 times in the loop
+  remove 4 of these 30 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+    <fragment>:3:11   read 1 time in the loop
+    <fragment>:4:11   read 1 time in the loop
+    <fragment>:5:11   read 1 time in the loop
+    <fragment>:6:11   read 1 time in the loop
+    <fragment>:7:11   read 1 time in the loop
+    <fragment>:8:11   read 1 time in the loop
+    <fragment>:9:11   read 1 time in the loop
+    <fragment>:10:11   read 1 time in the loop
+    <fragment>:11:11   read 1 time in the loop
+    <fragment>:12:12   read 1 time in the loop
+    <fragment>:13:12   read 1 time in the loop
+    <fragment>:14:12   read 1 time in the loop
+    <fragment>:15:12   read 1 time in the loop
+    <fragment>:16:12   read 1 time in the loop
+    <fragment>:17:12   read 1 time in the loop
+    <fragment>:18:12   read 1 time in the loop
+    <fragment>:19:12   read 1 time in the loop
+    <fragment>:20:12   read 1 time in the loop
+    <fragment>:21:12   read 1 time in the loop
+    <fragment>:22:12   read 1 time in the loop
+    <fragment>:23:12   read 1 time in the loop
+    <fragment>:24:12   read 1 time in the loop
+    <fragment>:25:12   read 1 time in the loop
+    <fragment>:26:12   read 1 time in the loop
+    <fragment>:27:12   read 1 time in the loop
+    <fragment>:28:12   read 1 time in the loop
+    <fragment>:29:12   read 1 time in the loop
+    <fragment>:30:12   read 1 time in the loop
+    <fragment>:32:10   read 1 time in the loop
+    <fragment>:31:10   read 30 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
+<!-- test: assigned-only-loop-carried-vars-overflow -->
+<!-- targets: x64-windows, x64-linux -->
+⭐ **A blocking value that reads ZERO times in the loop is not always a compiler surplus, and this is
+the case that says so.** Fifteen `var`s are declared before the loop, ASSIGNED inside it — one arm of
+an `if`/`else if` chain each — and read only after it. That is the shape of an argument parser, and
+`maxon-shv2/Main.maxon`'s own `MaxonArgs.parse` is one, at 21 flags. Each is a BLOCK ARG defined
+INSIDE the loop — the header phi the loop mints for a name it assigns, and the join phi the
+`if`/`else if` chain merges that name into — so `isColdSpillable` refuses it on the DEPTH of that
+def, and no live-range split shortens its range: the store would anchor at the block that defines
+it, inside the loop, and the reloads would sit at its in-loop edge uses. Seventeen values (15 flags
++ `argc` + `i`) against a pool of fourteen, deficit exactly 3.
+
+The ranked list prints all fifteen at **`read 0 times in the loop`**, and that is honest rather than
+contradictory: the count is of OP operands, and every in-loop use of a loop-carried `var` is a
+branch-edge arg (`RegionReadCount`). The word is `read` for exactly this reason — these values ARE
+written in the loop, further down, and calling that "used 0 times" told an author the loop
+does not touch a value they can see it assigning. ⚠ It also means a 0 here is **necessary but not
+sufficient** as the tell of a surplus value ARCHITECTURE's "Known limits" #1 describes: nothing
+upstream over-produced anything in this program.
+
+No arm64 twin, and that is MEASURED rather than a missing golden: arm64 allocates from 26 GPRs, so
+seventeen live values fit and the same source compiles there (`--target=arm64-macos`, verified). The
+pool is the subject, exactly as this file's header says.
+```maxon
+function parseFlags(argc int) returns int
+	var f0 = 0
+	var f1 = 0
+	var f2 = 0
+	var f3 = 0
+	var f4 = 0
+	var f5 = 0
+	var f6 = 0
+	var f7 = 0
+	var f8 = 0
+	var f9 = 0
+	var f10 = 0
+	var f11 = 0
+	var f12 = 0
+	var f13 = 0
+	var f14 = 0
+	var i = 0
+	while i < argc 'scan'
+		if i == 0 'k0'
+			f0 = 1
+		end 'k0' else if i == 1 'k1'
+			f1 = 1
+		end 'k1' else if i == 2 'k2'
+			f2 = 1
+		end 'k2' else if i == 3 'k3'
+			f3 = 1
+		end 'k3' else if i == 4 'k4'
+			f4 = 1
+		end 'k4' else if i == 5 'k5'
+			f5 = 1
+		end 'k5' else if i == 6 'k6'
+			f6 = 1
+		end 'k6' else if i == 7 'k7'
+			f7 = 1
+		end 'k7' else if i == 8 'k8'
+			f8 = 1
+		end 'k8' else if i == 9 'k9'
+			f9 = 1
+		end 'k9' else if i == 10 'k10'
+			f10 = 1
+		end 'k10' else if i == 11 'k11'
+			f11 = 1
+		end 'k11' else if i == 12 'k12'
+			f12 = 1
+		end 'k12' else if i == 13 'k13'
+			f13 = 1
+		end 'k13' else if i == 14 'k14'
+			f14 = 1
+		end 'k14'
+		i = i + 1
+	end 'scan'
+	return f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14
+end 'parseFlags'
+
+function main() returns ExitCode
+	return parseFlags(0)
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:21 needs 3 more register(s) than are available
+  17 values must be held in registers at once inside this loop, but
+  only 14 registers are available. The values idle across the loop were already
+  spilled around it at no cost; spilling any of these would put a load or store inside
+  the loop body, which is exactly what this error exists to prevent.
+
+  remove 3 of these 17 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+    <fragment>:3:11   read 0 times in the loop
+    <fragment>:4:11   read 0 times in the loop
+    <fragment>:5:11   read 0 times in the loop
+    <fragment>:6:11   read 0 times in the loop
+    <fragment>:7:11   read 0 times in the loop
+    <fragment>:8:11   read 0 times in the loop
+    <fragment>:9:11   read 0 times in the loop
+    <fragment>:10:11   read 0 times in the loop
+    <fragment>:11:11   read 0 times in the loop
+    <fragment>:12:11   read 0 times in the loop
+    <fragment>:13:12   read 0 times in the loop
+    <fragment>:14:12   read 0 times in the loop
+    <fragment>:15:12   read 0 times in the loop
+    <fragment>:16:12   read 0 times in the loop
+    <fragment>:17:12   read 0 times in the loop
+    <fragment>:2:21   read 1 time in the loop
+    <fragment>:18:10   read 17 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
@@ -419,22 +532,22 @@ error E5001: the loop at <fragment>:18 needs 1 more register(s) than are availab
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 1 of these 15 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:2:14   used 1 time in the loop
-    <fragment>:3:11   used 1 time in the loop
-    <fragment>:4:11   used 1 time in the loop
-    <fragment>:5:11   used 1 time in the loop
-    <fragment>:6:11   used 1 time in the loop
-    <fragment>:7:11   used 1 time in the loop
-    <fragment>:8:11   used 1 time in the loop
-    <fragment>:9:11   used 1 time in the loop
-    <fragment>:10:11   used 1 time in the loop
-    <fragment>:11:11   used 1 time in the loop
-    <fragment>:12:12   used 1 time in the loop
-    <fragment>:13:12   used 1 time in the loop
-    <fragment>:14:12   used 1 time in the loop
-    <fragment>:15:12   used 1 time in the loop
-    <fragment>:16:10   used 15 times in the loop
+  remove 1 of these 15 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+    <fragment>:2:14   read 1 time in the loop
+    <fragment>:3:11   read 1 time in the loop
+    <fragment>:4:11   read 1 time in the loop
+    <fragment>:5:11   read 1 time in the loop
+    <fragment>:6:11   read 1 time in the loop
+    <fragment>:7:11   read 1 time in the loop
+    <fragment>:8:11   read 1 time in the loop
+    <fragment>:9:11   read 1 time in the loop
+    <fragment>:10:11   read 1 time in the loop
+    <fragment>:11:11   read 1 time in the loop
+    <fragment>:12:12   read 1 time in the loop
+    <fragment>:13:12   read 1 time in the loop
+    <fragment>:14:12   read 1 time in the loop
+    <fragment>:15:12   read 1 time in the loop
+    <fragment>:16:10   read 15 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
@@ -555,36 +668,36 @@ error E5001: the loop at <fragment>:30 needs 3 more register(s) than are availab
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 3 of these 29 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:2:14   used 1 time in the loop
-    <fragment>:3:11   used 1 time in the loop
-    <fragment>:4:11   used 1 time in the loop
-    <fragment>:5:11   used 1 time in the loop
-    <fragment>:6:11   used 1 time in the loop
-    <fragment>:7:11   used 1 time in the loop
-    <fragment>:8:11   used 1 time in the loop
-    <fragment>:9:11   used 1 time in the loop
-    <fragment>:10:11   used 1 time in the loop
-    <fragment>:11:11   used 1 time in the loop
-    <fragment>:12:12   used 1 time in the loop
-    <fragment>:13:12   used 1 time in the loop
-    <fragment>:14:12   used 1 time in the loop
-    <fragment>:15:12   used 1 time in the loop
-    <fragment>:16:12   used 1 time in the loop
-    <fragment>:17:12   used 1 time in the loop
-    <fragment>:18:12   used 1 time in the loop
-    <fragment>:19:12   used 1 time in the loop
-    <fragment>:20:12   used 1 time in the loop
-    <fragment>:21:12   used 1 time in the loop
-    <fragment>:22:12   used 1 time in the loop
-    <fragment>:23:12   used 1 time in the loop
-    <fragment>:24:12   used 1 time in the loop
-    <fragment>:25:12   used 1 time in the loop
-    <fragment>:26:12   used 1 time in the loop
-    <fragment>:27:12   used 1 time in the loop
-    <fragment>:28:12   used 1 time in the loop
-    <fragment>:30:10   used 1 time in the loop
-    <fragment>:29:10   used 28 times in the loop
+  remove 3 of these 29 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+    <fragment>:2:14   read 1 time in the loop
+    <fragment>:3:11   read 1 time in the loop
+    <fragment>:4:11   read 1 time in the loop
+    <fragment>:5:11   read 1 time in the loop
+    <fragment>:6:11   read 1 time in the loop
+    <fragment>:7:11   read 1 time in the loop
+    <fragment>:8:11   read 1 time in the loop
+    <fragment>:9:11   read 1 time in the loop
+    <fragment>:10:11   read 1 time in the loop
+    <fragment>:11:11   read 1 time in the loop
+    <fragment>:12:12   read 1 time in the loop
+    <fragment>:13:12   read 1 time in the loop
+    <fragment>:14:12   read 1 time in the loop
+    <fragment>:15:12   read 1 time in the loop
+    <fragment>:16:12   read 1 time in the loop
+    <fragment>:17:12   read 1 time in the loop
+    <fragment>:18:12   read 1 time in the loop
+    <fragment>:19:12   read 1 time in the loop
+    <fragment>:20:12   read 1 time in the loop
+    <fragment>:21:12   read 1 time in the loop
+    <fragment>:22:12   read 1 time in the loop
+    <fragment>:23:12   read 1 time in the loop
+    <fragment>:24:12   read 1 time in the loop
+    <fragment>:25:12   read 1 time in the loop
+    <fragment>:26:12   read 1 time in the loop
+    <fragment>:27:12   read 1 time in the loop
+    <fragment>:28:12   read 1 time in the loop
+    <fragment>:30:10   read 1 time in the loop
+    <fragment>:29:10   read 28 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
@@ -649,23 +762,23 @@ error E5001: the loop at <fragment>:19 needs 2 more register(s) than are availab
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 2 of these 16 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:19:11   used 0 times in the loop
-    <fragment>:20:11   used 0 times in the loop
-    <fragment>:21:11   used 0 times in the loop
-    <fragment>:22:11   used 0 times in the loop
-    <fragment>:23:11   used 0 times in the loop
-    <fragment>:25:11   used 0 times in the loop
-    <fragment>:26:11   used 0 times in the loop
-    <fragment>:27:11   used 0 times in the loop
-    <fragment>:28:11   used 0 times in the loop
-    <fragment>:29:13   used 0 times in the loop
-    <fragment>:30:13   used 0 times in the loop
-    <fragment>:31:13   used 0 times in the loop
-    <fragment>:32:13   used 0 times in the loop
-    <fragment>:16:12   used 1 time in the loop
-    <fragment>:24:11   used 1 time in the loop
-    <fragment>:17:10   used 15 times in the loop
+  remove 2 of these 16 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+    <fragment>:19:11   read 0 times in the loop
+    <fragment>:20:11   read 0 times in the loop
+    <fragment>:21:11   read 0 times in the loop
+    <fragment>:22:11   read 0 times in the loop
+    <fragment>:23:11   read 0 times in the loop
+    <fragment>:25:11   read 0 times in the loop
+    <fragment>:26:11   read 0 times in the loop
+    <fragment>:27:11   read 0 times in the loop
+    <fragment>:28:11   read 0 times in the loop
+    <fragment>:29:13   read 0 times in the loop
+    <fragment>:30:13   read 0 times in the loop
+    <fragment>:31:13   read 0 times in the loop
+    <fragment>:32:13   read 0 times in the loop
+    <fragment>:16:12   read 1 time in the loop
+    <fragment>:24:11   read 1 time in the loop
+    <fragment>:17:10   read 15 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
@@ -748,35 +861,35 @@ error E5001: the loop at <fragment>:30 needs 2 more register(s) than are availab
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 2 of these 28 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:31:11   used 0 times in the loop
-    <fragment>:32:11   used 0 times in the loop
-    <fragment>:33:11   used 0 times in the loop
-    <fragment>:34:11   used 0 times in the loop
-    <fragment>:35:11   used 0 times in the loop
-    <fragment>:36:11   used 0 times in the loop
-    <fragment>:37:11   used 0 times in the loop
-    <fragment>:38:11   used 0 times in the loop
-    <fragment>:39:11   used 0 times in the loop
-    <fragment>:40:13   used 0 times in the loop
-    <fragment>:41:13   used 0 times in the loop
-    <fragment>:42:13   used 0 times in the loop
-    <fragment>:43:13   used 0 times in the loop
-    <fragment>:44:13   used 0 times in the loop
-    <fragment>:45:13   used 0 times in the loop
-    <fragment>:46:13   used 0 times in the loop
-    <fragment>:47:13   used 0 times in the loop
-    <fragment>:48:13   used 0 times in the loop
-    <fragment>:49:13   used 0 times in the loop
-    <fragment>:50:13   used 0 times in the loop
-    <fragment>:51:13   used 0 times in the loop
-    <fragment>:52:13   used 0 times in the loop
-    <fragment>:53:13   used 0 times in the loop
-    <fragment>:54:13   used 0 times in the loop
-    <fragment>:55:13   used 0 times in the loop
-    <fragment>:28:12   used 1 time in the loop
-    <fragment>:56:11   used 1 time in the loop
-    <fragment>:29:10   used 27 times in the loop
+  remove 2 of these 28 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+    <fragment>:31:11   read 0 times in the loop
+    <fragment>:32:11   read 0 times in the loop
+    <fragment>:33:11   read 0 times in the loop
+    <fragment>:34:11   read 0 times in the loop
+    <fragment>:35:11   read 0 times in the loop
+    <fragment>:36:11   read 0 times in the loop
+    <fragment>:37:11   read 0 times in the loop
+    <fragment>:38:11   read 0 times in the loop
+    <fragment>:39:11   read 0 times in the loop
+    <fragment>:40:13   read 0 times in the loop
+    <fragment>:41:13   read 0 times in the loop
+    <fragment>:42:13   read 0 times in the loop
+    <fragment>:43:13   read 0 times in the loop
+    <fragment>:44:13   read 0 times in the loop
+    <fragment>:45:13   read 0 times in the loop
+    <fragment>:46:13   read 0 times in the loop
+    <fragment>:47:13   read 0 times in the loop
+    <fragment>:48:13   read 0 times in the loop
+    <fragment>:49:13   read 0 times in the loop
+    <fragment>:50:13   read 0 times in the loop
+    <fragment>:51:13   read 0 times in the loop
+    <fragment>:52:13   read 0 times in the loop
+    <fragment>:53:13   read 0 times in the loop
+    <fragment>:54:13   read 0 times in the loop
+    <fragment>:55:13   read 0 times in the loop
+    <fragment>:28:12   read 1 time in the loop
+    <fragment>:56:11   read 1 time in the loop
+    <fragment>:29:10   read 27 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
@@ -858,25 +971,25 @@ error E5001: the loop at <fragment>:25 needs 4 more register(s) than are availab
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 4 of these 18 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:3:12   used 0 times in the loop
-    <fragment>:7:11   used 1 time in the loop
-    <fragment>:8:11   used 1 time in the loop
-    <fragment>:9:11   used 1 time in the loop
-    <fragment>:10:11   used 1 time in the loop
-    <fragment>:11:11   used 1 time in the loop
-    <fragment>:12:11   used 1 time in the loop
-    <fragment>:13:11   used 1 time in the loop
-    <fragment>:14:11   used 1 time in the loop
-    <fragment>:15:11   used 1 time in the loop
-    <fragment>:16:12   used 1 time in the loop
-    <fragment>:17:12   used 1 time in the loop
-    <fragment>:18:12   used 1 time in the loop
-    <fragment>:19:12   used 1 time in the loop
-    <fragment>:20:12   used 1 time in the loop
-    <fragment>:21:12   used 1 time in the loop
-    <fragment>:22:12   used 1 time in the loop
-    <fragment>:23:10   used 18 times in the loop
+  remove 4 of these 18 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+    <fragment>:3:12   read 0 times in the loop
+    <fragment>:7:11   read 1 time in the loop
+    <fragment>:8:11   read 1 time in the loop
+    <fragment>:9:11   read 1 time in the loop
+    <fragment>:10:11   read 1 time in the loop
+    <fragment>:11:11   read 1 time in the loop
+    <fragment>:12:11   read 1 time in the loop
+    <fragment>:13:11   read 1 time in the loop
+    <fragment>:14:11   read 1 time in the loop
+    <fragment>:15:11   read 1 time in the loop
+    <fragment>:16:12   read 1 time in the loop
+    <fragment>:17:12   read 1 time in the loop
+    <fragment>:18:12   read 1 time in the loop
+    <fragment>:19:12   read 1 time in the loop
+    <fragment>:20:12   read 1 time in the loop
+    <fragment>:21:12   read 1 time in the loop
+    <fragment>:22:12   read 1 time in the loop
+    <fragment>:23:10   read 18 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
@@ -951,23 +1064,23 @@ error E5001: the loop at <fragment>:6 needs 2 more register(s) than are availabl
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 2 of these 16 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:3:12   used 1 time in the loop
-    <fragment>:4:10   used 2 times in the loop
-    <fragment>:7:12   used 2 times in the loop
-    <fragment>:8:12   used 2 times in the loop
-    <fragment>:9:12   used 2 times in the loop
-    <fragment>:10:12   used 2 times in the loop
-    <fragment>:11:12   used 2 times in the loop
-    <fragment>:12:12   used 2 times in the loop
-    <fragment>:13:12   used 2 times in the loop
-    <fragment>:14:12   used 2 times in the loop
-    <fragment>:15:12   used 2 times in the loop
-    <fragment>:16:13   used 2 times in the loop
-    <fragment>:17:13   used 2 times in the loop
-    <fragment>:18:13   used 2 times in the loop
-    <fragment>:19:13   used 2 times in the loop
-    <fragment>:6:11   used 15 times in the loop
+  remove 2 of these 16 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+    <fragment>:3:12   read 1 time in the loop
+    <fragment>:4:10   read 2 times in the loop
+    <fragment>:7:12   read 2 times in the loop
+    <fragment>:8:12   read 2 times in the loop
+    <fragment>:9:12   read 2 times in the loop
+    <fragment>:10:12   read 2 times in the loop
+    <fragment>:11:12   read 2 times in the loop
+    <fragment>:12:12   read 2 times in the loop
+    <fragment>:13:12   read 2 times in the loop
+    <fragment>:14:12   read 2 times in the loop
+    <fragment>:15:12   read 2 times in the loop
+    <fragment>:16:13   read 2 times in the loop
+    <fragment>:17:13   read 2 times in the loop
+    <fragment>:18:13   read 2 times in the loop
+    <fragment>:19:13   read 2 times in the loop
+    <fragment>:6:11   read 15 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory

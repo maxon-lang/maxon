@@ -3561,10 +3561,26 @@ end 'choiceFound'
 // and keeping the two apart is the whole point of the amended Rule 2.
 //
 //  • FULL-POOL overflow → E5001, and this is the diagnostic the design exists to raise. Every
-//    value crossing the point is used inside the loop, so it is the loop's genuine working set,
-//    and it is larger than the machine. No spiller can fix that; only the author can, by
-//    restructuring. `maxlive` is EXACT here (SSA interference is chordal, so χ = ω), so the
-//    deficit is a theorem about the program, not the outcome of a search.
+//    value crossing the point is one the loop CARRIES — READ inside it, or DEFINED inside it (a
+//    loop-header phi for a `var` the loop assigns) — so the only placement a split could give it
+//    puts a store or a reload in the loop body, which is what Rule 2's COLD gate refuses. It is
+//    the loop's genuine working set AS LOWERED, and it is larger than the machine. No spiller can
+//    fix that; only the author can, by restructuring. `maxlive` is EXACT here (SSA interference is
+//    chordal, so χ = ω), so the deficit is a theorem about the program, not the outcome of a search.
+//
+//    ⚠⚠ **THIS SAID "every value crossing the point is USED inside the loop", WHICH IS NARROWER
+//    THAN THE TRUTH — narrow enough that reading it produced a wrong diagnosis of a live E5001.**
+//    A loop-carried `var` the loop only ASSIGNS is read ZERO times inside it and is still here,
+//    because it is a block arg DEFINED in the loop: its store would anchor at its own header block
+//    and its reloads would sit at its in-loop edge uses, so no split shortens its range at all.
+//    `isColdSpillable` refuses it on the DEPTH of that def, which is the fact that matters, and the
+//    ranked list prints it at "read 0 times in the loop" (`RegionReadCount` — it counts op operands,
+//    never edge args). MEASURED on the spec harness's own `MaxonArgs.parse` (BATCH43): 22 of the 33
+//    blocking values were loop-header phis of exactly this shape — 21 `var` flags plus the counter —
+//    against a pool of 14. Relieving THOSE needs a transformation this splitter does not own
+//    (demoting a whole phi congruence class into one frame slot), not a live-range split; the
+//    refusal is therefore correct as the design stands, and the author's remedy is the one the
+//    message names.
 //
 //  • CONFINED (clobber-only) overflow → a SPLITTER BUG, and it must NEVER reach the user as E5001.
 //    The values confined to the witness FIT the pool; they are excluded only from the registers the
