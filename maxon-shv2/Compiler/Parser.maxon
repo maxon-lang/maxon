@@ -8413,6 +8413,33 @@ typealias TokenIndexColumn = Array with TokenIndex
 // across the per-file parse fan-out.
 let sharedEmptyDeclaredNameKeywords = TokenIndexColumn.create()
 
+// Does the ASCENDING token-index list `column` hold `index`? The bisect BOTH sparse keyword indexes are
+// read through — `declaredNameKeywords` (via `namesADeclaration`) and `blockKeywordNames` (via
+// `keywordIsAName`). One routine, because it is one question asked of two lists built to the same
+// discipline, and a second copy is how two bisects' bounds drift apart.
+//
+// ⚡ The `count()` read is the whole cost for very nearly every file: neither list has an entry unless the
+// file actually spells the shape it records.
+function ascendingTokenIndexHolds(column TokenIndexColumn, index TokenIndex) returns bool
+	var lo = 0
+	var hi = column.count()
+	while lo < hi 'bisect'
+		let mid = lo + (hi - lo) / 2
+		let atMid = try column.get(mid) otherwise panic("ascendingTokenIndexHolds: get OOB at {mid} of {column.count()}")
+		if atMid == index 'hit'
+			return true
+		end 'hit'
+
+		if atMid < index 'above'
+			lo = mid + 1
+		end 'above' else 'below'
+			hi = mid
+		end 'below'
+	end 'bisect'
+
+	return false
+end 'ascendingTokenIndexHolds'
+
 // The INITIAL `Parser.blockExtentEnds`, AND the anchor whose `is`-identity says the index has not been built
 // yet — `sharedEmptyInstanceAliasMap`'s pattern, for its reason and with its invariant. A parser that never
 // asks where a block closes (the signature sweep, a file with no `if`/`while`/`match`) allocates nothing
@@ -8420,6 +8447,13 @@ let sharedEmptyDeclaredNameKeywords = TokenIndexColumn.create()
 // it stays empty and is safe to share across the per-file parse fan-out. Reading it before the build is
 // harmless: `matchingEndOf` is the only reader and an empty column makes it panic rather than answer.
 let sharedEmptyBlockExtentEnds = TokenIndexColumn.create()
+
+// The INITIAL `Parser.blockKeywordNames`. It has no `is`-identity gate of its own because it is filled by
+// `buildBlockExtentIndex` in the SAME pass as `blockExtentEnds`, whose anchor above is the gate for both:
+// one walk decides block structure once, so one "have I run?" answer covers both of its outputs. The
+// builder REPLACES the field with a fresh list before pushing anything, so this one stays empty and is
+// safe to share across the per-file parse fan-out.
+let sharedEmptyBlockKeywordNames = TokenIndexColumn.create()
 
 // The bare member names of a generic type's inner ranged typealiases, in scope while its body is parsed
 // (P1.6-C, `Parser.enclosingInnerAliases`). Keyed by content like every other name set here.
@@ -10797,6 +10831,25 @@ export type Parser
 	// FILE-scoped and keyed by an ABSOLUTE token index, `blockExtentEnds`'s discipline for its reason, and it
 	// points at the shared empty until the first query with that `is`-identity as the "have I run?" gate.
 	var declaredNameKeywords as TokenIndexColumn
+	// ⭐⭐ **THE FILE'S BLOCK-STRUCTURE KEYWORD TOKENS THAT ARE NAMES, ASCENDING** — the memo
+	// `keywordIsAName` answers from, decided ONCE by `buildBlockExtentIndex`'s walk and read by every scan
+	// after it.
+	//
+	// ⚠ **IT IS A MEMO BECAUSE THE ANSWER NEEDS THE WALK'S OWN LEFT CONTEXT, WHICH NO CALLER HAS.** The
+	// match-arm shapes (`end gives 0`, `while(a, b) then …`) are rules about a token standing at the top
+	// level of a `match` BODY, and that is what the walk's opener stack knows and a bounded lookaround does
+	// not — see `keywordIsANameAt`. Recording the verdict per token is what lets the eight scans that count
+	// block depth (`blockStatementEndIndex`, `methodBodyEndFrom`, `skipUnreachedFunctionBody`, …) share ONE
+	// answer instead of each re-deriving it from a context it cannot see.
+	//
+	// ⚡ **SPARSE, NOT A PER-TOKEN COLUMN**, for the reason `declaredNameKeywords` above records with a
+	// measurement: a keyword standing where block structure could stand is rare, so this list is EMPTY for
+	// very nearly every file and `keywordIsAName` answers off its `count()`. Only the eight kinds
+	// `kindSpellsBlockStructure` admits are ever offered to it, because those are the only ones any caller
+	// asks about — an entry for anything else would be one nothing can match.
+	//
+	// FILE-scoped and keyed by an ABSOLUTE token index, `blockExtentEnds`'s discipline for its reason.
+	var blockKeywordNames as TokenIndexColumn
 	// THE BLOCK EXPRESSION PARSING IS EMITTING INTO, and it MOVES. Until P1.0d.2 an
 	// expression always ended in the block it started in, so "where do ops go" could be a
 	// parameter threaded down from the statement. A short-circuit `and`/`or` ends that: it
@@ -12011,6 +12064,7 @@ export type Parser
 			lastBlockBodyEnd: 0,
 			blockExtentEnds: sharedEmptyBlockExtentEnds,
 			declaredNameKeywords: sharedEmptyDeclaredNameKeywords,
+			blockKeywordNames: sharedEmptyBlockKeywordNames,
 			currentBlock: IrBlock.create(0, label: DetachedBlockLabel),
 			valueTags: ValueTypeTagArray.create(),
 			valueWitnessIds: ValueIdArray.create(),
@@ -37767,7 +37821,33 @@ export type Parser
 		return self.kindAt(index) == TokenKind.charLiteral and self.kindAt(index + 1) != TokenKind.dot
 	end 'charLiteralOpensTryBlockAt'
 
-	// Is the keyword at `index` being used as a NAME rather than as block structure?
+	// Is the keyword at `index` being used as a NAME rather than as block structure? Read off the memo
+	// `buildBlockExtentIndex`'s walk recorded — see `blockKeywordNames` and `keywordIsANameAt`, which is
+	// where the question is actually decided and why it cannot be decided here.
+	//
+	// ⚡ A BISECT of the ascending memo, and the `count()` read is the whole cost for very nearly every
+	// file: only a file that spells a keyword where block structure could stand has any entry at all.
+	function keywordIsAName(index TokenIndex) returns bool
+		self.buildBlockExtentIndex()
+		return ascendingTokenIndexHolds(self.blockKeywordNames, index: index)
+	end 'keywordIsAName'
+
+	// ⭐⭐ **THE DERIVATION BEHIND `keywordIsAName`, ASKED ONCE PER TOKEN BY THE BLOCK-EXTENT WALK.** It is
+	// separate from the reader above for one reason: **two of the four shapes below are rules about a token
+	// standing at the top level of a `match` BODY, and no bounded lookaround can see that.** The walk can —
+	// its opener stack holds exactly the blocks still open BEHIND the cursor — so it supplies `inMatchBody`
+	// and records the verdict, and every later scan reads that one answer instead of guessing again.
+	//
+	// ⚠⚠ **THE SCOPING IS NOT TIDINESS — AN UNSCOPED ARM LOOKAHEAD MISREAD A CONDITION AS A MATCH ARM AND
+	// TOOK THE COMPILER DOWN.** The rule used to say a control keyword is *never* followed by an arm
+	// separator, *"`if` takes a condition, `while` a condition"* — and D8 falsified it in a file this one
+	// never touches: a condition may BEGIN with a keyword-named binding, so
+	// `function twosComplementDistance(to ByteOffset, from ByteOffset)` makes `if to >= from 'forward'`
+	// (`Targets/Shared/GlobalDataTable.maxon`) an `if` whose next token is `to`. Read as an arm separator,
+	// that `if` opened no block, its `end` closed one that never opened, and `assertScanAligned` fired on a
+	// program the bootstrap compiles. `while`, `match` and `for` take the same shape, and `then`/`gives`/
+	// `upto`/`or` are equally declarable. Scoped to a match body the premise is TRUE again, because a case
+	// name can stand nowhere else.
 	//
 	// ⚠ **AN ENUM CASE MAY BE SPELLED WITH A KEYWORD** (`enum TokenType { function if else end … }`,
 	// keyword-as-case-name.md), so `if`/`else`/`end`/`while`/`match`/`for` can appear in a program as
@@ -37777,13 +37857,18 @@ export type Parser
 	// and `assertScanAligned` fires (or the arm loop stops early, or the declaration sweep records a
 	// local as a top-level binding).
 	//
-	// **THREE SHAPES, ONE FACT, so ONE predicate** — a divergence would leave the opener rule taught and
-	// the closer rule not, or one shape taught and the next not:
+	// **FOUR SHAPES, ONE FACT, so ONE predicate** — a divergence would leave the opener rule taught and
+	// the closer rule not, or one shape taught and the next not. The first two are ARM shapes and run only
+	// under `inMatchBody`; the last two hold wherever the keyword stands:
 	//
 	//   • **A MATCH-ARM CASE NAME — the LOOKAHEAD.** `if gives …`, `end then …`, `else to critical then
-	//     …`. A control keyword is NEVER followed by a match-arm SEPARATOR in real control flow (`if`
-	//     takes a condition, `end` a label or newline, `while` a condition), so a keyword immediately
-	//     followed by `gives`/`then`/`to`/`upto`/`or` is unambiguously a case name.
+	//     …`. Inside a match body a keyword immediately followed by `gives`/`then`/`to`/`upto`/`or` is a
+	//     case name: an arm is the only thing that stands at that level, and a `match` header's own
+	//     scrutinee sits BEFORE the body rather than in it.
+	//     ⛔ **OUTSIDE a match body this lookahead is WRONG, and the header above records the panic it
+	//     cost.** Its old premise — *"a control keyword is never followed by an arm separator in real
+	//     control flow"* — reads `if`/`while`/`match`/`for` as taking a condition or a scrutinee, and a
+	//     condition may BEGIN with a keyword-named binding (D8). `if to >= from 'forward'` is the shape.
 	//   • **A MATCH-ARM CASE NAME CARRYING A PAYLOAD BINDING LIST — the SAME LOOKAHEAD, PAST THE LIST.**
 	//     `end(m) then …`, `while(a, b) gives …`. The separator sits after the list, not next to the
 	//     keyword, so a lookahead of ONE token misses it entirely. ⚠ Both directions were REACHABLE and
@@ -37831,11 +37916,30 @@ export type Parser
 	//     — only the enclosing list's OWNER separates them, which no bounded lookaround can reach. See
 	//     `buildDeclaredNameIndex`, whose one linear pass reads paren matching and `functionDeclarationAt`
 	//     and NOTHING about block structure, so it cannot be circular with the extent index that reads it.
-	function keywordIsAName(index TokenIndex) returns bool
+	function keywordIsANameAt(index TokenIndex, inMatchBody bool) returns bool
 		let next = self.kindAt(index + 1)
-		if next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or 'matchCaseName'
-			return true
-		end 'matchCaseName'
+
+		// The two MATCH-ARM shapes, and they are asked only where an arm can stand. Everything below is
+		// position-independent and stays unscoped.
+		if inMatchBody 'armShapes'
+			if next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or 'matchCaseName'
+				return true
+			end 'matchCaseName'
+
+			// ⚠ **A POSITIVE ANSWER ONLY — it must FALL THROUGH to the lookbehind, never answer `false` for
+			// it.** A keyword followed by `(` can equally be a member READ of a keyword-named case that
+			// carries a payload (`Kw.end(20, b: 22)`), which has the `.` before it AND the `(` after it.
+			// Returning the separator test's verdict outright hid the lookbehind from exactly those reads —
+			// measured, mid-review: `if tagOf(Kw.end(20, b: 22)) == 42 'ok'` took `assertScanAligned` down.
+			if next == TokenKind.leftParen 'payloadBindingList'
+				// Asked of the SHARED paren walk, so a nested group inside the list (or inside a parenthesized
+				// condition this must NOT claim) is matched by the one rule `skipBalancedParens` uses.
+				let separator = self.kindAt(self.matchingRightParenOf(index + 1) + 1)
+				if separator == TokenKind.then or separator == TokenKind.gives 'armSeparator'
+					return true
+				end 'armSeparator'
+			end 'payloadBindingList'
+		end 'armShapes'
 
 		// ⭐ **A LABEL — the OTHER lookahead, and it is a `:` (D8).** `weigh(i, for: 3, match: 4)` labels a
 		// keyword-named PARAMETER. (An ARGUMENT label is the only reader: a struct literal's `Self{x: 3}` keys
@@ -37848,20 +37952,6 @@ export type Parser
 		if next == TokenKind.colon 'argumentOrFieldLabel'
 			return true
 		end 'argumentOrFieldLabel'
-
-		// ⚠ **A POSITIVE ANSWER ONLY — it must FALL THROUGH to the lookbehind, never answer `false` for
-		// it.** A keyword followed by `(` can equally be a member READ of a keyword-named case that
-		// carries a payload (`Kw.end(20, b: 22)`), which has the `.` before it AND the `(` after it.
-		// Returning the separator test's verdict outright hid the lookbehind from exactly those reads —
-		// measured, mid-review: `if tagOf(Kw.end(20, b: 22)) == 42 'ok'` took `assertScanAligned` down.
-		if next == TokenKind.leftParen 'payloadBindingList'
-			// Asked of the SHARED paren walk, so a nested group inside the list (or inside a parenthesized
-			// condition this must NOT claim) is matched by the one rule `skipBalancedParens` uses.
-			let separator = self.kindAt(self.matchingRightParenOf(index + 1) + 1)
-			if separator == TokenKind.then or separator == TokenKind.gives 'armSeparator'
-				return true
-			end 'armSeparator'
-		end 'payloadBindingList'
 
 		// Index 0 has no previous token, so it cannot be a member name — and no declaration spells a name
 		// there either, since every one of them is introduced by a keyword that sits before it.
@@ -37876,7 +37966,7 @@ export type Parser
 		// LAST, because it is the only shape that can trigger a build: the three above are O(1) lookarounds,
 		// and a real closing `end` — the overwhelmingly common token this is asked about — reaches here.
 		return self.namesADeclaration(index)
-	end 'keywordIsAName'
+	end 'keywordIsANameAt'
 
 	// Does a DECLARATION spell its NAME at `index` — a function's own name, or one of its parameters' (D8)?
 	//
@@ -37885,23 +37975,7 @@ export type Parser
 	// entry at all (see the field).
 	function namesADeclaration(index TokenIndex) returns bool
 		self.buildDeclaredNameIndex()
-		var lo = 0
-		var hi = self.declaredNameKeywords.count()
-		while lo < hi 'bisect'
-			let mid = lo + (hi - lo) / 2
-			let atMid = try self.declaredNameKeywords.get(mid) otherwise panic("namesADeclaration: declaredNameKeywords.get OOB at {mid} of {self.declaredNameKeywords.count()}")
-			if atMid == index 'hit'
-				return true
-			end 'hit'
-
-			if atMid < index 'above'
-				lo = mid + 1
-			end 'above' else 'below'
-				hi = mid
-			end 'below'
-		end 'bisect'
-
-		return false
+		return ascendingTokenIndexHolds(self.declaredNameKeywords, index: index)
 	end 'namesADeclaration'
 
 	// ⭐ **BUILD `declaredNameKeywords`: the KEYWORD tokens at which a declaration spells a name.** One linear
@@ -38062,7 +38136,14 @@ export type Parser
 	// by every `if`/`while`/`match` after it. It is what lets `blockStatementEndIndex` step OVER a nested
 	// construct in one array read instead of walking through its tokens.
 	//
-	// Idempotent, and the shared-empty `is`-identity of the column is the "have I run?" gate (see the
+	// ⭐⭐ **IT DECIDES `blockKeywordNames` IN THE SAME PASS, AND THAT IS NOT A CONVENIENCE.** Whether a
+	// keyword is block structure or a match-arm case NAME depends on whether a `match` BODY is open around
+	// it (`keywordIsANameAt`), and the only thing that knows is this walk's own opener stack. So the walk
+	// asks the question at each token, from the left context it already holds, and RECORDS the verdict —
+	// which is what lets `keywordIsAName`'s other readers share one answer instead of re-deriving it from a
+	// context none of them has. The two outputs are one derivation and share this routine's gate.
+	//
+	// Idempotent, and the shared-empty `is`-identity of the extent column is the "have I run?" gate (see the
 	// field): the fresh column installed below is what says it has run, whether or not the file opens a
 	// single block.
 	function buildBlockExtentIndex()
@@ -38073,32 +38154,80 @@ export type Parser
 			// token stream. `matchingEndOf` panics on a zero rather than inventing an extent.
 			var extentEnds = TokenIndexColumn.create()
 			extentEnds.resize(tokenCount)
+
+			// ⚠ **BOTH COLUMNS ARE INSTALLED BEFORE THE WALK, AND THE WALK WRITES THROUGH `self`.** The walk
+			// asks `opensBlockAt`, which asks `keywordIsAName`, which asks for this index — so the gate above
+			// has to be SHUT before the first of those calls or the builder re-enters itself forever. Shutting
+			// it early is sound because nothing the walk reaches READS an extent (`matchingEndOf` has no
+			// caller here), and every name-ness read it makes is of a token BEHIND the cursor, already
+			// recorded.
+			self.blockExtentEnds = extentEnds
+			self.blockKeywordNames = TokenIndexColumn.create()
+
 			// The openers not yet closed, innermost last — the bracket-matching stack.
 			var openers = TokenIndexColumn.create()
 
 			var i = 0 as TokenIndex
 			while i < tokenCount 'scan'
+				// BEFORE the two predicates below, because both of them read it back through
+				// `keywordIsAName` for this very token.
+				self.recordBlockKeywordName(i, openers: openers)
+
 				if self.opensBlockAt(i) 'opensBlock'
 					openers.push(i)
 					// UNTERMINATED until a closer says otherwise — the end of the token stream, which is the
 					// tolerant answer `blockStatementEndIndex`'s header states for a construct with no `end`.
 					// Seeded at the PUSH so there is no post-scan drain to keep in step with this loop.
-					try extentEnds.set(i, value: tokenCount) otherwise panic("buildBlockExtentIndex: opener {i} is outside this file's token space")
+					try self.blockExtentEnds.set(i, value: tokenCount) otherwise panic("buildBlockExtentIndex: opener {i} is outside this file's token space")
 				end 'opensBlock' else if self.closesBlockAt(i) 'closesBlock'
 					// A closer with nothing open closes nothing — the same malformed input the walk in
 					// `blockStatementEndIndex` carries straight past on a negative depth.
 					if openers.count() > 0 'hasOpener'
 						let opener = try openers.pop() otherwise panic("buildBlockExtentIndex: pop from an opener stack just checked non-empty")
-						try extentEnds.set(opener, value: i) otherwise panic("buildBlockExtentIndex: opener {opener} is outside this file's token space")
+						try self.blockExtentEnds.set(opener, value: i) otherwise panic("buildBlockExtentIndex: opener {opener} is outside this file's token space")
 					end 'hasOpener'
 				end 'closesBlock'
 
 				i = i + 1
 			end 'scan'
-
-			self.blockExtentEnds = extentEnds
 		end 'notBuiltYet'
 	end 'buildBlockExtentIndex'
+
+	// Is the innermost block still open a `match` — i.e. does the cursor stand at the top level of a match
+	// BODY, which is where an arm spells its case name and the only place one can? Read off the walk's
+	// opener stack, which holds only openers BEHIND the cursor, so the answer is a fact about the left
+	// context and cannot be circular with the extent this same walk is computing.
+	//
+	// A construct nested inside an arm's body pushes its own opener and becomes the innermost, so "the
+	// innermost is a match" is exactly "at the match's own level": an arm body is a statement on the arm's
+	// line, and it cannot re-enter this level without opening a block of its own first.
+	function innermostOpenBlockIsAMatch(openers TokenIndexColumn) returns bool
+		if openers.isEmpty() 'noneOpen'
+			return false
+		end 'noneOpen'
+
+		let innermost = try openers.last() otherwise panic("innermostOpenBlockIsAMatch: the opener stack is non-empty by the guard above and has no last")
+		return self.kindAt(innermost) == TokenKind.match
+	end 'innermostOpenBlockIsAMatch'
+
+	// Decide whether the token at `index` is a keyword standing where block structure could stand but
+	// spelling a NAME, and append it to the ascending memo if it is — the one caller of `keywordIsANameAt`.
+	//
+	// Only the kinds `kindSpellsBlockStructure` admits are offered, because those are the only ones any
+	// reader asks about (`opensBlockAt` early-returns on that set and `closesBlockAt` tests `end` first):
+	// an entry for anything else would be one the bisect can never be asked to match. That gate stands
+	// FIRST, so the stack read below runs at the few tokens that can answer anything and not at every one.
+	function recordBlockKeywordName(index TokenIndex, openers TokenIndexColumn)
+		if not kindSpellsBlockStructure(self.kindAt(index)) 'notBlockStructure'
+			return
+		end 'notBlockStructure'
+
+		if not self.keywordIsANameAt(index, inMatchBody: self.innermostOpenBlockIsAMatch(openers)) 'isBlockStructure'
+			return
+		end 'isBlockStructure'
+
+		self.blockKeywordNames.push(index)
+	end 'recordBlockKeywordName'
 
 	// The index of the `end` that closes the block opened at `index`, or the end of the token stream when
 	// nothing does — O(1) off `buildBlockExtentIndex`'s column.

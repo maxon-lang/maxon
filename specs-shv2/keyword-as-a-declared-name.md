@@ -555,3 +555,103 @@ end 'main'
 ```exitcode
 42
 ```
+
+### The defect the SELF-HOST attempt found — a keyword-named binding OPENING a block header
+
+<!-- test: a-keyword-named-parameter-AS-THE-FIRST-TOKEN-OF-A-CONDITION -->
+⛔⛔ **A BLOCK HEADER'S CONDITION MAY *BEGIN* WITH A KEYWORD-NAMED BINDING, AND THAT PUTS AN ARM
+SEPARATOR IMMEDIATELY AFTER THE BLOCK KEYWORD.** `keywordIsAName` read a keyword followed by
+`gives`/`then`/`to`/`upto`/`or` as a match-arm case name, on the stated premise that *"a control keyword
+is NEVER followed by a match-arm separator in real control flow — `if` takes a condition, `while` a
+condition"*. This rule falsified that premise in a file the premise never mentions: a condition is an
+expression, an expression may start with a NAME, and five of Maxon's separators are declarable as names.
+So `if to >= from 'forward'` is an `if` whose next token is `to` — read as an arm, it opened no block,
+its `end` closed one that never opened, the extent index shifted, and `assertScanAligned` took the
+compiler down on a program the bootstrap compiles and runs.
+
+⚠ **IT WAS NOT A CONSTRUCTED CASE — it is `maxon-shv2/Compiler/Targets/Shared/GlobalDataTable.maxon:127`,
+`function twosComplementDistance(to ByteOffset, from ByteOffset)`, and it was the FIRST error shv2 hit
+compiling its own source.** The cure is to ask the arm lookahead only where an arm can stand: at the top
+level of a `match` BODY, which the block-extent walk's own opener stack knows and no bounded lookaround
+can see (`keywordIsANameAt`). The case below reads `to` first in an `if`, in a `while` and as a `match`
+SCRUTINEE — the three headers whose next token is an expression — and every one of them was a panic.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function twosComplementDistance(to Integer, from Integer) returns Integer
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+
+	return (from - to) * -1
+end 'twosComplementDistance'
+
+function span(to Integer, from Integer) returns Integer
+	var acc = 0
+	var k = from
+	while to > k 'spin'
+		acc = acc + 1
+		k = k + 1
+	end 'spin'
+
+	return acc
+end 'span'
+
+function weight(to Integer) returns Integer
+	return match to 'pick'
+		1 gives 100
+		2 gives 4
+		default gives 0
+	end 'pick'
+end 'weight'
+
+function main() returns ExitCode
+	return (twosComplementDistance(50, from: 8) + span(4, from: 1) + weight(2)) as ExitCode
+end 'main'
+```
+```exitcode
+49
+```
+
+<!-- test: a-keyword-named-condition-BESIDE-keyword-named-match-arms -->
+⭐⭐ **THE DISCRIMINATING CASE: both readings of the same lookahead, alive in one program.** The scoping
+above is only right if the arm lookahead still FIRES where an arm really stands, and the two shapes are
+spelled with the same two tokens. `end gives 4` inside the match body is a keyword-named case name whose
+next token is a separator; `if to >= from 'forward'` outside it is a block header whose next token is
+that same separator kind. Drop the scoping and the second panics; drop the lookahead and the first is a
+closing `end` that ends the arm list early (`E2026 … not exhaustive`). Only a program holding both pins
+which of the two the walk is answering.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Kw
+	function
+	end
+	if
+	other
+end 'Kw'
+
+function score(k Kw) returns Integer
+	return match k 'classify'
+		function gives 1
+		end gives 4
+		if gives 8
+		other gives 16
+	end 'classify'
+end 'score'
+
+function gap(to Integer, from Integer) returns Integer
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+
+	return 0
+end 'gap'
+
+function main() returns ExitCode
+	return (score(Kw.end) + gap(46, from: 8)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
