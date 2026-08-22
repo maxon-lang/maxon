@@ -66360,7 +66360,12 @@ export type Parser
 			self.skipNewlines()
 			let elemTok = self.current()
 			let elem = try self.evalConstArrayElement(stack)
-			if constArrayElementKindOf(elem) != element 'mixed'
+			// ⚠ **`constArrayElementsAgree` AND NOT `constArrayElementKindOf(…) != element`, because a KIND
+			// STOPPED BEING THE WHOLE IDENTITY when enum elements arrived.** `[Reg.rcx, CharClass.other]` is two
+			// enums and one kind: compared on kind alone it would be accepted, and then typed from whichever
+			// element the walk happened to see first. The comparison is against the FIRST element for that
+			// reason — it is the one the instance is built from.
+			if not constArrayElementsAgree(elem, b: first) 'mixed'
 				throw ConstEvalError.defective(ParseError.unsupported(MixedArrayLiteralElementsMessage, line: elemTok.line, column: elemTok.column))
 			end 'mixed'
 			elements.push(elem)
@@ -66578,6 +66583,16 @@ export type Parser
 
 		let tok = self.current()
 		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
+
+		// ⭐ **A PAYLOAD-FREE ENUM CASE IS AN ELEMENT** — `[X64Register.rcx, X64Register.rdx, …]`, which is how
+		// three of shv2's own backends write their register tables. The scalar walk already folded it to its
+		// TAG and tagged the value `named` (see `evalConstNamed`), so nothing is decided here beyond keeping
+		// the enum's spelling with the element: the array it makes is an `Array with <the enum>`, and
+		// `constArrayValueType` reads that name off element 0.
+		if value.tag == ValueTypeTag.named 'enumCaseElement'
+			return ConstArrayElement.enumCase(value.payload, typeName: value.typeName)
+		end 'enumCaseElement'
+
 		if value.tag != ValueTypeTag.integer 'notAnInteger'
 			throw ConstEvalError.defective(ParseError.unsupported("a top-level array literal element of type '{typeTagName(value.tag)}' — a constant array's elements are integers or String literals", line: tok.line, column: tok.column))
 		end 'notAnInteger'

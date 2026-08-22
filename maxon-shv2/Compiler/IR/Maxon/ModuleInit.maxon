@@ -484,6 +484,13 @@ function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, rang
 		// shv2: `Parser.emitCharacterLiteral` emits the same `stringLiteral` op and the same `__str_clone`
 		// promotes it, and the tag is what makes the value a `Character` for the set's key check.
 		character(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.character, range: range)
+		// ⭐ **AN ENUM CASE IS THE INTEGER ARM, and it is written out rather than folded into it because the
+		// two bind different shapes.** A payload-free enum's value IS its tag, so the slot takes the same i64
+		// the integer arm stores — and it is typed `integer` here for the same reason `emitEnumTagLiteral`
+		// types its op that way: the ELEMENT TYPE is the array instance's business (`Array with Reg`, fixed by
+		// `constArrayValueType`), and this is the STORAGE. The enum's name is carried on the element for the
+		// instance to be built from, and is not wanted here.
+		enumCase(payload, _) gives fn.emitTypedLiteral(payload, valueType: MaxonType.integer, range: range)
 	end 'element'
 end 'elementRecordOf'
 

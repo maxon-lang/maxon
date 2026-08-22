@@ -309,6 +309,7 @@ let ConstShapeArrayValue = 48 as ContentHash
 // are different types, and a reader types its load from the instance this picks.
 let ArrayElementShapeInteger = 49 as ContentHash
 let ArrayElementShapeString = 50 as ContentHash
+let ArrayElementShapeEnumCase = 107 as ContentHash
 
 // The FIFTH shape a top-level binding's answer hashes under (spec-port `ownership`): it folded to a
 // CONTAINER FACTORY CALL. Its own discriminator for `ConstShapeArrayValue`'s reason — `var g = [1, 2]`
@@ -879,6 +880,12 @@ export union ConstArrayElement
 	// `['a', 'b']` is refused exactly as it was. What `CharSet from ['a', 'e']` supplies that a bare bracket
 	// list cannot is the INSTANCE, which is why the element is admitted there and nowhere else.
 	character(bytes ByteArray)
+	// ⭐ **A PAYLOAD-FREE ENUM CASE element** — `[X64Register.rcx, X64Register.rdx, …]`, which is how three of
+	// shv2's own backends write their register tables. It is a SCALAR like `integer` (its value is the case's
+	// tag, an i64) and differs from it in exactly one thing: the array it makes is an `Array with <the enum>`
+	// and not an `Array with Integer`, so the element carries the enum's SPELLING for `constArrayValueType`
+	// to type the instance from. Bytes and not an interned id, for `ConstValue.typeName`'s reason.
+	enumCase(payload ParsedInt, typeName ByteArray)
 end 'ConstArrayElement'
 
 export typealias ConstArrayElementArray = Array with ConstArrayElement
@@ -908,6 +915,11 @@ function constSetMemberKeyTag(element ConstArrayElement) returns ValueTypeTag
 		integer gives ValueTypeTag.integer
 		string gives ValueTypeTag.string
 		character gives ValueTypeTag.character
+		// A `Set from […]` of enum cases is not spellable: `evalConstArrayElement` produces the enum arm, and
+		// the set walk STATES its instance from an alias rather than inferring it — so an enum member would
+		// have to be admitted by `requireSetKeyType` first, which refuses it (E2015, int and String only).
+		// It says so rather than answering, exactly as the `character` arm of `constArrayElementKindOf` does.
+		enumCase panic("constSetMemberKeyTag: an enum-case member has no set key tag — a `Set` admits int and String keys only (`requireSetKeyType`), so no set literal can produce this element")
 	end 'e'
 end 'constSetMemberKeyTag'
 
@@ -921,6 +933,11 @@ end 'constSetMemberKeyTag'
 export enum ConstArrayElementKind
 	integer
 	string
+	// The enum-element kind. It carries NO name of its own — the kind says WHICH FAMILY the array belongs to
+	// and the name lives on the ELEMENT, which is where the walk already has it. Two arrays of different
+	// enums are the same KIND and different arrays, which is why `constArrayElementsAgree` compares the name
+	// as well and the homogeneity check asks it rather than comparing kinds directly.
+	enumCase
 end 'ConstArrayElementKind'
 
 // The classification of one folded element — the single bridge between `ConstArrayElement` (what an element
@@ -930,6 +947,7 @@ export function constArrayElementKindOf(element ConstArrayElement) returns Const
 	return match element 'e'
 		integer gives ConstArrayElementKind.integer
 		string gives ConstArrayElementKind.string
+		enumCase gives ConstArrayElementKind.enumCase
 		// ⚠ **A CHARACTER ELEMENT HAS NO ARRAY KIND, AND THAT IS THE INVARIANT RATHER THAN AN OMISSION.**
 		// This function's whole job is what an ARRAY LITERAL infers its instance from, and no array literal
 		// can hold one: `evalConstArrayElement` has no character arm, because a character literal is not a
@@ -943,12 +961,54 @@ end 'constArrayElementKindOf'
 // rather than answering: a String element makes the array's instance MANAGED, and
 // `arrayElementMayBeConstantBlob` — which every caller of this asks first — refuses a managed element
 // because its slot holds a loader-chosen address rather than a value an image can contain.
+// ⭐⭐ **DO TWO ELEMENTS BELONG IN ONE ARRAY?** The homogeneity test, and it is a FUNCTION rather than the
+// `!=` on kinds it replaced because a kind stopped being the whole identity: `[Reg.rcx, CharClass.other]`
+// is two enums and one KIND, and compared on kind alone it would have been accepted and typed from whichever
+// element happened to come first. The name is compared for the enum kind and for no other, because no other
+// element kind has one.
+export function constArrayElementsAgree(a ConstArrayElement, b ConstArrayElement) returns bool
+	if constArrayElementKindOf(a) != constArrayElementKindOf(b) 'differentKinds'
+		return false
+	end 'differentKinds'
+
+	return constArrayElementEnumName(a).equals(constArrayElementEnumName(b))
+end 'constArrayElementsAgree'
+
+// The enum an element belongs to, or EMPTY for every element kind that names none. Empty is the truth about
+// them rather than a sentinel, and it is what lets the comparison above be one `equals` instead of a second
+// match on the kind.
+export function constArrayElementEnumName(element ConstArrayElement) returns ByteArray
+	return match element 'e'
+		enumCase(_, typeName) gives typeName
+		integer to character gives EmptySourceText
+	end 'e'
+end 'constArrayElementEnumName'
+
+// ⭐⭐ **WHICH ENUM A TOP-LEVEL ARRAY LITERAL'S ELEMENTS BELONG TO — or EMPTY when they belong to none.**
+// The FIRST element fixes it, which is the rule the whole literal is typed by (`constArrayValueType`), and
+// `constArrayElementsAgree` has already established that every other element names the same enum — so
+// reading element 0 is reading all of them.
+//
+// ⚠ **TWO READERS, AND THE SECOND IS THE ONE THAT MAKES THIS A FUNCTION RATHER THAN A LINE.** The instance
+// builder needs it to type the array, and the CONTENT HASH needs it to tell two enum arrays apart — see
+// `mixArrayElementKind`, where leaving it out is a stale-cache bug and not a coarse key.
+export function constArrayLiteralEnumName(elements ConstArrayElementArray) returns ByteArray
+	if elements.count() == 0 'noElements'
+		return EmptySourceText
+	end 'noElements'
+
+	return constArrayElementEnumName(try elements.get(0) otherwise panic("constArrayLiteralEnumName: elements.get(0) OOB below a count just checked non-zero"))
+end 'constArrayLiteralEnumName'
+
 export function constArrayElementScalar(element ConstArrayElement) returns ParsedInt
 	return match element 'e'
 		integer(payload) gives payload
 		// A String and a Character element alike hold a heap address, which is why `arrayElementMayBeConstantBlob`
 		// refuses the instance before this is asked — and a Character element cannot reach a blob at all, its
 		// container being a `Set` rather than an `Array`.
+		// An enum case's image is its TAG, exactly as an integer element's is its number — the same i64 in the
+		// same slot, which is what makes an enum array a constant blob at all.
+		enumCase(payload, _) gives payload
 		string to character panic("constArrayElementScalar: a managed element has no constant image — its slot holds a heap address, which is why `arrayElementMayBeConstantBlob` refuses the instance before this is asked")
 	end 'e'
 end 'constArrayElementScalar'
@@ -13249,7 +13309,7 @@ export type ProgramSignatures
 			// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reads as a managed `var` does — a POINTER slot holding the
 			// heap record `__module_init` built. It is the one arm `mutable` can arrive `false` from, and that
 			// bit is the whole of what makes `Live.push(1)` an E3019 and `Live = […]` an E2013.
-			arrayValue(_, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constArrayValueType(element), mutable: decl.mutable)
+			arrayValue(elements, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constArrayValueType(element, elements: elements), mutable: decl.mutable)
 			// ⭐ A CONTAINER FACTORY reads as an array literal does — a POINTER slot holding the record
 			// `__module_init` built — and its type needs no inference at all: the alias named the instance.
 			containerValue(giid, _) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.genericInstance(giid), mutable: decl.mutable)
@@ -13298,10 +13358,15 @@ export type ProgramSignatures
 	// Both are a pure LOOKUP here: the declaration sweep interns them whenever a file's tokens contain a `[`
 	// (plus a following string literal for the String one), which every array initializer does by definition
 	// — the same sweep-writes/parser-reads discipline `internBuiltinIntegerInstance` states.
-	export function constArrayValueType(element ConstArrayElementKind) returns MaxonType
+	export function constArrayValueType(element ConstArrayElementKind, elements ConstArrayElementArray) returns MaxonType
 		return match element 'e'
 			integer gives MaxonType.genericInstance(self.internBuiltinIntegerInstance(self.arrayRecordBaseName()))
 			string gives MaxonType.genericInstance(self.builtinInstanceForElement(self.arrayRecordBaseName(), element: MaxonType.string))
+			// ⭐ **THE ENUM'S NAME COMES FROM THE ELEMENTS, NOT FROM THE KIND** — the kind says which FAMILY the
+			// array belongs to and the elements carry which enum, because that is where the walk had it. The
+			// FIRST element fixes the instance and `constArrayElementsAgree` has already established that every
+			// other one names the same enum, so reading element 0 is reading all of them.
+			enumCase gives MaxonType.genericInstance(self.builtinInstanceForElement(self.arrayRecordBaseName(), element: MaxonType.named(self.typeNames.intern(constArrayLiteralEnumName(elements)))))
 		end 'e'
 	end 'constArrayValueType'
 
@@ -14155,7 +14220,7 @@ export type ProgramSignatures
 		match value 'folded'
 			scalar(folded) then panic("ProgramSignatures.foldedValueType: a folded scalar of tag '{typeTagName(folded.tag)}' names no record type — a scalar occupies its slot as a VALUE, and every caller splits the two before asking")
 			managed(_, kind) then return self.managedConstValueType(kind, elementFilePath: elementFilePath)
-			arrayLiteral(_, element) then return self.constArrayValueType(element)
+			arrayLiteral(elements, element) then return self.constArrayValueType(element, elements: elements)
 			containerCreate(giid, _) then return MaxonType.genericInstance(giid)
 		end 'folded'
 	end 'foldedValueType'
@@ -14392,7 +14457,7 @@ export type ProgramSignatures
 			// the load is typed with, and `[1]` becoming `["a"]` retypes every use — and the LABEL, which is
 			// the slot the emitted `globalAddr` names. Mixing the elements too would be SOUND and WRONG: the
 			// "sound, and useless" key that re-parses the program on every keystroke in any initializer.
-			arrayValue(_, element) then return mixBytes(self.mixArrayElementKind(mix(keyed, value: ConstShapeArrayValue), element: element), bytes: decl.dataLabel)
+			arrayValue(elements, element) then return mixBytes(self.mixArrayElementKind(mix(keyed, value: ConstShapeArrayValue), element: element, enumName: constArrayLiteralEnumName(elements)), bytes: decl.dataLabel)
 			// ⭐ **A CONTAINER FACTORY MIXES ITS INSTANCE AND ITS LABEL** — the array-literal arm's two facts,
 			// with the instance stated outright instead of inferred from an element kind. There are no
 			// elements to leave out.
@@ -14444,10 +14509,19 @@ export type ProgramSignatures
 	// Mix an array binding's ELEMENT kind (P1.7 slice 2b) — `mixManagedKind`'s twin, and its own
 	// discriminator per kind for the same reason: `Array with Integer` and `Array with String` are different
 	// types, so every reader's load is typed differently and a memo that did not move would keep the old one.
-	function mixArrayElementKind(state ContentHash, element ConstArrayElementKind) returns ContentHash
+	function mixArrayElementKind(state ContentHash, element ConstArrayElementKind, enumName ByteArray) returns ContentHash
 		return match element 'e'
 			integer gives mix(state, value: ArrayElementShapeInteger)
 			string gives mix(state, value: ArrayElementShapeString)
+			// ⛔⛔ **THE ENUM'S NAME IS MIXED, AND LEAVING IT OUT IS A STALE-CACHE BUG RATHER THAN A COARSE
+			// KEY.** This arm's two neighbours can hash a shape alone because their kind IS their element type;
+			// `enumCase` is a FAMILY, and `Array with Reg` and `Array with CharClass` are different types with
+			// different instances. The elements themselves are deliberately NOT hashed (see the caller: an
+			// array global's readers depend on its LABEL and its element TYPE, never on its values), so the
+			// name is the only thing standing between two enum arrays — without it, editing `[Reg.rcx]` to
+			// `[CharClass.other]` keeps the kind and keeps the label, and every reader is answered from the
+			// other's parse.
+			enumCase gives mixBytes(mix(state, value: ArrayElementShapeEnumCase), bytes: enumName)
 		end 'e'
 	end 'mixArrayElementKind'
 

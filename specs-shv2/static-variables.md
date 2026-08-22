@@ -2508,3 +2508,87 @@ end 'main'
 ```maxoncstderr
 error E2015: specs/fragments/static-variables/error.a-boxed-unions-case-is-still-not-a-constant.test:9:20: Unsupported: `Boxed.plain` in a constant initializer — a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
 ```
+
+### AN ARRAY LITERAL OF ENUM CASES
+
+⭐⭐ **AND SO IS AN ARRAY OF THEM.** The scalar half above folds `let JumpTableBaseReg = X64Register.r10`;
+this is the same fact one level down — `let calleeSavedOrder = [X64Register.rbx, X64Register.r12, …]`
+(`Targets/X64/X64PrologueEpilogue.maxon:123`), which is how three of shv2's own backends write their
+register tables, plus the lexer's 256-entry `charClassTable`.
+
+⚠ **THE ELEMENT CARRIES THE ENUM'S NAME AND THE KIND DOES NOT, which is not an arbitrary split.** The KIND
+says which FAMILY the array belongs to; the enum's spelling lives on the ELEMENT because that is where the
+walk has it. `constArrayValueType` reads it off element 0 — the first element fixes the instance — and the
+homogeneity test compares the name as well as the kind.
+
+⛔ **THAT COMPARISON HAD TO CHANGE, and the old one would have accepted a program with no type.**
+`constArrayElementKindOf(elem) != element` was the whole test, and it is a KIND comparison:
+`[Reg.rcx, CharClass.tab]` is two enums and ONE kind, so it would have been accepted and then typed from
+whichever element the walk saw first. `constArrayElementsAgree` compares the name for the enum kind and
+for no other, because no other element kind has one.
+
+⛔⛔ **AND THE CONTENT HASH NEEDED THE NAME TOO.** An array global's readers depend on its LABEL and its
+element TYPE and deliberately NOT on its values — so the elements are not hashed, and without the name
+`[Reg.rcx]` and `[CharClass.other]` have the same kind and the same label, hash identically, and a file
+edited from one to the other is answered from the other's parse. Its two neighbours can hash a shape alone
+because their kind IS their element type; `enumCase` is a family.
+
+<!-- test: an-array-literal-of-enum-cases-is-a-top-level-constant -->
+Read three ways — iterated, counted, and indexed — because the instance is what the fix is about and each
+reads it differently.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Reg
+	rcx
+	rdx
+	rax
+	r10
+end 'Reg'
+
+let calleeSaved = [Reg.rcx, Reg.rdx, Reg.r10]
+
+function ordinalOf(r Reg) returns Integer
+	return r.ordinal
+end 'ordinalOf'
+
+function main() returns ExitCode
+	var total = 0
+	for r in calleeSaved 'each'
+		total = total + ordinalOf(r)
+	end 'each'
+	let first = try calleeSaved.get(0) otherwise panic("get")
+	print("count={calleeSaved.count()} total={total} first={ordinalOf(first)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+count=3 total=4 first=0
+```
+
+<!-- test: error.an-array-literal-may-not-mix-two-enums -->
+⭐ **THE CASE THE OLD KIND-ONLY COMPARISON WOULD HAVE LET THROUGH.** Two enums, one kind. Accepted, this
+array would have been typed `Array with Reg` and hold a `CharClass` in its second slot.
+```maxon
+enum Reg
+	rcx
+	rdx
+end 'Reg'
+
+enum CharClass
+	other
+	tab
+end 'CharClass'
+
+let mixed = [Reg.rcx, CharClass.tab]
+
+function main() returns ExitCode
+	return mixed.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/static-variables/error.an-array-literal-may-not-mix-two-enums.test:12:23: Unsupported: an array literal with mixed element types — every element must have the same type as the first
+```
