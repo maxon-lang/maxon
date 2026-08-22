@@ -1610,8 +1610,10 @@ one instance for every reader, which is exactly the distinction the `Byte$0_200`
 RANGE — the range is per-file and enforced where the file is known, so a reader with no file reading it
 would be reading a stranger's bounds"* — and interning has no reader file.
 
-⇒ **TWO ROUTES REMAIN, and the choice is the first thing the next attempt owes:**
-- **(a) A POST-SWEEP MERGE.** Leave interning alone; once `queryProgramSignatures` is complete — and the
+⇒ **TWO ROUTES REMAINED. ⚖ THE USER CHOSE (a), THE POST-SWEEP MERGE (2026-08-22)** — "same range ⇒ one
+instance" is to be literally true, not merely observably true, so two symbols for one type is not an
+acceptable resting place.
+- **⚖ (a) A POST-SWEEP MERGE — CHOSEN.** Leave interning alone; once `queryProgramSignatures` is complete — and the
   alias registry with it — walk the instance registry and merge instances whose arguments denote the same
   type, rewriting gids through one mapping. Faithful to the ruling ("same range ⇒ one instance"), and the
   only moment the question is answerable. Cost: every holder of a gid must be remapped, and the mangled
