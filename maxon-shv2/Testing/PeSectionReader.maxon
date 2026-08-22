@@ -443,14 +443,31 @@ let NulByte = 0 as Byte
 // Re-deriving them here — a second opinion about what `3.14` is, rounding and all — would let the
 // gate and the compiler agree on a wrong answer, or disagree on a right one. `int.fromString`
 // cannot read it at all, which is the reported reason these two cases sat disabled.
+//
+// ⭐⭐ **IT REACHES THAT ONE PARSER THROUGH `float.fromString`, NOT THROUGH `__float_bitsFromText`
+// DIRECTLY, AND THE DIFFERENCE IS A NAMESPACE RULE RATHER THAN A CONVERSION (G17 defect 3).** The
+// reader IS `__float_bitsFromText` either way: `stdlib/Builtins.maxon:276`'s `__float_fromString` is
+// nothing but that call plus a `__Builtins.bitsToFloat`, so `floatToBits(float.fromString(t))` is a
+// bitcast round trip around the identical bits — exact for a signed zero, a subnormal and a
+// 21-significant-digit literal alike, because a bitcast pair cannot round. What the direct spelling
+// costs is COMPILABILITY: shv2's `requireCalleeIsNotReservedName` exempts the reserved `__` space only
+// for calls made from inside `Builtins.maxon` itself, so this file — user code as far as the compiler
+// is concerned — was refused with `E3004`, one of the eight defects between shv2 and its own harness.
+// `__Builtins.`-qualified callees short-circuit that check, which is why the second half stays direct.
+//
+// ⚠ **THE TWO FAILURE ARMS STILL COLLAPSE TO ONE THROW, AND THEY STILL HAVE TO.** `__FloatTextResult`
+// distinguishes `overflow` from `malformed`; `ParseError` — which `float.fromString` throws — has the
+// single `invalidFormat` arm and may not grow another (an error enum in `stdlib/` is language surface).
+// That loses nothing here for the reason the previous shape stated outright: a `RequiredData f64` line
+// whose text is not a number is a bad line however it is bad.
+//
+// ⚠ **AN ACCEPTED, STATED RISK: `float.fromString` SEGFAULTS ON arm64-macOS** (PLAN row `A5b`) while
+// answering correctly on every other lane. arm64 is a remote, opt-in, never-blocking lane, so this does
+// not gate the change — but the `RequiredData` gate now inherits that defect on that host, knowingly.
 function parseTypedValueBits(typeName String, text String) returns ParsedInt throws TypedValueError
 	if typeName == F64TypeName 'float'
-		// Both failure arms are the SAME answer here — a `RequiredData f64` line whose text is not a
-		// number is a bad line however it is bad — so they share one arm rather than repeating it.
-		match __float_bitsFromText(text) 'decoded'
-			bits(value) then return value
-			overflow to malformed then throw TypedValueError.badNumber(typeName, text: text)
-		end 'decoded'
+		let value = try float.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
+		return __Builtins.floatToBits(value)
 	end 'float'
 	return try int.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
 end 'parseTypedValueBits'
