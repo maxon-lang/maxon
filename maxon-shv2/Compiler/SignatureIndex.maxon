@@ -7082,6 +7082,32 @@ export type GenericAliasEntry
 		return Self{aliasName: qualifiedName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, baseIsBuffer: self.baseIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: self.sweptInstance, sweptInstanceRecorded: self.sweptInstanceRecorded, fixedSize: self.fixedSize, selfRefLine: self.selfRefLine, selfRefColumn: self.selfRefColumn, typeScoped: true}
 	end 'scopedToEnclosingType'
 
+	// ⭐⭐ **THE FILE-SCOPE NAME OF A NESTED DECLARATION — the same declaration under its BARE member**
+	// (G17). `scopedToEnclosingType`'s twin: that copy carries the `<Type>.<member>` key a BODY reads, this one
+	// the bare key a FILE reads. `Parser.publishNestedGenericAlias` is the sole caller and carries the rule for
+	// which nested declarations get one.
+	//
+	// ⚠⚠ **`typeScoped` STAYS TRUE THOUGH THE NAME IS BARE, AND THAT FIELD IS THE WHOLE OF THE DIFFERENCE
+	// BETWEEN THIS AND A FILE-SCOPE `typealias`.** It is what `nameInstancesFromDeclarations` rounds on: an
+	// UNSCOPED spelling claims an instance's display name FIRST, a type-scoped one only when nothing unscoped
+	// named it. MEASURED with it false: `type String`'s `typealias ByteMemory = __ManagedMemory with Byte`
+	// (`stdlib/String.maxon:50`) took the display name of `Array with Byte` away from `stdlib/File.maxon`'s
+	// file-scope `ByteArray`, so every diagnostic quoting that type changed word — *expected 'Bytes', got
+	// 'ByteMemory'*. That build (which also lacked `publishNestedGenericAlias`'s two gates) read ten corpus
+	// failures across five specs and 839 drifting golden fragments; SEVEN of the ten are this field's ALONE
+	// — `String` and `Character` are not generic, so their `ByteMemory` reaches this door whatever those
+	// gates say. The bare key is a way to WRITE the type, never a claim on how the compiler QUOTES it.
+	//
+	// ⚠⚠ **AND THE SOURCE ANCHOR MUST NOT RIDE.** `recordGenericAlias` files a `GenericInstantiationSite`
+	// for every entry whose `nameLine` is non-zero, and `instantiationSites()` is what the E3017
+	// where-constraint check walks — so an anchored second copy reports every violation TWICE at the identical
+	// position. The E2012 cycle blame is the same shape one door over (`firstCyclicAliasDecl` picks ONE
+	// declaration to report at, and `reportGenericAliasCycle` reads its anchors). One declaration, one anchor:
+	// the qualified copy keeps it, and this one is a NAME rather than a site.
+	export function asBareFileScopeName() returns GenericAliasEntry
+		return Self{aliasName: self.aliasName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, baseIsBuffer: self.baseIsBuffer, nameLine: 0, nameColumn: 0, filePath: self.filePath, visibility: self.visibility, sweptInstance: self.sweptInstance, sweptInstanceRecorded: self.sweptInstanceRecorded, fixedSize: self.fixedSize, selfRefLine: 0, selfRefColumn: 0, typeScoped: true}
+	end 'asBareFileScopeName'
+
 	// The instance this declaration names. Precondition: the entry came from `genericAliasDecls`, which
 	// `recordGenericAlias` fills with `recorded` copies exclusively.
 	export function internedInstance() returns GenericInstanceId

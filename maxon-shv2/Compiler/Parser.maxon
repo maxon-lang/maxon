@@ -16817,7 +16817,9 @@ export type Parser
 			// bare references resolve while the sweep is still building the whole-program index) AND keyed
 			// whole-program — a RANGED alias by `base.member` into `innerAliases`, a GENERIC-INSTANCE alias
 			// (`Array with T`) under its base-qualified name into `genericAliases` (so `Container.ElementArray`
-			// resolves the way a top-level `IntBox` does, and stays distinct from another type's `ElementArray`).
+			// resolves the way a top-level `IntBox` does, and stays distinct from another type's `ElementArray`),
+			// and — when the type is not generic and the member is not the type's own name — under its BARE
+			// member too, which is the file-scope reading `publishNestedGenericAlias` carries the rule for.
 			// Tolerant, like `readStructFieldInto`: a malformed nested alias is the real parse's to report, and
 			// stopping here leaves the remaining tokens to the robust outer walk.
 			if depth == 0 and self.atTypeAliasDeclaration() 'isInnerAlias'
@@ -16825,7 +16827,7 @@ export type Parser
 				let nested = try self.readNestedTypeAlias(nestedVisibility, recordFunctionSignature: false, tupleOwner: TupleAliasOwner.enclosingType(self.enclosingType)) otherwise break
 				match nested 'nested'
 					ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: alias))
-					genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
+					genericInstance(entry) then self.publishNestedGenericAlias(entry, into: genericAliasOut)
 					// A TUPLE alias is keyed whole-program by the reader itself, under the `<Type>.<member>` name
 					// `TupleAliasOwner.enclosingType` just gave it — there is no per-declaration column for it to
 					// land in, because it mints no identity of its own (see `NestedAliasResult`).
@@ -19218,6 +19220,9 @@ export type Parser
 	// stamps the field type with (`joinQualifiedName`), so the field's stored `named("Container.ElementArray")`
 	// and this `genericAliases` key are one string.
 	//
+	// ⚠ It is only HALF of what a `type` body's nested alias is published under — see
+	// `publishNestedGenericAlias`, which files this copy plus, for a plain type, a bare file-scope one.
+	//
 	// ⚠ **IT RE-KEYS AND RECORDS THE SCOPING — `scopedToEnclosingType`, not a rebuild through `create`.** A
 	// nested alias is a declaration a person wrote in a file, and every fact `readGenericInstanceAlias`
 	// captured about it (its declaring FILE above all, but also its visibility, its `Vector` size and its
@@ -19228,6 +19233,60 @@ export type Parser
 	function qualifiedInnerGenericAlias(entry GenericAliasEntry) returns GenericAliasEntry
 		return entry.scopedToEnclosingType(joinQualifiedName(self.enclosingType, member: entry.aliasName))
 	end 'qualifiedInnerGenericAlias'
+
+	// ⭐⭐ **A NESTED GENERIC-INSTANCE ALIAS OF A PLAIN `type` IS PUBLISHED UNDER TWO KEYS (G17)** —
+	// `publishNestedFunctionAlias`'s twin one alias FORM over, and the asymmetry between the two was the
+	// defect. A nested `typealias Fn = function(…)` has been filed under BOTH its bare name and
+	// `<Type>.<member>` since W49b, the bare one being *"the file-scope reading this form has always had"*;
+	// a nested `typealias Bag = Array with Num` was filed under the qualified name ALONE. So a member of a
+	// non-generic type had no spelling outside its own body, and neither did any signature built on it:
+	// `stdlib/Directory.maxon:12`'s `FilePathArray` is what `Directory.list` RETURNS, and no other file could
+	// write that type — `FilePathArray.create()` typed its result `unknown` (E2015 at the next member
+	// access) and `returns FilePathArray` was E3011. The compiler routed around it rather than fixing it
+	// (`Compiler.maxon`'s `MaxonSourcePathArray`), which is how the hole survived.
+	//
+	// ⚠⚠ **A GENERIC TYPE'S MEMBER GETS NO BARE KEY, AND THE PRICE OF PUBLISHING ONE IS MEASURED RATHER
+	// THAN FEARED.** Such a member is PER-INSTANCE — `Wrapper with A`'s `Idx` and `Wrapper with B`'s are
+	// distinct types (`per-instance-typealias.md`'s `wrong-instance-error`) — so there is no one type for a
+	// file-scope name to denote, and the entry it would file names the enclosing type's own PARAMETER.
+	// MEASURED on the ungated build: a free function writing `firstOf(b Bag)` over `type Holder uses T`'s
+	// `Bag = Array with T` was not refused but MISCOMPILED, reaching the layout-descriptor refusal
+	// (*"takes a reference to a borrowed type-parameter value"*) for a program whose actual defect is that
+	// `Bag` names nothing outside `Holder`. `stdlib` alone would have filed FIVE disagreeing `ElementArray`
+	// declarations (`Array.maxon:566`, `Builtins.maxon:56`, `Interfaces.maxon:195`, `List.maxon:13`,
+	// `Set.maxon:12`) — a contest over a name no program can legally write.
+	//
+	// ⚠⚠ **AND A MEMBER SPELLED LIKE ITS OWN TYPE GETS NONE EITHER, WHICH IS `namesEnclosingType`'s RULE
+	// READ AT THE PUBLISH DOOR RATHER THAN A SECOND ONE.** `inner-alias-construction.md`'s
+	// `an-inner-alias-shadowing-its-own-type` pins that `type Holder` declaring `typealias Holder = Array with
+	// …` still means the TYPE at `Holder.create()`; a bare key makes that declaration indistinguishable from
+	// a file-scope alias, which WINS at the static door (`inner-alias-shadowing-another-type-wins-at-the-static
+	// -door`). MEASURED: all three of that spec's shadowing cases went red, `Holder.create()` building the
+	// array. The read door already refuses the name for this reason — asking the same predicate here is what
+	// keeps the two from drifting.
+	//
+	// ⚠ **ONLY A `type` BODY REACHES THIS — an `extension` body is deliberately left publishing the
+	// qualified key alone.** `foldExtensionDeclarationInto` reads a body once per CONFORMER
+	// (`extensionTargetConformers`), so a bare key filed from there is ONE name for N declarations that are
+	// allowed to disagree: `stdlib/Interfaces.maxon`'s `extension Iterable` would file `ElementArray` as
+	// `Array with Character` for `String` and `Array with Byte` for `ByteView`, from one file, which no
+	// contest can separate. That is the eleven-signature shape W49b measured for the function form, which
+	// that form carries as a wart rather than as a thing to copy. Nothing needs it: an extension's member is
+	// already spelled from any `extension` over the same type through the `<Type>.<member>` key
+	// (`per-instance-typealias.md`'s `cross-file-extension-declares-the-generic-instance-member`).
+	function publishNestedGenericAlias(entry GenericAliasEntry, into GenericAliasEntryArray)
+		into.push(self.qualifiedInnerGenericAlias(entry))
+
+		if not self.enclosingTypeParams.isEmpty() 'aGenericTypesMemberIsPerInstance'
+			return
+		end 'aGenericTypesMemberIsPerInstance'
+
+		if self.namesEnclosingType(entry.aliasName) 'theTypesOwnNameStillMeansTheType'
+			return
+		end 'theTypesOwnNameStillMeansTheType'
+
+		into.push(entry.asBareFileScopeName())
+	end 'publishNestedGenericAlias'
 
 	// ⭐⭐ **A NESTED FUNCTION ALIAS IS PUBLISHED UNDER TWO KEYS, AND THEY ANSWER TWO DIFFERENT QUESTIONS
 	// (W49b).** The BARE name is the file-scope reading this form has always had and which the corpus pins —

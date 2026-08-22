@@ -740,3 +740,263 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:38:11: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'
 ```
+
+## A NON-GENERIC type's member has a FILE-SCOPE name; a generic type's member does not
+
+Everything above is about which BODY may spell a member — the declaring type's own, or an `extension`
+over it. This is the third reader, and it is the one with no enclosing type open at all: **file scope**.
+
+A `type` that takes no parameters has exactly one instance, so a `typealias` written in its body
+denotes one type for the whole program. Until that name can be written from outside, the member is
+unspellable and so is every signature built on it: `stdlib/Directory.maxon:12` declares
+`typealias FilePathArray = Array with FilePath` inside `type Directory`, and `Directory.list()` returns
+it — so no other file could declare a variable, a parameter or a return of the type that function
+hands back. A GENERIC type's member is the opposite case: `Bag = Array with T` means a different type
+per instantiation (`wrong-instance-error`), so it has no single meaning a file-scope name could carry,
+and it keeps only its `<Type>.<member>` key.
+
+⚠ **Of the four nested forms only the FUNCTION one had a file-scope name, and that asymmetry was not a
+rule anybody had written down.** A nested `typealias Fn = function(…)` has been filed under BOTH its bare
+name and `<Type>.<member>` since W49b — the bare key being *"the file-scope reading this form has always
+had"* — while a nested `typealias Bag = Array with Num` was filed under the qualified name ALONE. So
+`Bag.create()` at file scope typed its result `unknown` and the program was refused one door later for a
+member access on it, and `returns Bag` was `E3011`.
+
+⚠ **The RANGED and TUPLE forms still have no file-scope name, and that is a boundary rather than an
+oversight.** A ranged `typealias` is FILE-SCOPED by its declaration form (`type-name-collision.md`'s
+table of the three registries), so "a bare whole-program key" is not the shape its answer takes at all
+and handing it one would settle a different question than this rule does. Nothing measured needs it:
+what `Directory.list` returns is a generic instance, and so is every member the compiler's own harness
+names.
+
+### A plain type's member generic alias is a STATIC-CALL base at file scope
+
+<!-- test: plain-type-member-generic-alias-at-file-scope -->
+`Bag.create()` written by a free function in another file. Before this rule the result typed `unknown`
+and the `push` one line down was `E2015`.
+```maxon
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder
+	typealias Bag = Array with Num
+
+	export var v as Num
+
+	export static function create(v Num) returns Holder
+		return Holder{v: v}
+	end 'create'
+
+	export function fill() returns Bag
+		var b = Bag.create()
+		b.push(self.v)
+		return b
+	end 'fill'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var b = Bag.create()
+	b.push(20)
+	b.push(22)
+	let h = Holder.create(1)
+	let ownBag = h.fill()
+	if b.count() == 2 and ownBag.count() == 1 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### The same member is a DECLARED TYPE at file scope
+
+<!-- test: plain-type-member-generic-alias-as-a-declared-type -->
+The other door, and it is a different one: a written type annotation is resolved by
+`parseTypeReference`, a static call base by `parseQualifiedCall`. A free function's PARAMETER, its
+RETURN and a plain struct's FIELD all name the member. Before this rule each was
+`E3011 Unknown type 'Bag'`.
+```maxon
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder
+	typealias Bag = Array with Num
+
+	export var v as Num
+
+	export static function create(v Num) returns Holder
+		return Holder{v: v}
+	end 'create'
+
+	export function fill() returns Bag
+		var b = Bag.create()
+		b.push(self.v)
+		return b
+	end 'fill'
+end 'Holder'
+
+// --- file: main.maxon
+type Keeper
+	var held as Bag
+
+	static function create(held Bag) returns Keeper
+		return Keeper{held: held}
+	end 'create'
+
+	function total() returns Num
+		return sumOf(self.held)
+	end 'total'
+end 'Keeper'
+
+function makeBag() returns Bag
+	var b = Bag.create()
+	b.push(20)
+	b.push(22)
+	return b
+end 'makeBag'
+
+function sumOf(b Bag) returns Num
+	var total = 0
+	for n in b 'each'
+		total = total + n
+	end 'each'
+	return total
+end 'sumOf'
+
+function main() returns ExitCode
+	let k = Keeper.create(makeBag())
+	let h = Holder.create(3)
+	if k.total() == 42 and sumOf(h.fill()) == 3 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### `stdlib`'s own case — `Directory`'s member alias, named bare
+
+<!-- test: stdlib-directory-member-alias-at-file-scope -->
+The declaration this rule was found on. `type Directory` is not generic, so `FilePathArray` is one
+type for the whole program and `Directory.list`'s return is writable. The compiler's own spec harness
+spells it exactly this way.
+```maxon
+function main() returns ExitCode
+	var paths = FilePathArray.create()
+	paths.push(try FilePath.from("a") otherwise panic("unreachable: 'a' is a valid path"))
+	paths.push(try FilePath.from("b") otherwise panic("unreachable: 'b' is a valid path"))
+	return paths.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+### A GENERIC type's member generic alias is per-instance and has NO file-scope name
+
+<!-- test: error.generic-type-member-generic-alias-has-no-file-scope-name -->
+The control the widening owes, and the reason the rule is the enclosing type's PARAMETER LIST rather
+than "a nested alias is a top-level declaration written indented" — which is what both reference
+compilers do. `Bag = Array with T` is a different array for every `Holder with …`, so there is no one
+type for the bare name to denote and it stays refused.
+```maxon
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder uses T
+	typealias Bag = Array with T
+
+	export var v as T
+
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	export function fill() returns Bag
+		var b = Bag.create()
+		b.push(self.v)
+		return b
+	end 'fill'
+end 'Holder'
+
+export typealias NumHolder = Holder with Num
+
+// --- file: main.maxon
+function firstOf(b Bag) returns Num
+	return try b.get(0) otherwise 0
+end 'firstOf'
+
+function main() returns ExitCode
+	let h = NumHolder.create(3)
+	return firstOf(h.fill()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:25:15: Unknown type 'Bag'
+```
+
+### Two plain types in two files may declare one member name, exactly as two file-scope aliases may
+
+<!-- test: crossfile-plain-type-member-aliases-of-one-name-stay-file-scoped -->
+`crossfile-generic-alias-same-name-still-legal`'s rule, reached through the nested form: the bare key a
+member now files is the same registry a file-scope `typealias` files, so a name two files disagree
+about is settled the same way — each file reads its own declaration. `stdlib/Build.maxon` alone
+declares `StringArray` inside two different types.
+```maxon
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type HolderA
+	typealias Bag = Array with Num
+
+	export var v as Num
+
+	export static function create(v Num) returns HolderA
+		return HolderA{v: v}
+	end 'create'
+end 'HolderA'
+
+export function fromA() returns Num
+	var b = Bag.create()
+	b.push(20)
+	return try b.get(0) otherwise 0
+end 'fromA'
+
+// --- file: b.maxon
+typealias Num = int(0 to 200)
+
+export type HolderB
+	typealias Bag = Array with String
+
+	export var w as String
+
+	export static function create(w String) returns HolderB
+		return HolderB{w: w}
+	end 'create'
+end 'HolderB'
+
+export function fromB() returns Num
+	var b = Bag.create()
+	b.push("xx")
+	let first = try b.get(0) otherwise ""
+	return first.count() as Num
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = HolderA.create(1)
+	let b = HolderB.create("y")
+	if a.v == 1 and b.w.count() == 1 'constructed'
+		return (fromA() + fromB()) as ExitCode
+	end 'constructed'
+	return 1
+end 'main'
+```
+```exitcode
+22
+```

@@ -1161,10 +1161,23 @@ let BuildManifestName = "build.maxon"
 let MaxonSourceExtension = ".maxon"
 
 // Paths of Maxon source files, in the order a walk found them — what `collectMaxonSources`
-// produces and what `Project.stdlibSourcePaths` keeps. A DISTINCTLY-named alias rather than
-// QueryDatabase's `FilePathArray`, whose name collides with a member typealias inside stdlib's
-// `type Directory` and so does not resolve from every compiler file (`DiagnosticArray`, the same
-// `Array with T` shape under a unique name, resolves cross-file fine — the name is the difference).
+// produces and what `Project.stdlibSourcePaths` keeps. The ORDER is the fact this name carries and
+// `FilePathArray` does not, which is why it is its own alias and not a second spelling of that one.
+//
+// ⛔ **IT USED TO GIVE A SECOND REASON AND THAT REASON IS MEASURED FALSE (G17)**: *"whose name
+// collides with a member typealias inside stdlib's `type Directory` and so does not resolve from every
+// compiler file"*. There was no collision to have. A nested `typealias` was keyed
+// `Directory.FilePathArray` and under nothing else, so it could not contest a bare name at all — and the
+// shape the claim describes (one file exporting `typealias FilePathArray = Array with FilePath`, a
+// second naming it bare, a third calling `Directory.list`) COMPILES AND RUNS on both compilers, before
+// this rung and after it. `flat-namespace check` reads the two as OK for the same reason: they are
+// declared in different projects, and only one of them is top-level.
+//
+// What WAS true is the thing that claim was mistaken for, and it is now fixed: `Directory`'s member had
+// no FILE-SCOPE spelling of any kind, so `FilePathArray` resolved only where `QueryDatabase`'s own
+// export was in the program — which is every compiler file and no other program, including the
+// extracted spec harness. `Parser.publishNestedGenericAlias` gives such a member its bare key; the name
+// here stays for the ordering fact above.
 export typealias MaxonSourcePathArray = Array with FilePath
 
 // How many directories one `collectMaxonSources` call LISTED — itself plus everything it recursed
