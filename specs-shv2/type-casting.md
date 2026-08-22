@@ -758,3 +758,67 @@ end 'main'
 ```stdout
 r=42.0v=7
 ```
+
+## A CONTAINER IS NOT A CAST TARGET
+
+⛔⛔ **THIS SPELLING USED TO BE ACCEPTED AND THEN IGNORED.** `col as RegNumColumn` parsed, handed back a value
+still wearing its ORIGINAL type, and failed later at whatever use site first noticed — naming neither the cast
+nor its target. Nothing in the suite covered it, which is how a silently ignored cast survived.
+
+⚠ **AND IT COULD NOT HAVE BEEN MADE A RETAGGING, WHICH IS WHY THIS IS A REFUSAL AND NOT A GAP.**
+`Array with int(0 to u64.max)` strides EIGHT bytes per element and `Array with int(0 to 63)` strides ONE
+(`rangedAliasStorageBytes`), so retagging one as the other hands every later read a stride the buffer was not
+written at — the silent wrong answer `bytearray-element-size.md` measures at length. Converting instead would
+mean a second buffer and a range check per element: a real operation, and not one an `as` should perform in
+silence.
+
+⚠ **THE BOOTSTRAP REFUSES THE SYNTAX OUTRIGHT** (`E2003: Expected type name after 'as'`), so there is no
+reference answer to match — only a reference REFUSAL, which this agrees with while saying why.
+
+<!-- test: error.a-generic-instance-is-not-a-cast-target -->
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 63)
+typealias WideCol = Array with Wide
+typealias NarrowCol = Array with Narrow
+
+function widthOf(c NarrowCol) returns ExitCode
+	return c.count() as ExitCode
+end 'widthOf'
+
+function main() returns ExitCode
+	var w = WideCol.create()
+	w.push(5)
+	let n = w as NarrowCol
+	return widthOf(n)
+end 'main'
+```
+```maxoncstderr
+error E3131: specs/fragments/type-casting/error.a-generic-instance-is-not-a-cast-target.test:14:12: Cannot cast to 'NarrowCol': a container's elements have a storage layout of their own, so 'WideCol' cannot be retagged as one — build the container with the element type you need, or convert it element by element
+```
+
+<!-- test: a-scalar-alias-is-still-a-cast-target -->
+⭐ **THE CONTROL, AND IT IS WHAT SAYS THE REFUSAL DID NOT WIDEN.** The refusal reads the tag the cast TARGET
+denotes, so a ranged alias — the overwhelmingly common `as` target — is untouched. Lose this and every `as` in
+the corpus would be refused with it.
+
+⚠ The widening leg (`n as Wide`) is deliberately absent: shv2 answers **E3010 unneeded cast** for it, because
+`Narrow` already fits `Wide`. That is a rule about redundancy and not about containers, so asserting it here
+would tie this case to a diagnostic it is not about.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 63)
+
+function main() returns ExitCode
+	let w = 5 as Wide
+	let n = w as Narrow
+	print("n={n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=5
+```

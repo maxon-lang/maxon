@@ -90,7 +90,23 @@ export type Allocation
 	var holderOfReg as ValueIdArray
 
 	export static function create(valueCount ValueId) returns Allocation
-		return Self{color: filledColumn(valueCount, value: Uncolored), valueCount: valueCount, holderOfReg: filledColumn(RegisterFileSize, value: 0)}
+		// The colour column is BUILT as a `RegNumColumn`, not filled as a `DenseColumn` and stored as one.
+		// ⛔⛔ **THE TWO ARE NOT THE SAME BUFFER, AND THE DIFFERENCE IS THE ELEMENT STRIDE.** `DenseInt` is
+		// `int(0 to u64.max)` and strides EIGHT bytes; `RegNum` is `int(0 to 63)` and strides ONE
+		// (`rangedAliasStorageBytes`). Storing the first where the second is declared would hand every later
+		// read a stride it was not written at — the silent wrong answer `specs-shv2/bytearray-element-size.md`
+		// measures at length (*"read back 44 from one record and 300 from the other, one static type, two
+		// behaviours, no diagnostic"*). shv2 refuses it; the bootstrap accepts it only because it does not pack
+		// narrow elements at all, so there is no reference answer to prefer here.
+		//
+		// ⚠ **AND NOTHING IS NARROWED, WHICH IS WHY NO CAST BELONGS HERE.** Every value this column is born
+		// holding is `Uncolored`, and `Uncolored` IS a `RegNum` (`RegisterFileSize as RegNum`, 63). The
+		// mismatch was never about data outgrowing a bound — it was `filledColumn` being hard-typed to one
+		// element type while this field declares another.
+		var color = RegNumColumn.create()
+		color.refill(valueCount, value: Uncolored)
+
+		return Self{color: color, valueCount: valueCount, holderOfReg: filledColumn(RegisterFileSize, value: 0)}
 	end 'create'
 
 	export function isColored(v ValueId) returns bool

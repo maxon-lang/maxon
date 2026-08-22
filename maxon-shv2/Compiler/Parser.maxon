@@ -512,6 +512,11 @@ export union ParseError implements Error
 	// aggregate's POINTER flowed on typed as the numeric target and either miscompiled (a range check
 	// on a struct pointer) or was caught only downstream at the next type-checked position.
 	invalidCast(sourceType String, targetType String, line LineNumber, column ColumnNumber)
+	// E3131. An `as` whose target is a GENERIC INSTANCE. Its own arm rather than `invalidCast`'s because the
+	// reason is not that two KINDS do not convert — a container's elements have a layout of their own, and
+	// the two layouts need not agree — and because the message must name the two containers as the source
+	// SPELLS them, where `invalidCast` names tag words (`int`, `float`, `struct`).
+	castTargetIsAContainer(sourceType String, targetType String, line LineNumber, column ColumnNumber)
 	// ⭐ **A TYPE NAME, MET WHERE THERE IS A TOKEN TO POINT AT, THAT DENOTES NO TYPE AT ALL** — a typo
 	// (`Scor` for `Score`), a bare sized name (`u8` is not a type in Maxon; a ranged alias over it is), or
 	// a type this slice does not have. Renders as **E3011** with `unknownTypeMessage`, the SAME code and
@@ -44136,6 +44141,7 @@ export type Parser
 		// share one rule. It is the guard the element door was missing.
 		let targetTag = try self.castTargetTag(targetType, asTok: opTok)
 		try self.requireCastSourceIsNotEnum(value, targetTag: targetTag, asTok: opTok)
+		try self.requireCastTargetIsNotAContainer(value, targetType: targetType, targetTag: targetTag, asTok: opTok)
 		try self.requireCastKindsConvert(sourceTag, targetTag: targetTag, asTok: opTok)
 
 		// ⭐ **A FUNCTION-TO-FUNCTION CONVERSION IS THE ONE `requireCastKindsConvert` LETS THROUGH
@@ -44402,6 +44408,30 @@ export type Parser
 	// that nothing makes agree. A clause added to one would then be a WRONG ANSWER at the other — a
 	// `let X = 5 as T` accepted where `x as T` is refused — and not a compile error anywhere. Mirrors
 	// `requireConstOperands`, which is this file's existing answer to the identical split.
+	// ⛔⛔ **A CONTAINER IS NOT A RETAGGING, AND THIS SPELLING USED TO BE ACCEPTED AND THEN IGNORED.**
+	// `col as RegNumColumn` parsed, produced a value still wearing its ORIGINAL type, and failed later at
+	// whatever use site first noticed — naming neither the cast nor its target. Every other cast here is a
+	// retagging or a scalar conversion of ONE value; a container is neither.
+	//
+	// ⚠ **AND IT COULD NOT BE MADE A RETAGGING, WHICH IS WHY THIS IS A REFUSAL RATHER THAN A GAP.**
+	// `Array with int(0 to u64.max)` strides EIGHT bytes per element and `Array with int(0 to 63)` strides
+	// ONE (`rangedAliasStorageBytes`), so a retag hands every later read a stride the buffer was not written
+	// at — the silent wrong answer `specs-shv2/bytearray-element-size.md` measures at length. Converting
+	// would mean a second buffer and a range check per element: a real operation, and not one an `as`
+	// should perform in silence.
+	//
+	// ⚠ It reads the TARGET's tag as `castTargetTag` resolved it, so `as SomeAlias` is judged by what the
+	// alias denotes rather than by its spelling, and names the two types as the SOURCE writes them —
+	// `invalidCast`'s tag words would say `Cannot cast from int to int` here.
+	function requireCastTargetIsNotAContainer(value ValueId, targetType MaxonType, targetTag ValueTypeTag, asTok Token) throws ParseError
+		if targetTag != ValueTypeTag.genericInstance 'theTargetIsNotAContainer'
+			return
+		end 'theTargetIsNotAContainer'
+
+		let written = String.from(self.internedName(typeNameIdOf(targetType))) if maxonTypeTag(targetType) == ValueTypeTag.named else self.displayTypeNameOf(maxonTypeTag(targetType), nameId: typeNameIdOf(targetType))
+		throw ParseError.castTargetIsAContainer(self.valueDisplayTypeName(value), targetType: written, line: asTok.line, column: asTok.column)
+	end 'requireCastTargetIsNotAContainer'
+
 	function requireCastKindsConvert(sourceTag ValueTypeTag, targetTag ValueTypeTag, asTok Token) throws ParseError
 		if castHasNoLegalConversion(sourceTag, target: targetTag) 'incompatibleKinds'
 			throw ParseError.invalidCast(typeTagName(sourceTag), targetType: typeTagName(targetTag), line: asTok.line, column: asTok.column)

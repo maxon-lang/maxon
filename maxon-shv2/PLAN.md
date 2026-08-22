@@ -1585,7 +1585,7 @@ answer changes what the compiler IS, not merely which line gets edited.
 | # | Question | ⚖ RULING |
 |---|---|---|
 | **R-1** ✅ CLOSED | `Array with DenseInt` and `Array with RegCount` are two INSTANCES though both element aliases are `int(0 to u64.max)`. shv2 keys instance identity on the argument's NAME; the bootstrap treats them as one type, and shv2's own SCALAR rule already does (E3010 calls a cast between them unneeded). | **KEY ON THE ELEMENT RANGE, not the name.** Same range ⇒ one instance; different ranges stay distinct, which is `e4146cf8e`'s intent stated over the thing it was always about. ⚠ Where several aliases collapse, the MANGLED name must be chosen deterministically from the surviving spellings — `deriveInstanceDisplayNames` is the sole writer and the place to state it — and golden fragments churn wherever an instance is renamed. Clears 3 of the 4 open E3005s. |
-| **R-2** | `filledColumn(…)` returns `Array with int(0..u64.max)`; `RegisterAllocator.color` holds `Array with int(0..63)`. The bootstrap accepts the assignment; shv2 refuses it. Nothing range-checks elements at a whole-array assignment, so permitting it lets a reader trust a bound the data may not honour. | **REQUIRE AN EXPLICIT CAST.** The implicit assignment stays refused — shv2 is right that the bound is a promise — but `as RegNumColumn` is admitted, so the narrowing is VISIBLE at the site that performs it rather than assumed at the site that stores it. ⚠ This MINTS a cast form for a generic instance, which shv2 has not had; it is a language addition, not a relaxation. |
+| **R-2** ✅ CLOSED (re-scoped) | `filledColumn(…)` returns `Array with int(0..u64.max)`; `RegisterAllocator.color` holds `Array with int(0..63)`. The bootstrap accepts the assignment; shv2 refuses it. Nothing range-checks elements at a whole-array assignment, so permitting it lets a reader trust a bound the data may not honour. | **REQUIRE AN EXPLICIT CAST.** The implicit assignment stays refused — shv2 is right that the bound is a promise — but `as RegNumColumn` is admitted, so the narrowing is VISIBLE at the site that performs it rather than assumed at the site that stores it. ⚠ This MINTS a cast form for a generic instance, which shv2 has not had; it is a language addition, not a relaxation. |
 | **R-3** | The stand-in `runProcess` BUILTIN claims the bare name, so shv2's own 4-arg `Testing/SpecTestRunner.maxon` declaration is silently unreachable — the builtin's own comment says so and names the retirement recipe. | **TAKE THE `Subprocess` CONE WORK.** In order: the D7 blocker first (overloading `Subprocess.run` where one declaration `throws`), then MINT `__Builtins.runProcess` as the stdlib body's floor, then delete the bare name here and list the module. ⚠ Retiring it also moves the runtime entry from user code (target-gate BLIND) into stdlib source (target-gate AWARE) — `SemanticCheck.requireTargetSupportsCallee`'s header names the pair of spec cases `sleep` pinned for exactly this, and both halves are owed again. Unblocks 5 errors. |
 | **R-4** | shv2's E3010 sees a declared alias through a struct FIELD READ and a `try … otherwise` RESULT; the bootstrap sees neither. That asymmetry is why shv2's own source carried EIGHT casts that do nothing. | **TIGHTEN THE BOOTSTRAP AND CLEAN UP.** The two compilers agree on what STATES a declared alias. shv2's own source is already clean of these (`d6f94960d9`, `abcba35255`), so the blast radius is mainly the `specs/` corpus — MEASURE it before committing, because the change fails `dotnet build` until every flagged cast is gone. |
 
@@ -1747,6 +1747,39 @@ CALL door's is.
 symbols and two compiled bodies for one type. The ruling says one instance, and it is to be literally true.
 
 </details>
+
+✅ **R-2 IS CLOSED, AND ITS PREMISE WAS FALSE (2026-08-22).** The row said `RegisterAllocator.maxon:93` was
+*"a genuine narrowing"* needing an explicit cast. **MEASURED, it is not a narrowing at all:** `Uncolored` is
+`RegisterFileSize as RegNum` = **63**, already inside `RegNum = int(0 to 63)`, so every value that column is born
+holding fits. The mismatch was `filledColumn` being hard-typed `returns DenseColumn` — element stride **8**, since
+`DenseInt = int(0 to u64.max)` — while the field declares `RegNumColumn`, element stride **1**.
+
+⇒ **`Allocation.create` now BUILDS the column as a `RegNumColumn`** instead of filling one type and storing it as
+another. No language change, nothing needed from the bootstrap, and the site is gone. **MEASURED on the ladder:
+allocation counts IDENTICAL at every rung while bytes fall 3.7 MB at rung 5** — the same allocations, each 8× smaller,
+and the colour column is the only element type that changed, so the attribution is exact.
+
+⛔⛔ **AND THE CAST THE RULING WOULD HAVE MINTED COULD NOT HAVE BEEN SOUND.** Two facts the row did not have:
+
+1. **The two arrays have DIFFERENT MEMORY LAYOUTS**, so an `as` between them could never be the unchecked promise the
+   ruling describes. `rangedAliasStorageBytes` gives `int(0 to u64.max)` eight bytes and `int(0 to 63)` one, and
+   retagging across that hands every later read a stride the buffer was not written at — the silent wrong answer
+   `specs-shv2/bytearray-element-size.md` measures at length (*"read back 44 from one record and 300 from the other,
+   one static type, two behaviours, no diagnostic"*). A sound cast would have to allocate a second buffer and range-check
+   every element: a real operation, not something an `as` performs in silence.
+2. **The C# bootstrap answers `E2003: Expected type name after 'as'` for a generic-alias cast target**, and the
+   bootstrap is what BUILDS shv2 — so shv2's own source could not have used the form until the bootstrap had it too.
+   The language addition was never one compiler's to make alone.
+
+✅ **ONE REAL DEFECT CAME OUT OF LOOKING (E3131).** shv2 ACCEPTED `col as RegNumColumn` and then IGNORED it: the value
+kept its original type and the program failed later, at whatever use site first noticed, naming neither the cast nor
+its target. Nothing in the suite covered it, which is how a silently ignored cast survived. It is now refused AT THE
+`as`, saying why, with `type-casting/error.a-generic-instance-is-not-a-cast-target` pinning it and
+`a-scalar-alias-is-still-a-cast-target` as the control that says the refusal did not widen. Sabotage-verified.
+
+⚠ **IF A CONVERTING CONTAINER CAST IS EVER WANTED, IT IS ITS OWN SLICE**, and `bytearray-element-size.md` has already
+named it: *"an element-wise widening emission — a real mechanism, and the same one a widening `__managed_append`
+across differing strides would need"*. It would need building in both compilers.
 
 ⚠ **R-1 AND R-2 ARE ONE SEQUENCE, NOT TWO ROWS.** R-1 collapses the same-range pairs, which is what
 leaves `RegisterAllocator`'s `0..u64.max` → `0..63` standing ALONE as a genuine narrowing — so R-2's cast

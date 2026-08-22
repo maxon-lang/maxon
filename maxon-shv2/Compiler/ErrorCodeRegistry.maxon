@@ -1282,6 +1282,18 @@ export enum ErrorCode
 	// The cure is to make the member match the requirement it is named after, or to rename it. The
 	// compiler's own implementation is used for every enum that declares neither.
 	semanticGrantedConformanceMemberMismatch = "E3130"
+	// An `as` names a GENERIC INSTANCE as its cast target -- `col as RegNumColumn`. Every other cast this
+	// compiler performs is a RETAGGING or a scalar conversion of one value; a container is neither, because
+	// its elements have a storage layout of their own and the two layouts need not agree. `Array with
+	// int(0 to u64.max)` strides EIGHT bytes per element and `Array with int(0 to 63)` strides ONE
+	// (`rangedAliasStorageBytes`), so retagging one as the other hands every later read a stride the buffer
+	// was not written at -- the silent wrong answer `specs-shv2/bytearray-element-size.md` measures at
+	// length. Converting instead would mean allocating a second buffer and copying every element through a
+	// range check, which is a real operation and not something an `as` should perform in silence.
+	// shv2 used to ACCEPT this spelling and do nothing at all: the value kept its original type and the
+	// program failed later, at whatever use site first noticed, naming neither the cast nor its target.
+	// Build the container with the element type you need, or convert it element by element.
+	castTargetIsAContainer = "E3131"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"
