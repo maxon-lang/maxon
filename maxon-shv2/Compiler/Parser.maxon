@@ -2071,6 +2071,11 @@ let sharedEmptyBracketOpeners = TokenIndexArray.create()
 let sharedEmptyForwardCalls = ForwardCallArray.create()
 let sharedEmptyReturnedNames = ByteArrayArray.create()
 
+// The FOURTH parallel column's shared empty — `returnedAt`, the token index of the `return` each candidate
+// was read off. It sits beside the three above and is privatised with them at the same one test, so a body
+// with no `return` still allocates nothing.
+let sharedEmptyReturnedAt = TokenIndexColumn.create()
+
 // The module-level shared EMPTY per-instance-alias placeholders (P1.6-C), held as the INITIAL value of the
 // `enclosingInnerAliases` / `valueInstanceAlias` working fields AND as the COW anchors the reset points at.
 // ONE allocation for the whole compile each (like `sharedEmptyTypeParamFeeds`), so a generics-free program
@@ -10399,13 +10404,45 @@ function kindBindsTheNameAfterIt(kind TokenKind) returns bool
 	return kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.for or kind == TokenKind.leftParen or kind == TokenKind.comma
 end 'kindBindsTheNameAfterIt'
 
-// Mark every returned candidate whose HEAD segment is `name`. One name can head more than one candidate
-// (`Box.shared` and `Box.other` from two `return`s), so the walk is over all of them rather than a lookup.
-function markBoundHead(returnedHeads ByteArrayArray, bound BoolArray, name ByteArray)
+// Record one seed candidate on the three parallel columns AT ONCE — the name as it is looked up, the HEAD
+// segment the shadowing filter matches on, and the token index of the `return` it was read off. One door
+// rather than three pushes at each of the four recording sites: the columns are parallel by construction and
+// every reader's panic says so, and a site that pushed two of the three would desynchronize the third
+// silently.
+function noteReturnedCandidate(returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, name ByteArray, head ByteArray, returnIndex TokenIndex)
+	returnedNames.push(name)
+	returnedHeads.push(head)
+	returnedAt.push(returnIndex)
+end 'noteReturnedCandidate'
+
+// ⭐⭐ **MARK EVERY RETURNED CANDIDATE THIS BINDER SHADOWS — and a binder shadows only what comes AFTER it.**
+// One name can head more than one candidate (`Box.shared` and `Box.other` from two `return`s), so the walk is
+// over all of them rather than a lookup.
+//
+// ⛔⛔ **THE POSITION TEST IS THE WHOLE OF WHY THE GENEROUS BINDER SET IS SAFE TO KEEP, AND IT WAS MISSING.**
+// `returnedNamesNotBoundHere`'s own header records that the binder set deliberately admits plain call
+// ARGUMENTS, which bind nothing — and calls the resulting dropped seed acceptable because it costs only a
+// refusal. It was reached: `SignatureIndex.surfaceOfRootBits` returns `sharedEmptyDeclaredSurface` BARE on
+// one path and passes that same name as an ARGUMENT on the next line, so the position-blind walk marked the
+// candidate bound and the return was refused on a program the bootstrap compiles.
+//
+// ⭐ **THE CURE IS POSITION, NOT SHAPE, AND THAT DISTINCTION IS LOAD-BEARING.** Narrowing the binder SET is
+// what that header warns against, and it is right to: a `match` payload `case(a, b)` is character for
+// character a call, so no token test can separate the two. Position needs no such test and is EXACT for the
+// question actually being asked — a name cannot resolve to a local at a `return` that precedes the local's
+// own declaration, because such a program does not compile at all. So requiring the binder to come FIRST can
+// only drop FALSE shadowings; it cannot miss a real one, and the set stays as generous as it was.
+function markBoundHead(returnedHeads ByteArrayArray, bound BoolArray, returnedAt TokenIndexColumn, name ByteArray, binderIndex TokenIndex)
 	for i in 0 upto returnedHeads.count() 'eachCandidate'
-		if (try returnedHeads.get(i) otherwise panic("markBoundHead: returnedHeads.get({i}) OOB below its own count")).equals(name) 'sameHead'
-			try bound.set(i, value: true) otherwise panic("markBoundHead: bound.set({i}) OOB — the two columns are parallel by construction")
-		end 'sameHead'
+		if not (try returnedHeads.get(i) otherwise panic("markBoundHead: returnedHeads.get({i}) OOB below its own count")).equals(name) 'otherHead'
+			continue
+		end 'otherHead'
+
+		if binderIndex > (try returnedAt.get(i) otherwise panic("markBoundHead: returnedAt.get({i}) OOB — the columns are parallel by construction")) 'bindsAfterTheReturn'
+			continue
+		end 'bindsAfterTheReturn'
+
+		try bound.set(i, value: true) otherwise panic("markBoundHead: bound.set({i}) OOB — the columns are parallel by construction")
 	end 'eachCandidate'
 end 'markBoundHead'
 
@@ -13418,6 +13455,7 @@ export type Parser
 		// was always going to need.
 		var returnedNames = sharedEmptyReturnedNames
 		var returnedHeads = sharedEmptyReturnedNames
+		var returnedAt = sharedEmptyReturnedAt
 		var returnCalls = sharedEmptyForwardCalls
 		var returnColumnsArePrivate = false
 		// The type-parameter FEED map is a fresh array pre-filled with `none` ONLY inside a generic type's
@@ -13492,11 +13530,12 @@ export type Parser
 				if not returnColumnsArePrivate 'firstReturnInThisBody'
 					returnedNames = ByteArrayArray.create()
 					returnedHeads = ByteArrayArray.create()
+					returnedAt = TokenIndexColumn.create()
 					returnCalls = ForwardCallArray.create()
 					returnColumnsArePrivate = true
 				end 'firstReturnInThisBody'
 
-				self.noteReturnedGlobalOrForward(q, returnedNames: returnedNames, returnedHeads: returnedHeads, returnCalls: returnCalls)
+				self.noteReturnedGlobalOrForward(q, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls)
 			end 'returnStatement'
 
 			if scansParams 'aBodyWithParametersToWatch'
@@ -13648,7 +13687,7 @@ export type Parser
 			// SECOND O(tokens) walk of the body plus two arrays, per such body. It stands because the
 			// alternative — carrying the names bound so far through the first walk — costs a per-body set and
 			// an insert per binder, which is more than one allocation-free re-walk.
-			let unshadowed = self.returnedNamesNotBoundHere(returnedNames, returnedHeads: returnedHeads, bodyStart: bodyStart, paramNames: byRefParamNames) if returnedNames.count() > 0 else returnedNames
+			let unshadowed = self.returnedNamesNotBoundHere(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, bodyStart: bodyStart, paramNames: byRefParamNames) if returnedNames.count() > 0 else returnedNames
 			// Asked a second time because the FILTER can empty the name column: a body whose only `return` named
 			// a local of its own states nothing after all, and must not reach the map.
 			if GlobalAliasReturnInfo.statesAnything(unshadowed, returnCalls: returnCalls) 'mayHandBackAGlobalsRecord'
@@ -13687,7 +13726,7 @@ export type Parser
 	// The edge reuses `forwardCallOpeningAt` — the one place a call's tokens are turned into a `ForwardCall` —
 	// so a return-forward and a parameter-forward cannot come to disagree about which declarations a spelling
 	// can name.
-	function noteReturnedGlobalOrForward(returnIndex TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnCalls ForwardCallArray)
+	function noteReturnedGlobalOrForward(returnIndex TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray)
 		let head = (returnIndex + 1) as TokenIndex
 		if not tokenCanBeAName(self.tokenAt(head)) 'notANameAtAll'
 			return
@@ -13699,8 +13738,7 @@ export type Parser
 		end 'returnsABareCall'
 
 		if self.kindAt((head + 1) as TokenIndex) == TokenKind.newline 'returnsABareName'
-			returnedNames.push(self.tokenAt(head).value)
-			returnedHeads.push(self.tokenAt(head).value)
+			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(head).value, head: self.tokenAt(head).value, returnIndex: returnIndex)
 			return
 		end 'returnsABareName'
 
@@ -13708,9 +13746,8 @@ export type Parser
 		// which the two tests above have already established is a name — so it is seeded here on the same
 		// terms `returnsABareName` seeds its own, and the ELSE arm is then read on those terms too.
 		if self.kindAt((head + 1) as TokenIndex) == TokenKind.if 'returnsAConditional'
-			returnedNames.push(self.tokenAt(head).value)
-			returnedHeads.push(self.tokenAt(head).value)
-			self.noteConditionalElseArm((head + 2) as TokenIndex, returnedNames: returnedNames, returnedHeads: returnedHeads, returnCalls: returnCalls)
+			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(head).value, head: self.tokenAt(head).value, returnIndex: returnIndex)
+			self.noteConditionalElseArm((head + 2) as TokenIndex, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls, returnIndex: returnIndex)
 			return
 		end 'returnsAConditional'
 
@@ -13724,8 +13761,7 @@ export type Parser
 		end 'returnsADottedCall'
 
 		if self.kindAt((head + 3) as TokenIndex) == TokenKind.newline 'returnsAStaticMember'
-			returnedNames.push(qualifiedMethodName(self.tokenAt(head).value, methodName: self.tokenAt((head + 2) as TokenIndex).value))
-			returnedHeads.push(self.tokenAt(head).value)
+			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: qualifiedMethodName(self.tokenAt(head).value, methodName: self.tokenAt((head + 2) as TokenIndex).value), head: self.tokenAt(head).value, returnIndex: returnIndex)
 		end 'returnsAStaticMember'
 	end 'noteReturnedGlobalOrForward'
 
@@ -13739,7 +13775,7 @@ export type Parser
 	// bare name — both fall through recording nothing, which is this function's family rule: an unrecognised
 	// shape costs a REFUSAL at the return, never a silent acceptance. The THEN arm is already seeded by the
 	// caller either way, so a missed else arm cannot make the function's bit WRONG, only incomplete.
-	function noteConditionalElseArm(condStart TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnCalls ForwardCallArray)
+	function noteConditionalElseArm(condStart TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray, returnIndex TokenIndex)
 		var depth = 0
 		var q = condStart
 		while self.kindAt(q) != TokenKind.newline and self.kindAt(q) != TokenKind.eof 'scanForElse'
@@ -13751,7 +13787,7 @@ export type Parser
 				depth = depth - 1
 			end 'closesGroup'
 			if depth == 0 and kind == TokenKind.else 'foundTheElse'
-				self.noteConditionalArmValue((q + 1) as TokenIndex, returnedNames: returnedNames, returnedHeads: returnedHeads, returnCalls: returnCalls)
+				self.noteConditionalArmValue((q + 1) as TokenIndex, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls, returnIndex: returnIndex)
 				return
 			end 'foundTheElse'
 
@@ -13761,7 +13797,7 @@ export type Parser
 
 	// One arm's VALUE, on the two terms above. Split from the scan so the admission rule is written once and
 	// reads the same as the statement-level one it mirrors.
-	function noteConditionalArmValue(armStart TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnCalls ForwardCallArray)
+	function noteConditionalArmValue(armStart TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray, returnIndex TokenIndex)
 		if not tokenCanBeAName(self.tokenAt(armStart)) 'notANameAtAll'
 			return
 		end 'notANameAtAll'
@@ -13772,8 +13808,7 @@ export type Parser
 		end 'aBareCall'
 
 		if self.kindAt((armStart + 1) as TokenIndex) == TokenKind.newline 'aBareName'
-			returnedNames.push(self.tokenAt(armStart).value)
-			returnedHeads.push(self.tokenAt(armStart).value)
+			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(armStart).value, head: self.tokenAt(armStart).value, returnIndex: returnIndex)
 		end 'aBareName'
 	end 'noteConditionalArmValue'
 
@@ -13786,11 +13821,23 @@ export type Parser
 	// ⚠ **THE BINDER TEST IS DELIBERATELY GENEROUS, AND THE DIRECTION IS THE POINT.** A name is treated as
 	// bound when it follows `let`, `var`, `for`, `(` or `,` — which catches every binder form the language has
 	// (a declaration, a loop variable, a caught-error binder, a `match` payload, a destructuring name) and also
-	// catches plain call ARGUMENTS, which are not binders at all. That over-inclusion drops a seed, and a
-	// dropped seed falls back to the E2015 refusal at the return: the answer the compiler gave before this rung
-	// existed. Under-inclusion would be the costly direction — a spurious seed refuses a write on a legal
-	// program — so the test errs the way it does on purpose. Do not narrow it without moving that argument too.
-	function returnedNamesNotBoundHere(returnedNames ByteArrayArray, returnedHeads ByteArrayArray, bodyStart TokenIndex, paramNames ByteArrayArray) returns ByteArrayArray
+	// catches plain call ARGUMENTS, which are not binders at all. Under-inclusion is the costly direction — a
+	// spurious seed refuses a write on a legal program — so the SET errs the way it does on purpose. Do not
+	// narrow it: a `match` payload `case(a, b)` is character for character a call, and no token test separates
+	// them.
+	//
+	// ⛔⛔ **BUT THE OVER-INCLUSION WAS NOT FREE, AND THIS HEADER USED TO SAY IT WAS.** It read *"that
+	// over-inclusion drops a seed, and a dropped seed falls back to the E2015 refusal at the return: the answer
+	// the compiler gave before this rung existed"* — true, and it stops being acceptable the moment a real
+	// program is the one refused. `SignatureIndex.surfaceOfRootBits` returns `sharedEmptyDeclaredSurface` BARE
+	// on one path and hands that same name to a call on the next line; the walk was POSITION-BLIND, so the
+	// argument marked the candidate bound and the bare return was refused — on source the bootstrap compiles.
+	//
+	// ⭐ **THE CURE IS POSITION AND IT LEAVES THE SET ALONE** (`markBoundHead`, where the argument lives): a
+	// binder can only shadow a `return` that comes AFTER it, because a name cannot resolve to a local at a
+	// point before that local is declared. That is EXACT for the question, so it drops only FALSE shadowings —
+	// which is why the generous set can stay generous.
+	function returnedNamesNotBoundHere(returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, bodyStart TokenIndex, paramNames ByteArrayArray) returns ByteArrayArray
 		// A PARAMETER shadows exactly as a local does, and it is known without walking anything.
 		var bound = BoolArray.create()
 		for candidateHead in returnedHeads 'eachHead'
@@ -13805,7 +13852,7 @@ export type Parser
 			end 'bodyEnds'
 
 			if q > bodyStart and tokenCanBeAName(self.tokenAt(q)) and kindBindsTheNameAfterIt(self.kindAt((q - 1) as TokenIndex)) 'aBinderPosition'
-				markBoundHead(returnedHeads, bound: bound, name: self.tokenAt(q).value)
+				markBoundHead(returnedHeads, bound: bound, returnedAt: returnedAt, name: self.tokenAt(q).value, binderIndex: q)
 			end 'aBinderPosition'
 
 			depth = self.blockDepthAfter(q, depth: depth)

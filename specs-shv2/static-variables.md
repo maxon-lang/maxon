@@ -2219,3 +2219,96 @@ end 'main'
 ```stdout
 short=0 long=1
 ```
+
+### W117's shadowing filter — a binder shadows only what comes AFTER it
+
+⛔⛔ **THE FILTER WAS POSITION-BLIND, AND ITS OWN HEADER CALLED THAT ACCEPTABLE.**
+`returnedNamesNotBoundHere` drops a returned name that the body binds itself, using a deliberately
+GENEROUS binder set — a name is bound when it follows `let`, `var`, `for`, `(` or `,`, which also
+catches plain call ARGUMENTS. The header read *"that over-inclusion drops a seed, and a dropped seed
+falls back to the E2015 refusal at the return: the answer the compiler gave before this rung existed"*.
+That is true, and it stops being acceptable the moment a real program is the one refused.
+
+⭐ **IT WAS REACHED BY SHV2'S OWN SOURCE.** `SignatureIndex.surfaceOfRootBits` returns
+`sharedEmptyDeclaredSurface` BARE on one path — a shape the sweep DOES recognise — and hands that same
+name to a call on the next line. The argument marked the candidate bound, the seed was dropped, and the
+bare return was refused on source the bootstrap compiles.
+
+⭐⭐ **THE CURE IS POSITION, NOT SHAPE, AND THE SET IS UNCHANGED.** Narrowing the binder SET is what the
+header warns against and it is right to: a `match` payload `case(a, b)` is character for character a
+call, and no token test separates them. Position needs no such test and is EXACT for the question being
+asked — **a name cannot resolve to a local at a `return` that precedes the local's own declaration,
+because such a program does not compile at all.** So requiring the binder to come FIRST can only drop
+FALSE shadowings; it cannot miss a real one.
+
+<!-- test: a-returned-global-is-not-shadowed-by-a-later-call-argument -->
+The `surfaceOfRootBits` shape: the global is returned bare on one path and passed as an argument on the
+next line. Both paths are exercised.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Bits = Array with Integer
+
+let sharedEmptyBits = Bits.create()
+
+function withRootBits(base Bits, bits Integer) returns Bits
+	var out = Bits.create()
+	out.push(base.count() + bits)
+	return out
+end 'withRootBits'
+
+function surfaceOfRootBits(bits Integer) returns Bits
+	if bits == 0 'namesNothing'
+		return sharedEmptyBits
+	end 'namesNothing'
+
+	return withRootBits(sharedEmptyBits, bits: bits)
+end 'surfaceOfRootBits'
+
+function main() returns ExitCode
+	let empty = surfaceOfRootBits(0)
+	let one = surfaceOfRootBits(5)
+	print("empty={empty.count()} one={one.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+empty=0 one=1
+```
+
+<!-- test: a-returned-name-IS-shadowed-by-a-binder-above-it -->
+⭐ **THE CONTROL, AND IT IS THE HALF THAT MUST NOT BREAK.** The filter's whole job is to drop a name the
+body binds itself, and this program binds one ABOVE the return — so the local wins, the seed is dropped,
+and the value handed back is the LOCAL's and not the global's.
+**It WRITES through the returned value, and that is what makes it discriminating**: a spurious seed
+would mark `localWins` as handing back a global's record, and the `push` would then be refused on a
+program that touches no global at all. A read-only version of this case passes either way and would
+have proved nothing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Bits = Array with Integer
+
+let bits = Bits.create()
+
+function localWins() returns Bits
+	var bits = Bits.create()
+	bits.push(7)
+	bits.push(9)
+	return bits
+end 'localWins'
+
+function main() returns ExitCode
+	var got = localWins()
+	got.push(11)
+	print("global={bits.count()} local={got.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+global=0 local=3
+```
