@@ -1589,6 +1589,37 @@ answer changes what the compiler IS, not merely which line gets edited.
 | **R-3** | The stand-in `runProcess` BUILTIN claims the bare name, so shv2's own 4-arg `Testing/SpecTestRunner.maxon` declaration is silently unreachable — the builtin's own comment says so and names the retirement recipe. | **TAKE THE `Subprocess` CONE WORK.** In order: the D7 blocker first (overloading `Subprocess.run` where one declaration `throws`), then MINT `__Builtins.runProcess` as the stdlib body's floor, then delete the bare name here and list the module. ⚠ Retiring it also moves the runtime entry from user code (target-gate BLIND) into stdlib source (target-gate AWARE) — `SemanticCheck.requireTargetSupportsCallee`'s header names the pair of spec cases `sleep` pinned for exactly this, and both halves are owed again. Unblocks 5 errors. |
 | **R-4** | shv2's E3010 sees a declared alias through a struct FIELD READ and a `try … otherwise` RESULT; the bootstrap sees neither. That asymmetry is why shv2's own source carried EIGHT casts that do nothing. | **TIGHTEN THE BOOTSTRAP AND CLEAN UP.** The two compilers agree on what STATES a declared alias. shv2's own source is already clean of these (`d6f94960d9`, `abcba35255`), so the blast radius is mainly the `specs/` corpus — MEASURE it before committing, because the change fails `dotnet build` until every flagged cast is gone. |
 
+⛔⛔ **R-1's OBVIOUS IMPLEMENTATION IS WRONG, AND IT WAS TRIED AND MEASURED (2026-08-22).** Canonicalizing
+the argument at INTERN time — one `ProgramSignatures.internInstance` door computing a range-keyed spelling
+per argument, the registry keying on that instead of on `(tag, name id)` — passes its own probes
+(`DenseInt`/`RegCount` collapse; `RegNum(0..63)` stays distinct; both compilers exit 2 on the same program)
+and then **breaks a `b"hi"` one-liner**: `E3006 duplicate definition of 'Array_Byte' — the generic
+instantiations `Array with Byte` and `Array with Byte` compile to that same name`. TWO gids, ONE argument.
+
+⇒ **INTERNING RUNS *DURING* THE SWEEP THAT BUILDS THE ALIAS REGISTRY, so it cannot ask a whole-program
+question about an alias.** `canonicalArgKey` reads `multiplyDeclared` and the alias's range; both are still
+being folded file by file. An intern of `named(Byte)` BEFORE the second declaration of `Byte` is folded sees
+an UNCONTESTED alias and takes the range key; an intern of the SAME argument after it sees a CONTESTED one
+and takes the spelled key. Two keys, one argument, two instances — and `mangleTypeArg` renders both from the
+source spelling, so they collide on `Array_Byte`.
+
+⚠ **A CONTESTED-ALIAS GUARD DOES NOT FIX IT — it is what CREATED the second key.** Without the guard the
+same cut fails differently and worse: **34 spec cases red**, because a range-contested `Byte` collapses into
+one instance for every reader, which is exactly the distinction the `Byte$0_200` mint exists to keep.
+`RangedAliasRegistry`'s bare probe states the governing contract in as many words — *"none may read the
+RANGE — the range is per-file and enforced where the file is known, so a reader with no file reading it
+would be reading a stranger's bounds"* — and interning has no reader file.
+
+⇒ **TWO ROUTES REMAIN, and the choice is the first thing the next attempt owes:**
+- **(a) A POST-SWEEP MERGE.** Leave interning alone; once `queryProgramSignatures` is complete — and the
+  alias registry with it — walk the instance registry and merge instances whose arguments denote the same
+  type, rewriting gids through one mapping. Faithful to the ruling ("same range ⇒ one instance"), and the
+  only moment the question is answerable. Cost: every holder of a gid must be remapped, and the mangled
+  name of a merged pair must be chosen deterministically from the survivors.
+- **(b) DECIDE COMPATIBILITY AT THE CHECK.** Leave two instances and make assignability accept two whose
+  base matches and whose arguments denote the same type. Much smaller and it cannot race the sweep, but it
+  is NOT what the ruling says: two symbols and two compiled bodies survive for one type.
+
 ⚠ **R-1 AND R-2 ARE ONE SEQUENCE, NOT TWO ROWS.** R-1 collapses the same-range pairs, which is what
 leaves `RegisterAllocator`'s `0..u64.max` → `0..63` standing ALONE as a genuine narrowing — so R-2's cast
 is designed against a boundary R-1 has already cleared of everything that was never a narrowing at all.
