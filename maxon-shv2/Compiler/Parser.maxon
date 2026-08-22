@@ -27549,6 +27549,7 @@ export type Parser
 	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray) throws ParseError
 		let oldValue = binding.boundValue
 		let rhsWasBareLocal = not rhsBareLocalName.isEmpty()
+
 		// ⭐⭐ **AN IMMUTABLE SOURCE ALIASES WHERE A MUTABLE ONE MOVES (the ownership ruling, 2026-08-04),
 		// AND THIS DOOR IS WHERE THE DECLARATION ONE'S EXEMPTION WAS MISSING.** Read once, here, because the
 		// two halves of what it means are spent far apart: the poison below is SKIPPED, and the reference
@@ -27682,8 +27683,9 @@ export type Parser
 		// `promoteBorrowedToOwned` the declaration routes through, so the two sites cannot answer the
 		// String-vs-aggregate question differently: string-promoting a borrowed struct here blits its fields
 		// as a fused String record, a silent miscompile.
+		let sourceValueIsOwned = self.valueIsOwnedHeap(value)
 		var newValue = value
-		var newIsOwned = self.valueIsOwnedHeap(value)
+		var newIsOwned = sourceValueIsOwned
 		if inOwnedSet and not newIsOwned 'promoteBorrowed'
 			newValue = try self.promoteBorrowedToOwned(value, door: BorrowLaunderDoor.binding, range: SourceRange.ofToken(nameTok))
 			newIsOwned = true
@@ -27691,11 +27693,17 @@ export type Parser
 
 		// ⭐⭐ **THE REFERENCE THE SKIPPED POISON LEFT THIS BINDING OWING.** An immutable source keeps the
 		// drop it has always owed, so this binding — enrolled below, or already in the owned set — cannot
-		// inherit it and must hold one of its own (`coOwnImmutableRebindSource`). It is EXCLUSIVE with the
-		// promotion above by construction and not by ordering: that arm runs only on a BORROWED value, this
-		// one only on an owned one, and a promotion has already minted a reference this binding owns
-		// outright — retaining on top of it would leak exactly one box.
-		if aliasesImmutableSource and self.valueIsOwnedHeap(value) 'coOwnImmutableSource'
+		// INHERIT one and must hold its own (`coOwnImmutableRebindSource`). Two names, two references, two
+		// releases: without it the alias and its source both drop one box, which the leak gate reports as
+		// exit 101, and the destination may be the LONGER-LIVED of the two (an outer `var` taking a
+		// loop-body `let`), so nothing here can lean on the source outliving it the way the declaration
+		// door does.
+		//
+		// ⚠ It reads the SOURCE value's ownership, not `newIsOwned`, which is what makes it exclusive with
+		// the promotion above by construction rather than by ordering: that arm runs only on a BORROWED
+		// value and has already minted a reference this binding owns outright, so a retain on top of its
+		// result would leak exactly one box.
+		if aliasesImmutableSource and sourceValueIsOwned 'coOwnImmutableSource'
 			newValue = self.coOwnImmutableRebindSource(value, range: SourceRange.ofToken(nameTok))
 		end 'coOwnImmutableSource'
 
@@ -33091,8 +33099,9 @@ export type Parser
 	// mints a FRESH temp that is the value of no binding (a CONSUME), so the scan is guaranteed to find
 	// nothing.
 	//
-	// A BARE read is a rooted span with no field steps, so it is the two questions `rhsRootLocalName`
-	// and `rhsSpanReadsAField` answer, `and`ed — the chain grammar itself is written down once, there.
+	// A BARE read is a rooted span with no field steps, which is what `rhsBareLocalSourceName` answers with
+	// — the chain grammar itself is written down once, at `rhsRootLocalName`. This is that answer reduced to
+	// its emptiness, for the callers that need only the yes/no.
 	function rhsWasBareLocalReference(startPos TokenIndex) returns bool
 		return not self.rhsBareLocalSourceName(startPos).isEmpty()
 	end 'rhsWasBareLocalReference'
@@ -33137,12 +33146,14 @@ export type Parser
 	// "no root" has no other spelling to be confused with. It is the same idiom `bareArgImmutableName` and
 	// `borrowSubjectNameAt` already answer in (`EmptySourceText`), for the same reason.
 	//
-	// ⭐ **TWO RULES ASK IT, AND THEY ASK DIFFERENT HALVES OF ONE QUESTION.** The MOVE model asks *"was
+	// ⭐ **THREE RULES ASK IT, AND THEY ASK DIFFERENT HALVES OF ONE QUESTION.** The MOVE model asks *"was
 	// this a bare read of a local?"* (`rhsWasBareLocalReference` — only that shape can move an owned value
 	// out of an existing binding, because only that shape resolves to the binding's own SSA value). E3078
 	// asks *"whose storage is this initializer reaching into?"*, which a field chain answers too — `var i =
-	// o.inner` aliases `o`'s box through a writable name exactly as `var i = o` would. One walk answers
-	// both, so the grammar of "a name, then field steps" is written down once.
+	// o.inner` aliases `o`'s box through a writable name exactly as `var i = o` would. And the IMMUTABLE-
+	// ALIAS rule asks *"was that local declared `let`?"* (`rebindSourceIsAnImmutableAlias`), which needs the
+	// NAME the first of the three reduces away. One walk answers all three, so the grammar of "a name, then
+	// field steps" is written down once.
 	//
 	// ⚠ **PARENS ARE PART OF THE CHAIN GRAMMAR, and that is a soundness requirement, not tidiness.**
 	// `parseParenthesizedExpression` returns its inner value UNCHANGED, so `(t)` / `((t))` alias the
@@ -33720,13 +33731,29 @@ export type Parser
 	// re-mints a name owes the identical debt, and the W117 immutable-global taint is the one whose loss is
 	// not an `E2015` but a WRITE that reaches a record the language calls immutable. The interface witness
 	// is carried inside `retainBorrowedAggregate`, where the existential arm that needs it lives.
+	//
+	// ⚠ **`promoteBorrowedToOwned` IS THE NEAREST-LOOKING SIBLING AND IS NOT THIS.** Its precondition is a
+	// BORROWED value (its own `panic` says so), and both of its answers are wrong here: at the `binding`
+	// door a byte record COPIES, and at `merged` a trivial tuple COPIES — where this door's whole subject is
+	// a value the source still owns, whose IDENTITY the two names must go on sharing. What the two have in
+	// common is the column carry, which is why that is called and not re-spelled.
 	function coOwnImmutableRebindSource(value ValueId, range SourceRange) returns ValueId
-		var retained = value
-		if tagIsByteRecord(self.tagOf(value)) 'byteRecord'
-			retained = self.retainBorrowedByteRecord(value, range: range)
-		end 'byteRecord' else 'aggregate'
-			retained = self.retainBorrowedAggregate(value, range: range)
-		end 'aggregate'
+		// **THE SPLIT IS "IS THERE A SECOND OWNER TO KEEP ALIVE?"** — `storeOwnedValueIntoDurableSink`'s
+		// split, asked here for its reason and answered the same way. An owned value NO BINDING holds has no
+		// other owner at all, so this binding ADOPTS the `+1` it was handed and the caller's
+		// `removeFromPendingTemps` cancels the statement-end drop; an incref/decref pair around a value
+		// nothing else releases is pure churn. The shape that reaches it is a `for` element — declared
+		// IMMUTABLE (`declareLoopVariable`) and enrolled in no owned set, so it satisfies the alias rule
+		// while owning its value through the statement rather than through a name.
+		if self.noLiveOwner(self.liveOwnerIndexOf(value)) 'ownedTemporaryIsAdopted'
+			return value
+		end 'ownedTemporaryIsAdopted'
+
+		// The two retain protocols, and they are the SAME two `storeOwnedValueIntoDurableSink` routes
+		// between: a byte record through `__str_retain` (an incref on the heap branch, a copy of an immortal
+		// `.rdata` literal on the other, and the parser cannot know which), everything else through
+		// `__mm_retain`, which is also where an existential's witness-dispatched retain lives.
+		let retained = self.retainBorrowedByteRecord(value, range: range) if tagIsByteRecord(self.tagOf(value)) else self.retainBorrowedAggregate(value, range: range)
 
 		self.carryDeclaredSurface(retained, from: value)
 		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: value, to: retained)

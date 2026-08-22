@@ -404,6 +404,43 @@ end 'main'
 v9v9
 ```
 
+### A `for` Element Is an Immutable Source That No BINDING Owns
+
+A loop variable is declared immutable (`declareLoopVariable`) and is enrolled in no owned set: for a
+managed element the per-trip value owns its record through the STATEMENT rather than through a name. So
+it satisfies the alias rule and has no second owner to keep alive — the destination adopts the `+1` it
+was handed and the statement-end drop is cancelled, exactly as a durable sink adopts an owned
+temporary. An incref/decref pair around a value nothing else releases would be pure churn, and this is
+the case that says which of the two arms a nameless owned value takes.
+
+<!-- test: immutable-rebind-on-assign-from-a-loop-element -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringSeq = Array with String
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	var xs = StringSeq.create()
+	xs.push(build(1))
+	xs.push(build(2))
+	var last = build(0)
+	for s in xs 'each'
+		last = s
+	end 'each'
+	print("{last}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v2
+```
+
 ### The Second Name Is a Second NAME, Not a Copy
 
 The reference the destination takes is a reference to the SAME box, so a write through it shows on the
