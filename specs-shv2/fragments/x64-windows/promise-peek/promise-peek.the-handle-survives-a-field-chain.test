@@ -1,0 +1,232 @@
+// Test: promise-peek.the-handle-survives-a-field-chain
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+type Holder
+	public let p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	var arr = IntPromiseArray.create()
+	arr.push(async makeValue())
+	let p = try arr.get(0) otherwise panic("the promise was just pushed")
+	let h = Holder.of(p)
+	var score = 0
+	if h.p.inner == p.inner 'thetwodoorsagree'
+		score = score + 1
+	end 'thetwodoorsagree'
+	if __Builtins.gtIsComplete(h.p.inner) == __Builtins.gtIsComplete(p.inner) 'thetwopeeksagree'
+		score = score + 2
+	end 'thetwopeeksagree'
+	if await p == 42 'stillawaitable'
+		score = score + 4
+	end 'stillawaitable'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_system_stack_top@56 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_timer_capacity@80 = i64 0
+  __gt_trace_counter@88 = i64 0
+  __gt_trace_digits@96 = i64 0
+  __gt_clock_ticks@104 = i64 0
+  __gt_clock_freq@112 = i64 0
+  __gt_proc_count@120 = i64 0
+  __gt_proc_handles_base@128 = i64 0
+  __gt_proc_gts_base@136 = i64 0
+  __gt_free_list_head@144 = i64 0
+  __gt_live_count@152 = i64 0
+  __gt_startup_base@160 = i64 0
+  __gt_procinfo_base@168 = i64 0
+  __gt_exitcode_base@176 = i64 0
+  __gt_cmdline_buf_base@184 = i64 0
+  __gt_cmdline_buf_cap@192 = i64 0
+}
+
+func @Holder.of {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @makeValue {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Runtime.yield
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc rcx, [rip + makeValue]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.callDirect Holder.of
+    x64.movRegReg r13, r8
+    x64.movRegImm32 r14, 0
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.leaRegRegImm32 rax, rax, 0
+    x64.leaRegRegImm32 rcx, r12, 0
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, thetwodoorsagree
+    x64.jmp critsplit#12
+  thetwodoorsagree:
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.jmp ifcont#4
+  critsplit#12:
+    x64.jmp ifcont#4
+  ifcont#4:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.leaRegRegImm32 rcx, rax, 0
+    x64.callDirect __gt_is_complete
+    x64.movRegReg r15, r8
+    x64.leaRegRegImm32 rcx, r12, 0
+    x64.callDirect __gt_is_complete
+    x64.cmpRegReg r15, r8
+    x64.jcc equal, thetwopeeksagree
+    x64.jmp critsplit#13
+  thetwopeeksagree:
+    x64.leaRegRegImm32 r14, r14, 2
+    x64.jmp ifcont#6
+  critsplit#13:
+    x64.jmp ifcont#6
+  ifcont#6:
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.cmpRegImm32 r8, 42
+    x64.jcc equal, stillawaitable
+    x64.jmp critsplit#14
+  stillawaitable:
+    x64.leaRegRegImm32 rax, r14, 4
+    x64.jmp ifcont#8
+  critsplit#14:
+    x64.movRegReg rax, r14
+    x64.jmp ifcont#8
+  ifcont#8:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r12, rax, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Runtime.yield {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_resched
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

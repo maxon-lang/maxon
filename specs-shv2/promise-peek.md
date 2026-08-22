@@ -213,6 +213,63 @@ end 'main'
 7
 ```
 
+<!-- test: promise-peek.the-handle-survives-a-field-chain -->
+<!-- targets: x64-windows -->
+⭐ **A SECOND DOOR, PINNED SEPARATELY AND ANCHORED ON ITS OWN.** `h.p.inner` is a TWO-HOP chain, and the
+parser resolves a chain through its own walk rather than through the single-hop member dispatch — so
+"the promise arm fires for `p.inner`" is no evidence at all about `h.p.inner`. Agreement between the two
+readings is necessary and NOT sufficient (a door that kept the load would agree with another that kept
+it), so this case carries `completes-under-the-drive`'s own anchor as well: the peek taken THROUGH THE
+CHAIN must go `0 -> 1` across the drive, which only a real status word does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+type Holder
+	public let p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	let maxSpins = 100
+	var arr = IntPromiseArray.create()
+	arr.push(async makeValue())
+	let p = try arr.get(0) otherwise panic("the promise was just pushed")
+	let h = Holder.of(p)
+	let before = __Builtins.gtIsComplete(h.p.inner)
+	var spins = 0
+	var after = 0
+	while spins < maxSpins and after == 0 'drive'
+		Runtime.yield()
+		after = __Builtins.gtIsComplete(h.p.inner)
+		spins = spins + 1
+	end 'drive'
+	var score = 0
+	if h.p.inner == p.inner 'thetwodoorsagree'
+		score = score + 1
+	end 'thetwodoorsagree'
+	if before == 0 and after == 1 'thechainreadsarealstatus'
+		score = score + 2
+	end 'thechainreadsarealstatus'
+	if await p == 42 'stillawaitable'
+		score = score + 4
+	end 'stillawaitable'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: promise-peek.arity-checked -->
 `gtIsComplete` takes exactly one argument — the handle. An intrinsic has no signature for the ordinary
 arity check to read, so it is refused by the same `builtinArity` check every other `__Builtins` member
