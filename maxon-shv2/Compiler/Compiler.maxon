@@ -773,11 +773,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// stated there: one module, name-resolved calls, and the `usesManagedMemory` bit was settled before any install ran.
 	installCommandLineRuntime(pipeline.stdModule, usage: usage)
 
-	// The console and process-introspection runtimes (`__con_read_stdin`, `__proc_exe_path`, W5) — the same
-	// already-lowered way, each on its OWN bit, so a program that reads stdin carries no path walk and one
-	// that asks for its own path carries no read. They sit beside the three families above because they share
-	// their helpers (the raw alloc/free, the Win32 out word, the byte-element record builder and the cstring
-	// copy), and they need no ordering against the Array install below for the reason stated there.
+	// The console and process-introspection runtimes (`__con_read_stdin`, `__proc_exe_path`, `__proc_pid`) —
+	// the same already-lowered way, each on its OWN bit, so a program that reads stdin carries no path walk,
+	// one that asks for its own path carries no read, and one that asks only for its pid carries neither (nor
+	// the heap and managed-memory runtimes both of those drag in). They sit beside the three families above
+	// because they share their helpers (the raw alloc/free, the Win32 out word, the byte-element record
+	// builder and the cstring copy), and they need no ordering against the Array install below for the reason
+	// stated there.
 	installConsoleRuntime(pipeline.stdModule, usage: usage)
 	installProcessRuntime(pipeline.stdModule, usage: usage)
 

@@ -1,9 +1,20 @@
 // Runtime/ProcessRuntime.maxon — the RUNNING image's own path.
 //
-// ⭐ **WHAT IT SERVES.** `stdlib/Process.maxon`'s `executablePath()` bottoms out in ONE `__Builtins`
-// intrinsic — `executablePath()` — and nothing else in the language reaches this entry point. The bootstrap
-// declares the same one (`2-Parser.cs:11265-11267`) with the same arity, the same result type and the same
-// ownership, so the SURFACE here is the reference's; only the implementation differs.
+// ⭐ **WHAT IT SERVES — TWO `__Builtins` INTRINSICS THAT ASK THE RUNNING IMAGE ABOUT ITSELF.**
+// `stdlib/Process.maxon`'s `executablePath()` bottoms out in `__Builtins.executablePath()`, and
+// `Compiler/TreeLock.maxon`'s lock token bottoms out in `__Builtins.currentProcessId()` — with no stdlib
+// wrapper over the second, because a declaration whose whole body is one intrinsic call is the thin wrapper
+// the house rules forbid and neither reference compiler declares one. Nothing else in the language reaches
+// either entry point. The bootstrap declares both (`2-Parser.cs:11265-11267` and `:12238-12243`) with the
+// same arities, result types and ownership, so the SURFACE here is the reference's; only the implementation
+// differs.
+//
+// ⚠ **THE TWO ARE INSTALLED ON SEPARATE `RuntimeUsage` BITS, NOT ON ONE `__proc_` BIT**, for the reason the
+// console/process SPLIT itself exists (`Compiler.maxon`'s install block: *"each on its OWN bit, so a program
+// that reads stdin carries no path walk"*). A pid is three machine instructions and touches no memory; the
+// path walk is a doubling retry loop that drags in `usesHeap` AND `usesManagedMemory` — i.e. the WHOLE
+// managed-memory runtime, installed as one closure. Keyed together, `__Builtins.currentProcessId()` alone
+// would have pulled all of that into a program that allocates nothing.
 //
 // ⭐ **HOST-ONLY BY THE R4 RULING (2026-07-30), AND FOR A REASON OF ITS OWN ON TOP.** `x64-windows` is real;
 // every other target refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct` via
@@ -28,8 +39,9 @@
 // `scanRuntimeUsage` reads to set `usesProcessIntrospection`, and the one `SemanticCheck` reads for E3104.
 let ProcessRuntimePrefix = b"__proc_"
 
-// ⭐ **THE ONE ENTRY POINT.**
+// ⭐ **THE TWO ENTRY POINTS.**
 export let ProcessExecutablePathName = b"__proc_exe_path"
+export let ProcessCurrentPidName = b"__proc_pid"
 
 // The first buffer the walk asks for is `ManagedDirectoryRuntime.MaxPathBytes` — the same `MAX_PATH` the
 // `GetCurrentDirectoryA` walk starts at, READ from there rather than re-spelled here (W5 review), because
@@ -132,18 +144,55 @@ function buildProcessExecutablePath(module StdModule)
 	module.functions.push(func)
 end 'buildProcessExecutablePath'
 
-export function installProcessRuntime(module StdModule, usage RuntimeUsage)
-	if not usage.usesProcessIntrospection 'noIntrospection'
-		return
-	end 'noIntrospection'
+// ⭐⭐ **`__proc_pid() -> i64`** — the OS-assigned id of the running process, and the whole body is the op.
+//
+// ⭐ **THE Std OP AND ITS x64 LOWERING ALREADY EXISTED; ONLY THE DOOR WAS MISSING.** `StdOp.osGetPid` and
+// `lowerOsGetPid`'s `GetCurrentProcessId` import shipped with the P1.5 IOCP substrate, where the pid is the
+// high half of the overlapped pipe name's uniquifier (`GtRuntime.emitGtPipeNameUniquifier`) — so this rung
+// adds a name and an entry point, not an instruction. That is why there is no backend work here and no new
+// `IatSlot`: a second producer of the same op reaches the same slot.
+//
+// ⚠ **THERE IS NO RETRY, NO FAILURE ARM AND NO BUFFER**, which is what makes it three lines beside
+// `__proc_exe_path`'s loop: `GetCurrentProcessId` reads the PEB, cannot fail, has no out-parameter and
+// answers the same DWORD on every call in a process. `isPure` is nevertheless `false` on the op (it is a
+// call, and the backends need the call barrier's clobber accounting), so two calls in one function are two
+// calls — which `specs-shv2/process-id.md:is-stable-across-calls` asserts agree rather than assuming.
+function buildProcessCurrentPid(module StdModule)
+	var func = IrFunction.createFromStd(ProcessCurrentPidName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
 
-	buildProcessExecutablePath(module)
+	var entry = module.addBlock(func, label: b"entry")
+	let pid = ids.mint()
+	module.appendOp(entry, op: StdOp.osGetPid(pid))
+	module.setTerminator(entry, op: StdOp.ret(pid))
+
+	module.functions.push(func)
+end 'buildProcessCurrentPid'
+
+// ⚠ **ONE GUARD PER ENTRY, NOT ONE FOR THE FILE.** See the header: the two entries cost wildly different
+// amounts and a program almost always wants exactly one of them.
+export function installProcessRuntime(module StdModule, usage RuntimeUsage)
+	if usage.usesExecutablePath 'executablePath'
+		buildProcessExecutablePath(module)
+	end 'executablePath'
+
+	if usage.usesProcessId 'processId'
+		buildProcessCurrentPid(module)
+	end 'processId'
 end 'installProcessRuntime'
 
-// Every callee this file installs — what `scanRuntimeUsage` reads to set `usesProcessIntrospection`, and
-// what `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows target. A PREFIX test rather than
-// an `equals` against the single name, for `isCommandLineRuntimeCallee`'s reason: a second entry point here
-// is then covered by construction instead of having to be remembered at two sites.
+// Every callee this file installs — what `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows
+// target. A PREFIX test rather than an `equals` against a roster of names, for `isCommandLineRuntimeCallee`'s
+// reason: a second entry point here is then covered by construction instead of having to be remembered at
+// two sites.
+//
+// ✅ **THAT PROMISE WAS TESTED AND HELD.** `__proc_pid` arrived after this predicate was written and needed
+// no edit here: `specs-shv2/process-id.md:rejected-on-wasm` pins the E3104 it earns by prefix alone.
+//
+// ⚠ **`scanRuntimeUsage` DOES NOT READ THIS ONE**, and used to: it now asks for each entry by NAME, because
+// the two entries are installed on separate bits (see the header). A prefix is the right test for "may this
+// target run it at all" — one answer for the family — and the wrong test for "must this program carry it",
+// which is per entry point.
 export function isProcessRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ProcessRuntimePrefix)
 end 'isProcessRuntimeCallee'

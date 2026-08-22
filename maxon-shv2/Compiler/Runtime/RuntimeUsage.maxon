@@ -349,10 +349,17 @@ export type RuntimeUsage
 	// different OS APIs, so a program that reads stdin must not carry a path walk it never calls. Same two
 	// transitive bits, for the same two reasons — the grow-and-retry buffer is a raw alloc, and the answer is
 	// an `Array` record built one tier down.
-	export var usesProcessIntrospection as bool
+	export var usesExecutablePath as bool
+	// G17: the program asks for its own PROCESS ID (`__Builtins.currentProcessId` ⇒ `__proc_pid`). Its own
+	// bit even though it shares the `__proc_` family — and here the discipline earns more than tidiness:
+	// `__proc_pid` is ONE call op with no buffer, no retry and no allocation, so it declares NEITHER
+	// transitive bit. Folded into `usesExecutablePath`, a program whose only introspection is a pid would
+	// have carried the doubling path walk, the heap runtime AND the whole managed-memory runtime (installed
+	// as one closure) to link against nothing.
+	export var usesProcessId as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -559,11 +566,18 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesManagedMemory = true
 	end 'consoleStdin'
-	if isProcessRuntimeCallee(callee) 'processIntrospection'
-		usage.usesProcessIntrospection = true
+	// ⚠ **BY NAME, NOT BY THE `__proc_` PREFIX, AND THE PREFIX WAS WHAT THIS ASKED BEFORE G17.** The two
+	// entries in that family cost nothing alike: `__proc_exe_path` is a doubling retry loop whose answer is
+	// an `Array` record built one tier down, and `__proc_pid` is a single call op. A prefix test would have
+	// made the cheap one declare the expensive one's whole transitive closure — see `usesProcessId`.
+	if callee.equals(ProcessExecutablePathName) 'executablePath'
+		usage.usesExecutablePath = true
 		usage.usesHeap = true
 		usage.usesManagedMemory = true
-	end 'processIntrospection'
+	end 'executablePath'
+	if callee.equals(ProcessCurrentPidName) 'processId'
+		usage.usesProcessId = true
+	end 'processId'
 	if callee.equals(StreamWriteStdoutName) 'writestdout'
 		usage.usesWriteStdout = true
 	end 'writestdout'

@@ -1,0 +1,31 @@
+// Test: process-id.is-positive
+function main() returns ExitCode
+	let pid = __Builtins.currentProcessId()
+	if pid > 0 'positive'
+		return 3
+	end 'positive'
+	return 1
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __proc_pid
+    x64.cmpRegImm32 r8, 0
+    x64.jcc greater, positive
+    x64.jmp ifcont
+  positive:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

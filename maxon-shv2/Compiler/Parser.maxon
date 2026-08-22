@@ -4772,6 +4772,21 @@ let BuiltinsCommandLineArgName = b"__Builtins.commandLineArg"
 let BuiltinsReadStdinName = b"__Builtins.readStdin"
 let BuiltinsExecutablePathName = b"__Builtins.executablePath"
 
+// ⭐ **`__Builtins.currentProcessId()` — THE RUNNING PROCESS'S OWN ID, AND THE ONE `__Builtins` INTRINSIC
+// WITH NO `stdlib/` WRAPPER OVER IT.** `/specs/builtins-type.md:37` declares it (*"Pid of the current
+// process"*) with exactly this shape — no arguments, an `int` answer — and the bootstrap's table matches
+// (`2-Parser.cs:12238-12243`, lowering to its own `maxon_current_process_id`). Its one caller in this tree is
+// `Compiler/TreeLock.maxon`, which stamps the id into the lock file so a later reader can tell a live holder
+// from an abandoned one; that is why the intrinsic IS the surface here — a `Process.currentProcessId()`
+// wrapper would be a stdlib declaration whose whole body is this call, i.e. the thin wrapper the house rules
+// forbid, and `stdlib/Process.maxon` declares no such function in either reference compiler.
+//
+// ⚠ **THE ROSTER HAS NAMED IT SINCE BEFORE ANYTHING PROVIDED IT.** `specs-shv2/builtins-type.md:37` is a
+// byte-identical port of the canonical spec, so shv2 shipped a documented intrinsic that answered E3004 —
+// which is exactly the "surface without a floor" shape `STDLIB-BRINGUP.md` warns about, one step less
+// harmful (a clean refusal rather than a backend panic). See `ProcessRuntime.ProcessCurrentPidName`.
+let BuiltinsCurrentProcessIdName = b"__Builtins.currentProcessId"
+
 // ⭐ **THE TWO STREAM-WRITE INTRINSICS (W35)**, `stdlib/Print.maxon`'s and `stdlib/PrintError.maxon`'s only
 // floors, and the pair that let the bare-name `print` builtin be retired. `/specs/builtins-type.md:24-25`
 // declares exactly these two names with exactly this shape — one `__ManagedMemory` in, the byte count
@@ -4926,6 +4941,18 @@ let CommandLineArgArity = 1 as ParamCount
 // ordinary arity check to read, because no file declares it.
 let ReadStdinArity = 1 as ParamCount
 let ExecutablePathArity = 0 as ParamCount
+
+// `currentProcessId()` takes nothing. Stated here beside the two above for `CommandLineArgArity`'s reason —
+// an intrinsic has no signature for SemanticCheck's ordinary arity check to read, because no file declares
+// it.
+//
+// ⚠ **A THIRD ZERO, AND DELIBERATELY NOT A SHARED ONE.** `CommandLineCountArity` and `ExecutablePathArity`
+// are already both `0`, which is the idiom this band follows: one constant per INTRINSIC, because the
+// number is a fact about that intrinsic's contract and not about the band. (The `SubprocessOneArgArity`
+// family's *"a sixth constant equal to an existing one would be a second name for one fact"* is the
+// opposite case and does not reach here: there, five SHAPES are shared across twenty names by contract, so
+// the shape is the fact.)
+let CurrentProcessIdArity = 0 as ParamCount
 
 // `writeStdout(mm)`/`writeStderr(mm)` each take exactly one `__ManagedMemory`. ONE constant for both, not
 // two: it is a single fact about a single shape, and the two names are the same intrinsic on two streams.
@@ -67191,6 +67218,19 @@ export type Parser
 
 				return self.emitOwnedManagedMemoryResult(ProcessExecutablePathName, args: ValueIdArray.create(), range: SourceRange.ofToken(anchor))
 			end 'executablePath'
+
+			// ⭐ **THE SECOND PROCESS-INTROSPECTION INTRINSIC, AND IT ANSWERS AN `int` RATHER THAN A BUFFER** —
+			// so it takes `commandLineCount`'s emit and not `executablePath`'s, one arm up. There is nothing to
+			// own, nothing to enrol as a temporary and no buffer surface to mark: a pid is a machine word the
+			// caller reads and drops. `emitOwnedManagedMemoryResult` here would enrol a `__ManagedMemory` drop
+			// against an integer and free the pid.
+			if callee.equals(BuiltinsCurrentProcessIdName) 'currentProcessId'
+				if args.count() != CurrentProcessIdArity 'currentProcessIdArity'
+					throw ParseError.builtinArity(String.from(callee), expected: CurrentProcessIdArity, got: args.count(), line: anchor.line, column: anchor.column)
+				end 'currentProcessIdArity'
+
+				return self.emitRuntimeCall(ProcessCurrentPidName, args: ValueIdArray.create(), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+			end 'currentProcessId'
 
 			// ⭐ W35. The two stream writers — one emit, parameterized by the stream's runtime entry point,
 			// because the argument rule and the result are identical and only the destination differs.
