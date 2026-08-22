@@ -67130,14 +67130,19 @@ export type Parser
 			return try self.emitPositionalMathBuiltin(args, callee: callee, calleeTok: anchor)
 		end 'mathBuiltin'
 
+		// `spawnReadLine(cmd)` — the IOCP overlapped-read PROBE (P1.5 slice 1a-ii): `__gt_io_read` spawns the
+		// command with stdout → a fresh overlapped pipe, issues a YIELDING overlapped read and returns the byte
+		// count. NON-throwing (a plain integer, not the dual-register error ABI), so a bare call needs no `try`.
 		if callee.equals(SpawnReadLineBuiltinName) 'spawnReadLineBuiltin'
-			return try self.emitSpawnReadLine(args, calleeTok: anchor)
+			return try self.emitCommandLineRuntimeCall(args, runtimeName: IoReadName, builtinName: SpawnReadLineBuiltinName, arity: SpawnReadLineArity, calleeTok: anchor)
 		end 'spawnReadLineBuiltin'
 
 		// The seven streaming subprocess builtins (P1.5 slice 1b). Each is recognized by name after its arguments
 		// are parsed, exactly like `spawnReadLine`, and routes to a `__gt_subp_*` runtime entry.
+		// `subpSpawn(cmd)` — `__gt_subp_spawn` creates three pipes, spawns the child and returns a
+		// non-negative handle (or -1), which the six `subp*` handle doors below take as their argument.
 		if callee.equals(SubpSpawnBuiltinName) 'subpSpawnBuiltin'
-			return try self.emitSubpSpawn(args, calleeTok: anchor)
+			return try self.emitCommandLineRuntimeCall(args, runtimeName: SubpSpawnName, builtinName: SubpSpawnBuiltinName, arity: SubpSpawnArity, calleeTok: anchor)
 		end 'subpSpawnBuiltin'
 
 		if callee.equals(SubpReadLineBuiltinName) 'subpReadLineBuiltin'
@@ -67218,8 +67223,12 @@ export type Parser
 			// `stdlib/Subprocess.maxon` reaches a child by a different mechanism entirely (see
 			// `BuiltinsRunProcessName`). It was a BARE name until G17 and the harness's own `runProcess` is
 			// what that cost.
+			// `__gt_process_run` spawns the child with CreateProcessA, parks the GT on the process handle,
+			// and — once the netpoll observes the child exit — resumes and returns its scalar exit code. The
+			// result is an INTEGER, so unlike `sleep`'s void it is usable in value position and needs no
+			// `resultUsed` gate.
 			if callee.equals(BuiltinsRunProcessName) 'runProcess'
-				return try self.emitRunProcess(args, calleeTok: anchor)
+				return try self.emitCommandLineRuntimeCall(args, runtimeName: GtProcessRunName, builtinName: BuiltinsRunProcessName, arity: RunProcessArity, calleeTok: anchor)
 			end 'runProcess'
 
 			// ⭐ **THE SCHEDULER'S ONE READ-ONLY QUESTION**, beside the two arms above that hand it the
@@ -67962,73 +67971,39 @@ export type Parser
 		return self.emitRuntimeCall(GtReschedName, args: ValueIdArray.create(), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitYield'
 
-	// `__Builtins.runProcess(cmd)` — **SPAWN A WINDOWS CHILD AND AWAIT ITS EXIT CODE**, yielding the current green
-	// thread while it runs (P1.5 subprocess seed). It emits no `MaxonOp.call` to a user function — it routes to the
-	// `__gt_process_run(strPtr)` scheduler runtime entry (which spawns the child with CreateProcessA, parks the GT
-	// on the process, and — once the netpoll observes the child exit — resumes and returns its scalar exit code).
-	// It requires exactly one STRING argument (the command line; a non-String is refused with E3005, mirroring
-	// `emitSleep`'s integer check) and returns an INTEGER, so — unlike `emitSleep`'s void — its result IS usable in
-	// value position and needs no `resultUsed` gate.
+	// ⭐⭐ **THE ARGUMENT RULE EVERY COMMAND-LINE BUILTIN IS CHECKED AGAINST, IN ONE PLACE** — the
+	// `requireHandleArg`/`requireSubprocessArgs` shape, one family over. Three doors spawn a child from a
+	// command line (`__Builtins.runProcess` → `__gt_process_run`, `spawnReadLine` → `__gt_io_read`,
+	// `subpSpawn` → `__gt_subp_spawn`) and every one of them asks the identical two questions of the
+	// identical argument shape: exactly one argument, and it is TEXT. They had three verbatim copies of the
+	// answer, which is three places for the rule to drift and the thing `requireSubprocessArgs`'s own header
+	// says this file exists to stop ("twenty doors … growing twenty spellings of the same two questions").
 	//
-	// The String is BORROWED, exactly as `print` borrows its argument: `__gt_process_run` reads the command
-	// line's `buffer`/`length` out of the 56-byte record (like `__print_string` does) and never takes ownership,
-	// so a literal command line needs no decref.
-	function emitRunProcess(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
-		if args.count() != RunProcessArity 'arity'
-			throw ParseError.builtinArity(String.from(BuiltinsRunProcessName), expected: RunProcessArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+	// ⚠ Checking it here at all is what an intrinsic needs BECAUSE no file declares it: there is no
+	// signature for SemanticCheck's ordinary arity and argument-type checks to read.
+	//
+	// ⚠ **THE ARITY IS A PARAMETER THOUGH ALL THREE PASS 1**, exactly as `requireHandleArg`'s is though its
+	// six callers pass two values: the constant is what says what a given builtin IS, and collapsing three
+	// documented constants into a literal here would put that fact in the wrong file.
+	//
+	// ⚠ The String is BORROWED by all three entries — each reads `buffer`/`length` out of the 56-byte record
+	// and never takes ownership — so this emits an ordinary `emitRuntimeCall` and enrols no drop. A future
+	// command-line entry that CONSUMED its argument could not share this door.
+	function emitCommandLineRuntimeCall(args ValueIdArray, runtimeName ByteArray, builtinName ByteArray, arity ParamCount, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != arity 'arity'
+			throw ParseError.builtinArity(String.from(builtinName), expected: arity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
 		end 'arity'
 
-		let arg = try args.get(0) otherwise panic("emitRunProcess: args.count() == RunProcessArity just checked but get(0) failed")
-		let argTag = self.tagOf(arg)
+		let commandLine = try args.get(0) otherwise panic("emitCommandLineRuntimeCall: arity just checked but get(0) failed")
+		let argTag = self.tagOf(commandLine)
 		if not tagIsText(argTag) 'notAString'
-			throw ParseError.builtinOperandType(String.from(BuiltinsRunProcessName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.builtinOperandType(String.from(builtinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notAString'
 
 		var callArgs = ValueIdArray.create()
-		callArgs.push(arg)
-		return self.emitRuntimeCall(GtProcessRunName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-	end 'emitRunProcess'
-
-	// `spawnReadLine(cmd)` — **THE IOCP OVERLAPPED-READ PROBE** (P1.5 slice 1a-ii). A compiler BUILTIN like
-	// `__Builtins.runProcess`: routing to the `__gt_io_read(strPtr)` scheduler runtime entry (spawn the
-	// command with stdout → a fresh overlapped pipe, issue a YIELDING overlapped read, return the byte count). It
-	// requires exactly one STRING argument (the command line; a non-String is refused, mirroring `emitRunProcess`)
-	// and returns an INTEGER. NON-throwing (a plain integer result, not the dual-register error ABI), so no `try`.
-	// The String is BORROWED exactly as `__Builtins.runProcess` borrows it (`__gt_io_read` reads buffer/length, never owns).
-	function emitSpawnReadLine(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
-		if args.count() != SpawnReadLineArity 'arity'
-			throw ParseError.builtinArity(String.from(SpawnReadLineBuiltinName), expected: SpawnReadLineArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
-		end 'arity'
-
-		let arg = try args.get(0) otherwise panic("emitSpawnReadLine: args.count() == SpawnReadLineArity just checked but get(0) failed")
-		let argTag = self.tagOf(arg)
-		if not tagIsText(argTag) 'notAString'
-			throw ParseError.builtinOperandType(String.from(SpawnReadLineBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
-		end 'notAString'
-
-		var callArgs = ValueIdArray.create()
-		callArgs.push(arg)
-		return self.emitRuntimeCall(IoReadName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-	end 'emitSpawnReadLine'
-
-	// `subpSpawn(cmd)` — **SPAWN A STREAMING CHILD** (P1.5 slice 1b): route to `__gt_subp_spawn`, which creates three
-	// pipes, spawns the child, and returns a non-negative handle (or -1). One BORROWED String argument (the command
-	// line, read like `spawnReadLine`'s), an INTEGER result (the handle) usable in value position.
-	function emitSubpSpawn(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
-		if args.count() != SubpSpawnArity 'arity'
-			throw ParseError.builtinArity(String.from(SubpSpawnBuiltinName), expected: SubpSpawnArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
-		end 'arity'
-
-		let arg = try args.get(0) otherwise panic("emitSubpSpawn: args.count() == SubpSpawnArity just checked but get(0) failed")
-		let argTag = self.tagOf(arg)
-		if not tagIsText(argTag) 'notAString'
-			throw ParseError.builtinOperandType(String.from(SubpSpawnBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
-		end 'notAString'
-
-		var callArgs = ValueIdArray.create()
-		callArgs.push(arg)
-		return self.emitRuntimeCall(SubpSpawnName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-	end 'emitSubpSpawn'
+		callArgs.push(commandLine)
+		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitCommandLineRuntimeCall'
 
 	// Validate a streaming builtin's single INTEGER handle argument (arity 1, integer, not float) and return it —
 	// the shared front of `subpReadLine`/`subpReadErrLine`/`subpCloseStdin`/`subpWait`/`subpRelease`, so the arity +
