@@ -4530,7 +4530,7 @@ let TruncBuiltinName = b"trunc"
 // Every ARITY-1 NUMERIC builtin — `trunc` and the five arity-1 math intrinsics — takes exactly one
 // argument. ONE constant, because `numericBuiltinOperand` is the one function that states it (as both
 // the check and the message's `expected`), and a bare `1` there would be a magic value in the more
-// literal sense: the number that says what these builtins ARE. (`print`/`__Builtins.sleep`/`runProcess`
+// literal sense: the number that says what these builtins ARE. (`print`/`__Builtins.sleep`/`__Builtins.runProcess`
 // keep their own, because each has its own emit and its own operand rule.)
 let NumericBuiltinArity = 1 as ParamCount
 
@@ -4568,34 +4568,44 @@ let BinaryNumericBuiltinArity = 2 as ParamCount
 // `stdlib/Print.maxon`'s `print(value String)` by the ORDINARY checks now, which is what makes the
 // transcription unnecessary rather than merely duplicated.
 
-// **THE `runProcess` BUILTIN** (P1.5 subprocess seed). Like `print`, recognized by name after its arguments are
-// parsed: ordinary call syntax, but it emits no `MaxonOp.call` to a user function — it routes to the
-// `__gt_process_run(strPtr)` scheduler runtime entry (which spawns a Windows child, parks the current green
-// thread with a YIELDING wait, and returns the child's scalar exit code once it finishes).
+// **THE `__Builtins.runProcess` INTRINSIC** (P1.5 subprocess seed) — the YIELDING child-process wait. It emits
+// no `MaxonOp.call` to a user function: it routes to the `__gt_process_run(strPtr)` scheduler runtime entry,
+// which spawns a Windows child, parks the current green thread on the process handle, and returns the child's
+// scalar exit code once the netpoll observes it exit. Its arm is in the `__Builtins.*` table below.
 //
-// ⚠ It is a STAND-IN for a stdlib module shv2 cannot compile yet, and it therefore claims the bare name
-// `runProcess` the way `sleep` used to claim its own: a declaration of that name anywhere is silently
-// unreachable, because this test runs before any registry is consulted. Retire it the same way — delete the
-// name here and list the stdlib module that declares it — when that module compiles.
+// ⭐⭐ **IT WAS A BARE-NAME BUILTIN AND THAT WAS A LIVE DEFECT, NOT A COST OF BEING UNFINISHED (G17 defect 1).**
+// The bare name was tested in `parseCallNamed` before any registry was consulted, so a program declaring its own
+// `runProcess` found that declaration silently unreachable and its calls checked against the one-argument
+// stand-in. `maxon-shv2/Testing/SpecTestRunner.maxon:648` declares exactly such a function — four parameters,
+// three of them labelled — and shv2 answered `E3036: 'runProcess' takes exactly 1 argument, but 3 were given`
+// at its call sites, which is one of the eight defects standing between shv2 and its own harness. Moving the
+// name into the reserved `__Builtins.` space cures it by CONSTRUCTION rather than by a check: `E2051` bars
+// every declaration from that space, so no user name can contest this one again.
 //
-// TWO things the `sleep` retirement had that this note would otherwise let a reader assume come free:
-//   • The stdlib body needs a FLOOR to bottom out on, and the only one is a `__Builtins.*` intrinsic — the
-//     table below. `sleep` was retirable because `__Builtins.sleep` already existed and `stdlib/Sleep.maxon`
-//     was already written against it; there is no `__Builtins.runProcess`, so retiring this one MINTS that
-//     intrinsic first and the bare name second.
-//   • It CHANGES TARGET BEHAVIOUR for calls nothing reaches, and that is a decision, not a side effect: the
-//     runtime entry moves out of user code (where the target gate is reachability-BLIND) and into stdlib
-//     source (where it is reachability-AWARE), so an unreached call to the retired name starts compiling for
-//     targets that cannot lower its entry. `SemanticCheck.requireTargetSupportsCallee`'s header states the
-//     asymmetry and names the pair of spec cases that pin both halves for `sleep`. Pin both halves again.
-let RunProcessBuiltinName = b"runProcess"
+// ⚠⚠ **THE RETIREMENT MINTED AN INTRINSIC RATHER THAN LISTING A STDLIB MODULE, AND THE DIFFERENCE IS A
+// MECHANISM AND NOT A SPELLING.** `sleep` and `print` retired onto declarations — `stdlib/Sleep.maxon`,
+// `stdlib/Print.maxon` — whose bodies bottom out in an intrinsic. `stdlib/Subprocess.maxon` is listed too, but
+// it declares NO free `runProcess` and its `Subprocess.run` is a DIFFERENT mechanism: a poll-and-`__gt_sleep`
+// drain over the twenty `__Builtins.subprocess*` intrinsics below, not a park on the process handle. So there
+// was no declaration to move this entry to; PLAN's `#93` records reconciling the two as the deferred
+// full-Subprocess-API rung, and until it lands the intrinsic spelling IS the surface — the shape
+// `__Builtins.gtIsComplete` already has.
+//
+// ⚠ **THAT IS ALSO WHY THE TARGET ANSWER DID NOT MOVE.** Retiring a bare-name builtin ONTO STDLIB SOURCE
+// carries its calls across `SemanticCheck.requireTargetSupportsCallee`'s asymmetry — reachability-BLIND for
+// user code, reachability-AWARE for stdlib — so an unreached call starts compiling for targets that cannot
+// lower the entry (`async-sleep.unreached-compiles-on-wasm`). This entry stayed in USER code, so it stayed
+// blind, and `async-subprocess.rejected-on-wasm-when-unreached` pins that it did — the same half
+// `builtins-sleep.rejected-on-wasm-when-unreached` keeps for `__Builtins.sleep`.
+let BuiltinsRunProcessName = b"__Builtins.runProcess"
 
-// `runProcess` takes exactly one STRING argument — the command line — and returns an INTEGER (the child's exit
-// code), so unlike `__Builtins.sleep` its result IS usable in value position.
+// `__Builtins.runProcess` takes exactly one STRING argument — the command line — and returns an INTEGER (the
+// child's exit code), so unlike `__Builtins.sleep` its result IS usable in value position.
 let RunProcessArity = 1 as ParamCount
 
 // **THE `spawnReadLine` BUILTIN** (P1.5 dogfood slice 1a-ii — the IOCP overlapped-read PROBE). A TEMPORARY probe
-// surface (not the final async-subprocess-stdio API, which arrives with the stdlib in slice 1b): like `runProcess`,
+// surface (not the final async-subprocess-stdio API, which arrives with the stdlib in slice 1b): like
+// `__Builtins.runProcess`,
 // ordinary call syntax routing to a scheduler runtime entry — `__gt_io_read(strPtr)` — which spawns the command with
 // its stdout redirected to a fresh overlapped pipe, issues a YIELDING overlapped ReadFile, and returns the byte count
 // once the read completes. Non-throwing (returns an INTEGER, not the dual-register error ABI), so a bare
@@ -4699,8 +4709,8 @@ let MaxBuiltinName = b"max"
 // this predicate from collapsing into "is it a builtin". `subpWriteLine(h, line: s)` LABELS its second
 // argument on purpose: it is a stand-in for a stdlib method that will one day have a real declaration
 // with a real `line` parameter, and it is written the way that call will eventually be written. Ditto
-// `runProcess`/`spawnReadLine`, whose one argument is a String rather than a number and whose
-// eventual homes are stdlib declarations too. So the set is neither 'the builtins' nor 'the arity-2
+// `spawnReadLine` and `__Builtins.runProcess`, whose one argument is a String rather than a number. So
+// the set is neither 'the builtins' nor 'the arity-2
 // builtins' — it is the MATH intrinsics, the builtins that are permanently compiler-owned because each
 // IS a machine instruction and will never acquire a declaration to take labels from.
 //
@@ -4714,9 +4724,11 @@ let MaxBuiltinName = b"max"
 // questions ('does this name take labels' and 'which op does it emit') stay distinct; what is shared is
 // the one thing that must not be written twice, the SET.
 //
-// A builtin can still be a bare builtin without being here — NINE are: `runProcess`, `spawnReadLine` and
-// the seven `subp*` streaming-subprocess builtins. Every one of them is a stand-in for a declaration that
-// does not exist yet, which is exactly why they keep the ordinary label rule.
+// A builtin can still be a bare builtin without being here — EIGHT are: `spawnReadLine` and the seven
+// `subp*` streaming-subprocess builtins. Every one of them is a stand-in for a declaration that does not
+// exist yet, which is exactly why they keep the ordinary label rule. (`runProcess` was the ninth until
+// G17 moved it to `__Builtins.runProcess`; a `__Builtins.`-qualified name is not a bare builtin and takes
+// the `isBuiltinsIntrinsicCallee` half of the rule above instead.)
 //
 // ⚠ **THAT COUNT IS A PROSE COPY OF `parseCallNamed`'s CHAIN AND IT WAS WRONG FOR TWO RUNGS**, which is
 // the very failure `StdlibLoader`'s collision rule tells a maintainer to guard against by reading the
@@ -30311,7 +30323,7 @@ export type Parser
 	// and `try print("x")` compiled, and the desugar then branched on an error-flag register the callee never
 	// wrote — a `try` that takes its error path on whatever the ABI left in R10. The reference compiler
 	// rejects both. `isThrowingRuntimeCallee` is THE ONE home of "which builtin throws" (a throwing array
-	// accessor, or `runProcess`), and this is the exact mirror of `SemanticCheck.validatePlainCall`, which reads
+	// accessor, or `__Builtins.runProcess`), and this is the exact mirror of `SemanticCheck.validatePlainCall`, which reads
 	// the SAME predicate to report the opposite mistake (E3057 — a throwing builtin called WITHOUT `try`).
 	// Neither can drift from the other.
 	//
@@ -67118,10 +67130,6 @@ export type Parser
 			return try self.emitPositionalMathBuiltin(args, callee: callee, calleeTok: anchor)
 		end 'mathBuiltin'
 
-		if callee.equals(RunProcessBuiltinName) 'runProcessBuiltin'
-			return try self.emitRunProcess(args, calleeTok: anchor)
-		end 'runProcessBuiltin'
-
 		if callee.equals(SpawnReadLineBuiltinName) 'spawnReadLineBuiltin'
 			return try self.emitSpawnReadLine(args, calleeTok: anchor)
 		end 'spawnReadLineBuiltin'
@@ -67204,6 +67212,15 @@ export type Parser
 			if callee.equals(BuiltinsYieldName) 'yield'
 				return try self.emitYield(args, calleeTok: anchor, resultUsed: resultUsed)
 			end 'yield'
+
+			// ⭐ **THE THIRD ARM THAT HANDS OVER THE PROCESSOR, and the one with no declaration above it.**
+			// `sleep` and `yield` are stdlib's floor; this one is the whole surface, because
+			// `stdlib/Subprocess.maxon` reaches a child by a different mechanism entirely (see
+			// `BuiltinsRunProcessName`). It was a BARE name until G17 and the harness's own `runProcess` is
+			// what that cost.
+			if callee.equals(BuiltinsRunProcessName) 'runProcess'
+				return try self.emitRunProcess(args, calleeTok: anchor)
+			end 'runProcess'
 
 			// ⭐ **THE SCHEDULER'S ONE READ-ONLY QUESTION**, beside the two arms above that hand it the
 			// processor. It drives nothing and retires nothing (see `GtRuntime.GtIsCompleteName`), so unlike
@@ -67760,7 +67777,7 @@ export type Parser
 
 		// The buffer is BORROWED — the runtime entry reads `buffer@0`/`length@8` through it and never takes
 		// ownership — so there is no owned temporary to enrol and a literal argument needs no decref. This is
-		// exactly how `runProcess` borrows its command line.
+		// exactly how `__Builtins.runProcess` borrows its command line.
 		var callArgs = ValueIdArray.create()
 		callArgs.push(arg)
 		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
@@ -67945,26 +67962,26 @@ export type Parser
 		return self.emitRuntimeCall(GtReschedName, args: ValueIdArray.create(), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitYield'
 
-	// `runProcess(cmd)` — **SPAWN A WINDOWS CHILD AND AWAIT ITS EXIT CODE**, yielding the current green thread
-	// while it runs (P1.5 subprocess seed). A compiler BUILTIN like `print`: ordinary call syntax, but it emits no
-	// `MaxonOp.call` to a user function — it routes to the `__gt_process_run(strPtr)` scheduler runtime entry
-	// (which spawns the child with CreateProcessA, parks the GT on the process, and — once the netpoll observes
-	// the child exit — resumes and returns its scalar exit code). It requires exactly one STRING argument (the
-	// command line; a non-String is refused with E3005, mirroring `emitSleep`'s integer check) and returns an
-	// INTEGER, so — unlike `emitSleep`'s void — its result IS usable in value position and needs no `resultUsed` gate.
+	// `__Builtins.runProcess(cmd)` — **SPAWN A WINDOWS CHILD AND AWAIT ITS EXIT CODE**, yielding the current green
+	// thread while it runs (P1.5 subprocess seed). It emits no `MaxonOp.call` to a user function — it routes to the
+	// `__gt_process_run(strPtr)` scheduler runtime entry (which spawns the child with CreateProcessA, parks the GT
+	// on the process, and — once the netpoll observes the child exit — resumes and returns its scalar exit code).
+	// It requires exactly one STRING argument (the command line; a non-String is refused with E3005, mirroring
+	// `emitSleep`'s integer check) and returns an INTEGER, so — unlike `emitSleep`'s void — its result IS usable in
+	// value position and needs no `resultUsed` gate.
 	//
 	// The String is BORROWED, exactly as `print` borrows its argument: `__gt_process_run` reads the command
 	// line's `buffer`/`length` out of the 56-byte record (like `__print_string` does) and never takes ownership,
 	// so a literal command line needs no decref.
 	function emitRunProcess(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
 		if args.count() != RunProcessArity 'arity'
-			throw ParseError.builtinArity(String.from(RunProcessBuiltinName), expected: RunProcessArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.builtinArity(String.from(BuiltinsRunProcessName), expected: RunProcessArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
 		end 'arity'
 
 		let arg = try args.get(0) otherwise panic("emitRunProcess: args.count() == RunProcessArity just checked but get(0) failed")
 		let argTag = self.tagOf(arg)
 		if not tagIsText(argTag) 'notAString'
-			throw ParseError.builtinOperandType(String.from(RunProcessBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.builtinOperandType(String.from(BuiltinsRunProcessName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notAString'
 
 		var callArgs = ValueIdArray.create()
@@ -67973,11 +67990,11 @@ export type Parser
 	end 'emitRunProcess'
 
 	// `spawnReadLine(cmd)` — **THE IOCP OVERLAPPED-READ PROBE** (P1.5 slice 1a-ii). A compiler BUILTIN like
-	// `runProcess`: ordinary call syntax routing to the `__gt_io_read(strPtr)` scheduler runtime entry (spawn the
+	// `__Builtins.runProcess`: routing to the `__gt_io_read(strPtr)` scheduler runtime entry (spawn the
 	// command with stdout → a fresh overlapped pipe, issue a YIELDING overlapped read, return the byte count). It
 	// requires exactly one STRING argument (the command line; a non-String is refused, mirroring `emitRunProcess`)
 	// and returns an INTEGER. NON-throwing (a plain integer result, not the dual-register error ABI), so no `try`.
-	// The String is BORROWED exactly as `runProcess` borrows it (`__gt_io_read` reads buffer/length, never owns).
+	// The String is BORROWED exactly as `__Builtins.runProcess` borrows it (`__gt_io_read` reads buffer/length, never owns).
 	function emitSpawnReadLine(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
 		if args.count() != SpawnReadLineArity 'arity'
 			throw ParseError.builtinArity(String.from(SpawnReadLineBuiltinName), expected: SpawnReadLineArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)

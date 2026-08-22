@@ -9,21 +9,37 @@ category: concurrency
 
 ## Documentation
 
-`runProcess(cmd)` spawns a Windows child process for the command line `cmd`, suspends the **current green
+`__Builtins.runProcess(cmd)` spawns a Windows child process for the command line `cmd`, suspends the **current green
 thread** while the child runs, and returns the child's integer exit code once it finishes. It is a **yielding**
 wait: the thread parks on the child, hands control back to the scheduler, and RESUMES with its exit code once the
 child has exited — so other green threads run while a child is pending.
 
-`runProcess` is a **throwing** builtin (P1.5 #93): its two failure paths — a spawn failure and a full process
+⭐ **IT IS SPELLED `__Builtins.runProcess`, AND THE BARE NAME `runProcess` IS AN ORDINARY NAME.** It used to be a
+bare-name builtin, recognized before any registry was consulted, so a program declaring its own `runProcess`
+found that declaration silently unreachable and its calls checked against the builtin's arity — which is
+exactly what `maxon-shv2/Testing/SpecTestRunner.maxon`'s own four-parameter `runProcess` hit (`E3036`, G17
+defect 1). The entry moved into the reserved `__Builtins.` space, which `E2051` bars every declaration from,
+so no user name can contest it again. `the-bare-name-is-an-ordinary-declaration` below is the door that
+opened.
+
+⚠ **UNLIKE `sleep`, IT DID NOT MOVE INTO STDLIB SOURCE, AND THAT IS WHY ITS TARGET ANSWER DID NOT MOVE
+EITHER.** `sleep`'s retirement gave the entry to `stdlib/Sleep.maxon`, where the target gate is
+reachability-AWARE, so an unreached `sleep` began compiling for wasm (`async-sleep.unreached-compiles-on-wasm`).
+There is no stdlib declaration to give this one to: `stdlib/Subprocess.maxon`'s `Subprocess.run` is a different
+mechanism (a poll-and-`__gt_sleep` drain over `__Builtins.subprocess*`), and reconciling the two is the
+deferred full-Subprocess-API rung. `__Builtins.runProcess` therefore still emits `__gt_process_run` in USER
+code, where the gate is reachability-BLIND — pinned by `rejected-on-wasm-when-unreached` below.
+
+`__Builtins.runProcess` is a **throwing** builtin (P1.5 #93): its two failure paths — a spawn failure and a full process
 store — THROW rather than abort, so it must be called under `try`, exactly as a throwing array accessor is. It
 rides the same dual-register error ABI (`errorReturn`) an ordinary throwing call uses — the exit code in R8, the
-error flag in R10 — so `try runProcess(cmd) otherwise <handler>` catches the two failures that used to abort the
+error flag in R10 — so `try __Builtins.runProcess(cmd) otherwise <handler>` catches the two failures that used to abort the
 process, and a program can recover from them instead of dying. Recovery today is by VALUE — any error routes to
 the `otherwise` handler; binding `otherwise (e)` to a specific case is a deferred P1.7 feature, as for `ArrayError`.
 
 ```text
 function runChild() returns int
-	return try runProcess("cmd /c exit 3") otherwise 99
+	return try __Builtins.runProcess("cmd /c exit 3") otherwise 99
 end 'runChild'
 
 function main() returns ExitCode
@@ -39,11 +55,11 @@ timer is also pending, else indefinitely), never a busy-spin, and resumes each t
 the wait is bounded by the earliest timer, a thread that is merely sleeping still wakes on time even while another
 thread's child is still running.
 
-`runProcess` works from the main thread (`GT0`) and from a spawned `async` thread alike. Its argument is a
+`__Builtins.runProcess` works from the main thread (`GT0`) and from a spawned `async` thread alike. Its argument is a
 `String` command line — borrowed, not consumed; a `float`/`int`/`bool` is refused at compile time. Its result is
 an integer (the exit code), so — unlike `sleep` — it may be used in value position (under `try`).
 
-If the command names no runnable executable (`CreateProcessA` fails outright), `runProcess` throws its
+If the command names no runnable executable (`CreateProcessA` fails outright), it throws its
 **spawn-failure** error rather than parking on a non-existent child — a deterministic error the caller catches,
 never a hang. Parking more than the store's 64-slot capacity concurrently throws its **store-overflow** error
 rather than corrupting the parallel arrays. Both used to abort the process (exit 1 / exit 70); now they recover.
@@ -58,11 +74,11 @@ marker.
 <!-- test: async-subprocess.exit-code -->
 <!-- targets: x64-windows -->
 A spawned green thread runs a child that exits 3; the thread parks on the child (yielding), resumes once the child
-exits, and returns the exit code, which becomes the program's exit code. The `runProcess` succeeds, so the
+exits, and returns the exit code, which becomes the program's exit code. The spawn succeeds, so the
 `otherwise` fallback is never taken.
 ```maxon
 function runChild() returns int
-	return try runProcess("cmd /c exit 3") otherwise 99
+	return try __Builtins.runProcess("cmd /c exit 3") otherwise 99
 end 'runChild'
 
 function main() returns ExitCode
@@ -81,11 +97,11 @@ Two children run in sequence (spawn, await, spawn, await) with distinct exit cod
 read back independently and combined, proving no cross-talk between the two parked-then-resumed threads.
 ```maxon
 function childA() returns int
-	return try runProcess("cmd /c exit 4") otherwise 99
+	return try __Builtins.runProcess("cmd /c exit 4") otherwise 99
 end 'childA'
 
 function childB() returns int
-	return try runProcess("cmd /c exit 5") otherwise 99
+	return try __Builtins.runProcess("cmd /c exit 5") otherwise 99
 end 'childB'
 
 function main() returns ExitCode
@@ -109,15 +125,15 @@ time). Each exit code is read back into its own digit, so `123` proves all three
 right handle-to-thread mapping and no cross-talk.
 ```maxon
 function c1() returns int
-	return try runProcess("cmd /c exit 1") otherwise 99
+	return try __Builtins.runProcess("cmd /c exit 1") otherwise 99
 end 'c1'
 
 function c2() returns int
-	return try runProcess("cmd /c exit 2") otherwise 99
+	return try __Builtins.runProcess("cmd /c exit 2") otherwise 99
 end 'c2'
 
 function c3() returns int
-	return try runProcess("cmd /c exit 3") otherwise 99
+	return try __Builtins.runProcess("cmd /c exit 3") otherwise 99
 end 'c3'
 
 function main() returns ExitCode
@@ -145,7 +161,7 @@ that blocked the single thread on the child would instead produce `12`.
 var order = 0
 
 function slow() returns int
-	_ = try runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
+	_ = try __Builtins.runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
 	order = order * 10 + 1
 	return 1
 end 'slow'
@@ -175,7 +191,7 @@ Robustness: twenty-five spawned threads each run a child that exits 1, awaited i
 onto the free-list). The sum proves all twenty-five ran to completion with no crash, no use-after-free, and no leak.
 ```maxon
 function child() returns int
-	return try runProcess("cmd /c exit 1") otherwise 99
+	return try __Builtins.runProcess("cmd /c exit 1") otherwise 99
 end 'child'
 
 function main() returns ExitCode
@@ -205,7 +221,7 @@ before each spawn (the failure sentinel) and the exit-code slot is re-zeroed bef
 (a clean i64 read); the `__gt_live_count` gate stays clean, so a clean exit proves the reuse leaked nothing.
 ```maxon
 function child() returns int
-	return try runProcess("cmd /c exit 1") otherwise 99
+	return try __Builtins.runProcess("cmd /c exit 1") otherwise 99
 end 'child'
 
 function main() returns ExitCode
@@ -228,11 +244,11 @@ end 'main'
 <!-- targets: x64-windows -->
 A command that names no runnable executable makes `CreateProcessA` fail outright, leaving a null child handle. The
 runtime now THROWS its spawn-failure error (P1.5 #93) rather than aborting the process — so the direct
-`try runProcess(bad) otherwise 42` on GT0 catches it and returns the fallback 42. Before #93 this aborted with exit
+`try __Builtins.runProcess(bad) otherwise 42` on GT0 catches it and returns the fallback 42. Before #93 this aborted with exit
 1; now the program runs to a normal return, proving the spawn failure is recoverable, not fatal.
 ```maxon
 function main() returns ExitCode
-	let code = try runProcess("nonexistentprogram_xyz_12345") otherwise 42
+	let code = try __Builtins.runProcess("nonexistentprogram_xyz_12345") otherwise 42
 	return code as ExitCode
 end 'main'
 ```
@@ -243,13 +259,13 @@ end 'main'
 <!-- test: async-subprocess.spawn-failure-recover-continue -->
 <!-- targets: x64-windows -->
 Recovery leaves the scheduler CONSISTENT: after a caught `spawnFailed` (a command that cannot start), a SECOND
-`runProcess` of a VALID command still spawns, parks and returns its exit code. `bad` catches the spawn failure and
+A VALID command still spawns, parks and returns its exit code. `bad` catches the spawn failure and
 falls back to 0; `good` runs `cmd /c exit 9` normally. `0 + 9 = 9` proves the caught error did not leave the process
 store, the netpoller or the current GT in a broken state.
 ```maxon
 function main() returns ExitCode
-	let bad = try runProcess("nonexistentprogram_xyz_67890") otherwise 0
-	let good = try runProcess("cmd /c exit 9") otherwise 0
+	let bad = try __Builtins.runProcess("nonexistentprogram_xyz_67890") otherwise 0
+	let good = try __Builtins.runProcess("cmd /c exit 9") otherwise 0
 	return (bad + good) as ExitCode
 end 'main'
 ```
@@ -271,7 +287,7 @@ error, not a fatal abort. The other sixty-four promises are still parked at scop
 because it is the regression test for a memory-safety guard.
 ```maxon
 function child() returns int
-	return try runProcess("cmd /c exit 1") otherwise 88
+	return try __Builtins.runProcess("cmd /c exit 1") otherwise 88
 end 'child'
 
 function main() returns ExitCode
@@ -413,49 +429,95 @@ end 'main'
 ```
 
 <!-- test: async-subprocess.error.non-string-arg-rejected -->
-`runProcess` requires a `String` command line; a non-String argument is refused at compile time.
+`__Builtins.runProcess` requires a `String` command line; a non-String argument is refused at compile time.
 ```maxon
 function main() returns ExitCode
-	runProcess(42)
+	__Builtins.runProcess(42)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:2: 'runProcess' requires a String, but its argument is int
+error E3005: <fragment>:3:13: '__Builtins.runProcess' requires a String, but its argument is int
 ```
 
 <!-- test: async-subprocess.error.bare-call-requires-try -->
 <!-- targets: x64-windows -->
-`runProcess` is a throwing builtin (P1.5 #93), so a bare call that drops its error flag is refused (E3057) —
-the exact mirror of the throwing-array-accessor rule. A bare `runProcess` would read only the exit code (R8) and
-silently drop the spawn-failure/store-overflow flag (R10), so the compiler forces a `try`.
+`__Builtins.runProcess` is a throwing builtin (P1.5 #93), so a bare call that drops its error flag is refused
+(E3057) — the exact mirror of the throwing-array-accessor rule. A bare call would read only the exit code (R8)
+and silently drop the spawn-failure/store-overflow flag (R10), so the compiler forces a `try`.
 
 ⚠ **THE RULE IS TARGET-NEUTRAL AND THE CASE IS NOT, WHICH IS A CONSEQUENCE OF THE SUBSTRATE GATE.** Since
-`runProcess` joined `SemanticCheck.calleeNeedsWin32Substrate`, this program is refused on every other target
+this entry joined `SemanticCheck.calleeNeedsWin32Substrate`, this program is refused on every other target
 FIRST, with E3104 naming `__gt_process_run` — a correct refusal about a different property, and one no
 single pinned text can express alongside this one. The twin below pins that half.
 ```maxon
 function main() returns ExitCode
-	let code = runProcess("cmd /c exit 1")
+	let code = __Builtins.runProcess("cmd /c exit 1")
 	return code as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: <fragment>:3:13: throwing subprocess call requires try: wrap `runProcess(…)` as `try runProcess(…) otherwise …` — a bare call drops the spawn-failure error
+error E3057: <fragment>:3:24: throwing subprocess call requires try: wrap `__Builtins.runProcess(…)` as `try __Builtins.runProcess(…) otherwise …` — a bare call drops the spawn-failure error
 ```
 
 <!-- test: async-subprocess.error.rejected-on-wasm -->
 <!-- targets: wasm32-wasi -->
-The other half: `runProcess` spawns a Windows child through `__gt_process_run`, so a program that reaches it
+The other half: it spawns a Windows child through `__gt_process_run`, so a program that reaches it
 on any other target is refused at the call's own span with **E3104**. ⚠ It was OUTSIDE that gate until the
 subprocess rung, and `SemanticCheck.calleeNeedsWin32Substrate`'s header recorded what that cost: *"on another
 target they still die as a BACKEND PANIC rather than a diagnostic — MEASURED"*.
 ```maxon
 function main() returns ExitCode
-	let code = try runProcess("cmd /c exit 1") otherwise return 9
+	let code = try __Builtins.runProcess("cmd /c exit 1") otherwise return 9
 	return code as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:17: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:28: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation
+```
+
+<!-- test: async-subprocess.rejected-on-wasm-when-unreached -->
+<!-- targets: wasm32-wasi -->
+**The retirement did NOT move this program, and that is the half worth pinning.** `spawner` is never called,
+yet its intrinsic is still refused: `__Builtins.runProcess` emits `__gt_process_run` in USER code, where
+`SemanticCheck.requireTargetSupportsCallee` is reachability-BLIND — it visits every function, and
+dead-function elimination runs two tiers later. The twin `async-sleep.unreached-compiles-on-wasm` shows the
+opposite outcome for the retirement that DID hand its entry to stdlib source, where the gate is
+reachability-AWARE; this entry has no stdlib declaration to move to (see the *Documentation* section), so it
+keeps the property at the spelling that still has it, exactly as `builtins-sleep.rejected-on-wasm-when-unreached`
+does for `__Builtins.sleep`.
+```maxon
+function spawner() returns int
+	return try __Builtins.runProcess("cmd /c exit 1") otherwise 9
+end 'spawner'
+
+function main() returns ExitCode
+	return 4
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:24: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation
+```
+
+<!-- test: async-subprocess.the-bare-name-is-an-ordinary-declaration -->
+**THE DOOR THE RETIREMENT OPENED, and the defect it closed.** `runProcess` is no longer claimed by the parser,
+so a program may declare one and it is REACHED — with its own arity, its own `name:` labels and its own return
+type, none of which the one-argument builtin could express. Before the retirement this program was
+`E3036: 'runProcess' takes exactly 1 argument, but 3 were given`, reported against the call while the
+declaration sat there unreachable and undiagnosed — the shape `maxon-shv2/Testing/SpecTestRunner.maxon`'s own
+four-parameter `runProcess` hit, and G17 defect 1. Target-neutral: nothing here reaches a runtime entry.
+The three arguments carry 1, 2 and 4 so their SUM names exactly which of them arrived: a dropped or
+transposed label changes the total to a different, distinguishable number rather than to another 7.
+```maxon
+function runProcess(exe int, argv int, workingDirectory int) returns int
+	return exe + argv + workingDirectory
+end 'runProcess'
+
+function main() returns ExitCode
+	let n = runProcess(1, argv: 2, workingDirectory: 4)
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```

@@ -2806,10 +2806,11 @@ end 'throwingCallRequiresTryMessage'
 // per-method sentence would have displaced the family one. **`try-postfix-target.error.two-throwing-calls-in-
 // one-chain` pins this wording, on `__managed_slice`, and is the check that the move changed no answer.**
 function throwingRuntimeCalleeMessage(callee ByteArray) returns String
-	// The subprocess family words itself from the CALL rather than from a method name: `runProcess` is a free
-	// function, and what a bare one drops is a spawn failure, not an index.
+	// The subprocess family words itself from the CALL rather than from a method name: `__Builtins.runProcess`
+	// is a compiler intrinsic with no source method to name, and what a bare one drops is a spawn failure,
+	// not an index.
 	if isThrowingGtRuntimeCallee(callee) 'subprocessFamily'
-		return "throwing subprocess call requires try: wrap `runProcess(…)` as `try runProcess(…) otherwise …` — a bare call drops the spawn-failure error"
+		return "throwing subprocess call requires try: wrap `__Builtins.runProcess(…)` as `try __Builtins.runProcess(…) otherwise …` — a bare call drops the spawn-failure error"
 	end 'subprocessFamily'
 
 	// ⚠ The array family's sentence describes a CONSTRUCT and not a method, which is why it is here rather
@@ -2877,7 +2878,7 @@ function validatePlainCall(project Project, func IrFunction, signatures ProgramS
 	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 	// A THROWING BUILTIN reaching here as a plain `call` — not a `tryCall` — was written WITHOUT a `try`, so its
 	// error flag would be silently dropped: a throwing array accessor (`__managed_get`/…) would return a dummy 0 on an
-	// out-of-bounds read, and a bare `runProcess` (P1.5 #93) would return its sentinel exit code while dropping the
+	// out-of-bounds read, and a bare `__Builtins.runProcess` (P1.5 #93) would return its sentinel exit code while dropping the
 	// spawn-failure/store-overflow flag (a wrong answer). Both are compiler-internal callees, so the blanket skip
 	// below would hide them; the same E3057 "throwing call needs try" rule a user function gets is applied here
 	// first, off the SAME `isThrowingRuntimeCallee` the parser's E3055 accept reads (they cannot drift). The
@@ -3799,7 +3800,7 @@ end 'functionTypeDoorSite'
 // used to read: *"`runProcess(cmd)` and the streaming-subprocess builtins are outside it too: their runtime
 // entries (`__gt_process_*`) are not named here, so on another target they still die as a BACKEND PANIC
 // rather than a diagnostic — MEASURED"*. All three doors a program can spawn a child through now name their
-// entry here — `runProcess` → `__gt_process_run`, `spawnReadLine` → `__gt_io_read`, and the whole
+// entry here — `__Builtins.runProcess` → `__gt_process_run`, `spawnReadLine` → `__gt_io_read`, and the whole
 // `__gt_subp_` band behind the seven streaming builtins and the nineteen `__Builtins.subprocess*`
 // intrinsics (a twentieth name, `managedIsNull`, is a heap predicate and lowers nowhere near this band) —
 // so a subprocess program on arm64/linux/wasm is refused at the call's own span instead of panicking three
@@ -3833,7 +3834,7 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// later is gated by construction rather than by memory. Its own reason is stronger than "unimplemented
 	// elsewhere": `CreateProcessA`, three named pipes and an IOCP completion port are a WINDOWS shape, and
 	// WASI has no process-spawn primitive at all — so serving another target is a rung rather than a
-	// lowering, and on wasm it is not even that. `runProcess` and `spawnReadLine` are named individually
+	// lowering, and on wasm it is not even that. `__Builtins.runProcess` and `spawnReadLine` are named individually
 	// because their entries live in the SCHEDULER band rather than behind the subprocess prefix.
 	// The SOCKET band joins on the same terms and by the same PREFIX test. Its own reason is the
 	// subprocess band's, one library over: `ws2_32.dll` is a Windows shape, and while WASI does have
@@ -3930,18 +3931,18 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex O
 		// `specs/subprocess-unsupported.md` scopes the check to *"user call sites into the public
 		// subprocess API (`Subprocess.run`, `Configuration.run`, `StreamingSubprocess.spawn`, etc.)"*, and
 		// a crossing into stdlib is exactly what those are. A bare `__Builtins.subprocessSpawn` — or
-		// `runProcess`, or the seven `subp*` builtins — is the INTRINSIC FLOOR rather than the API, it
+		// `__Builtins.runProcess`, or the seven `subp*` builtins — is the INTRINSIC FLOOR rather than the API, it
 		// reaches the arm above, and it keeps answering E3104 with the entry named
 		// (`subprocess-builtins.rejected-on-wasm`, `async-subprocess.error.rejected-on-wasm`).
 		//
 		// ⚠ **THE RULE IS ABOUT THE API AND THE TEST IS ABOUT AN ENTRY BAND, AND THOSE ARE NOT THE SAME SET —
 		// SAID HERE, where the rule is, rather than left to be discovered at the predicate.**
-		// `isSubprocessRuntimeCallee` is the `__gt_subp_` prefix, and `runProcess`/`spawnReadLine` are
+		// `isSubprocessRuntimeCallee` is the `__gt_subp_` prefix, and `__Builtins.runProcess`/`spawnReadLine` are
 		// subprocess surfaces whose entries live in the SCHEDULER band instead
 		// (`calleeNeedsWin32Substrate` names them individually for the same reason). Today no stdlib function
 		// wraps either, so the two sets agree on every crossing that exists; one that did would be a stdlib
 		// crossing answering E3104. That is the direction this fails in — a WEAKER, still-true diagnostic
-		// rather than a missing one — and the day a stdlib module wraps `runProcess`, this test becomes
+		// rather than a missing one — and the day a stdlib module wraps `__Builtins.runProcess`, this test becomes
 		// `is this entry a process spawn?` rather than `is it in the subprocess band?`.
 		//
 		// ⚠ **THE MESSAGE CARRIES NO SPAN, AND THAT IS THE PINNED WIRE FORMAT RATHER THAN AN OVERSIGHT.**
