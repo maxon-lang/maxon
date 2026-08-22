@@ -17,17 +17,26 @@ function makeValue() returns Integer
 end 'makeValue'
 
 function main() returns ExitCode
+	let maxSpins = 100
 	var arr = IntPromiseArray.create()
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
 	let h = Holder.of(p)
+	let before = __Builtins.gtIsComplete(h.p.inner)
+	var spins = 0
+	var after = 0
+	while spins < maxSpins and after == 0 'drive'
+		Runtime.yield()
+		after = __Builtins.gtIsComplete(h.p.inner)
+		spins = spins + 1
+	end 'drive'
 	var score = 0
 	if h.p.inner == p.inner 'thetwodoorsagree'
 		score = score + 1
 	end 'thetwodoorsagree'
-	if __Builtins.gtIsComplete(h.p.inner) == __Builtins.gtIsComplete(p.inner) 'thetwopeeksagree'
+	if before == 0 and after == 1 'thechainreadsarealstatus'
 		score = score + 2
-	end 'thetwopeeksagree'
+	end 'thechainreadsarealstatus'
 	if await p == 42 'stillawaitable'
 		score = score + 4
 	end 'stillawaitable'
@@ -143,46 +152,84 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect Holder.of
     x64.movRegReg r13, r8
-    x64.movRegImm32 r14, 0
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.leaRegRegImm32 rax, rax, 0
-    x64.leaRegRegImm32 rcx, r12, 0
-    x64.cmpRegReg rax, rcx
-    x64.jcc equal, thetwodoorsagree
-    x64.jmp critsplit#12
-  thetwodoorsagree:
-    x64.leaRegRegImm32 r14, r14, 1
-    x64.jmp ifcont#4
-  critsplit#12:
-    x64.jmp ifcont#4
-  ifcont#4:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.leaRegRegImm32 rcx, rax, 0
     x64.callDirect __gt_is_complete
-    x64.movRegReg r15, r8
-    x64.leaRegRegImm32 rcx, r12, 0
+    x64.movRegReg r14, r8
+    x64.movRegImm32 r15, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r15, 100
+    x64.movRegImm32 rcx, 0
+    x64.jcc less, andrhs#4
+    x64.jmp critsplit#19
+  andrhs#4:
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.jmp scmerge#5
+  critsplit#19:
+    x64.jmp scmerge#5
+  scmerge#5:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, drive
+    x64.jmp whileexit
+  drive:
+    x64.callDirect Runtime.yield
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.leaRegRegImm32 rcx, rax, 0
     x64.callDirect __gt_is_complete
-    x64.cmpRegReg r15, r8
-    x64.jcc equal, thetwopeeksagree
-    x64.jmp critsplit#13
-  thetwopeeksagree:
-    x64.leaRegRegImm32 r14, r14, 2
-    x64.jmp ifcont#6
-  critsplit#13:
-    x64.jmp ifcont#6
-  ifcont#6:
+    x64.leaRegRegImm32 r15, r15, 1
+    x64.movRegReg rax, r8
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [r13 + 0]
+    x64.leaRegRegImm32 rdx, rdx, 0
+    x64.leaRegRegImm32 rsi, r12, 0
+    x64.cmpRegReg rdx, rsi
+    x64.jcc equal, thetwodoorsagree
+    x64.jmp critsplit#20
+  thetwodoorsagree:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp ifcont#9
+  critsplit#20:
+    x64.jmp ifcont#9
+  ifcont#9:
+    x64.cmpRegImm32 r14, 0
+    x64.movRegImm32 rdx, 0
+    x64.jcc equal, andrhs#10
+    x64.jmp critsplit#21
+  andrhs#10:
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg equal, rax
+    x64.jmp scmerge#11
+  critsplit#21:
+    x64.movRegReg rax, rdx
+    x64.jmp scmerge#11
+  scmerge#11:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, thechainreadsarealstatus
+    x64.jmp critsplit#22
+  thechainreadsarealstatus:
+    x64.leaRegRegImm32 r14, rcx, 2
+    x64.jmp ifcont#13
+  critsplit#22:
+    x64.movRegReg r14, rcx
+    x64.jmp ifcont#13
+  ifcont#13:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_await
     x64.cmpRegImm32 r8, 42
     x64.jcc equal, stillawaitable
-    x64.jmp critsplit#14
+    x64.jmp critsplit#23
   stillawaitable:
     x64.leaRegRegImm32 rax, r14, 4
-    x64.jmp ifcont#8
-  critsplit#14:
+    x64.jmp ifcont#15
+  critsplit#23:
     x64.movRegReg rax, r14
-    x64.jmp ifcont#8
-  ifcont#8:
+    x64.jmp ifcont#15
+  ifcont#15:
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
