@@ -1876,12 +1876,18 @@ function enumInterpRendering(layout EnumLayout) returns EnumInterpRendering
 	return EnumInterpRendering.rawNumber if layout.declaresRawValues else EnumInterpRendering.caseName
 end 'enumInterpRendering'
 
-// Every type NAME one file writes in a type position (P1.9). See `Parser.usedTypeNames`.
+// A set of type NAMES one file's parse recorded (P1.9). Two fields hold one: the names it WROTE in a type
+// position (`Parser.usedTypeNames`) and the types it reached a MEMBER of without writing anything
+// (`Parser.memberAccessedTypeNames`). They are two facts and are deliberately not merged — see there.
 export typealias UsedTypeNameSet = Set with ByteArray
 
-// The set every file that names no type at all shares — most files name several, but the sweep's and
-// the const evaluator's `Parser`s reach no type position whatever, and neither should allocate one.
+// The set every walk that records nothing shares — which is every walk but `parseModule`'s, since
+// `collectsTypeNameUses` gates both recorders, and a file that names no type and reaches into none at all.
 // Copy-on-write, exactly as `sharedEmptyInnerAliases` is (`Parser.recordTypeNameUse`).
+//
+// ⚠ **ONE singleton for BOTH fields**, and that is the rule `sharedEmptyDeferredNameDiagnostics` states: the
+// copy-on-write test is an IDENTITY test, so a second empty of the same type would make "which empty was
+// this field seeded with?" a fact to remember rather than one to derive.
 export let sharedEmptyUsedTypeNames = UsedTypeNameSet.create()
 
 // ⭐ THE ONE EMPTY `DeferredNameDiagnosticArray` every list of that type starts as — the parser's
@@ -12032,6 +12038,19 @@ export type Parser
 	// compile, 412.0M → 234.0M CPU ticks, `parse` 54.2 → 13.6 ms, and the emitted executable BYTE-IDENTICAL.**
 	let buildsBodies as bool
 	var usedTypeNames as UsedTypeNameSet
+	// ⭐⭐ **THE TYPES THIS FILE REACHED A MEMBER OF THROUGH A VALUE — the answer `requireFieldAccessible`
+	// ALREADY COMPUTED, kept (BATCH43).** A file can depend on another file's type without ever writing its
+	// name: `for it in h.items` then `it.n` needs `Item` VISIBLE and never spells it, which is exactly the
+	// question E4006 answers at that access. Recorded there and read by `checkUnusedExports`, so the
+	// export-hygiene question is the resolver's own answer rather than a second, weaker walk over the type
+	// graph — the two used to disagree, and a program caught between them had no legal spelling (E3092 said
+	// to drop the `export`, E4006 then refused the access).
+	//
+	// ⚠ **A SEPARATE SET FROM `usedTypeNames` ABOVE, WHICH HOLDS A DIFFERENT FACT.** That one is "a name this
+	// file WROTE in a type position" and is E3062's answer; this one holds names the file never wrote. Folding
+	// them together would tell E3062 that a file used an alias it never spelled the day a struct and an alias
+	// can wear one name.
+	var memberAccessedTypeNames as UsedTypeNameSet
 	// ⭐ **DOES THIS WALK COLLECT USES AT ALL?** Set by `parseModule` and false everywhere else, because
 	// `parseModule` is the only entry point that ever REPORTS (`reportUnusedTypeAliases`). The
 	// declaration sweep runs the same `parseTypeReference` over every signature, field and payload type
@@ -12273,6 +12292,7 @@ export type Parser
 			declaresCompilerInternalNames: declaresCompilerInternalNames,
 			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
 			usedTypeNames: sharedEmptyUsedTypeNames,
+			memberAccessedTypeNames: sharedEmptyUsedTypeNames,
 			collectsTypeNameUses: false,
 			declaredTypeAliases: sharedEmptyDeferredNameDiagnostics,
 			declaredFuncNames: sharedEmptyDeclaredFuncNames,
@@ -12327,6 +12347,11 @@ export type Parser
 		// measured wrong answer. It is the shared empty set unless this file wrote a type name, so a file
 		// that names none costs nothing.
 		self.artifact.usedTypeNames = self.usedTypeNames
+		// ⭐ **THE OTHER HALF OF THE SAME PUBLICATION** — the types this file's field accesses required to be
+		// VISIBLE, which no name it wrote can carry. Published beside the written names because
+		// `checkUnusedExports` needs both to answer one question; kept apart because they are two facts (see
+		// `Parser.memberAccessedTypeNames`).
+		self.artifact.memberAccessedTypeNames = self.memberAccessedTypeNames
 		return self.artifact
 	end 'parseModule'
 
@@ -18960,6 +18985,23 @@ export type Parser
 		end 'stillShared'
 		self.usedTypeNames.insert(name)
 	end 'recordTypeNameUse'
+
+	// ⭐ **A TYPE THIS FILE REACHED A MEMBER OF — `recordTypeNameUse`'s twin for the fact a written name
+	// cannot carry.** One call site (`requireFieldAccessible`), which states the rule; the copy-on-write shape
+	// and the `collectsTypeNameUses` gate are its twin's, for its twin's reason — `parseModule` is the only
+	// walk whose artifact anyone reads these sets off, so any other one would hash into a set it discards.
+	// Sharing ONE empty singleton with `usedTypeNames` is deliberate: the seed is an identity test, so a
+	// second empty of the same type would be a fact to remember rather than one to derive.
+	function recordMemberAccessedTypeName(name ByteArray)
+		if not self.collectsTypeNameUses 'notTheReportingWalk'
+			return
+		end 'notTheReportingWalk'
+
+		if self.memberAccessedTypeNames is sharedEmptyUsedTypeNames 'stillShared'
+			self.memberAccessedTypeNames = UsedTypeNameSet.create()
+		end 'stillShared'
+		self.memberAccessedTypeNames.insert(name)
+	end 'recordMemberAccessedTypeName'
 
 	// ⭐ **E3062, ONCE PER FILE, AT THE END OF ITS PARSE** — every non-exported top-level typealias whose
 	// name this file never wrote in a type position, in DECLARATION order.
@@ -63192,6 +63234,13 @@ export type Parser
 		if self.namesEnclosingType(layout.name) 'insideDeclaringType'
 			return
 		end 'insideDeclaringType'
+
+		// ⭐⭐ **THIS FILE REQUIRES `layout.name` VISIBLE, AND THIS IS THE ONE LINE THAT KNOWS IT.** Everything
+		// below decides whether the access is ALLOWED; the export audit needs the prior fact that it was
+		// ASKED FOR, because a file that reaches a type only this way never writes its name and therefore
+		// leaves no trace in `usedTypeNames`. Recorded after the enclosing-type rescue and not before it: the
+		// rescued access is by construction to this file's OWN declaration, which credits nothing.
+		self.recordMemberAccessedTypeName(layout.name)
 
 		// ⭐⭐ **E4006 — THE TYPE'S OWN VISIBILITY OUTRANKS THE FIELD'S (N1a), and v1 orders the two exactly
 		// this way** (`maxon-selfhosted/Compiler/TypeResolution.maxon:8215-8224`, the only implementation of

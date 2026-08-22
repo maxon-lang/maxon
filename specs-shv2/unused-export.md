@@ -533,6 +533,145 @@ end 'main'
 42
 ```
 
+<!-- test: cross-file-element-member-access-is-a-reference -->
+⚠⚠ **`app/main.maxon` NEVER WRITES `Item` — IT REACHES IT, AND THE TWO DIAGNOSTICS USED TO CONTRADICT
+EACH OTHER OVER THAT.** The element type is behind a generic-instance alias, so the transitive walk over
+`Holder`'s field type stops at `ItemArray`; E3092 therefore said to drop the `export`, and dropping it made
+E4006 refuse `it.n` — leaving the program no legal spelling at all. The reference now comes from the one
+line that DECIDES that visibility (`Parser.requireFieldAccessible`), so the audit cannot disagree with the
+resolver about it.
+```maxon
+// --- file: api/store.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Item
+	export let n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+export typealias ItemArray = Array with Item
+
+export type Holder
+	export let items as ItemArray
+
+	export static function create(items ItemArray) returns Self
+		return Self{items: items}
+	end 'create'
+end 'Holder'
+
+export function makeHolder() returns Holder
+	var xs = ItemArray.create()
+	xs.push(Item.create(7))
+	return Holder.create(xs)
+end 'makeHolder'
+
+// --- file: app/main.maxon
+typealias Count = int(i64.min to i64.max)
+
+function total(h Holder) returns Count
+	var t = 0
+	for it in h.items 'each'
+		t = t + it.n
+	end 'each'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	return total(makeHolder())
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: cross-file-inferred-value-member-access-is-a-reference -->
+The same defect one route over: `a`'s type is INFERRED from a callee's declared return, so `app/main.maxon`
+needs `Rec` visible for `a.n` and never writes the name. E3092 reported it and E4006 refused the access once
+the advice was taken.
+```maxon
+// --- file: api/build.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Rec
+	export let n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Rec'
+
+export function build() returns Rec
+	return Rec.create(7)
+end 'build'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let a = build()
+	return a.n
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.unused-exported-element-nothing-outside-reaches -->
+⭐⭐ **THE DISCRIMINATING CONTROL FOR THE TWO CASES ABOVE.** One line differs from
+`cross-file-element-member-access-is-a-reference` — the loop counts instead of reading `it.n` — and the
+verdict flips back. Nothing outside `api/store.maxon` reaches INTO an `Item`, so nothing outside needs it
+visible: dropping the `export` compiles (measured), and the finding is correct. Crediting every type merely
+REACHABLE from one a file names would delete this diagnostic and the three families beside it (a user
+generic's argument, a function alias's signature, a tuple alias's elements — each verified to compile once
+its `export` is dropped).
+```maxon
+// --- file: api/store.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Item
+	export let n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+export typealias ItemArray = Array with Item
+
+export type Holder
+	export let items as ItemArray
+
+	export static function create(items ItemArray) returns Self
+		return Self{items: items}
+	end 'create'
+end 'Holder'
+
+export function makeHolder() returns Holder
+	var xs = ItemArray.create()
+	xs.push(Item.create(7))
+	return Holder.create(xs)
+end 'makeHolder'
+
+// --- file: app/main.maxon
+typealias Count = int(i64.min to i64.max)
+
+function total(h Holder) returns Count
+	var t = 0
+	for it in h.items 'each'
+		t = t + 1
+	end 'each'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	return total(makeHolder())
+end 'main'
+```
+```maxoncstderr
+error E3092: api/<fragment>:5:13: exported type 'Item' is never referenced outside its declaring file
+```
+
 ## E3093 — referenced, but only from inside the declaring subtree
 
 <!-- test: error.exportable-as-module -->
@@ -564,6 +703,65 @@ end 'main'
 ```
 ```maxoncstderr
 error E3093: pkg/<fragment>:5:17: exported function 'pkg.subtreeOnly' is only referenced inside its declaring module subtree; consider 'module' visibility
+```
+
+<!-- test: subtree-only-is-not-a-finding-when-an-outside-file-reaches-a-member -->
+⭐⭐ **E3093 HAD ITS SIBLING'S HOLE, AND IT IS CLOSED BY THE SAME REFERENCE.** `pkg/sub/user.maxon` is the
+only file that NAMES `Item` and it is strictly nested, so the subtree rule fired — while `main.maxon`, which
+is outside the subtree entirely, reaches INTO an `Item` through `h.items`. Narrowing `Item` to `module` on
+that advice makes E4006 refuse the access, so the advice was wrong in exactly the way E3092's was.
+```maxon
+// --- file: pkg/store.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Item
+	export let n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+export typealias ItemArray = Array with Item
+
+export type Holder
+	export let items as ItemArray
+
+	export static function create(items ItemArray) returns Self
+		return Self{items: items}
+	end 'create'
+end 'Holder'
+
+export function makeHolder() returns Holder
+	var xs = ItemArray.create()
+	xs.push(Item.create(itemValue(Item.create(7))))
+	return Holder.create(xs)
+end 'makeHolder'
+
+// --- file: pkg/sub/user.maxon
+typealias Num = int(i64.min to i64.max)
+
+export function itemValue(i Item) returns Num
+	return i.n
+end 'itemValue'
+
+// --- file: main.maxon
+typealias Count = int(i64.min to i64.max)
+
+function total(h Holder) returns Count
+	var t = 0
+	for it in h.items 'each'
+		t = t + it.n
+	end 'each'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	return total(makeHolder())
+end 'main'
+```
+```exitcode
+7
 ```
 
 ## The audit needs two files the author wrote

@@ -14,13 +14,18 @@
 //   • `export` — other files may see this, AND I expect this program to use it. Audited here.
 //   • `public` — this is API surface. Exempt, because "no caller in THIS compilation" is not "dead".
 //
-// ⇒ **v1 needs TWO stdlib exemptions and this pass needs NONE.** `maxon-selfhosted` skips the whole
-// pass for the stdlib's own compile (`PassPipeline:321`) AND filters every stdlib declaration out of
-// the seed by PATH when compiling user code (`UnusedExportCheck:106`), whose comment says exactly why:
+// ⇒ **v1 needs TWO stdlib exemptions ON THE SEED and this pass needs NEITHER.** `maxon-selfhosted` skips
+// the whole pass for the stdlib's own compile (`PassPipeline:321`) AND filters every stdlib declaration out
+// of the seed by PATH when compiling user code (`UnusedExportCheck:106`), whose comment says exactly why:
 // *"Without this filter the pass would emit E3092 against every stdlib typealias the user happens not
 // to mention."* Every one of `stdlib/`'s 680 exported declarations is `public` now, so they fall out at
 // the `isProgramWideTier`-and-not-`global` test below like any other author's API surface would. The
 // exemption became a fact the author states instead of a path this pass has to know about.
+//
+// ⚠ **THE PASS DOES KNOW ABOUT THE LIBRARY IN ONE PLACE, AND IT IS THE READER SIDE, WHICH NEITHER v1
+// EXEMPTION COVERS** — `noteRead` refuses to let a library file be credited with a reference to an AUTHOR's
+// declaration, because a monomorphized `Array with Item` body carries `stdlib/Array.maxon` as its source
+// file and cannot possibly have named `Item`. The rule and what it cost are stated in full there.
 //
 // ⚠ **WHAT IS STILL AUDITED IN `stdlib/`: its six `module` declarations** (all in `String.maxon`).
 // That is deliberate — `module` is the marked, narrower tier there, and E3094 is exactly the signal its
@@ -109,6 +114,24 @@ typealias TrackedDeclIndexMap = Map with (ByteArray, TrackedDeclIndexArray)
 // credit the second reader with the first one's result.
 typealias VisitedTypeNameSet = Set with ByteArray
 
+// The LIBRARY's source files, keyed by the `FilePath.toString()` spelling every reader in this pass
+// already carries. A SET and not a second walk, because `isStdlibSourceFile` resolves a path against the
+// process's working directory — a `Directory.currentPath()` and two path builds — while `noteRead` asks
+// the question at every credit.
+typealias LibrarySourcePathSet = Set with String
+
+// The author's files and the library's, told apart in ONE walk over `project.db.sourcePaths`. Both halves
+// come from the same `isStdlibSourceFile` answer per path, so the two populations cannot come to
+// disagree about a file the way two independently-filtered walks could.
+type SourcePathSplit
+	export let userFiles as FilePathArray
+	export let libraryFiles as LibrarySourcePathSet
+
+	export static function create(userFiles FilePathArray, libraryFiles LibrarySourcePathSet) returns SourcePathSplit
+		return Self{userFiles: userFiles, libraryFiles: libraryFiles}
+	end 'create'
+end 'SourcePathSplit'
+
 // The seed, plus the three by-name indexes a reference is resolved through. One array so emission order
 // is DECLARATION order and therefore deterministic — a map iteration would make the diagnostic order an
 // artifact of hashing, and two runs of one compiler must print the same bytes.
@@ -117,9 +140,14 @@ type TrackedDecls
 	export var functionIndex as TrackedDeclIndexMap
 	export var typeIndex as TrackedDeclIndexMap
 	export var bindingIndex as TrackedDeclIndexMap
+	// Which files are the library's — the one fact `noteRead` needs about a reader that neither the
+	// reader's path nor the declaration carries. It rides here rather than as a fourth reader parameter
+	// threaded through every `note*` because it is a property of the PROGRAM and not of any one credit.
+	// Read by `noteRead` alone, which states the rule it serves.
+	export let libraryFiles as LibrarySourcePathSet
 
-	export static function create() returns TrackedDecls
-		return Self{entries: TrackedDeclArray.create(), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create()}
+	export static function create(libraryFiles LibrarySourcePathSet) returns TrackedDecls
+		return Self{entries: TrackedDeclArray.create(), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), libraryFiles: libraryFiles}
 	end 'create'
 
 	export function add(decl TrackedDecl)
@@ -155,14 +183,14 @@ end 'TrackedDecls'
 // ── The pass ─────────────────────────────────────────────────────────────────────────────────────
 
 export function checkUnusedExports(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
-	let userFiles = try userSourcePaths(project)
-	if userFiles.count() < MinimumUserFilesToAudit 'tooFewFilesToHaveAnOutside'
+	let sources = try splitSourcePaths(project)
+	if sources.userFiles.count() < MinimumUserFilesToAudit 'tooFewFilesToHaveAnOutside'
 		return
 	end 'tooFewFilesToHaveAnOutside'
 
-	var tracked = TrackedDecls.create()
+	var tracked = TrackedDecls.create(sources.libraryFiles)
 	seedFunctions(module, signatures: signatures, tracked: tracked)
-	try seedTypes(project, signatures: signatures, userFiles: userFiles, tracked: tracked)
+	try seedTypes(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	seedBindings(signatures, tracked: tracked)
 
 	if tracked.entries.count() == 0 'nothingWiderThanAFile'
@@ -170,22 +198,25 @@ export function checkUnusedExports(project Project, module MaxonModule, signatur
 	end 'nothingWiderThanAFile'
 
 	collectReferences(module, signatures: signatures, tracked: tracked)
-	try collectTypePositionReferences(project, signatures: signatures, userFiles: userFiles, tracked: tracked)
+	try collectFileTypeReferences(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	emitDiagnostics(project, tracked: tracked)
 end 'checkUnusedExports'
 
-// The files the AUTHOR wrote — see `MinimumUserFilesToAudit` for why the stdlib half cannot be counted.
-function userSourcePaths(project Project) returns FilePathArray throws CompileError
+// The files the AUTHOR wrote, and the library's own — see `MinimumUserFilesToAudit` for why the gate above
+// cannot count the library half, and `noteRead` for what the library half is used for.
+function splitSourcePaths(project Project) returns SourcePathSplit throws CompileError
 	var paths = FilePathArray.create()
+	var libraryFiles = LibrarySourcePathSet.create()
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibSourceFile(project, path: path) 'stdlibFile'
+			libraryFiles.insert(path.toString())
 			continue
 		end 'stdlibFile'
 		paths.push(path)
 	end 'eachFile'
 
-	return paths
-end 'userSourcePaths'
+	return SourcePathSplit.create(paths, libraryFiles: libraryFiles)
+end 'splitSourcePaths'
 
 // ── Seeding ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -437,12 +468,19 @@ function noteThrowsType(func IrFunction, signatures ProgramSignatures, tracked T
 	noteTypeName(signatures, tracked: tracked, name: errorName.toByteArray(), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 end 'noteThrowsType'
 
-// ⭐⭐ **CALLING A FUNCTION USES ITS SIGNATURE, AND THE CALLER'S FILE IS WHERE THAT USE HAPPENS.** A file
-// can depend on a type through a callee without ever writing the name: `try risky(9) otherwise (e)` binds
-// `e` to `risky`'s declared error union, and `var a = Outer.build()` binds `a` to a record declared in a
-// third file. Both were MEASURED reporting E3092 against the very type the case exists to pass across a
-// file boundary. The return type is asked through `returnTypeOf`, which ADOPTS the id into the reader's
-// interner — the discipline that door exists for, and the reason this is not a raw id read.
+// ⭐⭐ **CALLING A FUNCTION USES ITS DECLARED ERROR TYPE, AND THE CALLER'S FILE IS WHERE THAT USE HAPPENS.**
+// `try risky(9) otherwise (e)` binds `e` to `risky`'s declared error union without the caller ever writing
+// the name, and it was MEASURED reporting E3092 against the very type the case exists to pass across a file
+// boundary.
+//
+// ⛔ **THE RETURN TYPE IS NOT ASKED HERE, AND THIS HEADER CLAIMED IT WAS FOR THE WHOLE LIFE OF THE FILE**
+// (found BATCH43, by the program the claim predicts: `let a = build()` then `a.n`, with `build` and its
+// record declared together in another file, reported E3092 against that record and E4006 once the advice was
+// taken). It is not asked because it is not this pass's to derive: a value's type matters here only when the
+// reader reaches INTO it, and the line that decides THAT is `Parser.requireFieldAccessible`, whose answer
+// arrives as `FileParseArtifact.memberAccessedTypeNames`. Reading `returnTypeOf` as well would credit every
+// caller of every factory with its record whether or not the caller ever opened one — three families of
+// correct findings, deleted (see `collectFileTypeReferences`).
 function noteCalleeSignature(signatures ProgramSignatures, tracked TrackedDecls, callee ByteArray, readerFilePath FilePath, readerModuleDirectory String)
 	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return
 	noteTypeName(signatures, tracked: tracked, name: errorName.toByteArray(), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
@@ -461,21 +499,45 @@ function noteOpReferences(signatures ProgramSignatures, tracked TrackedDecls, op
 	end 'namesAStoredGlobal'
 end 'noteOpReferences'
 
-// ⭐⭐ **EVERY TYPE NAME EACH FILE WROTE IN A TYPE POSITION — the one source that survives ERASURE.**
-// A ranged typealias in a signature is `integer` by the time any pass sees it (MEASURED: `scoreOf(s Score)`
-// declared in another file leaves `maxonParamTypes` holding `integer` with `UnnamedTypeId`), so reading
-// declared types alone reports a genuinely-used `export typealias` as E3092 — a wrong answer. The parser
-// already records this set for E3062, which asks the same question one scope narrower ("did this FILE use
-// its own alias?"), so the answer is shared rather than re-derived.
-function collectTypePositionReferences(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
+// ⭐⭐ **THE TWO SETS EACH FILE'S OWN PARSE RECORDED — the names it WROTE, and the types it reached a MEMBER
+// of without writing anything.** Neither survives anywhere else, and the check is wrong without either.
+//
+// **WRITTEN NAMES** are the one source that survives ERASURE. A ranged typealias in a signature is `integer`
+// by the time any pass sees it (MEASURED: `scoreOf(s Score)` declared in another file leaves
+// `maxonParamTypes` holding `integer` with `UnnamedTypeId`), so reading declared types alone reports a
+// genuinely-used `export typealias` as E3092 — a wrong answer. The parser already records this set for
+// E3062, which asks the same question one scope narrower ("did this FILE use its own alias?"), so the answer
+// is shared rather than re-derived.
+//
+// ⭐⭐ **MEMBER-ACCESSED TYPES ARE THE RESOLVER'S OWN ANSWER TO THIS PASS'S QUESTION, AND WITHOUT THEM THE
+// TWO DIAGNOSTICS CONTRADICTED EACH OTHER (BATCH43).** `for it in h.items` then `it.n` requires `Item`
+// VISIBLE and never spells it: the transitive walk below reaches `Holder`'s field type `ItemArray` and stops
+// at the alias, so E3092 told the author to drop an `export` that E4006 then refused the access without —
+// a program with no legal spelling. `Parser.requireFieldAccessible` is the line that decides that
+// visibility question, so it is the line that records it; this pass ASKS the resolver instead of walking the
+// type graph a second, weaker way.
+//
+// ⚠ **IT IS NOT "EVERY TYPE STRUCTURALLY REACHABLE FROM ONE THIS FILE NAMES", AND THAT DISTINCTION IS
+// MEASURED.** A reader that holds a `Crate with Item`, a `function(Payload) returns …` or a `(Elem, Integer)`
+// without ever reaching INTO one compiles perfectly well once the `export` is dropped — verified on all
+// three — so crediting them would delete three families of correct findings. What earns a credit is a
+// visibility the resolver actually demanded.
+function collectFileTypeReferences(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
 	for path in userFiles 'eachFile'
 		let artifact = try queryParseOps(project, path: path)
 		let readerModuleDirectory = signatures.moduleDirectoryOf(path)
-		for name in artifact.usedTypeNames 'eachUsedName'
-			noteTypeName(signatures, tracked: tracked, name: name, readerFilePath: path, readerModuleDirectory: readerModuleDirectory)
-		end 'eachUsedName'
+		noteEveryTypeName(signatures, tracked: tracked, names: artifact.usedTypeNames, readerFilePath: path, readerModuleDirectory: readerModuleDirectory)
+		noteEveryTypeName(signatures, tracked: tracked, names: artifact.memberAccessedTypeNames, readerFilePath: path, readerModuleDirectory: readerModuleDirectory)
 	end 'eachFile'
-end 'collectTypePositionReferences'
+end 'collectFileTypeReferences'
+
+// Both of a file's recorded name sets are credited the same way — the two differ in what they MEAN, not in
+// what a reference to one of their names does, so the crediting is written once.
+function noteEveryTypeName(signatures ProgramSignatures, tracked TrackedDecls, names UsedTypeNameSet, readerFilePath FilePath, readerModuleDirectory String)
+	for name in names 'eachName'
+		noteTypeName(signatures, tracked: tracked, name: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'eachName'
+end 'noteEveryTypeName'
 
 // v1's `crossFileConstReads`, in shv2's spelling — see `ProgramSignatures.notedConstantValue` for why an
 // inlined constant cannot be found in the IR at all.
@@ -636,9 +698,33 @@ end 'noteGlobalLabel'
 // `moduleDirectoryContains`, whose own answer includes it.
 function noteRead(tracked TrackedDecls, index TrackedDeclIndex, readerFilePath FilePath, readerModuleDirectory String)
 	var decl = tracked.at(index)
-	if decl.declFilePath.toString().equals(readerFilePath.toString()) 'itsOwnFile'
+	// Both spellings are taken ONCE and reused by the two tests below — the same-file test already needed
+	// both, and this runs at every credit the walk makes.
+	let readerPath = readerFilePath.toString()
+	let declPath = decl.declFilePath.toString()
+	if declPath.equals(readerPath) 'itsOwnFile'
 		return
 	end 'itsOwnFile'
+
+	// ⭐⭐ **A LIBRARY FILE CANNOT NAME AN AUTHOR'S DECLARATION — A CREDIT THAT SAYS OTHERWISE IS A
+	// MONOMORPH'S SIGNATURE, NOT A REFERENCE.** `stdlib/` is compiled with no knowledge whatever of user
+	// code, so no line in it can mention `type Item`; what the walk actually met is `ArrayIterator.create`
+	// INSTANTIATED over the author's element type, whose `sourceFilePath` is `stdlib/Array.maxon` because
+	// that is where its body was written. The instantiation was demanded by an author's file, and that file
+	// is credited on its own wherever it genuinely reaches the type.
+	//
+	// ⛔ **IT SUPPRESSED TRUE FINDINGS, AND IT DID SO UNPREDICTABLY.** MEASURED (BATCH43): two three-file
+	// programs differing only in whether the READING file declared its own `typealias Count` got different
+	// answers for the same `export type Item` — one E3092, one clean — because the monomorphized iterator's
+	// signature mentioned `Item` in one and not in the other. It also made the E3093 half of this pass
+	// unfalsifiable: every route by which an outside file reaches a container's ELEMENT type runs through a
+	// library generic, so the finding could not fire on any of them.
+	//
+	// ⚠ **ONE DIRECTION ONLY.** A library file reading a LIBRARY declaration is an ordinary reference, and it
+	// is what keeps `stdlib/String.maxon`'s six `module` declarations audited (see this file's header).
+	if tracked.libraryFiles.contains(readerPath) and not tracked.libraryFiles.contains(declPath) 'aLibraryBodyNamedNothingTheAuthorWrote'
+		return
+	end 'aLibraryBodyNamedNothingTheAuthorWrote'
 
 	decl.sawOutsideFile = true
 
