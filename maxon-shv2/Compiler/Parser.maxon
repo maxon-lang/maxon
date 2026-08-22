@@ -474,6 +474,11 @@ export union ParseError implements Error
 	// assign to — what they must change is the ARGUMENT — so the sentence states the two types and
 	// nothing else. Renders as E3005; see `SlotMismatchVoice.payloadArgument`.
 	typeMismatchExpectedGot(expected String, got String, line LineNumber, column ColumnNumber)
+	// ⭐ **`<Type> from "…"` NAMED A TYPE THAT DOES NOT DECLARE `InitableFromStringLiteral`** — the verdict
+	// `checkLiteralInitConformance` reaches for the BODY spelling, needed as a ParseError because the
+	// TOP-LEVEL spelling is decided in the const evaluator, which throws rather than reporting. Same code
+	// (E3005) and same sentence, so the two positions answer identically.
+	literalInitDoesNotConform(typeName String, interfaceName String, line LineNumber, column ColumnNumber)
 	// ⭐ A statement-level TUPLE ASSIGNMENT whose target count does not match the tuple's element count
 	// (`(x) = makePair(…)`). Renders as E3005, positioned on the `(` — where the author decided how many
 	// targets to write. Both the code and the wording are `specs/tuple-assign.md`'s, pinned by
@@ -65642,7 +65647,7 @@ export type Parser
 		// other reading of either — so a call surfaced as *"Expected 'min' or 'max'"* and a struct literal as
 		// **E2004 `Undefined constant 'Pair'`**, a message about a `let` the author never wrote. That is the
 		// identical misattribution the `CharSet from […]` and `ItemArray.create()` arms below were added for.
-		if self.atConstInitializerCall() or self.atConstStructConstruction() 'deferredNodeInitializer'
+		if self.atConstInitializerCall() or self.atConstStructConstruction() or self.atConstStringLiteralInit() 'deferredNodeInitializer'
 			var calls = ConstFactoryCallArray.create()
 			let root = try self.evalConstInitializerNodeInto(calls, stack: stack, nested: false)
 			try self.requireInitializerConsumed(decl, deferred: true)
@@ -65829,6 +65834,28 @@ export type Parser
 		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftBrace
 	end 'atConstStructConstruction'
 
+	// ⭐⭐ **IS THE CURSOR ON `<TypeName> from "…"` — A STRING-LITERAL `init` CONSTRUCTION?** The THIRD
+	// initializer that builds a record without folding one, and it reads the identical token shape its body
+	// twin does (`atStringLiteralInitConstruction`) through the identical `structOf` test — one question, two
+	// positions, so a type this admits in a body is a type it admits here.
+	//
+	// ⛔ **IT WAS MISSING, AND SHV2'S OWN `Project.maxon:407` IS THE PROGRAM:**
+	// `export let CompilerOwnedDeclFilePath = FilePath from ""`. Unrecognised, the scalar walk read the bare
+	// `FilePath` as a reference to another top-level `let` — its only other reading of an identifier — and
+	// answered **E2004 `Undefined constant 'FilePath'`**, a message about a constant nobody wrote. That is
+	// the SAME misattribution the struct-literal and factory-call arms beside it were added for, a third
+	// time, and it cost four errors: the declaration plus the three files that read the name it declares.
+	function atConstStringLiteralInit() returns bool
+		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.kindAt((self.pos + 2) as TokenIndex) == TokenKind.stringLiteral) 'notTheShape'
+			return false
+		end 'notTheShape'
+
+		return match self.signatures.structOf(self.current().value) 'declared'
+			declared gives true
+			undeclared gives false
+		end 'declared'
+	end 'atConstStringLiteralInit'
+
 	// ⭐ **WALK WHICHEVER NODE IS HERE INTO THE ARENA** — the ONE fork between the two ways a top-level
 	// initializer produces a record without folding one (W116), so a whole initializer and a nested
 	// argument/field admit exactly the same pair rather than two lists that could drift.
@@ -65843,8 +65870,66 @@ export type Parser
 			return try self.evalConstStructConstructionInto(calls, stack: stack)
 		end 'structLiteral'
 
+		if self.atConstStringLiteralInit() 'stringLiteralInit'
+			return try self.evalConstStringLiteralInitInto(calls)
+		end 'stringLiteralInit'
+
 		return try self.evalConstFactoryCallInto(calls, stack: stack, nested: nested)
 	end 'evalConstInitializerNodeInto'
+
+	// ⭐⭐ **`FilePath from ""` AS AN INITIALIZER — recorded as the CALL it already is.** The body form is a
+	// call to the type's own `init` static (`parseStringLiteralInitConstruction`, whose callee is
+	// `qualifiedMethodName(<Type>, methodName: StringInitMethod)`), so nothing new is evaluated here: this
+	// walk states WHICH function to call and WHAT to pass it, and `__module_init` builds the record before
+	// `main` exactly as it does for `Database.create(…)`.
+	//
+	// ⚠ **THE ARGUMENT IS THE DECODED LITERAL, THROUGH `decodeConstStringLiteral` — the same decoder the
+	// scalar walk's own string arm uses**, so an escape means here what it means there. It is `folded`
+	// rather than a nested `call` because a literal runs no user code; that is the whole of the difference
+	// between this arm and the one below it.
+	//
+	// ⛔⛔ **IT ASKS WHETHER THE `init` EXISTS, AND DELIBERATELY NOT WHETHER IT IS EXPORTED.**
+	// `requireGlobalInitCalleeIsVisible` — the door the qualified factory form takes — was tried here first
+	// and REFUSED shv2's own `Project.maxon:407` with `E3008 function 'FilePath.init' is not exported`, on a
+	// program the bootstrap runs. That is the right question for `Database.create(…)`, where the author NAMED
+	// the method, and the wrong one here: this construction reaches `init` through the type's CONFORMANCE and
+	// never spells it, which is exactly why the body form (`parseStringLiteralInitConstruction`) does not ask
+	// it either. Asking existence keeps the arm honest about what it is recording — a call `__module_init`
+	// will emit — without inventing a visibility rule the body spelling does not have.
+	function evalConstStringLiteralInitInto(calls ConstFactoryCallArray) returns InitializerCallId throws ConstEvalError
+		let typeTok = self.current()
+		self.advance()
+		try self.consumeConstToken(TokenKind.from)
+
+		// ⛔⛔ **THE CONFORMANCE IS CHECKED HERE, AND LEAVING IT OUT WAS A FALSE ACCEPT.** The body spelling's
+		// conformance is decided by `checkLiteralInitConformance`, which walks `project.literalInitSites` —
+		// a store the REAL PARSE fills and this phase cannot reach, so a top-level construction recorded
+		// nothing and was checked by nobody. **MEASURED with the check absent**: a `type Tag` with an `init`
+		// static and NO `implements InitableFromStringLiteral` compiled and RAN, where the bootstrap answers
+		// `E3005 Type 'Tag' does not conform to InitableFromStringLiteral`. Accepting what the oracle refuses
+		// is the costly direction, and this arm created it.
+		//
+		// ⭐ It asks the SAME predicate through the SAME pair `checkLiteralInitConformance` asks it through
+		// (`typeDeclaresInterface` over a declared-conformance map and the interface map), reading the SWEEP's
+		// own store — which is exactly the substitution `sweptConformanceIndex`'s header exists for: two
+		// stores of the declarations at two moments, one map type and one predicate, so what "conforms" MEANS
+		// is stated once. The wording is the oracle's, verbatim.
+		if not typeDeclaresInterface(self.signatures.sweptConformanceIndex(), interfaces: self.signatures.interfaceMap(), typeName: typeTok.value, interfaceName: InitableFromStringLiteralName) 'doesNotConform'
+			throw ConstEvalError.defective(ParseError.literalInitDoesNotConform(String.from(typeTok.value), interfaceName: String.from(InitableFromStringLiteralName), line: typeTok.line, column: typeTok.column))
+		end 'doesNotConform'
+
+		let callee = qualifiedMethodName(typeTok.value, methodName: StringInitMethod)
+
+		let decoded = try self.decodeConstStringLiteral(self.consumeManagedLiteral())
+
+		var args = ConstFactoryArgumentArray.create()
+		args.push(ConstFactoryArgument.create(EmptySourceText, value: ConstFactoryArgumentValue.folded(ConstFoldedValue.managed(decoded, kind: ManagedConstKind.string))))
+
+		let id = calls.count()
+		calls.push(ConstFactoryCall.call(callee, args: args))
+
+		return id
+	end 'evalConstStringLiteralInitInto'
 
 	// ⭐⭐ **`Database.create(EntryMap.create(), sourcePaths: StringArray.create())` — A GLOBAL BUILT BY THE
 	// PROGRAM'S OWN CODE** (spec-port `map-struct-bytearray`). The cursor sits on the type name;

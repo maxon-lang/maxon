@@ -2312,3 +2312,79 @@ end 'main'
 ```stdout
 global=0 local=3
 ```
+
+### `<Type> from "…"` AS A TOP-LEVEL INITIALIZER
+
+⛔⛔ **THE CONST EVALUATOR HAD NO READING OF THIS SHAPE, AND ANSWERED ABOUT A CONSTANT NOBODY WROTE.**
+shv2's own `Compiler/Project.maxon:407` is `export let CompilerOwnedDeclFilePath = FilePath from ""`.
+Unrecognised, the scalar walk read the bare `FilePath` as a reference to another top-level `let` — its
+only other reading of an identifier — and answered **E2004 `Undefined constant 'FilePath'`**. That is the
+SAME misattribution the struct-literal and factory-call arms beside it were added for, a third time, and
+it cost four errors: the declaration plus the three files that read the name it declares.
+
+⭐ **IT IS RECORDED AS THE CALL IT ALREADY IS.** The body form calls the type's own `init` static, so
+nothing new is evaluated: the walk states WHICH function to call and WHAT to pass it, and `__module_init`
+builds the record before `main` exactly as it does for `Database.create(…)`.
+
+⛔⛔ **AND THE CONFORMANCE HAD TO BE CHECKED HERE, WHICH THE FIRST CUT OF THIS ARM DID NOT DO.** The body
+spelling's conformance is decided by `checkLiteralInitConformance`, which walks `project.literalInitSites`
+— a store the REAL PARSE fills and the const evaluator cannot reach. So a top-level construction recorded
+nothing and was checked by nobody. **MEASURED with the check absent: a `type Tag` with an `init` static
+and NO `implements InitableFromStringLiteral` compiled and RAN**, where the bootstrap answers
+`E3005 Type 'Tag' does not conform to InitableFromStringLiteral`. Accepting what the oracle refuses is the
+costly direction. The arm now asks the SAME predicate through the SAME pair, reading the sweep's own
+store — the substitution `sweptConformanceIndex`'s header exists for — and reports the same code with the
+same sentence.
+
+<!-- test: a-top-level-let-built-by-a-string-literal-init -->
+Both a `""` and a non-empty literal, so the argument is carried and not merely accepted.
+```maxon
+interface InitableFromStringLiteral
+end 'InitableFromStringLiteral'
+
+type Tag implements InitableFromStringLiteral
+	export let text as String
+
+	export static function init(text String) returns Self
+		return Self{text: text}
+	end 'init'
+end 'Tag'
+
+let emptyTag = Tag from ""
+let namedTag = Tag from "hello"
+
+function main() returns ExitCode
+	print("empty={emptyTag.text.byteLength()} named={namedTag.text}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+empty=0 named=hello
+```
+
+<!-- test: error.a-top-level-string-literal-init-still-needs-the-conformance -->
+⭐ **THE CONTROL, AND IT IS THE HALF A FIRST CUT OF THIS ARM GOT WRONG.** The only difference from the
+case above is the missing `implements` clause. Same code, same sentence, same anchor as the body spelling
+and as the bootstrap.
+```maxon
+type Tag
+	export let text as String
+
+	export static function init(text String) returns Self
+		return Self{text: text}
+	end 'init'
+end 'Tag'
+
+let namedTag = Tag from "hello"
+
+function main() returns ExitCode
+	print("n={namedTag.text}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/static-variables/error.a-top-level-string-literal-init-still-needs-the-conformance.test:10:16: Type 'Tag' does not conform to InitableFromStringLiteral
+```
