@@ -655,3 +655,68 @@ end 'main'
 ```exitcode
 42
 ```
+
+### A KEYWORD-NAMED CALL TARGET AFTER `try`
+
+⛔⛔ **`parseTryCallReceiver`'s general arm asked `TokenKind.identifier`, WHICH A KEYWORD IS NOT.** Since D8
+a function and a parameter may be DECLARED with a keyword, so `try from.get(k)` on a parameter named `from`
+(`IR/CsrGraph.maxon:75`) is an ordinary throwing method call — and it was
+`E2015 "try must be applied to a call … (got 'from')"` on source the bootstrap compiles. This is
+`keyword-as-a-declared-name.md`'s rule at one more door.
+
+⭐⭐ **THE ARM MOVED DOWN RATHER THAN GAINING AN EXCLUSION LIST, and the difference is the one this file
+keeps paying for.** Widened where it stood, it would have claimed `Self.check(v)` and `int.fromString(s)`
+out from under the two arms that exist to serve them — the `Self` arm's own header says it cannot ride the
+named arm, and a primitive static reaches `parseDottedPrimary` through neither. The alternative was
+`tokenCanBeAName(…) and not at(selfType) and not primitiveStaticCallAt(…)`, an enumerated exclusion that
+goes stale the next time a keyword-headed target earns an arm. **Ordering IS the rule in this router** — its
+own header says the field-chain arm is "checked FIRST" for exactly this reason — so the general case goes
+last and every specific one keeps its claim by standing above it.
+
+<!-- test: a-try-target-may-be-a-keyword-named-receiver -->
+All three shapes in one program, because the fix is about which arm claims which: a KEYWORD-named receiver
+(the one that was broken), a PRIMITIVE static, and a `Self.`-qualified static — the two that had to keep
+their claim when the general arm moved past them.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+enum BoxError implements Error
+	negative
+end 'BoxError'
+
+type Box
+	export let n as Integer
+
+	export static function viaSelf(n Integer) returns Integer throws BoxError
+		if n < 0 'bad'
+			throw BoxError.negative
+		end 'bad'
+		return n + 1
+	end 'viaSelf'
+
+	export static function checked(n Integer) returns Integer throws BoxError
+		return try Self.viaSelf(n) otherwise panic("self")
+	end 'checked'
+end 'Box'
+
+function firstOf(from IntArray) returns Integer
+	return try from.get(0) otherwise panic("oob")
+end 'firstOf'
+
+function main() returns ExitCode
+	var xs = IntArray.create()
+	xs.push(7)
+	let a = firstOf(xs)
+	let b = try int.fromString("5") otherwise panic("parse")
+	let c = try Box.checked(1) otherwise panic("checked")
+	print("a={a} b={b} c={c}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=7 b=5 c=2
+```

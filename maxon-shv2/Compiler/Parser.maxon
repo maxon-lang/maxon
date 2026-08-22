@@ -30296,14 +30296,6 @@ export type Parser
 		if self.at(TokenKind.self) 'selfCall'
 			return try self.parseSelfPrimary(func, resultUsed: false)
 		end 'selfCall'
-		if self.at(TokenKind.identifier) 'named'
-			if self.peekKind() == TokenKind.leftParen 'freeCall'
-				return try self.parseCall(func, resultUsed: false)
-			end 'freeCall'
-			if self.peekKind() == TokenKind.dot 'dotted'
-				return try self.parseDottedPrimary(func, resultUsed: false)
-			end 'dotted'
-		end 'named'
 		// `try Self.check(v) otherwise …` — the `Self.` spelling of the qualified static the arm above serves
 		// (D9). `Self` is its own keyword token, so it cannot ride that arm; and it opens the DOTTED form ONLY,
 		// which is why it is not simply folded into it — there is no `Self(…)` free call for the sibling
@@ -30380,6 +30372,31 @@ export type Parser
 		if self.at(TokenKind.leftParen) 'parenthesizedTarget'
 			return try self.parseParenthesizedExpression(func)
 		end 'parenthesizedTarget'
+
+		// ⭐⭐ **THE GENERAL NAMED TARGET, AND IT IS LAST ON PURPOSE.** `try f(…)` and `try obj.method(…)` where
+		// the head is any token that can stand as a NAME — which since D8 includes a KEYWORD, because a
+		// function and a parameter may be declared with one. `try from.get(k)` on a parameter named `from`
+		// (`IR/CsrGraph.maxon:75`) is the shape, and it was `E2015 "try must be applied to a call … (got
+		// 'from')"` on source the bootstrap compiles — this arm asked `TokenKind.identifier`, which a keyword
+		// is not.
+		//
+		// ⚠ **IT MOVED DOWN RATHER THAN GAINING AN EXCLUSION LIST, and the difference is the one this file
+		// keeps paying for.** Widened in place it would have claimed `Self.check(v)` and `int.fromString(s)`
+		// out from under the two arms above that exist to serve them — the `Self` arm's own header says it
+		// cannot ride the named arm, and a primitive static reaches `parseDottedPrimary` through neither. The
+		// alternative was `tokenCanBeAName(…) and not at(selfType) and not primitiveStaticCallAt(…)`, an
+		// enumerated exclusion that goes stale the next time a keyword-headed target earns an arm. Ordering
+		// IS the rule here — the router's own header says the field-chain arm is "checked FIRST" for exactly
+		// this reason — so the general case goes last and every specific one keeps its claim by standing
+		// above it.
+		if tokenCanBeAName(self.current()) 'named'
+			if self.peekKind() == TokenKind.leftParen 'freeCall'
+				return try self.parseCall(func, resultUsed: false)
+			end 'freeCall'
+			if self.peekKind() == TokenKind.dot 'dotted'
+				return try self.parseDottedPrimary(func, resultUsed: false)
+			end 'dotted'
+		end 'named'
 
 		let tok = self.current()
 		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)`, `try obj.method(…)`, `try (a / b)`, or `try await p` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
