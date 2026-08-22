@@ -52451,14 +52451,26 @@ export type Parser
 	// captured field access (`level.rawValue`) and a captured method call (`b.doubled()`). The box is READ OUT
 	// OF THE ENV (`emitCaptureRead` — a borrowed pointer copy, one `loadIndirect`, cursor-independent so a
 	// caller may have already consumed the base token), and its layout is resolved from the enclosing binding's
-	// struct type exactly as `requireStructBase` does for a local base. A captured non-struct is refused (only a
-	// struct carries fields and methods; a captured String's builtin methods are reached by no case here).
+	// struct type exactly as `requireStructBase` does for a local base. A captured value with no struct layout
+	// is refused (a captured String's builtin methods are reached by no case here).
+	//
+	// ⛔⛔ **THE GATE ASKS `tagCarriesStructLayoutHere`, AND IT USED TO SPELL `!= structRef` ITSELF — WHICH
+	// EXCLUDED EVERY GENERIC INSTANCE.** This was the ONLY door in the file guarding a `structLayoutOfType`
+	// call with a hand-rolled tag test; its two siblings (`requireStructBase` for a local base,
+	// `structLayoutOfField` for a hop) both ask the predicate, and both carry the comment saying why — *"a
+	// struct box OR a generic INSTANCE (`Sizer with bool`, P1.6-B1) can be a method/field base"*. Left out,
+	// a closure that names a captured instance was refused, and the refusal CONTRADICTED ITSELF:
+	// `typeTagName(genericInstance)` prints `"struct"`, so it read *"declared 'struct' and not a struct
+	// type"*. MEASURED on shv2's OWN source — `logDebug(…, message: function() gives "… {module.funcCount()}
+	// …")` where `module` is a `StdModule`, i.e. `IrModule with StdOp` — in EIGHT files, against a bootstrap
+	// that compiles every one of them. It is the same A4j shape `structLayoutOfField`'s header records, one
+	// door over, and the same fix: ask the predicate rather than answer for yourself.
 	function capturedStructBase(baseTok Token, enclosing Scope) returns StructBase throws ParseError
 		let baseName = self.baseBindingName(baseTok)
 		let binding = enclosing.getInfo(baseName)
 		let capturedTag = maxonTypeTag(binding.varType)
 		let capturedTypeNameId = typeNameIdOf(binding.varType)
-		if capturedTag != ValueTypeTag.structRef 'notAStruct'
+		if not self.tagCarriesStructLayoutHere(capturedTag) 'notAStruct'
 			// `requireStructBase`'s undeclared-name guard, reached through a `function(…) gives` instead of a
 			// bare name — identically able to assert an invented `int` without it, which is the second of
 			// `requireDeclaredBaseTypeName`'s three doors.

@@ -827,3 +827,125 @@ end 'main'
 ```stdout
 total=5 go=39
 ```
+
+### A captured GENERIC INSTANCE — a base is a struct box OR an instance, in a closure too
+
+⛔⛔ **`capturedStructBase` SPELLED ITS OWN TAG TEST, AND THAT EXCLUDED EVERY GENERIC INSTANCE.** It was the
+only door in `Parser.maxon` guarding a `structLayoutOfType` call with a hand-rolled `!= structRef`; its two
+siblings — `requireStructBase` for a local base and `structLayoutOfField` for a chain hop — both ask
+`tagCarriesStructLayoutHere`, and both carry the comment saying why: *a struct box OR a generic INSTANCE
+(`Sizer with bool`, P1.6-B1) can be a method/field base.* Read against them it is the odd one out, and the
+suite could not see it because no case captured an instance.
+
+⚠ **THE REFUSAL CONTRADICTED ITSELF, WHICH IS THE TELL.** `typeTagName(genericInstance)` prints `"struct"`,
+so the message read *"the captured 'b', which is declared 'struct' and not a struct type"*. The same
+sentence shape is recorded one door over in `structLayoutOfField`'s header, from the same cause.
+
+⭐ **MEASURED ON SHV2'S OWN SOURCE, in EIGHT files** — every one of them
+`logDebug(LogCategory.ir, message: function() gives "… {module.funcCount()} …")` where `module` is a
+`StdModule`, i.e. `IrModule with StdOp`. The reference bootstrap compiles all eight.
+
+<!-- test: closure-capture.captured-generic-instance-method-and-field -->
+Both members a base can carry, off one captured instance: a METHOD call and a FIELD read.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias LazyMessage = function() returns String
+
+type Box uses T
+	export let v as T
+
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function lazy(make LazyMessage)
+	print("{make()}")
+end 'lazy'
+
+function run(b IntBox)
+	lazy(function() gives "v={b.get()} field={b.v}")
+end 'run'
+
+function main() returns ExitCode
+	run(IntBox.create(7))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=7 field=7
+```
+
+<!-- test: closure-capture.captured-plain-struct-still-works -->
+The CONTROL. A captured plain struct took the same door before this change and must still take it — the
+gate widened from one tag to the predicate's two, and a widening that lost the case it already served
+would be a worse defect than the one it cured.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias LazyMessage = function() returns String
+
+type Plain
+	export let n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function doubled() returns Integer
+		return self.n * 2
+	end 'doubled'
+end 'Plain'
+
+function lazy(make LazyMessage)
+	print("{make()}")
+end 'lazy'
+
+function run(p Plain)
+	lazy(function() gives "d={p.doubled()} field={p.n}")
+end 'run'
+
+function main() returns ExitCode
+	run(Plain.create(21))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+d=42 field=21
+```
+
+<!-- test: error.a-captured-scalar-still-has-no-members -->
+⚠ **THE REFUSAL IT WIDENED PAST IS STILL THERE FOR EVERYTHING ELSE.** `tagCarriesStructLayoutHere` admits
+a struct and an instance and nothing more, so a captured `int` is refused exactly as before — and the
+message is accurate for it, unlike the one an instance used to get.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias LazyMessage = function() returns String
+
+function lazy(make LazyMessage)
+	print("{make()}")
+end 'lazy'
+
+function run(n Integer)
+	lazy(function() gives "n={n.doubled()}")
+end 'run'
+
+function main() returns ExitCode
+	run(21)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/closure-capture/error.a-captured-scalar-still-has-no-members.test:10:28: Unsupported: a field access or method call on the captured 'n', which is declared 'int' and not a struct type (only a struct has fields and methods)
+```
