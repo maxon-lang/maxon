@@ -4787,6 +4787,19 @@ let BuiltinsExecutablePathName = b"__Builtins.executablePath"
 // harmful (a clean refusal rather than a backend panic). See `ProcessRuntime.ProcessCurrentPidName`.
 let BuiltinsCurrentProcessIdName = b"__Builtins.currentProcessId"
 
+// ⭐⭐ **`__Builtins.gtIsComplete(gt)` — THE NON-BLOCKING PEEK AT A GREEN THREAD'S STATUS (G17).** `await`
+// drives the scheduler until ONE named promise finishes, so a dispatcher holding N of them cannot use it
+// without head-of-line blocking; this answers "has this one finished?" without driving anything. The
+// bootstrap declares the identical name and shape (`2-Parser.cs:12138-12140`, lowering to its own
+// `__gt_is_complete`) and its doc-comment states the calling convention this arm implements: *"Pass
+// `promise.inner` from a `Promise with X`."* `Testing/SpecWorkerPool.drainHasAnswered` is the one caller.
+//
+// ⚠ **THE ARGUMENT IS A RAW GT POINTER AND THE INTRINSIC ASKS NOTHING ELSE OF IT** — not that it came from
+// a promise, not that the promise is live. `promise.inner` is how a program obtains one (see
+// `PromiseType.fieldReadIsThePromiseHandle`, without which that read used to DEREFERENCE the handle), and
+// the operand rule here is the ordinary machine-word one every handle-taking intrinsic uses.
+let BuiltinsGtIsCompleteName = b"__Builtins.gtIsComplete"
+
 // ⭐ **THE TWO STREAM-WRITE INTRINSICS (W35)**, `stdlib/Print.maxon`'s and `stdlib/PrintError.maxon`'s only
 // floors, and the pair that let the bare-name `print` builtin be retired. `/specs/builtins-type.md:24-25`
 // declares exactly these two names with exactly this shape — one `__ManagedMemory` in, the byte count
@@ -4953,6 +4966,10 @@ let ExecutablePathArity = 0 as ParamCount
 // opposite case and does not reach here: there, five SHAPES are shared across twenty names by contract, so
 // the shape is the fact.)
 let CurrentProcessIdArity = 0 as ParamCount
+
+// `gtIsComplete(gt)` takes exactly one machine word — the green-thread handle. Stated here for
+// `CommandLineArgArity`'s reason, and as its own constant for `CurrentProcessIdArity`'s.
+let GtIsCompleteArity = 1 as ParamCount
 
 // `writeStdout(mm)`/`writeStderr(mm)` each take exactly one `__ManagedMemory`. ONE constant for both, not
 // two: it is a single fact about a single shape, and the two names are the same intrinsic on two streams.
@@ -43742,7 +43759,7 @@ export type Parser
 		// five: `applyCast` passes `false`, which is what keeps a plain `x as Byte` a no-op — see
 		// `castChangesTheElementPacking`'s ⛔⛔ block for the two programs that broke when every cast retagged.
 		if mustCarryTargetType or self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) or self.castChangesTheDivisionSignedness(value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) or self.castChangesTheElementPacking(value, targetAlias: targetAlias) 'retaggingCast'
-			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, asTok: opTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
+			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, range: SourceRange.ofToken(opTok)), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'retaggingCast'
 
 		// ⭐⭐ **RENAME, NOT MINT — the third answer, and the one a narrowing `as` needs.** A cast to an alias
@@ -44232,6 +44249,15 @@ export type Parser
 	// plain target, so a per-instance Idx decays to the numeric it is). `foldConstOperands` folds the op
 	// to a single `binOpImm add 0`.
 	//
+	// ⭐ **AND SINCE G17 IT HAS A CALLER THAT IS NOT A CAST AT ALL: `emitFieldLoad`'s PROMISE ARM.** Reading
+	// `p.inner` off an unboxed promise is the same problem in different words — the value already IS the
+	// answer, and what is wanted is a DISTINCT ValueId wearing the field's declared type, so the handle does
+	// not arrive carrying the promise's own marks (`valueOwnsGreenThread`, `valueIsPromise`), which would
+	// enrol a second owner of one green thread and double-drop it. This is the compiler's one debugged
+	// spelling of "the same bits, a new identity, a new type"; a second would be a second thing to get right.
+	// ⚠ Its `range` is a SourceRange rather than the cast's `asTok`, for that caller: a field read is
+	// anchored `SourceRange.between(baseTok, last: memberTok)` and has no single token to point at.
+	//
 	// ⚠ **IT RECORDS NO RANGE-CHECK SITE, AND THAT IS DELIBERATE.** The site is the SOURCE, not this
 	// mint, so `applyCast` records it above the branch — see the ⚠ there for why anchoring on the result
 	// would downgrade `3 as Big` from an E3005 to a runtime guard.
@@ -44246,10 +44272,10 @@ export type Parser
 	// ⚠ The base-range compatibility check the spec names (`fooIdx as BarContainer.Idx` requires the SAME
 	// low/high) is inert at this rung — every inner alias is `int(0 to u64.max)` — and its diagnostic form is
 	// deferred with the first narrower inner range.
-	function emitRetaggedCastValue(value ValueId, targetType MaxonType, asTok Token) returns ValueId
+	function emitRetaggedCastValue(value ValueId, targetType MaxonType, range SourceRange) returns ValueId
 		let result = self.mintValueOfType(targetType)
-		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(asTok))
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: value, rhs: zero, op: MaxonBinOp.add), range: SourceRange.ofToken(asTok))
+		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: value, rhs: zero, op: MaxonBinOp.add), range: range)
 
 		if self.constIsKnown(value) 'constantSource'
 			self.recordConst(result, folded: self.constOf(value))
@@ -62853,6 +62879,31 @@ export type Parser
 		// recorded the layout ran before the alias was known), which is what makes the loaded value carry
 		// the `function` tag so `h.op(21)` reaches an indirect call (P1.5-A1).
 		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
+
+		// ⭐⭐ **READING A PROMISE'S `inner` IS NOT A LOAD EITHER — THE HANDLE *IS* THE VALUE (G17).** The
+		// same shape as the fused-wrapper arm above and settled the same way: shv2 does not box a promise
+		// (`PromiseType.maxon` carries the argument), so a `Promise with T` value IS the green-thread
+		// pointer, and the line below would DEREFERENCE it. `inner` sits at offset 0, which is `GtOffSp` —
+		// so `p.inner` answered the thread's saved STACK POINTER, never faulting and never crashing, just
+		// handing back a plausible number. `PromiseType.maxon`'s header carries the measurement and the
+		// paragraph it replaced.
+		//
+		// ⚠ **IT MINTS RATHER THAN HANDING `box` BACK, AND THE MINT IS THE LOAD-BEARING HALF.** Returning the
+		// receiver's own ValueId would make `let h = p.inner` a SECOND NAME for the promise: it carries
+		// `valueOwnsGreenThread`, so the binding enrols a second owner and `__gt_promise_drop` runs twice, and
+		// it answers `valueIsPromise`, so `await h` is a second await the linearity check cannot see as one.
+		// `emitRetaggedCastValue` is the compiler's existing spelling of "the same bits, a fresh identity,
+		// the target type" — the field's DECLARED type here, which is what makes the handle arrive at
+		// `__Builtins.gtIsComplete` as the machine word its operand rule wants.
+		//
+		// ⚠ The tail below is skipped and owes nothing: `inner` is declared `int`, so there is no interface
+		// witness to pair, no instance substitution to apply (the field's type names no type parameter), no
+		// `named` throw-source to record and no buffer surface; and it is a `let`, so the rebindable-slot
+		// mark is unreachable twice over (immutable, and not managed heap).
+		if fieldReadIsThePromiseHandle(self.signatures, receiverType: self.valueMaxonType(box), layout: layout, index: index) 'handleIsTheValue'
+			return self.emitRetaggedCastValue(box, targetType: declared, range: range)
+		end 'handleIsTheValue'
+
 		let offset = layout.offsetOfField(index)
 		let result = self.emitIndirectLoad(declared, box: box, offset: offset, storageType: self.fieldStorageType(declared), range: range)
 
@@ -67154,6 +67205,21 @@ export type Parser
 				return try self.emitYield(args, calleeTok: anchor, resultUsed: resultUsed)
 			end 'yield'
 
+			// ⭐ **THE SCHEDULER'S ONE READ-ONLY QUESTION**, beside the two arms above that hand it the
+			// processor. It drives nothing and retires nothing (see `GtRuntime.GtIsCompleteName`), so unlike
+			// `await` it is an ordinary value-producing call with no promise bookkeeping: the argument is a
+			// machine word, and the result is the `int` `0`/`1` the runtime entry answers.
+			if callee.equals(BuiltinsGtIsCompleteName) 'gtIsComplete'
+				if args.count() != GtIsCompleteArity 'gtIsCompleteArity'
+					throw ParseError.builtinArity(String.from(callee), expected: GtIsCompleteArity, got: args.count(), line: anchor.line, column: anchor.column)
+				end 'gtIsCompleteArity'
+
+				let gt = try args.get(0) otherwise panic("gtIsComplete: args.count() == GtIsCompleteArity just checked but get(0) failed")
+				try self.requireIntrinsicMachineWordArg(gt, callee: callee, calleeTok: anchor)
+
+				return self.emitRuntimeCall(GtIsCompleteName, args: singletonArgs(gt), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+			end 'gtIsComplete'
+
 			if callee.equals(BuiltinsCommandLineCountName) 'commandLineCount'
 				if args.count() != CommandLineCountArity 'countArity'
 					throw ParseError.builtinArity(String.from(callee), expected: CommandLineCountArity, got: args.count(), line: anchor.line, column: anchor.column)
@@ -68052,15 +68118,33 @@ export type Parser
 					throw ParseError.builtinOperandType(String.from(callee), required: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 				end 'notAManagedBuffer'
 			end 'aBuffer' else 'aMachineWord'
-				if not tagIsIntegral(self.tagOf(arg)) 'notAnInteger'
-					throw ParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
-				end 'notAnInteger'
+				try self.requireIntrinsicMachineWordArg(arg, callee: callee, calleeTok: calleeTok)
 			end 'aMachineWord'
 			callArgs.push(arg)
 		end 'each'
 
 		return callArgs
 	end 'requireSubprocessArgs'
+
+	// ⭐ **ONE MACHINE-WORD ARGUMENT OF A `__Builtins` INTRINSIC — A HANDLE, A POINTER, A BUDGET, A FLAG.**
+	// Two askers that have nothing else in common: the subprocess family's per-slot walk above, and
+	// `__Builtins.gtIsComplete`, whose single argument is a raw green-thread pointer. Written once because
+	// the RULE is one rule — an intrinsic's word-shaped operand — and because its two halves are each a
+	// measured trap: `tagIsIntegral` rather than `== ValueTypeTag.integer` (the ranged-alias false refusal
+	// `parseBuiltinIntegerArg`'s header records, which has shipped twice in this file), and the CALLEE token
+	// as the anchor rather than the argument (the position every `__Builtins` refusal in this table uses).
+	//
+	// ⚠ **IT IS NOT THE SPELLING `commandLineArg`/`readStdin` USE, AND UNIFYING THOSE IS A DIFFERENT RUNG.**
+	// Those two render `got:` as `typeTagName(self.tagOf(arg))` where this renders `valueDisplayTypeName`;
+	// the two agree on every case any spec pins today, and `specs-shv2/builtins-type.md`'s four disabled
+	// `bits-to-float` cases already name the whole `ParseError.builtinOperandType` VOICE as its own rung
+	// (it moves every `__Builtins.*` and `subp*` refusal at once, and four spec files pin the current
+	// wording). Folding them in here would move pinned diagnostics for a reason unrelated to this cure.
+	function requireIntrinsicMachineWordArg(arg ValueId, callee ByteArray, calleeTok Token) throws ParseError
+		if not tagIsIntegral(self.tagOf(arg)) 'notAMachineWord'
+			throw ParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
+		end 'notAMachineWord'
+	end 'requireIntrinsicMachineWordArg'
 
 	// ⭐ **A SUBPROCESS INTRINSIC WHOSE RESULT IS A MACHINE WORD OR NOTHING AT ALL** — fourteen of the twenty.
 	// The arguments are BORROWED (the runtime entry reads the argv blob's `buffer`/`length` through the

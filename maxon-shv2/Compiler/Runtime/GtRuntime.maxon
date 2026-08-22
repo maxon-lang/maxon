@@ -445,6 +445,25 @@ export let GtTryAwaitName = b"__gt_try_await"
 // the goldens.
 export let GtPromiseDropName = b"__gt_promise_drop"
 
+// ⭐⭐ **THE NON-BLOCKING PEEK (G17).** `__gt_is_complete(gt) -> 1 if that green thread has reached
+// `completed`, 0 otherwise` — the floor of `__Builtins.gtIsComplete(promise.inner)`, and the ONE thing an
+// N-slot dispatcher needs that `await` cannot give it: `await` drives until ONE named promise finishes, so
+// serving slot 0 while slot 3 has already answered is head-of-line blocking.
+// `Testing/SpecWorkerPool.drainHasAnswered` is the only caller in the tree.
+//
+// ⚠ **IT IS A QUESTION AND NOT A STEP.** It drives nothing, advances nothing and retires nothing — which is
+// what lets `findReadyDrain` (which SERVES on the answer) and `abortOnWedgedPool` (which ACCUSES on it) ask
+// it about the same slot and get the same answer. A peek with a side effect would make the report's whole
+// diagnostic claim false.
+//
+// ⚠ **AND IT IS TARGET-NEUTRAL, so it is deliberately NOT in `SemanticCheck.calleeNeedsWin32Substrate`.**
+// A load, a compare and a return: no Win32 import, no allocation, no scheduler state beyond the word it
+// reads. Gating it would refuse it on a target that can serve it perfectly well, and what actually
+// restricts a peeking program elsewhere is its THUNK — the only yield primitives at this rung are
+// x64-windows-only, so the E3104 names `__gt_resched`. `specs-shv2/promise-peek.md:rejected-on-wasm` pins
+// that attribution rather than assuming it.
+export let GtIsCompleteName = b"__gt_is_complete"
+
 // P1.5 mid-body-yield entry points. `__gt_sleep` is the front-end target for `sleep(ms)`; the rest are the
 // scheduler internals it and the await drivers share.
 export let GtSleepName = b"__gt_sleep"
@@ -1397,6 +1416,9 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags)
 	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true, asyncTrace: asyncTrace, tags: tags)
 	buildGtPromiseDrop(module, usesIocp: usesIocp)
+	// The non-blocking PEEK, beside the two blocking drivers it exists as the alternative to. See
+	// `buildGtIsComplete` for why it is unconditional where `__proc_pid` is bit-gated.
+	buildGtIsComplete(module)
 	buildGtSleep(module, asyncTrace: asyncTrace, tags: tags)
 	buildGtProcAdd(module)
 	buildGtProcCount(module)
@@ -2626,6 +2648,56 @@ function emitGtStructReclaim(module StdModule, block IrBlock, ids ValueMinter, g
 	module.appendOp(block, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: gt, valueType: StdType.i64))
 end 'emitGtStructReclaim'
 
+// ⭐⭐ **DOES A GT'S ALREADY-LOADED STATUS WORD EQUAL `want`? — the ONE spelling of the comparison three
+// entry points make, and the reason it is worth a name is that they read it for three different verdicts:**
+// `__gt_promise_drop` picks its teardown arm from it (`completed` ⇒ struct only, `ready` ⇒ unlink the run
+// queue first), `emitGtRunOne` gates the STACK RECYCLE on it (the one place where getting it wrong is a
+// use-after-free rather than a leak), and `__gt_is_complete` answers it to a caller.
+//
+// ⚠ **IT TAKES THE LOADED WORD RATHER THAN THE GT, so a caller that asks TWO questions of one status loads
+// it ONCE.** `__gt_promise_drop` is exactly that caller — `completed?` then `ready?` — and a helper that
+// re-loaded per question would have emitted a second `loadIndirect` of a word that cannot have changed. It
+// pairs with `emitLoadField(record: gt, offset: GtOffStatus)`, which is the load.
+//
+// ⚠ **THE CONSTANT AND THE OFFSET WERE ALREADY SINGLE-HOMED (`GtStatusCompleted`, `GtOffStatus`); what was
+// not is the SHAPE.** Emitting `const` then `cmp` in that order, minting in that order, is what makes this
+// substitution byte-identical at both existing sites — which is the property that let it be made at all.
+function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, want ParsedInt, ids ValueMinter) returns ValueId
+	let wantConst = emitConst(module, block: block, value: want, ids: ids)
+	return emitCmp(module, block: block, a: status, b: wantConst, pred: StdCmpPred.eq, ids: ids)
+end 'emitGtStatusEquals'
+
+// ⭐⭐ **`__gt_is_complete(gt) -> 1 when that green thread has reached `completed`, 0 otherwise** — the
+// floor of `__Builtins.gtIsComplete(promise.inner)`. See `GtIsCompleteName` for what it is for, why it must
+// have no side effect, and why it is target-neutral.
+//
+// **THE WHOLE BODY IS THE PREDICATE `emitGtStatusEquals` NAMES**, which is the point: the comparison already
+// existed inside the await and drop paths, and what was missing was a way to REACH it from a program. It
+// dereferences the handle and nothing else — no drive, no queue walk, no status write — so it composes with
+// `await`'s linearity for free (a peek is not an await, so E3100 counts none of them) and a caller may ask
+// it in a scan loop as often as it likes.
+//
+// ⚠ **IT IS INSTALLED UNCONDITIONALLY WITH THE REST OF THE SCHEDULER, not on a usage bit of its own** — the
+// opposite of what `__proc_pid` does one runtime over, and for a reason that does not carry across. The
+// `__proc_` split was worth making because the cheap entry's neighbour drags in `usesHeap` AND
+// `usesManagedMemory` transitively, i.e. two whole runtimes. Here the family is already installed as ONE
+// closure (`installGtRuntime` builds `__gt_sleep`, `__gt_process_run`, `__gt_io_park` and the timer/proc
+// stores for every async program, each far larger than this), and this entry is four ops that reference
+// nothing. A bit for it would be a mechanism whose whole yield is a few bytes.
+function buildGtIsComplete(module StdModule)
+	var func = IrFunction.createFromStd(GtIsCompleteName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let gt = 0 as ValueId
+
+	let status = emitLoadField(module, block: entry, record: gt, offset: GtOffStatus, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(emitGtStatusEquals(module, block: entry, status: status, want: GtStatusCompleted, ids: ids)))
+
+	module.functions.push(func)
+end 'buildGtIsComplete'
+
 // ⭐ **`__gt_promise_drop(gt)` — RECLAIM + CANCEL AN UN-AWAITED GREEN THREAD (P1.5-B2 #88).** The ownership
 // DUAL of the `__gt_await` reclaim: the front-end enrols an `async` spawn's Promise as an owned value and
 // emits this call on every path to scope exit / a re-arm that neither `await`s nor re-arms it. It branches
@@ -2675,20 +2747,14 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
-	// entry: completed → reclaim (struct only, stack already freed); else decide ready vs waiting.
-	let status = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(status, addrId: gt, offset: GtOffStatus, valueType: StdType.i64))
-	let completedConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(completedConst, value: GtStatusCompleted, valueType: StdType.i64))
-	let isCompleted = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(isCompleted, lhs: status, rhs: completedConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	// entry: completed → reclaim (struct only, stack already freed); else decide ready vs waiting. The status
+	// word is loaded ONCE and asked twice, which is `emitGtStatusEquals`' whole shape.
+	let status = emitLoadField(module, block: entry, record: gt, offset: GtOffStatus, ids: ids)
+	let isCompleted = emitGtStatusEquals(module, block: entry, status: status, want: GtStatusCompleted, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isCompleted, thenBlockId: release.id, elseBlockId: checkReady.id))
 
 	// checkReady: ready → unlink from the run queue; else (waiting) → remove from the timer/proc stores.
-	let readyConst = ids.mint()
-	module.appendOp(checkReady, op: StdOp.const(readyConst, value: GtStatusReady, valueType: StdType.i64))
-	let isReady = ids.mint()
-	module.appendOp(checkReady, op: StdOp.cmp(isReady, lhs: status, rhs: readyConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	let isReady = emitGtStatusEquals(module, block: checkReady, status: status, want: GtStatusReady, ids: ids)
 	module.setTerminator(checkReady, op: StdOp.condBranch(isReady, thenBlockId: readyArm.id, elseBlockId: waitingArm.id))
 
 	// ready arm: splice the never-run GT out of the FIFO run queue, then free its seed stack. Under `usesIocp` the
@@ -3354,12 +3420,8 @@ function emitGtRunOne(module StdModule, run IrBlock, recycle IrBlock, freeStack 
 	let switchResult = ids.mint()
 	module.appendOp(run, op: StdOp.call(switchResult, callee: GtContextSwitchName, args: twoArgs(selfGt, second: g)))
 	module.appendOp(run, op: StdOp.storeIndirect(curAddr, offset: 0, valueId: selfGt, valueType: StdType.i64))
-	let gStatus = ids.mint()
-	module.appendOp(run, op: StdOp.loadIndirect(gStatus, addrId: g, offset: GtOffStatus, valueType: StdType.i64))
-	let completedConst = ids.mint()
-	module.appendOp(run, op: StdOp.const(completedConst, value: GtStatusCompleted, valueType: StdType.i64))
-	let gCompleted = ids.mint()
-	module.appendOp(run, op: StdOp.cmp(gCompleted, lhs: gStatus, rhs: completedConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	let gStatus = emitLoadField(module, block: run, record: g, offset: GtOffStatus, ids: ids)
+	let gCompleted = emitGtStatusEquals(module, block: run, status: gStatus, want: GtStatusCompleted, ids: ids)
 	// ⭐ RECYCLE ONLY A COMPLETED g. A merely-parked (waiting) g keeps its stack — it will resume on it.
 	module.setTerminator(run, op: StdOp.condBranch(gCompleted, thenBlockId: recycle.id, elseBlockId: continuation.id))
 

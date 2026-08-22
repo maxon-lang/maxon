@@ -35,10 +35,20 @@
 //     `await`'s linearity (E3100) exists to make unrepresentable, so a cloner for this type would be a
 //     mechanism whose every use is a bug.
 //
-// ⚠ **NOTHING OBSERVABLE DEPENDS ON THE BOX.** `Promise.inner` is documented in `stdlib/Builtins.maxon` as
-// *"a raw GT pointer"* — which is exactly what the unboxed value IS — so a reader of it gets the same
-// number either way; and a box would be an allocation the leak gate has to see freed, which storing the
-// handle simply never makes.
+// ⛔⛔ **THIS PARAGRAPH USED TO SAY "NOTHING OBSERVABLE DEPENDS ON THE BOX", AND THAT WAS A SILENT WRONG
+// ANSWER FOR AS LONG AS IT STOOD (G17).** Its premise was right — `Promise.inner` is documented in
+// `stdlib/Builtins.maxon:124` as *"a raw GT pointer"*, which is exactly what the unboxed value IS, and a box
+// would be an allocation the leak gate has to see freed, which storing the handle never makes. What did not
+// follow is the conclusion, because **NOTHING HAD TOLD THE FIELD-READ DOOR**: the ordinary lowering of a
+// field read is *load the word at the field's offset*, and with the value being the handle that
+// DEREFERENCES it. `inner` is at offset 0, where a green thread keeps its saved stack pointer (`GtOffSp`).
+// MEASURED on `function peek(p IntPromise) returns Integer { return p.inner }`:
+// `x64.loadRegBaseDisp.word64 r8, [rcx + 0]` — `gt->sp`, handed to a caller that asked for the handle. It
+// never faulted (the stack is committed) and never crashed; it answered a plausible number, and
+// `Testing/SpecWorkerPool.drainHasAnswered` would have peeked a word 16 bytes into the green thread's own
+// stack. ⇒ `fieldReadIsThePromiseHandle` below is what the door now asks, and `specs-shv2/promise-peek.md`
+// is what would have caught it: with the read left as a load, its `completes-under-the-drive` case exits
+// **0xC0000005**.
 //
 // ⭐ **THE SECOND FACT: THE ERROR TYPE IS AN ARGUMENT, AND ITS ABSENCE IS THE NON-THROWING CASE.** The
 // declaration names two parameters and `Promise with T` supplies one. That is not an arity error — the
@@ -62,6 +72,36 @@ export let PromiseTypeName = b"Promise"
 // (its `inner` field is the whole of its written surface), so this name is the compiler's and lives with the
 // rest of what the compiler knows about the type rather than in a roster it is not on.
 export let PromiseCancelMethodName = b"cancel"
+
+// ⭐⭐ **THE ONE FIELD A PROMISE CARRIES — `stdlib/Builtins.maxon:124`'s `public let inner`**, and the ONE
+// spelling of its name. That declaration says what it is for in so many words: *"`inner` is exported
+// (read-only via `let`) so non-blocking pollers like the spec test dispatcher can peek at the underlying
+// GT's status"* — which is `__Builtins.gtIsComplete(promise.inner)`, and the whole reason the read below
+// has to be right.
+export let PromiseInnerFieldName = b"inner"
+
+// ⭐⭐ **IS THIS FIELD READ THE PROMISE'S OWN HANDLE RATHER THAN A LOAD?** The FIRST fact above says a
+// promise's runtime value IS the green-thread pointer, so `p.inner` is the identity — exactly as a fused
+// wrapper's inline `managed` is (`StructLayout.fieldIsTheInlineManagedRecord`, whose arm in `emitFieldLoad`
+// this one sits beside): in both cases the record IS the field, and a `loadIndirect` at the field's offset
+// reads through a pointer the caller wanted the VALUE of.
+//
+// ⚠ **BOTH CONJUNCTS MATTER, for `fieldIsTheInlineManagedRecord`'s reason one type over.** The type test
+// alone would be right today only because `Promise` happens to declare exactly one field; the index test
+// alone is a bare `== 0` about any struct. `indexOfField` answers `fieldCount()` when the name is absent,
+// so a layout that somehow lacked `inner` compares unequal to every valid index rather than matching 0.
+//
+// ⚠ **THE RECEIVER'S TYPE IS WHAT IS ASKED, NOT THE LAYOUT'S NAME.** `typeIsPromiseStorage` routes
+// through `ProgramSignatures.instanceIsPromiseHandle`, the one place the base name is compared — so this
+// door, the type index and the await cannot come to disagree about which values are promises, which is the
+// obligation this file's header opens with.
+export function fieldReadIsThePromiseHandle(signatures ProgramSignatures, receiverType MaxonType, layout StructLayout, index FieldIndex) returns bool
+	if not typeIsPromiseStorage(signatures, t: receiverType) 'notAPromise'
+		return false
+	end 'notAPromise'
+
+	return index == layout.indexOfField(PromiseInnerFieldName)
+end 'fieldReadIsThePromiseHandle'
 
 // `Element` — the type the thunk RETURNS, and what an `await` of this promise yields.
 export let PromiseResultArgPosition = 0 as TypeParamPosition
