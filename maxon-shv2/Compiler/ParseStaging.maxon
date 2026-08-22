@@ -114,8 +114,20 @@ export type FuncReturnTypeEntry
 	export var paramNames as ByteArrayArray
 	export var paramTypes as MaxonTypeArray
 
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = sharedNoDeclaredParamNames, paramTypes MaxonTypeArray = sharedNoDeclaredParamTypes) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes}
+	// The bare NAME the `returns` clause wrote, when it wrote one — `DenseColumn` for
+	// `returns DenseColumn`, and EMPTY for `returns Array with Integer`, for a primitive, or for no
+	// return clause at all. It is the CALL RESULT's half of P1.6-C's provenance: after R-1 two ranged
+	// aliases over one range are one instance, so the gid a call hands back cannot say which alias the
+	// callee's signature named, and only this can.
+	//
+	// ⚠ **IT IS THE TOKEN'S TEXT AND NOTHING IS ASKED ABOUT IT HERE.** Whether the name IS a generic
+	// alias is a whole-program question, and this entry is built during the declaration SWEEP that
+	// answers it — the same trap R-1's first implementation fell into. The consumer asks, at parse time,
+	// with the index complete.
+	export var returnAliasName as ByteArray
+
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = sharedNoDeclaredParamNames, paramTypes MaxonTypeArray = sharedNoDeclaredParamTypes, returnAliasName ByteArray = EmptySourceText) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, returnAliasName: returnAliasName}
 	end 'create'
 end 'FuncReturnTypeEntry'
 

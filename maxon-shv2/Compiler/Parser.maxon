@@ -13061,6 +13061,7 @@ export type Parser
 		// (`ProgramSignatures.declaredReturnSurface`): the callee may be in another file, so only the
 		// whole-program index can answer for it.
 		let declaredSurface = self.returnDeclaredSurface()
+		let returnAliasName = self.returnAliasSpelling()
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
 		// ⭐⭐ **ONE WALK OF THE PARAMETER LIST, TWO WHOLE-PROGRAM FACTS.** The CONSUME/FEED scan (at the tail
@@ -13102,7 +13103,7 @@ export type Parser
 				scannedParamNames = callAlignedFrom(sourceParamNames)
 			end 'genericInstanceMethod'
 		end 'instanceMethod'
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes))
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, returnAliasName: returnAliasName))
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME (N1b's qualified-spelling record, re-cut by N1c)** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
 		// the whole-program index can: is `utils.helper(…)` a directory-qualified free call or a static on a
@@ -53868,8 +53869,27 @@ export type Parser
 	// EVERY parser diagnostic that names a VALUE's type reads it (the builtin-argument rules, the assignment
 	// and return voices, the `otherwise` and match-arm merges); written out it was the same four-call chain
 	// each time, and each copy was free to reach for the identity instead.
+	// The spelling THIS VALUE's own site wrote, where R-1 left the type with more than one.
+	//
+	// Two ranged aliases over one range are one type, so `WideCol` and `OtherCol` share a gid and no per-gid
+	// answer can say which the blamed statement wrote. The provenance column (P1.6-C's `valueInstanceAlias`,
+	// stamped at the container door and at every call result) is what can, and this is the parser's half of
+	// reading it — SemanticCheck's is `valueTypeDisplayName`, and the two must agree or one message would
+	// quote the author while its neighbour quoted the compiler.
+	//
+	// ⚠ **ASKED ONLY WHERE THE gid CANNOT ANSWER**, so an instance one alias spells keeps the name every
+	// pinned diagnostic already agrees on, and a program with no merge probes nothing. Where the site named
+	// no alias the file-scoped answer still applies, and that is never a stranger's spelling.
 	function valueDisplayTypeName(value ValueId) returns String
-		return self.displayTypeNameOf(self.tagOf(value), nameId: self.valueNameId(value))
+		let tag = self.tagOf(value)
+		let nameId = self.valueNameId(value)
+		if tag == ValueTypeTag.genericInstance and self.signatures.instanceIsMultiplyAliased(nameId) 'moreThanOneAliasSpellsThisType'
+			if let aliasId = try self.valueInstanceAlias.get(value) 'theSiteNamedOneOfThem'
+				return String.from(self.internedName(aliasId))
+			end 'theSiteNamedOneOfThem'
+		end 'moreThanOneAliasSpellsThisType'
+
+		return self.displayTypeNameOf(tag, nameId: nameId)
 	end 'valueDisplayTypeName'
 
 	// ⭐⭐ **THE DISPLAY TWIN OF `aggregateNameOf`, AND THE PARSER-TIER HALF OF ONE RULE (user ruling,
@@ -64755,6 +64775,53 @@ export type Parser
 	// (`parseFunction`). That is exactly why `parseOptionalReturnType` is shared, and a second hand-written
 	// peek beside it would be free to disagree the moment a return clause grows a second shape — silently,
 	// since a wrong SURFACE is a wrong answer and not a compile error.
+	// ⭐⭐ **THE BARE NAME THE `returns` CLAUSE WROTE — the CALL RESULT's half of P1.6-C's provenance.**
+	// `returns DenseColumn` gives `DenseColumn`; `returns Array with Integer`, a primitive, or no clause at
+	// all gives EMPTY, because none of those names an alias. Read at the same moment as
+	// `returnDeclaredSurface` and for the same reason: the clause has not been consumed yet.
+	//
+	// ⚠ **IT ASKS NOTHING ABOUT THE NAME, and that is deliberate.** Whether the spelling is a generic alias
+	// is a WHOLE-PROGRAM question and this runs inside the declaration sweep that answers it — asking here
+	// is R-1's own first mistake one layer up. `recordCallResultInstanceAlias` asks, at parse time.
+	// ⭐⭐ **A CALL RESULT CARRIES THE ALIAS ITS CALLEE'S SIGNATURE NAMED (P1.6-C, extended at R-1).**
+	// `filledColumn(…) returns DenseColumn` hands back a gid that `DurationNanosArray` and 26 other stdlib
+	// aliases share, so without this a diagnostic about the result can only fall back to the element RANGE.
+	// It is `markDeclaredSurface`'s neighbour at the same door and reads the same kind of per-callee fact.
+	//
+	// ⚠ **PAID FOR ONLY WHERE IT CAN BE READ**, exactly as the container door's stamp is: the provenance is
+	// consulted only when the gid has more than one author spelling, which R-1 settled before this parse
+	// began. **AND ONLY HERE IS IT SAFE TO ASK WHETHER THE SPELLING IS AN ALIAS** — the sweep that answers
+	// that is complete, which is why `returnAliasSpelling` below records the token's text and asks nothing.
+	function recordCallResultInstanceAlias(result ValueId, callee ByteArray)
+		if self.tagOf(result) != ValueTypeTag.genericInstance 'theResultIsNotAnInstance'
+			return
+		end 'theResultIsNotAnInstance'
+
+		if not self.signatures.instanceIsMultiplyAliased(self.valueNameId(result)) 'oneAliasSpellsItForEveryone'
+			return
+		end 'oneAliasSpellsItForEveryone'
+
+		let aliasName = self.signatures.returnAliasNameOf(callee)
+		if not self.signatures.isGenericAlias(aliasName) 'theClauseNamedNoGenericAlias'
+			return
+		end 'theClauseNamedNoGenericAlias'
+
+		self.recordValueInstanceAlias(result, aliasName: aliasName)
+	end 'recordCallResultInstanceAlias'
+
+	function returnAliasSpelling() returns ByteArray
+		if not self.at(TokenKind.returns) 'noReturnClause'
+			return EmptySourceText
+		end 'noReturnClause'
+
+		let named = self.tokenAt(self.returnTypeTokenIndex())
+		if not tokenCanBeAName(named) 'theClauseDoesNotOpenWithAWrittenNAME'
+			return EmptySourceText
+		end 'theClauseDoesNotOpenWithAWrittenNAME'
+
+		return named.value
+	end 'returnAliasSpelling'
+
 	function returnDeclaredSurface() returns DeclaredSurface
 		if not self.at(TokenKind.returns) 'noReturnClause'
 			return sharedEmptyDeclaredSurface
@@ -69435,6 +69502,7 @@ export type Parser
 		// `MaxonType` and not the callee name — and the name is the only thing that still knows the spelling,
 		// the alias having erased it. Every direct, method and static call funnels through this one line.
 		self.markDeclaredSurface(result, declared: self.signatures.declaredReturnSurface(callee))
+		self.recordCallResultInstanceAlias(result, callee: callee)
 		// ⛔ **AND NO SIZED-CONTAINER MARK, for `bindParameters`' recorded reason**: a `returns ElementMemory`
 		// hands back the record OR a view of it and the declaration cannot tell which, so the fact is refused
 		// at the RETURN inside the declaration (`emitOwnedValueReturn`) rather than inferred at the call.

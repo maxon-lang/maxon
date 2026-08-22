@@ -1699,12 +1699,27 @@ one author spelling, and R-1's merge decided that before the parse began — so 
 ungated: +2,069 allocations at rung 0 rising to +16,357 at rung 5**, for a spelling nothing would ever ask for;
 gated it is **+255 at rung 5**.
 
-⚠ **ONE SOURCE OF SPELLING IS STILL UNSTAMPED, AND IT IS A SLICE OF ITS OWN, NOT A DEFECT:** a value that arrives
-as a plain CALL RESULT carries no alias, because a function's declared RETURN spelling is not recorded for a generic
-instance (`FunctionRangeChecks.returnAliasName` is *"EMPTY unless the function returns a ranged INT alias"*). That is
-why `RegisterAllocator.maxon:93` still reads `Array with int(0 to 18446744073709551615)` rather than `DenseColumn` —
-**a true name for the type, and never a stranger's alias**, which is the property that had to hold. Closing it means
-recording the return clause's alias spelling and stamping the call result from it.
+✅ **AND THE LAST UNSTAMPED SOURCE IS DONE (user, 2026-08-22: *"call result needs to carry the alias"*).** A value
+arriving as a plain CALL RESULT now carries the alias its callee's `returns` clause wrote — shv2's own
+`RegisterAllocator.maxon:93` reads **`of type 'DenseColumn'`**, the callee's own declared spelling, where it read
+`Array with int(0 to 18446744073709551615)`.
+
+The clause's bare NAME is captured beside `returnDeclaredSurface` (the same moment, because the clause has not been
+consumed yet), rides `FuncReturnTypeEntry` into `ProgramSignatures.funcReturnAliasNames`, and `emitCall` stamps the
+result next to `markDeclaredSurface` — the neighbouring per-callee fact.
+
+⚠ **NOTHING IS ASKED ABOUT THE NAME AT CAPTURE TIME, and that is R-1's own lesson applied one layer up.** Whether the
+spelling is a generic alias is a WHOLE-PROGRAM question and the capture runs inside the declaration sweep that answers
+it. The token's text is recorded; `recordCallResultInstanceAlias` asks at parse time, with the index complete.
+
+⛔ **AND GATING THE STORE ON `genericInstance` IS A WRONG ANSWER — MEASURED.** At the moment `record` runs, a generic
+alias's return type is still `named`; the alias is not resolved to its instance until later. The obvious-looking gate
+is therefore false for EVERY function and the stamp never happens. It gates on `returnTypeNamesAType` instead, which
+is the shape that is true there.
+
+**COST:** two gates keep it small — the store needs a `named` recorded return type, and the stamp needs the gid to
+have more than one author spelling. **+5,461 allocations at rung 5 (0.013%), growing ×1.78 against the ladder's ×1.9,
+so its share shrinks**; the store gate cut the bytes by 58%.
 
 ⚠ **THE RANGE-RENDERED PATH CANNOT BE PINNED BY A SPEC, AND THAT IS MEASURED, NOT ASSUMED.** It needs a merged instance
 whose claimants the reading file does not declare — i.e. two files. Spec fragments are ONE file plus `stdlib/`, and
@@ -1712,8 +1727,10 @@ whose claimants the reading file does not declare — i.e. two files. Spec fragm
 only reach a merge by declaring a claimant itself, which then wins the file-local lookup. The path is exercised by
 shv2's own build. **The other two halves ARE pinned and both are sabotage-verified:**
 `ranged-typealias/error.two-aliases-over-different-ranges-are-still-two-types` reddens to the range spelling if the
-reader's file is not consulted, and `ranged-typealias/error.a-diagnostic-names-the-alias-the-site-wrote` reddens to
-exactly the old `got 'WideCol'` if the provenance stamp is removed.
+reader's file is not consulted, `ranged-typealias/error.a-diagnostic-names-the-alias-the-site-wrote` reddens to
+exactly the old `got 'WideCol'` if the container door's stamp is removed, and
+`ranged-typealias/error.a-call-results-type-is-named-by-its-callees-returns-clause` reddens to the same string if the
+CALL door's is.
 
 <details><summary>The two routes considered, and why (a) was chosen</summary>
 

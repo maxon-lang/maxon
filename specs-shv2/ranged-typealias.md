@@ -3301,3 +3301,48 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/ranged-typealias/error.a-diagnostic-names-the-alias-the-site-wrote.test:21:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
 ```
+
+<!-- test: error.a-call-results-type-is-named-by-its-callees-returns-clause -->
+### A CALL RESULT is named by the alias its callee's `returns` clause wrote
+⭐⭐ **THE OTHER HALF OF THE PROVENANCE, AND THE ONE shv2's OWN SOURCE NEEDED.** The case above stamps a value
+built by a factory; this one arrives from a plain call, and its only spelling is the one the CALLEE's signature
+wrote. `filledColumn(…) returns DenseColumn` in `Targets/Shared/TargetLiveness.maxon` hands back a gid that
+`DurationNanosArray` and 26 other `int(0 to u64.max)` aliases share, and without this the diagnostic at
+`RegisterAllocator.maxon:93` could only fall back to the element RANGE.
+
+⚠ **THE SPELLING IS CAPTURED AS THE TOKEN'S TEXT AND NOTHING IS ASKED ABOUT IT AT CAPTURE TIME.** Whether the
+name is a generic alias is a WHOLE-PROGRAM question and the capture runs inside the declaration sweep that
+answers it — asking there is R-1's own first mistake one layer up. `recordCallResultInstanceAlias` asks at parse
+time, with the index complete.
+
+⚠ `returns Array with Integer` writes no alias and is left EMPTY rather than being stamped with the base name —
+`Array` names no instance, and a value stamped with it would file a per-instance question under a name no
+per-instance registry answers.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Other = int(0 to u64.max)
+typealias WideCol = Array with Wide
+typealias OtherCol = Array with Other
+typealias Narrow = int(0 to 63)
+typealias NarrowCol = Array with Narrow
+
+function makeOther() returns OtherCol
+	return OtherCol.create()
+end 'makeOther'
+
+function widthOf(c WideCol) returns ExitCode
+	return c.count() as ExitCode
+end 'widthOf'
+
+function takesNarrow(c NarrowCol) returns ExitCode
+	return c.count() as ExitCode
+end 'takesNarrow'
+
+function main() returns ExitCode
+	let w = widthOf(WideCol.create())
+	return takesNarrow(makeOther()) + w
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.a-call-results-type-is-named-by-its-callees-returns-clause.test:23:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
+```
