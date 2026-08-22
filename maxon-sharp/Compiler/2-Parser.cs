@@ -3333,8 +3333,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// Parse a where clause: where TypeParam is Interface [and Interface2] [, TypeParam2 is Interface3]
+  /// Parse a where clause:
+  ///   where TypeParam is Interface [with Bindings] [and Interface2 [with Bindings]] [, TypeParam2 is …]
   /// Returns a mapping from type parameter names to their required interface names.
+  ///
+  /// The optional `with` binds the constrained interface's associated types, exactly as the same keyword
+  /// does on an `implements` line — `where Source is Iterator with Element`. It is CONSUMED and its arity
+  /// checked here, and it contributes nothing to this parser's own resolution: an associated return is
+  /// resolved through <see cref="IsAssociatedTypeName"/>, a global registry probe that needs no
+  /// per-constraint binding. The self-hosted compiler compiles one body per generic declaration with no
+  /// per-conformer specialization, so it cannot resolve such a return from the receiver's type at all and
+  /// needs the binding stated; both compilers read the same `stdlib/` sources, so the grammar has to be
+  /// accepted here whether or not it is acted on. Refusing to parse it would make `stdlib/helpers/itertools/
+  /// withIterator.maxon` uncompilable by this compiler.
   /// </summary>
   private Dictionary<string, List<string>> ParseWhereClause(List<string> associatedTypeNames) {
     var constraints = new Dictionary<string, List<string>>();
@@ -3354,13 +3365,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       Expect(TokenType.Is);
 
       var interfaces = new List<string> {
-        Expect(TokenType.Identifier).Value
+        ParseWhereConstraintInterface()
       };
 
       // 'and' for multiple interfaces on the same param
       while (Check(TokenType.And)) {
         Advance(); // consume 'and'
-        interfaces.Add(Expect(TokenType.Identifier).Value);
+        interfaces.Add(ParseWhereConstraintInterface());
       }
 
       constraints[paramName] = interfaces;
@@ -3371,6 +3382,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     return constraints;
+  }
+
+  /// <summary>
+  /// One interface named by a `where` constraint, plus the associated-type bindings it may carry.
+  /// A MULTI-binding `with` must be parenthesized here, where on an `implements` line it need not be: a
+  /// `where` clause has its own comma list (`where T is A with X, U is B`), so an unparenthesized comma
+  /// after a binding separates CONSTRAINTS and cannot also continue the binding list.
+  /// </summary>
+  private string ParseWhereConstraintInterface() {
+    var ifaceName = Expect(TokenType.Identifier).Value;
+    if (!Check(TokenType.With)) return ifaceName;
+
+    var withTok = Advance();
+    EnsureKeywordFollowedBySpaceBeforeParen(withTok);
+    if (Check(TokenType.LeftParen)) {
+      ParseWithTypeArgs(GetAssociatedTypeCount(ifaceName));
+    } else {
+      ParseTypeRef();
+    }
+    return ifaceName;
   }
 
   /// <summary>

@@ -18334,7 +18334,33 @@ export type Parser
 		self.clearExtensionAssociatedTypes()
 	end 'closeTypeParamScope'
 
-	// ⭐ **PARSE A `where <T> is <Interface> [and <Interface>]… [, <U> is …]…` CLAUSE (P1.7a slice 2a).** The
+	// ⭐⭐ **THE ASSOCIATED-TYPE BINDINGS ONE `where` CONSTRAINT CARRIES — `where Source is Iterator with
+	// Element` (G19).** The `with` clause an `implements` line already carries, read by the SAME reader
+	// (`readConformanceWithArg`, under the `identity` spelling) so a binding written on a constraint and the
+	// same binding written on a conformance are the same rendered string and compare without a second
+	// resolution.
+	//
+	// ⚠ **A MULTI-BINDING `with` MUST BE PARENTHESIZED HERE, WHERE ON AN `implements` LINE IT NEED NOT BE —
+	// and that is forced rather than chosen.** `parseConformanceWithArgs`' comma-continued spelling is bounded
+	// by the interface's `uses` ARITY, and that arity is UNRESOLVABLE in the declaration sweep (which is the
+	// pass whose layout `ProgramSignatures.structOf` answers from). An `implements` clause can defer — it
+	// stops early and `skipRestOfImplementsClause` consumes the tail, costing at worst a conformance the real
+	// parse re-reads. A `where` clause cannot: its constraint list IS the witness-slot numbering, so a sweep
+	// that read `where T is Pair with A, B` as `T is Pair with A` and then tried to read `B` as a constrained
+	// PARAMETER would abandon the clause and file a SHORTER slot list whole-program — a wrong ABI, not a
+	// wrong message. Parentheses make the extent a token fact, so both passes read the same list.
+	function readWhereConstraintBindings(interfaceName ByteArray) returns ByteArrayArray throws ParseError
+		if self.at(TokenKind.leftParen) 'delimited'
+			return try self.parseConformanceWithArgs(interfaceName, spelling: ConformanceArgSpelling.identity)
+		end 'delimited'
+
+		var bindings = ByteArrayArray.create()
+		bindings.push(try self.readConformanceWithArg(ConformanceArgSpelling.identity))
+		return bindings
+	end 'readWhereConstraintBindings'
+
+	// ⭐ **PARSE A `where <T> is <Interface> [with <Bindings>] [and <Interface> …]… [, <U> is …]…` CLAUSE
+	// (P1.7a slice 2a, `with` added at G19).** The
 	// cursor sits on `where`. Each `<param> is <Interface>` records a `WhereConstraint`, in SOURCE ORDER —
 	// and that order is the witness-slot order the dictionary-passing ABI threads, so it must be stable
 	// between the tolerant sweep and the real parse (both call this). A conjunction `is A and B` and a comma
@@ -18356,7 +18382,12 @@ export type Parser
 
 			while true 'interfaces'
 				let ifaceTok = try self.consume(TokenKind.identifier)
-				constraints.push(WhereConstraint.create(paramIndex, interfaceName: ifaceTok.value))
+				var bindings = sharedEmptyDeclaredConformances
+				if self.at(TokenKind.with) 'bindsAssociatedTypes'
+					try self.consume(TokenKind.with)
+					bindings = try self.readWhereConstraintBindings(ifaceTok.value)
+				end 'bindsAssociatedTypes'
+				constraints.push(WhereConstraint.create(paramIndex, interfaceName: ifaceTok.value, associatedBindings: bindings))
 				if not self.at(TokenKind.and) 'doneInterfaces'
 					break
 				end 'doneInterfaces'
@@ -35913,6 +35944,10 @@ export type Parser
 		// calls a side-effecting function is called exactly once.
 		let sourceTempFloor = self.pendingTempDrops.count()
 		let sourceStart = self.pos
+		// The op index the SOURCE EXPRESSION's own ops start at — `rewriteLastCallToTryCall`'s `targetOpFloor`,
+		// so a source whose throw the loop absorbs (`absorbThrowingCursorSource`) can never rewrite a call the
+		// previous statement emitted.
+		let sourceOpFloor = self.artifact.module.ops.count()
 		// `var` for the ONE rewrite a collection source can undergo: a `Map` is replaced by its materialized
 		// entries below, which is what makes every question after this point an ARRAY's question.
 		var source = try self.parseExpression(func, block: block)
@@ -36061,7 +36096,7 @@ export type Parser
 			// the token the USER wrote — so `for pair in m` locks `m` and blames `m`, not a temporary that has
 			// no name in the source at all. See `materializeIterableIterationSource` for why the ENTRY SEED
 			// travels with the cursor.
-			let iterable = try self.materializeIterableIterationSource(func, source: source, forTok: forTok)
+			let iterable = try self.materializeIterableIterationSource(func, source: source, sourceOpFloor: sourceOpFloor, forTok: forTok)
 			source = match iterable 'walkedValue'
 				notIterable gives source
 				cursor(iterator, _) gives iterator
@@ -36740,13 +36775,13 @@ export type Parser
 	// constructor throw `exhausted` for an empty collection — so the factory's own error flag becomes the
 	// value the header starts from, and the loop's ordinary exit test does the rest. An INFALLIBLE factory
 	// cannot report emptiness at all, so its seed is the literal 0 the bare cursor form uses.
-	function materializeIterableIterationSource(func IrFunction, source ValueId, forTok Token) returns IterableIterationSource throws ParseError
+	function materializeIterableIterationSource(func IrFunction, source ValueId, sourceOpFloor OpIndex, forTok Token) returns IterableIterationSource throws ParseError
 		// The surface gate is `methodSurfaceOf`'s and is there for its reason: a source with no
 		// method surface has no `createIterator` to find, and no store to ask for one.
 		let surface = self.methodSurfaceOf(source)
 		let alreadyACursor = try self.surfaceDeclaresCursorProtocol(surface, anchor: forTok)
 		if alreadyACursor 'walksItself'
-			return IterableIterationSource.notIterable
+			return try self.absorbThrowingCursorSource(func, source: source, sourceOpFloor: sourceOpFloor, forTok: forTok)
 		end 'walksItself'
 
 		match try self.surfaceIterableFactory(surface, anchor: forTok) 'factory'
@@ -36773,6 +36808,57 @@ export type Parser
 		_ = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: forTok, targetOpFloor: targetOpFloor)
 		return IterableIterationSource.cursor(cursor, entrySeed: flag)
 	end 'materializeIterableIterationSource'
+
+	// ⭐⭐ **A SOURCE THAT IS ALREADY A CURSOR MAY HAVE BEEN PRODUCED BY A THROWING CALL, AND THE LOOP ABSORBS
+	// THAT THROW EXACTLY AS IT ABSORBS A FACTORY'S (G19).** `for (iter, item) in arr.withIterator()` is
+	// `/specs/with-iterator.md`'s own spelling and the bootstrap runs it; the call hands back a
+	// `WithIterIterator`, which declares the cursor protocol, so the factory rewrite above never sees it and
+	// the user-written call was left a bare `call` — **E3057, `throwing function requires try`**, on the
+	// canonical program. `stdlib/Interfaces.maxon` declares `withIterator() … throws IterationError` for the
+	// same reason `createIterator()` does: an EMPTY collection has no first element to position on. So the
+	// answer is the same answer — the call's own error flag becomes the header's entry seed, and the loop's
+	// ordinary exit test runs it zero times.
+	//
+	// ⚠ **IT ABSORBS ONLY `IterationError`, and that bound is `surfaceIterableFactory`'s own** (see its
+	// `throwsSomethingElse` refusal): the loop takes the error WITHOUT binding it, which is sound only for a
+	// payload-free error the protocol itself defines. A source call throwing anything else keeps its E3057 and
+	// must be written with an explicit `try`.
+	//
+	// ⚠ **A CALL AN ENCLOSING `try` BLOCK ALREADY ROUTED IS LEFT ALONE**, because it is no longer a `call`:
+	// the router rewrote it, the author asked for that handler by writing the block, and a second rewrite of
+	// one op is the shape `rewriteLastCallToTryCall`'s own guards exist to prevent.
+	function absorbThrowingCursorSource(func IrFunction, source ValueId, sourceOpFloor OpIndex, forTok Token) returns IterableIterationSource throws ParseError
+		if not self.sourceCameFromAnIterationThrowingCall(source, sourceOpFloor: sourceOpFloor) 'nothingToAbsorb'
+			return IterableIterationSource.notIterable
+		end 'nothingToAbsorb'
+
+		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		_ = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: forTok, targetOpFloor: sourceOpFloor)
+		return IterableIterationSource.cursor(source, entrySeed: flag)
+	end 'absorbThrowingCursorSource'
+
+	// Was this cursor produced, as the LAST thing the source expression emitted, by a direct call declaring
+	// `throws IterationError`? Three conditions and every one of them is load-bearing: the op must be one the
+	// SOURCE emitted (`sourceOpFloor` — the guard `rewriteLastCallToTryCall`'s own header records a measured
+	// wrong-statement rewrite for), it must DEFINE the value being iterated (so `for x in f().cursor` does not
+	// rewrite `f`), and its callee's clause must be the one the loop can absorb.
+	function sourceCameFromAnIterationThrowingCall(source ValueId, sourceOpFloor OpIndex) returns bool
+		let refCount = self.currentBlock.opRefs.count()
+		if refCount == 0 'theSourceEmittedNoOp'
+			return false
+		end 'theSourceEmittedNoOp'
+
+		let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("sourceCameFromAnIterationThrowingCall: opRefs.get OOB on a non-empty block")
+		if opIdx < sourceOpFloor 'notTheSourcesOwnOp'
+			return false
+		end 'notTheSourcesOwnOp'
+
+		match try self.artifact.module.ops.get(opIdx) otherwise panic("sourceCameFromAnIterationThrowingCall: opRef {opIdx} not in module.ops") 'op'
+			call(result, callee, _, _, _, _, _, _) then return result == source and throwsClauseIsIterationError(self.signatures.throwsOf(callee))
+			literal to switch then return false
+			witnessDispatch to errorFlagEncode then return false
+		end 'op'
+	end 'sourceCameFromAnIterationThrowingCall'
 
 	// ⭐ **WHAT A `for … in` MAY ITERATE.** An `Array` instance whose element read is a random-access index,
 	// which is what the counter lowering requires — plus the `Vector` whose record IS an array's, a
@@ -58302,6 +58388,15 @@ export type Parser
 			return self.mintOwnedCallResult(bound)
 		end 'theReceiversInstanceBindsIt'
 
+		// ⭐⭐ **AND THE SAME ANSWER FOR A CONSTRAINED TYPE PARAMETER, WHOSE `where` CLAUSE IS WHERE ITS `with`
+		// ARGUMENTS ARE WRITTEN (G19).** Asked beside the instance arm rather than inside it because the two
+		// receivers record the claim in two different stores — a declared existential on the VALUE, a type
+		// parameter on the DECLARATION — and above the fallback for the identical reason: the fallback reads
+		// the associated type's NAME as though it were a concrete type's.
+		if let bound = try self.associatedReturnThroughConstraintBinding(target, receiver: receiver) 'theConstraintBindsIt'
+			return self.mintOwnedCallResult(bound)
+		end 'theConstraintBindsIt'
+
 		return self.mintOwnedCallResult(self.interfaceReturnMaxonType(target.returnTypeName))
 	end 'witnessDispatchValueResult'
 
@@ -58353,6 +58448,59 @@ export type Parser
 
 		return self.resolvedSlotType(self.signatures.substitutedInstanceArg(instance, position: position))
 	end 'instanceBoundAssociatedType'
+
+	// ⭐⭐ **WHAT THE RECEIVER'S OWN `where` CONSTRAINT SAYS THIS ASSOCIATED-TYPE RETURN IS (G19)** — the
+	// constrained-type-parameter twin of `associatedReturnThroughReceiverInstance`, and the reason
+	// `where Source is Iterator with Element` exists at all. `source.current()` inside a shared generic body
+	// dispatches through a receiver whose TYPE is a parameter; without the constraint's binding the fallback
+	// hands back `named("Element")` — the interface's own PLACEHOLDER read as if it were a type the program
+	// declares — and a tuple built from it is a different tuple type from the declared one (E3005, the first
+	// of G19's three layers).
+	//
+	// The two guards are `associatedReturnThroughReceiverInstance`'s, for its reasons: a requirement projected
+	// from a PARENT is numbered against a list that is not this interface's, and a constraint binding fewer
+	// arguments than the interface declares claims nothing at the positions past them.
+	function associatedReturnThroughConstraintBinding(target WitnessDispatchTarget, receiver ValueId) returns MaxonType throws MapError
+		if self.tagOf(receiver) != ValueTypeTag.typeParameter 'notAConstrainedParameter'
+			throw MapError.keyNotFound
+		end 'notAConstrainedParameter'
+
+		let dispatched = self.signatures.interfaceNameAtDeclIndex(target.interfaceDeclIndex)
+		if not target.declaringInterfaceName.equals(dispatched) 'aProjectedParentRequirement'
+			throw MapError.keyNotFound
+		end 'aProjectedParentRequirement'
+
+		match lookupInterface(self.signatures.interfaceMap(), name: dispatched) 'base'
+			notFound then throw MapError.keyNotFound
+			found(iface) then return try self.constraintBoundAssociatedType(receiver, iface: iface, returnTypeName: target.returnTypeName)
+		end 'base'
+	end 'associatedReturnThroughConstraintBinding'
+
+	// The two lookups the answer above is — `instanceBoundAssociatedType`'s shape over the constraint list
+	// rather than over an instance's arguments, split out for `heldAssociatedReturnIn`'s reason.
+	function constraintBoundAssociatedType(receiver ValueId, iface IrInterface, returnTypeName ByteArray) returns MaxonType throws MapError
+		let position = try namePositionIn(iface.associatedTypeNames, name: returnTypeName)
+		let bindings = constrainedParamAssociatedBindings(self.signatures, token: self.valueNameId(receiver), interfaceName: iface.name)
+		if position >= bindings.count() 'boundNothingHere'
+			throw MapError.keyNotFound
+		end 'boundNothingHere'
+
+		return self.constraintBindingResultType(try bindings.get(position) otherwise panic("constraintBoundAssociatedType: bindings.get OOB at {position} below count {bindings.count()}"))
+	end 'constraintBoundAssociatedType'
+
+	// ⭐ **WHAT A CONSTRAINT'S BINDING DENOTES IN THE DECLARATION THAT WROTE IT.** A binding is a rendered type
+	// name, and inside a shared generic body the interesting ones name the enclosing declaration's OWN
+	// parameters — `where Source is Iterator with Element` inside `type WithIterIterator uses Source, Element`
+	// binds a `typeParameter`, which is what makes the declared `returns (Source, Element)` and the built
+	// tuple ONE type. Everything else is a concrete name and takes `interfaceReturnMaxonType`, the SAME typer
+	// the fallback one function up uses, so the two answers differ only in what they are answering ABOUT.
+	function constraintBindingResultType(binding ByteArray) returns MaxonType
+		if self.typeParamPositionOf(binding) < self.enclosingTypeParams.count() 'namesAnEnclosingParameter'
+			return MaxonType.typeParameter(typeParamTokenFor(self.enclosingType, paramName: binding))
+		end 'namesAnEnclosingParameter'
+
+		return self.interfaceReturnMaxonType(binding)
+	end 'constraintBindingResultType'
 
 	// ⭐⭐ **IS THIS DISPATCH'S RESULT AN ASSOCIATED TYPE THE PROGRAM HOLDS AT AN INTERFACE?** — the position
 	// within the DISPATCHED interface's own `uses` names, plus the interface it is held at, or

@@ -2055,8 +2055,18 @@ E3128 SemanticSharedConformanceReadsDictionary
 	doc Before the adapter existed the same parameters read whatever the ABI registers happened to hold --
 	doc the identical unsoundness with no check, silent on x64 and a `wasm trap: indirect call type mismatch`
 	doc on wasm.
-	doc The cure for a program this refuses is a per-INSTANCE witness table, which `maxon-selfhosted` emits
-	doc (`Passes/BuildWitnessTables.emitPerInstanceWitnessTables`) and shv2 does not yet.
+	doc THE CURE IS A PER-INSTANCE WITNESS TABLE, AND SHV2 EMITS ONE (G19). Where a table is minted for a
+	doc CONCRETE instance of a conformer whose impls carry a dictionary, it is keyed by that instance
+	doc (`__witness_Box_Leaf.Sized`) and its slots point at adapters holding the instance's own descriptor,
+	doc element count and constraint witnesses; a conformer whose impls need none keeps the one shared table.
+	doc What this code now refuses is the residue: a table demanded where there is NO concrete instance to
+	doc key it by. Two shapes reach it, and both are real. A conformer with no instantiation in hand at all;
+	doc and -- the one the corpus reaches -- an instance that is still PARAMETRIC because it is written inside
+	doc a shared generic body over that body's own type parameters. `stdlib/Array.maxon`'s
+	doc `ArrayIterator with Element`, built by `Array.withIterator()`, is exactly that: `ArrayIterator.current`
+	doc reads `Element`'s layout descriptor, and no static `.rdata` table can carry a descriptor the ENCLOSING
+	doc FRAME holds at run time. Curing that needs either a specialization of the enclosing method per element
+	doc type or a witness ABI that carries a dictionary beside the table -- a design decision, not a pass.
 
 E3129 SemanticMatchArmPayloadBindingConflict
 	shv2 matchArmPayloadBindingConflict
@@ -2135,6 +2145,26 @@ E3131 SemanticCastTargetIsAContainer
 	doc shv2 used to ACCEPT this spelling and do nothing at all: the value kept its original type and the
 	doc program failed later, at whatever use site first noticed, naming neither the cast nor its target.
 	doc Build the container with the element type you need, or convert it element by element.
+E3133 SemanticWhereConstraintBindingDisagreement
+	shv2 semanticWhereConstraintBindingDisagreement
+	doc A `where` constraint BINDS the constrained interface's associated types --
+	doc `where Source is Iterator with Element` -- and the type argument supplied at an instantiation
+	doc conforms to that interface while binding one of those positions to a different type.
+	doc The binding is not decoration. Inside the shared generic body the receiver of a witness dispatch
+	doc is a value of a type PARAMETER, which carries nothing about what the conformance behind it bound,
+	doc so the constraint's binding is what types the dispatch's RESULT
+	doc (`Parser.associatedReturnThroughConstraintBinding`) and its associated FORMALS
+	doc (`LowerMaxonToStd.associatedFormalType`) -- and it is what lets E3119 stop asking every conformer
+	doc of that interface to agree about the position, because this dispatch SETTLED it.
+	doc One body is compiled against that answer and every instantiation reuses it, so a conformer binding
+	doc the position otherwise has its bits read as the wrong type. That is E3119's own recorded failure --
+	doc `with String` beside `with Integer` SEGFAULTED (exit 139), `with float` answered 31 where the
+	doc program computes 51, and a ranged binding RANGE-PANICKED -- reached one indirection later.
+	doc It is the `where`-clause twin of E3127, which asks the same question of a value WIDENED into a
+	doc parameterized existential, and it is checked at the same moment E3017 is: the instantiation site,
+	doc where the type argument and the constraint first meet.
+	doc The cure is to bind the constraint to what the conformer declares, or to supply a type argument
+	doc whose conformance binds what the constraint states.
 
 E6003 BinaryOutputNotWritten
 	shv2 binaryOutputNotWritten

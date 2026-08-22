@@ -3127,12 +3127,30 @@ export typealias FieldDefaultArray = Array with FieldDefault
 // interface) pair, IN SOURCE ORDER — and that order IS the witness-slot order (dictionary-passing threads a
 // hidden witness pointer per constraint, index-aligned to this list). The instantiation-site check (E3017)
 // reads it straight off `structOf`, exactly as the arity check reads `typeParamNames`.
+//
+// ⭐⭐ **AND IT MAY BIND THAT INTERFACE'S ASSOCIATED TYPES — `where Source is Iterator with Element` (G19).**
+// The `with` clause an `implements` line already carries, written on the other side of the same conformance,
+// and the currency is the same: one RENDERED type name per associated position, in the interface's `uses`
+// order, exactly as `StructLayout.conformanceBindings` holds them (both come out of
+// `Parser.parseConformanceWithArgs`, so a binding written on a constraint and the same binding written on a
+// conformance are comparable as strings without a second resolution).
+//
+// ⭐ **WHAT IT BUYS IS THE ONE FACT A TYPE PARAMETER CANNOT CARRY.** Inside a shared generic body the receiver
+// of a witness dispatch is a value of a type PARAMETER, which says nothing about what the conformance behind
+// it bound — so a requirement returning an associated type had no type to give the result, and the position
+// counted as UNCLAIMED for E3119. `ConformanceCheck.constrainedParamAssociatedBindings` is the one door that
+// reads this list, and all three tiers ask it.
+//
+// ⚠ **THE BINDINGS ARE NOT PART OF A CONSTRAINT'S IDENTITY** (`whereConstraintsEqual`): the identity is the
+// witness SLOT, which is the `(parameter, interface)` pair, and one slot holds one table however the
+// associated positions are written.
 export type WhereConstraint
 	export let typeParamIndex as FieldIndex
 	export let interfaceName as ByteArray
+	export let associatedBindings as ByteArrayArray
 
-	export static function create(typeParamIndex FieldIndex, interfaceName ByteArray) returns WhereConstraint
-		return Self{typeParamIndex: typeParamIndex, interfaceName: interfaceName}
+	export static function create(typeParamIndex FieldIndex, interfaceName ByteArray, associatedBindings ByteArrayArray = sharedEmptyDeclaredConformances) returns WhereConstraint
+		return Self{typeParamIndex: typeParamIndex, interfaceName: interfaceName, associatedBindings: associatedBindings}
 	end 'create'
 end 'WhereConstraint'
 

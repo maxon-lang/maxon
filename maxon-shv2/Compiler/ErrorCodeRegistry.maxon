@@ -1219,8 +1219,18 @@ export enum ErrorCode
 	// Before the adapter existed the same parameters read whatever the ABI registers happened to hold --
 	// the identical unsoundness with no check, silent on x64 and a `wasm trap: indirect call type mismatch`
 	// on wasm.
-	// The cure for a program this refuses is a per-INSTANCE witness table, which `maxon-selfhosted` emits
-	// (`Passes/BuildWitnessTables.emitPerInstanceWitnessTables`) and shv2 does not yet.
+	// THE CURE IS A PER-INSTANCE WITNESS TABLE, AND SHV2 EMITS ONE (G19). Where a table is minted for a
+	// CONCRETE instance of a conformer whose impls carry a dictionary, it is keyed by that instance
+	// (`__witness_Box_Leaf.Sized`) and its slots point at adapters holding the instance's own descriptor,
+	// element count and constraint witnesses; a conformer whose impls need none keeps the one shared table.
+	// What this code now refuses is the residue: a table demanded where there is NO concrete instance to
+	// key it by. Two shapes reach it, and both are real. A conformer with no instantiation in hand at all;
+	// and -- the one the corpus reaches -- an instance that is still PARAMETRIC because it is written inside
+	// a shared generic body over that body's own type parameters. `stdlib/Array.maxon`'s
+	// `ArrayIterator with Element`, built by `Array.withIterator()`, is exactly that: `ArrayIterator.current`
+	// reads `Element`'s layout descriptor, and no static `.rdata` table can carry a descriptor the ENCLOSING
+	// FRAME holds at run time. Curing that needs either a specialization of the enclosing method per element
+	// type or a witness ABI that carries a dictionary beside the table -- a design decision, not a pass.
 	semanticSharedConformanceReadsDictionary = "E3128"
 	// A match arm's payload bindings are not a one-to-one map between names and payload slots, or an
 	// `or`-arm binds a slot some case the arm covers does not hold as that type.
@@ -1294,6 +1304,25 @@ export enum ErrorCode
 	// program failed later, at whatever use site first noticed, naming neither the cast nor its target.
 	// Build the container with the element type you need, or convert it element by element.
 	castTargetIsAContainer = "E3131"
+	// A `where` constraint BINDS the constrained interface's associated types --
+	// `where Source is Iterator with Element` -- and the type argument supplied at an instantiation
+	// conforms to that interface while binding one of those positions to a different type.
+	// The binding is not decoration. Inside the shared generic body the receiver of a witness dispatch
+	// is a value of a type PARAMETER, which carries nothing about what the conformance behind it bound,
+	// so the constraint's binding is what types the dispatch's RESULT
+	// (`Parser.associatedReturnThroughConstraintBinding`) and its associated FORMALS
+	// (`LowerMaxonToStd.associatedFormalType`) -- and it is what lets E3119 stop asking every conformer
+	// of that interface to agree about the position, because this dispatch SETTLED it.
+	// One body is compiled against that answer and every instantiation reuses it, so a conformer binding
+	// the position otherwise has its bits read as the wrong type. That is E3119's own recorded failure --
+	// `with String` beside `with Integer` SEGFAULTED (exit 139), `with float` answered 31 where the
+	// program computes 51, and a ranged binding RANGE-PANICKED -- reached one indirection later.
+	// It is the `where`-clause twin of E3127, which asks the same question of a value WIDENED into a
+	// parameterized existential, and it is checked at the same moment E3017 is: the instantiation site,
+	// where the type argument and the constraint first meet.
+	// The cure is to bind the constraint to what the conformer declares, or to supply a type argument
+	// whose conformance binds what the constraint states.
+	semanticWhereConstraintBindingDisagreement = "E3133"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

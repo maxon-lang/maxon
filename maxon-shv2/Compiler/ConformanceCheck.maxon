@@ -336,8 +336,8 @@ end 'dispatchedRequirementSlots'
 function noteDispatchedSlot(op MaxonOp, slots DispatchedSlotMap, signatures ProgramSignatures, func IrFunction)
 	match op 'op'
 		call to switch then break 'op'
-		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then recordDispatchedSlot(slots, interfaceName: signatures.interfaceNameAtDeclIndex(interfaceDeclIndex), methodIndex: methodIndex, claimed: receiverClaimedPositions(func, signatures: signatures, args: args))
-		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then recordDispatchedSlot(slots, interfaceName: signatures.interfaceNameAtDeclIndex(interfaceDeclIndex), methodIndex: methodIndex, claimed: receiverClaimedPositions(func, signatures: signatures, args: args))
+		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		panicAbortValue then break 'op'
 		// The error-flag encode dispatches nothing — it is arithmetic on a value already in hand, so it fills no
 		// interface slot.
@@ -345,17 +345,40 @@ function noteDispatchedSlot(op MaxonOp, slots DispatchedSlotMap, signatures Prog
 	end 'op'
 end 'noteDispatchedSlot'
 
+// The body the two dispatch ops share — ONE interface-name resolution, feeding both the slot's key and the
+// question asked of the receiver. The two arms differ only in where `args` sits in the op, so they must not
+// also be two chances to key a claim to a different interface than the slot it is recorded under.
+function noteOneDispatchedSlot(slots DispatchedSlotMap, signatures ProgramSignatures, func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex)
+	let interfaceName = signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
+	recordDispatchedSlot(slots, interfaceName: interfaceName, methodIndex: methodIndex, claimed: receiverClaimedPositions(func, signatures: signatures, args: args, interfaceName: interfaceName))
+end 'noteOneDispatchedSlot'
+
 // ⭐ **HOW MANY ASSOCIATED POSITIONS THIS DISPATCH'S RECEIVER FIXES** — the `with` arguments its declaration
 // named, off the SAME `IrFunction.valueExistentialInstances` column `LowerMaxonToStd.receiverSiteBinding`
 // reads to emit the formal's ABI. One column, so the refusal below and the emission cannot come to different
 // answers about which receivers say what they hold.
 //
-// ZERO for every receiver that claims nothing — a bare `Taker` parameter, a constrained type parameter, a
-// field load, a merge phi — which is the shape all three of E3119's recorded failures have, and is why they
-// stay refused.
-function receiverClaimedPositions(func IrFunction, signatures ProgramSignatures, args ValueIdArray) returns TypeParamPosition
-	let instance = try func.valueExistentialInstances.get(witnessDispatchReceiver(args)) otherwise return 0
-	return signatures.genericInstanceArgCount(instance)
+// ⭐ **A CONSTRAINED TYPE PARAMETER CLAIMS WHAT ITS OWN `where` CLAUSE BOUND (G19)** — `where Source is
+// Iterator with Element` is the same claim a `source Iterator with Integer` parameter makes, written on the
+// constraint because a type parameter has no type position to write it in. The two answers come from two
+// stores because the two receivers record the fact in two places, and both are the DECLARATION's.
+//
+// ZERO for every receiver that claims nothing — a bare `Taker` parameter, an UNBOUND constrained type
+// parameter, a field load, a merge phi — which is the shape all three of E3119's recorded failures have, and
+// is why they stay refused.
+function receiverClaimedPositions(func IrFunction, signatures ProgramSignatures, args ValueIdArray, interfaceName ByteArray) returns TypeParamPosition
+	let receiver = witnessDispatchReceiver(args)
+	if let instance = try func.valueExistentialInstances.get(receiver) 'declaredAtAnInstantiatedExistential'
+		return signatures.genericInstanceArgCount(instance)
+	end 'declaredAtAnInstantiatedExistential'
+
+	let tag = try func.valueTags.get(receiver) otherwise return 0
+	if tag != ValueTypeTag.typeParameter 'notAConstrainedParameter'
+		return 0
+	end 'notAConstrainedParameter'
+
+	let token = try func.valueNameIds.get(receiver) otherwise return 0
+	return constrainedParamAssociatedBindings(signatures, token: token, interfaceName: interfaceName).count()
 end 'receiverClaimedPositions'
 
 // ⚠ **THE INNER MAP IS REBUILT RATHER THAN WRITTEN INTO, BECAUSE A VALUE FETCHED OUT OF A `Map` BORROWS THE
@@ -827,12 +850,120 @@ function checkStructInstantiationConstraints(project Project, signatures Program
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("checkStructInstantiationConstraints: whereConstraints.get OOB at {i}")
 		if instantiationMeetsConstraint(signatures, interfaces: project.interfaces, declared: declared, gid: site.gid, constraint: constraint) 'satisfied'
+			checkConstraintAssociatedBindings(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 			continue
 		end 'satisfied'
 
 		reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 	end 'eachConstraint'
 end 'checkStructInstantiationConstraints'
+
+// ⭐⭐ **A `where` CONSTRAINT'S BINDING IS A CLAIM ABOUT THE TYPE ARGUMENT, AND THIS IS WHERE IT IS CHECKED
+// (E3131, G19).** `where Source is Iterator with Element` states that the conformance behind `Source` binds
+// `Iterator`'s `Element`, and `Parser.associatedReturnThroughConstraintBinding` compiles the shared body
+// against that answer. So only a conformer that KEEPS the claim may be supplied — the identical obligation
+// E3127 imposes on a value widened into a parameterized existential, one door over, and for the identical
+// reason: a claim decides the ABI, so admitting a conformer that binds otherwise reads its bits as the wrong
+// type.
+//
+// It runs BESIDE the E3017 verdict rather than inside it, and only when that verdict passed: a type argument
+// that does not conform at all has no binding to compare, and one refusal per instantiation is what an author
+// can act on.
+//
+// ⛔⛔ **IT COMPARES RENDERED NAMES, SO IT MAY ONLY RUN WHERE BOTH RENDERINGS ARE CONCRETE — AND THE FIRST
+// CUT DID NOT, WHICH REFUSED `stdlib/Interfaces.maxon` OUTRIGHT.** A rendering written over type PARAMETERS
+// is a name in ONE declaration's scope, not a type identity: `extension Iterable`'s
+// `WithIterIterator with (Iter, Element)` claims `Iterator with <Iterable's Element>` while `MapIterator`'s
+// own conformance binds `Iterator`'s `Element` to `<MapIterator's (Key, Value)>` — the SAME tuple, spelled
+// `__Tuple2.Tfcd8090be60770aa.T5d84c0fc6312cff6` on one side and `__Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c`
+// on the other, because the parameter TOKENS belong to different declarations. MEASURED: E3131 on the
+// corpus's own `withIterator`, on a claim that is true.
+//
+// ⇒ two gates, and between them they are what makes a MISMATCH mean a wrong program:
+//   • the INSTANTIATION must be fully concrete (`instanceArgsAreFullyConcrete`) — a parametric one is a
+//     shape inside some shared body, compiled against that declaration's own view, and it says nothing a
+//     name comparison can decide;
+//   • the SUPPLIED binding must reduce to a concrete rendering (`suppliedConstraintBinding`), which for a
+//     GENERIC conformer means substituting its own `withArgs` through this argument's instantiation.
+// An inconclusive comparison is SKIPPED rather than reported: this refuses a wrong program, and a rendering
+// it cannot make concrete is not evidence of one.
+function checkConstraintAssociatedBindings(project Project, signatures ProgramSignatures, site GenericInstantiationSite, constraint WhereConstraint, baseName ByteArray)
+	if not signatures.instanceArgsAreFullyConcrete(site.gid) 'aParametricInstantiation'
+		return
+	end 'aParametricInstantiation'
+
+	for position in 0 upto constraint.associatedBindings.count() 'eachBoundPosition'
+		let claimed = substitutedConstraintBinding(signatures, gid: site.gid, baseName: baseName, binding: try constraint.associatedBindings.get(position) otherwise panic("checkConstraintAssociatedBindings: associatedBindings.get OOB at {position} below count {constraint.associatedBindings.count()}"))
+		let supplied = try suppliedConstraintBinding(signatures, conformances: project.conformances, gid: site.gid, constraint: constraint, position: position) otherwise continue
+		if claimed.equals(supplied) 'theArgumentKeepsTheClaim'
+			continue
+		end 'theArgumentKeepsTheClaim'
+
+		reportPositioned(project, code: ErrorCode.semanticWhereConstraintBindingDisagreement, message: "'{String.from(baseName)}' constrains type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex))}' to '{String.from(constraint.interfaceName)} with {String.from(claimed)}', but '{String.from(signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex))}' binds '{String.from(constraint.interfaceName)}'s associated type '{String.from(associatedTypeNameAt(project.interfaces, interfaceName: constraint.interfaceName, position: position))}' to '{String.from(supplied)}' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+		return
+	end 'eachBoundPosition'
+end 'checkConstraintAssociatedBindings'
+
+// The name at one associated POSITION, for a diagnostic that has the position and owes the reader the word
+// the author wrote. Reaching here means a conformance for that interface was already read at that position,
+// so a missing declaration or a short `uses` list is an internal disagreement rather than a user error.
+function associatedTypeNameAt(interfaces IrInterfaceMap, interfaceName ByteArray, position ElementCount) returns ByteArray
+	match lookupInterface(interfaces, name: interfaceName) 'resolve'
+		notFound then panic("associatedTypeNameAt: interface '{String.from(interfaceName)}' resolves to nothing, and a constraint naming it was just accepted against a conformance")
+		found(iface) then return try iface.associatedTypeNames.get(position) otherwise panic("associatedTypeNameAt: '{String.from(interfaceName)}' declares {iface.associatedTypeNames.count()} associated type(s) and position {position} was bound against it — the `with` clause's length is checked against that same list")
+	end 'resolve'
+end 'associatedTypeNameAt'
+
+// A constraint's binding is written in the DECLARING type's own scope, so a binding that names one of its
+// `uses` parameters means whatever THIS instantiation supplied there — `where S is Cursor with E` at
+// `Wrap with (IntCur, Integer)` claims `Integer`. Every other binding is a concrete name already and travels
+// unchanged, which is why an unsubstitutable one falls back to itself here while the SUPPLIED side treats the
+// same miss as inconclusive: a claim the author wrote is a name in the program, a conformer's `withArgs`
+// entry over its own parameters is not.
+function substitutedConstraintBinding(signatures ProgramSignatures, gid GenericInstanceId, baseName ByteArray, binding ByteArray) returns ByteArray
+	return try substitutedBindingIn(signatures, gid: gid, paramNames: signatures.structTypeParamsOf(baseName), binding: binding) otherwise binding
+end 'substitutedConstraintBinding'
+
+// ⭐ **THE ONE SUBSTITUTION STEP — a rendered name written over `paramNames`, rewritten into the scope
+// `gid` instantiates them in.** `MapError.keyNotFound` where the binding is not a bare parameter name (a
+// tuple or a nested instance is a rendering this cannot rewrite) or where the instantiation bound nothing at
+// that position. The answer is the SOURCE spelling (`instanceArgDisplayName`), which is the side a
+// conformance's `withArgs` is recorded in — comparing a compiled name against a source string would report a
+// difference in RENDERING as a difference in type, exactly as `requireWrittenBindingMatchesConformers` records.
+function substitutedBindingIn(signatures ProgramSignatures, gid GenericInstanceId, paramNames ByteArrayArray, binding ByteArray) returns ByteArray throws MapError
+	let position = try namePositionIn(paramNames, name: binding)
+	if position >= signatures.genericInstanceArgCount(gid) 'boundOutsideThisInstantiation'
+		throw MapError.keyNotFound
+	end 'boundOutsideThisInstantiation'
+
+	return signatures.instanceArgDisplayName(gid, position: position)
+end 'substitutedBindingIn'
+
+// What the ARGUMENT at this constrained position actually binds, as a CONCRETE rendering — or
+// `MapError.keyNotFound` where no concrete one can be derived, which the caller reads as *"say nothing"*.
+// A miss is also what an under-bound conformance produces, and that is E3016's to report rather than this
+// code's to guess at.
+//
+// ⭐ **A GENERIC CONFORMER WRITES ITS BINDING OVER ITS OWN PARAMETERS, so the name it declares becomes a type
+// only once THIS argument's instantiation is substituted into it** — `MapIterator implements Iterator with
+// (Key, Value)` states a tuple of two parameters, and `MapIterator with (String, Integer)` is what turns it
+// into one. A bare parameter name substitutes to that instantiation's own display name; any richer rendering
+// (a tuple, a nested instance) is one this comparison cannot make concrete, and it says nothing.
+function suppliedConstraintBinding(signatures ProgramSignatures, conformances ConformanceDeclArray, gid GenericInstanceId, constraint WhereConstraint, position ElementCount) returns ByteArray throws MapError
+	let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
+	let binding = try conformerAssociatedBinding(conformances, typeName: conformer, interfaceName: constraint.interfaceName, position: position)
+	let conformerParams = signatures.structTypeParamsOf(conformer)
+	if conformerParams.isEmpty() 'aNonGenericConformerBindsAConcreteType'
+		return binding
+	end 'aNonGenericConformerBindsAConcreteType'
+
+	let typeArg = signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+	if maxonTypeTag(typeArg) != ValueTypeTag.genericInstance 'noInstantiationToSubstituteThrough'
+		throw MapError.keyNotFound
+	end 'noInstantiationToSubstituteThrough'
+
+	return try substitutedBindingIn(signatures, gid: typeNameIdOf(typeArg), paramNames: conformerParams, binding: binding)
+end 'suppliedConstraintBinding'
 
 // ⭐⭐ **DOES ONE `where` CONSTRAINT HOLD AT ONE INSTANTIATION? — THE VERDICT, ONCE, FOR THE TWO READERS THAT
 // DISAGREE ABOUT WHAT TO DO WITH IT.** `checkStructInstantiationConstraints` above REPORTS an unmet one
@@ -1008,6 +1139,47 @@ export function opaqueParamDischarge(signatures ProgramSignatures, interfaces Ir
 
 	return OpaqueConstraintDischarge.unsatisfied
 end 'opaqueParamDischarge'
+
+// ⭐⭐ **WHAT A CONSTRAINED TYPE PARAMETER'S OWN `where` CLAUSE CLAIMS AT `interfaceName`'s ASSOCIATED
+// POSITIONS (G19)** — the constrained-parameter twin of `IrFunction.valueExistentialInstances`, which answers
+// the same question for a receiver declared at a PARAMETERIZED EXISTENTIAL.
+//
+// `where Source is Iterator with Element` says the conformance behind `Source` binds `Iterator`'s `Element`
+// to the enclosing declaration's own `Element`. That is the one fact a type parameter cannot carry in its
+// type, and three tiers need it about the SAME receiver, so it is derived HERE once rather than at each:
+// the parser types the dispatch's RESULT through it (`Parser.associatedReturnThroughConstraintBinding`),
+// `dispatchedRequirementSlots` counts it as a site CLAIM so E3119 stops asking the conformers to agree about
+// a position this dispatch settled, and the lowering types the associated FORMALS through it
+// (`LowerMaxonToStd.associatedFormalType`). Two derivations would be a check that passes and an ABI that
+// says something else.
+//
+// ⚠ **THE INTERFACE MUST MATCH EXACTLY — `conformanceSatisfiesInterface` IS THE WRONG QUESTION HERE.** The
+// bindings are positions in THIS interface's own `uses` list, and associated types do not project through
+// `extends` (`checkOneInterfaceConformance` records a derived interface with an empty `associatedTypeNames`),
+// so a `where T is Derived with X` says nothing about a requirement declared on `Base`. `opaqueParamDischarge`
+// one door up asks the wider question because a witness SLOT genuinely serves the parent; a BINDING does not.
+//
+// ⚠ It reads the declaring TYPE's own constraints (`structWhereConstraints`), which is `opaqueParamDischarge`'s
+// scope exactly: a type EXTENSION's extra constraints are not in that list, so a binding written there claims
+// nothing and the position stays E3119's to decide — a refusal, never a wrong ABI.
+//
+// The empty list is the answer for every unconstrained parameter and every constraint that binds nothing,
+// which is the whole corpus but the shapes this exists for — and it is the SHARED empty, so the common path
+// allocates nothing.
+export function constrainedParamAssociatedBindings(signatures ProgramSignatures, token TypeParamId, interfaceName ByteArray) returns ByteArrayArray
+	let owner = try signatures.typeParamOwnerOf(token) otherwise return sharedEmptyDeclaredConformances
+	let constraints = signatures.structWhereConstraints(owner.declaringTypeName)
+	for i in 0 upto constraints.count() 'eachOwnerConstraint'
+		let promised = try constraints.get(i) otherwise panic("constrainedParamAssociatedBindings: whereConstraints.get OOB at {i} for `type {String.from(owner.declaringTypeName)}`, whose own list this iterates")
+		if promised.typeParamIndex != owner.position or not promised.interfaceName.equals(interfaceName) 'anotherConstraint'
+			continue
+		end 'anotherConstraint'
+
+		return promised.associatedBindings
+	end 'eachOwnerConstraint'
+
+	return sharedEmptyDeclaredConformances
+end 'constrainedParamAssociatedBindings'
 
 // Does this verdict discharge the constraint? The bool the union deliberately is not, for the one caller
 // that needs the verdict WITHOUT the index — the E3017 check, which has a diagnostic to emit and no slot to

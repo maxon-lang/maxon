@@ -101,7 +101,7 @@ end 'main'
 error E4006: <fragment>:19:7: Type 'Array' has no field named 'equals' ('equals' is available as a conditional extension where Element is Hashable and Equatable, but 'Opaque' does not implement 'Hashable')
 ```
 
-<!-- test: error.the-cloneable-witness-route-is-closed-by-the-shared-dictionary -->
+<!-- test: the-cloneable-witness-route-is-opened-by-the-instance-dictionary -->
 ### An existential `Cloneable` reaches `Array.clone`'s body with no concretely-typed call site
 
 ⭐⭐ **THIS CASE PINNED THE OPAQUE COPY GATE FOR TWO RUNGS AND WAS NEVER THE GATE'S TO PIN.** It stood in the
@@ -111,11 +111,24 @@ purely through the `Cloneable` witness that `type Array … implements … Clone
 The gate spoke first, so the gate got the credit.
 
 ⛔⛔ **W90 MEASURED THAT IT WAS NOT THE GATE — with `requireOpaqueArrayCopyable` probe-disabled, this program
-was STILL REFUSED, by E3128 at `stdlib/Array.maxon:143:18`.** A conforming generic type shares ONE witness
-table across every instantiation, so a dispatch through that table has no instantiation to take a layout
-descriptor from, and an `Array` therefore cannot serve `Cloneable` at ANY element. That is a strictly more
-accurate refusal than the copy gate's: it is about the DISPATCH, which is what this program does wrong,
-rather than about the element, which here is incidental.
+was STILL REFUSED, by E3128 at `stdlib/Array.maxon:143:18`.** A conforming generic type shared ONE witness
+table across every instantiation, so a dispatch through that table had no instantiation to take a layout
+descriptor from, and an `Array` therefore could not serve `Cloneable` at ANY element.
+
+⭐⭐ **AND G19 OPENED IT, WHICH IS WHY THIS CASE NOW RUNS RATHER THAN REFUSING.** A witness table minted for a
+CONCRETE instance of a dictionary-carrying conformer is keyed by that instance — `__witness_Array_StrArr.Cloneable`
+— and its slot points at an adapter that calls the one shared `Array.clone` with THAT instance's own layout
+descriptor. The dispatch has an instantiation to take the dictionary from because the TABLE has one. E3128
+survives for the residue it is still true of: a table demanded where no concrete instance exists, which is
+what `stdlib/Array.maxon`'s `ArrayIterator with Element` inside `Array.withIterator()` still is.
+
+⛔⛔ **THE OWNERSHIP WORD HAD TO MOVE WITH THE LABEL, AND IT WAS A MEASURED LEAK BEFORE IT DID (G19).** A
+table's `destroyFunc@8` used to be read off the CONFORMER NAME (`existentialDestroyCallee("Array")`), which
+names a drop that does not know the element. Widening this same `Array with (Array with String)` into a
+`Cloneable` and dropping it exited **101**; the identical program over `Array with String` exited 0, because
+a String LITERAL element is immortal `.rdata` and hid the missing walk. A per-instance table names the
+instance, so it now names the instance's own drop (`ProgramSignatures.instanceDropCallee`) — which is why
+this case's element is a heap `Array with String` and not a literal.
 
 ⭐⭐ **G18 IS WHERE THE ORDER FINALLY CHANGED, AND NOTHING WAS WEAKENED TO MAKE IT.** A managed-element
 container now has a per-instance one-argument cloner thunk, so `Array with (Array with String)` is
@@ -153,19 +166,28 @@ records theirs. The sentence has narrowed once per rung, in the same direction e
 now a compiler-owned aggregate, a base-struct-less generic instance with no runtime copy of its own, an
 existential, or a type owning one of those — and nothing that merely needed a cloner nobody had written yet.
 ```maxon
-typealias Nested = Array with (Array with String)
+typealias StrArr = Array with String
+typealias Nested = Array with StrArr
 
 function copyIt(c Cloneable) returns Cloneable
 	return c.clone()
 end 'copyIt'
 
 function main() returns ExitCode
-	let n = copyIt(Nested.create())
+	var src = Nested.create()
+	var inner = StrArr.create()
+	inner.push("ab")
+	src.push(inner)
+	_ = copyIt(src)
+	print("cloned\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3128: stdlib/Array.maxon:143:18: 'Array.clone' satisfies a requirement of `Array` and reads the hidden dictionary parameter its generic declaration reserves (its type parameter's layout descriptor, or a `where` constraint's witness table). A conforming generic type shares ONE witness table across every instantiation, so a dispatch through that table has no instantiation to take the dictionary from — the impls it holds must be independent of the type argument
+```exitcode
+0
+```
+```stdout
+cloned
 ```
 
 <!-- test: error.the-suppression-may-not-read-a-weaker-index-than-the-report -->

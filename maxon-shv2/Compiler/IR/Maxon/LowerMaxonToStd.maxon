@@ -406,6 +406,34 @@ export typealias WitnessTableLabelSet = Set with String
 // the SLOT rather than on the table.
 typealias WitnessAdapterNameSet = Set with ByteArray
 
+// ⭐⭐ **WHICH TABLE A WITNESS MINT IS FOR — the conformer's ONE SHARED table, or the table of ONE CONCRETE
+// INSTANCE of it (G19).**
+//
+// shv2 keys a generic conformer's table by its BASE name, and that reduction is what lets one compiled impl
+// and one table serve every instantiation (`ProgramSignatures.conformerNameOfType`). Its premise, stated at
+// that door and again on `ErrorCode.semanticSharedConformanceReadsDictionary`, is that the impls are
+// INDEPENDENT of the type argument — and an impl that reads the hidden dictionary its generic declaration
+// reserves is not. Such a conformance gets a table PER INSTANCE, whose slots point at adapters carrying that
+// instance's OWN descriptor, element count and witnesses; every other conformance keeps the one shared table
+// it always had, byte for byte, so no program that never needed a dictionary moves.
+//
+// ⚠ **IT IS A REQUEST, NOT A VERDICT.** A caller states which instance it holds and
+// `witnessTableInstanceFor` decides — a conformance whose impls need nothing reduces back to `shared`, and so
+// does an instance that is not CONCRETE (an instance over the enclosing body's own parameters has no
+// descriptor to name, exactly as `emitInstanceDescriptorAddr` records one mechanism over).
+union WitnessTableInstance
+	// No instance is in hand — the base-keyed table, and the answer for every non-generic conformer.
+	shared
+	// This concrete instance's own table.
+	perInstance(gid GenericInstanceId)
+end 'WitnessTableInstance'
+
+// Which conformances have at least one slot impl carrying a hidden dictionary — asked once per `(conformer,
+// interface)` pair and held, because the answer is a pure function of the impls' declared arities and the
+// question is asked at every per-instance mint. Keyed by the pair's BASE label, which is injective
+// (`witnessTableLabel`'s own header states why).
+typealias DictionaryCarryingConformanceMap = Map with (String, bool)
+
 // ⭐ **ONE DEFERRED WITNESS-SLOT ABI ADAPTER — recorded while a table is stamped, built after the function
 // walk (WASM3).** A table is stamped from inside a BODY's lowering, and the body walk iterates
 // `stdModule.functions`; pushing the adapter there would be appending to the array being iterated. So the
@@ -424,9 +452,13 @@ type WitnessAdapterRequest
 	export let adapterName as ByteArray
 	// How many arguments a `witnessCall` through this slot passes — the adapter's whole parameter list.
 	export let slotArity as ParamCount
+	// WHICH table stamped this slot, and therefore WHERE the dictionary the adapter passes comes from (G19):
+	// `perInstance` names the instance whose descriptor and witnesses the adapter materializes, `shared` is
+	// the null dictionary `requireWitnessSlotImplIgnoresDictionary` proves nothing reads.
+	export let instance as WitnessTableInstance
 
-	export static function create(conformerType ByteArray, implName ByteArray, adapterName ByteArray, slotArity ParamCount) returns WitnessAdapterRequest
-		return Self{conformerType: conformerType, implName: implName, adapterName: adapterName, slotArity: slotArity}
+	export static function create(conformerType ByteArray, implName ByteArray, adapterName ByteArray, slotArity ParamCount, instance WitnessTableInstance) returns WitnessAdapterRequest
+		return Self{conformerType: conformerType, implName: implName, adapterName: adapterName, slotArity: slotArity, instance: instance}
 	end 'create'
 end 'WitnessAdapterRequest'
 
@@ -779,6 +811,8 @@ type MaxonToStdLowering
 	// The adapters whose bodies are still to be built — see `WitnessAdapterRequest`. Drained ONCE, after the
 	// function walk, by `installWitnessSlotAdapters`.
 	var pendingWitnessAdapters as WitnessAdapterRequestArray
+	// Which conformances hold a dictionary-carrying impl — see `DictionaryCarryingConformanceMap`.
+	var dictionaryCarryingConformances as DictionaryCarryingConformanceMap
 	// Which member `checkConformance` accepted for each witness slot (R10), from `project.witnessSlotImpls` —
 	// what `ensureWitnessTable` stamps a slot's relocation FROM, instead of re-deriving the impl symbol by a
 	// second un-suffixed join of the same two names. See `witnessSlotImpl`.
@@ -922,7 +956,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1566,7 +1600,7 @@ type MaxonToStdLowering
 			return self.pairedWitnessOf(value, site: site)
 		end 'forwardTheFatPointersOwnWitness'
 
-		return self.materializeWitnessTableAddr(self.conformerNameOf(value), interfaceName: interfaceName, dstBlock: dstBlock)
+		return self.materializeWitnessTableAddr(self.conformerNameOf(value), instance: self.witnessInstanceOfValue(value), interfaceName: interfaceName, dstBlock: dstBlock)
 	end 'witnessForExistentialValue'
 
 	// The witness the parser paired with an existential VALUE (`IrFunction.valueWitnessIds`). It refuses the
@@ -1657,8 +1691,13 @@ type MaxonToStdLowering
 			// The CANONICAL conformer name (`Box with Integer` -> `int`, `Box with Point` -> `Point`), so the
 			// table label (`__witness_int.Hashable`) and its slot reloc (`int.hash`) name the synthesized primitive
 			// impl — the SAME reducer the E3017 check keys its conformance lookup by, never a second spelling.
+			//
+			// ⭐ **AND THE ARGUMENT'S OWN INSTANCE TRAVELS BESIDE THAT NAME (G19)**: the reduction answers WHICH
+			// conformance, and where that conformance's impls carry a dictionary the table has to be keyed by the
+			// instantiation as well. `witnessTableInstanceFor` decides; a `Box with Integer` still names
+			// `__witness_int.Hashable` because `int` is no instance at all.
 			let concreteType = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
-			let label = self.ensureWitnessTable(concreteType, interfaceName: constraint.interfaceName)
+			let label = self.ensureWitnessTable(concreteType, instance: self.witnessInstanceOfType(typeArg), interfaceName: constraint.interfaceName)
 			let addrId = self.mintStdValueId()
 			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: label.toByteArray()))
 			return addrId
@@ -1742,8 +1781,9 @@ type MaxonToStdLowering
 	// was pruned — the noteDestructorUsage/noteClonerUsage rooting pattern for a slot named nowhere the module
 	// call graph can see. Idempotent by label: a table referenced at many sites registers ONE blob, ONE set of
 	// relocations, and one root.
-	function ensureWitnessTable(typeName ByteArray, interfaceName ByteArray) returns String
-		let label = witnessTableLabel(typeName, interfaceName: interfaceName)
+	function ensureWitnessTable(typeName ByteArray, instance WitnessTableInstance, interfaceName ByteArray) returns String
+		let table = self.witnessTableInstanceFor(typeName, instance: instance, interfaceName: interfaceName)
+		let label = witnessTableLabel(self.witnessTableLabelComponent(typeName, instance: table), interfaceName: interfaceName)
 		if self.emittedWitnessTables.contains(label) 'cached'
 			return label
 		end 'cached'
@@ -1775,22 +1815,164 @@ type MaxonToStdLowering
 
 		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED — and `retainFunc@16`,
 		// HOW A SECOND OWNER OF ONE IS TAKEN (P1.7a-existentials slices 2 and 2b).** Both are derived from
-		// `existentialOwnershipProtocol`'s single answer, so they are non-zero together and cannot disagree
-		// about a conformer.
-		self.stampOwnershipWord(self.signatures.existentialDestroyCallee(typeName), label: label, offsetInLabel: WitnessDestroyFuncOffset)
-		self.stampOwnershipWord(self.signatures.existentialRetainCallee(typeName), label: label, offsetInLabel: WitnessRetainFuncOffset)
+		// ONE ownership-protocol answer, so they are non-zero together and cannot disagree about a conformer.
+		//
+		// ⭐⭐ **A PER-INSTANCE TABLE ASKS THE INSTANCE, WHICH IS THE WHOLE POINT OF HAVING ONE (G19)** — see
+		// `ProgramSignatures.instanceDropCallee` for the leak the conformer-name answer produced on a nested
+		// container. A shared table has no instance to ask and keeps the conformer's answer, byte for byte.
+		self.stampOwnershipWord(self.witnessDestroyCallee(typeName, instance: table), label: label, offsetInLabel: WitnessDestroyFuncOffset)
+		self.stampOwnershipWord(self.witnessRetainCallee(typeName, instance: table), label: label, offsetInLabel: WitnessRetainFuncOffset)
 
 		for i in 0 upto methodCount 'eachMethod'
 			let slot = try slots.get(i) otherwise panic("ensureWitnessTable: slots.get OOB at {i} below count {methodCount}")
 			// The DECLARING interface, never this table's — `ConformanceCheck.recordWitnessSlotImpl` files its
 			// selection under the interface the requirement was declared on, so an inherited slot's key is the
 			// PARENT's. Passing `interfaceName` here would miss every projected slot's selection and panic.
-			self.globalData.recordFuncAbs64InRdata(self.witnessSlotCallee(typeName, slot: slot), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
+			self.globalData.recordFuncAbs64InRdata(self.witnessSlotCallee(typeName, instance: table, slot: slot), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
 		end 'eachMethod'
 
 		self.stampAssociatedWitnessSlots(typeName, interfaceName: interfaceName, label: label, methodCount: methodCount, associatedCount: associatedCount)
 		return label
 	end 'ensureWitnessTable'
+
+	// ⭐⭐ **THE VERDICT BEHIND `WitnessTableInstance` — a caller states which instance it holds, and this
+	// decides whether the table is keyed by it (G19).** Two independent reasons reduce a stated instance back
+	// to the shared table, and both are about what the ADAPTER would have to build:
+	//
+	//   • the conformance's impls carry NO hidden dictionary, so a per-instance table would name the identical
+	//     slots as the shared one under a second label — a duplicate blob and a moved golden for nothing;
+	//   • the instance is not CONCRETE, so there is no descriptor and no argument witness to put in one. An
+	//     instance over the enclosing body's own type parameters is exactly this shape, and it is the same
+	//     fact `emitInstanceDescriptorAddr` acts on one mechanism over (it forwards the caller's blocks; a
+	//     table has no caller to forward from, so here it can only decline).
+	//
+	// ⇒ a program that never reaches a dictionary-carrying conformance through a concrete instance mints
+	// exactly the tables it always did.
+	function witnessTableInstanceFor(typeName ByteArray, instance WitnessTableInstance, interfaceName ByteArray) returns WitnessTableInstance
+		match instance 'stated'
+			shared then return WitnessTableInstance.shared
+			perInstance then break 'stated'
+		end 'stated'
+
+		if not self.conformanceImplsCarryADictionary(typeName, interfaceName: interfaceName) 'nothingToSupply'
+			return WitnessTableInstance.shared
+		end 'nothingToSupply'
+
+		return instance if self.instanceIsFullyConcrete(instance) else WitnessTableInstance.shared
+	end 'witnessTableInstanceFor'
+
+	// The table's two OWNERSHIP words, each from the one source the table has: the INSTANCE when it is keyed by
+	// one, the conformer NAME otherwise. Two functions rather than one returning a pair, because they are read
+	// at two different offsets and each is one line; what they must share is the PROTOCOL answer, and they do —
+	// see `ProgramSignatures.instanceDropCallee` / `existentialDestroyCallee`, each of which derives its
+	// retain twin from the same protocol call.
+	function witnessDestroyCallee(typeName ByteArray, instance WitnessTableInstance) returns ByteArray
+		return match instance 'table'
+			shared gives self.signatures.existentialDestroyCallee(typeName)
+			perInstance(gid) gives self.signatures.instanceDropCallee(gid)
+		end 'table'
+	end 'witnessDestroyCallee'
+
+	function witnessRetainCallee(typeName ByteArray, instance WitnessTableInstance) returns ByteArray
+		return match instance 'table'
+			shared gives self.signatures.existentialRetainCallee(typeName)
+			perInstance(gid) gives self.signatures.instanceRetainCallee(gid)
+		end 'table'
+	end 'witnessRetainCallee'
+
+	// The `<Type>` half of a table's label: the conformer's own name for the shared table, the instance's
+	// canonical mangling for a per-instance one — the SAME mangling `__layout_<instance>` is built from
+	// (`ensureLayoutDescriptor`), so a per-instance table and the descriptor its adapter passes name one
+	// instance in one spelling.
+	//
+	// ⚠ **THE IMPLS ARE STILL THE CONFORMER'S, AND THAT SPLIT IS THE WHOLE OF THE PER-INSTANCE TABLE.** Which
+	// member fills a slot, and what a held associated position binds, are facts about the DECLARATION and one
+	// shared body answers them for every instantiation — so those questions keep asking `typeName` whichever
+	// table is being built. What moves with the label is what is a fact about the INSTANCE: the adapter's
+	// dictionary (`appendInstanceAdapterDictionary`) and the two ownership words (`witnessDestroyCallee`).
+	function witnessTableLabelComponent(typeName ByteArray, instance WitnessTableInstance) returns ByteArray
+		return match instance 'table'
+			shared gives typeName
+			perInstance(gid) gives self.signatures.mangleGenericInstance(gid)
+		end 'table'
+	end 'witnessTableLabelComponent'
+
+	// Does ANY slot of this conformance hold an impl whose ABI is wider than the slot's — i.e. an impl that
+	// takes the hidden dictionary a generic declaration reserves? Memoized per `(conformer, interface)`
+	// because it is asked at every per-instance mint and is a pure function of the impls' declared arities.
+	//
+	// ⚠ **IT IS THE SAME TEST `witnessSlotCallee` MAKES PER SLOT, and it must stay that way**: this decides
+	// the LABEL and that decides whether an ADAPTER is built, so a conformance called dictionary-free here
+	// whose slot then demanded an adapter would hand a per-instance adapter a shared table's null dictionary.
+	// Both go through `witnessSlotImplIsSlotShaped`.
+	function conformanceImplsCarryADictionary(typeName ByteArray, interfaceName ByteArray) returns bool
+		let key = witnessTableLabel(typeName, interfaceName: interfaceName)
+		if let memoized = try self.dictionaryCarryingConformances.get(key) 'alreadyAsked'
+			return memoized
+		end 'alreadyAsked'
+
+		let slots = interfaceWitnessSlots(self.interfaces, iface: self.resolveWitnessInterface(interfaceName))
+		var carries = false
+		for i in 0 upto slots.count() 'eachSlot'
+			let slot = try slots.get(i) otherwise panic("conformanceImplsCarryADictionary: slots.get OOB at {i} below count {slots.count()}")
+			if not self.witnessSlotImplIsSlotShaped(self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method), method: slot.method) 'thisSlotCarriesOne'
+				carries = true
+				break
+			end 'thisSlotCarriesOne'
+		end 'eachSlot'
+
+		self.dictionaryCarryingConformances.upsert(key, value: carries)
+		return carries
+	end 'conformanceImplsCarryADictionary'
+
+	// Is the member filling this slot already the slot's own shape — the ONE test that decides both whether an
+	// adapter is needed (`witnessSlotCallee`) and whether the conformance needs a per-instance table
+	// (`conformanceImplsCarryADictionary`).
+	//
+	// A COMPILER-SYNTHESIZED impl (`int.hash`, an `__` runtime entry) is in no signature registry and is built
+	// to the requirement's shape by construction — see `witnessSlotCallee` for why it is never measured
+	// against a signature that does not exist.
+	function witnessSlotImplIsSlotShaped(implName ByteArray, method InterfaceMethodSig) returns bool
+		if not self.funcSignatures.contains(implName) 'compilerSynthesizedImpl'
+			return true
+		end 'compilerSynthesizedImpl'
+
+		let impl = try self.funcNames.funcNamed(implName) otherwise panic("witnessSlotImplIsSlotShaped: '{String.from(implName)}' has a declared signature but is in no function of this module — `witnessSlotImpl` names the member a conformance ACCEPTED, and a check accepts only a declaration the merge carried")
+		return impl.paramCount == self.witnessSlotAbiArity(method)
+	end 'witnessSlotImplIsSlotShaped'
+
+	// Does this REQUEST name a fully concrete instance? `ProgramSignatures.instanceArgsAreFullyConcrete` is the
+	// rule; this is the union's own arm on it, so a `shared` request needs no gid to ask about.
+	function instanceIsFullyConcrete(instance WitnessTableInstance) returns bool
+		return match instance 'table'
+			shared gives false
+			perInstance(gid) gives self.signatures.instanceArgsAreFullyConcrete(gid)
+		end 'table'
+	end 'instanceIsFullyConcrete'
+
+	// The table a VALUE's witness is taken from — `perInstance` when the value is typed at a generic instance,
+	// `shared` otherwise. The one place a value's own type column becomes a table request, so the existential
+	// widening door and the constraint door cannot come to read a receiver differently.
+	function witnessInstanceOfValue(value ValueId) returns WitnessTableInstance
+		return self.witnessInstanceOfType(maxonTypeOfTag(self.valueTagOf(value), nameId: try self.valueNameIds.get(value) otherwise panic("witnessInstanceOfValue: value v{value} has no recorded type name — the two type columns are minted in lockstep")))
+	end 'witnessInstanceOfValue'
+
+	// The same request derived from a resolved TYPE rather than from a value — the door a constraint's
+	// SUBSTITUTED argument comes through (`materializeWitnessArg`, and the adapter's own constraint walk).
+	function witnessInstanceOfType(t MaxonType) returns WitnessTableInstance
+		return WitnessTableInstance.perInstance(typeNameIdOf(t)) if maxonTypeTag(t) == ValueTypeTag.genericInstance else WitnessTableInstance.shared
+	end 'witnessInstanceOfType'
+
+	// And from a declared NAME — the door a held associated position's BINDING comes through, which is a
+	// rendered name rather than a type. Its two arms are `ProgramSignatures.instanceOfDeclaredName`'s, asked
+	// there so this file holds no second opinion about which spellings name an instance.
+	function witnessInstanceOfDeclaredName(name ByteArray) returns WitnessTableInstance
+		if let instance = try self.signatures.instanceOfDeclaredName(name) 'namesAnInstance'
+			return WitnessTableInstance.perInstance(instance)
+		end 'namesAnInstance'
+
+		return WitnessTableInstance.shared
+	end 'witnessInstanceOfDeclaredName'
 
 	// ⭐⭐ **WHAT A WITNESS SLOT ACTUALLY POINTS AT — the impl, or an ABI ADAPTER over it (WASM3).**
 	//
@@ -1825,25 +2007,23 @@ type MaxonToStdLowering
 	// A COMPILER-SYNTHESIZED impl (`int.hash`, an `__` runtime entry) is in no signature registry and is built
 	// to the requirement's shape by construction — it has no `where` clause and no type parameter to describe
 	// — so it is returned unchanged rather than measured against a signature that does not exist.
-	function witnessSlotCallee(typeName ByteArray, slot CollectedInterfaceMethod) returns ByteArray
+	function witnessSlotCallee(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod) returns ByteArray
 		let implName = self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method)
-		if not self.funcSignatures.contains(implName) 'compilerSynthesizedImpl'
+		if self.witnessSlotImplIsSlotShaped(implName, method: slot.method) 'theImplNeedsNoAdapter'
 			return implName
-		end 'compilerSynthesizedImpl'
+		end 'theImplNeedsNoAdapter'
 
-		let impl = try self.funcNames.funcNamed(implName) otherwise panic("witnessSlotCallee: '{String.from(implName)}' has a declared signature but is in no function of this module — `witnessSlotImpl` names the member a conformance ACCEPTED, and a check accepts only a declaration the merge carried")
-		let slotArity = self.witnessSlotAbiArity(slot.method)
-		if impl.paramCount == slotArity 'theImplIsAlreadySlotShaped'
-			return implName
-		end 'theImplIsAlreadySlotShaped'
-
-		let adapterName = witnessSlotAdapterSymbol(typeName, interfaceName: slot.sourceInterfaceName, methodName: slot.method.name)
+		// ⭐ **THE ADAPTER IS NAMED OFF THE TABLE'S OWN LABEL COMPONENT, NEVER OFF THE CONFORMER (G19)** —
+		// two instances of one generic conformer share the impl and must NOT share the adapter, because the
+		// adapter is exactly where the two dictionaries differ. A shared table's component IS the conformer,
+		// so no existing adapter's symbol moves.
+		let adapterName = witnessSlotAdapterSymbol(self.witnessTableLabelComponent(typeName, instance: instance), interfaceName: slot.sourceInterfaceName, methodName: slot.method.name)
 		if self.emittedWitnessAdapters.contains(adapterName) 'anotherTableAlreadyRequestedIt'
 			return adapterName
 		end 'anotherTableAlreadyRequestedIt'
 
 		self.emittedWitnessAdapters.insert(adapterName)
-		self.pendingWitnessAdapters.push(WitnessAdapterRequest.create(typeName, implName: implName, adapterName: adapterName, slotArity: slotArity))
+		self.pendingWitnessAdapters.push(WitnessAdapterRequest.create(typeName, implName: implName, adapterName: adapterName, slotArity: self.witnessSlotAbiArity(slot.method), instance: instance))
 		return adapterName
 	end 'witnessSlotCallee'
 
@@ -1918,35 +2098,32 @@ type MaxonToStdLowering
 		self.stdModule.functions.push(adapter)
 	end 'synthesizeWitnessSlotAdapter'
 
-	// ⭐⭐ **THE DICTIONARY AN ADAPTER PASSES IS NULL, AND THAT IS THE CONFORMANCE MODEL'S OWN PREMISE MADE
-	// INTO A CHECK (WASM3) — not a shortcut.**
+	// ⭐⭐ **WHERE A WITNESS SLOT'S DICTIONARY COMES FROM — THE TABLE'S OWN INSTANCE, OR NOWHERE (WASM3, G19).**
 	//
 	// A hidden dictionary parameter describes the conformer's TYPE ARGUMENT: the layout descriptor of the
-	// instance (P1.6-B1) and one witness table per `where` constraint (P1.7a slice 2a). A witness table has
-	// no type argument to describe, because **shv2 keys a generic conformer's table by its BASE name**:
-	// `Array with Int` and `Array with String` both reduce to the one conformer `Array` and share
-	// `__witness_Array.Hashable` (`ProgramSignatures.conformerNameOfType`, whose header states the rule and
-	// the reason — *"the impls it names are ELEMENT-INDEPENDENT"*). One table, one impl, every element type;
-	// so there is no per-instance value for an adapter to pass, and a zero is not a guess but the only
-	// consistent answer.
+	// instance (P1.6-B1), the fixed element count (W190) and one witness table per `where` constraint (P1.7a
+	// slice 2a). Which of the two answers applies is decided ONCE, at the table (`witnessTableInstanceFor`),
+	// and travels on the request — never re-derived here, because the LABEL the slot was stamped with is what
+	// the caller jumped through and a second opinion about it is a wrong dictionary with no diagnostic.
 	//
-	// ⭐ **WHAT MAKES IT SOUND IS THE SENTENCE THAT REDUCTION ALREADY RESTS ON, AND HERE IT IS ENFORCED.**
-	// `requireWitnessSlotImplIgnoresDictionary` proves the impl READS none of these parameters; an impl that
-	// does is not element-independent, cannot be dispatched through a shared table, and is refused with a
-	// position rather than handed a null table to jump through. Before adapters existed the same parameters
-	// read whatever the ABI registers held — the identical unsoundness, with no check and no diagnostic.
+	//   • a **SHARED** table has no type argument to describe, because shv2 keys a generic conformer's table
+	//     by its BASE name: `Array with Int` and `Array with String` both reduce to the one conformer `Array`
+	//     and share `__witness_Array.Hashable` (`ProgramSignatures.conformerNameOfType`, whose header states
+	//     the rule and the reason — *"the impls it names are ELEMENT-INDEPENDENT"*). There is no per-instance
+	//     value to pass, and a zero is not a guess but the only consistent answer —
+	//     `requireWitnessSlotImplIgnoresDictionary` then PROVES the impl reads none of it, which is the
+	//     sentence that reduction already rests on, enforced.
+	//   • a **PER-INSTANCE** table names exactly one instantiation, so every word is a compile-time constant
+	//     of it, and the proof is unnecessary because the values are real.
 	//
-	// ⇒ **WHEN A CONFORMER'S TABLE BECOMES PER-INSTANCE, THIS IS WHERE THE REAL DICTIONARY GOES** —
-	// `maxon-selfhosted` emits one table per `genericInstance` (`Passes/BuildWitnessTables.maxon:196-305`)
-	// and its thunk loads `__layout_<instance>` and each constraint's `__witness_<boundArg>.<Iface>`
-	// (`LowerMaxonToStd.synthesizeOneWitnessThunk`). shv2 cannot today: the slot's own label names no
-	// instance.
+	// Before adapters existed the same parameters read whatever the ABI registers held — the identical
+	// unsoundness, with no check and no diagnostic.
 	//
-	// ⛔ **THE OTHER TWO HIDDEN BLOCKS ARE NOT NULLABLE, AND THE PANIC SAYS SO RATHER THAN GUESSING.** A
-	// `function`-typed parameter carries a companion ENVIRONMENT and an interface-typed one carries a WITNESS
-	// half; both are facts about the ARGUMENT, which only the caller has, and both are READ. A requirement
-	// declaring such a formal has no ABI a witness dispatch can satisfy — the call site passes one word where
-	// the impl reads two — and it was already broken before an adapter existed, silently.
+	// ⛔ **THE OTHER TWO HIDDEN BLOCKS ARE NOT NULLABLE ON EITHER PATH, AND THE PANIC SAYS SO RATHER THAN
+	// GUESSING.** A `function`-typed parameter carries a companion ENVIRONMENT and an interface-typed one
+	// carries a WITNESS half; both are facts about the ARGUMENT, which only the caller has, and both are READ.
+	// A requirement declaring such a formal has no ABI a witness dispatch can satisfy — the call site passes
+	// one word where the impl reads two — and it was already broken before an adapter existed, silently.
 	function appendWitnessAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, project Project)
 		let sig = try self.funcSignatures.get(request.implName) otherwise panic("appendWitnessAdapterDictionary: '{String.from(request.implName)}' has no signature — `witnessSlotCallee` returned the impl unchanged for exactly that case")
 		let companionCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.function) + countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef)
@@ -1954,18 +2131,97 @@ type MaxonToStdLowering
 			panic("appendWitnessAdapterDictionary: witness slot impl '{String.from(request.implName)}' declares a `function`- or interface-typed parameter, whose hidden companion word is a fact about the ARGUMENT — a witness dispatch passes one word per formal and cannot supply it")
 		end 'aPerArgumentCompanion'
 
+		match request.instance 'table'
+			shared then self.appendNullAdapterDictionary(args, request: request, impl: impl, entry: entry, project: project)
+			perInstance(gid) then self.appendInstanceAdapterDictionary(args, request: request, impl: impl, entry: entry, gid: gid, sig: sig)
+		end 'table'
+	end 'appendWitnessAdapterDictionary'
+
+	// One zero per hidden parameter, so the adapter's call has exactly the impl's declared arity. The ids
+	// continue the adapter's own dense space, which is why they are minted from the running count rather
+	// than through `mintStdValueId` (that counter belongs to the function being LOWERED, and a foreign id
+	// would leave the backend declaring locals up to it).
+	function appendNullAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, project Project)
 		self.requireWitnessSlotImplIgnoresDictionary(request, impl: impl, project: project)
 
-		// One zero per hidden parameter, so the adapter's call has exactly the impl's declared arity. The ids
-		// continue the adapter's own dense space, which is why they are minted from the running count rather
-		// than through `mintStdValueId` (that counter belongs to the function being LOWERED, and a foreign id
-		// would leave the backend declaring locals up to it).
 		for _ in request.slotArity upto impl.paramCount 'eachHiddenParam'
 			let zeroId = args.count()
 			self.stdModule.appendOp(entry, op: StdOp.const(zeroId, value: 0, valueType: StdType.i64))
 			args.push(zeroId)
 		end 'eachHiddenParam'
-	end 'appendWitnessAdapterDictionary'
+	end 'appendNullAdapterDictionary'
+
+	// ⭐⭐ **THE REAL DICTIONARY, BUILT FROM THE INSTANCE THE TABLE IS FOR (G19).** This is the mechanism
+	// `maxon-selfhosted` calls a witness THUNK (`Passes/BuildWitnessTables.emitPerInstanceWitnessTables` +
+	// `LowerMaxonToStd.synthesizeOneWitnessThunk`), reached through shv2's existing ADAPTER rather than
+	// through a second synthesis path — the adapter already exists, already forwards the slot's arguments and
+	// already carries the impl's return shape, and the only thing v1's thunk does that it did not is fill
+	// these words.
+	//
+	// ⚠ **TWO DELIBERATE DIVERGENCES FROM v1, both about cost:**
+	//   • v1 routes EVERY per-instance slot through a thunk, which pays a call on every generic witness
+	//     dispatch in the program. Here a slot whose impl already IS the slot's shape keeps pointing straight
+	//     at the impl (`witnessSlotImplIsSlotShaped`), so the extra call is paid only where a dictionary has
+	//     to be built.
+	//   • v1 EMITS one table per (gid × conformance) up front, for every interned instance. shv2 mints on
+	//     demand from a call site that holds the instance, so an instantiation nothing widens costs nothing.
+	//
+	// ⚠ **THE ORDER IS THE ABI's — `[layout][count][witness_0..k]`, read back from the END by
+	// `bindImplicitParams`** — and each block's PRESENCE is asked of the same predicate the call-site
+	// appender asks (`layoutNeedingFuncs`, `fixedElementCountParamCountFor`, `witnessConstraintsOfMethod`),
+	// so an adapter and a direct call to one impl cannot disagree about its parameter list. The arity check
+	// at the end is the two copies of that number meeting.
+	function appendInstanceAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, gid GenericInstanceId, sig FuncSignature)
+		if self.layoutNeedingFuncs.contains(request.implName) 'aLayoutDescriptor'
+			let descId = args.count()
+			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid).toByteArray()))
+			args.push(descId)
+		end 'aLayoutDescriptor'
+
+		if self.fixedElementCountParamCountFor(request.implName) != 0 'aFixedElementCount'
+			// A per-instance table is only minted for a CONCRETE instance, and a concrete instance states its
+			// own count — `Vector with 4 Element` says 4 — so unlike the value door there is no caller slot to
+			// fall back on and a silent instance is an internal break.
+			if not self.signatures.valueStatesItsOwnElementCount(ValueTypeTag.genericInstance, nameId: gid) 'statesNoCount'
+				panic("appendInstanceAdapterDictionary: '{String.from(request.implName)}' reads a fixed element count and the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' states none — a table is keyed by an instance only when `instanceIsFullyConcrete` accepted it, and a concrete instance states its own count")
+			end 'statesNoCount'
+
+			let countId = args.count()
+			self.stdModule.appendOp(entry, op: StdOp.const(countId, value: self.signatures.genericInstanceFixedSize(gid), valueType: StdType.i64))
+			args.push(countId)
+		end 'aFixedElementCount'
+
+		let constraints = self.signatures.witnessConstraintsOfMethod(request.implName, extensionConstraints: sig.extensionConstraints)
+		for i in 0 upto constraints.count() 'eachConstraint'
+			let constraint = try constraints.get(i) otherwise panic("appendInstanceAdapterDictionary: whereConstraints.get OOB at {i} for '{String.from(request.implName)}'")
+			let witnessId = args.count()
+			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(witnessId, label: self.instanceConstraintWitnessLabel(gid, constraint: constraint, implName: request.implName).toByteArray()))
+			args.push(witnessId)
+		end 'eachConstraint'
+
+		if args.count() != impl.paramCount 'theTwoParameterListsDisagree'
+			panic("appendInstanceAdapterDictionary: the adapter for '{String.from(request.implName)}' built {args.count()} argument(s) and the impl declares {impl.paramCount} — the three hidden blocks are asked of the same predicates the call-site appender uses, so a difference means one of them answers differently for an adapter than for a direct call")
+		end 'theTwoParameterListsDisagree'
+	end 'appendInstanceAdapterDictionary'
+
+	// The witness table one `where` constraint of `gid`'s BASE resolves to at this instantiation — the
+	// `concrete` arm of `materializeWitnessArg`, asked of an instance rather than of a receiver value, and
+	// through the SAME two reducers (`conformerTypeArgName` for the label's conformer,
+	// `witnessInstanceOfType` for whether that conformer's own table is per-instance) so a constraint
+	// discharged at a call site and the same constraint discharged inside an adapter name one table.
+	//
+	// ⚠ **AN OPAQUE ARGUMENT CANNOT ARRIVE HERE, AND THE PANIC IS THE GUARD RATHER THAN A HOPE.** The
+	// call-site door FORWARDS the caller's own slot for one (`forwardOpaqueParamWitness`); an adapter has no
+	// caller and no slot, which is exactly why `witnessTableInstanceFor` refuses to key a table by a
+	// non-concrete instance in the first place.
+	function instanceConstraintWitnessLabel(gid GenericInstanceId, constraint WhereConstraint, implName ByteArray) returns String
+		let typeArg = self.signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+		if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'stillOpaque'
+			panic("instanceConstraintWitnessLabel: the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' owes '{String.from(implName)}' a witness for `{String.from(constraint.interfaceName)}` at type-parameter position {constraint.typeParamIndex}, and that argument is still opaque — `instanceIsFullyConcrete` gates exactly this")
+		end 'stillOpaque'
+
+		return self.ensureWitnessTable(self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray(), instance: self.witnessInstanceOfType(typeArg), interfaceName: constraint.interfaceName)
+	end 'instanceConstraintWitnessLabel'
 
 	// ⭐⭐ **PROVE THE IMPL NEVER READS THE NULL DICTIONARY — the premise the base-keyed conformer name rests
 	// on, asked of the one impl that is about to be handed a null one (WASM3).**
@@ -2053,7 +2309,7 @@ type MaxonToStdLowering
 			if let held = try self.signatures.associatedTypeHeldAt(interfaceName, position: position) 'heldAtAnInterface'
 				if let binding = try conformerAssociatedBinding(self.conformances, typeName: typeName, interfaceName: interfaceName, position: position) 'thisConformerBoundIt'
 					let conformer = self.signatures.conformerNameOfDeclaredName(binding).toByteArray()
-					self.globalData.recordRdataBlobRelativeOffset(self.ensureWitnessTable(conformer, interfaceName: held), rdataLabel: label, offsetInLabel: witnessAssociatedSlotOffset(methodCount, position: position))
+					self.globalData.recordRdataBlobRelativeOffset(self.ensureWitnessTable(conformer, instance: self.witnessInstanceOfDeclaredName(binding), interfaceName: held), rdataLabel: label, offsetInLabel: witnessAssociatedSlotOffset(methodCount, position: position))
 				end 'thisConformerBoundIt'
 			end 'heldAtAnInterface'
 		end 'eachAssociatedType'
@@ -2680,8 +2936,8 @@ type MaxonToStdLowering
 	// the probe's `hash()` jumped through it — `create` + `upsert` + `contains` all correct and the first
 	// `try m.get(k)` faulting with 0xC0000005. ⇒ **A compiler-owned callee that takes witness parameters must
 	// have EVERY lowering path that emits it reach one appender**, never two that agree by hand.
-	function materializeWitnessTableAddr(conformerType ByteArray, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
-		let label = self.ensureWitnessTable(conformerType, interfaceName: interfaceName)
+	function materializeWitnessTableAddr(conformerType ByteArray, instance WitnessTableInstance, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
+		let label = self.ensureWitnessTable(conformerType, instance: instance, interfaceName: interfaceName)
 		let addrId = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: label.toByteArray()))
 		return addrId
@@ -3039,7 +3295,7 @@ type MaxonToStdLowering
 	// reachable and the machine word constrains nothing — unchanged by the per-site rule, which narrows WHICH
 	// conformers can arrive and cannot conjure one where there are none.
 	function associatedFormalType(interfaceName ByteArray, position ElementCount, formalName ByteArray, receiver ValueId) returns MaxonType
-		if let siteBinding = try self.receiverSiteBinding(receiver, position: position) 'theReceiverClaimsIt'
+		if let siteBinding = try self.receiverSiteBinding(receiver, position: position, interfaceName: interfaceName) 'theReceiverClaimsIt'
 			return renderedTypeNameAbiType(siteBinding)
 		end 'theReceiverClaimsIt'
 
@@ -3052,19 +3308,37 @@ type MaxonToStdLowering
 
 	// ⭐ **WHAT THE RECEIVER'S OWN DECLARATION BOUND ONE ASSOCIATED POSITION TO** — the site's claim, as the
 	// RENDERED name. `MapError.keyNotFound` for a receiver that claims nothing at all (a bare `Taker`
-	// parameter, a constrained type parameter, a field load, a merge phi) and for one whose instance bound too
-	// few arguments, which is E3016's to report.
+	// parameter, an UNBOUND constrained type parameter, a field load, a merge phi) and for one whose instance
+	// bound too few arguments, which is E3016's to report.
 	//
 	// The twin of `Parser.instanceBoundAssociatedType`, which answers the same question for the dispatch's
 	// RESULT out of the same column — one receiver, one instance, one position, so a call's result type and its
 	// argument ABI are decided by the same fact rather than by two readings of it.
-	function receiverSiteBinding(receiver ValueId, position ElementCount) returns ByteArray throws MapError
-		let instance = try self.currentExistentialInstances.get(receiver)
-		if position >= self.signatures.genericInstanceArgCount(instance) 'boundNothingHere'
-			throw MapError.keyNotFound
-		end 'boundNothingHere'
+	//
+	// ⭐ **A CONSTRAINED TYPE PARAMETER CLAIMS THROUGH ITS `where` CLAUSE INSTEAD (G19)**, which is the same
+	// arrangement one tier up: `ConformanceCheck.receiverClaimedPositions` reads the two stores in this order
+	// and for this reason, so the refusal that admits the dispatch and the ABI this emits for it cannot come to
+	// disagree about what the site fixed.
+	function receiverSiteBinding(receiver ValueId, position ElementCount, interfaceName ByteArray) returns ByteArray throws MapError
+		if let instance = try self.currentExistentialInstances.get(receiver) 'declaredAtAnInstantiatedExistential'
+			if position >= self.signatures.genericInstanceArgCount(instance) 'boundNothingHere'
+				throw MapError.keyNotFound
+			end 'boundNothingHere'
 
-		return self.signatures.instanceArgDisplayName(instance, position: position)
+			return self.signatures.instanceArgDisplayName(instance, position: position)
+		end 'declaredAtAnInstantiatedExistential'
+
+		if self.valueTagOf(receiver) != ValueTypeTag.typeParameter 'notAConstrainedParameter'
+			throw MapError.keyNotFound
+		end 'notAConstrainedParameter'
+
+		let token = try self.valueNameIds.get(receiver) otherwise throw MapError.keyNotFound
+		let bindings = constrainedParamAssociatedBindings(self.signatures, token: token, interfaceName: interfaceName)
+		if position >= bindings.count() 'theConstraintBoundNothingHere'
+			throw MapError.keyNotFound
+		end 'theConstraintBoundNothingHere'
+
+		return try bindings.get(position) otherwise panic("receiverSiteBinding: bindings.get OOB at {position} below count {bindings.count()}")
 	end 'receiverSiteBinding'
 
 	// Witness slot `methodIndex` of the interface `interfaceDeclIndex` names — the same `(interface, slot)` pair

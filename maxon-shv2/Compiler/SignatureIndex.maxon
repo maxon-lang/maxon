@@ -21835,33 +21835,44 @@ export type ProgramSignatures
 		// the conformer `IntArr` — a name nothing conforms under — so the very witness slot the reduction
 		// exists to name is never reachable through an alias, which is the only way the corpus writes one.
 		//
-		// ⚠ **THE SUPERSEDED GUARD IS `genericAliasInstance`'s PRECONDITION, not caution.** That door refuses
-		// a spelling two files contest, and a whole-program reader must ask this first (see there); a
-		// superseded spelling falls through to its own name, which conforms to nothing — the same answer a
-		// non-conforming array gets, and the safe direction.
-		if self.isGenericAlias(name) and not self.genericAliasSpellingIsSuperseded(name) 'genericInstanceAlias'
-			return self.conformerNameOfInstanceSpelling(self.genericAliasInstance(name), spelling: name)
-		end 'genericInstanceAlias'
-
 		// ⭐⭐ **AN INSTANCE ALSO ARRIVES AS ITS OWN CANONICAL RENDERING, AND THAT SPELLING REDUCES BY THE SAME
-		// RULE (W58).** The arm above answers for the spelling an author WROTE (`IntUpCursor`); this one answers
-		// for the spelling the COMPILER wrote (`UpCursor_Integer`), which is what `renderDeclaredTypeName`
-		// records into a conformance's `withArgs` and therefore what every conformance question asked of a
-		// binding is handed. `declaredNameIsManaged` already carries this same arm for the ownership question,
-		// with the same sentence — *"a generic instance arrives as its canonical name at some doors, and no
-		// registry is keyed by that"* — and the conformance question needed it for the same reason and did not
-		// have it. MEASURED at the E3126 door: *"'UpCursor_Integer' does not implement 'Cursor'"* on a program
-		// whose `type UpCursor uses Element implements Cursor with Element` declares exactly that, which is
-		// `stdlib/Array.maxon`'s `Iterable with (Element, ArrayIter)` to the letter.
-		//
-		// ⚠ It is asked after the alias door because that one holds the author's spelling and this one the
-		// compiler's; `renderedInstanceOfUnclaimedName` is what keeps a mint from outranking a DECLARATION.
-		if let rendered = try self.renderedInstanceOfUnclaimedName(name) 'aRenderedInstance'
-			return self.conformerNameOfInstanceSpelling(rendered, spelling: name)
-		end 'aRenderedInstance'
+		// RULE (W58)** — both spellings are `instanceOfDeclaredName`'s to recognize, and that is where the two
+		// arms, their ordering and the superseded guard live. A spelling it declines names no instance and
+		// falls through to its own name, which conforms to nothing — the same answer a non-conforming array
+		// gets, and the safe direction.
+		if let instance = try self.instanceOfDeclaredName(name) 'namesAnInstance'
+			return self.conformerNameOfInstanceSpelling(instance, spelling: name)
+		end 'namesAnInstance'
 
 		return String.from(name)
 	end 'conformerNameOfDeclaredName'
+
+	// ⭐⭐ **THE INSTANCE A DECLARED NAME NAMES, IN EITHER OF THE TWO SPELLINGS ONE CAN ARRIVE IN.** The first
+	// arm answers for the spelling an AUTHOR wrote (`typealias IntUpCursor = UpCursor with Integer`); the
+	// second for the spelling the COMPILER wrote (`UpCursor_Integer`), which is what `renderDeclaredTypeName`
+	// records into a conformance's `withArgs` and therefore what every question asked OF a binding is handed.
+	// `declaredNameIsManaged` carries the same pair for the ownership question, with the same sentence — *"a
+	// generic instance arrives as its canonical name at some doors, and no registry is keyed by that"*.
+	//
+	// ⚠ The alias door is asked FIRST because it holds the author's spelling and the other the compiler's;
+	// `renderedInstanceOfUnclaimedName` is what keeps a mint from outranking a DECLARATION.
+	//
+	// ⚠ **THE SUPERSEDED GUARD IS `genericAliasInstance`'s PRECONDITION, not caution.** That door refuses a
+	// spelling two files contest, and a whole-program reader must ask this first (see there); a superseded
+	// spelling names no instance, which is the safe direction — its caller then falls back to the name itself.
+	//
+	// Its two readers want different things from the answer — `conformerNameOfDeclaredName` the conformance it
+	// reduces to, `LowerMaxonToStd.witnessInstanceOfDeclaredName` whether its witness table is keyed by it —
+	// so the recognition is stated once here rather than at each. MEASURED at the E3126 door before the second
+	// arm existed: *"'UpCursor_Integer' does not implement 'Cursor'"* on a program whose
+	// `type UpCursor uses Element implements Cursor with Element` declares exactly that.
+	export function instanceOfDeclaredName(name ByteArray) returns GenericInstanceId throws MapError
+		if self.isGenericAlias(name) and not self.genericAliasSpellingIsSuperseded(name) 'genericInstanceAlias'
+			return self.genericAliasInstance(name)
+		end 'genericInstanceAlias'
+
+		return try self.renderedInstanceOfUnclaimedName(name)
+	end 'instanceOfDeclaredName'
 
 	// The reduction the two instance SPELLINGS share — an author's `typealias` and the compiler's own canonical
 	// mint — written once so the two doors above cannot come to answer differently about one instance.
@@ -23306,6 +23317,42 @@ export type ProgramSignatures
 		let base = self.genericInstanceBaseName(gid)
 		return not self.isBuiltinGenericBaseName(base) and not self.declaresTheArrayLiteralMarker(base)
 	end 'instanceIsANestedParameterisedOne'
+
+	// ⭐⭐ **IS EVERY ARGUMENT OF THIS INSTANCE A TYPE, ALL THE WAY DOWN (G19)?** — the question two mechanisms
+	// ask for the same reason, which is that a PARAMETRIC instance names nothing a compile-time answer can be
+	// built from:
+	//
+	//   • `LowerMaxonToStd.witnessTableInstanceFor` refuses to key a witness table by one, because the
+	//     table's adapter would have to name the instance's descriptor and one witness per constrained
+	//     argument, and neither exists for an argument that is still a type PARAMETER (its size IS the
+	//     descriptor read the blob would have to contain, which is why `primitiveTypeByteSize` panics rather
+	//     than guessing);
+	//   • `ConformanceCheck.checkConstraintAssociatedBindings` refuses to COMPARE one, because a parametric
+	//     rendering is a name in some declaration's own scope rather than a type identity — two spellings of
+	//     "the tuple of my two parameters" written in two declarations differ character for character while
+	//     denoting the same thing at every instantiation.
+	//
+	// ⚠ **THE WALK RECURSES, AND A SHALLOW TEST WOULD NOT BE ENOUGH.** `WithIterIterator with (MapIterator
+	// with (Key, Value), Element)` inside `Map`'s own body has a `genericInstance` at position 0 whose OWN
+	// arguments are `Map`'s parameters, so every argument at THIS level is a type and the instance is still
+	// parametric. `maxon-selfhosted` needed the identical deep test for the identical shape and records the
+	// wasm link failure the shallow one caused (`Passes/BuildWitnessTables.gidIsConditional`, whose own
+	// header names this exact `WithIterIterator` instantiation).
+	export function instanceArgsAreFullyConcrete(gid GenericInstanceId) returns bool
+		for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
+			let arg = self.substitutedInstanceArg(gid, position: position)
+			let tag = maxonTypeTag(arg)
+			if tag == ValueTypeTag.typeParameter 'stillOpaque'
+				return false
+			end 'stillOpaque'
+
+			if tag == ValueTypeTag.genericInstance and not self.instanceArgsAreFullyConcrete(typeNameIdOf(arg)) 'aNestedParametricInstance'
+				return false
+			end 'aNestedParametricInstance'
+		end 'eachArg'
+
+		return true
+	end 'instanceArgsAreFullyConcrete'
 
 	// ⭐⭐ **THE BASE A GENERIC-INSTANCE ALIAS DENOTES WHEN IT IS A NESTED PARAMETERISED ONE, or
 	// `EmptySourceText` (W161).** `EChain` inside `type Bag uses Element`, on a
@@ -24782,6 +24829,33 @@ export type ProgramSignatures
 	export function typeParamRetainCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
 		return retainCalleeForProtocol(self.typeParamOwnershipProtocol(id, position: position))
 	end 'typeParamRetainCallee'
+
+	// ⭐⭐ **THE SAME PAIR ASKED OF AN INSTANCE ITSELF RATHER THAN OF ITS TYPE ARGUMENT (G19)** — what a
+	// PER-INSTANCE witness table's `destroyFunc@8`/`retainFunc@16` hold. The two above answer for a generic's
+	// ARGUMENT (`Container with String`'s `String`); these answer for the instance (`Array with StrArr`), which
+	// is the value an existential of that instance actually owns.
+	//
+	// ⛔⛔ **A BASE-KEYED TABLE CANNOT ANSWER THIS, AND THE GAP WAS A MEASURED LEAK.** The shared table's words
+	// come from the conformer NAME (`existentialDestroyCallee("Array")`), which names a drop that does not
+	// know the element — right for the ONE table a non-generic conformer has, and a partial answer for a
+	// generic one. MEASURED at G19 on eleven lines with no `clone` in them: an
+	// `Array with (Array with String)` widened into a `Cloneable` and dropped exited **101**, while the same
+	// program over `Array with String` exited 0 — because a String LITERAL element is immortal rdata and hid
+	// the missing walk. A per-instance table names the instance, so it can name the instance's own drop.
+	//
+	// The rule is `typeParamDropCallee`'s, on a type this holds directly rather than reads out of an
+	// instance's argument list — same protocol, same two callees, same "empty is the ANSWER" encoding
+	// (`LowerMaxonToStd.stampOwnershipWord` leaves the zero every reader treats as inert).
+	export function instanceDropCallee(id GenericInstanceId) returns ByteArray
+		return match self.typeOwnershipProtocol(MaxonType.genericInstance(id)) 'protocol'
+			none gives EmptySourceText
+			byteRecord to aggregate gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id))
+		end 'protocol'
+	end 'instanceDropCallee'
+
+	export function instanceRetainCallee(id GenericInstanceId) returns ByteArray
+		return retainCalleeForProtocol(self.typeOwnershipProtocol(MaxonType.genericInstance(id)))
+	end 'instanceRetainCallee'
 
 	// ⭐⭐ **THE ONE ANSWER BOTH OF A DESCRIPTOR BLOCK'S OWNERSHIP WORDS ARE A SPELLING OF (found at review)** —
 	// `retainFunc@64` through `retainCalleeForProtocol`, `destroyFunc@40` through `typeParamDropCallee`. Written
