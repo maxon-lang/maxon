@@ -850,7 +850,14 @@ consume boundary learned anything: `typeSupportsDeepClone` carries the identical
 `isGenericAlias → genericAliasInstance` arm, and `requireOpaqueArrayCopyable` drives it over the same
 `instancesOfBase` walk. ⛔ MEASURED: the compiler PANICKED out of the file-less door. A superseded
 spelling refuses nothing, so the refusal that stands is the one the live instantiations earn — the
-managed-element array `Bag` genuinely has no single `copyFunc`.
+`Bag` whose element is an OS handle genuinely has no `copyFunc`, while the `int(0 to 100)` spelling in
+`cmain.maxon` is a byte blit and earns nothing.
+
+⛔ **THAT UNCOPYABLE ELEMENT WAS A `String` UNTIL G18, AND THE SUBJECT IS UNAFFECTED BY THE SWAP.** What this
+case pins is the CONTESTED-ALIAS arm not panicking out of a file-less door; the refusal is only the
+observable that proves the arm was walked. A managed-element array is deep-cloneable now (it has a
+per-instance one-argument cloner thunk), so the observable had to move to the residue the gate will always
+refuse — an OS handle, which cannot be deep-copied by anything.
 
 ⚠ **THE REFUSAL IS THE LIBRARY'S SINCE ARRH STRUCK `clone` FROM THE `Array` ROSTER, AND BLAME GIVES IT
 THE USER'S SPAN BACK** — `arr.clone()` is the library's own declaration now, so this program is refused by the
@@ -878,17 +885,25 @@ export type Container uses Element
 	end 'duplicate'
 end 'Container'
 
-// --- file: bstrings.maxon
-typealias Bag = Array with String
+// --- file: bhandles.maxon
+type Handle
+	export var f as __ManagedFile
+
+	export static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Handle'
+
+typealias Bag = Array with Handle
 typealias NestedContainer = Container with Bag
 
-export function useStrings() returns int
+export function useHandles() returns int
 	var sa = Bag.create()
-	sa.push("a string long enough to force a heap allocation")
+	sa.push(Handle.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 0))
 	var nc = NestedContainer.create()
 	nc.push(sa)
 	return 1
-end 'useStrings'
+end 'useHandles'
 
 // --- file: cmain.maxon
 typealias Low = int(0 to 100)
@@ -901,11 +916,11 @@ function main() returns ExitCode
 	var nc = NestedContainer.create()
 	nc.push(sa)
 	var dup = nc.duplicate()
-	return useStrings() - 1
+	return useHandles() - 1
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:23:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element container (`Array with (Array with String)`, `List with String`), a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element container (`Array with int`, `List with int`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173).
+error E2015: <fragment>:30:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
 note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 

@@ -1220,14 +1220,91 @@ end 'main'
 0
 ```
 
+### Copying an opaque array of a NESTED-CONTAINER instantiation
+
+⭐⭐ **G18 — THE OPAQUE HALF, AND THE ROUTE THE CONCRETE CASES CANNOT REACH.** `Container`'s shared body
+compiles once against an opaque `Element` and copies each element through the enclosing instance's descriptor
+`copyFunc@32`, which holds a SINGLE `(box) -> newBox`. A managed-element container element
+(`Array with String`) has a 2-argument copy, so until G18 it had no `copyFunc` and the whole method was
+refused; it now stamps the element's per-instance one-argument thunk
+(`ProgramSignatures.managedOpaqueArrayElementCloneCallee` → `__clone_<mangled>`), whose body makes that
+2-argument call. This is a DIFFERENT stamp from the concrete one
+(`Parser.arrayElementCloneValue`, exercised by `array-clone-managed-elements`), which is why the case exists
+here and not only there.
+
+⚠ **THE EXIT CODE IS THE WHOLE ASSERTION, AND IT DISCRIMINATES BOTH WAYS.** The source container, its inner
+array and both Strings are freed before the duplicate is read, so a byte-blitted copy double-frees them
+(MEASURED as `0xC0000005` / 139 before the cloner existed) and a copy that never happened leaks (exit 101).
+Only a real deep clone exits 0 — the inner row cannot be read from outside the shared body, so the answer has
+to come from the memory manager rather than from a value.
+<!-- test: opaque-copy-of-a-nested-container-instantiation -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Idx = int(0 to 1000)
+typealias StringArray = Array with String
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+
+	export function count() returns Idx
+		return self.items.count()
+	end 'count'
+end 'Container'
+
+typealias NestedContainer = Container with StringArray
+
+function makeDuplicate() returns NestedContainer
+	var sa = StringArray.create()
+	sa.push("a string long enough to force a heap allocation")
+	sa.push("a second string, also long enough to allocate")
+	var nc = NestedContainer.create()
+	nc.push(sa)
+	return nc.duplicate()
+	// nc, its inner array and both String records are freed when this function returns
+end 'makeDuplicate'
+
+function main() returns ExitCode
+	let dup = makeDuplicate()
+	print("{dup.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
 ### Copying an opaque array of a non-deep-cloneable instantiation is rejected
 
-The descriptor `copyFunc@32` can hold only a SINGLE `(box) -> newBox` cloner, so an instantiation whose managed
-element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with
-String)`), whose clone needs the two-argument `__managed_clone_managed` — has no single `copyFunc`. Copying such an
-opaque array in the shared body would byte-blit a managed pointer and double-free it, so the enclosing generic
-type's copy method is rejected with a positioned E2015 when SOME instantiation is not single-function-cloneable.
-(A DROP-only instantiation of the same shape is fine — it needs no `copyFunc` — and is covered above.)
+The descriptor `copyFunc@32` can hold only a SINGLE `(box) -> newBox` cloner, so an instantiation whose
+managed element has NO cloner at all — an OS handle, which cannot be deep-copied by anything (duplicating one
+hands two owners a descriptor whose `__mf_destruct` closes it once) — has nothing to stamp there. Copying such
+an opaque array in the shared body would byte-blit a managed pointer and double-free it, so the enclosing
+generic type's copy method is rejected with a positioned E2015 when SOME instantiation is not cloneable.
+(A DROP-only instantiation of the same shape is fine — it needs no `copyFunc` — and is covered below.)
+
+⛔ **THIS CASE'S ELEMENT WAS `Array with String` UNTIL G18 AND HAD TO CHANGE, WHICH IS THE POINT OF THE CASE
+ABOVE.** A managed-element container is cloneable now, so the old program is the POSITIVE case and this one
+needs an element the gate still refuses. The refusal has to be blamed at the `NestedContainer` line, so the
+uncopyable thing must be an instance the program never WROTE (`Array with Handle`, minted by `Container`'s
+inner `typealias ElementArray = Array with Element`) — a bare `typealias HandleArray = Array with
+__ManagedFile` would be refused at its OWN line instead. One user struct around the handle buys both.
 
 ⚠ **THE REFUSAL IS THE LIBRARY'S SINCE ARRH STRUCK `clone` FROM THE `Array` ROSTER, AND BLAME GIVES IT
 THE USER'S SPAN BACK** — `arr.clone()` is the library's own declaration now, so this program is refused by the
@@ -1239,7 +1316,14 @@ the blame edge once, for all four cases ARRH touched.
 <!-- test: opaque-copy-uncopyable-instantiation-rejected -->
 ```maxon
 typealias ExitCode = int(0 to 125)
-typealias StringArray = Array with String
+
+type Handle
+	export var f as __ManagedFile
+
+	export static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Handle'
 
 type Container uses Element
 	typealias ElementArray = Array with Element
@@ -1259,19 +1343,17 @@ type Container uses Element
 	end 'duplicate'
 end 'Container'
 
-typealias NestedContainer = Container with StringArray
+typealias NestedContainer = Container with Handle
 
 function main() returns ExitCode
-	var sa = StringArray.create()
-	sa.push("a string long enough to force a heap allocation")
 	var nc = NestedContainer.create()
-	nc.push(sa)
+	nc.push(Handle.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
 	var dup = nc.duplicate()
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:23:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element container (`Array with (Array with String)`, `List with String`), a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element container (`Array with int`, `List with int`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173).
+error E2015: <fragment>:30:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
 note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 

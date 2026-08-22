@@ -160,7 +160,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element container (`Array with (Array with String)`, `List with String`), a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element container (`Array with int`, `List with int`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173).
+error E2015: <fragment>:8:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
 note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 
@@ -221,8 +221,9 @@ end 'main'
 ### Clone of a struct whose field is a list of STRINGS
 The chain's own elements are managed here, so the copy cannot reuse the trivial walk: each node's `String`
 is deep-cloned in turn (`__list_clone_managed` + `__str_clone`), which is the chain's spelling of
-`__managed_clone_managed`. Reached one level down — through `__clone_Holder`'s field cascade — because a
-2-argument entry can never be an array element itself, exactly as a managed-element `Array` field cannot.
+`__managed_clone_managed`. Reached one level down — through `__clone_Holder`'s field cascade — which is where
+a 2-argument entry is emitted INLINE. (An array ELEMENT reaches the same call through the one-argument thunk
+instead; `clone-of-an-array-of-managed-element-lists` below is the chain at that position.)
 ```maxon
 typealias StrList = List with String
 
@@ -264,4 +265,285 @@ end 'main'
 2
 first list element, long enough to need a heap record
 second list element, long enough to need a heap record
+```
+
+<!-- test: an-array-of-string-arrays-needs-no-copy-to-compile -->
+### An array of string ARRAYS compiles on a program that copies nothing
+⭐⭐ **G18.** `Array.clone`'s own `managed.slice(0, len)` is answerable for EVERY instantiation of `Array`
+in the program, because the corpus body is compiled once over an opaque `Element` — so any program that
+reaches `stdlib/Array.maxon` at all (here, through `for … in`) used to be refused for an element it never
+copies. What makes the refusal go away is not a reachability exemption but the missing CLONER: a
+managed-element container now has a per-instance one-argument `__clone_<mangled>` thunk, so the element is
+deep-cloneable and the gate has nothing left to refuse.
+```maxon
+typealias StringArrayArray = Array with StringArray
+
+function firstOf(candidates StringArrayArray) returns String
+	for segments in candidates 'each'
+		for s in segments 'inner'
+			return s
+		end 'inner'
+	end 'each'
+	return "none"
+end 'firstOf'
+
+function main() returns ExitCode
+	var outer = StringArrayArray.create()
+	var inner = StringArray.create()
+	inner.push("a hit long enough to reach the heap")
+	outer.push(inner)
+	print("{firstOf(outer)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a hit long enough to reach the heap
+```
+
+<!-- test: clone-of-an-array-of-string-arrays-is-deep -->
+### Clone of an array of STRING ARRAYS, source freed before access
+The element is itself a managed-element container, whose copy is the 2-argument
+`__managed_clone_managed(box, funcAddr(__str_clone))`. An array element is invoked through
+`callIndirect(fn, elem)` and can pass only one argument, so the element's `copyFunc` is a synthesized
+per-instance thunk that makes that 2-argument call and returns its result. The source array, its inner
+array and its Strings are all freed before the clone is read, so a shallow copy at ANY of the three levels
+is a read of freed memory rather than a wrong number.
+```maxon
+typealias StringArrayArray = Array with StringArray
+
+function makeClone() returns StringArrayArray
+	var src = StringArrayArray.create()
+	var inner = StringArray.create()
+	inner.push("first inner string, long enough to need a heap record")
+	inner.push("second inner string, long enough to need a heap record")
+	src.push(inner)
+	return src.clone()
+	// src, its inner array and both String records are freed when this function returns
+end 'makeClone'
+
+function main() returns ExitCode
+	let cloned = makeClone()
+
+	let inner = try cloned.get(0) otherwise return 91
+	let first = try inner.get(0) otherwise return 92
+	let second = try inner.get(1) otherwise return 93
+
+	print("{cloned.count()} {inner.count()}\n{first}\n{second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+first inner string, long enough to need a heap record
+second inner string, long enough to need a heap record
+```
+
+<!-- test: clone-of-an-array-of-arrays-of-structs -->
+### Clone of buckets — an array of arrays of STRUCTS
+The shape shv2's own worker pool is built on (`Array with SpecTestResultArray`): the thunk's inner
+element cloner is a per-STRUCT `__clone_<T>` rather than `__str_clone`, so the needs closure has to reach
+the struct cascade THROUGH the synthesized thunk, which no module scan can see.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Rec
+	export var name as String
+	export var value as Integer
+
+	static function create(name String, value Integer) returns Self
+		return Self{name: name, value: value}
+	end 'create'
+end 'Rec'
+
+typealias RecArray = Array with Rec
+typealias RecBuckets = Array with RecArray
+
+function makeClone() returns RecBuckets
+	var src = RecBuckets.create()
+	var bucket = RecArray.create()
+	bucket.push(Rec.create("a bucketed record name long enough to reach the heap", value: 41))
+	src.push(bucket)
+	return src.clone()
+	// src, its bucket, its Rec and that Rec's String are freed when this function returns
+end 'makeClone'
+
+function main() returns ExitCode
+	let cloned = makeClone()
+
+	let bucket = try cloned.get(0) otherwise return 91
+	let rec = try bucket.get(0) otherwise return 92
+
+	print("{rec.name} {rec.value}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a bucketed record name long enough to reach the heap 41
+```
+
+<!-- test: slice-of-an-array-of-string-arrays-is-deep -->
+### Slice of an array of string arrays is an independent OWNER
+`slice` reaches the same element cloner `clone` does (`__managed_slice_managed` rather than
+`__managed_clone_managed`), so the window it copies out is a full owner over deep copies — which is what
+lets the source be dropped while the slice is still read.
+```maxon
+typealias StringArrayArray = Array with StringArray
+
+function makeSlice() returns StringArrayArray
+	var src = StringArrayArray.create()
+	var first = StringArray.create()
+	first.push("dropped inner string, long enough to need a heap record")
+	var second = StringArray.create()
+	second.push("kept inner string, long enough to need a heap record")
+	src.push(first)
+	src.push(second)
+	return try src.slice(1, endIndex: 2) otherwise StringArrayArray.create()
+	// src and BOTH inner arrays are freed when this function returns
+end 'makeSlice'
+
+function main() returns ExitCode
+	let kept = makeSlice()
+
+	let inner = try kept.get(0) otherwise return 91
+	let s = try inner.get(0) otherwise return 92
+
+	print("{kept.count()} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 kept inner string, long enough to need a heap record
+```
+
+<!-- test: clone-of-a-three-level-container-nesting -->
+### Clone of a THREE-level container nesting
+Each level's thunk names the level below it, so the needs closure has to grow through two synthesized
+bodies in a row — the container twin of `clone-managed-three-level-cascade`, which does the same through
+two per-struct cascades.
+```maxon
+typealias StringArrayArray = Array with StringArray
+typealias StringArrayArrayArray = Array with StringArrayArray
+
+function makeClone() returns StringArrayArrayArray
+	var src = StringArrayArrayArray.create()
+	var mid = StringArrayArray.create()
+	var leaf = StringArray.create()
+	leaf.push("the deepest string, long enough to need a heap record")
+	mid.push(leaf)
+	src.push(mid)
+	return src.clone()
+	// every one of the four levels is freed when this function returns
+end 'makeClone'
+
+function main() returns ExitCode
+	let cloned = makeClone()
+
+	let mid = try cloned.get(0) otherwise return 91
+	let leaf = try mid.get(0) otherwise return 92
+	let s = try leaf.get(0) otherwise return 93
+
+	print("{cloned.count()} {mid.count()} {leaf.count()}\n{s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1 1
+the deepest string, long enough to need a heap record
+```
+
+<!-- test: clone-of-an-array-of-managed-element-lists -->
+### Clone of an array of managed-element LISTS
+⚠ **A CONTROL, NOT A NEW CAPABILITY — IT PASSES ON THE MERGE BASE TOO, AND SAYING SO IS THE POINT.** A
+`List with T` is a DECLARED struct whose single field is the chain (W153), so this element clones through
+its ordinary per-instance `__clone_<mangled>` field cascade — already a one-argument entry — and it never
+met the arity bound G18 removes. It is here because it is the CLOSEST NEIGHBOUR to what G18 changed: the
+same router (`elementRecordCloneStrategy`) decides both, and the chain's own managed-element form
+(`__list_clone_managed`) is the container slot the thunk would fill if the chain record were ever spellable
+as an array element directly. It is not, so that half of the router is reached by construction rather than
+by a corpus program — and this case is what would go red if the declared-box route were disturbed reaching
+for it.
+```maxon
+typealias StrList = List with String
+typealias StrListArray = Array with StrList
+
+function makeClone() returns StrListArray
+	var src = StrListArray.create()
+	var words = StrList.create()
+	words.append("first list element, long enough to need a heap record")
+	words.append("second list element, long enough to need a heap record")
+	src.push(words)
+	return src.clone()
+	// src, its chain, both nodes and both String records are freed when this function returns
+end 'makeClone'
+
+function main() returns ExitCode
+	let cloned = makeClone()
+
+	let words = try cloned.get(0) otherwise return 91
+	let first = try words.get(0) otherwise return 92
+	let second = try words.get(1) otherwise return 93
+
+	print("{words.count()}\n{first}\n{second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+first list element, long enough to need a heap record
+second list element, long enough to need a heap record
+```
+
+<!-- test: append-of-an-array-of-string-arrays-deep-copies-the-source -->
+### Append of one array of string arrays into another deep-copies the SOURCE
+`append` is the third member of the copy gate and the only one whose source is BORROWED rather than
+consumed: `__managed_append_managed` grows the destination by deep clones and leaves the source owning its
+own elements. Both arrays are therefore live at teardown, so a shallow append would free every appended
+inner array — and every String inside it — twice.
+```maxon
+typealias StringArrayArray = Array with StringArray
+
+function main() returns ExitCode
+	var dest = StringArrayArray.create()
+	var first = StringArray.create()
+	first.push("destination inner string, long enough to allocate")
+	dest.push(first)
+
+	var src = StringArrayArray.create()
+	var second = StringArray.create()
+	second.push("appended inner string, long enough to allocate")
+	src.push(second)
+
+	dest.append(src)
+
+	let appended = try dest.get(1) otherwise return 91
+	let s = try appended.get(0) otherwise return 92
+
+	print("{dest.count()} {src.count()}\n{s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 1
+appended inner string, long enough to allocate
 ```

@@ -101,75 +101,57 @@ end 'main'
 error E4006: <fragment>:19:7: Type 'Array' has no field named 'equals' ('equals' is available as a conditional extension where Element is Hashable and Equatable, but 'Opaque' does not implement 'Hashable')
 ```
 
-<!-- test: error.the-opaque-copy-gate-is-reached-through-the-cloneable-witness -->
+<!-- test: error.the-cloneable-witness-route-is-closed-by-the-shared-dictionary -->
 ### An existential `Cloneable` reaches `Array.clone`'s body with no concretely-typed call site
 
-⭐⭐ **THIS IS THE OPAQUE COPY GATE'S OWN ACCEPTANCE, PINNED RATHER THAN QUOTED.** It stood in the `Map`
-case's shelving note as a shell transcript for two rungs, and a transcript is the one form of evidence
-nothing re-runs; it is also the case that holds W90's narrowing honest, because it is the one program here
-whose offending instance the author WROTE and whose instantiation no constraint refuses. It says two things
-at once and both matter:
+⭐⭐ **THIS CASE PINNED THE OPAQUE COPY GATE FOR TWO RUNGS AND WAS NEVER THE GATE'S TO PIN.** It stood in the
+`Map` case's shelving note as a shell transcript, and a transcript is the one form of evidence nothing
+re-runs. The program calls `.clone()` at NO concretely-typed site: it reaches `Array.clone`'s shared body
+purely through the `Cloneable` witness that `type Array … implements … Cloneable` promises unconditionally.
+The gate spoke first, so the gate got the credit.
 
-- **`Array`'s own opaque copy gate cannot be dropped** — though NOT for the reason this bullet gave for two
-  rungs. This program calls `.clone()` at NO concretely-typed site, so `requireArrayElementCopyable` never
-  fires; it reaches `Array.clone`'s shared body purely through the `Cloneable` witness that
-  `type Array … implements … Cloneable` promises unconditionally.
+⛔⛔ **W90 MEASURED THAT IT WAS NOT THE GATE — with `requireOpaqueArrayCopyable` probe-disabled, this program
+was STILL REFUSED, by E3128 at `stdlib/Array.maxon:143:18`.** A conforming generic type shares ONE witness
+table across every instantiation, so a dispatch through that table has no instantiation to take a layout
+descriptor from, and an `Array` therefore cannot serve `Cloneable` at ANY element. That is a strictly more
+accurate refusal than the copy gate's: it is about the DISPATCH, which is what this program does wrong,
+rather than about the element, which here is incidental.
 
-  ⛔ **THE OLD CLAIM — *"delete `requireOpaqueArrayCopyable` and IT compiles and byte-blits a managed pointer
-  through `copyFunc@32`"* — IS MEASURED FALSE OF *THIS* PROGRAM, and the correction matters because it was
-  the stated blocker on the standing cure.** MEASURED at W90 with the gate probe-disabled on this tree: this
-  program is still REFUSED, by **E3128** at `stdlib/Array.maxon:143:18` — *"'Array.clone' satisfies a
-  requirement of `Array` and reads the hidden dictionary parameter its generic declaration reserves"*. The
-  existential route is already closed, and closed more accurately than the copy gate closes it: a shared
-  witness table has no instantiation to take a layout descriptor from, so an `Array` cannot serve `Cloneable`
-  at ALL, at any element. ⇒ *"close the existential-dispatch hole first"* is a stale prerequisite.
+⭐⭐ **G18 IS WHERE THE ORDER FINALLY CHANGED, AND NOTHING WAS WEAKENED TO MAKE IT.** A managed-element
+container now has a per-instance one-argument cloner thunk, so `Array with (Array with String)` is
+deep-cloneable and the copy gate has nothing to say about it. What is left speaking is the diagnostic that
+was holding this door shut all along.
 
-  ⛔ **WHAT THE GATE REALLY STILL HOLDS UP IS THE CONCRETE ROUTE, AND THAT ONE IS MEASURED TOO.** Same probe,
-  `typealias Nested = Array with (Array with String)` followed by a plain `n.clone()`: the program COMPILES
-  and then **SEGFAULTS (139)** on the double free. ARRH struck `clone` from the `Array` roster without giving
-  the corpus call a receiver-keyed gate of its own, so today the library body's whole-program refusal is the
-  only thing standing there — which is exactly why it is whole-program, and why it over-refuses.
-- **A stdlib-body refusal is BLAMED AT THE USER'S OWN CONSTRUCT, and the library line survives as a NOTE.**
-  It is RAISED at `stdlib/Array.maxon:145:32` — `Array.clone`'s own `managed.slice(0, len)`, a line no user
-  wrote — and REPORTED at `typealias Nested = Array with (Array with String)`, the instantiation this
-  program wrote that made the element uncopyable. The library location reads REPO-RELATIVE because the
-  runner rewrites the compiler's absolute `stdlib/` root the way it already rewrites a staged fragment's
-  path (`SpecTestRunner.rewriteStdlibPaths`). Only the NOTE now carries the library's line number, so an
-  edit above `stdlib/Array.maxon:145` still moves this expectation — a real cost, and the same one the four
-  `/specs` cases pinning `Array.maxon:413`'s panic already pay.
+⭐⭐ **AND THE ROUTE THE GATE GENUINELY DID HOLD UP IS NOW CORRECT RATHER THAN MERELY REFUSED.** Same W90
+probe, the CONCRETE spelling — `typealias Nested = Array with (Array with String)` followed by a plain
+`n.clone()` — **COMPILED and then SEGFAULTED (139)** on the double free: the element's `copyFunc@32` was 0,
+so the copy byte-blitted a managed pointer and both records cascaded over the same elements. G18 answers
+that with the missing cloner instead of with the refusal, and
+`array-clone-managed-elements.clone-of-an-array-of-string-arrays-is-deep` is that exact program, running.
+⇒ *"the library body's whole-program refusal is the only thing standing there"* is retired, and so is the
+over-refusal it excused: a program that COPIES NOTHING (`for … in` over a nested array, an `isEmpty()`, a
+`clear()`) used to be refused too, because the refusal fires where `stdlib/Array.maxon:145`'s
+`managed.slice(0, len)` IS and that body is compiled once for the whole program.
 
-⭐⭐ **THIS REFUSAL IS THREE OTHER CASES' ANSWER TOO, AND THIS IS WHERE THAT IS EXPLAINED ONCE.** ARRH struck
-`clone` from `Parser.arraySurfaceMemberNames`, so `arr.clone()` is `stdlib/Array.maxon:143`'s declaration
-rather than a dispatch arm — and a corpus body is a SHARED generic body over an opaque `Element`, so a
-receiver whose element cannot be deep-cloned is refused by the OPAQUE gate in the library instead of by the
-CONCRETE gate at the call. Three expectations moved onto exactly the sentence above:
-`array-clone-managed-elements.error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused`,
+⚠ **A stdlib-body refusal is still BLAMED AT THE USER'S OWN CONSTRUCT, and the library line survives as a
+NOTE** — the arrangement the remaining opaque-gate cases print. It is RAISED at `stdlib/Array.maxon:145:32`,
+a line no user wrote, and REPORTED at the `typealias` whose instantiation made the element uncopyable. The
+library location reads REPO-RELATIVE because the runner rewrites the compiler's absolute `stdlib/` root the
+way it already rewrites a staged fragment's path (`SpecTestRunner.rewriteStdlibPaths`). Only the NOTE carries
+the library's line number, so an edit above `stdlib/Array.maxon:145` still moves those expectations — a real
+cost, and the same one the four `/specs` cases pinning `Array.maxon:413`'s panic already pay. The cases that
+still print it are `array-clone-managed-elements.error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused`,
+`generic-instance-clone.error.a-container-of-opaque-element-containers-is-refused`,
 `generic-type-nested-array-typealias.opaque-copy-uncopyable-instantiation-rejected` and
-`typealias-file-scope.error.contested-generic-alias-at-the-opaque-copy-gate`.
+`typealias-file-scope.error.contested-generic-alias-at-the-opaque-copy-gate` — each now over an element
+NOTHING can clone (an OS handle), because that is the only thing the gate still refuses.
 
-⚠ **A FOURTH WAS ON THAT LIST AND IS NOT A REFUSAL ANY MORE.**
-`generic-type-substitution.error.bare-generic-name-nesting-is-not-deep-cloneable` pinned this sentence
-because a non-`Array` generic instance had no per-instance cloner at all; **W162 built one**, so that case
-COMPILES and is now `generic-type-substitution.bare-generic-name-nesting-is-deep-cloneable`. The sentence
-itself moved in the same rung — what it names as uncloneable is now a compiler-owned aggregate, a
-MANAGED-element container, a base-struct-less generic instance with no runtime copy of its own, or a
-generic instance owning one of those, and no longer every non-`Array` instance. W173 narrowed it once
-more: a chain has a runtime copy now (`__list_clone`), so `List with int` is cloneable and only its
-MANAGED-element form is still refused here.
-
-⭐⭐ **THAT COST PRECISION, AND BLAME (this rung) GIVES IT BACK — WITHOUT MOVING THE SENTENCE.** Each of the
-four prints the OPAQUE sentence, which does not name the user's element the way the concrete one did
-(`Holder`, `StrHolder`); what it now names instead is the user's own LINE — the `typealias` that
-instantiated the uncopyable element — so the element is read off the source the reader is pointed at rather
-than quoted into the message. The gate consults the INSTANCE REGISTRY, so the construct it is really about
-is an instantiation, and `ProgramSignatures.instantiationSiteOf` is the route from the offending instance
-back to where the program wrote it. An instance the program never wrote — `Array with Bag`, substituted
-into `Container`'s inner `typealias ElementArray = Array with Element` by
-`typealias NestedContainer = Container with Bag` — is followed one hop further through
-`substitutedInstanceOrigins` to the enclosing instantiation that minted it, which is how the two
-`Container` cases land on their own `NestedContainer` line and not in the library. `slice` and `append`
-still reach the CONCRETE gate (`requireArrayCopyMethodSupported` → `requireArrayElementCopyable`), so that
-message is live too, just not through `clone`.
+⚠ **TWO CASES HAVE LEFT THAT LIST BY BEING FIXED RATHER THAN MOVED, AND BOTH ARE WORTH THE LINE.**
+`generic-type-substitution.error.bare-generic-name-nesting-is-not-deep-cloneable` went at W162, which gave a
+non-`Array` generic instance a per-instance cloner; this one goes at G18, which gave the two element-bearing
+records theirs. The sentence has narrowed once per rung, in the same direction each time: what it names is
+now a compiler-owned aggregate, a base-struct-less generic instance with no runtime copy of its own, an
+existential, or a type owning one of those — and nothing that merely needed a cloner nobody had written yet.
 ```maxon
 typealias Nested = Array with (Array with String)
 
@@ -183,8 +165,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element container (`Array with (Array with String)`, `List with String`), a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element container (`Array with int`, `List with int`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173).
-note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
+error E3128: stdlib/Array.maxon:143:18: 'Array.clone' satisfies a requirement of `Array` and reads the hidden dictionary parameter its generic declaration reserves (its type parameter's layout descriptor, or a `where` constraint's witness table). A conforming generic type shares ONE witness table across every instantiation, so a dispatch through that table has no instantiation to take the dictionary from — the impls it holds must be independent of the type argument
 ```
 
 <!-- test: error.the-suppression-may-not-read-a-weaker-index-than-the-report -->
@@ -204,11 +185,8 @@ index is a SUPERSET of the report's. It was a strict SUBSET: the suppression rea
 yields MORE `unmet` verdicts, not fewer, so a conformance only an extension declares made the suppression
 fire on an instantiation E3017 then found perfectly satisfied — and nothing spoke at all.
 
-⇒ MEASURED at review, on the program below: it compiled with **no diagnostic** and **ACCESS-VIOLATED
-(0xC0000005)** on the byte-blitted managed pointer. `Array`'s `Hashable`/`Equatable` are declared exactly
-this way (`stdlib/Array.maxon:668`), so the shape is the corpus's own and not a contrivance; `Sizer` is used
-here only because `Hashable` is ALSO granted intrinsically (`isIntrinsicBuiltinConformance`'s array row),
-which would have hidden the divergence behind an answer both indexes agree on.
+⇒ MEASURED at review, on this program over its original `Array with String` element: it compiled with **no
+diagnostic** and **ACCESS-VIOLATED (0xC0000005)** on the byte-blitted managed pointer.
 
 ⚠ **THE CONTROL IS ONE WORD.** The same program with `where Element is Cloneable` — an interface
 `type Array … implements … Cloneable` declares on the TYPE, so the swept index HAS it — is refused on the
@@ -218,20 +196,48 @@ can be the cause.
 ⭐ The cure is `ProgramSignatures.extensionDeclaredConformances`, filed by the extension fold BEFORE the
 per-conformer `where` verdict: an over-grant there can only withhold a suppression and restore a loud
 over-refusal, where an under-grant is this silent accept.
+
+⛔⛔ **THE CONFORMER MOVED FROM `Array` TO A USER STRUCT AT G18, AND IT HAD TO — THE SUBJECT DID NOT MOVE,
+THE SCAFFOLDING DID.** This case needs an element the copy gate genuinely refuses, so that a WITHHELD
+refusal is observable, AND it needs the offending instance to be one the program never WROTE (`Array with
+Handle`, minted by `Container`'s inner `typealias ElementArray = Array with Element`) so that the refusal is
+blamed at the `NestedContainer` line the `where` clause hangs off. Its original element was
+`Array with String`, and BOTH halves of that stopped working at once: a managed-element container is
+deep-cloneable now, and any nested spelling that is still uncopyable is uncopyable at a level the author
+spelled out loud — `typealias HandleArray = Array with __ManagedFile` is refused AT ITS OWN LINE, which
+blames the alias and never reaches `Container`'s clause at all (measured, both spellings). An OS handle
+behind ONE user struct restores both: `Array with Handle` is uncopyable, is minted by the substitution, and
+`Handle` takes the extension-declared `Sizer` the suppression is about.
+
+⚠ **WHAT THAT COSTS IS THE CORPUS PROVENANCE, AND IT IS WORTH SAYING RATHER THAN LOSING.** The old shape was
+`extension Array implements Sizer`, which is exactly how `Array`'s own `Hashable`/`Equatable` are declared
+(`stdlib/Array.maxon:668`) — so the arrangement under test was the corpus's own and not a contrivance.
+`extension Handle implements Sizer` is the same MECHANISM (a conformance in `project.conformances` and not in
+`StructLayout.conformsTo`) on a type the corpus does not happen to declare. `Sizer` rather than `Hashable`
+for the original reason: `Hashable` is ALSO granted intrinsically to an array
+(`isIntrinsicBuiltinConformance`'s row), which would have hidden the divergence behind an answer both
+indexes agree on.
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Integer = int(i64.min to i64.max)
-typealias StringArray = Array with String
+
+type Handle
+	export var f as __ManagedFile
+
+	export static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Handle'
 
 interface Sizer
 	function size() returns Integer
 end 'Sizer'
 
-extension Array implements Sizer
+extension Handle implements Sizer
 	function size() returns Integer
 		return 3
 	end 'size'
-end 'Array'
+end 'Handle'
 
 type Container uses Element where Element is Sizer
 	typealias ElementArray = Array with Element
@@ -251,20 +257,18 @@ type Container uses Element where Element is Sizer
 	end 'duplicate'
 end 'Container'
 
-typealias NestedContainer = Container with StringArray
+typealias NestedContainer = Container with Handle
 
 function main() returns ExitCode
-	var sa = StringArray.create()
-	sa.push("a string long enough to force a heap allocation")
 	var nc = NestedContainer.create()
-	nc.push(sa)
+	nc.push(Handle.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
 	let dup = nc.duplicate()
 	let n = dup.items.count()
 	return n as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:34:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element container (`Array with (Array with String)`, `List with String`), a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element container (`Array with int`, `List with int`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173).
+error E2015: <fragment>:41:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
 note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 

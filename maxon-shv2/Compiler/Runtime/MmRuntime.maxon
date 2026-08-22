@@ -2649,8 +2649,20 @@ end 'noteClonerUsage'
 // ⚠ The no-layout early-out is this walk's precondition, exactly as it is the drop twin's: a node is expanded
 // as soon as its SYMBOL is needed, and the field walk reads a base struct a layout-less instance does not have.
 // Nothing is lost by returning — `instanceCloneStrategy` refuses such an instance at the same tier, so no
-// referenced `__clone_<mangled>` can name one.
+// referenced `__clone_<mangled>` can name one. ⭐ The ONE exception is the arm below it: the two
+// element-bearing records are layout-less and DO have a cloner, so they are taken before that early-out
+// rather than exempted from it.
 function noteInstanceClonerNeeds(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
+	// ⭐ **A MANAGED-ELEMENT RECORD'S `__clone_<mangled>` IS THE ONE-ARGUMENT THUNK (G18), NOT A FIELD CASCADE.**
+	// It has no field list to walk — it has no base layout at all — and its whole body is the container's own
+	// 2-argument per-element copy, so its needs are exactly that FIELD-position strategy's: the container entry
+	// (`__managed_clone_managed` / `__list_clone_managed`) and the ELEMENT's own cloner, which may itself be
+	// another thunk one level down. Rooted through the shared `noteFieldCloneNeeds` so the closure and
+	// `synthesizeElementRecordCloner` read one strategy.
+	if signatures.isManagedElementRecordInstance(id) 'theOneArgumentThunk'
+		noteFieldCloneNeeds(usage, strategy: signatures.elementRecordFieldCopyStrategy(id), work: work)
+		return
+	end 'theOneArgumentThunk'
 	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
 		return
 	end 'noSynthesizedCloner'
@@ -2671,7 +2683,7 @@ function noteStructClonerNeeds(usage RuntimeUsage, layout StructLayout, project 
 			continue
 		end 'scalar'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("noteStructClonerNeeds: fieldTypes.get OOB at {i}")
-		noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType), work: work)
+		noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType, asElement: false), work: work)
 	end 'eachField'
 end 'noteStructClonerNeeds'
 
@@ -2684,7 +2696,7 @@ function noteUnionClonerNeeds(usage RuntimeUsage, layout EnumLayout, project Pro
 			if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 				continue
 			end 'scalar'
-			noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType), work: work)
+			noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false), work: work)
 		end 'eachField'
 	end 'eachCase'
 end 'noteUnionClonerNeeds'
@@ -2783,15 +2795,57 @@ export function installGenericInstanceCloners(module StdModule, project Project,
 		return
 	end 'noCloners'
 	for id in 0 upto signatures.genericInstanceCount() 'each'
-		if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
+		// ⭐ **A MANAGED-ELEMENT RECORD HAS NO BASE LAYOUT AND STILL HAS A CLONER (G18)** — the one-argument
+		// thunk, which is why the layout gate is a disjunct here rather than the loop's first word. Asked once
+		// and reused below, so the roster and the routing read one answer.
+		let isElementRecordThunk = signatures.isManagedElementRecordInstance(id)
+		if not (isElementRecordThunk or signatures.genericInstanceHasBaseLayout(id)) 'noSynthesizedCloner'
 			continue
 		end 'noSynthesizedCloner'
 		if not needed.contains(clonerSymbol(signatures.mangleGenericInstance(id))) 'notReferenced'
 			continue
 		end 'notReferenced'
+		if isElementRecordThunk 'theOneArgumentThunk'
+			synthesizeElementRecordCloner(module, id: id, signatures: signatures)
+			continue
+		end 'theOneArgumentThunk'
+
 		synthesizeGenericInstanceCloner(module, id: id, project: project, signatures: signatures)
 	end 'each'
 end 'installGenericInstanceCloners'
+
+// ⭐⭐ **THE ONE-ARGUMENT ELEMENT-CLONER THUNK FOR A MANAGED-ELEMENT RECORD (G18)** — what makes
+// `Array with (Array with String)` copyable at all. The record's copy is a 2-argument
+// `<containerClone>(box, funcAddr(elementClone))`, and an ARRAY ELEMENT is invoked through
+// `callIndirect(fn, elem)`, which passes exactly one. So the element's stamped `copyFunc@32` is this
+// `(box) -> newBox` whose entire body is that call — the arity adapter, and nothing else.
+//
+// ⚠ **IT IS NOT A `emitFieldCascadeCloner` AND MUST NOT BECOME ONE.** That skeleton allocates a fresh box and
+// BLITS the source's words before deep-cloning each managed field, which is right for a tagless box whose
+// scalar fields must survive the copy. An element-bearing record has no field list and no base layout: the
+// container entry it calls does its own `__managed_create`/`__list_create` and returns a full OWNER, so a blit
+// here would duplicate a record header nobody owns and hand the result a second buffer pointer.
+//
+// ⚠ **NO NULL GUARD, DELIBERATELY.** The per-field cloner needs one because a moved-out slot holds 0
+// (`emitManagedFieldClone`); this thunk is reached only from `emitElementCloneRange`, which does the identical
+// test one level up and never `callIndirect`s a null element. A second guard here would be a copy of that
+// fact, and the copy is what would go stale.
+//
+// The strategy is `elementRecordFieldCopyStrategy` — the SAME answer the needs closure rooted — emitted
+// through the SAME `emitCloneCall` a struct field takes, so the two entry points of one operation cannot come
+// to copy differently.
+function synthesizeElementRecordCloner(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
+	let func = IrFunction.createFromStd(clonerSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let src = 0 as ValueId
+
+	let newBox = emitCloneCall(module, block: entry, oldPtr: src, strategy: signatures.elementRecordFieldCopyStrategy(id), ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(newBox))
+	module.functions.push(func)
+end 'synthesizeElementRecordCloner'
 
 // One managed field a TAGLESS box cloner must deep-copy: its byte offset in the box, and HOW it is copied.
 // `ManagedFieldDrop`'s clone dual, and it exists for that one's reason — the struct (P1.7 slice 3b-vi-b) and
@@ -2846,7 +2900,7 @@ function synthesizeStructCloner(module StdModule, layout StructLayout, project P
 			continue
 		end 'scalar'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("synthesizeStructCloner: fieldTypes.get OOB at {i}")
-		clones.push(ManagedFieldClone.create(layout.offsetOfField(i), strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType)))
+		clones.push(ManagedFieldClone.create(layout.offsetOfField(i), strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType, asElement: false)))
 	end 'eachField'
 
 	emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: String.from(layout.name), clones: clones, project: project)
@@ -2948,7 +3002,7 @@ function emitManagedFieldClones(module StdModule, func IrFunction, startBlock Ir
 		if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 			continue
 		end 'scalar'
-		let strategy = managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
+		let strategy = managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false)
 		cur = emitManagedFieldClone(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), strategy: strategy, ids: ids)
 	end 'eachField'
 	module.setTerminator(cur, op: StdOp.branch(dest.id))

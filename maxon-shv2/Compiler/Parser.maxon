@@ -5059,11 +5059,13 @@ let StreamWriteArity = 1 as ParamCount
 let SubprocessOneArgArity = 1 as ParamCount
 let SubprocessTwoArgArity = 2 as ParamCount
 let SubprocessNoArgArity = 0 as ParamCount
+
 // The fourteen-argument spawn contract, in the bootstrap's own order: `argv_mm, argc, cwd_cstr, env_mm,
 // envInherit, stdinKind, stdinData_cstr, stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind,
 // stderrData_cstr, stderrLimit, flags`. `subprocessDetach` takes the identical fourteen and differs only in
 // what it answers (a pid rather than a handle); the runtime gates the detached path on `flags` bit 2.
 let SubprocessSpawnArity = 14 as ParamCount
+
 // `subprocessSpawnStreaming(argv_mm, argc, cwd_cstr, flags)` — the streaming spawn takes no stdio triples
 // because all three of its streams are pipes by definition.
 let SubprocessStreamingSpawnArity = 4 as ParamCount
@@ -6186,10 +6188,11 @@ end 'cursorSurfaceMemberNames'
 //     `generic-type-substitution/bare-generic-name-managed-field-as-array-element` into
 //     `requireOpaqueArrayCopyable` — programs that COPY NOTHING, refused because routing `count()` to the
 //     corpus makes `stdlib/Array.maxon`'s own `clone`→`slice` answerable for their instantiation.
-//     ⚠ **THAT LAST ONE IS NOT THIS RUNG'S TO CURE AND IT IS NOT HYPOTHETICAL EITHER** — the identical
-//     program written over `grid.truncate(0)`, a member that was never on this roster, is refused on `main`
-//     TODAY. It is P1.7 slice 3b-vi-b's deferred half (a per-instance cloner for a managed-element array),
-//     named in the refusal's own text.
+//     ⭐ **THAT LAST ONE IS CLOSED (G18), AND IT WAS THE 🚩 PHASE 1 GATE'S BLOCKER.** It was P1.7 slice
+//     3b-vi-b's deferred half — a per-instance cloner for a managed-element array — and it is now the
+//     one-argument thunk `MmRuntime.synthesizeElementRecordCloner` emits. The refusal that made a
+//     COPY-NOTHING program answerable for `clone` is gone with it, so `count()` (and `truncate`, `isEmpty`,
+//     `clear`, `for … in`) no longer drag a nested-container instantiation into `requireOpaqueArrayCopyable`.
 //   • **AN OPAQUE-ELEMENT RECEIVER CANNOT REACH A CORPUS BODY AT ALL** — `set`'s class, and ARR1's finding;
 //     see `set`'s own line on the roster below. ⭐ **ARRG CLOSED TWO OF ITS THREE SHAPES** (the compiler
 //     panic and the loop-store move) and ARR4 re-measured the third at THREE cases, all of them the
@@ -59886,12 +59889,10 @@ export type Parser
 			// end of one. `borrow-liveness.error.a-borrow-taken-out-of-a-borrow-holds-the-root` is that program
 			// and `.a-composed-borrow-expires-at-its-own-last-use` is its over-rejection guard.
 			//
-			// ⚠ **THE NESTED-CONTAINER SHAPE THE OLD NOTE CITED AS THE SAME FAULT CANNOT BE WRITTEN TODAY**, so
-			// it is no longer evidence either way: `Array with (Array with String)` is refused outright at
-			// `stdlib/Array.maxon:145` (*"a managed-element array … cannot be deep-cloned as a single-function
-			// element"*, P1.7 slice 3b-vi-b — the arm that survived W162, which cured only the non-`Array`
-			// INSTANCE half of that sentence). When the nested-array half lands, the composition rule is already
-			// in front of it.
+			// ⚠ **THE NESTED-CONTAINER SHAPE THE OLD NOTE CITED AS THE SAME FAULT IS WRITABLE AGAIN SINCE G18**,
+			// which gave a managed-element container its per-instance cloner and retired the refusal that had
+			// made this note's *"cannot be written today"* true. The composition rule was already in front of it
+			// when it landed, which is what that note was banking on; nothing here changed to let it through.
 			//
 			// ⚠ **A SOURCE NOTHING CAN NAME MINTS NOTHING, AND THAT IS SAFE FOR A SECOND REASON.**
 			// `makeBuffer().managed.createCursor()` has no subject to key a borrow on — and needs none: no
@@ -60430,15 +60431,29 @@ export type Parser
 
 	// ⭐ **THE COPY GATE for an OPAQUE-`T` array (P1.7 slice 3b-vi-b-β).** An opaque `Array with <type parameter>`
 	// inside a generic body copies each element through the enclosing instance's descriptor `copyFunc@32`, which
-	// can hold only a SINGLE `(box) -> newBox` cloner — so a String / struct / boxed-union / trivial-element-array
-	// / trivial-scalar instantiation is served (`__managed_*_opaque` branches on `copyFunc@32`: a byte-blit for a
-	// trivial element, a deep clone for a direct-clonable managed one). It REJECTS (E2015) only when SOME
-	// instantiation of the enclosing generic type substitutes a managed type this rung cannot deep-clone as a
-	// single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic
-	// instance (`Box with String`, a later slice) — because that element has no single `copyFunc` and its copy
-	// would byte-blit a managed pointer and double-free it. The reject is per-INSTANTIATION (the shared body's
-	// element is opaque), so it enumerates the enclosing type's instances through
-	// `genericTypeFieldUncopyableInstantiation`, mirroring the concrete gate's `arrayElementSupportsDeepClone`.
+	// can hold only a SINGLE `(box) -> newBox` cloner (`__managed_*_opaque` branches on it: a byte-blit for a
+	// trivial element, a deep clone for a managed one). It REJECTS (E2015) only when SOME instantiation of the
+	// enclosing generic type substitutes a managed type nothing can deep-clone — an OS handle, a base-struct-less
+	// generic instance with no runtime copy of its own (a `Vector`), an existential, or a type that owns one of
+	// those — because such an element has no `copyFunc` and its copy would byte-blit a managed pointer and
+	// double-free it. The reject is per-INSTANTIATION (the shared body's element is opaque), so it enumerates the
+	// enclosing type's instances through `genericTypeFieldUncopyableInstantiation`, mirroring the concrete gate's
+	// `arrayElementSupportsDeepClone`.
+	//
+	// ⭐⭐ **A MANAGED-ELEMENT CONTAINER USED TO BE ON THAT REJECT LIST AND IS NOT ANY MORE (G18).** It was there
+	// for an ARITY reason and never for an impossibility: an `Array with (Array with String)` element copies
+	// through a 2-argument `__managed_clone_managed(box, funcAddr(__str_clone))`, which `callIndirect(fn, elem)`
+	// could not reach. A per-instance one-argument thunk now can
+	// (`SignatureIndex.managedElementRecordCopy`), so this gate has nothing left to refuse there.
+	//
+	// ⛔ **AND UNTIL IT DID, THIS GATE REFUSED PROGRAMS THAT COPY NOTHING — which is the shape G18 was found by,
+	// not a hypothetical.** The refusal fires where `stdlib/Array.maxon:145`'s `managed.slice(0, len)` IS, and
+	// that body is compiled once for the whole program, so ANY program reaching the corpus `Array` at all (a
+	// `for … in`, an `isEmpty()`, a `clear()`) answered for `clone` on behalf of every instantiation in the
+	// file. Curing THAT by making the demand reachability-driven was measured and rejected as the wrong cure:
+	// the instantiation that would be exempted still needs a `copyFunc@32`, and a 0 there is the shape 25
+	// measured `0xC0000005`s came out of (see `ProgramSignatures.managedOpaqueArrayElementOf`). The cloner was
+	// the missing piece, not the demand.
 	function requireOpaqueArrayCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
 		// ⚠ The declaring type is NOT paired in here from `self.enclosingType` any more (W14): the element's
 		// token names its own declaration, so the gate resolves both halves from one fact — see
@@ -60450,7 +60465,7 @@ export type Parser
 			instance(offender) then self.blameLibraryRefusalOnInstantiation(offender)
 		end 'uncopyable'
 
-		throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element container (`Array with (Array with String)`, `List with String`), a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element container (`Array with int`, `List with int`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173).", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).", line: methodTok.line, column: methodTok.column)
 	end 'requireOpaqueArrayCopyable'
 
 	// ⭐⭐ **BLAME A LIBRARY-BODY REFUSAL ON THE INSTANTIATION THAT FORCED IT (BLAME).**
@@ -61006,19 +61021,25 @@ export type Parser
 	// TRIVIAL element passes (its copy is a correct byte blit / COW view). A CONCRETE MANAGED element (String /
 	// struct / boxed union) now passes too — its copy is a per-element DEEP CLONE (`arrayElementCloneValue` stamps
 	// the element's `funcAddr(__clone_<E>)` into the `_managed` runtime call), shv2's move-only answer to the
-	// reference compilers' incref. What still REJECTS (E2015) is a managed element whose nested type this rung's
-	// cloner cannot reach: a base-struct-less generic instance with no runtime copy of its own (a `Vector` —
-	// W162 gave a DECLARED generic's instance its per-instance cloner, W173 gave the chain its runtime walk, and
-	// a layout-less one with neither still has none), or a container whose OWN elements are managed (an
-	// array-of-managed-arrays, a `List with String`), whose copy is a 2-argument call no `callIndirect(fn, elem)`
-	// can reach. An OPAQUE-`T` element (a generic body) is routed to `requireOpaqueArrayCopyable`
+	// reference compilers' incref. What still REJECTS (E2015) is a managed element whose nested type NOTHING can
+	// clone: a base-struct-less generic instance with no runtime copy of its own (a `Vector` — W162 gave a
+	// DECLARED generic's instance its per-instance cloner, W173 gave the chain its runtime walk, and a
+	// layout-less one with neither still has none), an OS handle, or an existential.
+	//
+	// ⭐ **A CONTAINER WHOSE OWN ELEMENTS ARE MANAGED (an array-of-managed-arrays, a `List with String`) WAS ON
+	// THAT LIST UNTIL G18 AND IS NOT NOW.** Its copy is a 2-argument
+	// `<containerClone>(box, funcAddr(elementClone))`, which `callIndirect(fn, elem)` cannot reach — an ARITY
+	// bound on the entry point, never an impossibility — and a per-instance one-argument thunk closes it
+	// (`SignatureIndex.managedElementRecordCopy`).
+	//
+	// An OPAQUE-`T` element (a generic body) is routed to `requireOpaqueArrayCopyable`
 	// by `requireArrayCopyMethodSupported` instead, so only CONCRETE elements reach here.
 	function requireArrayElementCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
 		if not self.signatures.containerElementIsManaged(giid) 'trivial'
 			return
 		end 'trivial'
 		if not self.signatures.arrayElementSupportsDeepClone(giid) 'unsupportedNested'
-			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this rung cannot deep-clone — a `Vector` or other base-struct-less generic instance with no runtime copy, an OS handle, a value held at an interface type, or a container whose OWN elements are managed (an array-of-managed-arrays, a `List with String`). String / struct / boxed-union / declared-generic-instance / trivial-element-container elements, including nested String, struct, union, Array, chain and instance fields, ARE supported.", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this rung cannot deep-clone — a `Vector` or other base-struct-less generic instance with no runtime copy, an OS handle, or a value held at an interface type. String / struct / boxed-union / declared-generic-instance / container elements, including nested String, struct, union, Array, chain and instance fields and a managed-element container of any depth, ARE supported.", line: methodTok.line, column: methodTok.column)
 		end 'unsupportedNested'
 	end 'requireArrayElementCopyable'
 

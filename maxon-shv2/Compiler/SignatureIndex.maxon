@@ -1970,9 +1970,9 @@ enum TypeArgInstantiationKind
 	// retain-escaping rung's `__mm_incref`-at-feed + destructor-decref pair, which a shared-body reassign
 	// cannot re-balance and therefore rejects.
 	coOwnedTrivial
-	// Not deep-cloneable through the single-`copyFunc` element mechanism (`not typeSupportsDeepClone(as
-	// element)`): a managed-element array, a compiler-owned aggregate, or a generic instance with no per-instance
-	// cloner behind it — the opaque-copy front-end reject.
+	// Not deep-cloneable at all (`not typeSupportsDeepClone`): a compiler-owned aggregate, an existential, or a
+	// generic instance with no per-instance cloner behind it — the opaque-copy front-end reject. A
+	// managed-element container was on this list until G18 gave it a one-argument thunk.
 	uncopyableElement
 	// A HEAP AGGREGATE (`typeIsManaged`): a String, a struct, a boxed union, a nested container — anything
 	// whose slot is a POINTER rather than the value. The front-end reject for the one container that
@@ -4344,8 +4344,10 @@ export union ManagedCloneStrategy
 	// ⭐ A MANAGED-element CONTAINER FIELD: `containerClone(field, funcAddr(elementClone))`, where `containerClone`
 	// is the container's own per-element copy entry (`__managed_clone_managed` for the record,
 	// `__list_clone_managed` for the chain — W173) and `elementClone` is the element's own `direct` clone callee.
-	// A 2-arg call, so it is reachable only as a struct/union/instance FIELD (the synthesizer emits the funcAddr),
-	// never as a top-level array element (which must be `direct`).
+	// A 2-arg call, so it is carried only in a struct/union/instance FIELD, where the synthesized cascade body
+	// emits the funcAddr and makes the call inline. An ARRAY ELEMENT is invoked through `callIndirect(fn, elem)`
+	// and so must be `direct` — since G18 it reaches this same call through the container instance's own
+	// one-argument thunk, whose entire body IS it (`managedElementRecordCopy`).
 	//
 	// ⚠ **THE CONTAINER'S ENTRY IS A PAYLOAD RATHER THAN A SECOND CASE**, and that is what keeps the chain from
 	// duplicating the record's arm: `emitCloneCall` and `noteFieldCloneNeeds` each carry ONE arm for this shape,
@@ -4354,7 +4356,7 @@ export union ManagedCloneStrategy
 	managedElements(containerClone ByteArray, elementClone ByteArray)
 	// Not deep-cloneable by this rung's mechanism — a compiler-owned aggregate (`__ManagedFile`), a
 	// base-layout-less generic instance with no runtime copy of its own (a `Vector`), an existential, or a
-	// managed-element container whose element is not itself `direct` (an array-of-managed-arrays). The front end
+	// container whose element is not itself `direct` (an array of OS handles). The front end
 	// rejects such an element with a positioned E2015.
 	unsupported
 end 'ManagedCloneStrategy'
@@ -4363,7 +4365,7 @@ end 'ManagedCloneStrategy'
 // dispatch exactly: `typeNames` resolves a `named`/`structRef` id to a NAME; pass the interner the field
 // type's ids live in (the file artifact interner at a call site, `project.typeNames` at the synthesis site).
 // The field is a precondition MANAGED one, so a scalar reaching here is a classification drift and panics.
-export function managedFieldCloneStrategy(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType) returns ManagedCloneStrategy
+export function managedFieldCloneStrategy(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType, asElement bool) returns ManagedCloneStrategy
 	let tag = maxonTypeTag(fieldType)
 	// `tagIsByteRecord`, mirroring `managedFieldDropCallee`: a Character clones by the same fused-record
 	// deep copy a String does, because it IS one.
@@ -4371,7 +4373,7 @@ export function managedFieldCloneStrategy(signatures ProgramSignatures, typeName
 		return ManagedCloneStrategy.direct(StrCloneName)
 	end 'byteRecord'
 	if tag == ValueTypeTag.genericInstance 'instance'
-		return instanceCloneStrategy(signatures, id: typeNameIdOf(fieldType))
+		return instanceCloneStrategy(signatures, id: typeNameIdOf(fieldType), asElement: asElement)
 	end 'instance'
 	// ⛔ **AN EXISTENTIAL IS NOT DEEP-CLONEABLE, AND THE GATE AND THE STRATEGY HAVE TO SAY SO TOGETHER**
 	// (P1.7a-existentials slice 2) — this file's standing rule (see `managedNameCloneStrategy`'s
@@ -4390,7 +4392,7 @@ export function managedFieldCloneStrategy(signatures ProgramSignatures, typeName
 	// resolution: a value cloned by this strategy is dropped by the callee that one returns, so a name the two
 	// resolved differently would clone one type and drop another.
 	let name = signatures.denotedAggregateName(try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldCloneStrategy: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in"))
-	return managedNameCloneStrategy(signatures, declaredName: name)
+	return managedNameCloneStrategy(signatures, declaredName: name, asElement: asElement)
 end 'managedFieldCloneStrategy'
 
 // The clone strategy for a managed field NAMED `declaredName` — a declared struct or boxed union clones
@@ -4414,7 +4416,7 @@ end 'managedFieldCloneStrategy'
 // agree by construction and the front end reports a positioned E2015 where the backend used to panic — which
 // is what that gate's own header says it exists for: *"a name the gate and the strategy disagreed about would
 // admit a clone nobody can emit."*
-function managedNameCloneStrategy(signatures ProgramSignatures, declaredName ByteArray) returns ManagedCloneStrategy
+function managedNameCloneStrategy(signatures ProgramSignatures, declaredName ByteArray, asElement bool) returns ManagedCloneStrategy
 	match compilerOwnedAggregateOf(declaredName) 'compilerOwned'
 		managedFile to managedSocket then return ManagedCloneStrategy.unsupported
 		userDeclared then break 'compilerOwned'
@@ -4427,7 +4429,7 @@ function managedNameCloneStrategy(signatures ProgramSignatures, declaredName Byt
 	// value the clone side can route, and a divergence between them is a panic on one walk order and a
 	// compiling program on the other.
 	if let rendered = try signatures.renderedInstanceOfUnclaimedName(declaredName) 'aRenderedInstance'
-		return instanceCloneStrategy(signatures, id: rendered)
+		return instanceCloneStrategy(signatures, id: rendered, asElement: asElement)
 	end 'aRenderedInstance'
 
 	let form = try signatures.declaredFormOf(declaredName) otherwise panic("managedNameCloneStrategy: managed field '{String.from(declaredName)}' is declared by no registry — the caller classified it managed, and every managed non-String form is a declared struct, a boxed union or a generic-alias instance")
@@ -4442,7 +4444,7 @@ function managedNameCloneStrategy(signatures ProgramSignatures, declaredName Byt
 		interfaceType then panic("managedNameCloneStrategy: '{String.from(declaredName)}' is an interface, which no slot can be declared with today (E3011) — the rung that lands existential slots owes this arm a clone")
 		rangedAlias then panic("managedNameCloneStrategy: '{String.from(declaredName)}' is a ranged typealias — a scalar, which `typeIsManaged` never classifies managed")
 		functionAlias then panic("managedNameCloneStrategy: '{String.from(declaredName)}' is a function typealias — a bare code pointer, which `typeIsManaged` never classifies managed")
-		genericAlias then return instanceCloneStrategy(signatures, id: signatures.genericAliasInstance(declaredName))
+		genericAlias then return instanceCloneStrategy(signatures, id: signatures.genericAliasInstance(declaredName), asElement: asElement)
 		// The drop twin's tuple arm, one register over: `denotedAggregateName` has already resolved a tuple
 		// alias to the tuple's own struct name upstream, and a tuple box clones exactly as any struct box does.
 		tupleAlias then return ManagedCloneStrategy.direct(clonerSymbol(signatures.tupleAliasTarget(declaredName)))
@@ -4493,9 +4495,9 @@ end 'compilerOwnedAggregateOf'
 // `__destruct_<mangled>` cascade `genericInstanceBoxDropCallee` hands back for the same instance. The managed
 // element's own strategy comes back through the METHOD `containerElementCloneStrategy` (which resolves the
 // element in the index's own interner), so this free function never has to reach the index's private `typeNames`.
-function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceId) returns ManagedCloneStrategy
+function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceId, asElement bool) returns ManagedCloneStrategy
 	if signatures.isArrayInstance(id) 'theManagedRecord'
-		return elementRecordCloneStrategy(signatures, id: id, trivialClone: ManagedCloneName, perElementClone: ManagedCloneManagedName)
+		return elementRecordCloneStrategy(signatures, id: id, trivialClone: ManagedCloneName, perElementClone: ManagedCloneManagedName, asElement: asElement)
 	end 'theManagedRecord'
 	// ⭐ **A CHAIN IS THE SECOND ELEMENT-BEARING RECORD (W173).** Its copy is `ListRuntime`'s walk for
 	// `genericInstanceBoxDropCallee`'s reason one door along: a chain's record, its nodes and its elements are
@@ -4509,7 +4511,7 @@ function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceI
 	// ordinary per-instance `__clone_<mangled>` below, which walks that one field and reaches the chain by
 	// recursion — one structure, cloned once, through the surface that owns it.
 	if signatures.isManagedListInstance(id) 'theChain'
-		return elementRecordCloneStrategy(signatures, id: id, trivialClone: ListCloneName, perElementClone: ListCloneManagedName)
+		return elementRecordCloneStrategy(signatures, id: id, trivialClone: ListCloneName, perElementClone: ListCloneManagedName, asElement: asElement)
 	end 'theChain'
 	// ⛔ A base-layout-less instance with no runtime copy of its own (a `Vector`, a cursor) has no field list to
 	// cascade over either, so nothing synthesizes its cloner — `declaredInstanceSupportsDeepClone` refuses it at
@@ -4534,7 +4536,7 @@ end 'instanceCloneStrategy'
 // It takes the two entries rather than the container's identity because that is the ONLY thing that differs
 // between the two containers: written per-container, this routing would be one decision with two homes, free
 // to answer the chain and the buffer differently about what "managed element" costs.
-function elementRecordCloneStrategy(signatures ProgramSignatures, id GenericInstanceId, trivialClone ByteArray, perElementClone ByteArray) returns ManagedCloneStrategy
+function elementRecordCloneStrategy(signatures ProgramSignatures, id GenericInstanceId, trivialClone ByteArray, perElementClone ByteArray, asElement bool) returns ManagedCloneStrategy
 	if not signatures.containerElementIsManaged(id) 'trivialElement'
 		// ⛔⛔ **AN OPAQUE ELEMENT REACHES THIS ARM ON A `false` THAT MEANS "CANNOT SAY", NOT "OWNS NOTHING"
 		// (W176).** `containerOpaqueElementCanBeManaged` carries the measurement; the record's copy is the
@@ -4550,14 +4552,39 @@ function elementRecordCloneStrategy(signatures ProgramSignatures, id GenericInst
 	end 'trivialElement'
 
 	match signatures.containerElementCloneStrategy(id) 'element'
-		direct(elementClone) then return ManagedCloneStrategy.managedElements(perElementClone, elementClone: elementClone)
-		managedElements then return ManagedCloneStrategy.unsupported
+		direct(elementClone) then return managedElementRecordCopy(signatures, id: id, perElementClone: perElementClone, elementClone: elementClone, asElement: asElement)
+		// ⛔ UNREACHABLE BY CONSTRUCTION, AND SAID RATHER THAN DEFAULTED: the ELEMENT door
+		// (`containerElementCloneStrategy`) asks with `asElement: true`, and at that position a managed-element
+		// record answers with its one-argument thunk. An answer here means the element door stopped passing the
+		// position, which would silently refuse every nested container again.
+		managedElements then panic("elementRecordCloneStrategy: instance {id}'s element resolved to a 2-argument `managedElements` strategy at the ELEMENT position, where `asElement: true` mints the one-argument thunk (G18)")
 		unsupported then return ManagedCloneStrategy.unsupported
 	end 'element'
 end 'elementRecordCloneStrategy'
 
+// ⭐⭐ **THE ELEMENT POSITION TAKES A THUNK, THE FIELD POSITION TAKES THE CALL (G18).** A managed-element
+// record's copy is one operation — `<containerClone>(box, funcAddr(elementClone))` — with two entry points,
+// because the two positions can pass different numbers of arguments. A struct / union / instance FIELD is
+// cloned by a synthesized cascade body, which emits the `funcAddr` itself and makes the 2-argument call
+// inline. An ARRAY ELEMENT is reached through `callIndirect(fn, elem)`, which has room for exactly one — so it
+// takes the per-instance `__clone_<mangled>` whose ENTIRE body is that same call
+// (`MmRuntime.synthesizeElementRecordCloner`), reached through the shared `emitCloneCall` so the two entry
+// points cannot come to copy differently.
+//
+// ⚠ **THIS IS WHY THE POSITION IS A PARAMETER HERE AND IS NOT ONE ON THE GATE THAT ADMITS IT.** Before G18 the
+// element position had no entry point at all, so the position decided WHETHER — and `typeSupportsDeepClone`
+// carried an `asElement` to say so. It now decides only WHICH ENTRY, which is a fact about emission and
+// belongs on this side alone; see `typeSupportsDeepClone`'s header for the removal.
+function managedElementRecordCopy(signatures ProgramSignatures, id GenericInstanceId, perElementClone ByteArray, elementClone ByteArray, asElement bool) returns ManagedCloneStrategy
+	if asElement 'reachedThroughCallIndirect'
+		return ManagedCloneStrategy.direct(clonerSymbol(signatures.mangleGenericInstance(id)))
+	end 'reachedThroughCallIndirect'
+
+	return ManagedCloneStrategy.managedElements(perElementClone, elementClone: elementClone)
+end 'managedElementRecordCopy'
+
 // The single `(box) -> newBox` clone callee of a `direct` strategy. Precondition: the caller has classified the
-// element deep-cloneable through the FULL-GRAPH `typeSupportsDeepClone(asElement: true)` (via
+// element deep-cloneable through the FULL-GRAPH `typeSupportsDeepClone` (via
 // `genericInstanceOpaqueArrayElementIsCopyable` or the concrete copy gate `arrayElementSupportsDeepClone`), which
 // is `direct` at the TOP LEVEL for every deep-cloneable element — so a `managedElements`/`unsupported` strategy
 // reaching here is an invariant break and panics. (The full-graph gate is the RIGHT precondition, not a mere
@@ -4566,8 +4593,8 @@ end 'elementRecordCloneStrategy'
 export function directCloneCalleeOf(strategy ManagedCloneStrategy) returns ByteArray
 	match strategy 'strategy'
 		direct(callee) then return callee
-		managedElements then panic("directCloneCalleeOf: a `managedElements` strategy has no single-function clone callee — the caller must gate on typeSupportsDeepClone(asElement: true)")
-		unsupported then panic("directCloneCalleeOf: an `unsupported` strategy has no clone callee — the caller must gate on typeSupportsDeepClone(asElement: true)")
+		managedElements then panic("directCloneCalleeOf: a `managedElements` strategy has no single-function clone callee — the caller must gate on typeSupportsDeepClone")
+		unsupported then panic("directCloneCalleeOf: an `unsupported` strategy has no clone callee — the caller must gate on typeSupportsDeepClone")
 	end 'strategy'
 end 'directCloneCalleeOf'
 
@@ -19916,8 +19943,38 @@ export type ProgramSignatures
 	// `List with String`'s per-element cloner is resolved by exactly this call. A second `listElementCloneStrategy`
 	// would have been this header copied out with one word changed.
 	export function containerElementCloneStrategy(id GenericInstanceId) returns ManagedCloneStrategy
-		return managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: self.containerElementType(id))
+		return managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: self.containerElementType(id), asElement: true)
 	end 'containerElementCloneStrategy'
+
+	// ⭐ **IS THIS INSTANCE ONE OF THE TWO ELEMENT-BEARING RECORDS THIS COMPILER OWNS** — the managed buffer and
+	// the chain, whose copy and drop are a runtime WALK rather than a field cascade, and which therefore have no
+	// base layout for the declared-instance walks to read. Written once because three doors ask it and the
+	// negation is load-bearing at one of them: `instanceSupportsDeepClone` routes everything ELSE to the field
+	// walk, so a spelling that drifted here would send a record into a walk it has no fields for. It is
+	// deliberately NOT `opaqueInstanceCreateReadsTheDescriptor`, whose left half is about which containers are
+	// BORN through `__managed_create`; the header there records what fusing two such families cost.
+	export function isElementBearingRecordInstance(id GenericInstanceId) returns bool
+		return self.isArrayInstance(id) or self.isManagedListInstance(id)
+	end 'isElementBearingRecordInstance'
+
+	// ⭐ **IS THIS INSTANCE A MANAGED-ELEMENT RECORD — the shape whose element cloner is the one-argument THUNK
+	// (G18)?** One of those two records over an element that itself owns heap. Asked by the two RUNTIME sides —
+	// the needs closure (`MmRuntime.noteInstanceClonerNeeds`) and the installer
+	// (`MmRuntime.installGenericInstanceCloners`) — off the SAME predicates the gate and the strategy split on,
+	// so the gate, the strategy and the synthesis cannot come to disagree about which instances have a thunk to
+	// build.
+	export function isManagedElementRecordInstance(id GenericInstanceId) returns bool
+		return self.isElementBearingRecordInstance(id) and self.containerElementIsManaged(id)
+	end 'isManagedElementRecordInstance'
+
+	// The FIELD-position copy of a managed-element record — the 2-argument
+	// `<containerClone>(box, funcAddr(elementClone))` that IS the one-argument thunk's whole body. Asked by the
+	// needs closure (`MmRuntime.noteInstanceClonerNeeds`) and by the synthesis
+	// (`MmRuntime.synthesizeElementRecordCloner`), so what the closure roots and what the body calls are ONE
+	// answer rather than two derivations of it. Precondition: `isManagedElementRecordInstance`.
+	export function elementRecordFieldCopyStrategy(id GenericInstanceId) returns ManagedCloneStrategy
+		return instanceCloneStrategy(self, id: id, asElement: false)
+	end 'elementRecordFieldCopyStrategy'
 
 	// ⭐ **THE `<Base> with integer` INSTANCE FOR AN INFERRED-INT LITERAL CONSTRUCTION.** A bare `[…]` int-array
 	// literal (`baseName` = `Array`, P1.7 slice 1) and a `Set from [ints]` construction (`baseName` = `Set`,
@@ -23622,7 +23679,7 @@ export type ProgramSignatures
 		match kind 'kind'
 			consumeMoved then return self.typeArgIsOwned(t)
 			coOwnedTrivial then return self.typeArgIsCoOwnedTrivial(t)
-			uncopyableElement then return not self.typeSupportsDeepClone(t, asElement: true, visited: ClonerSet.create())
+			uncopyableElement then return not self.typeSupportsDeepClone(t, visited: ClonerSet.create())
 			managedElement then return self.typeArgIsManagedElement(t)
 			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
 			nestedDeclarationViewArg then return maxonTypeTag(t) == ValueTypeTag.typeParameter
@@ -23786,15 +23843,16 @@ export type ProgramSignatures
 	// UNCOPYABLE (P1.7 slice 3b-vi-b-β)?** The FRONT-END gate for an opaque `slice`/`clone`/`append`: the shared
 	// body copies each element through the descriptor's single `copyFunc@32`, which can hold a cloner only for a
 	// `direct`-clonable element (String / struct / boxed union / trivial-element array — a byte-blit copies a
-	// TRIVIAL element correctly with no cloner at all). An instantiation whose argument is a MANAGED type this
-	// rung cannot deep-clone as a single-function element — a managed-element array (`Array with (Array with
-	// String)`), a compiler-owned aggregate, or a base-struct-less generic instance (`List with String`; a
-	// DECLARED generic's instance has its own `__clone_<mangled>` since W162) — has no single `copyFunc`,
+	// TRIVIAL element correctly with no cloner at all). An instantiation whose argument is a MANAGED type
+	// NOTHING can deep-clone — a compiler-owned aggregate, an existential, or a base-struct-less generic
+	// instance with no runtime copy of its own (a `Vector`; a DECLARED generic's instance has its own
+	// `__clone_<mangled>` since W162, and a managed-element container its one-argument thunk since G18) — has
+	// no `copyFunc`,
 	// so a copy of it would byte-blit a managed pointer and double-free it; such an instantiation is rejected
 	// with a positioned E2015 at the copy site rather than crash at descriptor emit. HOW the instances are found
 	// is `instanceWithTypeArgKind`'s business and is described there once; what this gate adds is the KIND —
 	// each instance's argument at that parameter's position read through the SAME
-	// `typeSupportsDeepClone(asElement: true)` the concrete element-copy gate (`arrayElementSupportsDeepClone`)
+	// `typeSupportsDeepClone` the concrete element-copy gate (`arrayElementSupportsDeepClone`)
 	// uses, so the opaque reject and the concrete reject agree on what "deep-cloneable as an element" means. A
 	// TRIVIAL argument is copyable (a byte blit), so it never triggers the reject.
 	//
@@ -24024,7 +24082,7 @@ export type ProgramSignatures
 	// calls for (a clone leaks if it is not dropped and double-frees if it is dropped twice, and ONE classifier
 	// decides both). Precondition: the field is managed.
 	export function genericInstanceFieldCloneStrategy(id GenericInstanceId, index FieldIndex) returns ManagedCloneStrategy
-		return managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: self.substituteInstanceFieldType(id, index: index))
+		return managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: self.substituteInstanceFieldType(id, index: index), asElement: false)
 	end 'genericInstanceFieldCloneStrategy'
 
 	// Is substituted instance field `index` an existential — `structFieldIsExistential`'s instance twin, asked
@@ -24996,10 +25054,10 @@ export type ProgramSignatures
 	// single-`(box) -> newBox` mechanism: a String / boxed-union / struct / trivial-element-array element WHOSE WHOLE
 	// reachable type graph is itself clonable. It MUST read the SAME full-graph classifier the front-end reject
 	// (`genericTypeFieldUncopyableInstantiation`) and the concrete gate (`arrayElementSupportsDeepClone`) use —
-	// `typeSupportsDeepClone(asElement: true)` — NOT merely the element's TOP-LEVEL clone strategy. The reason is the
+	// `typeSupportsDeepClone` — NOT merely the element's TOP-LEVEL clone strategy. The reason is the
 	// stamp+root synthesizes the cloner UNCONDITIONALLY for every copyable-opaque instance, INCLUDING in a program
 	// that never copies (drop-only) and so never reaches the copy-site reject: a struct/union element that is
-	// `direct` at the top but owns a non-clonable field (`Array with (Array with String)`, a `Box with String`)
+	// `direct` at the top but owns a non-clonable field (a `Box with __ManagedFile`, a struct holding one)
 	// would then root a `__clone_<T>` the cloner synthesizer cannot build and PANIC on a valid drop-only program
 	// (`noteFieldCloneNeeds`). Reading the full-graph classifier keeps the stamp/root envelope and the reject
 	// envelope IDENTICAL, so neither can admit a cloner the other forbids. A non-clonable element's `copyFunc@32`
@@ -25012,7 +25070,7 @@ export type ProgramSignatures
 	export function genericInstanceOpaqueArrayElementIsCopyable(id GenericInstanceId, position TypeParamPosition) returns bool
 		var visited = ClonerSet.create()
 		match self.managedOpaqueArrayElementOf(id, position: position) 'element'
-			present(element) then return self.typeSupportsDeepClone(element, asElement: true, visited: visited)
+			present(element) then return self.typeSupportsDeepClone(element, visited: visited)
 			absent then return false
 		end 'element'
 	end 'genericInstanceOpaqueArrayElementIsCopyable'
@@ -25028,7 +25086,7 @@ export type ProgramSignatures
 	// invariant break, exactly as `Parser.arrayElementCloneValue` does for the concrete top-level element.
 	export function managedOpaqueArrayElementCloneCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
 		match self.managedOpaqueArrayElementOf(id, position: position) 'element'
-			present(element) then return directCloneCalleeOf(managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: element))
+			present(element) then return directCloneCalleeOf(managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: element, asElement: true))
 			absent then panic("ProgramSignatures.managedOpaqueArrayElementCloneCallee: instance {id} holds no managed opaque field at type-parameter position {position} — every caller gates on genericInstanceOpaqueArrayElementIsCopyable")
 		end 'element'
 	end 'managedOpaqueArrayElementCloneCallee'
@@ -25484,11 +25542,12 @@ export type ProgramSignatures
 	// The FRONT-END gate for a managed `slice`/`clone`/`append`, and the exact envelope the cloner synthesis
 	// handles — the two agree so the synthesizer never meets an `unsupported` field on a program the front end
 	// accepted (else it would panic, a compiler crash on valid input). The element is invoked through
-	// `callIndirect` (`asElement: true`), so it must be `direct`-cloneable (String / struct / union / trivial-
-	// element array), and its whole reachable type graph must be clonable too. Precondition:
-	// `containerElementIsManaged` (a trivial-element array never needs this — its copy is a byte blit).
+	// `callIndirect(fn, elem)`, so it must be reachable by a SINGLE `(box) -> newBox` callee — which since G18
+	// every deep-cloneable type is, a managed-element container through its own per-instance thunk — and its
+	// whole reachable type graph must be clonable too. Precondition: `containerElementIsManaged` (a
+	// trivial-element array never needs this — its copy is a byte blit).
 	export function arrayElementSupportsDeepClone(id GenericInstanceId) returns bool
-		return self.typeSupportsDeepClone(self.containerElementType(id), asElement: true, visited: ClonerSet.create())
+		return self.typeSupportsDeepClone(self.containerElementType(id), visited: ClonerSet.create())
 	end 'arrayElementSupportsDeepClone'
 
 	// ⭐ **CAN A DECLARED STRUCT BE DEEP-CLONED — the front-end gate for a SOURCE-LEVEL `p.clone()`?**
@@ -25507,23 +25566,29 @@ export type ProgramSignatures
 	// `__ManagedFile` / `__ManagedDirectory`. The cycle-break seeding comes free with it: that function
 	// inserts the name before it walks, so `type Node { var next as Node }` terminates on the same break.
 	//
-	// ⚠ NOT `asElement`: a struct reached this way is cloned by a DIRECT `__clone_<T>` call the parser emits,
-	// never through the element `callIndirect` that restricts a managed-element array.
 	export function structSupportsDeepClone(structName ByteArray) returns bool
 		return self.aggregateNameSupportsDeepClone(structName, visited: ClonerSet.create())
 	end 'structSupportsDeepClone'
 
 	// Recursively: can a value of `type` be deep-cloned? A scalar owns no heap (nothing to clone); a String is a
 	// `direct` leaf; a struct/union is clonable iff every managed field/payload is; a trivial-element Array is a
-	// `direct` leaf; a managed-element Array is clonable iff its element is itself `direct`-clonable AND clonable
-	// (an array-of-managed-arrays is not, this rung); a non-Array generic instance (`Box with String`) is clonable
-	// iff every one of its SUBSTITUTED fields is (W162). `asElement` is true when `type` is reached as an ARRAY
-	// ELEMENT (invoked through `callIndirect`), which a `managedElements`-strategy type — a managed-element
-	// Array or chain — cannot satisfy. `visited`
+	// `direct` leaf; a managed-element Array or chain is clonable iff its element is; a non-Array generic
+	// instance (`Box with String`) is clonable iff every one of its SUBSTITUTED fields is (W162). `visited`
 	// (struct/union NAMES) breaks a recursive type (`type Node { var next as Node }`): a name already in flight
 	// is assumed clonable, so the walk terminates, and the synthesized cloner recurses at RUN time through the
 	// same field, which is correct.
-	export function typeSupportsDeepClone(type MaxonType, asElement bool, visited ClonerSet) returns bool
+	//
+	// ⭐⭐ **THERE IS NO `asElement` PARAMETER, AND ITS REMOVAL IS G18'S WHOLE THESIS.** It used to be `true`
+	// wherever `type` is reached as an ARRAY ELEMENT — invoked through `callIndirect(fn, elem)`, so reachable
+	// only by a SINGLE `(box) -> newBox` callee — and it REFUSED the one shape whose copy is a 2-argument call:
+	// a managed-element container (`Array with (Array with String)`). That restriction was about the ARITY of an
+	// entry point and never about the copy being impossible, and a per-instance one-argument THUNK closes it
+	// (`elementRecordCloneStrategy` mints the symbol, `MmRuntime.synthesizeElementRecordCloner` emits the body).
+	// ⇒ **every deep-cloneable type now has a `direct` 1-arg callee**, which is the argument
+	// `declaredInstanceSupportsDeepClone`'s header has always made for `__clone_<mangled>`, generalized to the
+	// two element-bearing records. A parameter that can no longer change an answer is worse than absent: it
+	// tells a later reader the two positions still differ.
+	export function typeSupportsDeepClone(type MaxonType, visited ClonerSet) returns bool
 		let tag = maxonTypeTag(type)
 		if not self.typeIsManaged(type, from: self.typeNames) 'trivialLeaf'
 			return true
@@ -25532,7 +25597,7 @@ export type ProgramSignatures
 			return true
 		end 'byteRecord'
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.instanceSupportsDeepClone(typeNameIdOf(type), asElement: asElement, visited: visited)
+			return self.instanceSupportsDeepClone(typeNameIdOf(type), visited: visited)
 		end 'instance'
 		if not tagMayNameAggregate(tag) 'notManagedRef'
 			return false
@@ -25552,7 +25617,7 @@ export type ProgramSignatures
 				return true
 			end 'theContestReplacedThisOne'
 
-			return self.instanceSupportsDeepClone(self.genericAliasInstance(name), asElement: asElement, visited: visited)
+			return self.instanceSupportsDeepClone(self.genericAliasInstance(name), visited: visited)
 		end 'genericAlias'
 		// ⛔ **A COMPILER-OWNED AGGREGATE IS NOT DEEP-CLONEABLE, AND THE GATE HAS TO SAY SO — its layout is
 		// REGISTERED, so `containsStruct` below says yes and the walk would happily report its scalar-only
@@ -25601,8 +25666,8 @@ export type ProgramSignatures
 	end 'aggregateNameSupportsDeepClone'
 
 	// An ELEMENT-BEARING RECORD instance recurses into its element (a trivial one is a clonable leaf; a managed
-	// one must be a `direct`-clonable element via `asElement: true`); any other instance (`Box with String`)
-	// walks its own SUBSTITUTED fields, exactly as a declared struct walks its declared ones (W162).
+	// one must itself be deep-cloneable); any other instance (`Box with String`) walks its own SUBSTITUTED
+	// fields, exactly as a declared struct walks its declared ones (W162).
 	//
 	// ⭐ **THE CHAIN IS SUCH A RECORD AND IS ADMITTED BY THE SAME ARM (W173)** — it has no base layout to walk
 	// either, and its copy is `__list_clone` / `__list_clone_managed`, whose two shapes are exactly the two this
@@ -25613,8 +25678,8 @@ export type ProgramSignatures
 	// `containerElementIsManaged`) so neither can admit what the other cannot emit — and it is the
 	// `__ManagedList` predicate on BOTH sides since `List` was retired (W153), because a declared `List with T`
 	// box HAS a field list and therefore belongs in the walk below.
-	function instanceSupportsDeepClone(id GenericInstanceId, asElement bool, visited ClonerSet) returns bool
-		if not (self.isArrayInstance(id) or self.isManagedListInstance(id)) 'notAnElementRecord'
+	function instanceSupportsDeepClone(id GenericInstanceId, visited ClonerSet) returns bool
+		if not self.isElementBearingRecordInstance(id) 'notAnElementRecord'
 			return self.declaredInstanceSupportsDeepClone(id, visited: visited)
 		end 'notAnElementRecord'
 		if not self.containerElementIsManaged(id) 'trivialElement'
@@ -25624,11 +25689,11 @@ export type ProgramSignatures
 			return not self.containerOpaqueElementCanBeManaged(id)
 		end 'trivialElement'
 		// A managed-element record clones its elements through `<containerClone>(field, funcAddr(elementClone))`
-		// — a 2-arg call, so it cannot itself be an outer array element (invoked through `callIndirect`).
-		if asElement 'nestedManagedElementRecord'
-			return false
-		end 'nestedManagedElementRecord'
-		return self.typeSupportsDeepClone(self.containerElementType(id), asElement: true, visited: visited)
+		// — a 2-arg call, which `callIndirect(fn, elem)` cannot reach. ⭐ **G18: THE ELEMENT POSITION IS SERVED
+		// BY A PER-INSTANCE ONE-ARGUMENT THUNK** (`MmRuntime.synthesizeElementRecordCloner`), whose whole body is
+		// that 2-arg call, so the arity is no longer a reason to refuse and this arm asks the SAME question in
+		// both positions. `elementRecordCloneStrategy` mints the thunk's symbol on exactly this envelope.
+		return self.typeSupportsDeepClone(self.containerElementType(id), visited: visited)
 	end 'instanceSupportsDeepClone'
 
 	// ⭐⭐ **CAN A NON-`Array` GENERIC INSTANCE BE DEEP-CLONED (W162)?** `structFieldsSupportDeepClone`'s
@@ -25636,10 +25701,11 @@ export type ProgramSignatures
 	// synthesizer never meets an `unsupported` field on a program the front end accepted, which is the rule
 	// `arrayElementSupportsDeepClone`'s header states for the struct side and the reason it exists.
 	//
-	// ⚠ **`asElement` IS NOT A PARAMETER, AND THAT IS AN ANSWER RATHER THAN AN OMISSION.** The restriction it
-	// carries is that an ARRAY ELEMENT is invoked through `callIndirect(fn, elem)` and so must be reachable by a
-	// SINGLE `(box) -> newBox` callee. `__clone_<mangled>` is exactly that shape — the same shape a declared
-	// struct's `__clone_<T>` is — so an instance that clones at all clones as an element too.
+	// ⚠ **AN INSTANCE THAT CLONES AT ALL CLONES AS AN ELEMENT TOO**, because `__clone_<mangled>` is the single
+	// `(box) -> newBox` shape a `callIndirect(fn, elem)` needs — the same shape a declared struct's `__clone_<T>`
+	// is. That argument used to hold HERE and nowhere else, which is what the gate's `asElement` parameter
+	// existed to say; G18 generalized it to the two element-bearing records and the parameter went with it. See
+	// `typeSupportsDeepClone`, which now carries it for every shape.
 	//
 	// ⛔ **A BASE-LAYOUT-LESS INSTANCE IS REFUSED, AND IT IS THE SAME GATE THE DROP SIDE OPENS WITH.** A
 	// `Vector`/cursor instance has no base struct to read fields out of (`genericInstanceHasBaseLayout`), so
@@ -25672,7 +25738,7 @@ export type ProgramSignatures
 			end 'scalar'
 			// The SUBSTITUTED type, which is what the synthesized body clones — `genericInstanceFieldDropCallee`
 			// reads the same column for the same reason: the gate and the emitter must classify one type.
-			if not self.typeSupportsDeepClone(self.substituteInstanceFieldType(id, index: i), asElement: false, visited: visited) 'unsupportedField'
+			if not self.typeSupportsDeepClone(self.substituteInstanceFieldType(id, index: i), visited: visited) 'unsupportedField'
 				return false
 			end 'unsupportedField'
 		end 'eachField'
@@ -25686,7 +25752,7 @@ export type ProgramSignatures
 				continue
 			end 'scalar'
 			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structFieldsSupportDeepClone: fieldTypes.get OOB at {i}")
-			if not self.typeSupportsDeepClone(fieldType, asElement: false, visited: visited) 'unsupportedField'
+			if not self.typeSupportsDeepClone(fieldType, visited: visited) 'unsupportedField'
 				return false
 			end 'unsupportedField'
 		end 'eachField'
@@ -25701,7 +25767,7 @@ export type ProgramSignatures
 				if not payloadClassIsManaged(classifyUnionPayload(self, typeNames: self.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 					continue
 				end 'scalar'
-				if not self.typeSupportsDeepClone(field.declaredType, asElement: false, visited: visited) 'unsupportedPayload'
+				if not self.typeSupportsDeepClone(field.declaredType, visited: visited) 'unsupportedPayload'
 					return false
 				end 'unsupportedPayload'
 			end 'eachField'

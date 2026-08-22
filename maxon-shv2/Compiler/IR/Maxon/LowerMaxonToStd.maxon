@@ -2400,12 +2400,13 @@ type MaxonToStdLowering
 		// per-instance are deleted, and a predicate here is the sole gate on whether a word is written at all.
 		//
 		// ⭐ **THE `copyFunc@32` STAMP — the exact CLONE dual (P1.7 slice 3b-vi-b-β).** When the parameter's
-		// managed opaque `Array` element is DIRECT-clonable (a String / struct / boxed-union / trivial-element-array
-		// element — the only shape a single `(box) -> newBox` cloner can hold), a second `funcAbs64InRdata`
-		// relocation fills `copyFunc@32` with the element CLONER's `.text` VA, the value the shared opaque-copy
-		// wrappers read back and `callIndirect` per element. A TRIVIAL element records nothing (its wrapper takes
-		// the byte-blit/COW path), and a MANAGED but non-direct element (`Array with (Array with String)`) records
-		// nothing either — it is never copied (the front end rejects a base that copies with such an
+		// managed opaque `Array` element is DIRECT-clonable (a String / struct / boxed-union / any container —
+		// a managed-element one through its own per-instance one-argument thunk since G18 — i.e. anything a
+		// single `(box) -> newBox` cloner can name), a second `funcAbs64InRdata` relocation fills `copyFunc@32`
+		// with the element CLONER's `.text` VA, the value the shared opaque-copy wrappers read back and
+		// `callIndirect` per element. A TRIVIAL element records nothing (its wrapper takes the byte-blit/COW
+		// path), and a MANAGED element nothing can clone at all (an OS handle, a `Vector`, an existential)
+		// records nothing either — it is never copied (the front end rejects a base that copies with such an
 		// instantiation), so its 0 slot is never read.
 		for position in 0 upto paramCount 'eachTypeParam'
 			let blockBase = layoutBlockOffsetFor(position)
