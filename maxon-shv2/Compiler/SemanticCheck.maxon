@@ -4308,7 +4308,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			// way (user ruling, 2026-08-04). The compiled twin read `expected 'Box_Leaf', got 'OtherBox'`
 			// on a program that declares `typealias LeafBox = Box with Leaf` — the `got` side quoting the
 			// author and the `expected` side quoting the mangler.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(signatures.instanceArgDisplayName(gid, position: position)), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(signatures.instanceArgDisplayName(gid, position: position)), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongTypeArgument'
 
@@ -4497,7 +4497,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
 
 		if namedAggregatesConflict(expected, got: got) 'wrongInstance'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongInstance'
 	end 'eachArg'
@@ -5379,7 +5379,7 @@ function checkExistentialSiteClaimAtArgument(project Project, func IrFunction, p
 
 	let site = existentialSiteThroughCallInstance(signatures, func: func, subject: callInstanceSubject, siteInstance: declaredSite)
 	let claim = existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: site, conformerTag: argTag, conformerNameId: argNameId, interfaceName: interfaceName)
-	let conformer = typeDisplayName(project, tag: argTag, nameId: argNameId)
+	let conformer = typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)
 	let siteText = existentialSiteClaimSentence(interfaceName, claim: claim)
 	let associated = String.from(claim.associatedName)
 	match claim.status 'claim'
@@ -5423,7 +5423,7 @@ function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, ret
 	var signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtReturn")
 	let claim = existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: site, conformerTag: valueTag, conformerNameId: valueNameId, interfaceName: interfaceName)
 	let funcName = String.from(func.name)
-	let conformer = typeDisplayName(project, tag: valueTag, nameId: valueNameId)
+	let conformer = typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath)
 	let siteText = existentialSiteClaimSentence(interfaceName, claim: claim)
 	let associated = String.from(claim.associatedName)
 	match claim.status 'claim'
@@ -5507,7 +5507,7 @@ function checkOneReturnedValue(project Project, func IrFunction, value ValueId, 
 		// The parameterized half, asked once conformance is settled — the argument position's twin (W58).
 		widens then checkExistentialSiteClaimAtReturn(project, func: func, returnExistentialSites: returnExistentialSites, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, retRange: retRange)
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot return a `float` from '{String.from(func.name)}', which is declared to return the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the return type as `float`", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
-		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{String.from(func.name)}'", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
+		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{String.from(func.name)}'", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 	end 'widening'
 end 'checkOneReturnedValue'
 
@@ -5566,7 +5566,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// non-conformer's bindings are not the fault worth reporting.
 			widens then checkExistentialSiteClaimAtArgument(project, func: func, paramExistentialSites: paramExistentialSites, position: position, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, paramName: paramName, callInstanceSubject: callInstanceSubject, callRange: callRange, filePath: filePath)
 			floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(paramName, position: position)}, which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
-			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: typeDisplayName(project, tag: argTag, nameId: argNameId), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
+			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
 		end 'widening'
 		return
 	end 'existentialParam'
@@ -5609,7 +5609,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// never reaches the tag rule below — measured on `takeMsg(t)` with a `union Message` formal. Same
 			// fault, same reader, so the same explanation: `argMismatchWithOpaqueTail` appends nothing unless the
 			// ARGUMENT is the opaque one, which leaves every nominal-vs-nominal refusal here spelled as before.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, readerFilePath: func.sourceFilePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateComparable'
@@ -5690,7 +5690,7 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 	let verdict = checkDeclaredType(argTag, declared: declaredTag)
 	match verdict 'declared'
 		ok then break 'declared'
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 		// ⚠ **THE TWO ARMS BELOW SPELL THE PARAMETER BY ITS RESOLVED CLASS WORD AND NOT BY ITS DECLARATION,
 		// AND THAT IS THE CANONICAL COROLLARY OF THE DISPLAY RULE RATHER THAN AN EXCEPTION TO IT.** Each is
 		// ONE SENTENCE WITH SEVERAL DOORS, and every other door of each is a place with no parameter to name:
@@ -5850,9 +5850,9 @@ end 'aggregateNameFor'
 // whole-program index, so they cannot spell a type two ways. **The twinning stops at the LOOKUP and the
 // instance arm — the tail is `displayNameOfAggregate`, shared, because a tag and an already-resolved name
 // belong to no tier.**
-function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId) returns String
+function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns String
 	if tag == ValueTypeTag.genericInstance 'genericInstance'
-		return String.from(programSignaturesIn(project, asker: "typeDisplayName").instanceDisplayName(nameId))
+		return String.from(programSignaturesIn(project, asker: "typeDisplayName").instanceDisplayNameIn(nameId, readerFilePath: readerFilePath))
 	end 'genericInstance'
 
 	// Its aggregate NAME when it has one (`BoxB`), else the scalar TYPE it actually is (`int` for a bare
@@ -5893,9 +5893,9 @@ end 'typeDisplayName'
 // fallback is useless: `typeTagName(genericInstance)` is the bare word `struct`, so `expected 'IntegerArray',
 // got 'int'` (`specs/type-checking.md`, an `int` argument — a tag that admits no aggregate) would degrade to
 // `expected 'struct'`. The ranged arm's fallback is `int`, which is the type.
-function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTypeTag, aggregate ByteArray, declaredName ByteArray, argTag ValueTypeTag) returns String
+function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTypeTag, aggregate ByteArray, declaredName ByteArray, argTag ValueTypeTag, readerFilePath FilePath) returns String
 	if paramTag == ValueTypeTag.genericInstance 'genericInstance'
-		return typeDisplayName(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+		return typeDisplayName(project, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: readerFilePath)
 	end 'genericInstance'
 
 	if not aggregate.isEmpty() 'nominal'

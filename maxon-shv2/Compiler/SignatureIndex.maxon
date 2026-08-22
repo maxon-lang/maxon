@@ -6678,6 +6678,16 @@ export typealias GenericInstancesByBaseMap = Map with (TypeNameId, GenericInstan
 // sweep, and read only by `GenericInstanceRegistry.instanceKey`. See `rangeCanonicalTypeName`.
 export typealias RangeIdentityMap = Map with (TypeNameId, TypeNameId)
 
+// The instances more than one alias NAME claims, after R-1 merged them. Empty in a program where no two
+// ranged aliases share a range.
+export typealias GenericInstanceIdSet = Set with GenericInstanceId
+
+// For an instance R-1 merged: which alias each DECLARING FILE knows it by, keyed by that file's path text.
+// It is how a diagnostic in a file that declares one of the claimants gets THAT claimant rather than a
+// stranger's spelling of the same type. Empty unless a merge happened.
+export typealias AliasNameByFileMap = Map with (ByteArray, ByteArray)
+export typealias InstanceAliasByFileMap = Map with (GenericInstanceId, AliasNameByFileMap)
+
 // R-1's substitution as `RangedAliasRegistry` answers it — alias NAME ⇒ the name of its RANGE — before
 // `ProgramSignatures` interns both halves into ids. Two maps for one fact because the two layers key on
 // different things and neither may hold the other's interner.
@@ -6972,9 +6982,13 @@ export type GenericInstanceRegistry
 	// Filled by `rekeyForRangeIdentity` alongside the rekey, for the ONE caller that must repair gids the sweep
 	// already recorded. Empty otherwise, including in every program where no two aliases share a range.
 	var mergedInto as MergedInstanceMap
+	// The other side of `mergedInto`: the instances something merged INTO. It is what tells a display name
+	// that this instance's aliases are R-1's doing, and NOT the pre-existing two-spellings-of-one-type case
+	// (`Strs` and `StringArray` over `Array with String`) that first-wins has always answered correctly.
+	var mergeSurvivors as GenericInstanceIdSet
 
 	export static function create() returns GenericInstanceRegistry
-		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedSizeArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(), rangeIdentity: RangeIdentityMap.create(), mergedInto: MergedInstanceMap.create()}
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedSizeArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(), rangeIdentity: RangeIdentityMap.create(), mergedInto: MergedInstanceMap.create(), mergeSurvivors: GenericInstanceIdSet.create()}
 	end 'create'
 
 	// The cheap composite key that makes interning O(1): the base id, the fixed size, and each arg's
@@ -7066,6 +7080,7 @@ export type GenericInstanceRegistry
 			let key = self.instanceKey(self.instanceBaseId(id), args: args, fixedSize: self.instanceFixedSize(id))
 			if let survivor = try self.index.get(key) 'anEarlierInstanceAlreadyDenotesThisType'
 				self.mergedInto.upsert(id, value: survivor)
+				self.mergeSurvivors.insert(survivor)
 				continue
 			end 'anEarlierInstanceAlreadyDenotesThisType'
 
@@ -7101,6 +7116,11 @@ export type GenericInstanceRegistry
 	// The instance `id` denotes after R-1's merge — itself unless it lost one. ONE hop is exact: a survivor is
 	// by construction absent from `mergedInto`, because `rekeyForRangeIdentity` files a loser against the id
 	// that already CLAIMED the key, and a claimant never loses.
+	// Did R-1 merge another instance into this one? Only then can its aliases disagree BECAUSE of the merge.
+	export function instanceIsMergeSurvivor(id GenericInstanceId) returns bool
+		return self.mergeSurvivors.contains(id)
+	end 'instanceIsMergeSurvivor'
+
 	export function liveInstance(id GenericInstanceId) returns GenericInstanceId
 		if self.mergedInto.count() == 0 'nothingMerged'
 			return id
@@ -8192,6 +8212,53 @@ export function rangeCanonicalTypeName(underlying MaxonType, low ParsedInt, high
 	return "{rangedAliasUnderlyingName(underlying)}{CompilerQualifiedAliasSeparator}{low}_{high}".toByteArray()
 end 'rangeCanonicalTypeName'
 
+// The same range as a reader SEES it -- `int(0 to 255)`, the syntax the source declares it in.
+//
+// ⭐⭐ **TWO SPELLINGS OF ONE RANGE, AND THE SPLIT IS THE SAME ONE `mangleGenericInstance` AND
+// `canonicalNameWithin` HAVE.** `rangeCanonicalTypeName` above is a KEY: it must be unspellable in source,
+// so it wears `CompilerQualifiedAliasSeparator` and is never shown to anyone. This one is DISPLAY: it goes
+// into diagnostics, so it must read like a type and must not carry a separator no author has ever seen.
+// Neither can serve as the other, and a single spelling would have to fail at one of the two jobs.
+export function rangeSourceSpelling(underlying MaxonType, low ParsedInt, high ParsedInt) returns ByteArray
+	let unsignedDomain = rangeIsUnsignedDomain(low, high: high)
+	return "{rangedAliasUnderlyingName(underlying)}({boundText(low, unsignedDomain: unsignedDomain)} to {boundText(high, unsignedDomain: unsignedDomain)})".toByteArray()
+end 'rangeSourceSpelling'
+
+// ⭐⭐ **WHICH DOMAIN'S NUMBER IS THIS BOUND? — DETERMINED, NOT GUESSED.** Bounds ride as the RAW 64-bit
+// pattern (`RangedTypeAlias`'s header), so `u64.max` and `-1` are the SAME BITS and a signed render prints
+// `int(0 to -1)` for `int(0 to u64.max)` — a wrong answer in a diagnostic, and the one this function exists
+// to prevent.
+//
+// ⭐ **A NON-NEGATIVE `low` WITH A RAW-NEGATIVE `high` HAS EXACTLY ONE READING THAT IS A RANGE AT ALL.** Read
+// signed, `0 to -1` is EMPTY, and no declaration means that — `Parser`'s own note on `int(18446744073709551615
+// to -2)` calls such a range one "which no value can satisfy". So the unsigned reading is not the likelier of
+// two, it is the only one under which the program that declared it is legal. Where `low` is itself negative
+// the whole range is signed and both bounds render that way.
+//
+// ⚠ This is the third door to resolve that ambiguity and the three deliberately lean different ways, each
+// toward what its own answer is used for: `rangedAliasStorageBytes` takes the WIDEST slot, `rangeHoldsEveryByte`
+// REFUSES, and this one reads the range as its author must have meant it. A shared answer would have to be
+// wrong for two of them.
+function rangeIsUnsignedDomain(low ParsedInt, high ParsedInt) returns bool
+	return low >= 0 and high < 0
+end 'rangeIsUnsignedDomain'
+
+// One bound as text. The unsigned reading is obtained by HOLDING the value in a `int(0 to u64.max)` binding
+// rather than by any arithmetic: interpolation renders a value in its DECLARED range's domain, which is the
+// mechanism that already makes `"{w}"` print `18446744073709551615` for a `w` of that type.
+function boundText(bound ParsedInt, unsignedDomain bool) returns String
+	if unsignedDomain 'readAsAnUnsignedDomainBound'
+		let asUnsigned = bound as UnsignedRangeBound
+		return "{asUnsigned}"
+	end 'readAsAnUnsignedDomainBound'
+
+	return "{bound}"
+end 'boundText'
+
+// The unsigned domain a bound is rendered through — see `boundText`, whose whole method is the declared type
+// of this binding.
+typealias UnsignedRangeBound = int(0 to u64.max)
+
 // The `int`/`float` keyword a ranged alias is declared over, spelled as the source writes it. Only those two
 // forms can reach here: `RangedAliasRegistry.record`'s E3105 refuses a name whose declarations disagree about
 // the keyword, and nothing but a `typealias <name> = int(…)`/`float(…)` builds a `RangedTypeAlias` at all.
@@ -8590,6 +8657,10 @@ export type ProgramSignatures
 	// `InstanceDisplayNameMap`. Filled once by `deriveInstanceDisplayNames`, which is the only writer, so the
 	// parse (which fans out per file) only ever reads it.
 	var instanceDisplayNames as InstanceDisplayNameMap
+	// Instances that MORE THAN ONE alias name claims -- empty until R-1 merges two, and the reason
+	// `instanceDisplayName` cannot always answer with an alias. See `nameInstancesFromDeclarations`.
+	var multiplyAliasedInstances as GenericInstanceIdSet
+	var instanceAliasesByFile as InstanceAliasByFileMap
 	// Which written instantiation each SUBSTITUTED instance came out of — see `SubstitutedInstanceOriginMap`.
 	var substitutedInstanceOrigins as SubstitutedInstanceOriginMap
 	// The reverse of `canonicalInstanceNames` — see `CanonicalInstanceNameIndex` for the quadratic it removes.
@@ -9481,7 +9552,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DivergingFunctionNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DivergingFunctionNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -21890,8 +21961,43 @@ export type ProgramSignatures
 				continue
 			end 'aDeclarationForTheOtherRound'
 
-			let instance = self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath)
-			if self.instanceDisplayNames.contains(instance) 'anEarlierDeclarationAlreadyNamedThisType'
+			// ⚠ **THROUGH `liveInstance`, BECAUSE A DECLARATION ENTRY REMEMBERS THE gid IT INTERNED AND R-1 MAY
+			// HAVE MERGED IT SINCE.** Without the hop the two declarations of one merged type land on two
+			// different ids, never collide, and the collision this walk exists to notice is invisible — the
+			// display then answers from whichever id the asker happens to hold.
+			let instance = self.genericInstances.liveInstance(self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath))
+			// Recorded BEFORE the already-named test, so the WINNER's file is in the table too — a diagnostic
+			// in the file that declared the winning alias must get that alias by the same route as everyone
+			// else, not by falling through to it.
+			if self.genericInstances.instanceIsMergeSurvivor(instance) 'R1MERGEDsomethingONTOthisTYPE'
+				self.recordInstanceAliasFile(instance, filePath: entry.filePath, aliasName: entry.aliasName)
+			end 'R1MERGEDsomethingONTOthisTYPE'
+
+			if let named = try self.instanceDisplayNames.get(instance) 'anEarlierDeclarationAlreadyNamedThisType'
+				// ⛔⛔ **R-1 MADE "THE FIRST DECLARATION WINS" A WRONG ANSWER RATHER THAN AN ARBITRARY ONE.**
+				// Before the merge, a second declaration reaching an instance already named meant two aliases
+				// for one spelling of one type, and either name was as good. Now `Array with DenseInt` and
+				// `Array with DurationNanos` ARE one instance, and whichever the program interned first would
+				// be printed at every site including the ones that wrote the other. MEASURED on shv2's own
+				// source: `cannot assign a value of type 'DurationNanosArray'` at a site whose callee declares
+				// `returns DenseColumn`, in a file that does not mention `DurationNanos` at all.
+				//
+				// ⇒ Such an instance has NO author spelling, and `instanceDisplayName` renders it by its RANGE
+				// instead of picking one. Recorded here because this is the one walk that can see the
+				// collision; the names are compared rather than counted because two DECLARATIONS of one alias
+				// name (a re-export, a per-type scope) are not two names for the type.
+				// ⚠ **ONLY WHERE R-1 MERGED, and the difference is 18 spec cases.** Two alias NAMES for one
+				// instance is not new and is usually not R-1's doing: a spec's `Strs` and the stdlib's
+				// `StringArray` have always named one `Array with String`, and first-wins has always answered
+				// those correctly — the name it picks is the type's only shape and every site recognizes it.
+				// What R-1 introduced is aliases that name one instance while denoting DIFFERENT SPELLINGS of
+				// its element, and only those have no name a reader at an arbitrary site would recognize.
+				// MEASURED marking every multiply-aliased instance: `expected 'IntArray'` became
+				// `expected 'Array with int(-9223372036854775808 to 9223372036854775807)'` across the suite.
+				if self.genericInstances.instanceIsMergeSurvivor(instance) and not named.equals(entry.aliasName) 'R1MERGEDaSECONDaliasONTOthisTYPE'
+					self.multiplyAliasedInstances.insert(instance)
+				end 'R1MERGEDaSECONDaliasONTOthisTYPE'
+
 				continue
 			end 'anEarlierDeclarationAlreadyNamedThisType'
 
@@ -21948,9 +22054,113 @@ export type ProgramSignatures
 	// else the canonical mint (see `InstanceDisplayNameMap` for why a miss is an answer). It is the DISPLAY
 	// sibling of `canonicalInstanceName`, never a substitute for it: nothing may COMPARE two of these, because
 	// two aliases legitimately spell one type.
+	function recordInstanceAliasFile(id GenericInstanceId, filePath FilePath, aliasName ByteArray)
+		let key = filePath.toString().toByteArray()
+		if var known = try self.instanceAliasesByFile.get(id) 'thisInstanceAlreadyHasClaimants'
+			// ⚠ **THE FIRST ALIAS THIS FILE DECLARED KEEPS THE SLOT.** A file may itself declare two aliases
+			// over one range, and then either is a spelling its own author would recognize — but only one of
+			// them is a STABLE answer. Last-writer would make the name depend on declaration order within the
+			// file, which is exactly the arbitrariness this whole door exists to remove one level up.
+			if known.contains(key) 'thisFileAlreadyDeclaredOne'
+				return
+			end 'thisFileAlreadyDeclaredOne'
+
+			known.upsert(key, value: aliasName)
+			self.instanceAliasesByFile.upsert(id, value: known)
+			return
+		end 'thisInstanceAlreadyHasClaimants'
+
+		var first = AliasNameByFileMap.create()
+		first.upsert(key, value: aliasName)
+		self.instanceAliasesByFile.upsert(id, value: first)
+	end 'recordInstanceAliasFile'
+
+	// ⭐⭐ **HOW A DIAGNOSTIC IN A PARTICULAR FILE SPELLS A TYPE R-1 MERGED — the answer `instanceDisplayName`
+	// cannot give, because it has no site and after a merge the type has no single author spelling.**
+	//
+	// A file that DECLARES one of the claimants is told that one: `WideCol` at a site in the file that wrote
+	// `typealias WideCol = Array with Wide`, however many other aliases the program has over that range.
+	// A file that declares none of them gets the RANGE, which is true of every claimant and is what the
+	// reader can actually act on — naming a stranger's alias there was the defect: shv2's own
+	// `RegisterAllocator.maxon` was told `got 'DurationNanosArray'`, a spelling from `CompileTimings.maxon`
+	// that its own file never mentions, for a value whose callee declares `returns DenseColumn`.
+	//
+	// ⚠ **DECLARING and not merely NAMEABLE.** Both claimants are usually exported and so both are spellable
+	// from anywhere; visibility therefore separates nothing. What a reader recognizes is the alias their own
+	// file wrote down, which is exactly what this asks.
+	export function instanceDisplayNameIn(id GenericInstanceId, readerFilePath FilePath) returns ByteArray
+		if not self.multiplyAliasedInstances.contains(id) 'oneAliasSpellsThisTypeForEveryone'
+			return self.instanceDisplayName(id)
+		end 'oneAliasSpellsThisTypeForEveryone'
+
+		if let claimants = try self.instanceAliasesByFile.get(id) 'itsClaimantsAreKnown'
+			if let mine = try claimants.get(readerFilePath.toString().toByteArray()) 'thisFileDeclaredOneOfThem'
+				return mine
+			end 'thisFileDeclaredOneOfThem'
+		end 'itsClaimantsAreKnown'
+
+		return self.instanceDisplayName(id)
+	end 'instanceDisplayNameIn'
+
+	// The site-free answer. A type R-1 merged has no author spelling that is true everywhere, so it renders by
+	// its RANGE rather than by whichever claimant happened to be declared first; `instanceDisplayNameIn` above
+	// is the door that can do better, and every diagnostic with a file to offer should use it.
 	export function instanceDisplayName(id GenericInstanceId) returns ByteArray
+		if self.multiplyAliasedInstances.contains(id) 'moreThanOneAliasNamesThisType'
+			return self.rangeRenderedInstanceName(id)
+		end 'moreThanOneAliasNamesThisType'
+
 		return try self.instanceDisplayNames.get(id) otherwise self.canonicalInstanceName(id)
 	end 'instanceDisplayName'
+
+	// An instance no single alias can be said to spell, written the way the SOURCE would write it:
+	// `Array with int(0 to 255)`. Every alias R-1 merged into this instance denotes exactly this, so the name
+	// is true at every site -- which is the property a picked alias lost.
+	//
+	// ⚠ **SOURCE SYNTAX AND NOT THE `Base_Arg` MANGLING, because this is the one instance name a reader
+	// cannot look up.** `Array_Byte` is recognizable: some file declares `Byte`. `Array_int$0_255` names
+	// nothing an author can search for, and the `$` is a separator no source may contain.
+	function rangeRenderedInstanceName(id GenericInstanceId) returns ByteArray
+		var out = self.instanceNameStem(id)
+		let args = self.genericInstances.instanceArgs(id)
+		out.append(" with ")
+		if args.count() != 1 'moreThanOneArgumentIsParENTHESIZED'
+			out.append("(")
+		end 'moreThanOneArgumentIsParENTHESIZED'
+
+		var first = true
+		for arg in args 'eachArg'
+			if not first 'afterTheFirst'
+				out.append(", ")
+			end 'afterTheFirst'
+
+			first = false
+			out.append(String.from(self.displayedTypeArgName(arg)))
+		end 'eachArg'
+
+		if args.count() != 1 'closeTheParEN'
+			out.append(")")
+		end 'closeTheParEN'
+
+		return out.toByteArray()
+	end 'rangeRenderedInstanceName'
+
+	// One argument as a reader sees it: a ranged alias becomes its RANGE (the whole point -- its NAME is what
+	// the merge made ambiguous), a nested instance recurses through the display door so a merged inner is
+	// rendered by ITS range too, and anything else keeps the spelling `mangleTypeArg` gives it.
+	function displayedTypeArgName(arg MaxonType) returns ByteArray
+		let tag = maxonTypeTag(arg)
+		if tag == ValueTypeTag.genericInstance 'nested'
+			return self.instanceDisplayName(typeNameIdOf(arg))
+		end 'nested'
+
+		if tag == ValueTypeTag.named 'mayNameARangedAlias'
+			let name = self.nameOfId(typeNameIdOf(arg))
+			return try self.typeAliases.uncontestedRangeSourceSpelling(name) otherwise name
+		end 'mayNameARangedAlias'
+
+		return self.mangleTypeArg(arg).toByteArray()
+	end 'displayedTypeArgName'
 
 	// ⭐ **THE NOMINAL IDENTITY OF AN INSTANCE'S SUBSTITUTED TYPE ARGUMENT (P1.7)** — what a parameter
 	// declared with the bare type parameter `T` actually demands at a call made through that instance. It is

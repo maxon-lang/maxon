@@ -1794,6 +1794,17 @@ export type RangedAliasRegistry
 		return rangeCanonicalTypeName(any.underlying, low: any.low, high: any.high)
 	end 'uncontestedRangeName'
 
+	// `uncontestedRangeName`'s DISPLAY twin -- `int(0 to 255)` rather than the key spelling. Same contested
+	// refusal for the same reason: a name whose declarations disagree has no one range to be shown as.
+	export function uncontestedRangeSourceSpelling(name ByteArray) returns ByteArray throws MapError
+		if self.rangeContested.contains(name) 'itsDeclarationsDisagreeAboutTheRange'
+			throw MapError.keyNotFound
+		end 'itsDeclarationsDisagreeAboutTheRange'
+
+		let any = try self.byName.get(name)
+		return rangeSourceSpelling(any.underlying, low: any.low, high: any.high)
+	end 'uncontestedRangeSourceSpelling'
+
 	// ⭐⭐ **EVERY RANGED ALIAS THAT SHARES ITS RANGE WITH ANOTHER, PAIRED WITH THAT RANGE'S NAME (R-1).** The
 	// substitution `GenericInstanceRegistry.instanceKey` applies, in the one form the registry can consume
 	// without knowing what an alias is.

@@ -1652,12 +1652,53 @@ sabotage-verified — with the merge call removed the case reddens and the contr
 depend on the mechanism it exists to bound. Ladder cost **+28,502 allocations at rung 5, 0.066% of the rung**, growing
 ×1.5 per doubling against the ladder's ×1.9 (`docs/optimization-log.md`).
 
-⚠ **ONE CONSEQUENCE TO KNOW, AND IT IS INHERENT TO THE RULING RATHER THAN A DEFECT:** 47 of `stdlib/`'s 65 ranged aliases
-share a range with another (28 of them over `int(0 to u64.max)` alone), so a diagnostic about such an instance names
-whichever of the equivalent aliases the program interned FIRST. `RegisterAllocator.maxon:93`'s remaining error reads
-`got 'DurationNanosArray'` where the author wrote a different alias of the same range. Both names denote one type, so the
-message is not wrong — but it is not the spelling at the use site either, and no principled preference among equivalent
-aliases exists. **It is the price of "same range ⇒ one instance" and it was accepted with the ruling.**
+✅ **THE DIAGNOSTIC HALF IS ALSO CLOSED (user, 2026-08-22: *"the range name needs to be correct in the diagnostic
+messages"*).** R-1 gives one gid many alias names, and the per-gid display then printed whichever alias was declared
+FIRST *anywhere in the program*: `RegisterAllocator.maxon:93` was told `got 'DurationNanosArray'`, a spelling from
+`CompileTimings.maxon` that its own file never mentions, for a value whose callee declares `returns DenseColumn`.
+
+**THE RULE NOW: a diagnostic gets the alias ITS OWN FILE declared, and where the reading file declares none it gets the
+RANGE in source syntax** — `Array with int(0 to 18446744073709551615)`, which is true of every claimant and names
+nothing the author did not write. `instanceDisplayNameIn` is the door; `instanceDisplayName` keeps the site-free answer.
+
+**THREE THINGS IT MEASURED:**
+
+1. ⛔⛔ **RENDERING THE RANGE SIGNED IS A WRONG ANSWER.** Bounds ride as the RAW 64-bit pattern, so the first cut printed
+   `int(0 to -1)` for `int(0 to u64.max)`. **A non-negative `low` with a raw-negative `high` has exactly one reading
+   that is a range at all** — signed it is EMPTY — so the unsigned reading is determined, not guessed. This is the third
+   door to resolve that ambiguity and the three deliberately lean different ways (`rangedAliasStorageBytes` takes the
+   widest slot, `rangeHoldsEveryByte` refuses, this one reads it as its author must have meant it).
+2. ⛔⛔ **THE DECLARATION WALK COMPARED PRE-MERGE gids**, so two declarations of one merged type landed on two ids, never
+   collided, and the ambiguity the walk exists to notice was invisible. It hops through `liveInstance` now.
+3. ⛔ **MARKING EVERY MULTIPLY-ALIASED INSTANCE COST 18 SPEC CASES.** Two alias names for one instance is NOT new and is
+   usually not R-1's doing — a spec's `Strs` and the stdlib's `StringArray` have always named one `Array with String`,
+   and first-wins answered those correctly. Only instances R-1 actually MERGED are marked.
+
+⚠ **ONE DIVERGENCE FROM THE ORACLE REMAINS, MEASURED AND NOT CLOSED.** Where ONE FILE declares two claimants, shv2 names
+the first-declared and the bootstrap names **the spelling at the site**:
+
+```
+typealias Wide  = int(0 to u64.max)     typealias WideCol  = Array with Wide
+typealias Other = int(0 to u64.max)     typealias OtherCol = Array with Other
+…  takesNarrow(OtherCol.create())
+   shv2:      argument type mismatch for 'c': expected 'NarrowCol', got 'WideCol'
+   bootstrap: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
+```
+
+Both are the file's own aliases and both denote the type, so shv2's is not WRONG — but the oracle's is better, and the
+oracle proves it is reachable. ⇒ **THE FIX IS PER-VALUE PROVENANCE, AND THE COLUMN ALREADY EXISTS**: P1.6-C's
+`valueInstanceAlias` carries *"the provenance the shared `GenericInstanceId` cannot carry (`WrapperA` and `WrapperB`
+share one gid)"* — the identical sentence, one type-family over. **MEASURED: it does not cover a factory result** — a
+probe at the display door read `named=''` for `OtherCol.create()`'s value while its function's map existed — so closing
+this means extending recording to factory results and to reads of a binding, which is a slice of its own. A display
+preferring that column was written, could not be shown to fire, and was REMOVED rather than shipped unverified.
+
+⚠ **THE RANGE-RENDERED PATH CANNOT BE PINNED BY A SPEC, AND THAT IS MEASURED, NOT ASSUMED.** It needs a merged instance
+whose claimants the reading file does not declare — i.e. two files. Spec fragments are ONE file plus `stdlib/`, and
+`stdlib/` interns no two same-range arrays (`Array with ParsedInt` is the only one over its range), so a fragment can
+only reach a merge by declaring a claimant itself, which then wins the file-local lookup. The path is exercised by
+shv2's own build. The FILE-LOCAL half IS pinned — `ranged-typealias/error.two-aliases-over-different-ranges-are-still-two-types`
+reddens to the range spelling if the reader's file is not consulted, which is how the door was verified.
 
 <details><summary>The two routes considered, and why (a) was chosen</summary>
 

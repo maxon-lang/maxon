@@ -53858,8 +53858,11 @@ export type Parser
 	// `displayNameOfAggregate` — one home, because it takes a tag and a resolved name and neither is bound to
 	// an interner.**
 	function displayTypeNameOf(tag ValueTypeTag, nameId TypeNameId) returns String
+		// THIS FILE's spelling of the type, which for one R-1 merged is not the same as anyone else's — see
+		// `ProgramSignatures.instanceDisplayNameIn`. Every diagnostic the parser raises names a type through
+		// here, and the parser always knows which file it is reading.
 		if tag == ValueTypeTag.genericInstance 'genericInstance'
-			return String.from(self.signatures.instanceDisplayName(nameId))
+			return String.from(self.signatures.instanceDisplayNameIn(nameId, readerFilePath: self.filePath))
 		end 'genericInstance'
 
 		// Its aggregate NAME when it has one (a declared struct/union), else the scalar TYPE it actually is —
