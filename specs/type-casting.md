@@ -571,3 +571,77 @@ end 'main'
 ```exitcode
 2
 ```
+
+## E3010 SEES A DECLARED ALIAS THROUGH A FIELD READ AND A `try … otherwise` RESULT (R-4)
+
+⭐⭐ **THE TWO COMPILERS NOW AGREE ON WHAT *STATES* A DECLARED ALIAS.** `TryGetSourceRangedType` used to know
+two sources — a direct variable reference, and a snapshot that carries chained casts and call returns — so a
+cast whose source was a struct FIELD or a `try … otherwise` RESULT was never examined. shv2 examined both, and
+that asymmetry is why shv2's own source once carried EIGHT casts that do nothing.
+
+⚠ **THE NAME RIDES THE EXPRESSION RESULT, NOT `_lastRangedTypeName`, AND THAT WAS MEASURED.** The obvious
+route is the existing channel — but it is NOT diagnostic-only: a shift reads it to choose arithmetic vs logical
+fill, and the optimal-type scan reads it to size a value. **Writing a field read's name there moved two
+`per-instance-typealias` goldens (`x64.mov r8, 2` became `x64.mov r8, 1`)** — emitted code changing for a rule
+that only ever refuses. On `ExprResult.Direct` there is no staleness to manage either: the name belongs to that
+expression and dies with it.
+
+⚠ **THE FIELD READ RESOLVES THROUGH THE OWNER'S PER-INSTANCE ALIASES**, exactly as a call return does. A field
+declared `Idx` inside `StrWrapper` denotes `StrWrapper__Idx` at the read, and handing back the declaration's own
+name fires E3010 on a cast doing real work — MEASURED: `unneeded cast: 'Idx' already fits in 'StrWrapper__Idx'`.
+
+<!-- test: error.unneeded.through-a-field-read -->
+```maxon
+typealias Narrow = int(0 to 63)
+typealias Mid = int(0 to 1000)
+
+type Holder
+	export var n as Narrow
+
+	export static function make() returns Holder
+		return Self{n: 5}
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.make()
+	let w = h.n as Mid
+	print("w={w}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-field-read.test:15:14: unneeded cast: 'Narrow' already fits in 'Mid'
+```
+
+<!-- test: error.unneeded.through-a-try-otherwise-result -->
+⚠ **THE PARENTHESES ARE LOAD-BEARING AND THEY RECORD A DIVERGENCE.** Written bare, `try pick(true) otherwise 0
+as Mid`, the two compilers PARSE it differently: this one reads `(try … otherwise 0) as Mid` — `as` binding
+looser than `otherwise` — while shv2 reads `try … otherwise (0 as Mid)`, the cast binding to its operand.
+MEASURED: bare, this compiler answers E3010 and shv2 accepts the program. Parenthesized, both answer the same
+diagnostic at the same position, which is what this case pins. **The bare form's precedence is a real
+disagreement and is filed, not fixed here** — shv2's tighter reading is the conventional one for a cast.
+```maxon
+typealias Narrow = int(0 to 63)
+typealias Mid = int(0 to 1000)
+
+enum PickError implements Error
+	nope
+end 'PickError'
+
+function pick(ok bool) returns Narrow throws PickError
+	if not ok 'bad'
+		throw PickError.nope
+	end 'bad'
+	return 5
+end 'pick'
+
+function main() returns ExitCode
+	let w = (try pick(true) otherwise 0) as Mid
+	print("w={w}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-try-otherwise-result.test:17:39: unneeded cast: 'Narrow' already fits in 'Mid'
+```

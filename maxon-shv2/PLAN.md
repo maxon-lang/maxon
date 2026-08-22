@@ -1586,8 +1586,8 @@ answer changes what the compiler IS, not merely which line gets edited.
 |---|---|---|
 | **R-1** ✅ CLOSED | `Array with DenseInt` and `Array with RegCount` are two INSTANCES though both element aliases are `int(0 to u64.max)`. shv2 keys instance identity on the argument's NAME; the bootstrap treats them as one type, and shv2's own SCALAR rule already does (E3010 calls a cast between them unneeded). | **KEY ON THE ELEMENT RANGE, not the name.** Same range ⇒ one instance; different ranges stay distinct, which is `e4146cf8e`'s intent stated over the thing it was always about. ⚠ Where several aliases collapse, the MANGLED name must be chosen deterministically from the surviving spellings — `deriveInstanceDisplayNames` is the sole writer and the place to state it — and golden fragments churn wherever an instance is renamed. Clears 3 of the 4 open E3005s. |
 | **R-2** ✅ CLOSED (re-scoped) | `filledColumn(…)` returns `Array with int(0..u64.max)`; `RegisterAllocator.color` holds `Array with int(0..63)`. The bootstrap accepts the assignment; shv2 refuses it. Nothing range-checks elements at a whole-array assignment, so permitting it lets a reader trust a bound the data may not honour. | **REQUIRE AN EXPLICIT CAST.** The implicit assignment stays refused — shv2 is right that the bound is a promise — but `as RegNumColumn` is admitted, so the narrowing is VISIBLE at the site that performs it rather than assumed at the site that stores it. ⚠ This MINTS a cast form for a generic instance, which shv2 has not had; it is a language addition, not a relaxation. |
-| **R-3** | The stand-in `runProcess` BUILTIN claims the bare name, so shv2's own 4-arg `Testing/SpecTestRunner.maxon` declaration is silently unreachable — the builtin's own comment says so and names the retirement recipe. | **TAKE THE `Subprocess` CONE WORK.** In order: the D7 blocker first (overloading `Subprocess.run` where one declaration `throws`), then MINT `__Builtins.runProcess` as the stdlib body's floor, then delete the bare name here and list the module. ⚠ Retiring it also moves the runtime entry from user code (target-gate BLIND) into stdlib source (target-gate AWARE) — `SemanticCheck.requireTargetSupportsCallee`'s header names the pair of spec cases `sleep` pinned for exactly this, and both halves are owed again. Unblocks 5 errors. |
-| **R-4** | shv2's E3010 sees a declared alias through a struct FIELD READ and a `try … otherwise` RESULT; the bootstrap sees neither. That asymmetry is why shv2's own source carried EIGHT casts that do nothing. | **TIGHTEN THE BOOTSTRAP AND CLEAN UP.** The two compilers agree on what STATES a declared alias. shv2's own source is already clean of these (`d6f94960d9`, `abcba35255`), so the blast radius is mainly the `specs/` corpus — MEASURE it before committing, because the change fails `dotnet build` until every flagged cast is gone. |
+| **R-3** ✅ CLOSED (stale) | The stand-in `runProcess` BUILTIN claims the bare name, so shv2's own 4-arg `Testing/SpecTestRunner.maxon` declaration is silently unreachable — the builtin's own comment says so and names the retirement recipe. | **TAKE THE `Subprocess` CONE WORK.** In order: the D7 blocker first (overloading `Subprocess.run` where one declaration `throws`), then MINT `__Builtins.runProcess` as the stdlib body's floor, then delete the bare name here and list the module. ⚠ Retiring it also moves the runtime entry from user code (target-gate BLIND) into stdlib source (target-gate AWARE) — `SemanticCheck.requireTargetSupportsCallee`'s header names the pair of spec cases `sleep` pinned for exactly this, and both halves are owed again. Unblocks 5 errors. |
+| **R-4** ✅ CLOSED (half was already true) | shv2's E3010 sees a declared alias through a struct FIELD READ and a `try … otherwise` RESULT; the bootstrap sees neither. That asymmetry is why shv2's own source carried EIGHT casts that do nothing. | **TIGHTEN THE BOOTSTRAP AND CLEAN UP.** The two compilers agree on what STATES a declared alias. shv2's own source is already clean of these (`d6f94960d9`, `abcba35255`), so the blast radius is mainly the `specs/` corpus — MEASURE it before committing, because the change fails `dotnet build` until every flagged cast is gone. |
 
 ⛔⛔ **R-1's OBVIOUS IMPLEMENTATION IS WRONG, AND IT WAS TRIED AND MEASURED (2026-08-22).** Canonicalizing
 the argument at INTERN time — one `ProgramSignatures.internInstance` door computing a range-keyed spelling
@@ -1780,6 +1780,50 @@ its target. Nothing in the suite covered it, which is how a silently ignored cas
 ⚠ **IF A CONVERTING CONTAINER CAST IS EVER WANTED, IT IS ITS OWN SLICE**, and `bytearray-element-size.md` has already
 named it: *"an element-wise widening emission — a real mechanism, and the same one a widening `__managed_append`
 across differing strides would need"*. It would need building in both compilers.
+
+✅ **R-3 IS CLOSED, AND THE ROW WAS STALE (2026-08-22).** It said a stand-in `runProcess` BUILTIN claims the bare
+name, leaving `Testing/SpecTestRunner.maxon`'s 4-arg declaration silently unreachable, and that the cone was worth
+5 self-compile errors. **MEASURED, none of that still holds:**
+
+- **There is no bare-name stand-in.** The only spelling is the qualified intrinsic `__Builtins.runProcess`, and its
+  own header records why it stayed one: *"until [the full-Subprocess-API rung] lands the intrinsic spelling IS the
+  surface"*.
+- **The D7 blocker is gone** — `stdlib/Subprocess.maxon` already carries three `static function run` overloads
+  (2-, 3- and 4-argument), every one of them `throws SubprocessError`.
+- **`SpecTestRunner.runProcess` resolves.** Five call sites across `GoldenTracking`, `HarnessSelfTest`,
+  `ScalePerType` and `ScaleTestRunner` reach the 4-arg declaration, and **the self-compile carries ZERO errors
+  mentioning `Subprocess` or `runProcess`**.
+- **Neither half of the target-gate asymmetry is owed.** The row expected both to need re-pinning after the
+  retirement — but the retirement never happened, the entry stayed in USER code, and so it stayed reachability-BLIND.
+  **Both pins PASS on the lane that tests them:** `builtins-sleep.rejected-on-wasm-when-unreached` and
+  `async-subprocess.rejected-on-wasm-when-unreached`, measured under `--target=wasm32-wasi`.
+
+✅ **R-4 IS CLOSED, AND HALF OF IT WAS ALREADY TRUE (2026-08-22).** The row said shv2's E3010 sees a declared alias
+through a struct FIELD READ **and** a `try … otherwise` RESULT while the bootstrap sees NEITHER. Measured, the
+bootstrap already saw the second: a `try`'s callee is a CALL, so `ResolveCallReturnRangedType` had already put the
+return alias on `_lastRangedTypeName`, which is `TryGetSourceRangedType`'s second source. **A change written for
+that half was SABOTAGE-TESTED AND FOUND DEAD — the case passes with it removed — so it was not shipped.**
+
+⇒ **The FIELD READ was the whole gap, and it is closed.** Both compilers now answer
+`unneeded cast: 'Narrow' already fits in 'Mid'` at the same position for `h.n as Mid`.
+
+⚠⚠ **THE NAME RIDES THE EXPRESSION RESULT, NOT `_lastRangedTypeName`, AND THAT WAS MEASURED THE HARD WAY.** The
+obvious route is the existing channel — but it is NOT diagnostic-only: a shift reads it to choose arithmetic vs
+logical fill, and the optimal-type scan reads it to size a value. **Writing a field read's name there moved two
+`per-instance-typealias` goldens — `x64.mov r8, 2` became `x64.mov r8, 1`** — emitted code changing for a rule that
+only ever refuses. `ExprResult.Direct` gained an optional `RangedTypeName` instead: exact, expression-scoped, no
+staleness to manage, and unreachable from codegen.
+
+⚠ **THE FIELD READ RESOLVES THROUGH THE OWNER'S PER-INSTANCE ALIASES**, exactly as a call return does — MEASURED
+without it: `unneeded cast: 'Idx' already fits in 'StrWrapper__Idx'`, fired on a cast doing real work.
+
+⬜ **FILED, NOT FIXED: THE TWO COMPILERS PARSE `try X otherwise 0 as Mid` DIFFERENTLY.** The bootstrap reads
+`(try … otherwise 0) as Mid` — `as` binding LOOSER than `otherwise` — and shv2 reads `try … otherwise (0 as Mid)`,
+the cast binding to its operand. **MEASURED: bare, the bootstrap now answers E3010 and shv2 accepts the program.**
+shv2's tighter reading is the conventional one for a cast, so the bootstrap is the likelier side to be wrong. It is
+latent — the corpus writes no such shape, both suites are green and the bootstrap still builds shv2 — and
+`specs/type-casting.md`'s `error.unneeded.through-a-try-otherwise-result` records it in prose while pinning the
+PARENTHESIZED form, where the two agree.
 
 ⚠ **R-1 AND R-2 ARE ONE SEQUENCE, NOT TWO ROWS.** R-1 collapses the same-range pairs, which is what
 leaves `RegisterAllocator`'s `0..u64.max` → `0..63` standing ALONE as a genuine narrowing — so R-2's cast

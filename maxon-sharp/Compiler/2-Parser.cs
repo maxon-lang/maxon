@@ -10913,6 +10913,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
 
       var loadedValue = EmitVarRefOp(resultVar, resultKind, structTypeName);
+
       return new ExprResult.Direct(loadedValue);
     }
     return new ExprResult.Direct(tryInfo.ErrorFlag);
@@ -19865,7 +19866,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var structVal2 = ResolveExprValue(result);
       var accessOp = new MaxonFieldAccessOp(structVal2, userTypeName, fieldName, fieldKind, fieldStructName);
       _currentBlock!.AddOp(accessOp);
-      result = new ExprResult.Direct(accessOp.Result);
+
+      // R-4: a FIELD READ states a declared alias, so E3010 must see one through it — this is one of the
+      // two doors shv2 saw and this compiler did not, and the asymmetry is why shv2's own source once
+      // carried EIGHT casts that do nothing.
+      //
+      // ⚠ Resolved through the OWNER's per-instance aliases, exactly as `ResolveCallReturnRangedType` does
+      // for a call return. A field declared `Idx` inside `StrWrapper` denotes `StrWrapper__Idx` at this
+      // read; handing back the declaration's own name makes `w.i as StrWrapper.Idx` look like a cast
+      // between two types and fires E3010 on a cast doing real work. MEASURED without it:
+      // `unneeded cast: 'Idx' already fits in 'StrWrapper__Idx'`.
+      var fieldRangedName = field.Type is IrRangedPrimitiveType fieldRangedType
+        ? (structType.InnerRangedAliases.TryGetValue(fieldRangedType.Name, out var fieldConcrete)
+            ? fieldConcrete.Name
+            : fieldRangedType.Name)
+        : null;
+      result = new ExprResult.Direct(accessOp.Result, RangedTypeName: fieldRangedName);
+
 
       // A function-typed field holds a callable value. Publishing its signature is what
       // lets the loop's call-suffix arm lower `h.op(x)` on the next turn, and what lets
@@ -21898,7 +21915,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     /// nowhere else to live. Null for every value that is not a function, and for those whose
     /// producing op still names their signature.
     /// </param>
-    public sealed record Direct(MaxonValue Value, IrFunctionType? FnType = null) : ExprResult;
+    /// <param name="RangedTypeName">The declared ranged-alias name this value's SOURCE stated, when it
+    /// stated one. Set by the field-read arm and by `try … otherwise`; read ONLY by
+    /// <see cref="TryGetSourceRangedType"/> for E3010.
+    ///
+    /// It rides here rather than on <c>_lastRangedTypeName</c> because that field is NOT
+    /// diagnostic-only — a shift reads it to choose arithmetic vs logical fill, and the optimal-type
+    /// scan reads it to size a value. MEASURED writing a field read's name there: two
+    /// `per-instance-typealias` goldens moved (`x64.mov r8, 2` became `mov r8, 1`), which is emitted
+    /// code changing for a rule that only ever refuses. On the result there is no staleness to manage
+    /// either: the name belongs to THIS expression and dies with it.
+    public sealed record Direct(MaxonValue Value, IrFunctionType? FnType = null, string? RangedTypeName = null) : ExprResult;
     public sealed record VarRef(string VarName, VarInfo Info) : ExprResult;
   }
 
@@ -21962,6 +21989,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (lhs is ExprResult.VarRef vr && vr.Info.StructTypeName != null
         && _typeRegistry.TryGetValue(vr.Info.StructTypeName, out var t)
         && t is IrRangedPrimitiveType rpt) return rpt;
+    // 3. The expression STATED a declared alias without being a variable — a struct field read, or a
+    //    `try … otherwise` whose both arms agree on one. Tried ahead of the snapshot because it belongs to
+    //    THIS expression, where the snapshot is whatever the previous one happened to leave.
+    if (lhs is ExprResult.Direct dr && dr.RangedTypeName != null
+        && _typeRegistry.TryGetValue(dr.RangedTypeName, out var t3)
+        && t3 is IrRangedPrimitiveType rpt3) return rpt3;
     if (snapshottedRangedName != null
         && _typeRegistry.TryGetValue(snapshottedRangedName, out var t2)
         && t2 is IrRangedPrimitiveType rpt2) return rpt2;
