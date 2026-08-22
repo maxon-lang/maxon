@@ -1382,6 +1382,10 @@ export function nameableFromAnywhere(visibility Visibility) returns bool
 	return visibility == Visibility.global
 end 'nameableFromAnywhere'
 
+// The prefix Maxon reserves for compiler-minted names, as R-1 reads it — see `identifiableRangeName` for
+// why this tier has its own copy rather than sharing the parser's or the signature index's.
+let ReservedElementNamePrefix = b"__"
+
 export type RangedAliasRegistry
 	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
 	// whole-program behaviour, which is what makes the bare probe safe to keep.
@@ -1763,6 +1767,101 @@ export type RangedAliasRegistry
 		let any = try self.byName.get(name)
 		return any.underlying
 	end 'underlyingInAnyFile'
+
+	// ⭐⭐ **THE RANGE ITSELF, AS A NAME — the one BOUNDS question a file-less reader may ask, and the door
+	// R-1 resolves a generic instance's element identity through.**
+	//
+	// `underlyingInAnyFile` directly above refuses to hand out bounds at all, and its reason is exact: *a
+	// reader with no file reading A file's bounds is reading a STRANGER's bounds.* **That reason reaches only
+	// a CONTESTED name** — one whose declarations disagree about the range — **and this door refuses exactly
+	// those**, so every name it answers for is a name every file in the program reads identically. There is no
+	// stranger left to be wrong about.
+	//
+	// ⚠ **A NAME DECLARED TWICE OVER THE SAME RANGE IS NOT CONTESTED AND IS ANSWERED HERE.** That is the
+	// distinction `settleRangeContests` draws (`holdsRange` compares BOUNDS, not declarations), and it is the
+	// one this door needs: two declarations that agree are not two readings.
+	//
+	// ⚠⚠ **IT MAY NOT BE ASKED BEFORE `settleRangeContests` HAS RUN.** `rangeContested` is EMPTY until then,
+	// so every name would look uncontested and this would hand out a stranger's bounds after all — silently,
+	// and to every reader at once. Its caller gates on `ProgramSignatures.allFilesFolded`; see the ⚠⚠ note on
+	// `canonicalTypeArgName`'s `named` arm for the 34 red cases the ungated version measured.
+	export function uncontestedRangeName(name ByteArray) returns ByteArray throws MapError
+		if self.rangeContested.contains(name) 'itsDeclarationsDisagreeAboutTheRange'
+			throw MapError.keyNotFound
+		end 'itsDeclarationsDisagreeAboutTheRange'
+
+		let any = try self.byName.get(name)
+		return rangeCanonicalTypeName(any.underlying, low: any.low, high: any.high)
+	end 'uncontestedRangeName'
+
+	// ⭐⭐ **EVERY RANGED ALIAS THAT SHARES ITS RANGE WITH ANOTHER, PAIRED WITH THAT RANGE'S NAME (R-1).** The
+	// substitution `GenericInstanceRegistry.instanceKey` applies, in the one form the registry can consume
+	// without knowing what an alias is.
+	//
+	// ⚠ **A NAME WHOSE RANGE NO OTHER NAME SHARES IS ABSENT, AND THAT IS WHAT KEEPS THE COMMON PROGRAM FREE.**
+	// Substituting it would be a no-op — it would map the only spelling of a type to a second spelling of the
+	// same type — while making `rangeIdentity` non-empty, which is the flag every `instanceKey` tests. A
+	// program declaring no two aliases over one range gets an EMPTY map here and pays a `count()` per argument
+	// and nothing else.
+	//
+	// ⚠ **CONTESTED NAMES ARE SKIPPED, BY `uncontestedRangeName`'s REFUSAL AND NOT BY A SECOND TEST HERE.** A
+	// name whose declarations disagree about the range has no single range to be identified by; N2 has already
+	// split its instances per reading file, and that split is what must survive.
+	export function rangeIdentityPairs() returns RangeIdentityNameMap
+		// The range name is minted ONCE PER ALIAS and carried, not re-derived: it is the only allocation in this
+		// walk, and deriving it again in the second pass doubled the cost of the whole R-1 step for nothing.
+		var byAlias = RangeIdentityNameMap.create()
+		var claimants = RangeClaimantCountMap.create()
+		for (name, _) in self.byName 'eachRangedAlias'
+			if let rangeName = try self.identifiableRangeName(name) 'itsRangeIdentifiesIt'
+				byAlias.upsert(name, value: rangeName)
+				let seen = try claimants.get(rangeName) otherwise 0
+				claimants.upsert(rangeName, value: seen + 1)
+			end 'itsRangeIdentifiesIt'
+		end 'eachRangedAlias'
+
+		// A name whose range NO other name claims is dropped: substituting it would map the only spelling of a
+		// type to a second spelling of the same type, while making `rangeIdentity` non-empty — and that map's
+		// emptiness is the flag every `instanceKey` tests.
+		var pairs = RangeIdentityNameMap.create()
+		for (name, rangeName) in byAlias 'eachIdentifiableAlias'
+			let claimed = try claimants.get(rangeName) otherwise 0
+			if claimed > 1 'someOtherAliasDenotesTheSameRange'
+				pairs.upsert(name, value: rangeName)
+			end 'someOtherAliasDenotesTheSameRange'
+		end 'eachIdentifiableAlias'
+
+		return pairs
+	end 'rangeIdentityPairs'
+
+	// `uncontestedRangeName` for a name R-1 is ALLOWED to identify by its range, and a refusal for one it is
+	// not. Two names are refused, for two different reasons.
+	//
+	// A RANGE-CONTESTED name is refused by `uncontestedRangeName` itself: it has no single range to be
+	// identified by, and N2 has already given its readings distinct spellings that must survive.
+	//
+	// A COMPILER-RESERVED name is refused HERE, and this is the rule rather than an exception to it.
+	// R-1 says two aliases the AUTHOR wrote over one range are two spellings of one type. A `__`-prefixed
+	// element is not a spelling of anything — it is unspellable in source, and it is minted for the express
+	// purpose of being a DIFFERENT instance from the user-visible name beside it. `__ManagedByte` is the
+	// case: a compiler-synthesized byte buffer wears it so that it is not a user's `Array with Byte`, and the
+	// admission between the two is deliberately ONE-WAY through `ProgramSignatures.byteBufferBoundaryAdmits`
+	// (see `Parser.requireSameArrayInstance`). Identify them and that door has no subject left — the one-way
+	// admission becomes an identity, and a user's `Array with Byte` reaches a position nothing but the
+	// compiler is supposed to mint a value at. MEASURED with the exclusion absent: `stdlib/String.maxon:188`
+	// failed to compile and took three spec cases with it.
+	//
+	// ⚠ The reserved prefix is spelled here rather than shared with `Parser.ReservedNamePrefix` or
+	// `SignatureIndex.ReservedTypeNamePrefix`, which is that pair's own stated design — see the header on the
+	// latter: the three ask different questions (forbidding, minting, and now identifying) at different
+	// tiers, and the language rule binds them rather than a symbol.
+	function identifiableRangeName(name ByteArray) returns ByteArray throws MapError
+		if bytesStartWith(name, prefix: ReservedElementNamePrefix) 'aCompilerMintExistsToBeDistinct'
+			throw MapError.keyNotFound
+		end 'aCompilerMintExistsToBeDistinct'
+
+		return try self.uncontestedRangeName(name)
+	end 'identifiableRangeName'
 
 	// Does SOME file declare `name` as a ranged typealias — the membership half of `underlyingInAnyFile`,
 	// over the identical table, so the two cannot come to disagree about what this registry holds. It is the

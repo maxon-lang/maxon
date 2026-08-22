@@ -1584,7 +1584,7 @@ answer changes what the compiler IS, not merely which line gets edited.
 
 | # | Question | ⚖ RULING |
 |---|---|---|
-| **R-1** | `Array with DenseInt` and `Array with RegCount` are two INSTANCES though both element aliases are `int(0 to u64.max)`. shv2 keys instance identity on the argument's NAME; the bootstrap treats them as one type, and shv2's own SCALAR rule already does (E3010 calls a cast between them unneeded). | **KEY ON THE ELEMENT RANGE, not the name.** Same range ⇒ one instance; different ranges stay distinct, which is `e4146cf8e`'s intent stated over the thing it was always about. ⚠ Where several aliases collapse, the MANGLED name must be chosen deterministically from the surviving spellings — `deriveInstanceDisplayNames` is the sole writer and the place to state it — and golden fragments churn wherever an instance is renamed. Clears 3 of the 4 open E3005s. |
+| **R-1** ✅ CLOSED | `Array with DenseInt` and `Array with RegCount` are two INSTANCES though both element aliases are `int(0 to u64.max)`. shv2 keys instance identity on the argument's NAME; the bootstrap treats them as one type, and shv2's own SCALAR rule already does (E3010 calls a cast between them unneeded). | **KEY ON THE ELEMENT RANGE, not the name.** Same range ⇒ one instance; different ranges stay distinct, which is `e4146cf8e`'s intent stated over the thing it was always about. ⚠ Where several aliases collapse, the MANGLED name must be chosen deterministically from the surviving spellings — `deriveInstanceDisplayNames` is the sole writer and the place to state it — and golden fragments churn wherever an instance is renamed. Clears 3 of the 4 open E3005s. |
 | **R-2** | `filledColumn(…)` returns `Array with int(0..u64.max)`; `RegisterAllocator.color` holds `Array with int(0..63)`. The bootstrap accepts the assignment; shv2 refuses it. Nothing range-checks elements at a whole-array assignment, so permitting it lets a reader trust a bound the data may not honour. | **REQUIRE AN EXPLICIT CAST.** The implicit assignment stays refused — shv2 is right that the bound is a promise — but `as RegNumColumn` is admitted, so the narrowing is VISIBLE at the site that performs it rather than assumed at the site that stores it. ⚠ This MINTS a cast form for a generic instance, which shv2 has not had; it is a language addition, not a relaxation. |
 | **R-3** | The stand-in `runProcess` BUILTIN claims the bare name, so shv2's own 4-arg `Testing/SpecTestRunner.maxon` declaration is silently unreachable — the builtin's own comment says so and names the retirement recipe. | **TAKE THE `Subprocess` CONE WORK.** In order: the D7 blocker first (overloading `Subprocess.run` where one declaration `throws`), then MINT `__Builtins.runProcess` as the stdlib body's floor, then delete the bare name here and list the module. ⚠ Retiring it also moves the runtime entry from user code (target-gate BLIND) into stdlib source (target-gate AWARE) — `SemanticCheck.requireTargetSupportsCallee`'s header names the pair of spec cases `sleep` pinned for exactly this, and both halves are owed again. Unblocks 5 errors. |
 | **R-4** | shv2's E3010 sees a declared alias through a struct FIELD READ and a `try … otherwise` RESULT; the bootstrap sees neither. That asymmetry is why shv2's own source carried EIGHT casts that do nothing. | **TIGHTEN THE BOOTSTRAP AND CLEAN UP.** The two compilers agree on what STATES a declared alias. shv2's own source is already clean of these (`d6f94960d9`, `abcba35255`), so the blast radius is mainly the `specs/` corpus — MEASURE it before committing, because the change fails `dotnet build` until every flagged cast is gone. |
@@ -1613,7 +1613,55 @@ would be reading a stranger's bounds"* — and interning has no reader file.
 ⇒ **TWO ROUTES REMAINED. ⚖ THE USER CHOSE (a), THE POST-SWEEP MERGE (2026-08-22)** — "same range ⇒ one
 instance" is to be literally true, not merely observably true, so two symbols for one type is not an
 acceptable resting place.
-- **⚖ (a) A POST-SWEEP MERGE — CHOSEN.** Leave interning alone; once `queryProgramSignatures` is complete — and the
+✅ **R-1 IS CLOSED (2026-08-22).** Landed as the post-sweep merge, `ProgramSignatures.mergeRangeEquivalentInstances`,
+running LAST of the three whole-program instance steps in `queryProgramSignatures` — after `settleRangeScopedInstances` (N2)
+and `settleGenericAliasContest` (N3), both of which SPLIT instances, because merging in front of a split fuses instances
+those two are about to have to tell apart and there is no way back.
+
+**HOW IT WORKS, IN ONE LINE:** a substitution `alias name id ⇒ its RANGE's name id` is published into
+`GenericInstanceRegistry.rangeIdentity`, and `instanceKey` maps every `named` argument through it — so `Array with DenseInt`
+and `Array with RegCount` build ONE key and `intern` returns ONE instance. **The argument LISTS are never rewritten**, which
+is what keeps `mangleGenericInstance` and every diagnostic naming the alias the author wrote.
+
+**FOUR THINGS IT MEASURED, EACH OF WHICH WOULD HAVE BEEN A WRONG ANSWER:**
+
+1. ⛔⛔ **THE RANGE MAY NOT BE READ BEFORE THE SWEEP ENDS.** `RangedAliasRegistry`'s bare-probe contract says a file-less
+   reader may not read an alias's BOUNDS — it would be reading a stranger's. Ignored, a range-CONTESTED `Byte` collapsed
+   into one instance for every reader: **34 spec cases red.** The door added for R-1 (`uncontestedRangeName`) refuses a
+   contested name outright, and the caller gates on `allFilesFolded`.
+2. ⛔⛔ **A COMPILER-RESERVED ELEMENT IS NEVER IDENTIFIED BY ITS RANGE.** `__ManagedByte` carries a byte's range and exists
+   expressly to be a DIFFERENT instance from the user-visible `Byte`, because the admission between them is deliberately
+   ONE-WAY (`byteBufferBoundaryAdmits`). Merged, `stdlib/String.maxon:188` stopped compiling — **3 cases.**
+   `identifiableRangeName` excludes the `__` prefix, which is R-1's rule and not an exception to it.
+3. ⛔⛔ **AN INSTANCE'S RECORDED ELEMENT NAME STOPPED BEING A FACT ABOUT THE PROGRAM, and a door was reading it.**
+   `byteBufferBoundaryAdmits` asked "is the declared element SPELLED `Byte`?" — sound only while one instance had one
+   element name. After R-1 the survivor keeps whichever equivalent spelling the program named first, so a spec declaring
+   `typealias ByteVal = int(0 to u8.max)` merged with the stdlib's byte arrays and the name test failed. It now asks the
+   RANGE, which is identical across every alias R-1 merges, and that SUBSUMES the pair of questions it replaced — the old
+   second question answered `true` for a name that was no ranged alias at all, so only the spelling test was bounding the
+   door.
+4. ⛔ **THE COMMITTED SPEC THAT SAID OTHERWISE WAS JUSTIFIED BY A WRONG ANSWER IT DOES NOT PRODUCE.**
+   `string-views/error.from-rejects-a-user-ranged-byte-alias` refused `String.from(OctetArray)` and argued *"the bootstrap
+   accepts this program and prints a truncated string"*. **MEASURED, both compilers, that exact program: both print `Hi`.**
+   The truncation belongs to the array-LITERAL form in the case above it — one program's defect imported into a claim about
+   another. Re-pinned (user ruling) as `from-admits-a-user-ranged-byte-alias`, pinning BOTH routes, and on the literal one
+   shv2 is now RIGHT (`Hi`) where the bootstrap is WRONG (`H `, a stride-8 read of a stride-1 buffer).
+
+**MEASURED:** suite **6507 / 0** (6505 + R-1's own case and its control in `ranged-typealias.md`); self-compile **28 → 25**;
+sabotage-verified — with the merge call removed the case reddens and the control stays GREEN, so the control does not
+depend on the mechanism it exists to bound. Ladder cost **+28,502 allocations at rung 5, 0.066% of the rung**, growing
+×1.5 per doubling against the ladder's ×1.9 (`docs/optimization-log.md`).
+
+⚠ **ONE CONSEQUENCE TO KNOW, AND IT IS INHERENT TO THE RULING RATHER THAN A DEFECT:** 47 of `stdlib/`'s 65 ranged aliases
+share a range with another (28 of them over `int(0 to u64.max)` alone), so a diagnostic about such an instance names
+whichever of the equivalent aliases the program interned FIRST. `RegisterAllocator.maxon:93`'s remaining error reads
+`got 'DurationNanosArray'` where the author wrote a different alias of the same range. Both names denote one type, so the
+message is not wrong — but it is not the spelling at the use site either, and no principled preference among equivalent
+aliases exists. **It is the price of "same range ⇒ one instance" and it was accepted with the ruling.**
+
+<details><summary>The two routes considered, and why (a) was chosen</summary>
+
+- **⚖ (a) A POST-SWEEP MERGE — CHOSEN, and implemented as above.** Leave interning alone; once `queryProgramSignatures` is complete — and the
   alias registry with it — walk the instance registry and merge instances whose arguments denote the same
   type, rewriting gids through one mapping. Faithful to the ruling ("same range ⇒ one instance"), and the
   only moment the question is answerable. Cost: every holder of a gid must be remapped, and the mangled
@@ -1621,6 +1669,11 @@ acceptable resting place.
 - **(b) DECIDE COMPATIBILITY AT THE CHECK.** Leave two instances and make assignability accept two whose
   base matches and whose arguments denote the same type. Much smaller and it cannot race the sweep, but it
   is NOT what the ruling says: two symbols and two compiled bodies survive for one type.
+
+**(b) was rejected by the user (2026-08-22):** it clears the same three sites and cannot race the sweep, but it leaves two
+symbols and two compiled bodies for one type. The ruling says one instance, and it is to be literally true.
+
+</details>
 
 ⚠ **R-1 AND R-2 ARE ONE SEQUENCE, NOT TWO ROWS.** R-1 collapses the same-range pairs, which is what
 leaves `RegisterAllocator`'s `0..u64.max` → `0..63` standing ALONE as a genuine narrowing — so R-2's cast

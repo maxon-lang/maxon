@@ -3183,3 +3183,77 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+## A RANGED ALIAS'S TYPE IDENTITY IS ITS RANGE, NOT ITS NAME (R-1)
+
+⭐⭐ **TWO RANGED ALIASES OVER ONE RANGE ARE ONE TYPE, SO THEIR GENERIC INSTANCES ARE ONE INSTANCE**
+(user ruling, 2026-08-22). `typealias DenseInt = int(0 to u64.max)` and `typealias RegCount = int(0 to
+u64.max)` differ only in what the author called them, so `Array with DenseInt` and `Array with RegCount`
+name one type. Both compilers have always agreed about the VALUES; until R-1 shv2 called them two types and
+refused three sites in its own source.
+
+⚠ **THE RULE IS THE RANGE, AND THE CONTROL BELOW IS WHAT SAYS SO.** `e4146cf8e` made a generic's ranged
+element part of its type, and that is untouched: two aliases over DIFFERENT ranges are still two types and
+are still refused. R-1 narrows that rule to what it was always meant to say -- the RANGE is part of the
+type, and the NAME is not. Without the control this section would be indistinguishable from having deleted
+the rule outright.
+
+⚠ **A COMPILER-RESERVED ELEMENT IS NEVER IDENTIFIED THIS WAY, and it is unspellable in source so it
+cannot be pinned here.** `__ManagedByte` carries a byte's range and is minted expressly to be a DIFFERENT
+instance from the user-visible `Byte`, because the admission between them is one-way (see
+`SignatureIndex.byteBufferBoundaryAdmits`). `RangedAliasRegistry.identifiableRangeName` excludes the `__`
+prefix for that reason; `array-hashable/byte-array-hash` is the case that measured it, having gone red for
+exactly this when the exclusion was absent.
+
+<!-- test: two-aliases-over-one-range-are-one-instance -->
+The shape from shv2's own source: a value built through one alias reaches a parameter declared with the
+other, and is READ THROUGH that parameter -- which is what proves it is the same container and not a
+conversion.
+```maxon
+typealias DenseInt = int(0 to u64.max)
+typealias RegCount = int(0 to u64.max)
+typealias DenseColumn = Array with DenseInt
+typealias RegCountColumn = Array with RegCount
+
+function widthOf(c RegCountColumn) returns DenseInt
+	return c.count()
+end 'widthOf'
+
+function main() returns ExitCode
+	var d = DenseColumn.create()
+	d.push(7)
+	d.push(9)
+	print("width={widthOf(d)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+width=2
+```
+
+<!-- test: error.two-aliases-over-different-ranges-are-still-two-types -->
+⭐ **THE CONTROL.** The only difference from the case above is that the two ranges differ. `e4146cf8e`'s
+rule stands, the two columns are two types, and the bootstrap answers with this message character for
+character.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 63)
+typealias WideColumn = Array with Wide
+typealias NarrowColumn = Array with Narrow
+
+function takesNarrow(c NarrowColumn) returns Wide
+	return c.count()
+end 'takesNarrow'
+
+function main() returns ExitCode
+	var w = WideColumn.create()
+	w.push(7)
+	return takesNarrow(w) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.two-aliases-over-different-ranges-are-still-two-types.test:14:9: argument type mismatch for 'c': expected 'NarrowColumn', got 'WideColumn'
+```

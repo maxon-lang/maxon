@@ -502,9 +502,14 @@ A `typealias` the AUTHOR wrote does — and without that arm the element erases 
 ANSWER (W55).** This case read `print("{String.from([x, y])}\n")` and claimed stdout `Hi` as *"a program
 both references accept"*. **MEASURED against the runnable oracle: it prints `H`.** The bootstrap erases
 the literal's element, strides eight, and hands `String.from` every eighth byte of the buffer — the exact
-silent wrong answer the case above exists to forbid, committed as an expectation. shv2 refuses that
-program instead (see the `error.` case below), which is the better answer and is why this one had to stop
-asking `String.from` the question.
+silent wrong answer the case above exists to forbid, committed as an expectation, and is why this one had
+to stop asking `String.from` the question.
+
+⭐⭐ **THIS PARAGRAPH ONCE ENDED "shv2 REFUSES THAT PROGRAM INSTEAD, WHICH IS THE BETTER ANSWER". SINCE R-1
+IT DOES NOT REFUSE, AND ITS ANSWER IS BETTER STILL: it prints `Hi`.** Two ranged aliases over one range are
+one type, so `Octet` IS `Byte` and `OctetArray` is a `ByteArray` whose element provably strides 1 — there is
+nothing to refuse and nothing to truncate. See `from-admits-a-user-ranged-byte-alias` below, which pins BOTH
+routes and records that the bootstrap still answers `H ` on the literal one.
 ⇒ **What the case pins is unchanged and is now asserted where it belongs: at the RECORD.**
 `aggregatesConflict` is nominal over containers, so a `readBack(bytes OctetArray)` parameter admits an
 argument whose element kept the name `Octet` and refuses an `Array_int`; reading the two elements back
@@ -537,13 +542,27 @@ end 'main'
 177
 ```
 
-<!-- test: error.from-rejects-a-user-ranged-byte-alias -->
-### `String.from` takes `ByteArray` and nothing that merely strides like one
-The other half of the case above, and the reason it stopped asking `String.from`: an `OctetArray` holds
-one byte per element exactly as a `ByteArray` does, and is still a DIFFERENT type. `aggregatesConflict`
-is nominal over containers by design, so the argument is refused on its NAME rather than admitted on its
-layout — a rule that cannot be talked into reading one buffer as another. The bootstrap accepts this
-program and prints a truncated string; refusing it is the answer shv2 keeps.
+<!-- test: from-admits-a-user-ranged-byte-alias -->
+### `String.from` takes any element whose RANGE is a byte's
+⛔⛔ **THIS CASE PINNED A REFUSAL UNTIL R-1, AND THE REASON IT GAVE WAS MEASURED FALSE.** It read *"an
+`OctetArray` holds one byte per element exactly as a `ByteArray` does, and is still a DIFFERENT type …
+refused on its NAME rather than admitted on its layout"*, and justified that with *"the bootstrap accepts
+this program and prints a truncated string"*. **MEASURED, both compilers, this exact program: both print
+`Hi`.** The truncation is real but it belongs to the array-LITERAL form in the case above, which is a
+different program reaching `String.from` by a different route — the prose had imported one program's defect
+into a claim about another, which is how a refusal came to be justified by a wrong answer it does not
+produce.
+
+⭐⭐ **R-1 (user ruling, 2026-08-22) SETTLES IT THE OTHER WAY: two ranged aliases over one range are ONE
+type.** `Octet` is declared `int(0 to u8.max)`, which is `Byte`'s range, so `OctetArray` *is* `ByteArray` —
+not a lookalike admitted on its layout, the same instance. Nominal typing over containers is untouched and
+is still what refuses an `Array_int` at the `readBack` parameter above; what changed is which names denote
+the same element.
+
+⭐ **BOTH ROUTES ARE PINNED, AND THE SECOND IS ONE WHERE shv2 IS NOW RIGHT AND THE ORACLE IS WRONG.** The
+pushed array and the array literal reach `String.from` differently, and the literal is the one W55 measured:
+the bootstrap erases its element, strides EIGHT over a stride-1 buffer and prints `H `. shv2 prints `Hi` for
+both. A case that pinned only the pushed form would not have caught that.
 ```maxon
 typealias Octet = int(0 to u8.max)
 typealias OctetArray = Array with Octet
@@ -551,10 +570,18 @@ typealias OctetArray = Array with Octet
 function main() returns ExitCode
 	var a = OctetArray.create()
 	a.push(72)
-	let s = String.from(a)
-	return s.byteLength()
+	a.push(105)
+	let x = try a.get(0) otherwise 0
+	let y = try a.get(1) otherwise 0
+	let pushed = String.from(a)
+	let literal = String.from([x, y])
+	print("pushed={pushed} literal={literal} len={pushed.byteLength()}")
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3005: <fragment>:8:17: argument type mismatch for 'bytes': expected 'ByteArray', got 'OctetArray'
+```exitcode
+0
+```
+```stdout
+pushed=Hi literal=Hi len=2
 ```

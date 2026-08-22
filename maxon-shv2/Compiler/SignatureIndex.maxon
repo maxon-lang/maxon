@@ -6673,6 +6673,25 @@ typealias GenericAliasDeclarationGroupMap = Map with (ByteArray, GenericAliasDec
 export typealias GenericInstanceIdArray = Array with GenericInstanceId
 export typealias GenericInstancesByBaseMap = Map with (TypeNameId, GenericInstanceIdArray)
 
+// ⭐⭐ **R-1's IDENTITY SUBSTITUTION: an alias NAME id ⇒ the id of the name of its RANGE.** Empty in every
+// program until `ProgramSignatures.mergeRangeEquivalentInstances` publishes it at the end of the declaration
+// sweep, and read only by `GenericInstanceRegistry.instanceKey`. See `rangeCanonicalTypeName`.
+export typealias RangeIdentityMap = Map with (TypeNameId, TypeNameId)
+
+// R-1's substitution as `RangedAliasRegistry` answers it — alias NAME ⇒ the name of its RANGE — before
+// `ProgramSignatures` interns both halves into ids. Two maps for one fact because the two layers key on
+// different things and neither may hold the other's interner.
+export typealias RangeIdentityNameMap = Map with (ByteArray, ByteArray)
+
+// How many ranged aliases a program declares over one range, while `rangeIdentityPairs` is deciding which
+// ranges have more than one claimant. The bound is the count of ranged typealiases in the program.
+export typealias RangeClaimantCount = int(0 to u32.max)
+export typealias RangeClaimantCountMap = Map with (ByteArray, RangeClaimantCount)
+
+// One merged instance ⇒ the instance it merged INTO. Only `rekeyForRangeIdentity` writes it, and only for a
+// loser; a survivor is absent, which is what makes "is this id still live?" a membership test.
+export typealias MergedInstanceMap = Map with (GenericInstanceId, GenericInstanceId)
+
 // ⭐⭐ **gid ⇒ ITS COMPILED NAME, DERIVED ONCE.** A generic instance's mangling is a pure function of its
 // base name and its args, both FIXED at intern time and neither ever revised — so it is derivable once
 // and asked many times. It was derived many times: EIGHT call sites ask — `mangleTypeArg`'s own nested
@@ -6943,8 +6962,19 @@ export type GenericInstanceRegistry
 	// `kindIsARefusal` for why the other two gates still do.
 	var speculative as BoolArray
 
+	// ⭐⭐ **R-1's SUBSTITUTION, AND IT IS EMPTY FOR EVERY PROGRAM UNTIL THE SWEEP ENDS.** `instanceKey` maps a
+	// `named` argument's id through this before joining it, so `Array with DenseInt` and `Array with RegCount`
+	// build ONE key once it holds `DenseInt ⇒ int$0_…` and `RegCount ⇒ int$0_…`. It is deliberately a
+	// SUBSTITUTION and not a rewrite of `argLists`: the arg lists keep the names the author WROTE, which is
+	// what `mangleGenericInstance` and every diagnostic read, so a merge changes which types are one type
+	// without changing what any of them is called.
+	var rangeIdentity as RangeIdentityMap
+	// Filled by `rekeyForRangeIdentity` alongside the rekey, for the ONE caller that must repair gids the sweep
+	// already recorded. Empty otherwise, including in every program where no two aliases share a range.
+	var mergedInto as MergedInstanceMap
+
 	export static function create() returns GenericInstanceRegistry
-		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedSizeArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create()}
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedSizeArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(), rangeIdentity: RangeIdentityMap.create(), mergedInto: MergedInstanceMap.create()}
 	end 'create'
 
 	// The cheap composite key that makes interning O(1): the base id, the fixed size, and each arg's
@@ -6954,10 +6984,130 @@ export type GenericInstanceRegistry
 	function instanceKey(baseId TypeNameId, args MaxonTypeArray, fixedSize FixedElementCount) returns ByteArray
 		var key = "{baseId}#{fixedSize}"
 		for arg in args 'eachArg'
-			key.append("|{maxonTypeTag(arg).rawValue}:{typeNameIdOf(arg)}")
+			key.append("|{maxonTypeTag(arg).rawValue}:{self.identityOfArgName(arg)}")
 		end 'eachArg'
 		return key.toByteArray()
 	end 'instanceKey'
+
+	// ⭐⭐ **THE ARGUMENT'S IDENTITY, WHICH IS ITS OWN NAME UNTIL R-1 SAYS OTHERWISE.** A `named` argument whose
+	// alias shares a RANGE with another alias substitutes that range's name here, so both spellings build one
+	// key and `intern` returns one instance — which is the whole of what R-1 asks for.
+	//
+	// ⚠ **THE EMPTINESS TEST IS THE POINT, NOT AN OPTIMIZATION.** `rangeIdentity` is empty for the entire
+	// declaration sweep and stays empty in any program where no two ranged aliases agree, so the common path is
+	// one `count()` and the identical key this function has always built. It matters that it is exactly
+	// identical: `intern` runs once per type reference in the program, and a map probe per ARGUMENT there is a
+	// cost every compile would pay for an answer almost every compile does not have.
+	//
+	// ⛔⛔ **IT MAY NOT BE POPULATED DURING THE SWEEP, AND THE FIRST ATTEMPT AT R-1 DID EXACTLY THAT.** Which
+	// aliases share a range is a WHOLE-PROGRAM fact, so a key built from it mid-sweep is built from a half-read
+	// answer: MEASURED, the same argument took the range key before a second declaration was folded and the
+	// spelled key after, and one `b"hi"` reached `E3006 duplicate definition of 'Array_Byte' — the generic
+	// instantiations 'Array with Byte' and 'Array with Byte' compile to that same name`. See
+	// `ProgramSignatures.mergeRangeEquivalentInstances`, which publishes this at the one moment it is a fact.
+	function identityOfArgName(arg MaxonType) returns TypeNameId
+		let nameId = typeNameIdOf(arg)
+		if self.rangeIdentity.count() == 0 'noTwoAliasesInThisProgramShareARange'
+			return nameId
+		end 'noTwoAliasesInThisProgramShareARange'
+
+		// ⭐ **A NESTED INSTANCE IS IDENTIFIED BY THE INSTANCE IT SURVIVED AS.** `Array with (Array with BytePos)`
+		// and `Array with (Array with ByteCount)` are one type only if their INNER arg resolves to one id first.
+		// `rekeyForRangeIdentity` walks ids ASCENDING and an inner instance always has the lower id — its gid must
+		// exist before an outer arg list can name it — so the inner is already settled when the outer is keyed.
+		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'nested'
+			return self.liveInstance(nameId)
+		end 'nested'
+
+		if maxonTypeTag(arg) != ValueTypeTag.named 'carriesNoAliasName'
+			return nameId
+		end 'carriesNoAliasName'
+
+		return try self.rangeIdentity.get(nameId) otherwise nameId
+	end 'identityOfArgName'
+
+	// Re-point one instance's ARGUMENT to the instance it survived as. `mangleGenericInstance` reads `argLists`,
+	// so an outer instance holding a merged inner would otherwise name a dead id in an emitted symbol.
+	export function retypeArg(id GenericInstanceId, argIndex FieldIndex, arg MaxonType)
+		var args = self.instanceArgs(id)
+		try args.set(argIndex, value: arg) otherwise panic("GenericInstanceRegistry.retypeArg: index {argIndex} out of range for instance {id}")
+		try self.argLists.set(id, value: args) otherwise panic("GenericInstanceRegistry.retypeArg: argLists desync at GenericInstanceId {id}")
+	end 'retypeArg'
+
+	// ⭐⭐ **PUBLISH R-1's SUBSTITUTION AND RE-KEY EVERY INSTANCE ALREADY INTERNED UNDER IT.**
+	//
+	// The substitution changes what `instanceKey` builds, so every key in `index` is stale the moment it is
+	// published — leave them and the next `intern` of an already-interned spelling MISSES its own row and mints
+	// a second one. The index is therefore rebuilt whole, in ASCENDING id order, and the first id to claim a key
+	// KEEPS it: the survivor of a merge is the instance the program named FIRST, which is a property of the
+	// source rather than of a walk order, and it is the one whose author-written name every later diagnostic and
+	// every emitted symbol will wear.
+	//
+	// ⚠ **`byBase` IS DELIBERATELY NOT REBUILT.** It is a superset index — "which instances share this base" —
+	// and its readers filter what they find; a merged loser left in it is an id that no live type names, which
+	// those readers already tolerate for the speculative rows beside it.
+	//
+	// Answers the losers, because gids the sweep already RECORDED cannot be rekeyed by a key rebuild and must be
+	// rewritten where they sit (`ProgramSignatures.repairMergedInstanceReferences`).
+	export function rekeyForRangeIdentity(identity RangeIdentityMap) returns MergedInstanceMap
+		self.rangeIdentity = identity
+
+		for id in 0 upto self.baseIds.count() 'eachInternedInstance'
+			let args = self.instanceArgs(id)
+			// An instance NONE of whose arguments the substitution touches builds the byte-identical key it
+			// was interned under, so its `index` entry is already right and rebuilding it would allocate a
+			// string to arrive back where it started. MEASURED on the scale ladder as a full rebuild: +7,336
+			// allocations at rung 0 rising to +35,736 at rung 5, for a program in which most instances
+			// (`Array with String`, every `Map`, every opaque `T`) hold no ranged alias at all.
+			if not self.anyArgSubstitutes(args) 'itsKeyCannotHaveMoved'
+				continue
+			end 'itsKeyCannotHaveMoved'
+
+			let key = self.instanceKey(self.instanceBaseId(id), args: args, fixedSize: self.instanceFixedSize(id))
+			if let survivor = try self.index.get(key) 'anEarlierInstanceAlreadyDenotesThisType'
+				self.mergedInto.upsert(id, value: survivor)
+				continue
+			end 'anEarlierInstanceAlreadyDenotesThisType'
+
+			self.index.upsert(key, value: id)
+		end 'eachInternedInstance'
+
+		return self.mergedInto
+	end 'rekeyForRangeIdentity'
+
+	// Does the substitution reach any of these arguments? A pure PROBE -- it builds nothing, which is the
+	// whole reason it runs in front of `instanceKey` rather than after it.
+	//
+	// ⚠ **A SKIPPED INSTANCE CANNOT COLLIDE WITH A REKEYED ONE, and that is what makes the skip safe rather
+	// than merely cheap.** A rekeyed instance's new key names the RANGE's id in the slot where its argument's
+	// alias id stood, and no argument list anywhere holds that id -- the range's name is minted as a key and
+	// never written into `argLists` (see `rangeIdentity`). So the survivor of any merge is always among the
+	// instances this returns true for, and an untouched instance keeps an entry no rekeyed one can want.
+	function anyArgSubstitutes(args MaxonTypeArray) returns bool
+		for arg in args 'eachArg'
+			let tag = maxonTypeTag(arg)
+			if tag == ValueTypeTag.named and self.rangeIdentity.contains(typeNameIdOf(arg)) 'itsAliasIsIdentifiedByItsRange'
+				return true
+			end 'itsAliasIsIdentifiedByItsRange'
+
+			if tag == ValueTypeTag.genericInstance and self.mergedInto.contains(typeNameIdOf(arg)) 'itsNestedInstanceMerged'
+				return true
+			end 'itsNestedInstanceMerged'
+		end 'eachArg'
+
+		return false
+	end 'anyArgSubstitutes'
+
+	// The instance `id` denotes after R-1's merge — itself unless it lost one. ONE hop is exact: a survivor is
+	// by construction absent from `mergedInto`, because `rekeyForRangeIdentity` files a loser against the id
+	// that already CLAIMED the key, and a claimant never loses.
+	export function liveInstance(id GenericInstanceId) returns GenericInstanceId
+		if self.mergedInto.count() == 0 'nothingMerged'
+			return id
+		end 'nothingMerged'
+
+		return try self.mergedInto.get(id) otherwise id
+	end 'liveInstance'
 
 	// Intern `(baseId, args, fixedSize)`, returning an existing id for a structural repeat. O(1)
 	// amortized via `index`. `fixedSize` defaults to `NoFixedSize` — every base but `Vector` is unsized, so
@@ -8024,6 +8174,41 @@ export function rangeQualifiedAliasName(name ByteArray, low ParsedInt, high Pars
 	return "{String.from(name)}{CompilerQualifiedAliasSeparator}{low}_{high}".toByteArray()
 end 'rangeQualifiedAliasName'
 
+// ⭐⭐ **A RANGED ALIAS'S TYPE IDENTITY IS ITS RANGE AND NOT ITS NAME (R-1, user ruling 2026-08-22).**
+// `typealias DenseInt = int(0 to u64.max)` and `typealias RegCount = int(0 to u64.max)` are two spellings of
+// ONE type, so `Array with DenseInt` and `Array with RegCount` must canonicalize to one string. **The alias's
+// own name is therefore ABSENT BY DESIGN** — it is the very thing two such declarations differ in while
+// denoting the same type, which is the whole of what R-1 says.
+//
+// ⚠ **THE UNDERLYING KEYWORD IS PART OF THE KEY, and leaving it out would be a wrong ANSWER rather than a
+// missed merge.** Bounds ride as a RAW 64-bit pattern (`RangedTypeAlias`'s header), so an `int` alias and a
+// `float` alias can hold identical bits; headless, `Array with Ratio` and `Array with Count` would be one
+// type and one of them would be read at the wrong width.
+//
+// It shares `rangeQualifiedAliasName`'s separator and therefore its unspellability in source: no program can
+// declare a type whose name collides with one of these. It is a COMPARISON name — `canonicalTypeArgName`'s
+// arm is its only caller — so nothing emitted carries it.
+export function rangeCanonicalTypeName(underlying MaxonType, low ParsedInt, high ParsedInt) returns ByteArray
+	return "{rangedAliasUnderlyingName(underlying)}{CompilerQualifiedAliasSeparator}{low}_{high}".toByteArray()
+end 'rangeCanonicalTypeName'
+
+// The `int`/`float` keyword a ranged alias is declared over, spelled as the source writes it. Only those two
+// forms can reach here: `RangedAliasRegistry.record`'s E3105 refuses a name whose declarations disagree about
+// the keyword, and nothing but a `typealias <name> = int(…)`/`float(…)` builds a `RangedTypeAlias` at all.
+function rangedAliasUnderlyingName(underlying MaxonType) returns String
+	let tag = maxonTypeTag(underlying)
+
+	if tag == ValueTypeTag.integer 'anIntegerRange'
+		return "int"
+	end 'anIntegerRange'
+
+	if tag == ValueTypeTag.float 'aFloatRange'
+		return "float"
+	end 'aFloatRange'
+
+	panic("rangedAliasUnderlyingName: a ranged alias whose underlying type is neither `int` nor `float`")
+end 'rangedAliasUnderlyingName'
+
 // ⭐⭐ **THE INSTANCE-QUALIFIED SPELLING OF ONE DECLARATION OF A CONTESTED GENERIC ALIAS (N3)** — `Bag` +
 // `Array with String` ⇒ `Bag$Array_String`. `rangeQualifiedAliasName`'s sibling one layer up, sharing its
 // separator and therefore its strip, and derived from the same principle: the qualifier is the very thing
@@ -8274,6 +8459,10 @@ export enum RecordedReturnTypeRule
 	// DECLARED the function.** See `rewrittenReturnTypeUnder`'s `contestScopedAlias` arm and the two walks
 	// that supply it a file (`recordedReturnDeclFileOf`, and an `OverloadedDecl`'s own).
 	contestScopedAlias
+	// ⭐⭐ **R-1 — a recorded `returns` clause naming a generic instance that MERGED into an earlier one.** The
+	// sweep recorded the gid it interned; `mergeRangeEquivalentInstances` then decided that gid and another
+	// denote one type, and the recorded half cannot rekey itself. See `mergedInstanceReturnOf`.
+	mergedInstance
 	// ⭐⭐ **S2j — SETTLE WHAT A RECORDED RETURN TYPE NAMING A STRUCT BOX IS SPELLED AS: the ONE repair
 	// that makes a `returns Inner` and a `returns Self` be the same recorded declaration.**
 	//
@@ -18601,13 +18790,9 @@ export type ProgramSignatures
 	// NOT one of these doors (see its own ⚠ paragraph), so the two nines count different things.
 	export function byteBufferBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
 		let declaredElement = self.arrayNamedElementName(declaredTag, nameId: declaredNameId)
-		if not isByteElementName(declaredElement) 'declaredElementIsNotNamedForAByte'
+		if not self.declaredByteElementHoldsEveryByte(declaredElement) 'declaredElementIsNotAByteElement'
 			return false
-		end 'declaredElementIsNotNamedForAByte'
-
-		if not self.rosterElementHoldsEveryByte(declaredElement) 'declaredElementCannotHoldEveryByte'
-			return false
-		end 'declaredElementCannotHoldEveryByte'
+		end 'declaredElementIsNotAByteElement'
 
 		if not self.isBytePackedArrayInstance(declaredTag, nameId: declaredNameId) 'declaredRecordDoesNotStrideOneByte'
 			return false
@@ -18709,9 +18894,32 @@ export type ProgramSignatures
 	// the one a `b"…"` literal minted for itself — so what they hold is the COMPILER's to state, and a
 	// compiler-minted byte is a whole byte. Every other roster name reaching here IS declared, and its own
 	// declarations answer.
-	function rosterElementHoldsEveryByte(element ByteArray) returns bool
-		return try self.typeAliases.holdsEveryByteInEveryFile(element) otherwise true
-	end 'rosterElementHoldsEveryByte'
+	// IS THE DECLARED ELEMENT A BYTE ELEMENT? -- asked of its RANGE and, since R-1, deliberately not of its
+	// SPELLING.
+	//
+	// It was two questions: `isByteElementName` (is it spelled `Byte` or `__ManagedByte`?) and then
+	// `holdsEveryByteInEveryFile` (does every declaration of that name hold every byte value?). The pair was
+	// sound only while an instance's recorded element name was a fact about the program. R-1 ended that: two
+	// ranged aliases over one range are ONE instance, and the surviving instance keeps whichever of the
+	// equivalent spellings the program named FIRST. MEASURED with the name test still in front: a spec
+	// declaring `typealias ByteVal = int(0 to u8.max)` merged with the stdlib's byte arrays, the survivor
+	// carried a spelling that is not `Byte`, and `stdlib/String.maxon:188` stopped compiling -- three cases.
+	//
+	// The range is the property the door actually needs, it is identical across every alias R-1 merges, and
+	// it SUBSUMES the name test rather than dropping it: the old second question answered `true` for a name
+	// that is no ranged alias at all, so only the name test was bounding the door. Asked as one question with
+	// no `otherwise true`, a non-alias element is refused where before it depended on being spelled `Byte`.
+	//
+	// The compiler's own mint is admitted by name because it IS a name and not a declaration: nothing
+	// registers `__ManagedByte` as a ranged typealias, so there is no range to ask about. It reaches here
+	// only when both sides are compiler mints, which raw instance equality has already answered.
+	function declaredByteElementHoldsEveryByte(element ByteArray) returns bool
+		if sourceSpelledAliasName(element).equals(SynthesizedByteElementName) 'theCompilersOwnMint'
+			return true
+		end 'theCompilersOwnMint'
+
+		return try self.typeAliases.holdsEveryByteInEveryFile(element) otherwise false
+	end 'declaredByteElementHoldsEveryByte'
 
 	// ⭐⭐ **MAY `append` COPY FROM THIS ARRAY INTO A RECEIVER OF `receiverGiid`? — THE NINTH COERCION SITE,
 	// ASKED IN ONE PLACE FOR BOTH SURFACES OF THE RECORD (A4b).** `Array.append` and the buffer surface's
@@ -19608,6 +19816,118 @@ export type ProgramSignatures
 		end 'eachEnvironment'
 	end 'settleRangeScopedInstances'
 
+	// R-1 (user ruling, 2026-08-22): TWO RANGED ALIASES OVER ONE RANGE ARE ONE TYPE, SO THEIR INSTANCES
+	// ARE ONE INSTANCE. `typealias DenseInt = int(0 to u64.max)` and `typealias RegCount = int(0 to u64.max)`
+	// differ only in what the author called them, and `Array with DenseInt` and `Array with RegCount` therefore
+	// name one type -- which shv2's own source needs, and which the bootstrap has always agreed with.
+	//
+	// IT CANNOT BE DONE AT INTERN TIME AND THAT WAS TRIED, MEASURED AND REVERTED FIRST. "Which aliases
+	// share a range" is a WHOLE-PROGRAM question, and interning runs DURING the sweep that answers it: the same
+	// argument took the range key before a file was folded and the spelled key after, and one `b"hi"` reached
+	// `E3006 duplicate definition of 'Array_Byte'` with the two colliding instantiations spelled identically.
+	// Ahead of that, reading an alias's bounds with no reader file broke `RangedAliasRegistry`'s own contract
+	// and collapsed a range-CONTESTED `Byte` into one instance for every reader -- 34 spec cases red. Both
+	// failures are the same one: a question about the whole program asked before the whole program was read.
+	// This runs where the answer exists.
+	//
+	// STRICTLY AFTER `settleRangeScopedInstances` AND `settleGenericAliasContest`, and the order is the same
+	// load-bearing order those two have between them. Both SPLIT instances -- per reading file, per contested
+	// alias -- and this one MERGES. Merging first would fuse instances that N2 is about to have to tell apart,
+	// and there is no way back: `rangeIdentityPairs` skips a contested name precisely because N2 has already
+	// given its readings distinct spellings, and those spellings must be in place before they can be skipped.
+	//
+	// A program where no two aliases share a range leaves after one map walk and changes nothing -- no
+	// substitution is published, so `instanceKey` keeps building the byte-identical keys it always has.
+	export function mergeRangeEquivalentInstances()
+		let pairs = self.typeAliases.rangeIdentityPairs()
+		if pairs.count() == 0 'noTwoAliasesInThisProgramShareARange'
+			return
+		end 'noTwoAliasesInThisProgramShareARange'
+
+		// The range's name is interned into THIS index's own name table like any other, and is never declared:
+		// it exists only as a key, is unspellable in source (`CompilerQualifiedAliasSeparator`), and no argument
+		// list is rewritten to hold it -- see `GenericInstanceRegistry.rangeIdentity` for why the arg lists keep
+		// the author's spelling.
+		var identity = RangeIdentityMap.create()
+		for (aliasName, rangeName) in pairs 'eachSharedAlias'
+			identity.upsert(self.typeNames.intern(aliasName), value: self.typeNames.intern(rangeName))
+		end 'eachSharedAlias'
+
+		let merged = self.genericInstances.rekeyForRangeIdentity(identity)
+		if merged.count() == 0 'theProgramNAMEDNoTwoOfThem'
+			return
+		end 'theProgramNAMEDNoTwoOfThem'
+
+		self.repairMergedInstanceReferences()
+	end 'mergeRangeEquivalentInstances'
+
+	// THE GIDS THE SWEEP ALREADY WROTE DOWN, RE-POINTED AT THE INSTANCES THEY SURVIVED AS. Rebuilding
+	// `index` fixes every FUTURE intern; it cannot reach a gid already recorded in a field type, a payload, a
+	// `returns` clause, an alias binding or another instance's argument list. Left stale, those are references
+	// to an instance no live type names -- and `mangleGenericInstance` would emit its name beside the survivor's.
+	//
+	// It walks exactly the surfaces `resolveRecordedGenericAliasTypes` walks, for the identical reason: those
+	// are the places the declaration sweep records a resolved type. The two differ only in the rule applied.
+	function repairMergedInstanceReferences()
+		self.rewriteRecordedSlotTypes(RecordedReturnTypeRule.mergedInstance)
+		self.rewriteRecordedReturnTypes(RecordedReturnTypeRule.mergedInstance)
+		self.repairMergedGenericAliases()
+		self.repairMergedInstanceArgs()
+	end 'repairMergedInstanceReferences'
+
+	// A `typealias Column = Array with DenseInt` binds a NAME to a gid, and that gid may have been the loser.
+	function repairMergedGenericAliases()
+		var names = ByteArrayArray.create()
+		var live = GenericInstanceIdArray.create()
+		for (aliasName, id) in self.genericAliases 'eachAlias'
+			let survivor = self.genericInstances.liveInstance(id)
+			if survivor == id 'itsInstanceSurvived'
+				continue
+			end 'itsInstanceSurvived'
+
+			names.push(aliasName)
+			live.push(survivor)
+		end 'eachAlias'
+
+		for i in 0 upto names.count() 'applyEach'
+			let aliasName = try names.get(i) otherwise panic("ProgramSignatures.repairMergedGenericAliases: names.get OOB at {i} below count {names.count()}")
+			let survivor = try live.get(i) otherwise panic("ProgramSignatures.repairMergedGenericAliases: live.get OOB at {i} -- the two columns are pushed together")
+			self.genericAliases.upsert(aliasName, value: survivor)
+		end 'applyEach'
+	end 'repairMergedGenericAliases'
+
+	// A nested argument (`Array with (Array with BytePos)`) holds an inner gid, and `mangleGenericInstance`
+	// reads it. The inner is settled before the outer is keyed (`identityOfArgName`'s nested arm), so this only
+	// has to write down what the key already used.
+	function repairMergedInstanceArgs()
+		for id in 0 upto self.genericInstances.count() 'eachInstance'
+			let args = self.genericInstances.instanceArgs(id)
+			for index in 0 upto args.count() 'eachArg'
+				let arg = try args.get(index) otherwise panic("ProgramSignatures.repairMergedInstanceArgs: args.get OOB at {index} for instance {id}")
+				if let live = try self.mergedInstanceType(arg) 'namesAMergedInstance'
+					self.genericInstances.retypeArg(id, argIndex: index, arg: live)
+				end 'namesAMergedInstance'
+			end 'eachArg'
+		end 'eachInstance'
+	end 'repairMergedInstanceArgs'
+
+	// The type `declared` denotes after the merge, or a refusal when it names no merged instance -- the
+	// `throws` shape every recorded-type rewrite rule in this file uses, so a rule that claims nothing costs
+	// its walk nothing.
+	function mergedInstanceType(declared MaxonType) returns MaxonType throws MapError
+		if maxonTypeTag(declared) != ValueTypeTag.genericInstance 'namesNoInstance'
+			throw MapError.keyNotFound
+		end 'namesNoInstance'
+
+		let id = typeNameIdOf(declared)
+		let survivor = self.genericInstances.liveInstance(id)
+		if survivor == id 'itSurvivedTheMerge'
+			throw MapError.keyNotFound
+		end 'itSurvivedTheMerge'
+
+		return MaxonType.genericInstance(survivor)
+	end 'mergedInstanceType'
+
 	// ⭐⭐ **WHICH GENERIC-ALIAS NAMES DO TWO FILES DISAGREE ABOUT, AND WHAT DOES EACH FILE MEAN BY ONE? (N3)**
 	// — one pass, at the one moment every declaration is in and no file has been parsed.
 	//
@@ -19881,23 +20201,44 @@ export type ProgramSignatures
 			return
 		end 'noNameIsContested'
 
+		self.rewriteRecordedSlotTypes(RecordedReturnTypeRule.contestScopedAlias)
+		self.rewriteRecordedReturnTypes(RecordedReturnTypeRule.contestScopedAlias)
+	end 'resolveRecordedGenericAliasTypes'
+
+	// EVERY DECLARED SLOT THE SWEEP RECORDED A RESOLVED TYPE INTO, REWRITTEN UNDER ONE RULE -- a struct's
+	// fields and an enum case's payloads. It is `rewriteRecordedReturnTypes`' sibling over the other half of
+	// the recorded surface, and it takes the SAME rule enum so that a repair which has to reach both halves
+	// names one rule twice rather than being written out twice. N3 (`contestScopedAlias`) and R-1
+	// (`mergedInstance`) are both such repairs, and before this pair existed the second had copied the first.
+	function rewriteRecordedSlotTypes(rule RecordedReturnTypeRule)
 		for (_, layout) in self.structTypes 'eachStruct'
 			for index in 0 upto layout.fieldCount() 'eachField'
-				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.resolveRecordedGenericAliasTypes: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
-				if let resolved = try self.contestScopedDeclaredType(declared, slotScopeFilePath: layout.declFilePath) 'namesAContestedAlias'
-					layout.retypeField(index, declaredType: resolved)
-				end 'namesAContestedAlias'
+				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.rewriteRecordedSlotTypes: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
+				if let rewritten = try self.rewrittenSlotTypeUnder(rule, declared: declared, slotScopeFilePath: layout.declFilePath) 'theRuleClaimsIt'
+					layout.retypeField(index, declaredType: rewritten)
+				end 'theRuleClaimsIt'
 			end 'eachField'
 		end 'eachStruct'
 
 		for (_, layout) in self.enumTypes 'eachEnum'
 			for caseIndex in 0 upto layout.caseCount() 'eachCase'
-				self.resolveRecordedPayloadTypes(layout, caseIndex: caseIndex)
+				self.rewriteRecordedPayloadTypes(rule, layout: layout, caseIndex: caseIndex)
 			end 'eachCase'
 		end 'eachEnum'
+	end 'rewriteRecordedSlotTypes'
 
-		self.rewriteRecordedReturnTypes(RecordedReturnTypeRule.contestScopedAlias)
-	end 'resolveRecordedGenericAliasTypes'
+	// One recorded SLOT type under `rule`, or a refusal when the rule does not claim it. The two rules that
+	// reach a slot are spelled here; the two that exist only for a `returns` clause panic rather than
+	// returning the type unchanged, because a caller asking a return-only rule about a field has made a
+	// mistake that a silent identity would carry into the recorded layout.
+	function rewrittenSlotTypeUnder(rule RecordedReturnTypeRule, declared MaxonType, slotScopeFilePath FilePath) returns MaxonType throws MapError
+		match rule 'rule'
+			contestScopedAlias then return try self.contestScopedDeclaredType(declared, slotScopeFilePath: slotScopeFilePath)
+			mergedInstance then return try self.mergedInstanceType(declared)
+			declaredStruct then panic("ProgramSignatures.rewrittenSlotTypeUnder: `declaredStruct` is a recorded-RETURN rule and has no slot reading")
+			declaredInterface then panic("ProgramSignatures.rewrittenSlotTypeUnder: `declaredInterface` is a recorded-RETURN rule and has no slot reading")
+		end 'rule'
+	end 'rewrittenSlotTypeUnder'
 
 	// ⭐⭐ **THE ONE REWRITE OF `returnTypes`, AND THE THREE RULES THAT DRIVE IT (BATCH28 review).** Three
 	// whole-program passes re-decide a recorded return type — N3's contest rescoping, S2j's struct re-tag
@@ -20008,6 +20349,7 @@ export type ProgramSignatures
 	function rewrittenReturnTypeUnder(rule RecordedReturnTypeRule, declFilePath FilePath, declared MaxonReturnType) returns MaxonType throws MapError
 		match rule 'rule'
 			contestScopedAlias then return try self.contestScopedReturnType(declared, declFilePath: declFilePath)
+			mergedInstance then return try self.mergedInstanceReturnOf(declared)
 			declaredStruct then return try self.sweptStructReturnOf(declared)
 			declaredInterface then return try self.sweptInterfaceReturnOf(declared)
 		end 'rule'
@@ -20026,6 +20368,13 @@ export type ProgramSignatures
 	// including its "absence is a throw" convention, so both read as one kind of pass. A `void` return
 	// names no type to re-tag, and a type that is already concrete is refused by the tag guard, which is
 	// what makes this idempotent.
+	function mergedInstanceReturnOf(declared MaxonReturnType) returns MaxonType throws MapError
+		match declared 'shape'
+			void then throw MapError.keyNotFound
+			value(inner) then return try self.mergedInstanceType(inner)
+		end 'shape'
+	end 'mergedInstanceReturnOf'
+
 	function sweptStructReturnOf(declared MaxonReturnType) returns MaxonType throws MapError
 		match declared 'shape'
 			void then throw MapError.keyNotFound
@@ -20270,15 +20619,15 @@ export type ProgramSignatures
 
 	// One union case's payload slots, rewritten by the rule above. Split out because a payload array is
 	// replaced wholesale (`PayloadField` holds `let` columns), where a struct field column is retyped in place.
-	function resolveRecordedPayloadTypes(layout EnumLayout, caseIndex CaseIndex)
+	function rewriteRecordedPayloadTypes(rule RecordedReturnTypeRule, layout EnumLayout, caseIndex CaseIndex)
 		let payloads = layout.payloadsAt(caseIndex)
 		var rewritten = PayloadFieldArray.create()
 		var changed = false
 		for field in payloads 'eachSlot'
-			if let resolved = try self.contestScopedDeclaredType(field.declaredType, slotScopeFilePath: layout.declFilePath) 'namesAContestedAlias'
+			if let resolved = try self.rewrittenSlotTypeUnder(rule, declared: field.declaredType, slotScopeFilePath: layout.declFilePath) 'theRuleClaimsIt'
 				rewritten.push(PayloadField.create(field.name, declaredType: resolved, declaredSurface: field.declaredSurface))
 				changed = true
-			end 'namesAContestedAlias' else 'unchanged'
+			end 'theRuleClaimsIt' else 'unchanged'
 				rewritten.push(field)
 			end 'unchanged'
 		end 'eachSlot'
@@ -20288,7 +20637,7 @@ export type ProgramSignatures
 		end 'nothingToRewrite'
 
 		layout.retypeCasePayloads(caseIndex, payloads: rewritten)
-	end 'resolveRecordedPayloadTypes'
+	end 'rewriteRecordedPayloadTypes'
 
 	// The minted spelling a recorded `named` should carry when it names a CONTESTED generic alias, resolved
 	// against the file that declared the SLOT — or `MapError` when it names no contested alias, which is every
@@ -21412,6 +21761,14 @@ export type ProgramSignatures
 
 		// A `named` leaf that denotes no instance is a declared aggregate or a ranged alias: its own name,
 		// which is what `mangleTypeArg` would answer for it and is spelled here without the String round trip.
+		//
+		// ⛔⛔ **R-1 DOES NOT LIVE HERE, AND THE FIRST ATTEMPT PUT IT HERE.** Resolving a ranged alias to its
+		// RANGE in this arm gives the right identity and the wrong NAME: this string is rendered into
+		// diagnostics through `instanceDisplayName`'s fallback and through `aggregateNameOf`, and **MEASURED,
+		// four cases named `Array_int$-9223372036854775808_9223372036854775807` where the author wrote
+		// `Array_Integer`** — against this tree's standing rule that a diagnostic quotes an alias AS SOURCE
+		// SPELLS IT. The identity question is asked by `instanceIdentityKey`, which is never rendered, and the
+		// MERGE it drives leaves one instance wearing one author-written name.
 		if maxonTypeTag(t) == ValueTypeTag.named 'namedLeaf'
 			return String.from(self.nameOfId(typeNameIdOf(t)))
 		end 'namedLeaf'
