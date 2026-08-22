@@ -659,3 +659,102 @@ end 'main'
 ```maxoncstderr
 error E3010: <fragment>:15:11: unneeded cast: 'Num' already fits in 'Num'
 ```
+
+### The SOURCES that state a declared alias — a field read and a `try` result
+
+⭐⭐ **E3010's gate is "both ends are DECLARED ranged typealiases", and the question that gate turns on is
+WHICH EXPRESSIONS STATE ONE.** The cases above all read a local. These two pin the other two sources shv2
+carries an alias through, and they are pinned because a self-compile found **seven genuinely redundant
+casts in shv2's own source** behind exactly them — `segment.base as ParsedInt` (a field read) and
+`try text.get(k) otherwise panic(…) as ParsedInt` (a `try` result), plus four int→float twins.
+
+⛔ **THE REFERENCE BOOTSTRAP DOES NOT REPORT THESE, AND IT IS THE BLIND ONE.** MEASURED, same program on
+both: shv2 reports `unneeded cast: 'RungIndex' already fits in 'JsonFloat'` on `result.rung as JsonFloat`
+where `maxon.exe` compiles it and prints `3.0`. That is a place where shv2 knows more — a struct field
+carries its declared type, and a `try … otherwise` result carries its callee's — and the divergence is
+deliberate rather than accidental. It is also why shv2's own source compiled under the bootstrap for
+months while carrying casts that do nothing.
+
+⚠ **AND THE VERDICT IS CHECKABLE, WHICH IS WHAT MAKES IT SAFE.** A diagnostic saying "delete this" is only
+right if the program still compiles once you do. The last case below is that proof for the int→float
+shape — the one where "unneeded" is least obvious, because the cast performs a real `cvtsi2sd`. It is
+unneeded anyway: the conversion happens at the argument regardless, on BOTH compilers, to the same
+printed digits.
+
+<!-- test: error.unneeded.through-a-struct-field-read -->
+A struct field states the alias it was DECLARED with.
+```maxon
+typealias Narrow = int(0 to u32.max)
+typealias Wide = int(i64.min to i64.max)
+
+type Segment
+	export let base as Narrow
+
+	export static function create(base Narrow) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Segment'
+
+function main() returns ExitCode
+	let seg = Segment.create(7)
+	let w = seg.base as Wide
+	return w as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-struct-field-read.test:15:19: unneeded cast: 'Narrow' already fits in 'Wide'
+```
+
+<!-- test: error.unneeded.through-a-try-otherwise-result -->
+A `try … otherwise` result states its callee's declared return type — here `ByteArray.get`'s `Byte`.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let bytes = b"A"
+	let ch = try bytes.get(0) otherwise panic("get")
+	let w = ch as Wide
+	return (w - 23) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-try-otherwise-result.test:7:13: unneeded cast: 'Byte' already fits in 'Wide'
+```
+
+<!-- test: an-int-alias-reaches-a-float-parameter-with-no-cast -->
+⭐ **THE PROOF THAT "UNNEEDED" MEANS IT.** Both the widening int→int and the int→float casts E3010 refuses
+are deletable, and this is the harder half: an `Integer` argument reaches a `Ratio` parameter with no cast
+at all, because the promotion is the ARGUMENT's, not the cast's. Measured identical on the bootstrap.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Ratio = float(f64.min to f64.max)
+typealias Narrow = int(0 to u32.max)
+
+function identity(n Integer) returns Integer
+	return n
+end 'identity'
+
+function showRatio(r Ratio)
+	print("r={r}")
+end 'showRatio'
+
+function showWide(v Integer)
+	print("v={v}")
+end 'showWide'
+
+function narrow(n Narrow) returns Narrow
+	return n
+end 'narrow'
+
+function main() returns ExitCode
+	showRatio(identity(42))
+	showWide(narrow(7))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+r=42.0v=7
+```
