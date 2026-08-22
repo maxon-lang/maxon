@@ -4399,7 +4399,17 @@ end 'shortCircuitOperator'
 // f64 and re-encode the bits) — and the `MaxonType.float` this hands back is what tells `lowerLiteral`
 // to lay those 8 bytes down as an f64 rather than an i64. That is the whole of `let PI = 3.14`,
 // `var ratio = 2.5`, and now `let X = 1.0 + 2.0` too.
-export function constantValueType(tag ValueTypeTag) returns MaxonType
+// ⭐ **THE `MaxonType` A FOLDED CONSTANT'S TAG DENOTES.** `typeNameId` is read by the `named` arm alone —
+// a payload-free enum case folds to its tag and its TYPE is the enum — and is ignored by every other, which
+// names no type. It takes an ID rather than the bytes the constant carries because interning is the
+// CALLER's: there is one table per Parser and one on `ProgramSignatures`, and which one a type belongs to
+// is a fact only the caller has. The two wrappers (`Parser.constantValueTypeOf`,
+// `ProgramSignatures.constantValueTypeOf`) are that one line each, and they intern ONLY for `named`.
+export function constantValueType(tag ValueTypeTag, typeNameId TypeNameId) returns MaxonType
+	if tag == ValueTypeTag.named 'anEnumCase'
+		return MaxonType.named(typeNameId)
+	end 'anEnumCase'
+
 	if tag == ValueTypeTag.boolean 'bool'
 		return MaxonType.boolean
 	end 'bool'
@@ -18396,7 +18406,7 @@ export type Parser
 			let inferred = try self.readFieldDefaultLiteral()
 			// Shape 2 has no annotation at all, so no spelling can name the buffer alias (A2j); the type
 			// comes from a LITERAL, and no literal produces a `__ManagedMemory`.
-			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredSurface: sharedEmptyDeclaredSurface)
+			layout.addField(nameTok.value, declaredType: self.constantValueTypeOf(inferred.tag, typeName: inferred.typeName), mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredSurface: sharedEmptyDeclaredSurface)
 			return
 		end 'typeFromLiteral'
 
@@ -64121,7 +64131,7 @@ export type Parser
 	// where the oracle raises E3019). It publishes its name for the same reason a `let` local does.
 	function topLevelBindingReference(tok Token) returns ValueId throws ParseError
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
-			found(payload, tag) then return self.recordImmutableConstantRead(tok, value: self.emitLiteral(payload, valueType: constantValueType(tag), range: SourceRange.ofToken(tok)))
+			found(payload, tag, typeName) then return self.recordImmutableConstantRead(tok, value: self.emitFoldedConstant(payload, tag: tag, typeName: typeName, range: SourceRange.ofToken(tok)))
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
 			notFound then break 'constant'
 		end 'constant'
@@ -64132,6 +64142,35 @@ export type Parser
 	// Publish a top-level constant read's blame name and hand the value straight back —
 	// `recordGlobalReadValue`'s shape, for its reason: the two arms above differ only in how the value is
 	// materialized, and a `let` is immutable in both.
+	// ⭐⭐ **MATERIALIZE A FOLDED CONSTANT AT A USE — and an ENUM CASE takes the door the BODY spelling takes.**
+	// `Reg.rdx` written in a body goes through `emitEnumTagLiteral`, which mints a value TAGGED `named(Reg)`
+	// while the op it emits carries `integer`; that split is the whole shape of a payload-free enum in this
+	// compiler — the value knows its enum, the storage is an i64.
+	//
+	// ⛔ **EMITTING THE LITERAL AT `MaxonType.named` INSTEAD IS A COMPILER PANIC, MEASURED:**
+	// `maxonTypeToStdType: a `named` type must be resolved to a primitive before lowering`. The op's
+	// valueType is a STORAGE question and `named` is not an answer to it. Routing here rather than widening
+	// `constantValueType` is what keeps the two spellings of `Reg.rdx` — in a body and out of a top-level
+	// `let` — one mechanism.
+	function emitFoldedConstant(payload ParsedInt, tag ValueTypeTag, typeName ByteArray, range SourceRange) returns ValueId
+		if tag != ValueTypeTag.named 'aPlainScalar'
+			return self.emitLiteral(payload, valueType: constantValueType(tag, typeNameId: 0), range: range)
+		end 'aPlainScalar'
+
+		return self.emitEnumTagLiteral(typeName, tag: payload, range: range)
+	end 'emitFoldedConstant'
+
+	// The `MaxonType` a folded constant denotes, interned into THIS parser's table. Only a `named` tag has a
+	// name to intern, so every other constant read pays nothing — which matters because this is on the path
+	// of every top-level constant reference in the program.
+	function constantValueTypeOf(tag ValueTypeTag, typeName ByteArray) returns MaxonType
+		if tag != ValueTypeTag.named 'namesNoType'
+			return constantValueType(tag, typeNameId: 0)
+		end 'namesNoType'
+
+		return constantValueType(tag, typeNameId: self.artifact.typeNames.intern(typeName))
+	end 'constantValueTypeOf'
+
 	function recordImmutableConstantRead(tok Token, value ValueId) returns ValueId
 		self.publishBareBindingName(tok, immutable: true)
 		return value
@@ -67221,12 +67260,57 @@ export type Parser
 
 		if self.peekKind() == TokenKind.dot 'dottedNonBound'
 			let memberTok = self.tokenAt(self.pos + 2)
+
+			// ⭐⭐ **A PAYLOAD-FREE ENUM CASE *IS* A CONSTANT — its value is its TAG, a number fixed at
+			// declaration.** `let JumpTableBaseReg = X64Register.r10` (`Targets/X64/X64Backend.maxon:1144`) and
+			// `let calleeSavedOrder = [X64Register.rbx, …]` are what the refusal below cost, six times across
+			// shv2's own backends, on source the bootstrap compiles. Nothing here runs: `tagOfCase` reads the
+			// layout the sweep already built.
+			//
+			// ⚠ **THE VALUE CARRIES THE ENUM'S NAME, because the number alone is a wrong answer about it.**
+			// A bare `integer` cannot be passed where the enum is declared — MEASURED, `argument type mismatch
+			// for 'r': expected 'Reg', got 'int'` — so the fold is tagged `named` and `ConstValue.typeName`
+			// carries the spelling for the use site to intern (see that field for why bytes and not an id).
+			//
+			// ⛔ **A BOXED UNION'S CASE IS EXCLUDED, AND THAT IS THE RULE RATHER THAN A LIMIT OF THIS ARM.**
+			// `isBoxed` means SOME case carries a payload, and then EVERY case — payload-free ones included —
+			// is a heap box rather than a bare tag (`EnumLayout`'s own header). A heap object is not something
+			// a constant can be folded to, so `MaxonType.unresolved` keeps the refusal below and keeps it for
+			// the right reason: not "an enum member is unsupported" but "this one's value is a record".
+			if self.constFoldableEnumCase(tok, memberTok: memberTok) 'payloadFreeEnumCase'
+				let layout = requireEnumLayout(self.signatures.enumOf(tok.value))
+				self.advance()
+				try self.consumeConstToken(TokenKind.dot)
+				self.advance()
+
+				return ConstValue.create(layout.tagOfCase(memberTok.value), tag: ValueTypeTag.named, typeName: tok.value)
+			end 'payloadFreeEnumCase'
 			throw ConstEvalError.defective(ParseError.unsupported("`{String.from(tok.value)}.{tokenDisplayText(memberTok)}` in a constant initializer — a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `{String.from(CreateMethod)}()`-style factory at the TOP of an initializer, or a sized type's `.{String.from(MinBoundField)}`/`.{String.from(MaxBoundField)}`, and nothing else", line: tok.line, column: tok.column))
 		end 'dottedNonBound'
 
 		self.advance()
 		return try self.evalConstNameRef(tok, stack: stack)
 	end 'evalConstNamed'
+
+	// ⭐ **DOES `<tok>.<memberTok>` NAME A CASE OF A DECLARED, UNBOXED ENUM?** The arm's admission rule, split
+	// out so the test and the fold cannot come to disagree about which members are foldable — the shape
+	// `enumAccessorFieldAt` and its dispatch already use one construct over.
+	//
+	// It asks the SWEEP's registry (`signatures.enumOf`), which is the only store that exists this early and
+	// is the same one every other constant-time enum question in this evaluator would ask.
+	function constFoldableEnumCase(tok Token, memberTok Token) returns bool
+		let namedEnum = self.signatures.enumOf(tok.value)
+		if not enumMatchIsDeclared(namedEnum) 'notAnEnum'
+			return false
+		end 'notAnEnum'
+
+		let layout = requireEnumLayout(namedEnum)
+		if layout.isBoxed() 'aHeapBox'
+			return false
+		end 'aHeapBox'
+
+		return layout.hasCase(memberTok.value)
+	end 'constFoldableEnumCase'
 
 	// **THE FORWARD REFERENCE, AND THE CROSS-FILE ONE.** A name in an initializer resolves through the
 	// whole-program arena, which recursively evaluates whatever it finds — so declaration ORDER does
@@ -67235,7 +67319,7 @@ export type Parser
 	// the only place that can see one.
 	function evalConstNameRef(tok Token, stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		match self.signatures.evaluateNamed(tok.value, readerFilePath: self.filePath, stack: stack) 'resolved'
-			value(payload, tag) then return ConstValue.create(payload, tag: tag)
+			value(payload, tag, typeName) then return ConstValue.create(payload, tag: tag, typeName: typeName)
 			// It exists and has no value. Its own declaration carries the diagnostic, so this one stays
 			// quiet — see `TopLevelConstant.poisoned`.
 			failed then throw ConstEvalError.dependencyFailed

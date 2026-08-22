@@ -760,7 +760,14 @@ export union TopLevelConstant
 	evaluating
 	// It evaluated. `payload` is the number (a bool's is its 0/1 — TypeRules' `BoolTrueValue`), and
 	// `tag` says which of the two it is. This is what a use INLINES.
-	value(payload ParsedInt, tag ValueTypeTag)
+	//
+	// ⭐ **`typeName` IS THE ENUM'S SPELLING WHEN THE TAG IS `named`, EMPTY OTHERWISE.** A payload-free enum
+	// case folds to its tag — a number — and the number alone is a wrong answer about it: the use site has
+	// to emit the literal typed as the ENUM or the value cannot be passed where the enum is declared. The
+	// arm is WIDENED rather than duplicated because a folded enum case is not a second kind of scalar
+	// constant, it is a scalar constant that names its type; two arms would be one fact with two spellings
+	// free to drift. Bytes and not an id — see `ConstValue.typeName` for why the interner forbids an id here.
+	value(payload ParsedInt, tag ValueTypeTag, typeName ByteArray)
 	// THIS declaration is defective, and `error` is the positioned diagnostic for it. Held rather
 	// than reported, because the sweep that found it is deliberately TOLERANT and has no business
 	// vetoing a program (see `foldDeclaredSignaturesInto`). The REAL parse raises it, once, when it
@@ -1526,9 +1533,23 @@ end 'ManagedOpaqueArrayElement'
 export type ConstValue
 	export var payload as ParsedInt
 	export var tag as ValueTypeTag
+	// ⭐⭐ **THE TYPE'S NAME WHEN THE TAG IS `named` — AND IT IS THE NAME'S BYTES, NOT AN INTERNED ID.**
+	// A payload-free enum CASE folds to its tag, an ordinary number, and `integer` would be a wrong answer
+	// about it: `X64Register.rcx` is an `X64Register`, and a use site handed a bare int refuses to pass it
+	// where the enum is declared (`argument type mismatch for 'r': expected 'Reg', got 'int'`).
+	//
+	// ⚠ **A `TypeNameId` COULD NOT BE CARRIED HERE, and that is a fact about the interner rather than a
+	// preference.** Ids are minted per PARSER (`Parser.internedName`'s panic says so), the evaluator is a
+	// throwaway parser built per declaration, and the USE site is a third one — so an id minted during the
+	// fold means nothing where it is read. Bytes cross that boundary; the reader interns them into its own
+	// table, exactly as `fieldTypeOf(…, into:)` re-interns a field's type for its caller.
+	//
+	// EMPTY for every other tag, which is the truth about them rather than a sentinel: an `integer`,
+	// `boolean` or `float` constant names no type.
+	export var typeName as ByteArray
 
-	export static function create(payload ParsedInt, tag ValueTypeTag) returns ConstValue
-		return Self{payload: payload, tag: tag}
+	export static function create(payload ParsedInt, tag ValueTypeTag, typeName ByteArray = EmptySourceText) returns ConstValue
+		return Self{payload: payload, tag: tag, typeName: typeName}
 	end 'create'
 end 'ConstValue'
 
@@ -1748,7 +1769,10 @@ end 'ConstConstructionFieldLookup'
 // The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
 // diagnostic is already recorded on the decl that owns it — it is the instruction to STOP.
 export union ConstEvalOutcome
-	value(payload ParsedInt, tag ValueTypeTag)
+	// `typeName` rides for `TopLevelConstant.value`'s reason: a constant that folded to an enum CASE is a
+	// number whose type is the enum, and a reference from ANOTHER constant (`let B = A`) resolves through
+	// this answer — so dropping the name here would silently retype `B` as a bare int.
+	value(payload ParsedInt, tag ValueTypeTag, typeName ByteArray)
 	failed
 	notFound
 end 'ConstEvalOutcome'
@@ -1768,7 +1792,9 @@ end 'ConstEvalError'
 // `ConstEvalOutcome`: a use site cannot trigger an evaluation (they are all done by then) and must
 // not be able to, so it is given a type with no `failed` arm to mishandle.
 export union TopLevelConstantLookup
-	found(payload ParsedInt, tag ValueTypeTag)
+	// `typeName` rides for `TopLevelConstant.value`'s reason — this is the answer a USE site reads, and it
+	// is the one place the enum's spelling has to arrive for the emitted literal to be typed as the enum.
+	found(payload ParsedInt, tag ValueTypeTag, typeName ByteArray)
 	// The MANAGED twin of `found` (P1.7a top-level managed `let`): a use re-materializes the literal
 	// from these bytes rather than inlining a number. It sits BESIDE `found` — unlike
 	// `TopLevelConstant.managedValue`, which is appended — because the two "a constant of this name is
@@ -12069,7 +12095,9 @@ export type ProgramSignatures
 	// project for a change that means nothing.
 	function mixDefaultLiteral(state ContentHash, payload ParsedInt, tag ValueTypeTag) returns ContentHash
 		let payloadBits = payload as ContentHash
-		return mix(self.mixValueTag(mix(state, value: FieldShapeDefaulted), tag: tag), value: payloadBits)
+		// A field default names no TYPE — this door is the three-literal question its header describes, and
+		// the `named` arm `mixValueTag` grew is the top-level evaluator's alone.
+		return mix(self.mixValueTag(mix(state, value: FieldShapeDefaulted), tag: tag, typeName: EmptySourceText), value: payloadBits)
 	end 'mixDefaultLiteral'
 
 	// Add one ranged typealias to the index AND fold it into the hash. The hash carries the RANGE
@@ -12818,7 +12846,7 @@ export type ProgramSignatures
 		var decl = self.declAt(index)
 
 		match decl.outcome 'state'
-			value(payload, tag) then return ConstEvalOutcome.value(payload, tag: tag)
+			value(payload, tag, typeName) then return ConstEvalOutcome.value(payload, tag: tag, typeName: typeName)
 			failed to poisoned then return ConstEvalOutcome.failed
 			// An ARRAY binding answers `notFound` for a managed literal's reason (P1.7 slice 2b): the only
 			// caller reading this for a NAME is a reference from inside another initializer, and there is
@@ -12944,8 +12972,8 @@ export type ProgramSignatures
 
 	// Settle a decl whose initializer folded to a NUMBER — the arm this arena has always had.
 	function settleScalarValue(decl TopLevelDecl, value ConstValue) returns ConstEvalOutcome
-		decl.outcome = TopLevelConstant.value(value.payload, tag: value.tag)
-		return ConstEvalOutcome.value(value.payload, tag: value.tag)
+		decl.outcome = TopLevelConstant.value(value.payload, tag: value.tag, typeName: value.typeName)
+		return ConstEvalOutcome.value(value.payload, tag: value.tag, typeName: value.typeName)
 	end 'settleScalarValue'
 
 	// Settle a decl whose initializer folded to a MANAGED literal (P1.7a). It answers `notFound` for
@@ -13106,6 +13134,16 @@ export type ProgramSignatures
 	// A `var` reads as `notFound` here too — not because it is undefined, but because it is not a
 	// CONSTANT and this door only answers for constants. Its reader (`Parser.parseVariableReference`)
 	// asks `globalDeclFor` next, and emits a LOAD.
+	// The `MaxonType` a folded constant denotes, interned into the WHOLE-PROGRAM table — the twin of
+	// `Parser.constantValueTypeOf` on the other interner, and split for that reason alone.
+	export function constantValueTypeOf(tag ValueTypeTag, typeName ByteArray) returns MaxonType
+		if tag != ValueTypeTag.named 'namesNoType'
+			return constantValueType(tag, typeNameId: 0)
+		end 'namesNoType'
+
+		return constantValueType(tag, typeNameId: self.typeNames.intern(typeName))
+	end 'constantValueTypeOf'
+
 	export function constantValueOf(name ByteArray, readerFilePath FilePath) returns TopLevelConstantLookup
 		match self.constantDeclFor(name, readerFilePath: readerFilePath) 'lookup'
 			found(index) then return self.notedConstantValue(index, name: name, readerFilePath: readerFilePath)
@@ -13202,7 +13240,7 @@ export type ProgramSignatures
 	function resolvedGlobalOf(index TopLevelDeclIndex, into TypeNameInterner) returns TopLevelGlobalLookup
 		let decl = self.declAt(index)
 		match decl.outcome 'state'
-			value(_, tag) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: constantValueType(tag), mutable: decl.mutable)
+			value(_, tag, typeName) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constantValueTypeOf(tag, typeName: typeName), mutable: decl.mutable)
 			failed to poisoned then return TopLevelGlobalLookup.notFound
 			// ⭐ A MANAGED `var` (P1.7 slice 2a) reads exactly as a scalar one does — the slot is real, it
 			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
@@ -13627,7 +13665,7 @@ export type ProgramSignatures
 				continue
 			end 'noReachableSlot'
 			match decl.outcome 'state'
-				value(payload, tag) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(tag, name: decl.name), value: payload))
+				value(payload, tag, _) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(tag, name: decl.name), value: payload))
 				failed to poisoned then continue
 				// ⭐ EVERY RECORD BINDING reserves a POINTER slot holding NULL, and a LAZY one keeps that null until
 				// its first access rather than only until `__module_init` — a managed literal (P1.7 slice
@@ -14239,7 +14277,7 @@ export type ProgramSignatures
 	function resolvedValueOf(index TopLevelDeclIndex) returns TopLevelConstantLookup
 		let decl = self.declAt(index)
 		match decl.outcome 'state'
-			value(payload, tag) then return TopLevelConstantLookup.found(payload, tag: tag)
+			value(payload, tag, typeName) then return TopLevelConstantLookup.found(payload, tag: tag, typeName: typeName)
 			managedValue(bytes, kind) then return TopLevelConstantLookup.foundManaged(bytes, kind: kind)
 			failed to poisoned then return TopLevelConstantLookup.notFound
 			// ⭐ **AN ARRAY BINDING IS NOT A CONSTANT A USE CAN INLINE** (P1.7 slice 2b): its value is a heap
@@ -14339,7 +14377,7 @@ export type ProgramSignatures
 	function mixConstant(state ContentHash, decl TopLevelDecl) returns ContentHash
 		let keyed = mixBytes(self.mixMutability(state, mutable: decl.mutable), bytes: decl.storageKey)
 		match decl.outcome 'o'
-			value(payload, tag) then return self.mixDeclAnswer(keyed, decl: decl, payload: payload, tag: tag)
+			value(payload, tag, typeName) then return self.mixDeclAnswer(keyed, decl: decl, payload: payload, tag: tag, typeName: typeName)
 			// ⭐ **THE BYTES RIDE, for `mixDeclAnswer`'s reason applied to a managed constant.** A use
 			// re-materializes the literal from exactly these bytes, so `export let G = "a"` → `"b"` changes
 			// what every OTHER file compiles to while their own bytes never move. The KIND rides too: the
@@ -14438,12 +14476,12 @@ export type ProgramSignatures
 	// whenever any global's initial value moved, which is precisely the "sound, and useless"
 	// failure `verify-warm-rebuild`'s property (b) exists to reject — the composite-source-hash key
 	// wearing a different hat. `globalValueEditIsLocal` is the probe that keeps this honest.
-	function mixDeclAnswer(state ContentHash, decl TopLevelDecl, payload ParsedInt, tag ValueTypeTag) returns ContentHash
+	function mixDeclAnswer(state ContentHash, decl TopLevelDecl, payload ParsedInt, tag ValueTypeTag, typeName ByteArray) returns ContentHash
 		if not decl.mutable 'constantInlinesItsValue'
-			return self.mixConstantValue(state, payload: payload, tag: tag)
+			return self.mixConstantValue(state, payload: payload, tag: tag, typeName: typeName)
 		end 'constantInlinesItsValue'
 
-		return mixBytes(self.mixValueTag(mix(state, value: ConstShapeValue), tag: tag), bytes: decl.dataLabel)
+		return mixBytes(self.mixValueTag(mix(state, value: ConstShapeValue), tag: tag, typeName: typeName), bytes: decl.dataLabel)
 	end 'mixDeclAnswer'
 
 	// The TAG rides the hash beside the payload: a `boolean` 1 and an `integer` 1 are the same number
@@ -14454,8 +14492,8 @@ export type ProgramSignatures
 	// bools; `foldIntCompare` yields a bool; `binOpResultTag` yields one of the two given two of the
 	// two). Hashing them "just in case" would be inventing a key for a value that cannot exist, and
 	// the day one can, this is where it must be decided rather than defaulted.
-	function mixConstantValue(state ContentHash, payload ParsedInt, tag ValueTypeTag) returns ContentHash
-		return mix(self.mixValueTag(mix(state, value: ConstShapeValue), tag: tag), value: payload as ContentHash)
+	function mixConstantValue(state ContentHash, payload ParsedInt, tag ValueTypeTag, typeName ByteArray) returns ContentHash
+		return mix(self.mixValueTag(mix(state, value: ConstShapeValue), tag: tag, typeName: typeName), value: payload as ContentHash)
 	end 'mixConstantValue'
 
 	// Mix a FOLDED LITERAL's TAG. Shared by both arms of `mixDeclAnswer`, so a `let` and a `var`
@@ -14490,14 +14528,23 @@ export type ProgramSignatures
 	// `mixType` already gives a float from the `MaxonType` side: the two functions hash one lattice
 	// from two directions, and a float that hashed differently depending on which door it came
 	// through is a cache that answers a stale parse for a changed file.
-	function mixValueTag(state ContentHash, tag ValueTypeTag) returns ContentHash
+	function mixValueTag(state ContentHash, tag ValueTypeTag, typeName ByteArray) returns ContentHash
 		match tag 'k'
 			integer then return mix(state, value: TypeShapeInteger)
 			boolean then return mix(state, value: TypeShapeBoolean)
 			float then return mix(state, value: TypeShapeFloat)
-			// `named` stays out: a constant's initializer is a bare expression and shv2 infers
-			// `int`/`bool`/`float` from it, never an alias — that needs an `as` cast (P1.9).
-			named then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a constant's type is inferred from a bare initializer, so it is never a ranged alias (that needs an `as` cast, P1.9)")
+			// ⭐⭐ **`named` IS REACHABLE NOW, AND THE NAME RIDES WITH THE SHAPE.** This arm used to panic on
+			// the premise that *"a constant's type is inferred from a bare initializer, so it is never a
+			// ranged alias (that needs an `as` cast, P1.9)"* — true of a ranged alias, and falsified by a
+			// PAYLOAD-FREE ENUM CASE, whose value is its tag and whose type is the enum
+			// (`let JumpTableBaseReg = X64Register.r10`).
+			//
+			// ⚠ **THE BYTES ARE MIXED, NOT ONLY THE SHAPE, and leaving them out would be a stale-cache bug
+			// rather than a coarse key.** Two enums' cases collide constantly — every enum's first case has
+			// tag 0 — so `let a = Reg.rcx` and `let a = CharClass.other` would hash IDENTICALLY on shape plus
+			// payload alone, and a file edited from one to the other would be answered from the other's parse.
+			// That is exactly the failure this function's own header names two arms down.
+			named then return mixBytes(mix(state, value: TypeShapeNamed), bytes: typeName)
 			exitCode to void then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 			// A struct is unreachable here for `globalStdType`'s reason and one more: the only way to
 			// build one is `T.create(…)`, and a CALL in a top-level initializer is E2045 in every

@@ -2388,3 +2388,123 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/static-variables/error.a-top-level-string-literal-init-still-needs-the-conformance.test:10:16: Type 'Tag' does not conform to InitableFromStringLiteral
 ```
+
+### A PAYLOAD-FREE ENUM CASE IS A CONSTANT
+
+⭐⭐ **ITS VALUE IS ITS TAG — a number fixed at declaration — so it folds like any other.** shv2 refused
+it, and it cost six errors across its own backends: `let JumpTableBaseReg = X64Register.r10`
+(`Targets/X64/X64Backend.maxon:1144`), `let GtSwitchFromReg = X64Register.rcx`, and the four register
+tables written as array literals. The bootstrap compiles every one.
+
+⚠ **THE NUMBER ALONE IS A WRONG ANSWER ABOUT IT, WHICH IS THE WHOLE OF WHY THIS IS NOT A ONE-LINE FOLD.**
+MEASURED: a constant folded to a bare `integer` cannot be passed where the enum is declared —
+`argument type mismatch for 'r': expected 'Reg', got 'int'`. So the fold is tagged `named` and carries the
+enum's SPELLING, which then rides the whole chain a constant travels: `ConstValue` → `TopLevelConstant`
+→ `ConstEvalOutcome` → `TopLevelConstantLookup` → the use site. Each of those arms is WIDENED rather than
+joined by a parallel one: a folded enum case is not a second kind of scalar constant, it is a scalar
+constant that names its type.
+
+⚠ **BYTES, NOT AN INTERNED ID.** Ids are minted per PARSER; the evaluator is a throwaway parser built per
+declaration and the use site is a third one, so an id minted during the fold means nothing where it is
+read. The reader interns the bytes into its own table — `fieldTypeOf(…, into:)`'s discipline.
+
+⚠ **AND THE USE SITE EMITS THROUGH `emitEnumTagLiteral`, THE DOOR THE BODY SPELLING TAKES**: the value is
+TAGGED `named(E)` while the op it emits carries `integer`. Emitting the literal AT `MaxonType.named`
+instead is a compiler panic — *"a `named` type must be resolved to a primitive before lowering"* — because
+the op's valueType is a STORAGE question and `named` is not an answer to it.
+
+⛔ **A BOXED UNION'S CASE IS EXCLUDED, AND THAT IS THE RULE RATHER THAN A LIMIT OF THIS SLICE.** `isBoxed`
+means SOME case carries a payload, and then EVERY case — payload-free ones included — is a heap box rather
+than a bare tag. A heap object is not something a constant folds to. shv2's own
+`SemanticCheck.maxon:729` says it in as many words about its own binding: *"a payload-free union case is
+still a heap object in Maxon"*.
+
+<!-- test: a-payload-free-enum-case-is-a-top-level-constant -->
+A plain enum, and a constant that REFERENCES another constant — which is the path through
+`ConstEvalOutcome`, the one arm a reader might think the use site does not need.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Reg
+	rcx
+	rdx
+	rax
+end 'Reg'
+
+let baseReg = Reg.rdx
+let aliasOfBase = baseReg
+
+function ordinalOf(r Reg) returns Integer
+	return r.ordinal
+end 'ordinalOf'
+
+function main() returns ExitCode
+	let local = baseReg
+	print("base={ordinalOf(baseReg)} alias={ordinalOf(aliasOfBase)} name={local.name}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+base=1 alias=1 name=rdx
+```
+
+<!-- test: a-backed-enum-case-constant-keeps-both-accessors -->
+⭐ **THE BACKED CASE, AND IT IS THE ONE THAT SAYS *WHICH* NUMBER IS FOLDED.** `Status.notFound` has
+ordinal 1 and raw value 404; the fold stores the TAG and the accessors derive the rest from the layout, so
+a fold that had stored the raw value would answer `ord=404` here.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Status
+	ok = 200
+	notFound = 404
+end 'Status'
+
+let backed = Status.notFound
+
+function rawOf(s Status) returns Integer
+	return s.rawValue
+end 'rawOf'
+
+function ordOf(s Status) returns Integer
+	return s.ordinal
+end 'ordOf'
+
+function main() returns ExitCode
+	print("raw={rawOf(backed)} ord={ordOf(backed)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+raw=404 ord=1
+```
+
+<!-- test: error.a-boxed-unions-case-is-still-not-a-constant -->
+⛔ **THE BOUNDARY.** `Boxed` has a payload-carrying case, so every case of it — `plain` included — is a
+heap box, and a heap object is not a folded constant. The original refusal stands, unchanged.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Boxed
+	plain
+	withPayload(n Integer)
+end 'Boxed'
+
+let stillRefused = Boxed.plain
+
+function main() returns ExitCode
+	return match stillRefused 'k'
+		plain gives 0
+		withPayload(n) gives n as ExitCode
+	end 'k'
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/static-variables/error.a-boxed-unions-case-is-still-not-a-constant.test:9:20: Unsupported: `Boxed.plain` in a constant initializer — a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+```

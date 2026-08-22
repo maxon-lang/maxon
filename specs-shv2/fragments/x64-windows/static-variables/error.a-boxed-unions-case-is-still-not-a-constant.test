@@ -1,0 +1,19 @@
+// Test: error.a-boxed-unions-case-is-still-not-a-constant
+typealias Integer = int(i64.min to i64.max)
+
+union Boxed
+	plain
+	withPayload(n Integer)
+end 'Boxed'
+
+let stillRefused = Boxed.plain
+
+function main() returns ExitCode
+	return match stillRefused 'k'
+		plain gives 0
+		withPayload(n) gives n as ExitCode
+	end 'k'
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:20: Unsupported: `Boxed.plain` in a constant initializer — a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
