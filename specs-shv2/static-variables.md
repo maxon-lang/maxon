@@ -2168,3 +2168,54 @@ end 'main'
 ```maxoncstderr
 error E3019: <fragment>:15:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)
 ```
+
+### W117's returned-shape sweep — the INLINE CONDITIONAL
+
+⭐⭐ **A `return` WHOSE VALUE IS AN INLINE CONDITIONAL HAS TWO ARMS, AND EITHER MAY BE A GLOBAL'S RECORD.**
+`noteReturnedGlobalOrForward` recognises a deliberately narrow set of `return` shapes, and its own tail
+states the family rule: an unrecognised shape leaves the function's bit clear, and a clear bit keeps the
+E2015 refusal at the return — *"a missed shape costs a REFUSAL, never a silent acceptance"*.
+
+⛔ **THE MISS WAS REACHED, BY SHV2'S OWN SOURCE.** `ConformanceCheck.pairableAssociatedTypeNames` is
+`return sharedEmptyDeclaredConformances if boundTypeNames.count() < associatedTypeNames.count() else
+associatedTypeNames` — a legal program the bootstrap compiles, refused because the sweep read the shape
+and recorded nothing.
+
+⚠ **BOTH ARMS ARE SEEDED, NEVER ONE.** The shape says the value is one of two records and the sweep
+cannot know which; recording only the half it happened to read first would be a fact about the parser
+rather than about the program. A nested conditional — in the CONDITION, where its `else` sits behind a
+paren, or in the ELSE arm, where the arm is not a bare name — still records nothing for that arm, which
+is the family rule again: the THEN arm is seeded either way, so a missed else arm cannot make the bit
+WRONG, only incomplete.
+
+<!-- test: a-returned-inline-conditional-may-hand-back-a-global -->
+The `pairableAssociatedTypeNames` shape, and both arms are exercised — one call takes the global, the
+other takes the parameter.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Names = Array with Integer
+
+let sharedEmptyNames = Names.create()
+
+function pairable(bound Names, wanted Names) returns Names
+	return sharedEmptyNames if bound.count() < wanted.count() else wanted
+end 'pairable'
+
+function main() returns ExitCode
+	var a = Names.create()
+	a.push(1)
+	var b = Names.create()
+	b.push(2)
+	b.push(3)
+	let short = pairable(a, wanted: b)
+	let long = pairable(b, wanted: a)
+	print("short={short.count()} long={long.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+short=0 long=1
+```
