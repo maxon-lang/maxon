@@ -50931,16 +50931,28 @@ export type Parser
 	// cross-file comments cite it (`SemanticCheck.maxon:2813, 2960`, `LowerMaxonToStd.maxon:1560`) and this
 	// rung owns neither file. A rename is a two-file comment edit and belongs to whoever holds them.
 	function retypeGenericAliasConstructorResult(result ValueId, gid GenericInstanceId, aliasName ByteArray)
-		if self.tagOf(result) != ValueTypeTag.structRef 'notBaseStruct'
-			return
-		end 'notBaseStruct'
+		self.retypeConstructorResultToInstance(result, gid: gid)
 
-		let baseId = self.artifact.typeNames.intern(self.signatures.genericInstanceBaseName(gid))
-		let resultNameId = try self.valueNameIds.get(result) otherwise panic("retypeGenericAliasConstructorResult: result v{result} has no name-id — the two type columns are dense and in lockstep")
-		if resultNameId != baseId 'notThisBase'
+		// ⛔⛔ **PROVENANCE IS ABOUT WHAT THE SITE WROTE, NOT ABOUT WHETHER A RETYPE WAS NEEDED — and it used
+		// to sit BEHIND the retype's two guards, so a factory whose result was ALREADY the instance recorded
+		// NOTHING.** That is the common case, not the rare one: only a DECLARED generic's `create() returns
+		// Self` comes back as the shared body's base `structRef` and needs retyping, while every builtin
+		// container's factory — `OtherCol.create()` over `Array` — is already typed and fell straight out of
+		// the first guard. **MEASURED with a probe at the display door: `named=''` for exactly that value,
+		// while its own function's provenance map existed** — which is why a diagnostic could not say which of
+		// two R-1-merged aliases the blamed statement had written, and named the first-declared instead.
+		//
+		// ⚠ The guards below are the ones this fact needs, and they are NOT the retype's: the value must BE an
+		// instance and it must be THIS one. A result that is some other base's struct is not described by
+		// this alias and must not be stamped with its name.
+		if self.tagOf(result) != ValueTypeTag.genericInstance 'notAnInstanceValue'
 			return
-		end 'notThisBase'
-		self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
+		end 'notAnInstanceValue'
+
+		if self.valueNameId(result) != gid 'aDifferentInstance'
+			return
+		end 'aDifferentInstance'
+
 		// ⭐ Carry the FACTORY's instance-alias provenance onto the result (P1.6-C), so a later
 		// `w.getTag()` / `w.setTag(…)` on this value can re-qualify an inner-alias return/parameter to
 		// `WrapperA.Idx`. The shared gid cannot recover `WrapperA`; only the syntactic `aliasName` here can.
@@ -50962,6 +50974,23 @@ export type Parser
 		// and it is the same spelling `recordValueInstanceAlias` is here for.
 		self.markDeclaredSurface(result, declared: surfaceOfRootBits(self.signatures.aliasSpellingSurfaceBits(aliasName, readerFilePath: self.filePath)))
 	end 'retypeGenericAliasConstructorResult'
+
+	// ⭐ **THE RETYPE HALF.** A DECLARED generic's `create() returns Self` hands back the shared body's base
+	// `structRef`, and only the call site knows which instance was asked for. A result that is already an
+	// instance — every builtin container's factory — needs nothing done to it, which is precisely why the
+	// provenance above may not be written behind these guards.
+	function retypeConstructorResultToInstance(result ValueId, gid GenericInstanceId)
+		if self.tagOf(result) != ValueTypeTag.structRef 'notBaseStruct'
+			return
+		end 'notBaseStruct'
+
+		let baseId = self.artifact.typeNames.intern(self.signatures.genericInstanceBaseName(gid))
+		let resultNameId = try self.valueNameIds.get(result) otherwise panic("retypeGenericAliasConstructorResult: result v{result} has no name-id — the two type columns are dense and in lockstep")
+		if resultNameId != baseId 'notThisBase'
+			return
+		end 'notThisBase'
+		self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
+	end 'retypeConstructorResultToInstance'
 
 	// ⭐ **`p.add(10)` / `self.add(10)` — AN INSTANCE METHOD CALL, WHICH IS AN ORDINARY DIRECT CALL
 	// WITH ONE EXTRA ARGUMENT.**
@@ -55295,7 +55324,37 @@ export type Parser
 	// `giid`, which cannot answer: `Array with __ManagedMemory` and `Array with ByteArray` intern to the SAME
 	// instance. The name is the caller's because the doors spell it differently — a top-level alias is its own
 	// token, a nested one is base-qualified — and only they know which.
+	// ⭐⭐ **THE CONTAINER, PLUS THE PROVENANCE OF THE NAME THE SITE BUILT IT UNDER (P1.6-C, extended at R-1).**
+	//
+	// ⛔⛔ **A BUILTIN CONTAINER'S FACTORY RECORDED NO SPELLING AT ALL, AND AFTER R-1 THAT IS A WRONG ANSWER IN
+	// A DIAGNOSTIC.** Two ranged aliases over one range are ONE instance, so `WideCol` and `OtherCol` share a
+	// gid and only the written spelling can say which one `takesNarrow(OtherCol.create())` passed. The
+	// provenance column existed and this door never wrote it: `retypeGenericAliasConstructorResult` is where a
+	// DECLARED generic's factory result gets stamped, and a builtin container never reaches it — its result is
+	// already an instance rather than the shared body's base `structRef`. **MEASURED: a probe here counted ZERO
+	// calls to that door for `OtherCol.create()`**, and the diagnostic named the first-declared alias in the
+	// file, where the bootstrap names the one at the site.
+	//
+	// ⚠ It is stamped in ONE place rather than in each of the three arms, because it is one fact about the
+	// CALL and not about which kind of container the call built.
 	function emitOwnedContainerCreate(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws ParseError
+		let container = try self.emitOwnedContainerRecord(giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
+		// The stamp is PAID FOR ONLY WHERE IT CAN BE READ. A diagnostic consults the provenance exactly when
+		// the gid has more than one author spelling, which R-1's merge decided before this parse began
+		// (`deriveInstanceDisplayNames` runs at the end of the signature sweep) — so an instance one alias
+		// spells records nothing and a program with no merge at all pays one set probe per container it
+		// builds. MEASURED ungated on the scale ladder: +2,069 allocations at rung 0 rising to +16,357 at
+		// rung 5, for a spelling nothing would ever ask for.
+		if self.signatures.instanceIsMultiplyAliased(giid) and self.signatures.isGenericAlias(aliasName) 'aWrittenAliasWorthRemembering'
+			self.recordValueInstanceAlias(container, aliasName: aliasName)
+		end 'aWrittenAliasWorthRemembering'
+
+		return container
+	end 'emitOwnedContainerCreate'
+
+	// The record itself — one arm per container kind. Split from the stamping above so the provenance is written
+	// once for all three rather than at each `return`.
+	function emitOwnedContainerRecord(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws ParseError
 		if self.signatures.isArrayInstance(giid) 'array'
 			let arr = try self.emitArrayCreateOp(giid, range: range)
 			self.trackOwnedTemp(arr, exclusivity: OwnedHeapExclusivity.sole)
@@ -55328,7 +55387,7 @@ export type Parser
 		let container = try self.gateAndEmitContainerCreate(giid, aliasTok: aliasTok, range: range)
 		self.trackOwnedTemp(container, exclusivity: OwnedHeapExclusivity.sole)
 		return container
-	end 'emitOwnedContainerCreate'
+	end 'emitOwnedContainerRecord'
 
 	// ⭐ **THE EMPTY RECORD, THEN ITS SLOTS PUBLISHED** — `__managed_create` yields a record with no slots
 	// (every index out of bounds) and `__managed_resize` grows it to the count and ZEROES the new range, which

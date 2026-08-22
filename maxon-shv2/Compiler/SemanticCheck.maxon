@@ -4308,7 +4308,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			// way (user ruling, 2026-08-04). The compiled twin read `expected 'Box_Leaf', got 'OtherBox'`
 			// on a program that declares `typealias LeafBox = Box with Leaf` — the `got` side quoting the
 			// author and the `expected` side quoting the mangler.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(signatures.instanceArgDisplayName(gid, position: position)), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(signatures.instanceArgDisplayName(gid, position: position)), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongTypeArgument'
 
@@ -4497,7 +4497,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
 
 		if namedAggregatesConflict(expected, got: got) 'wrongInstance'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongInstance'
 	end 'eachArg'
@@ -4511,9 +4511,49 @@ function receiverInstanceAlias(project Project, func IrFunction, argIds ValueIdA
 		return EmptySourceText
 	end 'noArgs'
 	let receiverId = try argIds.get(0) otherwise panic("receiverInstanceAlias: argIds.count() > 0 but get(0) failed")
-	let checks = try project.rangeChecks.get(func.name) otherwise return EmptySourceText
-	return try checks.valueInstanceAliases.get(receiverId) otherwise EmptySourceText
+	return instanceAliasOfValue(project, func: func, value: receiverId)
 end 'receiverInstanceAlias'
+
+// The instance alias the SOURCE named when it wrote this value down (P1.6-C's per-value provenance), or empty
+// where it named none — a `self` receiver, a value merged across branches. Split out of
+// `receiverInstanceAlias` when the diagnostics gained a second reason to ask it; the receiver question is now
+// "the alias of argument 0" and nothing more.
+function instanceAliasOfValue(project Project, func IrFunction, value ValueId) returns ByteArray
+	let checks = try project.rangeChecks.get(func.name) otherwise return EmptySourceText
+	return try checks.valueInstanceAliases.get(value) otherwise EmptySourceText
+end 'instanceAliasOfValue'
+
+// ⭐⭐ **HOW A DIAGNOSTIC SPELLS THE TYPE OF A *VALUE* — the site's own words where the type itself has none.**
+//
+// ⛔⛔ **R-1 MADE THE gid AN INSUFFICIENT ANSWER, AND THE ORACLE ALREADY KNEW IT.** Two ranged aliases over
+// one range are one type, so `WideCol` and `OtherCol` share a `GenericInstanceId` and the per-gid display can
+// only pick one of them. MEASURED on `var o = OtherCol.create(); takesNarrow(o)`: the bootstrap says
+// `got 'OtherCol'` — the spelling at the site — while a per-gid answer said `got 'WideCol'`, a name that
+// appears nowhere in the statement being blamed.
+//
+// ⭐ **THE CHANNEL ALREADY EXISTED**: `valueInstanceAlias` was built for P1.6-C to carry exactly *"the
+// provenance the shared `GenericInstanceId` cannot carry (`WrapperA` and `WrapperB` share one gid)"*. R-1
+// makes that sentence true of ranged aliases too, so this reads the same column rather than inventing one.
+//
+// ⚠ **ASKED ONLY WHERE THE gid CANNOT ANSWER.** An instance one alias spells is spelled that way by
+// everyone, and going through the value would change nothing while making every mismatch pay a map probe —
+// and would quietly re-spell messages that are pinned against the oracle today.
+function valueTypeDisplayName(project Project, func IrFunction, value ValueId, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns String
+	if tag != ValueTypeTag.genericInstance 'itsTypeHasOneSpelling'
+		return typeDisplayName(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath)
+	end 'itsTypeHasOneSpelling'
+
+	if not programSignaturesIn(project, asker: "valueTypeDisplayName").instanceIsMultiplyAliased(nameId) 'oneAliasSpellsItForEveryone'
+		return typeDisplayName(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath)
+	end 'oneAliasSpellsItForEveryone'
+
+	let named = instanceAliasOfValue(project, func: func, value: value)
+	if named.isEmpty() 'theSiteNamedNoAlias'
+		return typeDisplayName(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath)
+	end 'theSiteNamedNoAlias'
+
+	return String.from(named)
+end 'valueTypeDisplayName'
 
 // ⭐ **REFUSE A CAPTURING CLOSURE PASSED TO A PERSISTED PARAMETER (P1.5-A2b-2, E3099).** The closure's
 // environment belongs to THIS frame; a callee that stores or returns the parameter keeps the closure alive
@@ -5566,7 +5606,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// non-conformer's bindings are not the fault worth reporting.
 			widens then checkExistentialSiteClaimAtArgument(project, func: func, paramExistentialSites: paramExistentialSites, position: position, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, paramName: paramName, callInstanceSubject: callInstanceSubject, callRange: callRange, filePath: filePath)
 			floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(paramName, position: position)}, which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
-			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
+			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
 		end 'widening'
 		return
 	end 'existentialParam'
@@ -5609,7 +5649,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// never reaches the tag rule below — measured on `takeMsg(t)` with a `union Message` formal. Same
 			// fault, same reader, so the same explanation: `argMismatchWithOpaqueTail` appends nothing unless the
 			// ARGUMENT is the opaque one, which leaves every nominal-vs-nominal refusal here spelled as before.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, readerFilePath: func.sourceFilePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, readerFilePath: func.sourceFilePath), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateComparable'

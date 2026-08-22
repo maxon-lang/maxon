@@ -1674,31 +1674,46 @@ nothing the author did not write. `instanceDisplayNameIn` is the door; `instance
    usually not R-1's doing — a spec's `Strs` and the stdlib's `StringArray` have always named one `Array with String`,
    and first-wins answered those correctly. Only instances R-1 actually MERGED are marked.
 
-⚠ **ONE DIVERGENCE FROM THE ORACLE REMAINS, MEASURED AND NOT CLOSED.** Where ONE FILE declares two claimants, shv2 names
-the first-declared and the bootstrap names **the spelling at the site**:
+✅ **AND THE DIVERGENCE FROM THE ORACLE IS CLOSED TOO (user, 2026-08-22: *"diagnostics need to be accurate"*).**
+Where ONE FILE declared two claimants, shv2 named the first-declared and the bootstrap named **the spelling at the
+site**:
 
 ```
 typealias Wide  = int(0 to u64.max)     typealias WideCol  = Array with Wide
 typealias Other = int(0 to u64.max)     typealias OtherCol = Array with Other
-…  takesNarrow(OtherCol.create())
-   shv2:      argument type mismatch for 'c': expected 'NarrowCol', got 'WideCol'
-   bootstrap: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
+…  var o = OtherCol.create() … takesNarrow(o)
+   was:  argument type mismatch for 'c': expected 'NarrowCol', got 'WideCol'      ⟵ a name the statement never says
+   now:  argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'     ⟵ character for character the oracle's
 ```
 
-Both are the file's own aliases and both denote the type, so shv2's is not WRONG — but the oracle's is better, and the
-oracle proves it is reachable. ⇒ **THE FIX IS PER-VALUE PROVENANCE, AND THE COLUMN ALREADY EXISTS**: P1.6-C's
-`valueInstanceAlias` carries *"the provenance the shared `GenericInstanceId` cannot carry (`WrapperA` and `WrapperB`
-share one gid)"* — the identical sentence, one type-family over. **MEASURED: it does not cover a factory result** — a
-probe at the display door read `named=''` for `OtherCol.create()`'s value while its function's map existed — so closing
-this means extending recording to factory results and to reads of a binding, which is a slice of its own. A display
-preferring that column was written, could not be shown to fire, and was REMOVED rather than shipped unverified.
+⭐⭐ **THE PROVENANCE COLUMN ALREADY EXISTED AND ONE DOOR NEVER WROTE IT.** P1.6-C's `valueInstanceAlias` was built
+to carry *"the provenance the shared `GenericInstanceId` cannot carry (`WrapperA` and `WrapperB` share one gid)"* —
+the identical sentence, one type-family over, which is why R-1 needed no new column. It was stamped only by
+`retypeGenericAliasConstructorResult`, and **a BUILTIN container's factory never reaches that door**: its result is
+already an instance rather than the shared body's base `structRef`, so it falls out of the first guard.
+**MEASURED with a probe: ZERO calls to it for `OtherCol.create()`.** `emitOwnedContainerCreate` stamps it now, in
+ONE place rather than in each of its three arms, and the provenance survives a `var` binding.
+
+⚠ **THE STAMP IS PAID FOR ONLY WHERE IT CAN BE READ.** A diagnostic consults it exactly when the gid has more than
+one author spelling, and R-1's merge decided that before the parse began — so the stamp is gated on it. **MEASURED
+ungated: +2,069 allocations at rung 0 rising to +16,357 at rung 5**, for a spelling nothing would ever ask for;
+gated it is **+255 at rung 5**.
+
+⚠ **ONE SOURCE OF SPELLING IS STILL UNSTAMPED, AND IT IS A SLICE OF ITS OWN, NOT A DEFECT:** a value that arrives
+as a plain CALL RESULT carries no alias, because a function's declared RETURN spelling is not recorded for a generic
+instance (`FunctionRangeChecks.returnAliasName` is *"EMPTY unless the function returns a ranged INT alias"*). That is
+why `RegisterAllocator.maxon:93` still reads `Array with int(0 to 18446744073709551615)` rather than `DenseColumn` —
+**a true name for the type, and never a stranger's alias**, which is the property that had to hold. Closing it means
+recording the return clause's alias spelling and stamping the call result from it.
 
 ⚠ **THE RANGE-RENDERED PATH CANNOT BE PINNED BY A SPEC, AND THAT IS MEASURED, NOT ASSUMED.** It needs a merged instance
 whose claimants the reading file does not declare — i.e. two files. Spec fragments are ONE file plus `stdlib/`, and
 `stdlib/` interns no two same-range arrays (`Array with ParsedInt` is the only one over its range), so a fragment can
 only reach a merge by declaring a claimant itself, which then wins the file-local lookup. The path is exercised by
-shv2's own build. The FILE-LOCAL half IS pinned — `ranged-typealias/error.two-aliases-over-different-ranges-are-still-two-types`
-reddens to the range spelling if the reader's file is not consulted, which is how the door was verified.
+shv2's own build. **The other two halves ARE pinned and both are sabotage-verified:**
+`ranged-typealias/error.two-aliases-over-different-ranges-are-still-two-types` reddens to the range spelling if the
+reader's file is not consulted, and `ranged-typealias/error.a-diagnostic-names-the-alias-the-site-wrote` reddens to
+exactly the old `got 'WideCol'` if the provenance stamp is removed.
 
 <details><summary>The two routes considered, and why (a) was chosen</summary>
 

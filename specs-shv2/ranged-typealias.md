@@ -3257,3 +3257,47 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/ranged-typealias/error.two-aliases-over-different-ranges-are-still-two-types.test:14:9: argument type mismatch for 'c': expected 'NarrowColumn', got 'WideColumn'
 ```
+
+<!-- test: error.a-diagnostic-names-the-alias-the-site-wrote -->
+### A diagnostic names the alias the SITE wrote, not the first one declared
+⛔⛔ **R-1 MADE THE `GenericInstanceId` AN INSUFFICIENT ANSWER TO "WHAT IS THIS VALUE'S TYPE CALLED?"** `WideCol`
+and `OtherCol` are one instance here, so a per-gid display can only pick one of them — and it picked the one
+declared FIRST, naming `WideCol` in a statement that says `OtherCol`. The bootstrap names the site's spelling,
+and this case pins that shv2 now does too.
+
+⭐ **THE PROVENANCE COLUMN ALREADY EXISTED AND THIS DOOR NEVER WROTE IT.** `valueInstanceAlias` was built for
+P1.6-C to carry *"the provenance the shared `GenericInstanceId` cannot carry (`WrapperA` and `WrapperB` share
+one gid)"* — the identical sentence, one type-family over. It was stamped only by
+`retypeGenericAliasConstructorResult`, which a BUILTIN container's factory never reaches: its result is already
+an instance rather than the shared body's base `structRef`, so it falls out of that door's first guard.
+MEASURED with a probe: ZERO calls to it for `OtherCol.create()`. `emitOwnedContainerCreate` stamps it now.
+
+⚠ **THE VALUE IS READ BACK THROUGH A `var`, DELIBERATELY.** A case that passed the factory result straight into
+the call would not say whether the provenance survives a binding — and the binding is the shape a real program
+writes.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Other = int(0 to u64.max)
+typealias WideCol = Array with Wide
+typealias OtherCol = Array with Other
+typealias Narrow = int(0 to 63)
+typealias NarrowCol = Array with Narrow
+
+function widthOf(c WideCol) returns ExitCode
+	return c.count() as ExitCode
+end 'widthOf'
+
+function takesNarrow(c NarrowCol) returns ExitCode
+	return c.count() as ExitCode
+end 'takesNarrow'
+
+function main() returns ExitCode
+	var o = OtherCol.create()
+	o.push(2)
+	let w = widthOf(o)
+	return takesNarrow(o) + w
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.a-diagnostic-names-the-alias-the-site-wrote.test:21:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
+```
