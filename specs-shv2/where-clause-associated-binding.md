@@ -372,3 +372,226 @@ end 'main'
 ```maxoncstderr
 error E2066: <fragment>:8:39: interface 'Sized' declares 0 associated type(s), but this parenthesized 'with' clause binds 1
 ```
+
+<!-- test: associated-binding.a-constraint-argument-written-as-a-typealias-gets-its-own-table -->
+⭐⭐ **AN INSTANCE IS AN INSTANCE HOWEVER IT IS SPELLED.** `Holder with LeafBox` names the same argument as
+`Holder with (Box with Leaf)` — one through a `typealias`, one inline — and both need the per-instance table
+`Box.size`'s hidden witness comes from. The lowering used to read only the TYPE TAG, which a declared name
+does not carry: the alias spelling reduced to the SHARED `Box` table, whose adapter hands `Box.size` a null
+witness, and the program was refused with **E3128**. The inline spelling compiled and answered 16 all along.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Integer
+end 'Sized'
+
+type Leaf implements Sized
+	var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function size() returns Integer
+		return self.n
+	end 'size'
+end 'Leaf'
+
+type Box uses T implements Sized where T is Sized
+	var t as T
+
+	export static function create(t T) returns Self
+		return Self{t: t}
+	end 'create'
+
+	export function size() returns Integer
+		return self.t.size() + 1
+	end 'size'
+end 'Box'
+
+type Holder uses S where S is Sized
+	var s as S
+
+	export static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	export function twice() returns Integer
+		return self.s.size() * 2
+	end 'twice'
+end 'Holder'
+
+typealias LeafBox = Box with Leaf
+typealias BoxHolder = Holder with LeafBox
+
+function main() returns ExitCode
+	print("{BoxHolder.create(LeafBox.create(Leaf.create(7))).twice()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+16
+```
+
+<!-- test: associated-binding.a-parametric-constraint-argument-is-a-zero-nothing-reads -->
+⭐⭐ **THE WITNESS A SHARED BODY CANNOT NAME, AND THE PROOF THAT NOTHING NEEDED IT.** `Outer.tally` builds
+`Holder with (Box with E)` while `E` is still its own type parameter, so the `where S is Sized` witness it
+owes is a table for `Box with E` — an instance whose adapter would have to name a layout descriptor only the
+running frame holds. There is no such table, so the call passes a ZERO and the compiler PROVES the callee
+reads none of it (`Holder.create` is a bare `Self` literal; `Holder.tag` returns a constant). This is the
+shape `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` is, without the stdlib.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Integer
+end 'Sized'
+
+type Leaf implements Sized
+	var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function size() returns Integer
+		return self.n
+	end 'size'
+end 'Leaf'
+
+type Box uses T implements Sized where T is Sized
+	var t as T
+
+	export static function create(t T) returns Self
+		return Self{t: t}
+	end 'create'
+
+	export function size() returns Integer
+		return self.t.size() + 1
+	end 'size'
+end 'Box'
+
+type Holder uses S where S is Sized
+	var s as S
+
+	export static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	export function twice() returns Integer
+		return self.s.size() * 2
+	end 'twice'
+
+	export function tag() returns Integer
+		return 5
+	end 'tag'
+end 'Holder'
+
+type Outer uses E where E is Sized
+	typealias BoxE = Box with E
+	typealias Inner = Holder with BoxE
+	var e as E
+
+	export static function create(e E) returns Self
+		return Self{e: e}
+	end 'create'
+
+	export function tally() returns Integer
+		return Inner.create(BoxE.create(self.e)).tag() + self.e.size()
+	end 'tally'
+end 'Outer'
+
+typealias LeafOuter = Outer with Leaf
+
+function main() returns ExitCode
+	print("{LeafOuter.create(Leaf.create(7)).tally()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+12
+```
+
+<!-- test: error.a-parametric-constraint-argument-the-callee-reads -->
+⭐⭐ **AND WHERE THE CALLEE DOES READ IT, THE ZERO IS REFUSED RATHER THAN SHIPPED.** The same program with
+`twice()` — which dispatches `self.s.size()` through the very witness — in place of `tag()`. A null table is
+a wild indirect call at the first dispatch, so the proof is the whole difference between the two cases: the
+test is USE, not read-of-a-particular-kind.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Integer
+end 'Sized'
+
+type Leaf implements Sized
+	var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function size() returns Integer
+		return self.n
+	end 'size'
+end 'Leaf'
+
+type Box uses T implements Sized where T is Sized
+	var t as T
+
+	export static function create(t T) returns Self
+		return Self{t: t}
+	end 'create'
+
+	export function size() returns Integer
+		return self.t.size() + 1
+	end 'size'
+end 'Box'
+
+type Holder uses S where S is Sized
+	var s as S
+
+	export static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	export function twice() returns Integer
+		return self.s.size() * 2
+	end 'twice'
+
+	export function tag() returns Integer
+		return 5
+	end 'tag'
+end 'Holder'
+
+type Outer uses E where E is Sized
+	typealias BoxE = Box with E
+	typealias Inner = Holder with BoxE
+	var e as E
+
+	export static function create(e E) returns Self
+		return Self{e: e}
+	end 'create'
+
+	export function tally() returns Integer
+		return Inner.create(BoxE.create(self.e)).twice() + self.e.size()
+	end 'tally'
+end 'Outer'
+
+typealias LeafOuter = Outer with Leaf
+
+function main() returns ExitCode
+	print("{LeafOuter.create(Leaf.create(7)).tally()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3132: <fragment>:57:18: 'Outer.tally' calls 'Holder.twice', whose `where` constraint requires a witness table for `Box` conforming to `Sized` at a generic instance written over this body's OWN type parameters — and 'Holder.twice' READS that witness. A conformance whose impls carry a hidden dictionary is given a table PER INSTANCE, whose slots supply that instantiation's layout descriptor; an instance that is still parametric names a descriptor the enclosing frame only holds at run time, so no static table exists to pass. Reach the constrained method through a concrete instance, or make the conformance's impls independent of their type argument
+```

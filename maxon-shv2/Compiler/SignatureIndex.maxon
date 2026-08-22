@@ -21683,6 +21683,42 @@ export type ProgramSignatures
 		return self.conformerNameOfType(self.substitutedInstanceArg(gid, position: position), idsFrom: self.typeNames)
 	end 'conformerTypeArgName'
 
+	// ⭐⭐ **THE INSTANCE THAT SAME ARGUMENT NAMES, WHEN IT NAMES ONE (BATCH43)** — `conformerTypeArgName`'s
+	// twin, and it has to be its twin: the name answers WHICH CONFORMANCE and this answers WHICH
+	// INSTANTIATION, and a witness table for a dictionary-carrying conformance is keyed by both
+	// (`LowerMaxonToStd.witnessTableInstanceFor`). Two spellings of "is this argument an instance?" is exactly
+	// the shape that let one of them say no.
+	//
+	// ⛔⛔ **IT SAID NO FOR AN INSTANCE WRITTEN AS A `typealias`, AND THAT WAS A REFUSAL OF A LEGAL PROGRAM.**
+	// The lowering asked only the TAG: a `Wrap with (Cur with Small, Small)` written inline carries the
+	// argument as a `genericInstance` and got its per-instance table, while the identical program written
+	// `typealias SmallCur = Cur with Small` … `Wrap with (SmallCur, Small)` carries it as a declared NAME,
+	// reduced to the shared table — whose adapter then hands `Cur.current` a null dictionary, refused with
+	// E3128. **MEASURED: the inline spelling compiles and answers 7; the alias spelling is refused.** The name
+	// half never had that hole because it goes through `conformerNameOfType`, which resolves an aggregate tag
+	// through the interner; this is that same resolution for the instance half.
+	//
+	// ⚠ **IT RESOLVES AGAINST THIS INDEX'S OWN INTERNER, WHICH IS WHY IT LIVES HERE AND NOT AT THE CALL
+	// SITE.** A stored instance argument's `named`/`structRef` id is THIS index's; the lowering's
+	// `project.typeNames` is a different id space, and resolving one against the other answers with whatever
+	// name happens to sit at that number (`conformerNameOfType`'s header records the measured refusal that
+	// produced).
+	//
+	// An argument that names no instance at all — `int`, a plain struct, a type parameter — THROWS, which is
+	// the same "there is no instance here" answer `instanceOfDeclaredName` gives for a name that is not one.
+	export function conformerTypeArgInstance(gid GenericInstanceId, position TypeParamPosition) returns GenericInstanceId throws MapError
+		let arg = self.substitutedInstanceArg(gid, position: position)
+		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'anInstanceById'
+			return typeNameIdOf(arg)
+		end 'anInstanceById'
+
+		if not tagMayNameAggregate(maxonTypeTag(arg)) 'namesNoDeclaration'
+			throw MapError.keyNotFound
+		end 'namesNoDeclaration'
+
+		return try self.instanceOfDeclaredName(try self.typeNames.nameOf(typeNameIdOf(arg)) otherwise panic("conformerTypeArgInstance: type-name id {typeNameIdOf(arg)} is not in this index's interner — an instance's stored argument was interned by this index, so its ids are this index's own"))
+	end 'conformerTypeArgInstance'
+
 	// ⭐ **THE CANONICAL CONFORMER NAME A TYPE REDUCES TO — the key every conformance answer, every
 	// `__witness_<conformer>.<Iface>` label and every `<conformer>.<method>` impl symbol is filed under.**
 	// Split out of `conformerTypeArgName` when the EXISTENTIAL widening doors needed the same reduction of a

@@ -2060,13 +2060,15 @@ E3128 SemanticSharedConformanceReadsDictionary
 	doc (`__witness_Box_Leaf.Sized`) and its slots point at adapters holding the instance's own descriptor,
 	doc element count and constraint witnesses; a conformer whose impls need none keeps the one shared table.
 	doc What this code now refuses is the residue: a table demanded where there is NO concrete instance to
-	doc key it by. Two shapes reach it, and both are real. A conformer with no instantiation in hand at all;
-	doc and -- the one the corpus reaches -- an instance that is still PARAMETRIC because it is written inside
-	doc a shared generic body over that body's own type parameters. `stdlib/Array.maxon`'s
-	doc `ArrayIterator with Element`, built by `Array.withIterator()`, is exactly that: `ArrayIterator.current`
-	doc reads `Element`'s layout descriptor, and no static `.rdata` table can carry a descriptor the ENCLOSING
-	doc FRAME holds at run time. Curing that needs either a specialization of the enclosing method per element
-	doc type or a witness ABI that carries a dictionary beside the table -- a design decision, not a pass.
+	doc key it by -- a conformer with no instantiation in hand at all.
+	doc THE PARAMETRIC ARGUMENT NO LONGER REACHES IT (BATCH43), and it used to be the shape the corpus hit.
+	doc `stdlib/Array.maxon`'s `ArrayIterator with Element`, built by `Array.withIterator()` inside a body still
+	doc generic in `Element`, was sent here because `witnessTableInstanceFor` reduces a non-concrete instance to
+	doc the shared table and the shared table's adapter then hands the impl a null dictionary. That is the right
+	doc refusal about the TABLE asked one mechanism away from the call the author wrote: the question a witness
+	doc ARGUMENT poses is whether the CALLEE reads it. `LowerMaxonToStd.materializeWitnessArg` now passes a zero
+	doc for such an argument and `requireCalleeIgnoresParametricWitness` proves nothing reads it, refusing with
+	doc E3132 where something does.
 
 E3129 SemanticMatchArmPayloadBindingConflict
 	shv2 matchArmPayloadBindingConflict
@@ -2165,6 +2167,30 @@ E3133 SemanticWhereConstraintBindingDisagreement
 	doc where the type argument and the constraint first meet.
 	doc The cure is to bind the constraint to what the conformer declares, or to supply a type argument
 	doc whose conformance binds what the constraint states.
+
+E3132 SemanticParametricConstraintWitnessRead
+	shv2 semanticParametricConstraintWitnessRead
+	doc A call passes the hidden witness table for one of the callee's `where` constraints, the type argument
+	doc at that constraint is a generic instance written over the CALLING body's own type parameters, the
+	doc conformance behind it has impls that carry a hidden dictionary -- and the callee READS that witness
+	doc parameter.
+	doc Such an instance has no table. A witness table is `.rdata`, and the slots of a dictionary-carrying
+	doc conformance point at adapters that must supply the instantiation's layout descriptor, its fixed element
+	doc count and its own constraint witnesses; for `ArrayIterator with Element` inside a body still generic in
+	doc `Element` every one of those is a run-time fact of the ENCLOSING FRAME, and no static blob can carry it.
+	doc E3128 is the same wall one mechanism down, reached from the table rather than from the argument.
+	doc Where the callee never READS the parameter the call passes a zero and this check is what makes that
+	doc sound rather than a guess -- exactly as `LowerMaxonToStd.appendNullAdapterDictionary` passes a null
+	doc dictionary and `requireWitnessSlotImplIgnoresDictionary` proves the impl reads none of it. The test is
+	doc USE and not read-of-a-particular-kind: a witness that is dispatched through, forwarded to another
+	doc dictionary-passing callee, or merely stored is equally a value the caller cannot supply.
+	doc `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` is the shape that passes the check --
+	doc `WithIterIterator.create` returns a bare `Self` struct literal and dispatches nothing, while the
+	doc `current()`/`advance()` a for-loop then drives are reached from a CONCRETE instance that mints a real
+	doc per-instance table.
+	doc The cure is to reach the constrained method through a concrete instance -- bind the enclosing body's
+	doc type parameter before the constrained type is built -- or to make the conformance's impls independent
+	doc of their type argument so no dictionary is needed at all.
 
 E6003 BinaryOutputNotWritten
 	shv2 binaryOutputNotWritten

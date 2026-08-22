@@ -1224,13 +1224,15 @@ export enum ErrorCode
 	// (`__witness_Box_Leaf.Sized`) and its slots point at adapters holding the instance's own descriptor,
 	// element count and constraint witnesses; a conformer whose impls need none keeps the one shared table.
 	// What this code now refuses is the residue: a table demanded where there is NO concrete instance to
-	// key it by. Two shapes reach it, and both are real. A conformer with no instantiation in hand at all;
-	// and -- the one the corpus reaches -- an instance that is still PARAMETRIC because it is written inside
-	// a shared generic body over that body's own type parameters. `stdlib/Array.maxon`'s
-	// `ArrayIterator with Element`, built by `Array.withIterator()`, is exactly that: `ArrayIterator.current`
-	// reads `Element`'s layout descriptor, and no static `.rdata` table can carry a descriptor the ENCLOSING
-	// FRAME holds at run time. Curing that needs either a specialization of the enclosing method per element
-	// type or a witness ABI that carries a dictionary beside the table -- a design decision, not a pass.
+	// key it by -- a conformer with no instantiation in hand at all.
+	// THE PARAMETRIC ARGUMENT NO LONGER REACHES IT (BATCH43), and it used to be the shape the corpus hit.
+	// `stdlib/Array.maxon`'s `ArrayIterator with Element`, built by `Array.withIterator()` inside a body still
+	// generic in `Element`, was sent here because `witnessTableInstanceFor` reduces a non-concrete instance to
+	// the shared table and the shared table's adapter then hands the impl a null dictionary. That is the right
+	// refusal about the TABLE asked one mechanism away from the call the author wrote: the question a witness
+	// ARGUMENT poses is whether the CALLEE reads it. `LowerMaxonToStd.materializeWitnessArg` now passes a zero
+	// for such an argument and `requireCalleeIgnoresParametricWitness` proves nothing reads it, refusing with
+	// E3132 where something does.
 	semanticSharedConformanceReadsDictionary = "E3128"
 	// A match arm's payload bindings are not a one-to-one map between names and payload slots, or an
 	// `or`-arm binds a slot some case the arm covers does not hold as that type.
@@ -1304,6 +1306,28 @@ export enum ErrorCode
 	// program failed later, at whatever use site first noticed, naming neither the cast nor its target.
 	// Build the container with the element type you need, or convert it element by element.
 	castTargetIsAContainer = "E3131"
+	// A call passes the hidden witness table for one of the callee's `where` constraints, the type argument
+	// at that constraint is a generic instance written over the CALLING body's own type parameters, the
+	// conformance behind it has impls that carry a hidden dictionary -- and the callee READS that witness
+	// parameter.
+	// Such an instance has no table. A witness table is `.rdata`, and the slots of a dictionary-carrying
+	// conformance point at adapters that must supply the instantiation's layout descriptor, its fixed element
+	// count and its own constraint witnesses; for `ArrayIterator with Element` inside a body still generic in
+	// `Element` every one of those is a run-time fact of the ENCLOSING FRAME, and no static blob can carry it.
+	// E3128 is the same wall one mechanism down, reached from the table rather than from the argument.
+	// Where the callee never READS the parameter the call passes a zero and this check is what makes that
+	// sound rather than a guess -- exactly as `LowerMaxonToStd.appendNullAdapterDictionary` passes a null
+	// dictionary and `requireWitnessSlotImplIgnoresDictionary` proves the impl reads none of it. The test is
+	// USE and not read-of-a-particular-kind: a witness that is dispatched through, forwarded to another
+	// dictionary-passing callee, or merely stored is equally a value the caller cannot supply.
+	// `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` is the shape that passes the check --
+	// `WithIterIterator.create` returns a bare `Self` struct literal and dispatches nothing, while the
+	// `current()`/`advance()` a for-loop then drives are reached from a CONCRETE instance that mints a real
+	// per-instance table.
+	// The cure is to reach the constrained method through a concrete instance -- bind the enclosing body's
+	// type parameter before the constrained type is built -- or to make the conformance's impls independent
+	// of their type argument so no dictionary is needed at all.
+	semanticParametricConstraintWitnessRead = "E3132"
 	// A `where` constraint BINDS the constrained interface's associated types --
 	// `where Source is Iterator with Element` -- and the type argument supplied at an instantiation
 	// conforms to that interface while binding one of those positions to a different type.

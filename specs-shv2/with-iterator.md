@@ -33,9 +33,7 @@ Iterators are first-class values. Pass a half-consumed iterator into a function 
 
 ## Tests
 
-<!-- disabled-test: withIterator.basic -->
-<!-- BLOCKED: a witness table for a PARAMETRIC generic instance, which shv2 cannot mint. RE-MEASURED 2026-08-22 (G19), after that rung cured the E3005 this marker used to name: `error E3128: stdlib/Array.maxon:533:18: 'ArrayIterator.current' … reads the hidden dictionary parameter its generic declaration reserves`. `Array.withIterator()` is `extension Iterable`'s shared body, compiled ONCE over an opaque `Element`, and it builds `WithIterIterator with (ArrayIterator with Element, Element)` — so the `where Source is Iterator` witness it must supply is a table for `ArrayIterator with Element`, an instance that is still parametric. G19 mints a per-instance table for every CONCRETE instance and cannot mint one here: `ArrayIterator.current` reads `Element`'s layout descriptor (through `__ManagedMemoryCursor with Element`), and no static `.rdata` table can carry a descriptor the ENCLOSING FRAME holds at run time. Reproduced stdlib-free: `type Cur uses E implements Cursor with E` (whose `current() returns E` reads the descriptor), `type Wrap uses S, E implements Cursor with E where S is Cursor with E`, and a `type Box uses E` whose method returns `Wrap with (Cur with E, E)` — the same E3128 on `Cur.current`, so it is the SHAPE and not the corpus. -->
-<!-- the rung that gives a witness dispatch a DICTIONARY beside its table, or specializes a shared body per element type — a design decision, not a pass. Reported to the coordinator as a candidate rung; on no rung of PLAN.md today. -->
+<!-- test: withIterator.basic -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -96,9 +94,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: withIterator.body-advance-skips-element -->
-<!-- BLOCKED: a witness table for a PARAMETRIC generic instance, which shv2 cannot mint. RE-MEASURED 2026-08-22 (G19), after that rung cured the E3005 this marker used to name: `error E3128: stdlib/Array.maxon:533:18: 'ArrayIterator.current' … reads the hidden dictionary parameter its generic declaration reserves`. `Array.withIterator()` is `extension Iterable`'s shared body, compiled ONCE over an opaque `Element`, and it builds `WithIterIterator with (ArrayIterator with Element, Element)` — so the `where Source is Iterator` witness it must supply is a table for `ArrayIterator with Element`, an instance that is still parametric. G19 mints a per-instance table for every CONCRETE instance and cannot mint one here: `ArrayIterator.current` reads `Element`'s layout descriptor (through `__ManagedMemoryCursor with Element`), and no static `.rdata` table can carry a descriptor the ENCLOSING FRAME holds at run time. Reproduced stdlib-free: `type Cur uses E implements Cursor with E` (whose `current() returns E` reads the descriptor), `type Wrap uses S, E implements Cursor with E where S is Cursor with E`, and a `type Box uses E` whose method returns `Wrap with (Cur with E, E)` — the same E3128 on `Cur.current`, so it is the SHAPE and not the corpus. -->
-<!-- the rung that gives a witness dispatch a DICTIONARY beside its table, or specializes a shared body per element type — a design decision, not a pass. Reported to the coordinator as a candidate rung; on no rung of PLAN.md today. -->
+<!-- test: withIterator.body-advance-skips-element -->
 Calling `iter.advance()` inside the for-loop body skips the next element. Body runs on 10, advances to 20, header advances again to 30; so 20 is skipped.
 ```maxon
 function main() returns ExitCode
@@ -118,9 +114,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: withIterator.body-retreat-revisits-element -->
-<!-- BLOCKED: a witness table for a PARAMETRIC generic instance, which shv2 cannot mint. RE-MEASURED 2026-08-22 (G19), after that rung cured the E3005 this marker used to name: `error E3128: stdlib/Array.maxon:533:18: 'ArrayIterator.current' … reads the hidden dictionary parameter its generic declaration reserves`. `Array.withIterator()` is `extension Iterable`'s shared body, compiled ONCE over an opaque `Element`, and it builds `WithIterIterator with (ArrayIterator with Element, Element)` — so the `where Source is Iterator` witness it must supply is a table for `ArrayIterator with Element`, an instance that is still parametric. G19 mints a per-instance table for every CONCRETE instance and cannot mint one here: `ArrayIterator.current` reads `Element`'s layout descriptor (through `__ManagedMemoryCursor with Element`), and no static `.rdata` table can carry a descriptor the ENCLOSING FRAME holds at run time. Reproduced stdlib-free: `type Cur uses E implements Cursor with E` (whose `current() returns E` reads the descriptor), `type Wrap uses S, E implements Cursor with E where S is Cursor with E`, and a `type Box uses E` whose method returns `Wrap with (Cur with E, E)` — the same E3128 on `Cur.current`, so it is the SHAPE and not the corpus. -->
-<!-- the rung that gives a witness dispatch a DICTIONARY beside its table, or specializes a shared body per element type — a design decision, not a pass. Reported to the coordinator as a candidate rung; on no rung of PLAN.md today. -->
+<!-- test: withIterator.body-retreat-revisits-element -->
 Calling `iter.retreat()` inside the body causes the next iteration to re-visit the current element. Without the guard, this would loop forever — we stop after a fixed count.
 ```maxon
 function main() returns ExitCode
