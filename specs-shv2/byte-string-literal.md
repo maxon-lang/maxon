@@ -648,3 +648,85 @@ end 'main'
 ```exitcode
 73
 ```
+
+### A RAW newline in the body — legal here, and ONLY here
+
+A byte string is byte-exact, so a literal newline written inside `b"…"` **is** the byte it spells: the
+literal spans source lines and holds `0x0A` at that position. `Runtime/GtRuntime.maxon:581` is the
+consumer — `let GtTraceNewlineText = b"` with the closing quote on the next line is how this compiler's
+own source spells a one-byte newline constant.
+
+⛔ **A `String` literal is the opposite, and the asymmetry is deliberate.** `"…"` carries interpolation
+and escape decoding and is line-oriented; a raw newline in one is `E1002 Unterminated string literal`
+on both compilers, which is what catches a missing closing quote. Measured on the reference bootstrap,
+one program, both forms: the byte string compiles and holds the newline, the String literal does not.
+Do not "unify" the two scanners on this point.
+
+⚠ **AND A SCANNER THAT CONSUMES A NEWLINE OWES THE LINE COUNTER.** shv2 counted lines in exactly two
+places — the `newline` token and the block-comment body — so a body that swallowed newlines left `line`
+short for the whole rest of the file, and every diagnostic after it named somebody else's code. The
+bootstrap had the identical defect and paid for it twice over (`1-Lexer.cs:Advance`): wrong diagnostic
+lines, and `maxon fmt` silently DELETING comments, because it keys them by true source line and emits
+them against token lines. Counting now happens in the one mover both compilers funnel through, so the
+second case below is what stands between this feature and that defect.
+
+<!-- test: byte-string-literal.raw-newline-spans-source-lines -->
+The literal below is written across three source lines and holds exactly the five bytes `a \n b \n c`.
+```maxon
+let Spanning = b"a
+b
+c"
+
+function main() returns ExitCode
+	let first = try Spanning.get(0) otherwise panic("get(0)")
+	let nl = try Spanning.get(1) otherwise panic("get(1)")
+	let last = try Spanning.get(4) otherwise panic("get(4)")
+	print("count={Spanning.count()} first={first} nl={nl} last={last}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+count=5 first=97 nl=10 last=99
+```
+
+<!-- test: byte-string-literal.raw-newline-of-its-own -->
+A byte string whose whole body is one raw newline — the `GtRuntime.maxon:581` shape, verbatim.
+```maxon
+let GtTraceNewlineText = b"
+"
+
+function main() returns ExitCode
+	let only = try GtTraceNewlineText.get(0) otherwise panic("get(0)")
+	print("count={GtTraceNewlineText.count()} byte={only}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+count=1 byte=10
+```
+
+<!-- test: error.raw-newline-keeps-diagnostic-lines-honest -->
+⭐⭐ **THE DRIFT GUARD, AND IT IS THE ONLY OBSERVABLE THERE IS.** The literal above the error swallows
+TWO newlines, so a lexer that consumes them without counting reports this call two lines too early —
+measured at line 6 with the counting removed, against the line 8 it is written on. Nothing else in the
+suite can see that: the program compiles, runs and answers correctly either way, and only the POSITION
+in the diagnostic moves.
+```maxon
+let Spanning = b"a
+b
+c"
+
+function main() returns ExitCode
+	print("len={Spanning.count()}")
+	return undefinedAfterTheLiteral()
+end 'main'
+```
+```maxoncstderr
+error E3004: specs/fragments/byte-string-literal/error.raw-newline-keeps-diagnostic-lines-honest.test:8:9: call to undefined function 'undefinedAfterTheLiteral'
+```

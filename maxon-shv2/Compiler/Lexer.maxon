@@ -643,30 +643,69 @@ type Lexer
 
 	// --- Navigation helpers ---
 
-	function advance() throws CursorError
-		try cursor.advance() otherwise throw CursorError.exhausted
+	// ⭐⭐ **THE ONE PLACE `line` AND `column` ARE KEPT.** Every scanner in this file already funnels
+	// through the movers below, and the byte handed here is the one that mover stepped OVER — so a
+	// newline consumed as ordinary text is counted whoever consumed it, and the next scanner someone
+	// adds has nothing to remember.
+	//
+	// ⚠⚠ **IT USED TO BE THE CALLERS' JOB AND ONLY TWO OF THEM DID IT** — the `newline` token and the
+	// block-comment body — while `tryAdvance` moved only the column. TWO bodies already walked past a
+	// `\n` without either: `scanSingleQuoteString` does it on an unterminated char literal, and
+	// `scanByteStringLiteralBody` now does it BY DESIGN, because a multi-line `b"…"` is a real
+	// construct this compiler's OWN source uses (`Runtime/GtRuntime.maxon:581`, a byte string holding
+	// one newline). Either way `line` fell short by however many newlines were eaten, and stayed short
+	// for the rest of the file.
+	//
+	// ⛔ **THE BOOTSTRAP PAID FOR THIS EXACT DEFECT AND ITS RECEIPT IS IN `1-Lexer.cs:Advance`.** With
+	// the newlines uncounted, EVERY diagnostic after such a literal named a line too low by the number
+	// inside it — measured there as an undefined function on line 6 reported at line 4 — and `maxon
+	// fmt` DELETED comments, because it keys them by true source line and emits them against token
+	// lines, so the two drifted apart and whatever fell off the end was dropped silently. The same
+	// defect, two faces. Counting in the mover is what closed it there and is what closes it here.
+	function countConsumed(consumed Byte)
+		if consumed == Ascii.lf 'consumedNewline'
+			line = line + 1
+			column = 1
+			return
+		end 'consumedNewline'
+
 		column = column + 1
+	end 'countConsumed'
+
+	// ⭐ **THE BYTE IS COUNTED WHETHER OR NOT THE CURSOR CAN MOVE, and that is not an off-by-one — it is
+	// what an EOF position MEANS.** `ArrayIterator` keeps the cursor on a valid element, so it refuses
+	// to step past the LAST byte; but every caller here has already consumed the byte under the cursor
+	// and is only asking to move past it. A refusal says "there is nothing after it", not "it was not
+	// consumed". Counting first is therefore the whole of why `function main()` + a trailing newline
+	// reports its unexpected end of input at line 3 column 1 rather than at the end of line 2:
+	// the file's LAST newline is exactly the byte no advance can step past.
+	// (`cursor.current()` is infallible under that same invariant, so the read never needs a guard.)
+	function advance() throws CursorError
+		countConsumed(cursor.current())
+		try cursor.advance() otherwise throw CursorError.exhausted
 	end 'advance'
 
+	// ⚠ **RETREAT CANNOT UNDO A LINE, AND NOTHING ASKS IT TO.** It steps back over the ONE byte of
+	// lookahead the DFA took (`retreatUnlessLast`, for a number or an identifier), which is a digit or
+	// a letter by construction. Restoring the column across a newline would need the PREVIOUS line's
+	// length, which the cursor does not carry — so this says so rather than answering with a column
+	// every later diagnostic in the file would inherit.
 	function retreat() throws CursorError
 		try cursor.retreat() otherwise throw CursorError.atStart
+		if cursor.current() == Ascii.lf 'unconsumedNewline'
+			panic("Lexer.retreat: stepped back over the newline at byte {cursor.index()} — the length of the line before it is not recoverable, and only the DFA's one-byte lookahead over a digit or a letter ever retreats")
+		end 'unconsumedNewline'
+
 		column = column - 1
 	end 'retreat'
 
 	// Non-throwing advance. Returns true if advanced, false if at end of source.
 	// Use in loops where reaching EOF is normal (numbers, identifiers, comments).
 	function tryAdvance() returns bool
+		countConsumed(cursor.current())
 		try cursor.advance() otherwise return false
-		column = column + 1
 		return true
 	end 'tryAdvance'
-
-	// Non-throwing advanceRaw. Returns true if advanced, false if at end of source.
-	function tryAdvanceRaw() returns bool
-		try cursor.advance() otherwise return false
-		return true
-	end 'tryAdvanceRaw'
-
 	// Variable-content emit: the token's text as a zero-copy `ByteArray` slice of the
 	// source, plus the byte range it spans. Used by the identifier, number,
 	// string-literal and directive scanners — every token whose text is not implied
@@ -713,12 +752,6 @@ type Lexer
 		let value = try bytes.slice(strStart, endIndex: endByte) otherwise panic("Lexer.emitStringLit: invariant violated")
 		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: strStart, endByte: endByte))
 	end 'emitStringLit'
-
-	function newline(startLine LineNumber, startCol ColumnNumber)
-		tokens.push(Token.create(TokenKind.newline, line: startLine, column: startCol))
-		line = line + 1
-		column = 1
-	end 'newline'
 
 	// Sub-scanners signal "token completed cleanly on the source's final byte"
 	// by setting `emittedAtEof` and unwinding via CursorError. Centralized here
@@ -800,7 +833,7 @@ type Lexer
 		match action 'dispatch'
 			skip then return
 			skipCr then column = column - 1
-			newline then newline(startLine, startCol: startCol)
+			newline then tokens.push(Token.create(TokenKind.newline, line: startLine, column: startCol))
 			emit then emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
 			emit2 then try handleEmit2(dfaState, startLine: startLine, startCol: startCol)
 			enterStrSq then try scanSingleQuoteString(startLine, startCol: startCol)
@@ -955,6 +988,20 @@ type Lexer
 	// the opening `b` and `"`. Scans bytes until the closing `"`, treating
 	// `\` as a one-byte escape skip (decoded by the parser) and explicitly
 	// rejecting `{` interpolation markers — byte strings are byte-exact.
+	//
+	// ⭐⭐ **A RAW NEWLINE IS AN ORDINARY BODY BYTE HERE, AND ONLY HERE.** A `b"…"` is byte-exact, so a
+	// literal newline in one IS the byte it spells — `Runtime/GtRuntime.maxon:581` writes
+	// `let GtTraceNewlineText = b"` with the closing quote on the next line, and that is how this
+	// compiler's own source spells a one-byte newline constant. The bootstrap has always admitted it
+	// (`1-Lexer.cs:ScanByteStringLiteral` walks to the closing quote and tests nothing else); shv2
+	// refused it with `E1002 Unterminated string literal`, which is why shv2 could not lex its own
+	// `GtRuntime.maxon` — and five other files then lost every name that file exports.
+	//
+	// ⛔ **THE DOUBLE-QUOTE TWIN KEEPS ITS REFUSAL, AND THE DIFFERENCE IS NOT AN OVERSIGHT.** MEASURED
+	// on the bootstrap, same program: a raw newline inside `b"…"` compiles and the literal holds it,
+	// while the same newline inside `"…"` is `E1002` on both compilers. A `String` literal carries
+	// interpolation and escape decoding and is line-oriented; a byte string carries bytes. Do not
+	// "unify" these two bodies on this point.
 	function scanByteStringLiteralBody(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		let strStart = cursor.index()
 		while cursor.index() < len 'bstrBody'
@@ -966,12 +1013,6 @@ type Lexer
 				end 'closeEof'
 				return
 			end 'endBstr'
-			if bc == Ascii.lf 'newlineInBstr'
-				emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
-				hasPendingError = true
-				pendingError = LexerError.unterminatedString(startLine, column: startCol)
-				throw CursorError.exhausted
-			end 'newlineInBstr'
 			if bc == Ascii.backslash 'esc'
 				if not tryAdvance() 'escEof'
 					break
@@ -1101,18 +1142,25 @@ type Lexer
 	// would have opened such a construct is the one already excluded by the depth test that got us
 	// here.
 	//
-	// ⛔⛔ **AND SO DOES A NEWLINE, WHICH IS THE ONE THING THIS SCANNER MUST NOT LEAVE OUT.** Every
-	// other byte-consuming body in this lexer stops at `Ascii.lf` — `scanDoubleQuoteString`,
-	// `scanSingleQuoteString`, `scanByteStringLiteralBody` — and this one did not. MEASURED before
+	// ⛔⛔ **AND SO DOES A NEWLINE, WHICH IS THE ONE THING THIS SCANNER MUST NOT LEAVE OUT.** This one
+	// did not, and the cost is measured below. ⚠ **THE SENTENCE THAT USED TO STAND HERE — *"every
+	// other byte-consuming body in this lexer stops at `Ascii.lf`"*, naming `scanDoubleQuoteString`,
+	// `scanSingleQuoteString` and `scanByteStringLiteralBody` — WAS ALREADY FALSE OF ONE OF ITS OWN
+	// THREE**: `scanSingleQuoteString` has never had a newline test and walks past one on an
+	// unterminated char literal. It is now false of a second by design (a multi-line `b"…"` is a real
+	// construct — see `scanByteStringLiteralBody`). `scanDoubleQuoteString` alone still stops. The
+	// rule that survives is about THIS scanner and rests on its own reason: a format specifier is the
+	// tail of one interpolation on one line. MEASURED before
 	// the fix: `print("a{x:")` on one line followed by `print("b{y}")` on the next COMPILED CLEAN and
 	// printed `a1`. The specifier body had eaten `")`, the newline and `print("b{y`, stopping at the
 	// NEXT LINE's `}`; the following `"` then closed the string tidily and the whole second statement
 	// was gone, with no diagnostic from either the lexer or the parser. Silently deleting a statement
 	// is the worst answer a compiler can give, and one missing `}` was enough to get it.
 	//
-	// ⚠ It also kept the LINE COUNTER honest. `tryAdvance` moves `column`; only `newline()` moves
-	// `line`. A body that swallows newlines leaves `line` short by however many it ate, so every
-	// diagnostic in the rest of the file is reported against the wrong line.
+	// ⚠ It USED to be the line counter's protection as well, and it is not any more: `countConsumed`
+	// moves `line` for whichever mover steps over the newline byte, so a body that swallows newlines no
+	// longer leaves `line` short. That was the second reason to stop here; the statement-deleting one above
+	// is the first, it is unaffected, and it is on its own now.
 	//
 	// `failInterp` is what both exits take, and it needs no case of its own here: it scans the
 	// consumed body for a `"` and reports the unescaped-brace reading when it finds one — which is
@@ -1484,15 +1532,14 @@ type Lexer
 		return false
 	end 'scanDirective'
 
-	// Both '/' characters already consumed. Advances to (but not past) the newline.
-	// Only increments cursor position, not column — column will be reset by the newline handler.
+	// Both '/' characters already consumed. Advances to (but not past) the newline, which is left for
+	// the main DFA to consume and emit as a token.
 	function scanComment() throws CursorError
 		while cursor.index() < len 'skipComment'
-			let cc = cursor.current()
-			if cc == Ascii.lf 'endComment'
+			if cursor.current() == Ascii.lf 'endComment'
 				break
 			end 'endComment'
-			if not tryAdvanceRaw() 'commentEof'
+			if not tryAdvance() 'commentEof'
 				// Comment runs to end of file — that's a complete comment, not a
 				// truncated token.
 				try finishAtEof()
@@ -1500,8 +1547,9 @@ type Lexer
 		end 'skipComment'
 	end 'scanComment'
 
-	// Both '/' and '*' already consumed. Scans until '*/' is found.
-	// Tracks line/column across newlines within the comment.
+	// Both '/' and '*' already consumed. Scans until '*/' is found. A newline inside the comment is an
+	// ordinary consumed byte — `countConsumed` is what keeps `line` right across it, so this body no
+	// longer has an arm of its own for one.
 	function scanBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		while cursor.index() < len 'skipBlockComment'
 			let cc = cursor.current()
@@ -1519,21 +1567,11 @@ type Lexer
 					return
 				end 'foundEnd'
 			end 'checkEnd'
-			if cc == Ascii.lf 'newlineInBlock'
-				line = line + 1
-				column = 1
-				if not tryAdvanceRaw() 'blockEof1'
-					hasPendingError = true
-					pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
-					throw CursorError.exhausted
-				end 'blockEof1'
-			end 'newlineInBlock' else 'advanceInBlock'
-				if not tryAdvance() 'blockEof2'
-					hasPendingError = true
-					pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
-					throw CursorError.exhausted
-				end 'blockEof2'
-			end 'advanceInBlock'
+			if not tryAdvance() 'blockEof'
+				hasPendingError = true
+				pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
+				throw CursorError.exhausted
+			end 'blockEof'
 		end 'skipBlockComment'
 		// Loop exit without finding `*/` — unterminated.
 		hasPendingError = true
