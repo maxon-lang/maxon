@@ -1575,3 +1575,139 @@ end 'main'
 ```stdout
 plain=6 thrown=6 score=2
 ```
+
+### An `async` Whose Result Is a MANAGED GENERIC INSTANCE
+
+`returns StringArray` is a GENERIC-ALIAS return, and the whole-program sweep records it as a bare
+`named("StringArray")` because it runs before the aliases are known (`parseTypeReference`'s
+generic-alias arm is gated on `allFilesFolded`). An ordinary call's result is repaired at the READ
+door (`repairSweptType`, at `mintOwnedCallResult`); the AWAIT road read the same registry entry and
+did not, so `await`ing the spawn bound a value tagged `named` under a name no reader could resolve —
+`E3011: Unknown type 'StringArray'` at the first member call on it.
+
+⚠ **THE RANGED-ALIAS HALF OF THIS LOSS WAS ALREADY FIXED AND THE GENERIC-INSTANCE HALF WAS NOT.**
+`awaitedPromiseFacts` was changed from answering a bare TAG to answering a TYPE for exactly this
+class (measured then as `Cannot return 'FilePath' from function declared to return 'int'`), which is
+why a ranged-alias result — the control this case is paired with — compiled the whole time. The
+repair now happens at `calleeReturnType`, the ONE registry read both async result questions are
+answered from, so the await's result type, the spawn's carried result tag and the promise-STORAGE
+agreement check cannot come to disagree about what the callee returns.
+
+<!-- test: async-await.managed-generic-result -->
+```maxon
+enum DrainError implements Error
+	broken
+end 'DrainError'
+
+function drainThunk() returns StringArray throws DrainError
+	_ = File.exists(FilePath from "noyield.txt")
+	var lines = StringArray.create()
+	lines.push("one")
+	lines.push("two")
+	return lines
+end 'drainThunk'
+
+function main() returns ExitCode
+	let p = async drainThunk()
+	let lines = try await p otherwise (e) 'died'
+		return 1
+	end 'died'
+	print("{lines.count()} {try lines.get(0) otherwise "?"}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 one
+```
+
+### The Same Result Through an Explicitly Named Promise Storage Type
+
+`SpecWorkerPool`'s own spelling: `typealias DrainPromise = Promise with (StringArray, SubprocessError)`,
+stored in an array so the spawn is BOXED and the await is described by the storage type rather than by
+a reachable `asyncCall`. The agreement check between the storage's claimed result and the callee's
+declared one compared a REPAIRED `claimed` (through `resolvedSlotType`) against an UNREPAIRED
+`returned`, so it reported the storage naming `StringArray` while "this promise's function returns
+'int'" — a sentence naming a type the program does not contain. Both sides are repaired now.
+
+<!-- test: async-await.managed-generic-result-through-promise-storage -->
+```maxon
+enum DrainError implements Error
+	broken
+end 'DrainError'
+
+typealias DrainPromise = Promise with (StringArray, DrainError)
+typealias DrainPromiseArray = Array with DrainPromise
+
+function drainThunk(n int) returns StringArray throws DrainError
+	_ = File.exists(FilePath from "noyield.txt")
+	if n < 0 'bad'
+		throw DrainError.broken
+	end 'bad'
+	var lines = StringArray.create()
+	lines.push("one")
+	lines.push("two")
+	return lines
+end 'drainThunk'
+
+function main() returns ExitCode
+	var promises = DrainPromiseArray.create()
+	promises.push(async drainThunk(1))
+	promises.push(async drainThunk(2))
+	var total = 0
+	for p in promises 'each'
+		let lines = try await p otherwise (e) 'died'
+			continue
+		end 'died'
+		total = total + lines.count()
+	end 'each'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+### A Ranged-Alias Result Is the Control, and It Compiled the Whole Time
+
+The same program with a ranged-int result. It is here because it is what proves the defect above was
+the GENERIC-INSTANCE half of the swept-type loss and not `async` losing its result type generally —
+this spelling has always worked, and a fix that broke it would be repairing the wrong thing. A ranged
+alias deliberately keeps its `named` tag through the repair (`repairSweptType` resolves a struct, a
+float alias, a function alias, a generic alias and a tuple alias — never a ranged int), which is what
+keeps the alias name available to every downstream range check.
+
+<!-- test: async-await.ranged-alias-result-control -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+enum DrainError implements Error
+	broken
+end 'DrainError'
+
+function countThunk() returns Tally throws DrainError
+	_ = File.exists(FilePath from "noyield.txt")
+	return 2 as Tally
+end 'countThunk'
+
+function main() returns ExitCode
+	let p = async countThunk()
+	let n = try await p otherwise (e) 'died'
+		return 1
+	end 'died'
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```

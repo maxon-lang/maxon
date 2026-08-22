@@ -69262,11 +69262,37 @@ export type Parser
 	// async result questions are answered from** — what TAGS the await's result value (`calleeReturnTag`)
 	// and what the spawn's result channel must CARRY (`asyncCarriedResultTag`) — so the two cannot come to
 	// disagree about which callee they are describing.
+	//
+	// ⭐⭐ **AND IT IS A SWEPT TYPE, SO IT IS REPAIRED HERE — THE ASYNC ROAD'S HALF OF THE ONE THE ORDINARY
+	// CALL ALREADY TAKES.** The whole-program sweep records a return type before the aliases are known
+	// (`parseTypeReference`'s generic-alias arm is gated on `allFilesFolded`, and `adoptType` re-interns by
+	// NAME), so `returns StringArray` arrives here as a bare `named`. An ordinary call's result is repaired
+	// at its READ door (`mintOwnedCallResult` → `repairSweptType`) and the await road was not: `await`ing
+	// such a spawn bound a `named` value under a name no member read could resolve — MEASURED as
+	// `E3011: Unknown type 'StringArray'` at the first `.count()` on it.
+	//
+	// ⚠ **THE STORAGE-AGREEMENT CHECK IS THE SECOND ASKER, AND IT WAS COMPARING ONE REPAIRED SIDE AGAINST
+	// ONE RAW ONE.** `requirePromiseStorageResult` resolves the CLAIMED type through `resolvedSlotType` and
+	// read the RETURNED one from here unrepaired, so `Promise with (StringArray, …)` was refused with
+	// *"this promise's function returns 'int'"* — a type the program does not contain. Repairing at this ONE
+	// read is what makes both sides the same question; repairing at `emitAwaitOp` alone would have left the
+	// refusal saying `int`.
+	//
+	// ⚠ A RANGED int alias is deliberately untouched by the repair (`repairSweptType` resolves a struct, a
+	// float alias, a function alias, a generic alias or a tuple alias — never a ranged int), so
+	// `calleeReturnTag` keeps the `named` tag its own header requires and the alias name stays available to
+	// every downstream range check. That is why the ranged spelling compiled the whole time
+	// (`async-await.ranged-alias-result-control`) while this one did not.
 	function calleeReturnType(callee ByteArray) returns MaxonReturnType
-		return match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
+		let swept = match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
 			declared(returnType) gives returnType
 			undeclared gives MaxonReturnType.value(MaxonType.integer)
 		end 'r'
+
+		return match swept 'repair'
+			void gives swept
+			value(inner) gives MaxonReturnType.value(self.repairSweptType(inner))
+		end 'repair'
 	end 'calleeReturnType'
 
 	// The declared return type of `callee` as a value tag, VOID included. The tag that TYPES the awaited
