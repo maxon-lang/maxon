@@ -43847,7 +43847,25 @@ export type Parser
 			//
 			// A postfix receiver is bound to no name, so it carries no E3019 blame name and no E3070 subject
 			// — see `valueReceiver`.
+			// ⭐⭐ **AN ENUM ACCESSOR ON A VALUE — `b.c.name`, and it is asked BEFORE the method dispatch for
+			// the reason `parseDottedPrimary` asks its own enum arm before the field arm: a declared enum
+			// erases to `integer`, so a value of one reaching the method door has no receiver type that could
+			// serve `.name`. The two arms are disjoint by the `(` — `atEnumInstanceAccessor` excludes a call,
+			// so an enum's real METHOD still goes to `dispatchMethodOnReceiver`.
+			//
+			// This is the THIRD spelling of an enum member read and it shares the other two's answer: the
+			// binding's (`s.ordinal`), the type-qualified case's (`Op.doubleOp.rawValue`) and this one differ
+			// ONLY in how the tag is obtained, and all three hand that tag to `emitEnumInstanceAccessor`.
+			// The anchor is the `.` itself — a postfix receiver is bound to no name, so there is no earlier
+			// token the read can honestly be said to span from.
 			if self.at(TokenKind.dot) 'memberAccess'
+				if self.atEnumAccessorHopOn(current) 'enumAccessorHop'
+					let hopLayout = requireEnumLayout(self.enumMatchFor(current))
+					let hopAnchor = self.current()
+					current = try self.consumeEnumAccessorHop(hopLayout, tag: self.emitEnumTagOf(current, layout: hopLayout, range: SourceRange.ofToken(hopAnchor)), anchorTok: hopAnchor)
+					continue
+				end 'enumAccessorHop'
+
 				current = try self.dispatchMethodOnReceiver(func, recv: self.valueReceiver(current, immutableName: EmptySourceText, subjectName: EmptySourceText), resultUsed: resultUsed)
 				continue
 			end 'memberAccess'
@@ -49368,6 +49386,49 @@ export type Parser
 
 		return self.enumMemberIsReadable(layout, memberTok: self.enumMemberTokenAt(index))
 	end 'atEnumInstanceAccessor'
+
+	// ⭐⭐ **IS THE CURSOR ON AN ACCESSOR HOP READABLE OFF `value`?** ONE door for the two callers that hold a
+	// VALUE rather than a binding or a type name: `parsePostfix`, where the receiver is whatever the
+	// expression just built, and `emitEnumBackingFieldSelect`, whose selected leaf may itself be enum-typed.
+	// Both spelled these gates out, and the field-chain fix was about to spell them a third time.
+	//
+	// ⚠⚠ **IT ANSWERS `bool` AND NEVER TOUCHES `enumMatchFor`, AND THE LADDER IS WHY.** A `DeclaredEnum` is a
+	// union VALUE that heap-allocates even to say `undeclared` — the cost `valueIsUnion` and
+	// `enumAccessorFieldAt` both arrange their gates around — and this is asked at EVERY `.` in every postfix
+	// chain in the program. Written to RETURN one, it charged **+288 allocations at rung 0 of the scale
+	// ladder, doubling at every rung**; the same reading survived putting `containsEnum` in front of the
+	// lookup, because the box was the RETURN and not the query. So the three cheap tests — token shape, the
+	// value's scalar tag column, and a set membership over bytes already in hand — stand in front, and the
+	// only allocating call left is `enumOf` on a value that really is an enum. The caller re-derives the
+	// LAYOUT on the taken path, which is `enumAccessorFieldAt`'s own arrangement with `parseEnumAccessor`.
+	function atEnumAccessorHopOn(value ValueId) returns bool
+		if not self.enumMemberReadFollowsAt(self.pos) 'noMemberFollows'
+			return false
+		end 'noMemberFollows'
+
+		if self.tagOf(value) != ValueTypeTag.named 'notANamedValue'
+			return false
+		end 'notANamedValue'
+
+		return self.atEnumAccessorHopOfType(self.internedName(self.valueNameId(value)))
+	end 'atEnumAccessorHopOn'
+
+	// ⭐ **THE TAIL BOTH DOORS SHARE — is the cursor on an accessor hop readable off a value whose TYPE is
+	// spelled `typeName`?** `atEnumAccessorHopOn` reaches it from a VALUE's tag column and
+	// `enumAccessorFollowsFieldTyped` from a FIELD's declared type; past the name they are the same two
+	// questions, so they are asked here once. Written twice, one door could come to admit a member the other
+	// refuses — and the two decide the SAME hop from opposite sides of one field load.
+	//
+	// ⚠ **`containsEnum` BEFORE `enumOf`, and it is the allocation guard both callers' headers record**: a
+	// `DeclaredEnum` heap-allocates even to say `undeclared`, and this runs at every `.` in every postfix
+	// chain and at every intermediate field hop. The membership test is over bytes already in hand.
+	function atEnumAccessorHopOfType(typeName ByteArray) returns bool
+		if not self.signatures.containsEnum(typeName) 'notAnEnumName'
+			return false
+		end 'notAnEnumName'
+
+		return self.atEnumInstanceAccessor(requireEnumLayout(self.signatures.enumOf(typeName)), index: self.pos)
+	end 'atEnumAccessorHopOfType'
 
 	// The kind of the token FOLLOWING the member — `index + 2`, the third of the three this shape spans, and
 	// the one the `(` exclusion tests. It sits beside `enumMemberTokenAt` on that helper's own argument: the
@@ -61652,10 +61713,47 @@ export type Parser
 		// walk decides where to go NEXT from the type, before any value exists.
 		let declaredFieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 		let fieldType = self.slotTypeThroughReceiver(box, declared: declaredFieldType)
+
+		// ⭐⭐ **AN ENUM ACCESSOR AFTER THIS FIELD ENDS THE CHAIN TOO — the third instance of the rule the
+		// `.member(` arm above states, and it arrived the way that arm predicts one will.** `b.c.name` on a
+		// field declared `as Color` is not a hop THROUGH `c`: `.name` is a member of the enum VALUE, so the
+		// walk stops here, the caller loads `c`, and `parsePostfix` reads the accessor off the loaded value
+		// through the same `emitEnumInstanceAccessor` the other two spellings use. Left to fall through, the
+		// walk consumed `name` as a field and `structLayoutOfField` refused it — *"a field access through
+		// 'Box.c', which is declared 'int' and not a struct"*, a message that is true of the ERASURE and
+		// false of the program, on source the bootstrap compiles and shv2's own `Lexer.tokenDisplayText`
+		// (`token.kind.rawValue`) is written in.
+		//
+		// ⚠ **IT IS THE ONE GATE HERE THAT MUST ASK THE DECLARED TYPE RATHER THAN A VALUE**, because no value
+		// exists yet — the load is what this decision gates. `enumAccessorFollowsFieldTyped` is that reading,
+		// and it reaches the same lookup `enumMatchFor` does so the two cannot disagree.
+		if self.enumAccessorFollowsFieldTyped(fieldType) 'enumAccessorField'
+			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
+		end 'enumAccessorField'
+
 		let nextLayout = try self.structLayoutOfField(layout, fieldTok: fieldTok, fieldType: fieldType)
 		let nextBox = self.emitFieldLoad(box, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 		return try self.resolveFieldChainFrom(nextBox, layout: nextLayout, baseTok: baseTok, baseBinding: baseBinding)
 	end 'resolveFieldChainFrom'
+
+	// Does an enum accessor hop follow the cursor, off a field whose DECLARED type is `fieldType`? The
+	// type-keyed twin of `enumAccessorHopOn`, and it exists because the field-chain walk has to decide
+	// whether to continue BEFORE it loads anything — there is no value to classify yet. Past the `named`
+	// test the two read the identical lookup (`enumOfTypeNameId`) and the identical admission rule
+	// (`atEnumInstanceAccessor`), so a member one admits is a member the other admits.
+	//
+	// A `named` tag is what an enum-typed field carries (`typeTagName` prints it as `int`, which is what
+	// made the old refusal read as a claim about an integer); every other tag declines here and the walk
+	// carries on to `structLayoutOfField` exactly as before.
+	function enumAccessorFollowsFieldTyped(fieldType MaxonType) returns bool
+		if maxonTypeTag(fieldType) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+
+		// ⚠ The tag test above filters almost none of the hops this runs at — a STRUCT-typed field is `named`
+		// too — so the allocation guard on the shared tail is what keeps this off the ladder.
+		return self.atEnumAccessorHopOfType(self.internedName(typeNameIdOf(fieldType)))
+	end 'enumAccessorFollowsFieldTyped'
 
 	// The `StructLayout` of a field whose already-resolved type `fieldType` is passed in — used to continue a
 	// field chain THROUGH a struct-typed field (`o.inner.x`). The type is resolved to a `structRef`
@@ -72153,25 +72251,14 @@ export type Parser
 		try self.requireEnumBackingFieldDomainIsAWord(leaf.lastStep(), fieldType: fieldType, domain: domain, anchor: fieldTok)
 		let selected = try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.structBackingField(leaf.path, domain: domain), valueType: fieldType, anchor: fieldTok, range: range)
 
-		// The cheap SHAPE test first, then the layout, then the admission rule — in that order because the
-		// admission rule is a property of the field's own enum and cannot be asked before it is in hand, while
-		// `enumMatchFor` boxes a `DeclaredEnum` even to answer "no". Same arrangement, same reason, as
-		// `enumAccessorFieldAt`.
-		if not self.enumMemberReadFollowsAt(self.pos) 'noMemberFollows'
-			return selected
-		end 'noMemberFollows'
-
-		let fieldEnum = self.enumMatchFor(selected)
-		// A `.name`-shaped member on a field that is NOT enum-typed is left where it was: the field may be a
-		// `String` with a `.count()`, and only the enum route is this function's to claim.
-		if not enumMatchIsDeclared(fieldEnum) 'notAnEnumField'
-			return selected
-		end 'notAnEnumField'
-
-		let fieldLayout = requireEnumLayout(fieldEnum)
-		if not self.atEnumInstanceAccessor(fieldLayout, index: self.pos) 'noAccessorHop'
+		// A `.name`-shaped member on a leaf that is NOT enum-typed is left where it was: the field may be a
+		// `String` with a `.count()`, and only the enum route is this function's to claim. The gates that
+		// decide it live in `atEnumAccessorHopOn`, which `parsePostfix` reads too.
+		if not self.atEnumAccessorHopOn(selected) 'noAccessorHop'
 			return selected
 		end 'noAccessorHop'
+
+		let fieldLayout = requireEnumLayout(self.enumMatchFor(selected))
 
 		// The selected leaf is a value of `fieldLayout` — the `enumWord` domain, which
 		// `enumBackingNamedFieldDomain` admits only for an UNBOXED declaration, so `emitEnumTagOf` is the
