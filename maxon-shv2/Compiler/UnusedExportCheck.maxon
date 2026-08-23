@@ -519,10 +519,12 @@ end 'noteThrowsType'
 // (found BATCH43, by the program the claim predicts: `let a = build()` then `a.n`, with `build` and its
 // record declared together in another file, reported E3092 against that record and E4006 once the advice was
 // taken). It is not asked because it is not this pass's to derive: a value's type matters here only when the
-// reader reaches INTO it, and the line that decides THAT is `Parser.requireFieldAccessible`, whose answer
-// arrives as `FileParseArtifact.memberAccessedTypeNames`. Reading `returnTypeOf` as well would credit every
-// caller of every factory with its record whether or not the caller ever opened one — three families of
-// correct findings, deleted (see `collectFileTypeReferences`).
+// reader reaches INTO it, and the lines that decide THAT are `Parser.requireFieldAccessible` and
+// `Parser.emitEnumTagOf`, whose answers arrive as `FileParseArtifact.memberAccessedTypeNames`. Reading
+// `returnTypeOf` as well would credit every caller of every factory with its record whether or not the caller
+// ever opened one — three families of correct findings, deleted (see `collectFileTypeReferences`), plus
+// `unused-export/error.unused-exported-union-nothing-outside-reaches`, whose whole subject is a file that
+// receives a union value and never opens it.
 function noteCalleeSignature(signatures ProgramSignatures, tracked TrackedDecls, callee ByteArray, readerFilePath FilePath, readerModuleDirectory String)
 	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return
 	noteTypeName(signatures, tracked: tracked, name: errorName.toByteArray(), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
@@ -558,6 +560,14 @@ end 'noteOpReferences'
 // a program with no legal spelling. `Parser.requireFieldAccessible` is the line that decides that
 // visibility question, so it is the line that records it; this pass ASKS the resolver instead of walking the
 // type graph a second, weaker way.
+//
+// ⭐⭐ **THE SAME CLASS, THIRD INSTANCE: AN ENUM OR UNION REACHED THROUGH A `match` (BATCH43).** `match
+// classify(42)` on another file's `union Answer` spells its CASES (`small`, `big(n)`) and never its TYPE, as
+// `s.ordinal` spells a member and an interpolation hole spells nothing — so nothing written reaches
+// `usedTypeNames` and the transitive walk has no field to follow. E3092 said to drop the `export`, and with it
+// dropped the BOOTSTRAP CRASHED on the identical program (E9001 in `SetupMatchScrutinee`): advice with no
+// legal spelling under EITHER compiler. `Parser.emitEnumTagOf` — the one line that reads a tag out of a value
+// of a declared enum — records it, for `requireFieldAccessible`'s reason and through its channel.
 //
 // ⚠ **IT IS NOT "EVERY TYPE STRUCTURALLY REACHABLE FROM ONE THIS FILE NAMES", AND THAT DISTINCTION IS
 // MEASURED.** A reader that holds a `Crate with Item`, a `function(Payload) returns …` or a `(Elem, Integer)`

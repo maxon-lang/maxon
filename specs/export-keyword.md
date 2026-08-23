@@ -439,6 +439,301 @@ end 'main'
 error E2004: specs/fragments/export-keyword/error.non-exported-enum-cross-file.test:10:10: Undefined variable 'InternalStatus'
 ```
 
+### Holding a value of a type you may not NAME
+
+A file that RECEIVES a value of another file's non-exported `enum`, `union` or `type` — from an
+exported function's declared return — may hold it, reassign it, compare it and hand it back. It writes
+no name, so there is no visibility to demand: what the compiler needs is the type's REPRESENTATION,
+which is the same fact for every reader. Every REACH into such a value stays refused by the cases
+below.
+
+⚠ Each of these five programs was an INTERNAL COMPILER CRASH (`E9001`, a .NET `KeyNotFoundException`
+with a stack trace) until BATCH43, because the per-file type registry — which answers "may this file
+NAME this type?" — was indexed for the representation too.
+
+<!-- test: non-exported-union-value-crosses-a-file-boundary -->
+```maxon
+// --- file: answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+export function score(a Answer) returns Integer
+	return match a 'm'
+		small gives 1
+		big(n) gives n
+	end 'm'
+end 'score'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = classify(42)
+	return score(a) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: non-exported-union-value-is-reassignable-across-a-file-boundary -->
+A `var` holding one is written twice, so the read that crashed is reached from a block other than the
+declaring one — the shape that distinguishes this from the inline `score(classify(42))`, which always
+compiled because the value never landed in a local at all.
+```maxon
+// --- file: answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+export function score(a Answer) returns Integer
+	return match a 'm'
+		small gives 1
+		big(n) gives n
+	end 'm'
+end 'score'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var a = classify(42)
+	a = classify(3)
+	return score(a) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: non-exported-enum-values-compare-across-a-file-boundary -->
+`==` on two values of a non-exported `enum` writes no name either, and a payload-free enum HAS
+synthesized equality — so this is the ordinary tag compare, not the union refusal below.
+```maxon
+// --- file: shade.maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Shade
+	dim
+	bright
+end 'Shade'
+
+export function pick(n Integer) returns Shade
+	if n > 5 'b'
+		return Shade.bright
+	end 'b'
+	return Shade.dim
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = pick(7)
+	let t = pick(1)
+	if s == t 'same'
+		return 1
+	end 'same'
+	return 9
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: non-exported-enum-case-reaches-a-file-through-an-exported-constant -->
+An exported constant whose value is a case of a NON-exported enum is INLINED at the reader, which
+never writes the enum's name. The case's raw value is a representation question like the rest.
+```maxon
+// --- file: shade.maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Shade
+	dim
+	bright
+end 'Shade'
+
+export let Preferred = Shade.bright
+
+export function shadeRank(s Shade) returns Integer
+	return match s 'm'
+		dim gives 0
+		bright gives 7
+	end 'm'
+end 'shadeRank'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return shadeRank(Preferred) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: non-exported-struct-values-compare-across-a-file-boundary -->
+The same fact one type-kind over: `==` on two values of a non-exported `type` that implements
+`Equatable` dispatches to the type's own `equals` and writes no name.
+```maxon
+// --- file: rec.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Rec implements Equatable
+	export let n as Integer
+
+	export static function create(n Integer) returns Rec
+		return Self{n: n}
+	end 'create'
+
+	export function equals(other Rec) returns bool
+		return self.n == other.n
+	end 'equals'
+end 'Rec'
+
+export function build(n Integer) returns Rec
+	return Rec.create(n)
+end 'build'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = build(1)
+	let b = build(2)
+	if a == b 'same'
+		return 1
+	end 'same'
+	return 9
+end 'main'
+```
+```exitcode
+9
+```
+
+### Reaching INTO one is refused
+
+<!-- test: error.match-on-a-non-exported-union-cross-file -->
+A `match` reads the case set out of the layout, so it is a REACH — the same event `p.x` and
+`s.ordinal` are refused for above. The refusal was never written at the scrutinee, so the missing
+registry entry surfaced as `E9001` plus a .NET stack trace instead of a diagnostic.
+
+⚠ **THE TWO COMPILERS DISAGREE ABOUT THIS PROGRAM AND THE RULE IS NOT SETTLED.** shv2 COMPILES it: it
+enforces no visibility at a match scrutinee at all, which is why its own E3092 hygiene check could
+advise dropping an `export` that made the bootstrap crash. What is settled is that a `KeyNotFoundException`
+is not an answer to a user program under any reading. A port of this case to `specs-shv2/` must stay
+disabled until the visibility question is ruled on.
+```maxon
+// --- file: answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return match classify(42) 'a'
+		small gives 1
+		big(n) gives n
+	end 'a'
+end 'main'
+```
+```maxoncstderr
+error E4006: specs/fragments/export-keyword/error.match-on-a-non-exported-union-cross-file.test:19:9: Unknown type 'Answer' in match scrutinee
+```
+
+<!-- test: error.compare-a-non-exported-union-cross-file -->
+⭐ **A UNION IS NOT COMPARABLE WHETHER OR NOT THE READER MAY NAME IT, AND THE GUARD USED TO ASK THE
+WRONG QUESTION.** It tested the per-file registry — "may this file name the type?" — so for a
+non-exported union it did not fire at all, and the backing walk one line below would then have
+compared TAGS, making `big(1) == big(2)` true. It never shipped only because that walk's own raw
+lookup crashed first. Comparability is a property of the TYPE, so it is asked of the type wherever it
+is declared.
+```maxon
+// --- file: answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = classify(11)
+	let b = classify(42)
+	if a == b 'same'
+		return 1
+	end 'same'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3066: specs/fragments/export-keyword/error.compare-a-non-exported-union-cross-file.test:21:7: cannot compare union values using '==', use 'match' instead
+```
+
+<!-- test: error.string-pattern-against-a-non-exported-struct-scrutinee -->
+⚠ **A DIAGNOSTIC THAT HAD TO LOOK THE TYPE UP TO WORD ITSELF, AND CRASHED DOING SO.** The pattern is
+ill-formed whatever `Rec`'s visibility is, but deciding that meant asking whether `Rec` conforms to
+`BuiltinStringLiteral` — off the per-file registry, which has no entry for a type this file may not
+name. shv2 refuses the same program with the same code.
+```maxon
+// --- file: rec.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Rec
+	export let n as Integer
+
+	export static function create(n Integer) returns Rec
+		return Self{n: n}
+	end 'create'
+end 'Rec'
+
+export function build(n Integer) returns Rec
+	return Rec.create(n)
+end 'build'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let r = build(1)
+	match r 'x'
+		"hi" then return 1
+		default panic("no")
+	end 'x'
+end 'main'
+```
+```maxoncstderr
+error E2028: specs/fragments/export-keyword/error.string-pattern-against-a-non-exported-struct-scrutinee.test:21:3: pattern type 'String' does not match scrutinee type 'Rec'
+```
+
 <!-- test: exported-typealias-cross-file -->
 ```maxon
 // --- file: api/types.maxon

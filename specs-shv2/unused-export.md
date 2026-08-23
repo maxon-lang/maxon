@@ -617,6 +617,104 @@ end 'main'
 7
 ```
 
+<!-- test: cross-file-union-match-is-a-reference -->
+⚠⚠ **`app/main.maxon` NEVER WRITES `Answer` — A `match` ARM NAMES ITS *CASES*, NOT ITS TYPE.** That is
+the same contradiction `cross-file-element-member-access-is-a-reference` records, arriving through the one
+door a written name cannot reach: the scrutinee's type is INFERRED from `classify`'s declared return, and
+the arms spell `small` / `big(n)`. E3092 therefore said to drop the `export` — and with it dropped the
+bootstrap crashed on the very same program, so the advice led to a spelling NEITHER compiler accepts. The
+reference now comes from `Parser.emitEnumTagOf`, the one line that reads into a value of a declared
+enum/union.
+```maxon
+// --- file: api/answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return match classify(42) 'a'
+		small gives 1
+		big(n) gives n
+	end 'a'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-enum-match-is-a-reference -->
+The payload-free half of the case above: a plain `enum` matched cross-file reaches the same layout through
+the same door, and was reported the same way. The two are kept apart because a bare enum's value IS its tag
+— `emitEnumTagOf` emits nothing for it — so a cure that only credited the BOXED load would pass the union
+case and still report this one.
+```maxon
+// --- file: api/color.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum Shade
+	dim
+	bright
+end 'Shade'
+
+export function pick(n Integer) returns Shade
+	if n > 5 'bright'
+		return Shade.bright
+	end 'bright'
+	return Shade.dim
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return match pick(7) 'c'
+		dim gives 1
+		bright gives 9
+	end 'c'
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: cross-file-enum-accessor-is-a-reference -->
+`.ordinal` on a value whose enum is declared elsewhere — the third arrival at that one door, and the
+narrowest: the whole program mentions `Shade` in exactly one file.
+```maxon
+// --- file: api/color.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum Shade
+	dim
+	bright
+end 'Shade'
+
+export function pick(n Integer) returns Shade
+	if n > 5 'bright'
+		return Shade.bright
+	end 'bright'
+	return Shade.dim
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let s = pick(7)
+	return s.ordinal as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
 <!-- test: error.unused-exported-element-nothing-outside-reaches -->
 ⭐⭐ **THE DISCRIMINATING CONTROL FOR THE TWO CASES ABOVE.** One line differs from
 `cross-file-element-member-access-is-a-reference` — the loop counts instead of reading `it.n` — and the
@@ -670,6 +768,44 @@ end 'main'
 ```
 ```maxoncstderr
 error E3092: api/<fragment>:5:13: exported type 'Item' is never referenced outside its declaring file
+```
+
+<!-- test: error.unused-exported-union-nothing-outside-reaches -->
+⭐⭐ **THE DISCRIMINATING CONTROL FOR THE THREE `match` / ACCESSOR CASES ABOVE.** `app/main.maxon` HOLDS an
+`Answer` — it receives one from `classify` and hands it to `score` — and never reaches INTO it, so it never
+needs the type visible: dropping the `export` compiles under BOTH compilers (measured). Crediting a callee's
+declared RETURN type would delete this diagnostic, which is why the credit is taken where a value's tag is
+READ and not where its type is merely produced.
+```maxon
+// --- file: api/answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+export function score(a Answer) returns Integer
+	return match a 'm'
+		small gives 1
+		big(n) gives n
+	end 'm'
+end 'score'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return score(classify(42))
+end 'main'
+```
+```maxoncstderr
+error E3092: api/<fragment>:5:14: exported type 'Answer' is never referenced outside its declaring file
 ```
 
 ## E3093 — referenced, but only from inside the declaring subtree

@@ -1,0 +1,85 @@
+// Test: cross-file-enum-match-is-a-reference
+// --- file: api/color.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum Shade
+	dim
+	bright
+end 'Shade'
+
+export function pick(n Integer) returns Shade
+	if n > 5 'bright'
+		return Shade.bright
+	end 'bright'
+	return Shade.dim
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return match pick(7) 'c'
+		dim gives 1
+		bright gives 9
+	end 'c'
+end 'main'
+---
+ExitCode: 9
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc greater, bright
+    x64.jmp ifcont
+  bright:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 7
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext
+  matcharm#1:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, matcharm#2
+    x64.jmp matchdead
+  matcharm#2:
+    x64.movRegImm32 r8, 9
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

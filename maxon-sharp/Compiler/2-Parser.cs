@@ -10920,7 +10920,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return structRefOp.Result;
     }
     if (kind == MaxonValueKind.Enum) {
-      var enumType = (IrEnumType)_typeRegistry[structTypeName!];
+      // The backing REPRESENTATION, not permission to name the type — see `HeldEnumType`. Reading a local
+      // that HOLDS another file's non-exported enum is legal (the author writes no name at all), and
+      // indexing the per-file registry for its shape crashed the compiler on one.
+      var enumType = HeldEnumType(structTypeName!);
       var backingKind = GetEnumBackingKind(enumType);
       var enumRefOp = new MaxonEnumVarRefOp(varName, structTypeName!, backingKind);
       _currentBlock!.AddOp(enumRefOp);
@@ -15692,7 +15695,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
       } else if (Check(TokenType.StringLiteral)) {
         if (compareKind != MaxonValueKind.Struct || structTypeName == null ||
-            !(_typeRegistry[structTypeName] is IrStructType st && st.ConformingInterfaces.Contains("BuiltinStringLiteral"))) {
+            !(HeldType(structTypeName) is IrStructType st && st.ConformingInterfaces.Contains("BuiltinStringLiteral"))) {
           var scrutineeTypeName = enumTypeName ?? structTypeName ?? KindToTypeName(compareKind);
           throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
             $"pattern type 'String' does not match scrutinee type '{scrutineeTypeName}'",
@@ -15707,7 +15710,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
         patterns.Add(new ExactStringPattern(strToken.Value, displayName, patternLine, patternCol));
       } else if (Check(TokenType.CharacterLiteral) && structTypeName != null &&
-          _typeRegistry[structTypeName] is IrStructType charSt && charSt.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
+          HeldType(structTypeName) is IrStructType charSt && charSt.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
         var charToken = Advance();
         var resolvedCharValue = StringUtils.ResolveEscapes(charToken.Value);
         patterns.Add(ParseCharPatternOrRange(resolvedCharValue, seenPatternKeys, patternLine, patternCol));
@@ -16387,14 +16390,104 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// ⭐⭐ THE SHAPE OF AN ENUM THIS FILE HOLDS A VALUE OF BUT MAY NOT NAME — and the line that says which
+  /// of TWO questions <c>_typeRegistry</c> is being asked.
+  ///
+  /// <c>_typeRegistry</c> answers "MAY THIS FILE NAME THIS TYPE?": it is seeded per file through
+  /// <see cref="TryTypeAsSeenFrom"/>, so a missing key means this reader stands outside every scope the
+  /// name was declared in. A site holding a VALUE asks something else — "WHAT SHAPE IS IT?" — whose answer
+  /// is the same for every reader. Indexing the per-file table for it threw a bare
+  /// <c>KeyNotFoundException</c>, which reached the author as <c>E9001</c> plus a .NET stack trace on
+  /// programs the language accepts: <c>let a = classify(42)</c> then <c>score(a)</c>, both callees
+  /// exported and the union between them not. MEASURED (BATCH43) — shv2 compiles it, and so does THIS
+  /// compiler when the identical program is written inline as <c>score(classify(42))</c>, because then the
+  /// value never lands in a local for <see cref="ResolveExprValue"/> to read back.
+  ///
+  /// ⚠ IT IS NOT A RELAXED VISIBILITY RULE, AND NOTHING HERE WIDENS WHAT MAY BE WRITTEN. Every REACH
+  /// into such a value stays refused exactly where it already was — a field read and <c>.ordinal</c> by
+  /// E4006 in <see cref="ParseFieldAccessChain"/>, a case name by E2004, a <c>match</c> scrutinee by
+  /// <see cref="RequireVisibleScrutineeEnum"/> below. What this admits is HOLDING one and handing it on,
+  /// which demands no visibility at all because the author never writes the name.
+  ///
+  /// ⚠ The fallback reads <c>seedModule.TypeDefs</c> — the PRE-SCAN module, which is the very table
+  /// <see cref="SeedTypeRegistry"/> filters, so this is provably the unfiltered form of the same answer
+  /// rather than a second source of truth. It is NOT <c>_currentModule</c>: <see cref="Parse()"/> makes a
+  /// FRESH per-file module and seeds it through the same visibility filter, so asking that one re-asks the
+  /// question this exists to get past (measured — it answered "no such enum anywhere" for a union declared
+  /// two files away).
+  ///
+  /// ⚠ <c>TypeDefs</c> is keyed by BARE NAME and holds one entry per name, so where two files declare one
+  /// name it answers with whichever merged last. That is no loss here: the key IS a bare name (a value
+  /// carries its type's name and nothing more), so the raw index this replaces asked exactly as coarse a
+  /// question.
+  /// </summary>
+  private IrEnumType HeldEnumType(string enumTypeName) {
+    if (HeldType(enumTypeName) is IrEnumType declared) return declared;
+
+    throw new CompileError(ErrorCode.InternalError,
+      $"no enum declaration named '{enumTypeName}' anywhere in this program, yet a value claims to be one",
+      Current().Line, Current().Column);
+  }
+
+  /// <summary>
+  /// The same two-table search <see cref="HeldEnumType"/> describes, for the callers whose next line is
+  /// already a type test (<c>is IrStructType</c>) and whose answer for an unknown name is that test
+  /// failing — a struct compared through <c>Equatable</c>, a string or character PATTERN offered against a
+  /// struct scrutinee. Each of those indexed the per-file registry RAW, so a value of another file's
+  /// non-exported struct crashed the compiler where the type test would have produced the ordinary
+  /// diagnostic (MEASURED, BATCH43: <c>a == b</c> on a hidden <c>Equatable</c> record, and <c>match r</c>
+  /// with a <c>"hi"</c> arm, both E9001; shv2 answers the first by compiling it and the second with E2028).
+  ///
+  /// <c>null</c> means NO file declares the name — which for every caller here is the same "not this kind
+  /// of type" the failed test already handles, so it needs no separate refusal of its own.
+  /// </summary>
+  private IrType? HeldType(string typeName) {
+    if (_typeRegistry.TryGetValue(typeName, out var visible)) return visible;
+
+    return seedModule?.TypeDefs.GetValueOrDefault(typeName);
+  }
+
+  /// <summary>
+  /// ⭐ THE SCRUTINEE'S ENUM, OR A POSITIONED REFUSAL — the <c>match</c> half of the split
+  /// <see cref="HeldEnumType"/> describes, and the half where visibility DOES decide.
+  ///
+  /// A <c>match</c> reads the case set out of the layout: it is a REACH into the value, the same kind of
+  /// event <see cref="ParseFieldAccessChain"/> refuses with E4006 for <c>r.n</c> and for <c>s.ordinal</c>
+  /// on a type this file cannot see, and the same kind E2004 refuses for a written <c>Color.blue</c>. The
+  /// refusal was simply never written here, so the missing key surfaced as <c>E9001</c> with a .NET stack
+  /// trace instead (MEASURED, BATCH43: <c>match classify(42)</c> over a non-exported <c>union</c>).
+  ///
+  /// ⚠ ONE HOME, TWO CALLERS — <see cref="ResolveScrutinee"/> and <see cref="SetupMatchScrutinee"/> both
+  /// index the registry for the same scrutinee. Written at one of them, the other keeps the crash for
+  /// whichever shape reaches it first.
+  ///
+  /// ⚠ A name NO file declares is a different fact and gets a different answer: the value claims an enum
+  /// type that does not exist, which is a compiler invariant and not something an author can fix by
+  /// exporting anything.
+  /// </summary>
+  private IrEnumType RequireVisibleScrutineeEnum(string enumTypeName, Token matchToken) {
+    // Asked FIRST, and it is the ONLY lookup: a name NO file declares must report the compiler-invariant
+    // failure it is, not advice to export something that does not exist. Written as a second lookup here,
+    // this would be a copy of `HeldEnumType`'s two-table search free to drift from it.
+    var enumType = HeldEnumType(enumTypeName);
+    if (!_typeRegistry.ContainsKey(enumTypeName)) {
+      throw new CompileError(ErrorCode.IrInvalidFieldAccess,
+        $"Unknown type '{enumTypeName}' in match scrutinee",
+        matchToken.Line, matchToken.Column);
+    }
+
+    return enumType;
+  }
+
+  /// <summary>
   /// Resolves scrutinee to a comparable value. For enums, extracts the raw backing value.
   /// Returns the compare value, its kind, and enum metadata if applicable.
   /// </summary>
   private (MaxonValue CompareVal, MaxonValueKind CompareKind, string? EnumTypeName, IrEnumType? EnumType, string? StructTypeName)
-      ResolveScrutinee(MaxonValue scrutineeVal) {
+      ResolveScrutinee(MaxonValue scrutineeVal, Token matchToken) {
     if (scrutineeVal is MaxonEnum enumVal) {
       var enumTypeName = enumVal.TypeName;
-      var enumType = (IrEnumType)_typeRegistry[enumTypeName];
+      var enumType = RequireVisibleScrutineeEnum(enumTypeName, matchToken);
       if (enumType.HasAssociatedValues) {
         // For associated-value enums, extract the tag for comparison
         var tagOp = new MaxonEnumTagOp(scrutineeVal, enumTypeName);
@@ -16416,15 +16509,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// enum value in a temp variable so payload can be extracted in case bodies.
   private (string? origEnumTempName, MaxonValue compareVal, MaxonValueKind compareKind,
       string? enumTypeName, IrEnumType? enumType, string? structTypeName)
-      SetupMatchScrutinee(MaxonValue scrutineeVal, string matchLabel) {
+      SetupMatchScrutinee(MaxonValue scrutineeVal, string matchLabel, Token matchToken) {
     string? origEnumTempName = null;
     if (scrutineeVal is MaxonEnum origEnum) {
-      var origEnumType = (IrEnumType)_typeRegistry[origEnum.TypeName];
+      var origEnumType = RequireVisibleScrutineeEnum(origEnum.TypeName, matchToken);
       if (origEnumType.HasAssociatedValues) {
         origEnumTempName = $"__match_enum_{matchLabel}";
       }
     }
-    var (compareVal, compareKind, enumTypeName, enumType, structTypeName) = ResolveScrutinee(scrutineeVal);
+    var (compareVal, compareKind, enumTypeName, enumType, structTypeName) = ResolveScrutinee(scrutineeVal, matchToken);
     if (origEnumTempName != null) {
       var origEnumTypeName = ((MaxonEnum)scrutineeVal).TypeName;
       _currentBlock!.AddOp(new MaxonAssignOp(origEnumTempName, scrutineeVal, isDeclaration: true, isMutable: false, MaxonValueKind.Enum));
@@ -16814,7 +16907,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return;
     }
     var (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName) =
-      SetupMatchScrutinee(scrutineeVal, matchLabel);
+      SetupMatchScrutinee(scrutineeVal, matchLabel, matchToken);
 
     var entryBlock = _currentBlock!;
 
@@ -17571,7 +17664,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     var scrutineeVal = ResolveExprValue(scrutineeExpr);
     var (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName) =
-      SetupMatchScrutinee(scrutineeVal, matchLabel);
+      SetupMatchScrutinee(scrutineeVal, matchLabel, matchToken);
 
     var entryBlock = _currentBlock!;
 
@@ -18102,13 +18195,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne
           && lhsVal is MaxonStruct lhsStruct && rhsVal is MaxonStruct rhsStruct
           && IsStructTypeCompatible(lhsStruct.TypeName, rhsStruct.TypeName)) {
-        if (_typeRegistry[lhsStruct.TypeName] is IrStructType structType && structType.ConformingInterfaces.Contains("Equatable")) {
-          if (!_isStdlib && _typeRegistry[lhsStruct.TypeName] is IrEnumType enumT && enumT.IsUnion) {
-            var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
-            throw new CompileError(ErrorCode.SemanticEnumNotComparable,
-              $"cannot compare union values using '{opStr}', use 'match' instead",
-              opToken.Line, opToken.Column);
-          }
+        // ⛔ **THE UNION REFUSAL THAT STOOD HERE COULD NOT FIRE, AND IT INDEXED THE SAME KEY A SECOND
+        // TIME TO ASK.** It was nested INSIDE the `is IrStructType` arm, so it tested whether one
+        // registry entry was simultaneously a struct and an enum. The live refusal is the one on the
+        // ENUM-kinded operand path below, which is where a union value actually arrives — a union is a
+        // `MaxonEnum`, never a `MaxonStruct`.
+        if (HeldType(lhsStruct.TypeName) is IrStructType structType && structType.ConformingInterfaces.Contains("Equatable")) {
           // Resolve "?" placeholder to the concrete element type name when available
           var equalsTypeName = lhsStruct.TypeName;
           if (equalsTypeName == "?" && _currentTypeName != null
@@ -18142,7 +18234,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (entry.Op is MaxonBinOperator.Lt or MaxonBinOperator.Gt or MaxonBinOperator.Le or MaxonBinOperator.Ge
           && lhsVal is MaxonStruct lhsCmpStruct && rhsVal is MaxonStruct rhsCmpStruct
           && IsStructTypeCompatible(lhsCmpStruct.TypeName, rhsCmpStruct.TypeName)) {
-        if (_typeRegistry[lhsCmpStruct.TypeName] is IrStructType cmpStructType && cmpStructType.ConformingInterfaces.Contains("Comparable")) {
+        if (HeldType(lhsCmpStruct.TypeName) is IrStructType cmpStructType && cmpStructType.ConformingInterfaces.Contains("Comparable")) {
           var compareMethodName = $"{lhsCmpStruct.TypeName}.compare";
           var compareToken = new Token(TokenType.Identifier, compareMethodName, opToken.Line, opToken.Column);
           var callOp = CreateFunctionCall(compareToken, [lhsVal, rhsVal]);
@@ -18180,9 +18272,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
         // Enum values cannot be compared with == or != - must use match
         // (Constants are excluded: they allow direct comparison)
+        //
+        // ⛔ **THE REFUSAL WAS GATED ON THE UNION BEING NAMEABLE HERE, AND THAT GATE WAS A WRONG ANSWER
+        // WAITING TO HAPPEN.** `_typeRegistry.TryGetValue` answers "may this file NAME the type?", so for a
+        // union declared without `export` in another file the guard simply did not fire — and the backing
+        // walk below then compared TAGS, making `big(1) == big(2)` true. It never surfaced only because that
+        // same walk's raw index crashed first (MEASURED, BATCH43: E9001 on `a == b` over a non-exported
+        // union). Whether a union may be compared is a property of the TYPE and of nothing else, so it is
+        // asked of the type wherever the type is declared. shv2 refuses the identical program (E3066).
         if (!_isStdlib && kind == MaxonValueKind.Enum && (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne)) {
           var enumTypeName2 = lhsVal is MaxonEnum le2 ? le2.TypeName : ((MaxonEnum)rhsVal).TypeName;
-          if (_typeRegistry.TryGetValue(enumTypeName2, out var enumTypeEntry2) && enumTypeEntry2 is IrEnumType enumT2 && enumT2.IsUnion) {
+          if (HeldEnumType(enumTypeName2).IsUnion) {
             var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
             throw new CompileError(ErrorCode.SemanticEnumNotComparable,
               $"cannot compare union values using '{opStr}', use 'match' instead",
@@ -18190,10 +18290,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           }
         }
 
-        // Enum comparisons use the backing kind (Integer or Float)
+        // Enum comparisons use the backing kind (Integer or Float). The BACKING is a property of the type
+        // and not of this file's view of it — comparing two values of an enum this file cannot name writes
+        // no name and is legal, so the shape is asked for through `HeldEnumType`.
         if (kind == MaxonValueKind.Enum) {
           var cmpEnumTypeName = lhsVal is MaxonEnum le ? le.TypeName : ((MaxonEnum)rhsVal).TypeName;
-          var cmpEnumType = (IrEnumType)_typeRegistry[cmpEnumTypeName];
+          var cmpEnumType = HeldEnumType(cmpEnumTypeName);
           if (cmpEnumType.HasAssociatedValues) {
             // For associated-value enums, compare tags only
             kind = MaxonValueKind.Integer;
@@ -20422,7 +20524,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return new ExprResult.Direct(strOp.Result);
     }
     if (constValue is EnumConstantValue ec) {
-      var enumType = (IrEnumType)_typeRegistry[ec.EnumTypeName];
+      // A cross-file `let Preferred = Shade.bright` is INLINED at the reader, which never writes `Shade`
+      // — so the case's raw value is a representation question, not a visibility one. See `HeldEnumType`.
+      var enumType = HeldEnumType(ec.EnumTypeName);
       var enumCase = enumType.GetCase(ec.CaseName)!;
       var enumLitOp = BuildEnumLiteralOp(ec.EnumTypeName, enumCase, enumType.BackingType);
       _currentBlock!.AddOp(enumLitOp);
@@ -21843,17 +21947,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // Struct/enum variables always need a fresh var_ref op so each reference
         // gets a unique SSA value ID (prevents aliasing in structVarNames when
         // multiple variables share the same underlying value).
-        if (info.Kind == MaxonValueKind.Struct) {
-          var structRefOp = new MaxonStructVarRefOp(v.VarName, info.StructTypeName!);
-          _currentBlock!.AddOp(structRefOp);
-          return structRefOp.Result;
-        }
-        if (info.Kind == MaxonValueKind.Enum) {
-          var enumType = (IrEnumType)_typeRegistry[info.StructTypeName!];
-          var backingKind = GetEnumBackingKind(enumType);
-          var enumRefOp = new MaxonEnumVarRefOp(v.VarName, info.StructTypeName!, backingKind);
-          _currentBlock!.AddOp(enumRefOp);
-          return enumRefOp.Result;
+        //
+        // ⚠ Emitted THROUGH `EmitVarRefOp` and not written out again: the two spellings were
+        // instruction-for-instruction identical, and the enum arm's registry lookup — which crashed the
+        // compiler on a value of another file's non-exported enum — sat in both. A cure applied to one
+        // copy of a duplicated rule is the defect one read site over.
+        if (info.Kind is MaxonValueKind.Struct or MaxonValueKind.Enum) {
+          return EmitVarRefOp(v.VarName, info.Kind, info.StructTypeName);
         }
         // A function value needs the function-specific load for the same reason a struct and an
         // enum need theirs: it is not one machine word. It is a POINTER PAIRED WITH AN ENVIRONMENT,
@@ -26060,7 +26160,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return defaultOp.Result;
     }
     if (attr is EnumAttr enumAttr) {
-      var enumType = (IrEnumType)_typeRegistry[enumAttr.EnumTypeName];
+      // A default the CALLER materializes, whose case names the callee's enum and not the caller's — the
+      // same representation question every other holder of a foreign enum value asks. See `HeldEnumType`.
+      var enumType = HeldEnumType(enumAttr.EnumTypeName);
       var enumCase = enumType.GetCase(enumAttr.CaseName)!;
       MaxonEnumLiteralOp enumOp;
       if (enumType.BackingType == IrType.F64) {

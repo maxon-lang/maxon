@@ -1,0 +1,132 @@
+// Test: non-exported-struct-values-compare-across-a-file-boundary
+// --- file: rec.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Rec implements Equatable
+	export let n as Integer
+
+	export static function create(n Integer) returns Rec
+		return Self{n: n}
+	end 'create'
+
+	export function equals(other Rec) returns bool
+		return self.n == other.n
+	end 'equals'
+end 'Rec'
+
+export function build(n Integer) returns Rec
+	return Rec.create(n)
+end 'build'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = build(1)
+	let b = build(2)
+	if a == b 'same'
+		return 1
+	end 'same'
+	return 9
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @Rec.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Rec.equals(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov rax, [rbp-16]
+    x64.mov rsi, [rax+0]
+    x64.cmp rbx, rsi
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.epilogue
+    x64.ret
+  }
+  func @build(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Rec.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.call build
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 2
+    x64.call build
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call Rec.equals
+    x64.test rax, rax
+    x64.je main.same_0.after
+  same_0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  same_0.after:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, 9
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Rec(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Rec.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -1877,7 +1877,7 @@ function enumInterpRendering(layout EnumLayout) returns EnumInterpRendering
 end 'enumInterpRendering'
 
 // A set of type NAMES one file's parse recorded (P1.9). Two fields hold one: the names it WROTE in a type
-// position (`Parser.usedTypeNames`) and the types it reached a MEMBER of without writing anything
+// position (`Parser.usedTypeNames`) and the types it reached INTO without writing anything
 // (`Parser.memberAccessedTypeNames`). They are two facts and are deliberately not merged — see there.
 export typealias UsedTypeNameSet = Set with ByteArray
 
@@ -12038,13 +12038,20 @@ export type Parser
 	// compile, 412.0M → 234.0M CPU ticks, `parse` 54.2 → 13.6 ms, and the emitted executable BYTE-IDENTICAL.**
 	let buildsBodies as bool
 	var usedTypeNames as UsedTypeNameSet
-	// ⭐⭐ **THE TYPES THIS FILE REACHED A MEMBER OF THROUGH A VALUE — the answer `requireFieldAccessible`
-	// ALREADY COMPUTED, kept (BATCH43).** A file can depend on another file's type without ever writing its
-	// name: `for it in h.items` then `it.n` needs `Item` VISIBLE and never spells it, which is exactly the
-	// question E4006 answers at that access. Recorded there and read by `checkUnusedExports`, so the
-	// export-hygiene question is the resolver's own answer rather than a second, weaker walk over the type
-	// graph — the two used to disagree, and a program caught between them had no legal spelling (E3092 said
-	// to drop the `export`, E4006 then refused the access).
+	// ⭐⭐ **THE TYPES THIS FILE REACHED INTO THROUGH A VALUE — answers the RESOLVER already computed, kept
+	// (BATCH43).** A file can depend on another file's type without ever writing its name: `for it in h.items`
+	// then `it.n` needs `Item` VISIBLE and never spells it, which is exactly the question E4006 answers at that
+	// access. Recorded there and read by `checkUnusedExports`, so the export-hygiene question is the resolver's
+	// own answer rather than a second, weaker walk over the type graph — the two used to disagree, and a
+	// program caught between them had no legal spelling (E3092 said to drop the `export`, E4006 then refused
+	// the access).
+	//
+	// ⭐ **TWO WRITERS, ONE PER FAMILY OF REACH, AND NEITHER IS A WALK** — `requireFieldAccessible` for a
+	// STRUCT's field, `emitEnumTagOf` for an ENUM/UNION's tag. Each states its own rule at its own site; both
+	// are the line the compile ALREADY had to reach to emit the access, so neither re-derives anything. The
+	// enum half arrived third in one class: a `match` on another file's union names its CASES and never its
+	// type, so E3092 said to drop an `export` whose absence CRASHED the bootstrap outright (E9001 in
+	// `SetupMatchScrutinee`) — a program with no legal spelling under either compiler.
 	//
 	// ⚠ **A SEPARATE SET FROM `usedTypeNames` ABOVE, WHICH HOLDS A DIFFERENT FACT.** That one is "a name this
 	// file WROTE in a type position" and is E3062's answer; this one holds names the file never wrote. Folding
@@ -18986,10 +18993,11 @@ export type Parser
 		self.usedTypeNames.insert(name)
 	end 'recordTypeNameUse'
 
-	// ⭐ **A TYPE THIS FILE REACHED A MEMBER OF — `recordTypeNameUse`'s twin for the fact a written name
-	// cannot carry.** One call site (`requireFieldAccessible`), which states the rule; the copy-on-write shape
-	// and the `collectsTypeNameUses` gate are its twin's, for its twin's reason — `parseModule` is the only
-	// walk whose artifact anyone reads these sets off, so any other one would hash into a set it discards.
+	// ⭐ **A TYPE THIS FILE REACHED INTO — `recordTypeNameUse`'s twin for the fact a written name cannot
+	// carry.** Two call sites, one per family of reach and each stating its own rule: `requireFieldAccessible`
+	// (a struct's field) and `emitEnumTagOf` (an enum's or union's tag). The copy-on-write shape and the
+	// `collectsTypeNameUses` gate are its twin's, for its twin's reason — `parseModule` is the only walk whose
+	// artifact anyone reads these sets off, so any other one would hash into a set it discards.
 	// Sharing ONE empty singleton with `usedTypeNames` is deliberate: the seed is an identity test, so a
 	// second empty of the same type would be a fact to remember rather than one to derive.
 	function recordMemberAccessedTypeName(name ByteArray)
@@ -50813,6 +50821,28 @@ export type Parser
 	// A caller that has not already established the value IS an enum keeps that guard at its own site — the
 	// `match` dispatch's `isEnumMatch`, which is a question about the SCRUTINEE and not about the layout.
 	function emitEnumTagOf(value ValueId, layout EnumLayout, range SourceRange) returns ValueId
+		// ⭐⭐ **THIS FILE REACHED INTO A VALUE OF `layout.name`, AND THIS IS THE ONE LINE THAT KNOWS IT** —
+		// `requireFieldAccessible`'s twin for enums and unions, recorded through the same one-writer channel and
+		// for the same reason. A `match` arm spells CASE names (`small`, `big(n)`), `.ordinal` spells a member,
+		// and an interpolation hole spells nothing at all, so a file that reaches another file's union this way
+		// leaves NO written name for `usedTypeNames` to hold — and E3092 told the author to drop the `export`
+		// that made the program compile. Third instance of one class; see `UnusedExportCheck`'s header for the
+		// first two.
+		//
+		// ⚠⚠ **RECORDED HERE AND NOT AT `enumMatchFor`, WHICH IS THE WIDER DOOR — AND THE DIFFERENCE IS
+		// MEASURED, NOT ARGUED.** That one also answers for a drop cascade (`decrefCalleeFor`), a compare
+		// operand (`valueIsUnion`) and a refused cast (`requireCastSourceIsNotEnum`) — none of them a
+		// source-level reach. Crediting the drop is exactly the callee-RETURN-type credit `noteCalleeSignature`
+		// refuses by name. MEASURED (BATCH43) by putting the credit there and rebuilding:
+		// `unused-export/error.unused-exported-union-nothing-outside-reaches` went RED — "expected a compile
+		// error but compilation succeeded" — while all three `match`/accessor cases stayed green. That case's
+		// whole subject is a file that HOLDS such a value and never opens it, so the wider door deletes it.
+		//
+		// ⚠ Written BEFORE the `isBoxed` split: an UNBOXED enum's value IS its tag and emits nothing, but the
+		// file reached the layout either way. A cure behind the load would pass the union cases and still report
+		// every plain `enum`.
+		self.recordMemberAccessedTypeName(layout.name)
+
 		if not layout.isBoxed() 'theValueIsTheTag'
 			return value
 		end 'theValueIsTheTag'
