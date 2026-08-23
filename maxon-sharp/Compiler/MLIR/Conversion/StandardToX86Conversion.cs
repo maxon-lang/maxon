@@ -934,7 +934,8 @@ public static class StandardToX86Conversion {
 
           case StdCondBrOp condBr: {
             var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
-            if (twoJumpCondBrs.TryGetValue(condBr, out var tj)) {
+            var isTwoJump = twoJumpCondBrs.TryGetValue(condBr, out var tj);
+            if (isTwoJump) {
               // Two-jump optimization: emit cmp+jcc for each bound, jumping to
               // the then (panic) block. Explicit jmp to else (ok) after both pass.
               // Emit upper check (cmp2) first so each constant load is adjacent to its cmp.
@@ -965,6 +966,39 @@ public static class StandardToX86Conversion {
               regManager.EmitBoolTest(condBr.Condition, x86Block);
               x86Block.AddOp(new X86JccOp("e", scopedElse));
             }
+
+            // ⭐⭐ THE FALLTHROUGH INVARIANT, ENFORCED HERE INSTEAD OF ASSUMED EVERYWHERE ELSE.
+            //
+            // Every arm above but the two-jump one emits a SINGLE jcc, to Else, and nothing at all for
+            // Then — so Then is reached by falling off the end of this block, which is correct only
+            // while Then is the physically NEXT block. Emission order is block-list order all the way
+            // down (MlirRegion.Blocks is append-only; MaxonToStandardConversion and this pass both
+            // rebuild it 1:1 in order; 4-X86CodeEmitter walks it back to front), so "next" means
+            // sourceBlocks[blockIdx + 1] and nothing reorders it in between.
+            //
+            // ⛔ IT WAS AN UNCHECKED PRECONDITION ON ~26 UNRELATED PARSER SITES, AND TWO OF THEM BROKE
+            // IT. Both were x64-ONLY SILENT MISCOMPILES — arm64 emits both edges
+            // (StandardToARM64Conversion's StdCondBrOp arm) and is correct at any order — and both
+            // reproduce on ordinary programs the spec corpus simply does not contain:
+            //   * ParseUnionMatch leaves `_currentBlock = mergeBlock` while per-arm exit blocks and the
+            //     default-cleanup blocks sit AFTER it, so the next cond-br's Then could not be next
+            //     however it was written. A `try/otherwise` whose handler matches a union carrying an
+            //     associated value and then takes an `if` fell into an arm-exit block: measured
+            //     `mm_decref: refcount underflow (already zero)` + a nil-pointer panic, for a program
+            //     whose answer is 42.
+            //   * InstrumentIfArms mints its synthetic else-block AFTER the merge block under
+            //     `--coverage`, and an `else`-less `if` then HUNG.
+            //
+            // ⇒ The cure is here rather than at the producers because a producer cannot fix it: AddBlock
+            // only appends, so a site that needs a block it already created cannot make it next. Fixing
+            // the 26 sites would also be one rule written 26 times — this is the one place that both
+            // knows the emitted order and owns the jcc that depends on it. It is a NO-OP wherever the
+            // invariant already holds, which is the whole corpus, so no committed golden moves.
+            if (!isTwoJump
+                && (blockIdx + 1 >= sourceBlocks.Count
+                    || sourceBlocks[blockIdx + 1].Name != condBr.ThenBlock))
+              x86Block.AddOp(new X86JmpOp($"{func.Name}.{condBr.ThenBlock}"));
+
             lastCmpResult = null;
             lastCmpKind = null;
             lastCmpPredicate = null;

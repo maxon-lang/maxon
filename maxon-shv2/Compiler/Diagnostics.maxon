@@ -160,8 +160,8 @@ end 'reportPositioned'
 //
 // ✅ **THE WHOLE SET ROUTES THROUGH IT, AND THE SECOND HALF LANDED WITH THE CALLER THAT NEEDED IT
 // (G20).** `Project.printDiagnostics` brings every `Diagnostic`; `Main.reportCompileError` brings the
-// five `CompileError` arms that never reach `project.diagnostics` at all — `fileNotFound`,
-// `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound` — which it used to print to stderr
+// SIX `CompileError` arms that never reach `project.diagnostics` at all — `fileNotFound`,
+// `directoryNotFound`, `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound` — which it used to print to stderr
 // directly, past this sink. Until it did, a capture was exact for a REFUSED compile (the whole
 // `maxoncstderr` corpus, whose blocks are `Diagnostic.render()` output and nothing else) and EMPTY for
 // a build that died on a missing file. `SpecTestRunner.compileOneTest` calls `reportCompileError`
@@ -213,8 +213,15 @@ export function beginDiagnosticCapture()
 end 'beginDiagnosticCapture'
 
 // Stop capturing and hand back everything captured, byte for byte as stderr would have received it.
+//
+// ⚠ **CLOSING A CAPTURE THAT WAS NEVER OPENED IS A HARD FAILURE, NOT AN EMPTY ANSWER.** `""` is a
+// LEGITIMATE result — a compile that reported nothing produces it — so an unpaired close would hand
+// back the value a clean compile gives, and a caller that forgot to open would read every refused
+// compile as having said nothing at all. That is the silent-wrong-answer shape, so it panics.
 export function endDiagnosticCapture() returns String
-	requireCaptureOpen("endDiagnosticCapture")
+	if not diagnosticCaptureOpen 'notOpen'
+		panic("endDiagnosticCapture: no diagnostic capture is open — every close pairs with a `beginDiagnosticCapture`, and an unpaired one returns the empty text a compile with NO diagnostics legitimately produces")
+	end 'notOpen'
 
 	var joined = StringBuilder.create()
 	for text in capturedDiagnosticText 'each'
@@ -225,26 +232,9 @@ export function endDiagnosticCapture() returns String
 	return joined.build()
 end 'endDiagnosticCapture'
 
-// Stop capturing and DISCARD — the failure-path twin, for a caller that opened a capture and then
-// has no use for the text (it took a different exit, or the text belongs to a run it abandoned).
-export function cancelDiagnosticCapture()
-	requireCaptureOpen("cancelDiagnosticCapture")
-	closeDiagnosticCapture()
-end 'cancelDiagnosticCapture'
-
 // Drop the latch and the buffer together, so no close can leave a finished compile's text behind for
 // the next one to inherit.
 function closeDiagnosticCapture()
 	diagnosticCaptureOpen = false
 	capturedDiagnosticText = CapturedDiagnosticTextArray.create()
 end 'closeDiagnosticCapture'
-
-// ⚠ **CLOSING A CAPTURE THAT WAS NEVER OPENED IS A HARD FAILURE, NOT AN EMPTY ANSWER.** `""` is a
-// LEGITIMATE result — a compile that reported nothing produces it — so an unpaired close would hand
-// back the value a clean compile gives, and a caller that forgot to open would read every refused
-// compile as having said nothing at all. That is the silent-wrong-answer shape, so it panics.
-function requireCaptureOpen(caller String)
-	if not diagnosticCaptureOpen 'notOpen'
-		panic("{caller}: no diagnostic capture is open — every close pairs with a `beginDiagnosticCapture`, and an unpaired one returns the empty text a compile with NO diagnostics legitimately produces")
-	end 'notOpen'
-end 'requireCaptureOpen'

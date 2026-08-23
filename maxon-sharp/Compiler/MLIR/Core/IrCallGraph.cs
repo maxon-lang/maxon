@@ -258,14 +258,14 @@ public static class CallGraphDialects {
       // synthesizes those after monomorphization. Concrete-alias resolution
       // covers generic aliases like Entry → ____Tuple_Key_Value_String_i64.
       case MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemType }:
-        sink.Add($"{elemType}.clone");
+        sink.Add($"{elemType}.{ManagedElementCopy.CloneMethodName}");
         var resolved = module.ResolveConcreteAlias(elemType);
         if (resolved != elemType)
-          sink.Add($"{resolved}.clone");
+          sink.Add($"{resolved}.{ManagedElementCopy.CloneMethodName}");
         if (module.TypeDefs.TryGetValue(elemType, out var elemDef) && elemDef is IrStructType elemStruct) {
           foreach (var field in elemStruct.Fields) {
             if (field.Type is IrStructType fieldSt)
-              sink.Add($"{fieldSt.Name}.clone");
+              sink.Add($"{fieldSt.Name}.{ManagedElementCopy.CloneMethodName}");
           }
         }
         break;

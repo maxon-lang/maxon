@@ -4881,7 +4881,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // equals(other Self) -> bool
-    var equalsName = $"{qualifiedTypeName}.equals";
+    var equalsName = $"{qualifiedTypeName}.{EqualsMethodName}";
     if (module.FindFunctionByExactName(equalsName) == null) {
       var equalsFunc = new IrFunction<MaxonOp>(
         equalsName, ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1, null) {
@@ -7335,7 +7335,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private void SynthesizeStructEquals(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
     var namespace_ = NamespaceOf();
-    var equalsName = $"{QualifiedInNamespace(typeName)}.equals";
+    var equalsName = $"{QualifiedInNamespace(typeName)}.{EqualsMethodName}";
     var equalsFunc = module.FindFunctionByExactName(equalsName);
     if (equalsFunc == null) return;
 
@@ -7471,7 +7471,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     hashBlock.AddOp(new MaxonReturnOp(hashCall.Result));
 
     // --- equals() ---
-    var equalsName = $"{qualifiedTypeName}.equals";
+    var equalsName = $"{qualifiedTypeName}.{EqualsMethodName}";
     var equalsFunc = module.FindFunctionByExactName(equalsName)
       ?? throw new InvalidOperationException($"Expected equals stub for {qualifiedTypeName}");
     module.RemoveFunction(equalsFunc);
@@ -7510,7 +7510,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // Call backingType.equals(selfCmp, otherCmp)
-    var equalsCall = new MaxonCallOp($"{backingTypeName}.equals", [selfCmp, otherCmp], MaxonValueKind.Bool);
+    var equalsCall = new MaxonCallOp($"{backingTypeName}.{EqualsMethodName}", [selfCmp, otherCmp], MaxonValueKind.Bool);
     equalsBlock.AddOp(equalsCall);
     equalsBlock.AddOp(new MaxonScopeEndOp(eqScopeEndVars));
     equalsBlock.AddOp(new MaxonReturnOp(equalsCall.Result));
@@ -16253,7 +16253,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var strLit = new MaxonStringLiteralOp(stringPat.Value, structTypeName!);
         _currentBlock!.AddOp(strLit);
         EmitLiteralTempAssign((MaxonStruct)strLit.Result);
-        var equalsMethodName = $"{structTypeName}.equals";
+        var equalsMethodName = $"{structTypeName}.{EqualsMethodName}";
         var equalsToken = new Token(TokenType.Identifier, equalsMethodName, pattern.Line, pattern.Column);
         var callOp = CreateFunctionCall(equalsToken, [refOp.Result, strLit.Result]);
         return callOp.Result!;
@@ -16264,7 +16264,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var charLit = new MaxonCharLiteralOp(charPat.Value, structTypeName!);
         _currentBlock!.AddOp(charLit);
         EmitLiteralTempAssign((MaxonStruct)charLit.Result);
-        var equalsMethodName = $"{structTypeName}.equals";
+        var equalsMethodName = $"{structTypeName}.{EqualsMethodName}";
         var equalsToken = new Token(TokenType.Identifier, equalsMethodName, pattern.Line, pattern.Column);
         var callOp = CreateFunctionCall(equalsToken, [refOp.Result, charLit.Result]);
         return callOp.Result!;
@@ -18212,7 +18212,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
               && ownerStruct.TypeParams.TryGetValue("Element", out var elemType2)
               && elemType2 is not IrTypeParameterType)
             equalsTypeName = elemType2.Name;
-          var equalsMethodName = $"{equalsTypeName}.equals";
+          var equalsMethodName = $"{equalsTypeName}.{EqualsMethodName}";
           var equalsToken = new Token(TokenType.Identifier, equalsMethodName, opToken.Line, opToken.Column);
           var callOp = CreateFunctionCall(equalsToken, [lhsVal, rhsVal]);
           if (entry.Op == MaxonBinOperator.Ne) {

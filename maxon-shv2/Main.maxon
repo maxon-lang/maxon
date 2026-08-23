@@ -445,7 +445,10 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// run nothing at all. Asked by the PARENT for `requireRunnerAvailable`'s reason, and asked AFTER
 	// the worker branch above so a worker never re-asks it: one fact, reported once, on the process
 	// whose stdout is a report rather than a wire.
-	let freshnessExit = refuseIfStale(harnessExe, role: "the spec-test harness, which is also the compiler it tests")
+	// The role reads as the SUBJECT of "<role> is STALE" (see `refuseIfStale`), so it is a bare noun
+	// phrase: a trailing relative clause put the verb behind "…it tests is STALE" and the sentence
+	// stopped parsing as English.
+	let freshnessExit = refuseIfStale(harnessExe, role: "the spec-test harness (which is also the compiler it tests)")
 	if freshnessExit != 0 'staleBinary'
 		return freshnessExit
 	end 'staleBinary'
@@ -766,9 +769,9 @@ end 'firstBadOption'
 //
 // ⛔ **IT USED TO CALL `printError` DIRECTLY, AND THAT WAS THE ONE GAP IN THE CAPTURE.**
 // `Diagnostics.emitDiagnosticLine`'s header recorded it as an outstanding obligation: every
-// `Diagnostic` went through the sink, but the five `CompileError` arms that never reach
-// `project.diagnostics` at all — `fileNotFound`, `noSourceFiles`, `readError`, `noCommonRoot`,
-// `stdlibNotFound` — were printed here, past it. So a capture was exact for a REFUSED compile and
+// `Diagnostic` went through the sink, but the SIX `CompileError` arms that never reach
+// `project.diagnostics` at all — `fileNotFound`, `directoryNotFound`, `noSourceFiles`, `readError`,
+// `noCommonRoot`, `stdlibNotFound` — were printed here, past it. So a capture was exact for a REFUSED compile and
 // EMPTY for a build that died on a missing file. `SpecTestRunner.compileOneTest` calls this INSIDE its
 // capture, which is what closes that gap and why there is still only one renderer of these sentences.
 //

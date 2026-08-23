@@ -75,6 +75,19 @@ STEPS=(
 	# back, so no file's bytes are touched and the working tree is unchanged either way.
 	"stale-binary|shv2|Checking the stale-binary refusal|bash scripts/stale-binary-gate.sh"
 
+	# Gates the PROCESS-WIDE stdlib token memo (G20): that a warm compile is served from it, that it
+	# stays bounded (`admitted == holding`, so a worker holds one entry per stdlib file and not one per
+	# fragment), and that a program emits byte-identical Target IR whether it is compiled alone or
+	# behind two unrelated compiles in the same process.
+	#
+	# ⛔ NONE of that is spec-testable, and that is the whole reason for the line: no Maxon program can
+	# observe how many times its own stdlib was lexed, and the suite's own green says only that the memo
+	# did not break something — never that it FIRED. The gate was written at G20 and this registry entry
+	# was not, so for one rung it was 435 lines nobody ran. Requires the shv2 build because it drives
+	# that binary and its `verify-warm-rebuild`; it writes only under `mktemp -d` and the gitignored
+	# `temp/`.
+	"shared-stdlib-memo|shv2|Checking the shared stdlib token memo|bash scripts/shared-stdlib-memo-gate.sh"
+
 	# Needs only the BOOTSTRAP, which is why it does not name the shv2 build: `maxon-dev-mcp/mcp` is
 	# compiled by `bin/maxon`. Under the old chain a broken shv2 build silently took the MCP build with
 	# it, which is one of the six.
