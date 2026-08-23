@@ -587,11 +587,15 @@ error E2015: <fragment>:7:14: Unsupported: `__ManagedList.remove` takes the elem
 ```
 
 <!-- test: removing-a-handle-out-of-a-merge-is-refused -->
-A ternary's result is a phi, which no binding owns — marking it would mark neither arm. ⚠ **THIS ONE IS
-CONSERVATIVE RATHER THAN LOAD-BEARING, AND SAYING SO IS THE POINT**: with the guard off the program is still
-refused, by E3102, because building the phi MOVES both arms into it. It is in the roster because a refused
-spelling with no measured segfault behind it is a different claim from one with, and a reader who cannot
-tell them apart will delete the wrong one.
+A ternary's result is a phi, which no binding owns — marking it would mark neither arm.
+
+⚠ **THIS GUARD USED TO BE CONSERVATIVE AND IS NOT ANY MORE — the second refusal behind it is GONE.** It
+read *"with the guard off the program is still refused, by E3102, because building the phi MOVES both arms
+into it"*, and that sentence stopped being true when a merge arm reading an IMMUTABLE binding began to
+CO-OWN rather than move (⚖ 2026-08-04, `Parser.settleArmGive`). `a` and `b` are `let` bindings holding
+owned handles, so MEASURED on this tree both arms now incref and neither is poisoned: with the guard off
+this program would COMPILE. What happens after that is not measured here — the guard is what stops it —
+but the E3102 backstop this note rested on no longer exists, so the guard is the only thing standing.
 ```maxon
 typealias StrChain = __ManagedList with String
 

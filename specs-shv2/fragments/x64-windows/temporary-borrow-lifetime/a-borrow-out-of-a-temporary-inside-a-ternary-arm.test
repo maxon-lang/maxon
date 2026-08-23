@@ -111,10 +111,10 @@ func @main {
   trycont:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
     x64.jmp matchcont
   ternaryfalse:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
     x64.movRegReg r13, r12
     x64.jmp matchcont
   matchcont:
@@ -122,6 +122,8 @@ func @main {
     x64.callDirect __managed_count
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic

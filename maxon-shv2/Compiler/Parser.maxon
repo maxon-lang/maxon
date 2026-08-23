@@ -40625,12 +40625,29 @@ export type Parser
 	// one is what the clause now rests on, alone. Skipping the promotion does not lose the mark either: the
 	// give reaches the phi unchanged, and `propagateImmutableGlobalReadToPhi` reads the marks off the gives.
 	//
-	// An arm holding NOTHING (the overwhelming majority) settles exactly as before, through
-	// `transferGiveToPhi` — a no-op for a borrowed or scalar give.
+	// An arm holding NOTHING (the overwhelming majority) reaches the two doors below: an outliving
+	// IMMUTABLE binding's value is co-owned (`giveAliasesAnOutlivingImmutableBinding`), and everything
+	// else settles through `transferGiveToPhi` — a no-op for a borrowed or scalar give.
 	function settleArmGive(give ValueId, ownedFloor BindingMark, exitBlock IrBlock, anchor Token) returns ValueId throws ParseError
 		if self.giveBorrowsIntoDyingRecords(give, ownedFloor: ownedFloor) 'borrowIntoDyingRecords'
 			return try self.promoteBorrowedMergeEdge(give, edgeBlock: exitBlock, anchor: anchor)
 		end 'borrowIntoDyingRecords'
+
+		// ⭐⭐ **AN ARM READING AN IMMUTABLE BINDING CO-OWNS IT — IT DOES NOT MOVE IT (⚖ 2026-08-04).**
+		// The arm's own edge takes a SECOND reference and the binding keeps the one it already owed, so both
+		// stay live and the box is released once by each. `emitIncref` in place rather than `__mm_retain` for
+		// the reason its header gives: the phi mints its own id, so no two BINDINGS come to share one — which
+		// is the whole of `coOwnImmutableRebindSource`'s fresh-name argument and does not apply here.
+		if self.giveAliasesAnOutlivingImmutableBinding(give, ownedFloor: ownedFloor) 'coOwnedImmutableSource'
+			// The incref belongs on the ARM's edge, not on `currentBlock`: the arm runs on one path, and a
+			// reference taken on the unconditional path would be owed by the phi on an edge that never took it.
+			// The same placement `promoteBorrowedMergeEdge` makes, for the same reason.
+			let saved = self.currentBlock
+			self.currentBlock = exitBlock
+			self.emitIncref(give, range: SourceRange.ofToken(anchor))
+			self.currentBlock = saved
+			return give
+		end 'coOwnedImmutableSource'
 
 		try self.transferGiveToPhi(give, anchor: anchor)
 		return give
@@ -40647,15 +40664,56 @@ export type Parser
 		return self.valueIsManagedHeap(give) and not self.valueIsOwnedHeap(give) and not self.immutableGlobalReads.contains(give)
 	end 'giveBorrowsIntoDyingRecords'
 
+	// ⭐⭐ **DOES THIS GIVE NAME A VALUE AN IMMUTABLE BINDING GOES ON OWNING PAST THE MERGE?** The three
+	// clauses, and each excludes a give the merge already answers correctly:
+	//
+	//   • a BORROWED give owns nothing to co-own — `giveBorrowsIntoDyingRecords` above and
+	//     `resolveGivesOwnership`'s promotion decide it, and they are the doors that hold the borrow rules;
+	//   • an owned TEMPORARY (`gives build(1)`) has no other owner at all, so the phi ADOPTS the one
+	//     reference it was handed — increfing it would leak, which is `transferFallbackToPhi`'s measurement;
+	//   • a binding this ARM declared (`text(s) gives s`) dies at the arm's exit, so a move is both correct
+	//     and free: `dropArmScopedOwned` skips a poisoned binding, where co-ownership would incref and
+	//     immediately decref. `ownedFloor` is the arm's own height, so the index test IS that question.
+	//
+	// What is left is a binding declared OUTSIDE the arm and declared `let`, which is exactly the shape the
+	// alias ruling blesses (`rebindSourceIsAnImmutableAlias` — this is the same question keyed by VALUE, since
+	// a give arrives as an SSA id and not as a name).
+	//
+	// ⚠ **A MUTABLE SOURCE STILL MOVES, and that is the ruling's rationale read the other way**: a `var`
+	// can be written through after the merge, so a second name for its value could watch it change. That is
+	// `specs-shv2/moves.md`'s boundary, and `error.gives-mutable-binding-still-moves` is its pin here.
+	function giveAliasesAnOutlivingImmutableBinding(give ValueId, ownedFloor BindingMark) returns bool
+		if not self.valueIsOwnedHeap(give) 'borrowed'
+			return false
+		end 'borrowed'
+
+		let index = self.liveOwnerIndexOf(give)
+		if self.noLiveOwner(index) 'ownedTemporary'
+			return false
+		end 'ownedTemporary'
+
+		if index >= ownedFloor 'declaredByThisArm'
+			return false
+		end 'declaredByThisArm'
+
+		let owner = try self.ownedBindings.get(index) otherwise panic("giveAliasesAnOutlivingImmutableBinding: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		return not owner.mutable
+	end 'giveAliasesAnOutlivingImmutableBinding'
+
 	// ⭐ **TRANSFER AN OWNED `gives` VALUE OUT OF ITS OWNER (P1.3).** An expression arm whose yielded value
 	// is OWNED — an owned interpolation/heap `String`, a struct box, or a managed payload a binding arm
 	// moved out (`text(s) gives s`) — hands that value to the merge's result phi, which becomes its sole
 	// owner (`finalizeMatchMerge` marks the phi owned so its consumer drops it once). So the value must
 	// leave its current owner HERE, before `dropArmScopedOwned` releases the arm's bindings and before the
 	// post-match statement drain runs: an owned temporary leaves the pending list, and a bare-local owner
-	// (the payload binding of `text(s) gives s`, or an outer owned binding) is poisoned so `emitScopeDrops`
+	// (the payload binding of `text(s) gives s`, or an outer MUTABLE binding) is poisoned so `emitScopeDrops`
 	// skips its drop and a later read of it is use-after-move. A borrowed/scalar give owns nothing, so both
 	// calls are no-ops — a borrowed String is promoted at the merge instead, where phi ownership is decided.
+	//
+	// ⚠ **AN OUTER binding declared `let` NEVER REACHES HERE (⚖ 2026-08-04).** `settleArmGive` co-owns it
+	// instead, so the phi takes a second reference and the source stays live — the same answer
+	// `transferFallbackToPhi` gives the `try … otherwise <binding>` edge. This door is left with exactly the
+	// two owners a move is right for: an arm-scoped binding, and a mutable one.
 	function transferGiveToPhi(give ValueId, anchor Token) throws ParseError
 		if not self.valueIsOwnedHeap(give) 'borrowed'
 			return
