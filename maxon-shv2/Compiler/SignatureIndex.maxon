@@ -377,6 +377,12 @@ let DeclShapeThrows = 27 as ContentHash
 // Only a proved-diverging declaration is recorded, so every ordinary function costs no hash movement.
 let DeclShapeDiverges = 107 as ContentHash
 
+// A function that can only ever THROW (G18) — `DeclShapeDiverges`' second way out, and its own tag for
+// the identical reason: a callee that gains or loses the property changes whether a PROPAGATING `try`
+// statement on it ENDS ITS CALLER'S BLOCK, so a caller's parse memo must move with it. Only a proved
+// always-throwing declaration is recorded, so every ordinary function costs no hash movement.
+let DeclShapeAlwaysThrows = 108 as ContentHash
+
 // ⭐ A declared RETURN TYPE's pre-erasure SPELLING (A2j / A2m) — the `DeclaredSurface` word `mixDeclaration`
 // folds in beside the return type. It is the one declaration fact `mixReturnType` structurally cannot carry:
 // `__ManagedMemory` resolves to the SAME `genericInstance` a `ByteArray` does, so an edit between the two
@@ -4020,6 +4026,13 @@ typealias DisagreeingThrowsNameSet = Set with ByteArray
 // another file, so only the whole-program index can answer for it. `Parser.terminateAfterDivergingCall` is
 // the door that asks.
 //
+// ⭐ **THERE ARE TWO WAYS OUT AND `leavesByThrowing` SAYS WHICH (G18)**, because they are one fact to the
+// SWEEP and two facts to the CALL SITE. A body that can only ever `panic` is left by a BARE call statement;
+// a body that can only ever `throw` is left by a PROPAGATING `try` statement, and by nothing else — an
+// `otherwise` catches the error and control comes back. One transport array carries both so the second way
+// costs no second parameter on the eight routines the first one is threaded through; `foldFile` splits them
+// onto their own registries at the one point the key is minted.
+//
 // ⚠ **THERE IS NO PAYLOAD, BECAUSE PRESENCE *IS* THE VALUE.** `recordScannedSignature` pushes one of these
 // only for a declaration whose body walk proved cannot return (`scanBodyFacts`' `'neverReturns'` verdict), so
 // a name with no entry returns — the "absence is the answer" convention `funcThrows` and `funcParamConsumes`
@@ -4029,9 +4042,12 @@ typealias DisagreeingThrowsNameSet = Set with ByteArray
 export type DivergingDeclEntry
 	export let name as ByteArray
 	export let takesReceiver as bool
+	// Which of the two ways out this body has: `true` for a tail `throw` (G18), `false` for a tail `panic`
+	// (G17). See the header — the two are read by different call shapes and never share a registry.
+	export let leavesByThrowing as bool
 
-	export static function create(name ByteArray, takesReceiver bool) returns DivergingDeclEntry
-		return Self{name: name, takesReceiver: takesReceiver}
+	export static function create(name ByteArray, takesReceiver bool, leavesByThrowing bool) returns DivergingDeclEntry
+		return Self{name: name, takesReceiver: takesReceiver, leavesByThrowing: leavesByThrowing}
 	end 'create'
 end 'DivergingDeclEntry'
 
@@ -9119,6 +9135,13 @@ export type ProgramSignatures
 	// pair `functionNeverReturns` compares, and the only way the sweep can see an overload of the same name that
 	// returns. `funcThrowingDeclarationCounts`' twin, one registry over and for exactly its reason.
 	var funcDivergingDeclarationCounts as FunctionDeclarationCountMap
+	// ⭐ The functions that can only ever THROW (G18) — `funcDiverges`' second way out, on its own registry
+	// because its door is a different call shape: `functionAlwaysThrows(callee)` is what a PROPAGATING `try`
+	// STATEMENT asks before deciding the call ends its block. Empty for a program with no such helper.
+	var funcAlwaysThrows as DivergingFunctionNameSet
+	// How many declarations of a name could only THROW, against `funcDeclarationCounts`' how many there were
+	// — `funcDivergingDeclarationCounts`' twin, one registry over and for exactly its reason.
+	var funcAlwaysThrowingDeclarationCounts as FunctionDeclarationCountMap
 	// ⭐ Function name -> its per-parameter DEFAULTS (BATCH2 slice 4). `defaultsOf(callee)` is the door
 	// `Parser.emitCall` asks before deciding an under-supplied call is an arity error. Filled by
 	// `recordParamDefaults` from each file's scanned signatures; last-wins on a duplicate name (E3006
@@ -9557,7 +9580,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DivergingFunctionNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DivergingFunctionNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DivergingFunctionNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -10301,8 +10324,16 @@ export type ProgramSignatures
 			self.recordThrows(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), clause: entry.clause)
 		end 'eachThrows'
 
+		// The sweep collects both ways out of a body into ONE array (see `DivergingDeclEntry`); they part
+		// company HERE, at the one point the registration key is minted, so neither way can be filed under a
+		// key the other's door would not ask with.
 		for entry in divergingDecls 'eachDivergingDeclaration'
-			self.recordDiverges(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver))
+			let nonReturningKey = self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver)
+			if entry.leavesByThrowing 'leavesByThrowing'
+				self.recordNonReturningDeclaration(nonReturningKey, marked: self.funcAlwaysThrows, counts: self.funcAlwaysThrowingDeclarationCounts, shape: DeclShapeAlwaysThrows)
+			end 'leavesByThrowing' else 'leavesByPanicking'
+				self.recordNonReturningDeclaration(nonReturningKey, marked: self.funcDiverges, counts: self.funcDivergingDeclarationCounts, shape: DeclShapeDiverges)
+			end 'leavesByPanicking'
 		end 'eachDivergingDeclaration'
 
 		// ⭐⭐ **THIS FILE'S OWN RE-KEYED DECLARATIONS: THE ONE THING THE LOOPS ABOVE COULD NOT KEY FOR
@@ -11712,17 +11743,22 @@ export type ProgramSignatures
 	end 'throwsClauseCollide'
 
 	// Record that this declaration's body can never return — the write plus the hash, for `recordThrows`'
-	// reason. The overwrite is not compared, because presence IS the value and two diverging declarations of
-	// one key state the identical thing; the TALLY beside it is what catches the shape the recorder cannot
+	// reason. The overwrite is not compared, because presence IS the value and two non-returning declarations
+	// of one key state the identical thing; the TALLY beside it is what catches the shape the recorder cannot
 	// see, an overload of the same key whose body returns and so never arrives here.
-	function recordDiverges(name ByteArray)
-		if self.funcDiverges.contains(name) 'anotherDivergingDeclarationOfThisName'
-			self.noteRepeatedDeclaration(self.funcDivergingDeclarationCounts, name: name)
-		end 'anotherDivergingDeclarationOfThisName'
+	//
+	// ⭐ **ONE RECORDER FOR BOTH WAYS OUT (G17 `panic`, G18 `throw`)**, taking the registry it writes to. The
+	// two ways differ only in WHICH call shape reads them back, which is a property of the door and not of the
+	// recording — so a second copy of these four lines would be two chances to forget the tally, and the tally
+	// is the half that carries the safe direction.
+	function recordNonReturningDeclaration(name ByteArray, marked DivergingFunctionNameSet, counts FunctionDeclarationCountMap, shape ContentHash)
+		if marked.contains(name) 'anotherSuchDeclarationOfThisName'
+			self.noteRepeatedDeclaration(counts, name: name)
+		end 'anotherSuchDeclarationOfThisName'
 
-		self.funcDiverges.insert(name)
-		self.hash = mixBytes(mix(self.hash, value: DeclShapeDiverges), bytes: name)
-	end 'recordDiverges'
+		marked.insert(name)
+		self.hash = mixBytes(mix(self.hash, value: shape), bytes: name)
+	end 'recordNonReturningDeclaration'
 
 	// ⭐⭐ **DOES A CALL TO THIS NAME NEVER COME BACK? — the door `Parser.terminateAfterDivergingCall` asks
 	// before letting a bare-call STATEMENT end its block (G17).**
@@ -11734,13 +11770,33 @@ export type ProgramSignatures
 	// caller to remember, the forgotten call would not be a missing refusal: it would stop emitting the edge
 	// a returning overload really takes, which is a wrong answer with no diagnostic anywhere.
 	export function functionNeverReturns(callee ByteArray) returns bool
-		let someDeclarationDiverges = self.funcDiverges.contains(callee)
-		if not someDeclarationDiverges 'noDeclarationOfThisNameDiverges'
-			return false
-		end 'noDeclarationOfThisNameDiverges'
-
-		return not self.notEveryDeclarationPublishesIt(someDeclarationDiverges, publishedBy: self.funcDivergingDeclarationCounts, name: callee)
+		return self.everyDeclarationOfThisNameNeverReturns(callee, marked: self.funcDiverges, counts: self.funcDivergingDeclarationCounts)
 	end 'functionNeverReturns'
+
+	// ⭐⭐ **DOES A CALL TO THIS NAME ALWAYS THROW? — the door `Parser.desugarTry` asks before letting a
+	// PROPAGATING `try` STATEMENT end its block (G18).** `functionNeverReturns`' twin, one registry over: the
+	// question, the collide rule and the safe direction are identical, and only the way the body leaves and
+	// the call shape that reads it differ.
+	//
+	// ⚠ **IT IS NOT A SUPERSET OF `functionNeverReturns` AND MUST NOT BE FOLDED INTO IT.** A `panic` helper's
+	// call is a terminator written BARE; an always-throwing one's is a terminator only under a propagating
+	// `try`, because an `otherwise` catches the error and control comes back. Answering either question with
+	// the other's set would end a block control really leaves by.
+	export function functionAlwaysThrows(callee ByteArray) returns bool
+		return self.everyDeclarationOfThisNameNeverReturns(callee, marked: self.funcAlwaysThrows, counts: self.funcAlwaysThrowingDeclarationCounts)
+	end 'functionAlwaysThrows'
+
+	// The shared body of the two doors above — somebody published the fact for this key, and EVERY declaration
+	// wearing the key did. Written once for `recordNonReturningDeclaration`'s reason: the collide half is the
+	// one that carries the safe direction, and a second copy of it is a second chance to omit it.
+	function everyDeclarationOfThisNameNeverReturns(callee ByteArray, marked DivergingFunctionNameSet, counts FunctionDeclarationCountMap) returns bool
+		let someDeclarationPublishesIt = marked.contains(callee)
+		if not someDeclarationPublishesIt 'noDeclarationOfThisNameDoes'
+			return false
+		end 'noDeclarationOfThisNameDoes'
+
+		return not self.notEveryDeclarationPublishesIt(someDeclarationPublishesIt, publishedBy: counts, name: callee)
+	end 'everyDeclarationOfThisNameNeverReturns'
 
 	// ⭐ **THE CALLEE'S `throws` CLAUSE, or `none`** — the door a call site asks: does this callee throw,
 	// and what error type does it throw? `none` (no recorded entry) is every non-throwing function and the

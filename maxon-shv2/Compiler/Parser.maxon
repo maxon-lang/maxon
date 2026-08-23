@@ -13505,6 +13505,10 @@ export type Parser
 		// declines to mark compiles exactly as it did before the fact existed; a body wrongly marked stops
 		// emitting the edge control really takes, which is a wrong ANSWER with no diagnostic anywhere.
 		var bodyCanExitBeforeItsTail = false
+		// ⭐ **THE `return` HALF ON ITS OWN, for G18.** The `panic` rule rules out all three exit keywords
+		// together; the `throw` rule cannot, because its own tail spells one of them. A `return` is the only
+		// keyword that is an exit NEITHER rule's tail can be, so it is the one that needs a column of its own.
+		var bodySpellsAReturn = false
 		var atStatementStart = false
 		var lastTopLevelStatement = bodyStart
 		var sawATopLevelStatement = false
@@ -13542,6 +13546,10 @@ export type Parser
 			if kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.throws 'anExitThatIsNotTheTail'
 				bodyCanExitBeforeItsTail = true
 			end 'anExitThatIsNotTheTail'
+
+			if kind == TokenKind.return 'aReturnAnywhereInThisBody'
+				bodySpellsAReturn = true
+			end 'aReturnAnywhereInThisBody'
 
 			// ⭐⭐ **W117's SEED AND EDGE, both read off a `return` statement's own first tokens.** Probed here
 			// rather than in a walk of its own because this walk already stands on every token of the body with
@@ -13679,8 +13687,29 @@ export type Parser
 		// statement whatever follows it, but the pairing is what says the scan is standing where it thinks it
 		// is; a lone keyword at a line start is a malformed body the real parse is about to report.
 		if sawTheFunctionsOwnEnd and not declaresThrows and not bodyCanExitBeforeItsTail and sawATopLevelStatement and self.kindAt(lastTopLevelStatement) == TokenKind.panic and self.kindAt((lastTopLevelStatement + 1) as TokenIndex) == TokenKind.leftParen 'neverReturns'
-			divergingDecls.push(DivergingDeclEntry.create(funcName, takesReceiver: takesReceiver))
+			divergingDecls.push(DivergingDeclEntry.create(funcName, takesReceiver: takesReceiver, leavesByThrowing: false))
 		end 'neverReturns'
+
+		// ⭐⭐ **G18: A BODY THAT CAN ONLY EVER THROW.** The rule above one way out over, and every condition is
+		// here for the same reason it is there — leaving one out is a MISCOMPILE, not a missed diagnostic:
+		//
+		//   • the walk reached the declaration's OWN `end`, so the tail below really is the body's tail;
+		//   • the declaration DOES state `throws` — the inverse of the `panic` rule's column, and for the
+		//     inverse reason. A tail `throw` needs the clause, so its absence means the scan is not standing in
+		//     the body it thinks it is; and a bare `try` propagating a callee's error, which the `panic` rule
+		//     must exclude because it cannot see it, needs no exclusion here — propagating IS throwing, one more
+		//     way of leaving that is not a return;
+		//   • no `return` anywhere in it. `throw`/`throws` are deliberately NOT excluded (the tail is one, and a
+		//     `default throws` re-throw is another exit by the error edge), so this is the ONE column the two
+		//     rules cannot share;
+		//   • its LAST top-level statement is a `throw`, which is what rules out falling off the end.
+		//
+		// ⚠ **THE TAIL TEST NEEDS NO PAIRING TOKEN, WHERE THE `panic` ONE DOES.** `panic` is a call and its `(`
+		// is what says the scan is standing on a statement rather than on a stray keyword; `throw` is a statement
+		// keyword the grammar admits nowhere else, so its own kind carries that.
+		if sawTheFunctionsOwnEnd and declaresThrows and not bodySpellsAReturn and sawATopLevelStatement and self.kindAt(lastTopLevelStatement) == TokenKind.throw 'alwaysThrows'
+			divergingDecls.push(DivergingDeclEntry.create(funcName, takesReceiver: takesReceiver, leavesByThrowing: true))
+		end 'alwaysThrows'
 
 		if any 'consumes'
 			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds), takesReceiver: takesReceiver))
@@ -30078,21 +30107,13 @@ export type Parser
 	// `otherwise` handler's fall-through gate (E3059), a function body's missing-return gate (E3013), an
 	// `if`/`match` arm's merge — through the block's terminator rather than through a reader of its own.
 	//
-	// ⚠ **NO SCOPE DROPS, EXACTLY AS `panic` EMITS NONE.** Control never leaves the callee, so this frame's
-	// owned bindings are never released and never can be; a drop emitted here would be code on a path that
-	// does not exist. What IS drained is this statement's own temporaries — the obligation
-	// `parseStatement`'s terminated-block skip hands to every terminating statement, and this is the FIFTH
-	// (the list is at that skip). The floor is the statement's own, `parsePanicStatement`'s rule and for its
-	// reason: an enclosing construct's temporary (a match scrutinee, a `for` element) sits below it, is not
-	// this statement's to release, and taking it off the pending list would leak it on every OTHER path.
+	// What ending the block then COSTS — the drain this statement owes, the absent scope drops, the fresh dead
+	// block the tail is parsed into — is `endBlockAfterUnreachableTail`'s, shared with G18's `try` door and
+	// stated there once. This statement is the FIFTH holder of the drain obligation `parseStatement`'s
+	// terminated-block skip hands out; the list is at that skip.
 	//
-	// ⭐ **WHAT FOLLOWS GOES INTO A FRESH `dead` BLOCK, AND THAT IS THE PRECEDENT RATHER THAN AN INVENTION.**
-	// `finalizeIfElse` does exactly this for the continuation of an `if` whose branches all terminate: the
-	// tail is parsed for syntax and emits into a block nothing reaches. It is also what keeps a second
-	// terminator off THIS block — `emitTerminator` panics on one, and a `return` written under a diverging
-	// call is one unless the parser has moved on. E3071 is not widened to refuse that tail: its roster is
-	// KEYWORDS at a statement's first token (`statementEndsItsBlockAt`), a call is not one, and a statement
-	// after a fully-terminating `if`/`else` is accepted today for the identical reason.
+	// ⚠ **A short-circuit `and`/`or` in an ARGUMENT leaves control in a fresh merge block**, which is where the
+	// call landed and so which one gets terminated — never the block this statement opened in.
 	//
 	// ⚠ **THE DOOR IS THE BARE-NAME CALL STATEMENT, AND THE OTHER CALL SHAPES ARE OUT BY A BOUNDARY RATHER
 	// THAN BY OVERSIGHT.** A METHOD call's key is `Type.method`, which needs the receiver's type and so is not
@@ -30108,22 +30129,58 @@ export type Parser
 			return
 		end 'theCalleeComesBack'
 
-		// A short-circuit `and`/`or` in an argument leaves control in a fresh merge block, which is where the
-		// call landed and which is what `emitDeadReturn` terminates. It cannot already be terminated — the
-		// call op was just appended to it — but a `dead` one can arrive here from an unreachable tail, and
-		// `Terminator.dead` is not an op `emitTerminator` may replace.
-		if self.currentBlock.isTerminated() 'nothingReachesThisCallAnyway'
-			return
-		end 'nothingReachesThisCallAnyway'
-
-		if self.pendingTempDrops.count() > tempFloor 'dropArgumentTemps'
-			self.drainPendingTemps(tempFloor, anchor: calleeTok)
-		end 'dropArgumentTemps'
-
-		self.emitDeadReturn(func, anchor: calleeTok)
-
-		self.currentBlock = self.newDeadBlock(func, label: b"afterdiverge", line: calleeTok.line)
+		self.endBlockAfterUnreachableTail(func, anchor: calleeTok, tempFloor: tempFloor)
 	end 'terminateAfterDivergingCall'
+
+	// ⭐⭐ **WHAT A STATEMENT DOES ONCE CONTROL PROVABLY DOES NOT CONTINUE PAST IT — the three steps, written
+	// once for the two doors that reach them** (G17's bare call to a `panic` helper, G18's propagating `try` on
+	// an always-throwing callee). The two doors differ only in the QUESTION they ask the signature index; what
+	// they then do to the block is the same, and a second copy of it is a second chance to omit the drain.
+	//
+	// ⚠ **THE DRAIN IS NOT OPTIONAL, because `parseStatement`'s tail drain SKIPS a terminated block.** This
+	// statement's own temporaries are released here or by nobody. The floor is the STATEMENT's, never the whole
+	// list: an enclosing construct's temporary (a match scrutinee, a `for` element) sits below it, is not this
+	// statement's to release, and taking it off the pending list would leak it on every OTHER path.
+	//
+	// ⚠ **NO SCOPE DROPS, EXACTLY AS `panic` EMITS NONE.** Control never reaches the rest of this frame, so its
+	// owned bindings are never released and never can be; a drop emitted here would be code on a path that does
+	// not exist.
+	//
+	// ⭐ **WHAT FOLLOWS GOES INTO A FRESH `dead` BLOCK, AND THAT IS THE PRECEDENT RATHER THAN AN INVENTION.**
+	// `finalizeIfElse` does exactly this for the continuation of an `if` whose branches all terminate: the tail
+	// is parsed for syntax and emits into a block nothing reaches. It is also what keeps a second terminator off
+	// THIS block — `emitTerminator` panics on one, and a `return` written under such a statement is one unless
+	// the parser has moved on. E3071 is not widened to refuse that tail: its roster is KEYWORDS at a statement's
+	// first token (`statementEndsItsBlockAt`), neither a call nor a `try` is one, and a statement after a
+	// fully-terminating `if`/`else` is accepted today for the identical reason.
+	function endBlockAfterUnreachableTail(func IrFunction, anchor Token, tempFloor TempDropMark)
+		// The block this statement's work landed in cannot ordinarily be terminated — its ops were just
+		// appended — but a `dead` one can arrive here from an unreachable tail, and `Terminator.dead` is not an
+		// op `emitTerminator` may replace.
+		if self.currentBlock.isTerminated() 'nothingReachesThisStatementAnyway'
+			return
+		end 'nothingReachesThisStatementAnyway'
+
+		if self.pendingTempDrops.count() > tempFloor 'dropStatementTemps'
+			self.drainPendingTemps(tempFloor, anchor: anchor)
+		end 'dropStatementTemps'
+
+		self.emitDeadReturn(func, anchor: anchor)
+
+		self.currentBlock = self.newDeadBlock(func, label: b"afterdiverge", line: anchor.line)
+	end 'endBlockAfterUnreachableTail'
+
+	// Does this `try` target name a callee that can only ever throw (G18)? Only a DIRECT call has a declaration
+	// to ask about: a witness dispatch resolves to a conformer this call site does not know, and an awaited
+	// promise names a storage type rather than a body — and every uncertainty here must resolve to "it comes
+	// back", which is exactly what those two arms answering `false` gives.
+	function tryTargetAlwaysThrows(target TryTarget) returns bool
+		return match target 'shape'
+			named(callee) gives self.signatures.functionAlwaysThrows(callee)
+			witness gives false
+			promise gives false
+		end 'shape'
+	end 'tryTargetAlwaysThrows'
 
 	// The type a dead return's zero is born with — `float` when the declared return occupies XMM, `integer`
 	// otherwise. Every non-float return type keeps the integer zero it always had, so no existing golden
@@ -30165,6 +30222,10 @@ export type Parser
 		// desugars into a fork and the outer call lands in the merge block, so a per-block count would be
 		// measured against a block that is no longer current.
 		let targetOpFloor = self.artifact.module.ops.count()
+		// This statement's own temporary floor, captured before the target is parsed so the target's operands
+		// sit above it — what `endBlockAfterUnreachableTail` drains if the ok edge turns out to be unreachable
+		// (G18). Read only on that path; every other `try` ignores it.
+		let tempFloor = self.pendingTempDrops.count()
 		let result = try self.parseTryCallTarget(func)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
@@ -30182,7 +30243,7 @@ export type Parser
 			throw ParseError.errorTypeMismatch("'{String.from(tryTargetNoun(target, signatures: self.signatures))}' does not return a value", line: tryTok.line, column: tryTok.column)
 		end 'voidInValue'
 
-		return try self.desugarTry(func, tryTok: tryTok, result: result, flag: flag, target: target, resultUsed: resultUsed)
+		return try self.desugarTry(func, tryTok: tryTok, result: result, flag: flag, target: target, resultUsed: resultUsed, tempFloor: tempFloor)
 	end 'parseTry'
 
 	// Parse the throwing call target after `try` — a primary call form followed by its WHOLE POSTFIX CHAIN
@@ -30739,7 +30800,7 @@ export type Parser
 
 	// Build the flag split + handler + merge for a parsed `tryCall`. `result` is the success value,
 	// `flag` its error flag, both defined by the `tryCall` in `currentBlock`.
-	function desugarTry(func IrFunction, tryTok Token, result ValueId, flag ValueId, target TryTarget, resultUsed bool) returns ValueId throws ParseError
+	function desugarTry(func IrFunction, tryTok Token, result ValueId, flag ValueId, target TryTarget, resultUsed bool, tempFloor TempDropMark) returns ValueId throws ParseError
 		let entryBlock = self.currentBlock
 		// `NoErrorFlag`, not a bare `0`: this is the dual-register ABI's "no error in flight" value, the one
 		// the throw ENCODE's bias reserves, and it is read here and by the block form's own flag test.
@@ -30834,8 +30895,23 @@ export type Parser
 		// `entryMoveMark` at the identical point for the identical pair of uses.
 		let entryMoveMark = self.captureMoveMark()
 
+		// ⭐⭐ **G18: IS THIS `try`'s SUCCESS EDGE REACHABLE AT ALL?** Read HERE, at the one point the cursor
+		// still stands on the token that decides the form and the target is already resolved — and passed to
+		// `parseOtherwiseHandler` rather than re-read there, so the two cannot come to disagree about which form
+		// this is. All three conditions are the boundary of the widening, not a filter on it:
+		//
+		//   • **PROPAGATING** — an `otherwise` CATCHES the error, so the handler runs and control comes back;
+		//     the call is not a terminator and the handler is not dead code;
+		//   • **STATEMENT position** (`not resultUsed`) — a value-position `let x = try f()` is left alone: its
+		//     binding is unreachable either way, and terminating there would put a definition in a block nothing
+		//     enters, for no gain to any reader;
+		//   • the callee can only ever THROW, so the flag test below is decided and the `tryok` edge is a branch
+		//     control never takes.
+		let propagates = not self.at(TokenKind.otherwise)
+		let okEdgeIsUnreachable = propagates and not resultUsed and self.tryTargetAlwaysThrows(target)
+
 		self.currentBlock = errBlock
-		let handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, target: target, resultUsed: resultUsed, tryTok: tryTok)
+		let handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, target: target, resultUsed: resultUsed, propagates: propagates, tryTok: tryTok)
 		var errEnd = self.currentBlock
 		let errMoveMark = self.captureMoveMark()
 
@@ -30848,6 +30924,15 @@ export type Parser
 		// LAST, and after the finish: `finishValueTry` drains the FALLBACK's own temporaries on the error edge
 		// with a whole-statement floor, and would sweep these with them if they were back on the list.
 		self.resumeForkTemps(forkTemps, suspendedMark: suspendedMark)
+
+		// ⭐ **AND ONLY NOW MAY THE UNREACHABLE OK EDGE BE CLOSED (G18).** `finishTerminatedTry` has left control
+		// in `okBlock` and re-enrolled a managed result there, and `resumeForkTemps` has handed the fork's
+		// temporaries back — so this is the first point at which the pending list is the one the drain must clear.
+		// Closing it earlier would strand both.
+		if okEdgeIsUnreachable 'theCalleeNeverComesBack'
+			self.endBlockAfterUnreachableTail(func, anchor: tryTok, tempFloor: tempFloor)
+		end 'theCalleeNeverComesBack'
+
 		return merged
 	end 'desugarTry'
 
@@ -31129,8 +31214,12 @@ export type Parser
 
 	// Parse the `otherwise` handler (or its absence — a PROPAGATE) into the current (error) block, and
 	// report how it affects the merge. On entry `currentBlock` is the error block.
-	function parseOtherwiseHandler(func IrFunction, result ValueId, flag ValueId, target TryTarget, resultUsed bool, tryTok Token) returns TryHandler throws ParseError
-		if not self.at(TokenKind.otherwise) 'propagate'
+	//
+	// `propagates` is the absence of an `otherwise`, read by `desugarTry` off the same cursor position this
+	// routine would have read it at and handed down rather than asked twice — it decides the ok edge's
+	// reachability there (G18) and the handler's shape here, and those two must be one answer.
+	function parseOtherwiseHandler(func IrFunction, result ValueId, flag ValueId, target TryTarget, resultUsed bool, propagates bool, tryTok Token) returns TryHandler throws ParseError
+		if propagates 'propagate'
 			// Uncaught `try f()` / `try await p` — re-publish the callee's flag to this function's caller. The
 			// flag is re-emitted VERBATIM, so the propagated error type MUST match this function's `throws`
 			// type or the caller decodes one enum's ordinals as another's (E3059, checked here).
