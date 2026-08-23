@@ -61482,7 +61482,26 @@ export type Parser
 		// A promise read back OUT of storage and put into another slot of the same type carries its claim
 		// already — it was checked when it was first stored, and there is no `asyncCall` left to re-check it
 		// against. Same instance means same claim, so this is an identity rather than a second verdict.
-		if self.tagOf(value) == ValueTypeTag.genericInstance and self.valueNameId(value) == storage 'alreadyStored'
+		//
+		// ⛔⛔ **BUT "READ BACK OUT OF STORAGE" IS THE OWNERSHIP MARK, NOT THE TYPE — THE TYPE IS THE ONE THING A
+		// STORE SITE OVERWRITES.** `retypeValue` below stamps the storage instance onto the SPAWN's own ValueId,
+		// so a spawn stored through TWO doors — `push` on one arm of a branch, `set` on the other — arrives at
+		// whichever door the parser reads SECOND already wearing the type this test reads. Taking the identity
+		// path there skips `consumePromiseThread`, so that path never records the move; `reconcileMovesAtMerge`
+		// then finds the binding live on that edge and emits `__gt_promise_drop`, which CANCELS the thread the
+		// container is now holding. The slot keeps a handle that never completes, and a non-blocking poller
+		// (`Testing/SpecWorkerPool.drainHasAnswered`) waits on it forever.
+		//
+		// ⚠ **MEASURED: THAT IS WHAT WEDGED THE 🚩 PHASE 1 GATE.** `SpecWorkerPool.sendAndDrain` arms a slot with
+		// `push` on its first dispatch and with `set` on every dispatch after, so the shv2-compiled harness
+		// completed EXACTLY ONE job per worker and then stalled on a cancelled drain — deterministically, with
+		// the watchdog's `drain complete: no` naming the symptom and nothing naming the cause.
+		//
+		// `valueOwnsGreenThread` is the question actually meant here (its own header: *"does THIS frame owe a
+		// `__gt_promise_drop`?"*): the spawn sets it, a container read never does, and no store site rewrites
+		// it — so unlike the type it answers the same at the first door and at the fifth.
+		// `specs-shv2/async-promise-drop.md`'s two `branch-store-into-a-container-*` cases pin both orders.
+		if not self.valueOwnsGreenThread(value) and self.tagOf(value) == ValueTypeTag.genericInstance and self.valueNameId(value) == storage 'alreadyStored'
 			return value
 		end 'alreadyStored'
 

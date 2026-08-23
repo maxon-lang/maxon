@@ -1,0 +1,341 @@
+// Test: async-promise-drop.branch-store-into-a-container-reads-the-doors-in-either-order
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+let MaxSpins = 200
+
+function value(n Integer) returns Integer
+	Runtime.yield()
+	return n
+end 'value'
+
+function arm(slots IntPromiseArray, slot Integer, n Integer)
+	let p = async value(n)
+	if slot < slots.count() 'reuse'
+		try slots.set(slot, value: p) otherwise panic("the slot exists — this arm is only taken when it does")
+	end 'reuse' else 'firstUse'
+		slots.push(p)
+	end 'firstUse'
+end 'arm'
+
+function completesUnderTheDrive(slots IntPromiseArray) returns bool
+	var spins = 0
+	while spins < MaxSpins 'drive'
+		Runtime.yield()
+		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
+		if __Builtins.gtIsComplete(p.inner) != 0 'complete'
+			return true
+		end 'complete'
+		spins = spins + 1
+	end 'drive'
+	return false
+end 'completesUnderTheDrive'
+
+function main() returns ExitCode
+	var slots = IntPromiseArray.create()
+
+	arm(slots, slot: 0, n: 11)
+	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
+		return 1 as ExitCode
+	end 'pushedThreadCancelled'
+	let first = try slots.get(0) otherwise panic("slot 0 was just armed")
+	var sum = await first
+
+	arm(slots, slot: 0, n: 31)
+	if not completesUnderTheDrive(slots) 'setThreadCancelled'
+		return 2 as ExitCode
+	end 'setThreadCancelled'
+	let second = try slots.get(0) otherwise panic("slot 0 was just re-armed")
+	sum = sum + (await second)
+
+	return sum as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_system_stack_top@56 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_timer_capacity@80 = i64 0
+  __gt_trace_counter@88 = i64 0
+  __gt_trace_digits@96 = i64 0
+  __gt_clock_ticks@104 = i64 0
+  __gt_clock_freq@112 = i64 0
+  __gt_proc_count@120 = i64 0
+  __gt_proc_handles_base@128 = i64 0
+  __gt_proc_gts_base@136 = i64 0
+  __gt_free_list_head@144 = i64 0
+  __gt_live_count@152 = i64 0
+  __gt_startup_base@160 = i64 0
+  __gt_procinfo_base@168 = i64 0
+  __gt_exitcode_base@176 = i64 0
+  __gt_cmdline_buf_base@184 = i64 0
+  __gt_cmdline_buf_cap@192 = i64 0
+}
+
+func @value {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.callDirect Runtime.yield
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @arm {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.leaRegFunc rcx, [rip + value]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 192], r13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_count
+    x64.cmpRegReg r12, r8
+    x64.jcc less, reuse
+    x64.jmp ifelse
+  reuse:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.jmp ifcont
+  ifelse:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_push
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @completesUnderTheDrive {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r12, 200
+    x64.jcc less, drive
+    x64.jmp whileexit
+  drive:
+    x64.callDirect Runtime.yield
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.leaRegRegImm32 rcx, r8, 0
+    x64.callDirect __gt_is_complete
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, complete
+    x64.jmp ifcont
+  complete:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 11
+    x64.movRegReg rcx, rbx
+    x64.callDirect arm
+    x64.movRegReg rcx, rbx
+    x64.callDirect completesUnderTheDrive
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, pushedThreadCancelled
+    x64.jmp ifcont#2
+  pushedThreadCancelled:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 31
+    x64.movRegReg rcx, rbx
+    x64.callDirect arm
+    x64.movRegReg rcx, rbx
+    x64.callDirect completesUnderTheDrive
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, setThreadCancelled
+    x64.jmp ifcont#6
+  setThreadCancelled:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.leaRegRegReg rax, r12, r8
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r12, rax, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Runtime.yield {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_resched
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

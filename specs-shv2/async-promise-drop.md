@@ -388,3 +388,138 @@ end 'main'
 9
 
 ```
+
+<!-- test: async-promise-drop.branch-store-into-a-container-on-both-arms -->
+<!-- targets: x64-windows -->
+⭐ **STORING THE SPAWN IS A CONSUMING MOVE ON *EVERY* ARM THAT DOES IT, INCLUDING THE SECOND ONE THE PARSER
+READS.** A dispatcher arms a slot through two doors — `push` the first time a slot exists, `set` every time
+after — so ONE `async` spawn reaches a merge having been given to the container on both paths, and the merge
+must therefore reconcile NOTHING. If either door fails to record the move, `reconcileMovesAtMerge` sees the
+binding live on that edge, emits `__gt_promise_drop` there, and the container is left holding a **cancelled**
+thread: it never completes, so a non-blocking poller waits on it forever. `arm` is called twice, taking a
+different door each time; each stored thread must run to completion under the drive and be awaitable for its
+value, so the sum is 42. The bounded drive is what makes a cancelled thread a VERDICT (exit 2) instead of a
+hang.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+let MaxSpins = 200
+
+function value(n Integer) returns Integer
+	Runtime.yield()
+	return n
+end 'value'
+
+function arm(slots IntPromiseArray, slot Integer, n Integer)
+	let p = async value(n)
+	if slot == slots.count() 'firstUse'
+		slots.push(p)
+	end 'firstUse' else 'reuse'
+		try slots.set(slot, value: p) otherwise panic("the slot exists — this arm is only taken when it does")
+	end 'reuse'
+end 'arm'
+
+function completesUnderTheDrive(slots IntPromiseArray) returns bool
+	var spins = 0
+	while spins < MaxSpins 'drive'
+		Runtime.yield()
+		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
+		if __Builtins.gtIsComplete(p.inner) != 0 'complete'
+			return true
+		end 'complete'
+		spins = spins + 1
+	end 'drive'
+	return false
+end 'completesUnderTheDrive'
+
+function main() returns ExitCode
+	var slots = IntPromiseArray.create()
+
+	arm(slots, slot: 0, n: 11)
+	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
+		return 1 as ExitCode
+	end 'pushedThreadCancelled'
+	let first = try slots.get(0) otherwise panic("slot 0 was just armed")
+	var sum = await first
+
+	arm(slots, slot: 0, n: 31)
+	if not completesUnderTheDrive(slots) 'setThreadCancelled'
+		return 2 as ExitCode
+	end 'setThreadCancelled'
+	let second = try slots.get(0) otherwise panic("slot 0 was just re-armed")
+	sum = sum + (await second)
+
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: async-promise-drop.branch-store-into-a-container-reads-the-doors-in-either-order -->
+<!-- targets: x64-windows -->
+The mirror of the case above, and the reason it is a second case rather than a second assertion: the defect it
+pins was ORDER-DEPENDENT — the first store door the parser read retyped the spawn's value to the storage
+instance, and the SECOND one then mistook it for a promise already read back out of a container and skipped
+the move. So the arms are written the other way round here, `set` first and `push` second, which makes `push`
+the door that is read second and taken FIRST at run time. Same two threads, same 42: whichever door the parser
+happens to read second must still consume the thread it stores.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+let MaxSpins = 200
+
+function value(n Integer) returns Integer
+	Runtime.yield()
+	return n
+end 'value'
+
+function arm(slots IntPromiseArray, slot Integer, n Integer)
+	let p = async value(n)
+	if slot < slots.count() 'reuse'
+		try slots.set(slot, value: p) otherwise panic("the slot exists — this arm is only taken when it does")
+	end 'reuse' else 'firstUse'
+		slots.push(p)
+	end 'firstUse'
+end 'arm'
+
+function completesUnderTheDrive(slots IntPromiseArray) returns bool
+	var spins = 0
+	while spins < MaxSpins 'drive'
+		Runtime.yield()
+		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
+		if __Builtins.gtIsComplete(p.inner) != 0 'complete'
+			return true
+		end 'complete'
+		spins = spins + 1
+	end 'drive'
+	return false
+end 'completesUnderTheDrive'
+
+function main() returns ExitCode
+	var slots = IntPromiseArray.create()
+
+	arm(slots, slot: 0, n: 11)
+	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
+		return 1 as ExitCode
+	end 'pushedThreadCancelled'
+	let first = try slots.get(0) otherwise panic("slot 0 was just armed")
+	var sum = await first
+
+	arm(slots, slot: 0, n: 31)
+	if not completesUnderTheDrive(slots) 'setThreadCancelled'
+		return 2 as ExitCode
+	end 'setThreadCancelled'
+	let second = try slots.get(0) otherwise panic("slot 0 was just re-armed")
+	sum = sum + (await second)
+
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
