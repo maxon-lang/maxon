@@ -61,10 +61,23 @@
 #    admission LIST is not the thing that grows. The STORE is. Found by running the sabotage, which
 #    is the only reason this check now measures what its name claims.
 #
-# 4. The SUITE, which is the two-different-fragments check at scale. Every case in a filtered run is
-#    a DIFFERENT program compiled in a worker that has already compiled hundreds of others, and every
-#    one of them is compared against a golden minted by a compiler that had no such store. That is
-#    strictly stronger than a hand-built pair of fragments, and it is where a wrong answer would show.
+# 4. The SUITE. Every case in a filtered run is a DIFFERENT program compiled in a worker that has
+#    already compiled hundreds of others, so a store that mis-serves anything shows up as a failing
+#    case here at corpus scale.
+#
+#    ⚠ **IT IS NOT THE WARM-AGAINST-COLD CHECK, AND THIS FILE CLAIMED IT WAS.** It read *"the
+#    two-different-fragments check at scale … strictly stronger than a hand-built pair of
+#    fragments"*, on the ground that each case is compared against *"a golden minted by a compiler
+#    that had no such store"*. **A golden mismatch is a `note:` and not a failure** (⚖ user ruling
+#    2026-08-02) and the committed corpus already carries hundreds of drifting goldens, so this check
+#    reads `0 failed` and nothing else. A defect that mis-compiles WITHOUT failing a case is invisible
+#    to it. That is CHECK 5's job, and it is why CHECK 5 exists rather than being a smaller copy of
+#    this one. **MEASURED at the commit that added CHECK 5:** under the raw-stream sabotage below,
+#    with a one-case `--filter`, CHECK 4 stays GREEN and CHECK 5 goes RED.
+#
+# 5. WARM AGAINST COLD, on three unrelated programs. Its own section below carries the argument; the
+#    short form is that it is the only comparison in this tree whose reference was minted by THIS
+#    binary with the store EMPTY, and the only place a golden mismatch is a hard failure.
 #
 #   ⚠ WHAT THIS GATE DOES NOT COVER, stated rather than left to be assumed: the store's key carries
 #     the TARGET (`QueryDatabase.SharedTargetView`), because a `#if`-resolved stream is
@@ -73,7 +86,31 @@
 #     `detectHostTarget()` outright and `spec-test` takes a single `--target` — so the MIXING case is
 #     unreachable from here. Each lane proves its own key; nothing available proves the two apart.
 #
-#   ⚠ VERIFIED TO GO RED, by sabotage rather than by argument, on the commit that added this file:
+#   ⚠ VERIFIED TO GO RED, by sabotage rather than by argument. On the commit that added CHECK 5:
+#     * the raw-stream sabotage below, run with `--filter=free-function-from-method` (ONE case, so no
+#       worker compiles a second program): CHECK 5 red — `1 passed, 2 failed`, and the two that failed
+#       are exactly `beta` and `clock-shadow`, the second and third compiles in the worker. `alpha`,
+#       the compile that FILLS the store, passes. CHECK 4 stays green on that filter, which is the
+#       measurement in the CHECK 4 note above.
+#     * a cold reference perturbed by one byte before the shared run: CHECK 5 red, `1 of 3 program(s)
+#       emit different code warm than they do cold` — the DRIFT arm, which no other check has.
+#     * a cold reference DELETED before the shared run: CHECK 5 red, `2 of 3 program(s) had a cold
+#       reference to compare against` — the guard against passing over fewer programs than it names.
+#     * the cold mints pointed at a filter matching nothing: CHECK 5 red, `3 of 3 cold reference
+#       mint(s) failed`.
+#
+#   ⛔ **AND ONE SABOTAGE THAT DID *NOT* FIRE, RECORDED BECAUSE IT BOUNDS WHAT HAS BEEN PROVED.**
+#     Making `sharedProducerMaskOf` return ALL FIVE producer bits on a hit — a store serving a wrong
+#     but well-formed answer — left every check GREEN, CHECK 5 included. It is not a hole in the
+#     check: an over-set producer bit registers a layout or interns an instance that nothing
+#     references, and neither reaches codegen (`Parser.foldDeclaredSignaturesInto`'s probe block says
+#     so, and this measures it). ⇒ **Everything the store holds today is either byte-exact — corrupt
+#     the tokens and the compile FAILS — or codegen-inert. There is no silent-poison surface to
+#     exercise, so CHECK 5's DRIFT arm has been proved against a perturbed REFERENCE and never against
+#     a compiler defect.** The moment the store is asked to hold something richer, that stops being
+#     true, and this is the check that would see it.
+#
+#   Earlier, on the commit that added this file:
 #     * make `sharedActiveTokensOf` hand back the RAW stream instead of the `#if`-resolved one and
 #       CHECKS 1 and 4 go red — `12 passed, 591 failed`, most of them
 #       `E2001: stdlib/FilePath.maxon:3:1: Expected function declaration, got '#if'`. CHECKS 2 and 3
@@ -188,6 +225,182 @@ elif ! echo "$summary" | grep -q ', 0 failed'; then
 	fail "CHECK 4: $summary"
 else
 	pass "CHECK 4: $summary — every one of them a different program compiled in a worker the store had already served"
+fi
+
+# ---------------------------------------------------------------------------------- CHECK 5
+#
+# ⛔⛔ **TWO DIFFERENT FRAGMENTS, NOT ONE FRAGMENT TWICE — AND THIS IS THE ONE CHECK THAT COMPARES
+# WARM AGAINST COLD.** Everything above compares a compile against an EXPECTATION (an exit code, a
+# committed golden minted by some earlier binary). This compares the same program's EMITTED CODE from
+# two positions in the same process: alone, and after two unrelated programs have filled the store.
+#
+# ⚠ **THE CORPUS'S OWN GOLDENS CANNOT MAKE THAT COMPARISON, FOR TWO SEPARATE REASONS, AND THAT IS THE
+# GAP.** First, a golden mismatch is a `note:` and never a failure (⚖ user ruling 2026-08-02), so CHECK
+# 4 above — which reads `0 failed` — cannot see one at all. Second, the committed corpus already
+# carries hundreds of drifting goldens for unrelated reasons, so even a human reading that note is
+# reading a signal buried in a crowd. The three programs below get a reference minted MINUTES earlier
+# by THIS binary, in a corpus whose drift is zero by construction, and here the mismatch is a hard
+# failure.
+#
+# ⚠ **AND THE REFERENCE HAS TO BE MINTED ONE PROGRAM PER PROCESS, WHICH IS THE WHOLE COST OF THIS
+# CHECK.** Mint all three in one run and the second and third references are themselves produced by
+# a served compile; cold and warm then move together and the diff is empty whatever is wrong. The
+# three `--filter`ed runs below are three processes, and that is what makes them cold.
+#
+# The three programs are deliberately unlike each other — different declared type names, so their
+# interner id assignments differ — and the third declares `type Clock`, which CONTESTS a stdlib type
+# name and is the one input measured to move a stdlib file's swept output. It is compiled LAST, so if
+# a contest could leak backwards into what the store already holds, this is where it would show.
+#
+# ⚠ `--workers=1` is not a gate on worker-count invariance (there is no such gate — see
+# `.claude/CLAUDE.md`). It is the PROPERTY UNDER TEST: one worker is one process, which is what puts
+# all three compiles behind one store. At the default pool the three would land in three workers and
+# the check would silently measure nothing.
+#
+# ⚠ COMPARED is asserted to equal the case count, not merely "0 differ". A cold mint that failed to
+# write leaves nothing to compare, and "0 of 0 differ" is the shape of a check that cannot fail.
+
+AB_SPEC="$WORK/abspec"
+mkdir -p "$AB_SPEC"
+cat > "$AB_SPEC/shared-scan-ab.md" <<'SPEC'
+---
+feature: shared-scan-ab
+status: stable
+keywords: [shared memo, cross fragment, byte identity]
+category: compiler
+---
+
+# Three unrelated programs through one process
+
+## Documentation
+
+What a program compiles to may not depend on what was compiled before it in the same process.
+
+## Tests
+
+<!-- test: alpha -->
+```maxon
+typealias Num = int(0 to 1000)
+typealias Nums = Array with Num
+
+type Alpha
+	export var slot as Num
+
+	export static function create(slot Num) returns Alpha
+		return Self{slot: slot}
+	end 'create'
+
+	export function doubled() returns Num
+		return self.slot * 2
+	end 'doubled'
+end 'Alpha'
+
+function main() returns ExitCode
+	var xs = Nums.create()
+	xs.push(7)
+	let a = Alpha.create(try xs.get(0) otherwise 0)
+	print("alpha {a.doubled()}\n")
+	return 0
+end 'main'
+```
+```stdout
+alpha 14
+```
+
+<!-- test: beta -->
+```maxon
+typealias Count = int(0 to 500)
+
+enum Mood
+	calm
+	loud
+end 'Mood'
+
+type Beta
+	export var tally as Count
+
+	export static function create(tally Count) returns Beta
+		return Self{tally: tally}
+	end 'create'
+end 'Beta'
+
+function describe(m Mood) returns String
+	return match m 'm'
+		calm gives "calm"
+		loud gives "loud"
+	end 'm'
+end 'describe'
+
+function main() returns ExitCode
+	let b = Beta.create(3)
+	print("beta {b.tally} {describe(Mood.loud)}\n")
+	return 0
+end 'main'
+```
+```stdout
+beta 3 loud
+```
+
+<!-- test: clock-shadow -->
+```maxon
+typealias Tick = int(0 to 99)
+
+type Clock
+	export var tick as Tick
+
+	export static function create(tick Tick) returns Clock
+		return Self{tick: tick}
+	end 'create'
+end 'Clock'
+
+function main() returns ExitCode
+	let c = Clock.create(9)
+	print("clock {c.tick}\n")
+	return 0
+end 'main'
+```
+```stdout
+clock 9
+```
+SPEC
+
+# The case names, once. `AB_CASES` is COUNTED from this list rather than written down beside it: the
+# count is what every assertion below compares against, and a second spelling of it is a gate that
+# stops matching the spec the moment a fourth program is added.
+AB_PROGRAMS="alpha beta clock-shadow"
+AB_CASES=$(echo $AB_PROGRAMS | wc -w)
+
+ab_cold_failed=0
+for program in $AB_PROGRAMS; do
+	# One program per PROCESS, so its reference is minted by a compile the store could not have served.
+	if ! "$SHV2" spec-test "$AB_SPEC" --filter="shared-scan-ab/$program" > "$WORK/ab-cold-$program.log" 2>&1; then
+		ab_cold_failed=$((ab_cold_failed + 1))
+		echo "       cold mint of '$program' exited non-zero:"
+		grep -E '^FAIL|^error' "$WORK/ab-cold-$program.log" | head -5 | sed 's/^/       /'
+	fi
+done
+
+"$SHV2" spec-test "$AB_SPEC" --workers=1 > "$WORK/ab-warm.log" 2>&1
+ab_warm_rc=$?
+ab_summary=$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$WORK/ab-warm.log" | tail -1)
+ab_note=$(grep -o '[0-9]* COMPARED against a committed reference ([0-9]* of them differ' "$WORK/ab-warm.log" | tail -1)
+ab_compared=$(echo "$ab_note" | grep -o '^[0-9]*')
+ab_differ=$(echo "$ab_note" | grep -o '([0-9]*' | grep -o '[0-9]*')
+ab_compared=${ab_compared:-0}
+ab_differ=${ab_differ:--1}
+
+if [ "$ab_cold_failed" -ne 0 ]; then
+	fail "CHECK 5: $ab_cold_failed of $AB_CASES cold reference mint(s) failed — there is nothing to compare warm against"
+elif [ "$ab_warm_rc" -ne 0 ] || ! echo "$ab_summary" | grep -q ', 0 failed'; then
+	fail "CHECK 5: the shared run exited $ab_warm_rc (${ab_summary:-no summary line})"
+	grep -E '^FAIL' "$WORK/ab-warm.log" | head -10 | sed 's/^/       /'
+elif [ "$ab_compared" -ne "$AB_CASES" ]; then
+	fail "CHECK 5: $ab_compared of $AB_CASES program(s) had a cold reference to compare against — a check over fewer than all of them cannot fail"
+elif [ "$ab_differ" -ne 0 ]; then
+	fail "CHECK 5: $ab_differ of $AB_CASES program(s) emit different code warm than they do cold — what a program compiles to depends on what was compiled before it"
+	grep -n 'no longer match what the compiler emits' -A 6 "$WORK/ab-warm.log" | sed 's/^/       /'
+else
+	pass "CHECK 5: all $AB_CASES program(s) emit byte-identical code whether compiled alone or behind two unrelated compiles"
 fi
 
 echo

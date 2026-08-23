@@ -62,6 +62,37 @@ end 'fileChanged'
 // (`maxon-selfhosted/Compiler/Passes/StdlibIrTranslation.maxon:38-53`) or the bootstrap's
 // clone-on-every-use (`maxon-sharp/Compiler/0-Compiler.cs:1298-1341`), and neither is in this file.
 //
+// ⛔⛔ **AND A SWEPT DECLARATION IS BARRED FOR A SECOND, STRONGER REASON THAN ITS IDS — MEASURED 2026-08-23
+// (G20 wave 4), when caching the per-file declaration SCAN was attempted and refused.** The paragraph above
+// is about what the scan's OUTPUT carries. This is about the scan itself: `Parser.foldDeclaredSignaturesInto`
+// is not a function of the file's bytes at all.
+//
+//   • **It READS the whole-program index while it walks — and every USER file has already been folded into
+//     that index by then**, because the two fold loops sit either side of the stdlib/user shadow contest
+//     (`Queries.queryProgramSignatures`). Instrumenting every exported member of `ProgramSignatures` and
+//     recording which ones a walk touches gives a surface of **27 members**, measured over one compile of a
+//     seven-line program (52 files): `isTupleAlias` (41 of them), `structOf` and
+//     `declarationsValueIsTheManagedRecord` (21 each), `isArrayBaseName` / `isVectorBaseName` (20 each),
+//     `arrayRecordBaseNameIn` (6, and NOT keyed by a name — it is the array-literal-conformer answer, which
+//     `discoverArrayLiteralConformers` decides from the USER's files as much as from `stdlib/`).
+//   • **It WRITES the whole-program index while it walks.** Snapshotting the index's state either side of the
+//     walk names two files whose walk moves it: `stdlib/Map.maxon` (`typealias Entry = (Key, Value)`) and
+//     `stdlib/helpers/itertools/withIterator.maxon` (`returns (Source, Element)`). Both go through
+//     `recordTupleAlias` / `internTupleType`, and `ProgramSignatures.sweptStructTypeOf`'s header records what
+//     that write-during-the-walk was already measured to be worth: *"with the alias's file sorting first the
+//     program compiled and printed `11 22`; with the factory's file first the identical program was
+//     refused"*. A cache that skips the walk skips those writes.
+//   • **Its output records are then mutated in place by the whole-program TAIL, by more passes than the
+//     obvious two** — `remapStructLayoutFieldTypes` / `remapEnumLayoutPayloadTypes` inside `foldFile`, plus
+//     `refoldConformanceClause` (`recordConformances`, on a recorded `StructLayout` AND on a recorded
+//     `EnumLayout`), `normalizeSweptInterfaceTypes` (`retypeField`), the constant evaluator (`outcome`) and
+//     `assignDataLabels` (`dataLabel`), the last two on a recorded `TopLevelDecl`.
+//
+// ⇒ A clone on the way out of the store is necessary and **not sufficient**. Admitting a swept declaration
+// needs a DEPENDENCY key over what the walk can see, and the only complete one that is cheap — the index's
+// own `hash` as the walk begins — is fragment-specific by construction and would never hit. That is a rung of
+// its own, not a line here.
+//
 // A TOKEN has neither problem. `Token`'s every field is a `let` (Lexer.maxon:279-301), no consumer
 // mutates a token array (`filterConditionalTokens` returns its input or builds a fresh array, and
 // `Parser.shadowRenamedTokens` likewise), and a token carries no id of any kind. It is a VALUE, and
