@@ -1825,6 +1825,51 @@ latent — the corpus writes no such shape, both suites are green and the bootst
 `specs/type-casting.md`'s `error.unneeded.through-a-try-otherwise-result` records it in prose while pinning the
 PARENTHESIZED form, where the two agree.
 
+### ⬜ FINDINGS FROM THE SELF-COMPILE AGENT WAVE (2026-08-22) — each needs its own rung
+
+Four agents cleared 6 of the 16 self-compile errors (16 → 10, suite 6573/0). Each surfaced work it correctly
+declined to do in scope. **None of these is a regression; all are pre-existing and were found by measurement.**
+
+- **⬜ E3092's export census does not count a reference made by a FOLDED CONSTANT INITIALIZER.** shv2 refuses a
+  program the bootstrap compiles and runs to exit 0: an `export enum Reg` whose ONLY cross-file reference is
+  `let baseReg = Reg.rdx`. Census at `UnusedExportCheck.maxon:679`. ⚠ **shv2's own tree HIDES it** — `X64Register`
+  and friends are also named in signatures, so the initializer is never the sole reference, which is why the
+  landed sibling rung was green. Needs a control: sole-reference-by-initializer must be ACCEPTED while a
+  genuinely unreferenced export still earns E3092.
+- **⬜⬜ `async` HAS NO wasm32-wasi TARGET GATE OF ITS OWN.** It is refused there only INCIDENTALLY, when the
+  spawned callee happens to touch an x64-only runtime entry — so a callee that yields via `calleeYields`'
+  fall-open reaches the backend and panics **with no file and no line**. MEASURED on a program naming nothing
+  unusual: `async` over a body of `print("value {n}")` gives
+  `panic at StdToWasm.maxon:2182: emitFuncAddr: no wasm function index for function value '__gt_trampoline'`.
+  The cure is to refuse the SPAWN, not the callee's incidental runtime entry — which **moves the skip reason of
+  ~30 committed async cases**, hence its own rung.
+- **⬜ A FOURTH DUPLICATE IN THE ContentHash NUMBER SPACE.** `ArrayElementShapeEnumCase` and `DeclShapeDiverges`
+  both claimed **107**, both mixed into the one rolling `self.hash`. That is exactly the fourth occurrence
+  `ConstShapeFactoryValue`'s header predicts and says nothing can refuse. Taken to 108 by the agent that found
+  it; **the number space still has no gate**, which is the real item.
+- **⬜ TWO STALE `disabled-test` MARKERS BLAMED A CAUSE THAT HAD ALREADY LANDED.**
+  `top-level-var-enum-initializer` and its cross-file twin blamed *"the CONSTANT EVALUATOR's missing enum-member
+  arm"*, which shipped. The real blocker is an INTERNER MISMATCH: `ProgramSignatures.constantValueTypeOf` interns
+  into the WHOLE-PROGRAM table while `resolvedGlobalOf` hands the answer to a FILE's parse — and that function's
+  own header calls itself *"the twin … on the other interner"*, so the wrong twin is called. Markers now carry
+  the measurement instead of the stale guess.
+- **⬜ `specs-shv2/http-client.md`'s `async-trace-interleave` is `disabled-test`** — the ONLY case exercising
+  `asyncTrace`, so that arm is untested locally (the canonical case needs network). Exercised by hand with
+  `--async-trace` during the E3102 rung; worth a runnable substitute.
+- **⬜ `builtinArity` renders "takes exactly 0 argument"**, unpluralized, now pinned in FOUR specs. One renderer,
+  four pins — a wording decision, so it was not taken silently.
+- **⬜ AN OPAQUE-`T` STORE SHAPE NOBODY COULD ATTRIBUTE.** `growFilled(v)` then `push(v)` is refused, while
+  `growFilled(v)` then an alias hop then `push` compiles. Every other combination fits "push/set moves,
+  growFilled borrows"; that one does not, and the refusal survives only until an alias launders it. It is a
+  REFUSAL, so it cannot be a wrong answer today — the question is whether an alias hop should clear it.
+- **⬜ A `maxon-sharp` HOLE, RE-MEASURED INDEPENDENTLY:** a value-position `try` whose handler falls through
+  compiles and yields an unspecified value (measured `b=0`). Known to `7ba94dcff9`; two agents hit it separately.
+
+⚠ **PROCESS, LEARNED THE HARD WAY THIS WAVE:** a full shv2 suite runs **14–19 minutes** on this box and takes the
+TREE LOCK. A 10-minute foreground timeout kills the parent and leaves its worker cohort ORPHANED — and merging
+while a suite is live has it reading spec files that are changing underneath it, so its result is worthless.
+Background the suite, and do not merge until it releases the lock.
+
 ⚠ **R-1 AND R-2 ARE ONE SEQUENCE, NOT TWO ROWS.** R-1 collapses the same-range pairs, which is what
 leaves `RegisterAllocator`'s `0..u64.max` → `0..63` standing ALONE as a genuine narrowing — so R-2's cast
 is designed against a boundary R-1 has already cleared of everything that was never a narrowing at all.
