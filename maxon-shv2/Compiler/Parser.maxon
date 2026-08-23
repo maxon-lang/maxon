@@ -4998,15 +4998,56 @@ let BuiltinsUcdI64AtName = b"__Builtins.ucdI64At"
 // ever built at run time** — which is the whole reason a pass may emit a trace event from inside the
 // register allocator without allocating into the very `mm` stream the trace exists to read.
 //
-// ⇒ It is the ONE `__DebugStream` member this compiler recognizes. The five that EMIT an event
-// (`enabled`, `phaseBegin`, `phaseEnd`, `event`, `text`) arrive with the producer that consumes a name id;
-// until then an unrecognized member takes the same reserved-callee refusal every other unknown `__` callee
-// gets (`requireCalleeIsNotReservedName`).
+// ⇒ It is the one member intercepted BEFORE the arguments are parsed, and the only one whose argument is
+// not a value. The five that reach the RING (`enabled`, `phaseBegin`, `phaseEnd`, `event`, `text`) take
+// ordinary Maxon values and are recognized AFTER their arguments are parsed, exactly as the `__Builtins`
+// table's members are — see `DebugStreamQualifierPrefix`.
 //
 // ⚠ It is NOT in `isBuiltinsIntrinsicCallee`'s table: that arm is gated on the `__Builtins.` prefix and this
 // is a different type. It is intercepted at `parseCallNamed`, BEFORE the arguments are parsed, beside the
 // two UCD table loads and for their exact reason — the literal's token is only the cursor there.
 let DebugStreamNameIdCallee = b"__DebugStream.nameId"
+
+// ⭐⭐ **THE FIVE `__DebugStream` MEMBERS THAT REACH THE RING (Workstream O3).** `nameId` above turns a NAME
+// into a number; these are what a program does with it — open and close a PHASE span, put a structured
+// EVENT on the wire, put a human message there, and ask whether anything is listening at all. They are the
+// only events in the whole wire schema a compiled program AUTHORS; every other family is the runtime
+// talking about itself.
+//
+// ⚠ **THE FOUR EMITTING MEMBERS RETURN NOTHING, WHICH IS WHY THE STATEMENT DOOR HAS TO CLAIM THEM**
+// (`voidStaticCallsAt`). A bare statement is the only position a void call can be written in, and
+// `Logger.logEvent` / `PhaseProbe.begin` — the compiler's own emitters — write exactly that.
+//
+// ⚠⚠ **THE QUALIFIER IS THE TEST, NOT A ROSTER OF THE FIVE, AND THAT IS `isBuiltinsIntrinsicCallee`'s
+// RULE ONE TYPE OVER.** A member this compiler does not recognize must reach the reserved-callee rejection
+// that names it (`E3004: call to undefined function '__DebugStream.nope'`) rather than a complaint about
+// SHAPE — in STATEMENT position exactly as in expression position, which is the asymmetry D10 removed for
+// the user half of the same question.
+let DebugStreamQualifierPrefix = b"__DebugStream."
+let DebugStreamEnabledCallee = b"__DebugStream.enabled"
+let DebugStreamPhaseBeginCallee = b"__DebugStream.phaseBegin"
+let DebugStreamPhaseEndCallee = b"__DebugStream.phaseEnd"
+let DebugStreamEventCallee = b"__DebugStream.event"
+let DebugStreamTextCallee = b"__DebugStream.text"
+
+// Each member's arity, named for `SleepIntrinsicArity`'s reason: an intrinsic has no signature for
+// SemanticCheck's ordinary arity check to read, so the count IS the declaration and it belongs beside the
+// name it declares.
+let DebugStreamEnabledArity = 0 as ParamCount
+// `phaseBegin(nameId, unitId)` / `phaseEnd(nameId, unitId)` — the same two, which is why they share a
+// constant as they share an entry point.
+let DebugStreamPhaseArity = 2 as ParamCount
+// `event(nameId, category, level, unitId, arg0, arg1)`.
+let DebugStreamEventArity = 6 as ParamCount
+// `text(category, level, unitId, message)`.
+let DebugStreamTextArity = 4 as ParamCount
+
+// ⭐ **IS THIS CALLEE A MEMBER OF THE `__DebugStream` TYPE?** THE one test, with the same two askers
+// `isBuiltinsIntrinsicCallee` has and the same obligation not to disagree: the member table in
+// `parseCallNamed` and the STATEMENT door's `voidStaticCallsAt`.
+function isDebugStreamCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: DebugStreamQualifierPrefix)
+end 'isDebugStreamCallee'
 
 // ⭐⭐ **THE TWENTY `__Builtins` INTRINSICS `stdlib/Subprocess.maxon` BOTTOMS OUT IN — NINETEEN
 // `subprocess*` NAMES PLUS `managedIsNull`, WHICH IS NOT ONE OF THEM.** That module is the
@@ -5060,25 +5101,34 @@ let BuiltinsManagedIsNullName = b"__Builtins.managedIsNull"
 // block at 3, the streaming spawn takes the argv blob alone, and every other intrinsic in the family
 // takes machine words only. A `ParamCountArray` would express the same thing while allocating an array
 // per parsed call to say "none".
-enum SubprocessBufferSlots
+enum IntrinsicBufferSlots
 	// Every argument is a machine word — a handle, a result-struct pointer, a byte budget, a timeout, a
-	// raw `cstring` address, a kind discriminator or the flags bitfield.
+	// raw `cstring` address, a kind discriminator, a flags bitfield, a name id, a category or a unit.
 	none
 	// Argument 0 is the argv blob (`subprocessSpawnStreaming`), or the buffer under test (`managedIsNull`).
 	first
 	// Arguments 0 and 3 are the argv blob and the environment block — the fourteen-argument contract.
 	argvAndEnv
-end 'SubprocessBufferSlots'
+	// The LAST argument is the buffer — `__DebugStream.text`'s message, whose three leading arguments are
+	// the category, the level and the unit. It is named by POSITION-FROM-THE-END rather than by index
+	// because that is what the member's shape actually says, and an index would be a fourth constant to
+	// keep in step with its arity.
+	last
+end 'IntrinsicBufferSlots'
 
 // Is position `index` of a call under `slots` a `__ManagedMemory` rather than a machine word? The one
 // place the shape above is decoded, so the two `SubprocessSpawn*Slot` constants have exactly one reader.
-function subprocessSlotIsBuffer(slots SubprocessBufferSlots, index ParamCount) returns bool
+//
+// ⚠ `arity` is taken because `last` is the only case that cannot be answered from the index alone. The
+// caller has already fixed `args.count()` at the arity, so the two agree by construction.
+function intrinsicSlotIsBuffer(slots IntrinsicBufferSlots, index ParamCount, arity ParamCount) returns bool
 	return match slots 's'
 		none gives false
 		first gives index == SubprocessSpawnArgvSlot
 		argvAndEnv gives index == SubprocessSpawnArgvSlot or index == SubprocessSpawnEnvSlot
+		last gives index == arity - 1
 	end 's'
-end 'subprocessSlotIsBuffer'
+end 'intrinsicSlotIsBuffer'
 
 // `floatToBits(x)` takes exactly one FLOAT and `bitsToFloat(b)` exactly one INTEGER. Stated here beside
 // the intrinsics for `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's
@@ -5210,8 +5260,21 @@ end 'isBuiltinsIntrinsicCallee'
 //
 // No committed expectation moves: the only `maxoncstderr` pin of E2052 against a `__Builtins` callee is
 // `specs-shv2/builtins-ucd.md`'s, and that one is on the ucd path above.
+//
+// ⚠⚠ **THE `__DebugStream` MEMBERS ARE THE THIRD FAMILY, AND THEY ARE A DELIBERATE DIVERGENCE FROM THE
+// BOOTSTRAP.** That compiler REGISTERS parameter names for them (`2-Parser.cs:1786-1799`) and therefore
+// accepts an optional label — MEASURED: `phaseBegin(phase, unitId: 7)` compiles there, `wrongLabel: 7`
+// earns E3003, and `nameId: phase` on the FIRST argument earns E2052. shv2 registers none: its five
+// members are recognized by name and their arguments are read by POSITION
+// (`emitScalarIntrinsicCall`), so there is nothing here for a label to be checked against.
+//
+// ⇒ An unchecked label on a SIX-ARGUMENT call is not a convenience, it is a silent mis-slot:
+// `event(n, level: 1, category: 2, …)` would be accepted and the two fields swapped, and no later pass can
+// notice — no signature exists for one to read. Refusing the label is what makes the positional order the
+// only order. The positional spelling is the one BOTH compilers accept, it is what `Logger`/`PhaseProbe`
+// write, and `specs-shv2/debugstream-log-events.md` pins the refusal so the divergence stays deliberate.
 function argLabelRuleForCallee(callee ByteArray) returns ArgLabelRule
-	return ArgLabelRule.allPositional if calleeTakesPositionalArgsOnly(callee) or isBuiltinsIntrinsicCallee(callee) else ArgLabelRule.ordinary
+	return ArgLabelRule.allPositional if calleeTakesPositionalArgsOnly(callee) or isBuiltinsIntrinsicCallee(callee) or isDebugStreamCallee(callee) else ArgLabelRule.ordinary
 end 'argLabelRuleForCallee'
 
 // Every clock intrinsic reads a clock and takes nothing.
@@ -69389,7 +69452,7 @@ export type Parser
 			// ⭐⭐ **THE TWENTY INTRINSICS OF `stdlib/Subprocess.maxon`'s FLOOR — nineteen `subprocess*` plus
 			// `managedIsNull`, which the arm below says in so many words is not a subprocess entry.** Each row is a
 			// NAME, the runtime entry it becomes, its arity, which of its positions carry a `__ManagedMemory` and
-			// what it answers; every rule any of them applies is `requireSubprocessArgs`', so a row cannot invent
+			// what it answers; every rule any of them applies is `requireIntrinsicArgs`', so a row cannot invent
 			// a spelling of the arity or operand question. See `BuiltinsSubprocessSpawnName` for the three
 			// families and for why `subprocessKill`/`subprocessSendSignal` are not among them.
 			//
@@ -69400,91 +69463,149 @@ export type Parser
 			// before calling. Two shv2 entry points would be two copies of one spawn differing in one branch the
 			// caller has already taken.
 			if callee.equals(BuiltinsSubprocessSpawnName) or callee.equals(BuiltinsSubprocessDetachName) 'subprocessSpawn'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpAttachedSpawnName, arity: SubprocessSpawnArity, buffersAt: SubprocessBufferSlots.argvAndEnv, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpAttachedSpawnName, arity: SubprocessSpawnArity, buffersAt: IntrinsicBufferSlots.argvAndEnv, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessSpawn'
 
 			if callee.equals(BuiltinsSubprocessSpawnStreamingName) 'subprocessSpawnStreaming'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpStreamSpawnName, arity: SubprocessStreamingSpawnArity, buffersAt: SubprocessBufferSlots.first, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpStreamSpawnName, arity: SubprocessStreamingSpawnArity, buffersAt: IntrinsicBufferSlots.first, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessSpawnStreaming'
 
 			if callee.equals(BuiltinsSubprocessGetPidName) 'subprocessGetPid'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpGetPidName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpGetPidName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessGetPid'
 
 			if callee.equals(BuiltinsSubprocessWaitCollectName) 'subprocessWaitCollect'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpWaitCollectName, arity: SubprocessTwoArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpWaitCollectName, arity: SubprocessTwoArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessWaitCollect'
 
 			if callee.equals(BuiltinsSubprocessWaitExitName) 'subprocessWaitExit'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpWaitExitName, arity: SubprocessTwoArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpWaitExitName, arity: SubprocessTwoArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessWaitExit'
 
 			if callee.equals(BuiltinsSubprocessWriteStdinAllName) 'subprocessWriteStdinAll'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpWriteAllName, arity: SubprocessTwoArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpWriteAllName, arity: SubprocessTwoArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessWriteStdinAll'
 
 			if callee.equals(BuiltinsSubprocessResultStatusKindName) 'subprocessResultStatusKind'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpResultKindName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpResultKindName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessResultStatusKind'
 
 			if callee.equals(BuiltinsSubprocessResultStatusCodeName) 'subprocessResultStatusCode'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpResultCodeName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpResultCodeName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessResultStatusCode'
 
 			if callee.equals(BuiltinsSubprocessResultDurationMsName) 'subprocessResultDurationMs'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpResultDurationName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpResultDurationName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessResultDurationMs'
 
 			// `managedIsNull(mm)` is not a subprocess entry — it is a `__ManagedMemory` predicate, and its
 			// runtime entry lives with the heap rather than with the children. It is dispatched here because
 			// `stdlib/Subprocess.maxon:487` is its only caller in the whole corpus.
 			if callee.equals(BuiltinsManagedIsNullName) 'managedIsNull'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: MmIsNullName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.first, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: MmIsNullName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.first, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'managedIsNull'
 
 			// The three VOID members. `subprocessReleaseHandle` and `subprocessCloseStdin` reach the streaming
 			// runtime's own entries rather than new ones: a handle is a handle whichever spawn minted it, and
 			// the attached spawn claims a slot in the SAME table (see `SubprocessRuntime`'s header).
 			if callee.equals(BuiltinsSubprocessReleaseHandleName) 'subprocessReleaseHandle'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpReleaseName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpReleaseName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessReleaseHandle'
 
 			if callee.equals(BuiltinsSubprocessCloseStdinName) 'subprocessCloseStdin'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpCloseStdinName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpCloseStdinName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessCloseStdin'
 
 			if callee.equals(BuiltinsSubprocessResultReleaseName) 'subprocessResultRelease'
-				return try self.emitSubprocessCall(args, callee: callee, runtimeName: SubpResultReleaseName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpResultReleaseName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessResultRelease'
 
 			// The six that answer a FRESH OWNED `__ManagedMemory` the caller frees.
 			if callee.equals(BuiltinsSubprocessResultStdoutName) 'subprocessResultStdout'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpResultStdoutName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, calleeTok: anchor)
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpResultStdoutName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
 			end 'subprocessResultStdout'
 
 			if callee.equals(BuiltinsSubprocessResultStderrName) 'subprocessResultStderr'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpResultStderrName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, calleeTok: anchor)
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpResultStderrName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
 			end 'subprocessResultStderr'
 
 			if callee.equals(BuiltinsSubprocessReadStdoutLineName) 'subprocessReadStdoutLine'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadOutBytesName, arity: SubprocessTwoArgArity, buffersAt: SubprocessBufferSlots.none, calleeTok: anchor)
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadOutBytesName, arity: SubprocessTwoArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
 			end 'subprocessReadStdoutLine'
 
 			if callee.equals(BuiltinsSubprocessReadStderrLineName) 'subprocessReadStderrLine'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadErrBytesName, arity: SubprocessTwoArgArity, buffersAt: SubprocessBufferSlots.none, calleeTok: anchor)
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadErrBytesName, arity: SubprocessTwoArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
 			end 'subprocessReadStderrLine'
 
 			if callee.equals(BuiltinsSubprocessResolveOnPathName) 'subprocessResolveOnPath'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpResolvePathName, arity: SubprocessOneArgArity, buffersAt: SubprocessBufferSlots.none, calleeTok: anchor)
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpResolvePathName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
 			end 'subprocessResolveOnPath'
 
 			if callee.equals(BuiltinsSubprocessLastErrorMessageName) 'subprocessLastErrorMessage'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpLastErrorName, arity: SubprocessNoArgArity, buffersAt: SubprocessBufferSlots.none, calleeTok: anchor)
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpLastErrorName, arity: SubprocessNoArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
 			end 'subprocessLastErrorMessage'
 		end 'builtinsIntrinsic'
 
+		// ⭐⭐ **THE `__DebugStream` MEMBERS THAT REACH THE RING (Workstream O3)** — the second builtin TYPE's
+		// table, gated behind ONE prefix compare for the `__Builtins` table's reason: a call to anything else
+		// pays fourteen bytes and no allocation. `nameId` never arrives here; it was taken above, before the
+		// arguments were parsed, because its argument is a NAME rather than a value.
+		//
+		// An unrecognized member falls through to `emitCall`'s reserved-callee rejection, which is this
+		// table's "unknown member" arm and names the callee — see `DebugStreamQualifierPrefix`.
+		if isDebugStreamCallee(callee) 'debugStreamMember'
+			if callee.equals(DebugStreamEnabledCallee) 'enabled'
+				return try self.emitDebugStreamEnabled(args, calleeTok: anchor)
+			end 'enabled'
+
+			// ⭐ **THE FOUR EMITTING MEMBERS GO THROUGH THE SAME DOOR THE `subprocess*` FAMILY DOES**, and it is
+			// the same four questions: the right number of arguments, each one a machine word or a buffer as its
+			// slot says, no result where there is none to have, and one `emitRuntimeCall`. What differs is the
+			// MARKER the lowering will read and the arity — which is what the rows below say and all they say.
+			//
+			// ⚠ The message buffer is BORROWED: `__ds_emit_log_text` reads `buffer`/`length` through the record
+			// and copies the bytes into the ring, taking no ownership, exactly as the subprocess entries borrow
+			// their argv blob — which is what makes this door the right one and enrols no drop.
+			//
+			// The two ends of a phase SPAN differ in the wire code and in nothing else, so they take two markers
+			// and one entry point; the lowering is what supplies the code (`DsEvLogPhaseBegin`/`DsEvLogPhaseEnd`).
+			if callee.equals(DebugStreamPhaseBeginCallee) 'phaseBegin'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DsLogPhaseBeginMarkerName, arity: DebugStreamPhaseArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+			end 'phaseBegin'
+
+			if callee.equals(DebugStreamPhaseEndCallee) 'phaseEnd'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DsLogPhaseEndMarkerName, arity: DebugStreamPhaseArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+			end 'phaseEnd'
+
+			if callee.equals(DebugStreamEventCallee) 'event'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DsLogEventMarkerName, arity: DebugStreamEventArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+			end 'event'
+
+			if callee.equals(DebugStreamTextCallee) 'text'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DsLogTextMarkerName, arity: DebugStreamTextArity, buffersAt: IntrinsicBufferSlots.last, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+			end 'text'
+		end 'debugStreamMember'
+
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint)
 	end 'parseCallNamed'
+
+	// ⭐ **THE ONE `__DebugStream` MEMBER THAT ANSWERS A VALUE — the SOURCE-LEVEL half of the run-time gate.**
+	// It lowers to the `__ds_base != 0` test itself: a load and a compare, no call. That is what makes it the
+	// right guard for a tier that ALLOCATES — `Logger.log` builds a String before it can hand one over, and
+	// the emitting members' own in-body test would only be reached after that cost had been paid.
+	//
+	// ⚠ In a build carrying no producer it folds to the constant `false`, so every body it guards is dead
+	// before the optimizer sees it (`LowerMaxonToStd.lowerDebugStreamEmit`). Its result is a `bool` and not
+	// the `integer` the `__Builtins` predicates answer, because unlike them it has no stdlib declaration in
+	// front of it to do the conversion: the source writes `if __DebugStream.enabled()` directly.
+	function emitDebugStreamEnabled(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != DebugStreamEnabledArity 'arity'
+			throw ParseError.builtinArity(String.from(DebugStreamEnabledCallee), expected: DebugStreamEnabledArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		return self.emitRuntimeCall(DsLogEnabledMarkerName, args: ValueIdArray.create(), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitDebugStreamEnabled'
+
 
 	// ⭐ **`__Builtins.currentTimeMs()` — THE NANOSECOND READING, SCALED. NOT the coarse tick.**
 	//
@@ -70092,11 +70213,11 @@ export type Parser
 	end 'emitIntegerZeroArgIntrinsic'
 
 	// ⭐⭐ **THE ARGUMENT RULE EVERY COMMAND-LINE BUILTIN IS CHECKED AGAINST, IN ONE PLACE** — the
-	// `requireHandleArg`/`requireSubprocessArgs` shape, one family over. Three doors spawn a child from a
+	// `requireHandleArg`/`requireIntrinsicArgs` shape, one family over. Three doors spawn a child from a
 	// command line (`__Builtins.runProcess` → `__gt_process_run`, `spawnReadLine` → `__gt_io_read`,
 	// `subpSpawn` → `__gt_subp_spawn`) and every one of them asks the identical two questions of the
 	// identical argument shape: exactly one argument, and it is TEXT. They had three verbatim copies of the
-	// answer, which is three places for the rule to drift and the thing `requireSubprocessArgs`'s own header
+	// answer, which is three places for the rule to drift and the thing `requireIntrinsicArgs`'s own header
 	// says this file exists to stop ("twenty doors … growing twenty spellings of the same two questions").
 	//
 	// ⚠ Checking it here at all is what an intrinsic needs BECAUSE no file declares it: there is no
@@ -70138,7 +70259,7 @@ export type Parser
 		// stood here until the subprocess rung. `tagIsIntegral`'s own header names it as the spelling to
 		// avoid and says why: the composition answers TRUE for `unresolved`, a tag that agrees with
 		// everything by deferral — so a handle of a type nobody has settled reached the emit unrefused.
-		// It is also the one predicate `requireSubprocessArgs` asks one family over, which is what stops
+		// It is also the one predicate `requireIntrinsicArgs` asks one family over, which is what stops
 		// the two doors of one question from drifting.
 		if not tagIsIntegral(self.tagOf(handle)) 'notAnInt'
 			throw ParseError.builtinOperandType(String.from(builtinName), required: "integer", got: typeTagName(self.tagOf(handle)), line: calleeTok.line, column: calleeTok.column)
@@ -70217,15 +70338,15 @@ export type Parser
 	// ⚠ A `cstring` argument is a machine word here, and that is `parseTypeReference`'s decision rather than
 	// a shortcut taken at this door: `cstring` resolves to `integer` because it IS a raw address, so
 	// `config.workingDirectory.toString().cstr()` arrives INTEGRAL and there is no separate tag to demand.
-	function requireSubprocessArgs(args ValueIdArray, callee ByteArray, arity ParamCount, buffersAt SubprocessBufferSlots, calleeTok Token) returns ValueIdArray throws ParseError
+	function requireIntrinsicArgs(args ValueIdArray, callee ByteArray, arity ParamCount, buffersAt IntrinsicBufferSlots, calleeTok Token) returns ValueIdArray throws ParseError
 		if args.count() != arity 'arity'
 			throw ParseError.builtinArity(String.from(callee), expected: arity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
 		end 'arity'
 
 		var callArgs = ValueIdArray.create()
 		for i in 0 upto arity 'each'
-			let arg = try args.get(i) otherwise panic("requireSubprocessArgs: args.count() == arity just checked but get(i) failed")
-			if subprocessSlotIsBuffer(buffersAt, index: i) 'aBuffer'
+			let arg = try args.get(i) otherwise panic("requireIntrinsicArgs: args.count() == arity just checked but get(i) failed")
+			if intrinsicSlotIsBuffer(buffersAt, index: i, arity: arity) 'aBuffer'
 				if not self.valueIsByteArray(arg) 'notAManagedBuffer'
 					throw ParseError.builtinOperandType(String.from(callee), required: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 				end 'notAManagedBuffer'
@@ -70236,7 +70357,7 @@ export type Parser
 		end 'each'
 
 		return callArgs
-	end 'requireSubprocessArgs'
+	end 'requireIntrinsicArgs'
 
 	// ⭐ **ONE MACHINE-WORD ARGUMENT OF A `__Builtins` INTRINSIC — A HANDLE, A POINTER, A BUDGET, A FLAG.**
 	// Two askers that have nothing else in common: the subprocess family's per-slot walk above, and
@@ -70265,23 +70386,23 @@ export type Parser
 	//
 	// A void result used in value position is rejected exactly as a void user-call is — the three void
 	// members are `subprocessReleaseHandle`, `subprocessResultRelease` and `subprocessCloseStdin`.
-	function emitSubprocessCall(args ValueIdArray, callee ByteArray, runtimeName ByteArray, arity ParamCount, buffersAt SubprocessBufferSlots, resultTag ValueTypeTag, resultUsed bool, calleeTok Token) returns ValueId throws ParseError
-		let callArgs = try self.requireSubprocessArgs(args, callee: callee, arity: arity, buffersAt: buffersAt, calleeTok: calleeTok)
+	function emitScalarIntrinsicCall(args ValueIdArray, callee ByteArray, runtimeName ByteArray, arity ParamCount, buffersAt IntrinsicBufferSlots, resultTag ValueTypeTag, resultUsed bool, calleeTok Token) returns ValueId throws ParseError
+		let callArgs = try self.requireIntrinsicArgs(args, callee: callee, arity: arity, buffersAt: buffersAt, calleeTok: calleeTok)
 
 		if resultTag == ValueTypeTag.void and resultUsed 'noValueToUse'
 			throw ParseError.voidCallResultUsed(String.from(callee), line: calleeTok.line, column: calleeTok.column)
 		end 'noValueToUse'
 
 		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-	end 'emitSubprocessCall'
+	end 'emitScalarIntrinsicCall'
 
 	// ⭐ **A SUBPROCESS INTRINSIC WHOSE RESULT IS A FRESH OWNED `__ManagedMemory`** — the other six
 	// (`subprocessResultStdout`/`Stderr`, the two `subprocessRead*Line` readers, `subprocessResolveOnPath`
 	// and `subprocessLastErrorMessage`). `emitOwnedManagedMemoryResult` is what carries the three facts that
 	// travel together — owned heap record, byte-PACKED instance, BUFFER SURFACE — so `String.init(managed)`
 	// accepts it and its scope exit drops it, the same door `__Builtins.commandLineArg(i)` comes out of.
-	function emitSubprocessManagedResult(args ValueIdArray, callee ByteArray, runtimeName ByteArray, arity ParamCount, buffersAt SubprocessBufferSlots, calleeTok Token) returns ValueId throws ParseError
-		let callArgs = try self.requireSubprocessArgs(args, callee: callee, arity: arity, buffersAt: buffersAt, calleeTok: calleeTok)
+	function emitSubprocessManagedResult(args ValueIdArray, callee ByteArray, runtimeName ByteArray, arity ParamCount, buffersAt IntrinsicBufferSlots, calleeTok Token) returns ValueId throws ParseError
+		let callArgs = try self.requireIntrinsicArgs(args, callee: callee, arity: arity, buffersAt: buffersAt, calleeTok: calleeTok)
 		return self.emitOwnedManagedMemoryResult(runtimeName, args: callArgs, range: SourceRange.ofToken(calleeTok))
 	end 'emitSubprocessManagedResult'
 
@@ -74433,6 +74554,23 @@ export type Parser
 		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
 			return true
 		end 'builtinsIntrinsic'
+
+		// ⭐ **THE SECOND BUILTIN TYPE, ON THE SAME TERMS (Workstream O3).** `__DebugStream`'s four emitting
+		// members return nothing, so a bare statement is the only position they can be written in — and the
+		// compiler's own emitters write exactly that (`Logger.logEvent`, `PhaseProbe.begin`). Without this arm
+		// they died as `E2015: Unsupported: identifier statement`, which is `__Builtins.sleep`'s history
+		// repeating for the third time and for the same structural reason: a VOID member of a family whose
+		// other members all return a value.
+		//
+		// ⚠ **THE QUALIFIER IS THE TEST, NOT A ROSTER OF THE VOID FOUR**, which is `isBuiltinsIntrinsicCallee`'s
+		// rule above and D10's finding one type over: claiming the whole family is what routes an unrecognized
+		// member to `parseCallNamed` and so to the positioned `E3004` that NAMES it, instead of a refusal about
+		// SHAPE that says nothing about the name. `nameId` is claimed too and its value is then discarded,
+		// exactly as a `__Builtins` value-returning intrinsic's is here — an intrinsic allocates nothing, so
+		// there is no box for a bare statement to strand.
+		if isDebugStreamCallee(callee) 'debugStreamMember'
+			return true
+		end 'debugStreamMember'
 
 		// ⭐ **A USER TYPE'S VOID STATIC — the same position, asked of the whole-program index instead of a
 		// table (D10).** `Helper.shout()` on a line of its own was `E2015: Unsupported: identifier statement`

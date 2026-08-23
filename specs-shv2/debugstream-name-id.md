@@ -17,11 +17,12 @@ that turns a NAME into a number:
 let event = __DebugStream.nameId("regalloc.functionAllocated")
 ```
 
-⚠ **IT IS THE ONE MEMBER THIS COMPILER RECOGNIZES SO FAR.** The five that EMIT an event —
-`enabled`, `phaseBegin`, `phaseEnd`, `event`, `text` — arrive with the producer that CONSUMES a name
-id; until then each earns the same reserved-callee refusal `error.unknown-member` pins below. `nameId`
-comes first because it is the only one that answers a VALUE, and because a name id costs nothing to
-mint whether or not anything ever transmits it.
+`nameId` is the member that CAME FIRST, and it is the only one whose argument is not a value: it is the
+one that answers a number, and a name id costs nothing to mint whether or not anything ever transmits
+it. The five that reach the RING — `enabled`, `phaseBegin`, `phaseEnd`, `event`, `text` — arrived with
+the producer that CONSUMES a name id and have a spec of their own
+(`specs-shv2/debugstream-log-events.md`). A member that is neither still earns the reserved-callee
+refusal `error.unknown-member` pins below.
 
 ### Its argument is a compile-time NAME, not a runtime value
 
@@ -156,8 +157,9 @@ error E2010: <fragment>:4:38: Expected ')' but got 'interpolation start'
 ```
 
 <!-- test: debugstream-name-id.error.unknown-member -->
-`nameId` is the only `__DebugStream` member this compiler recognizes. An unrecognized one reaches the
-same reserved-callee rejection every other unknown `__` callee gets, at the call's own span.
+A `__DebugStream` member this compiler does not recognize reaches the same reserved-callee rejection
+every other unknown `__` callee gets, at the call's own span — in expression position here, and in
+STATEMENT position by the same route (`debugstream-log-events.error.unknown-member-names-the-callee`).
 ```maxon
 function main() returns ExitCode
 	let id = __DebugStream.nope("alpha")

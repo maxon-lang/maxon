@@ -546,6 +546,28 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		usage.usesIntToString = true
 		usage.usesHeap = true
 	end 'traceRuntimeNeeds'
+	// ⭐ **AND A TRACED build THAT WRITES A `__DebugStream` LOG EVENT CARRIES THE PRODUCER'S OWN FLOOR** —
+	// the arm above's shape, one instrument over, and its two bits are equally invisible to the scan:
+	//   • the HEAP — `__ds_init` `__slab_alloc`s the ring lock and the env-name buffer, so a program that
+	//     emits an event but allocates nothing of its own would otherwise reach `buildCarriesDebugStream`'s
+	//     `usesHeap` conjunct as FALSE, install no producer, and emit its events into a function nothing
+	//     built. That is a link failure at best and a silently empty trace at worst.
+	//   • `__str_copy` — `__ds_emit_log_text` blits the message into the ring inside its SYNTHESIZED body,
+	//     which no walk of the Maxon module can see.
+	//
+	// ⚠ **BOTH ARE GATED ON THE FLAG, AND THAT IS WHAT KEEPS AN UNTRACED BUILD BYTE-IDENTICAL.** The markers
+	// are in the module either way — the parser cannot know which build this is — so declaring the heap
+	// unconditionally would hand an untraced program the allocator and the leak check for calls that lower
+	// to nothing.
+	//
+	// ⚠ It is also what lets `LowerMaxonToStd.lowerDebugStreamEmit` gate on the BARE flag rather than on the
+	// conjunction: after this line, a program holding a marker has `usesHeap`, so for exactly those programs
+	// the flag IS `buildCarriesDebugStream`. That function's header is where the four parties to that answer
+	// are listed; this is the fifth reading of it and it agrees by construction rather than by restatement.
+	if project.debugStream and usage.usesDebugStreamLog 'debugStreamLogRuntimeNeeds'
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'debugStreamLogRuntimeNeeds'
 	usage.usesManagedGlobals = usesManagedGlobals
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
 	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
@@ -937,7 +959,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// ⚠ Gated on the module's own armed flag — `buildCarriesDebugStream`, set above — rather than on a
 	// second spelling of the same conjunction.
 	if pipeline.stdModule.debugStream 'installDebugStream'
-		installDebugStreamRuntime(pipeline.stdModule, globalData: project.globalData)
+		installDebugStreamRuntime(pipeline.stdModule, globalData: project.globalData, usesGt: usage.usesGt)
 	end 'installDebugStream'
 
 	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)
