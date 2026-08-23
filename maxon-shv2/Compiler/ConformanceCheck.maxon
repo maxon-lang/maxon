@@ -670,7 +670,14 @@ export typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
 // one question and a second copy of it would be free to answer the literal differently from the alias.
 export function checkWhereConstraints(project Project, signatures ProgramSignatures)
 	let aliasSites = signatures.instantiationSites()
-	if aliasSites.count() == 0 and project.inferredInstantiationSites.count() == 0 'noSites'
+	// ⭐ **A THIRD PROVENANCE: a literal written at FILE SCOPE.** `var m = [b"if": Info.create(…)]` interns a
+	// `Map with (K, V)` from its first pair exactly as a body's literal does, but the constant evaluator is a
+	// throwaway `Parser` whose artifact is never committed — so its sites are recorded on the index instead
+	// (`ProgramSignatures.constInferredInstantiationSites`). Without this list a file-scope literal keyed on a
+	// type implementing NEITHER of `Map`'s constraints was admitted in silence, which is the identical hole
+	// `project.inferredInstantiationSites` was added to close one position over.
+	let constSites = signatures.constInferredInstantiationSites()
+	if aliasSites.count() == 0 and project.inferredInstantiationSites.count() == 0 and constSites.count() == 0 'noSites'
 		return
 	end 'noSites'
 
@@ -687,6 +694,7 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 	// is reported against the declaration the author wrote before the one the compiler inferred.
 	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: aliasSites)
 	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: project.inferredInstantiationSites)
+	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: constSites)
 end 'checkWhereConstraints'
 
 // Validate every site in one list. The two lists this check reads differ in where they were RECORDED — a

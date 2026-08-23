@@ -260,6 +260,28 @@ end 'main'
 error E2015: specs/fragments/bytearray-element-size/byte-string-global-refused-when-byte-is-wider-than-one-byte.test:5:14: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 8-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 8 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
 ```
 
+<!-- test: byte-string-key-of-a-top-level-map-is-refused-when-byte-is-wider-than-one-byte -->
+### The refusal reaches a byte-string KEY of a top-level map literal, which is a THIRD doorway
+A top-level `[b"…": v]` is neither a function body's expression nor a bare `let G = b"…"`: the map
+literal is a NODE the initializer sweep hands `__module_init`, so its key folds through
+`evalConstFoldedValue` and nothing on the expression path is consulted. A route that admits a key
+without asking the blob-fits-its-element rule would build a record striding 1 under a `Byte` striding
+8 — the same incoherence the two cases above refuse, reached through the door this program opens.
+```maxon
+typealias Byte = int(0 to u64.max)
+typealias Bytes = Array with Byte
+
+var KEYWORDS = [b"hi": 1]
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(1)
+	return made.count() + KEYWORDS.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:17: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 8-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 8 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
+```
 <!-- test: byte-string-literal-accepted-at-the-canonical-byte -->
 ### The canonical `Byte` keeps both producers agreeing, and they interoperate
 `.create()` and `b"…"` both stride 1, so a literal appends into a heap-grown array — which is the whole

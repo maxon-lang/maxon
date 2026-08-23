@@ -3933,6 +3933,23 @@ export let CellPayloadBytes = 8 as ParsedInt
 // mistake be described two ways depending on where it was written.
 let MixedArrayLiteralElementsMessage = "an array literal with mixed element types — every element must have the same type as the first"
 
+// The map-literal twin of the sentence above, for the TOP-LEVEL literal. It is composed the way
+// `parseHashTableColumnArg`'s is — the COLUMN's subject, then what arrived — so a mixed literal is refused in
+// the same shape wherever it was written; what it cannot share is the type SPELLINGS, which only the index's
+// own interner can render (`ProgramSignatures.constMapColumnCheck`, whose header carries why).
+function constMapColumnMessage(columnNoun String, expected String, got String) returns String
+	return "this `{String.from(MapBuiltinBaseName)}`'s {columnNoun} is '{expected}' — got a '{got}' value. A top-level map literal's FIRST pair fixes both columns, and every later pair must match them"
+end 'constMapColumnMessage'
+
+// ⭐ **WHAT A TOP-LEVEL MAP LITERAL'S COLUMNS ARE, AT THE PAIR BEING WALKED** — `open` for the FIRST pair,
+// which fixes them, and `fixed` for every one after it, which is held to them. A union rather than a pair of
+// types plus an "is this the first?" bool, because "there is nothing yet to compare against" is an ANSWER and
+// not a missing value: a sentinel type would be a type this walk could accidentally compare a real column to.
+union ConstMapColumns
+	open
+	fixed(key MaxonType, value MaxonType)
+end 'ConstMapColumns'
+
 // ⭐ **THE NOUNS A BRACKETED LITERAL'S REFUSALS ARE COMPOSED FROM.** `[…]` spells TWO containers — an array,
 // whose one column is its ELEMENT, and a map, whose two are its KEY and its VALUE — and `literalColumnTypeFor`
 // serves all three, so the sentence is assembled from the construct plus the column rather than written out
@@ -5689,7 +5706,9 @@ function renderWitnessRequirements(candidates WitnessDispatchTargetArray) return
 end 'renderWitnessRequirements'
 
 // A three-element call argument list — `__managed_set(arr, index, value)`'s triple. `pairArgs`' sibling.
-function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
+// Exported for `pairArgs`' reason: `ModuleInit.emitMapEntryUpsert` builds the same `(receiver, key, value)`
+// triple for a FILE-SCOPE map literal that `emitMapLiteralUpsert` builds for a body's.
+export function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(first)
 	args.push(second)
@@ -5798,11 +5817,6 @@ let MapMethod = b"map"
 // the program's. `requireElementTransform` records it and `SemanticCheck.checkTransformArities` compares
 // against it, so the rule and its sentence read one number.
 let ElementTransformArity = 1 as ParamCount
-
-// `Map.upsert(key, value: v)` — insert-or-replace. It joins the shared block rather than sitting beside a
-// runtime, for the reason the `Set` five did: a method-name SPELLING belongs where the parser composes it,
-// and it is what `emitMapLiteralUpsert` builds a desugared `[k: v]` literal's call from.
-let UpsertMethod = b"upsert"
 
 // ⚠⚠ **`FromMethod = b"from"` STOOD HERE (A3g) AND IS DELETED (W129 review): ITS ONE READER —
 // `parseCharacterSetFrom`'s argument reject — WENT AT W115, AND THE CONSTANT OUTLIVED IT.** The RULE it was
@@ -7227,10 +7241,14 @@ end 'uniformArgRanges'
 // per-argument column because `slotCallArgs` indexes it.
 export let NoImmutableArgNames = ByteArrayArray.create()
 
-// The `value:` label of `Map.upsert(key, value:)` and its slot in a synthesized `(receiver, key, value)`
+// The slot the `value:` label of `Map.upsert(key, value:)` occupies in a synthesized `(receiver, key, value)`
 // argument list (W41) — named rather than spelled inline so the desugar and the declaration it calls into
 // cannot disagree about which argument carries the label. `stdlib/Map.maxon:124`.
-let MapUpsertValueLabel = b"value"
+//
+// ⚠ **THE LABEL ITSELF MOVED TO `SignatureIndex.maxon`'s SHARED METHOD-NAME BLOCK** when the TOP-LEVEL map
+// literal arrived: `ProgramSignatures.globalMapEntry` spells it for the same desugar written at file scope,
+// and one label read by two tiers is exactly what that block exists for. The SLOT stays here, because it is a
+// fact about the argument array THIS emitter builds and nothing outside it has one.
 let MapUpsertValueArgSlot = 2 as FieldIndex
 
 // ⭐ **THE DEFAULT `argLabels` OF A COMPILER-EMITTED CALL: "all positional".** Shared and empty for
@@ -66659,7 +66677,7 @@ export type Parser
 		// other reading of either — so a call surfaced as *"Expected 'min' or 'max'"* and a struct literal as
 		// **E2004 `Undefined constant 'Pair'`**, a message about a `let` the author never wrote. That is the
 		// identical misattribution the `CharSet from […]` and `ItemArray.create()` arms below were added for.
-		if self.atConstInitializerCall() or self.atConstStructConstruction() or self.atConstStringLiteralInit() 'deferredNodeInitializer'
+		if self.atConstInitializerCall() or self.atConstStructConstruction() or self.atConstStringLiteralInit() or self.atConstMapLiteral() 'deferredNodeInitializer'
 			var calls = ConstFactoryCallArray.create()
 			let root = try self.evalConstInitializerNodeInto(calls, stack: stack, nested: false)
 			try self.requireInitializerConsumed(decl, deferred: true)
@@ -66886,6 +66904,59 @@ export type Parser
 		end 'declared'
 	end 'atConstStringLiteralInit'
 
+	// ⭐⭐ **IS THE CURSOR ON `[` … `:` — A MAP LITERAL?** The FOURTH initializer that builds a record without
+	// folding one, and the only one of the four whose shape cannot be settled from a fixed number of tokens: a
+	// map literal and an array literal open identically, and what separates them is a `:` an arbitrary
+	// expression away. Both reference compilers say why no bounded lookahead finds it — `[f(a, b): 1]` has a
+	// `,` at depth 1 before the colon, `[m.get(k): 1]` has a whole call in front of it.
+	//
+	// ⚠ **A BODY DECIDES THIS BY PARSING THE FIRST ELEMENT AND LOOKING AT WHAT FOLLOWS, AND THIS WALK CANNOT.**
+	// `parseArrayLiteral` can, because both of its forks emit into the same block and the element it parsed is
+	// usable either way. Here the forks produce DIFFERENT THINGS — an array literal folds to a
+	// `ConstFoldedValue`, a map literal is an arena NODE — so the fold would have to be run and thrown away,
+	// and its element rule refuses a key outright before it could be: a `"a"` standing before a `:` is not
+	// `arrayElementIsSingleToken`, so `var m = ["a": 1]` reported **E2004 `Expected expression but got 'string
+	// literal'`**, blaming the one part of the line that IS a constant (MEASURED, and the identical
+	// misattribution the three arms above were each added to cure).
+	//
+	// ⭐ **SO THE SHAPE IS READ OFF THE TOKENS, AND THAT IS SOUND HERE FOR THE REASON IT IS NOT IN A BODY: a
+	// constant initializer's brackets are BALANCED AND BOUNDED.** The scan stops at the `]` closing the `[` it
+	// started on, and inside those brackets a `:` at depth 1 has no other reading — a labelled argument's colon
+	// is inside `(`…`)` and a struct literal's field colon inside `{`…`}`, both of which this counts. It is
+	// linear in the literal and asked once per bracketed initializer.
+	function atConstMapLiteral() returns bool
+		if not self.at(TokenKind.leftBracket) 'notABracketedLiteral'
+			return false
+		end 'notABracketedLiteral'
+
+		var depth = 0 as ParsedInt
+		var i = self.pos
+		while i < self.tokens.count() 'eachToken'
+			let kind = self.kindAt(i)
+			if kind == TokenKind.leftBracket or kind == TokenKind.leftParen or kind == TokenKind.leftBrace 'opens'
+				depth = depth + 1
+			end 'opens'
+
+			if kind == TokenKind.colon and depth == 1 'theMapColon'
+				return true
+			end 'theMapColon'
+
+			if kind == TokenKind.rightBracket or kind == TokenKind.rightParen or kind == TokenKind.rightBrace 'closes'
+				depth = depth - 1
+				if depth == 0 'closedWithoutAColon'
+					return false
+				end 'closedWithoutAColon'
+			end 'closes'
+
+			i = i + 1
+		end 'eachToken'
+
+		// An UNCLOSED bracket is not a map literal, and saying so is what leaves the diagnostic to the walk
+		// that reads the tokens rather than to a lookahead that only counted them: the array-literal fold
+		// reports the missing `]` at the token it stopped on.
+		return false
+	end 'atConstMapLiteral'
+
 	// ⭐ **WALK WHICHEVER NODE IS HERE INTO THE ARENA** — the ONE fork between the two ways a top-level
 	// initializer produces a record without folding one (W116), so a whole initializer and a nested
 	// argument/field admit exactly the same pair rather than two lists that could drift.
@@ -66903,6 +66974,10 @@ export type Parser
 		if self.atConstStringLiteralInit() 'stringLiteralInit'
 			return try self.evalConstStringLiteralInitInto(calls)
 		end 'stringLiteralInit'
+
+		if self.atConstMapLiteral() 'mapLiteral'
+			return try self.evalConstMapLiteralInto(calls, stack: stack)
+		end 'mapLiteral'
 
 		return try self.evalConstFactoryCallInto(calls, stack: stack, nested: nested)
 	end 'evalConstInitializerNodeInto'
@@ -67105,12 +67180,163 @@ export type Parser
 	// `Pair.create(Pair{a: 1, b: 2})` both fall out of this, in both directions, without either door knowing
 	// the other exists.
 	function evalConstNodeValue(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgumentValue throws ConstEvalError
-		if self.atConstInitializerCall() or self.atConstStructConstruction() 'nestedNode'
+		// ⚠ **THE MAP LITERAL JOINS THE NODE TEST HERE AS WELL AS AT THE INITIALIZER, AND THE SYMMETRY IS THE
+		// POINT rather than a widening taken for its own sake.** This function's own thesis is that an argument,
+		// a field and a whole initializer admit ONE set through ONE walk; a form claimed at the initializer and
+		// not here would make that sentence false and leave `Holder{entries: [k: v]}` to fall to the folded walk,
+		// which reads the `[` as an ARRAY literal and reports `Expected ']' but got ':'` — a message about a
+		// grammar the author was not writing in, which is the exact misattribution every arm of this fork was
+		// added to cure.
+		if self.atConstInitializerCall() or self.atConstStructConstruction() or self.atConstMapLiteral() 'nestedNode'
 			return ConstFactoryArgumentValue.call(try self.evalConstInitializerNodeInto(calls, stack: stack, nested: true))
 		end 'nestedNode'
 
 		return ConstFactoryArgumentValue.folded(try self.evalConstFoldedValue(stack))
 	end 'evalConstNodeValue'
+
+	// ⭐⭐ **`[k0: v0, k1: v1, …]` AS A TOP-LEVEL INITIALIZER — the SAME desugar `parseMapLiteralBody` reads
+	// inside a function, walked into the arena instead of emitted:** `Map.create()` plus one `Map.upsert(k,
+	// value: v)` per pair, on the instance the FIRST pair's two column types fix. One desugar written at the
+	// two positions a map literal can be written, so a literal-built map is one representation and one
+	// instance wherever it stands.
+	//
+	// ⭐ **IT IS A NODE AND NOT A FOLD, WHICH IS THE WHOLE REASON IT LIVES HERE.** `ConstFoldedValue` is
+	// *"everything an initializer can be WITHOUT running user code"*, and this runs the program's own
+	// `Map.create` and `Map.upsert` before `main` — and a VALUE may be a further call, which is
+	// `var keywordMap = [b"if": KeywordInfo.create(…), …]`, the shape this compiler's own lexer is written in.
+	//
+	// ⚠ **NO OWNERSHIP BOOKKEEPING, for `evalConstArrayLiteral`'s reason one container over**: a pair's halves
+	// are CONSTANTS, so there is no binding to poison and no temp to de-list. Who FREES each half after the
+	// `upsert` is decided from the callee's own consume bits at the synthesis
+	// (`ProgramSignatures.globalMapEntry`) — the ordinary call machinery's answer, and deliberately not a
+	// second parse-time move, which is exactly the leak `parseMapLiteralBody`'s header records.
+	function evalConstMapLiteralInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns InitializerCallId throws ConstEvalError
+		try self.consumeConstToken(TokenKind.leftBracket)
+		self.skipNewlines()
+
+		var entries = ConstMapEntryArray.create()
+		let firstKeyTok = self.current()
+		let first = try self.evalConstMapEntry(calls, stack: stack, columns: ConstMapColumns.open)
+		entries.push(first)
+		let keyType = self.constMapColumnType(first.key, calls: calls)
+		let valueType = self.constMapColumnType(first.value, calls: calls)
+		let columns = ConstMapColumns.fixed(keyType, value: valueType)
+
+		// A newline at each pair boundary, exactly as `evalConstArrayLiteral` allows one at each element's:
+		// a multi-line literal is the same literal, and `keywordMap` is 62 pairs written one per line.
+		self.skipNewlines()
+		while self.at(TokenKind.comma) 'morePairs'
+			try self.consumeConstToken(TokenKind.comma)
+			self.skipNewlines()
+			entries.push(try self.evalConstMapEntry(calls, stack: stack, columns: columns))
+			self.skipNewlines()
+		end 'morePairs'
+		try self.consumeConstToken(TokenKind.rightBracket)
+
+		let giid = self.signatures.builtinInstanceForColumns(MapBuiltinBaseName, key: keyType, value: valueType)
+		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION** — `gateMapLiteralColumns`' rule for the body's
+		// literal, and it binds here for the identical reason: this is the one door a map is born through with
+		// no `with (K, V)` to anchor an E3017 on, so a key implementing NEITHER of `Map`'s constraints would
+		// otherwise be admitted in silence. What differs is only WHERE the site is filed — on the INDEX, not on
+		// a parse artifact, because the constant evaluator's `Parser` is a throwaway whose artifact is never
+		// committed (`ProgramSignatures.constInferredInstantiationSites`).
+		self.signatures.recordConstInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: firstKeyTok.line, nameColumn: firstKeyTok.column, filePath: self.filePath))
+
+		// The slot this node is about to occupy. Read BEFORE the push and AFTER the pairs, which is what makes
+		// it this node's own index — `evalConstFactoryCallInto`'s invariant, for its reason: every nested node
+		// the walk above found has already appended itself.
+		let id = calls.count()
+		calls.push(ConstFactoryCall.mapLiteral(giid, entries: entries))
+
+		return id
+	end 'evalConstMapLiteralInto'
+
+	// ONE `k: v` pair. Both halves go through `evalConstNodeValue` — the very walk a factory ARGUMENT and a
+	// struct-literal FIELD go through — so a map column admits exactly what an initializer admits, another
+	// CALL included, and no third list of admitted forms can drift from the other two.
+	//
+	// ⚠ **EACH HALF IS BLAMED AT ITS OWN TOKEN**, which is why the column check lives here rather than in the
+	// caller's loop: the tokens are gone by the time the pair is returned, and a mismatched VALUE reported at
+	// the KEY's position points at the half that was right.
+	function evalConstMapEntry(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, columns ConstMapColumns) returns ConstMapEntry throws ConstEvalError
+		let keyTok = self.current()
+		let key = try self.evalConstNodeValue(calls, stack: stack)
+		try self.consumeConstToken(TokenKind.colon)
+		self.skipNewlines()
+		let valueTok = self.current()
+		let value = try self.evalConstNodeValue(calls, stack: stack)
+
+		try self.requireConstMapColumnIsNameable(key, columnNoun: HashTableKeyColumnNoun, tok: keyTok)
+		try self.requireConstMapColumnIsNameable(value, columnNoun: HashTableValueColumnNoun, tok: valueTok)
+
+		match columns 'expected'
+			// The FIRST pair FIXES both columns, so there is nothing yet to hold it to.
+			open then break 'expected'
+			fixed(keyType, valueType) then try self.requireConstMapColumns(key, value: value, calls: calls, keyType: keyType, valueType: valueType, keyTok: keyTok, valueTok: valueTok)
+		end 'expected'
+
+		return ConstMapEntry.create(key, value: value)
+	end 'evalConstMapEntry'
+
+	// Hold one later pair to the columns the first fixed — BOTH halves, from one `match` arm, which is why the
+	// pair is a function rather than two lines at the caller. The body walk's rule, restated here because the
+	// body's is enforced by `parseHashTableColumnArg`, which reads a `ValueId` out of the parser's value
+	// columns — and a top-level initializer mints no values at all. What is compared instead is the TYPE each
+	// half will be MINTED at (`ProgramSignatures.constNodeValueType`), which is the very type the synthesis
+	// mints it at, so a pair this admits is a pair the emitted `Map.upsert` can take.
+	function requireConstMapColumns(key ConstFactoryArgumentValue, value ConstFactoryArgumentValue, calls ConstFactoryCallArray, keyType MaxonType, valueType MaxonType, keyTok Token, valueTok Token) throws ConstEvalError
+		try self.requireConstMapColumn(key, calls: calls, column: keyType, columnNoun: HashTableKeyColumnNoun, tok: keyTok)
+		try self.requireConstMapColumn(value, calls: calls, column: valueType, columnNoun: HashTableValueColumnNoun, tok: valueTok)
+	end 'requireConstMapColumns'
+
+	// ⛔⛔ **AN ENUM CASE CANNOT BE A TOP-LEVEL MAP LITERAL'S COLUMN, AND THE LIMIT IS THE INTERNER RATHER THAN
+	// THE GRAMMAR.** A payload-free enum case folds to a `named`-tagged SCALAR whose type is carried as BYTES
+	// (`ConstValue.typeName`) because the evaluator is a throwaway parser; a `Map with (K, V)`'s type argument
+	// has to be a `MaxonType`, and the only id this tier can mint is one in `ProgramSignatures`' own table —
+	// which `SemanticCheck` does not speak. `ProgramSignatures.foldedMintType`'s header carries the measured
+	// panic, and the wrong ANSWER the same shape gives when the name is dropped instead.
+	//
+	// ⇒ **REFUSED, AND POINTED AT THE SPELLING THAT WORKS.** A body's literal has a real parse artifact whose
+	// ids are remapped at merge, so the identical program written inside a function is correct today — and
+	// refusing here is what keeps this door from being the one that answers `int` where the author wrote an
+	// enum, or panics three passes later.
+	function requireConstMapColumnIsNameable(value ConstFactoryArgumentValue, columnNoun String, tok Token) throws ConstEvalError
+		match constScalarOf(value) 'scalar'
+			notAScalar then return
+			scalar(folded) then try self.requireConstMapScalarColumnIsNameable(folded, columnNoun: columnNoun, tok: tok)
+		end 'scalar'
+	end 'requireConstMapColumnIsNameable'
+
+	// The tail of the question above, split out because a `match` arm may not open one. A `named` tag is the
+	// whole test: every other folded scalar (`integer`, `boolean`, `float`, `exitCode`) rebuilds its type from
+	// the tag alone and needs no id, and a BOXED union's case is not a scalar at all.
+	function requireConstMapScalarColumnIsNameable(folded ConstValue, columnNoun String, tok Token) throws ConstEvalError
+		if folded.tag != ValueTypeTag.named 'namesNoType'
+			return
+		end 'namesNoType'
+
+		throw ConstEvalError.defective(ParseError.unsupported("a `{String.from(folded.typeName)}` case as a top-level map literal's {columnNoun} — a `{String.from(MapBuiltinBaseName)}`'s column type has to be nameable from the whole-program index, and an enum case folded at file scope carries its enum's name as BYTES rather than as an id this tier can put in `{String.from(MapBuiltinBaseName)} with (…)`. Build the map inside a function, where the literal's instance is interned from the file's own parse artifact", line: tok.line, column: tok.column))
+	end 'requireConstMapScalarColumnIsNameable'
+
+	// One half against its column. The VERDICT and both spellings are the index's — see
+	// `ProgramSignatures.constMapColumnCheck` for why neither can be produced on this side — so all this door
+	// owns is where the refusal is BLAMED, which is the half only a token walk can see.
+	function requireConstMapColumn(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, column MaxonType, columnNoun String, tok Token) throws ConstEvalError
+		match self.signatures.constMapColumnCheck(column, value: value, calls: calls, declName: MapBuiltinBaseName, elementFilePath: self.filePath) 'verdict'
+			agrees then return
+			mismatch(got, expected) then throw ConstEvalError.defective(ParseError.unsupported(constMapColumnMessage(columnNoun, expected: expected, got: got), line: tok.line, column: tok.column))
+		end 'verdict'
+	end 'requireConstMapColumn'
+
+	// The type one column half is minted at, in the index's own interner. It is the SYNTHESIS's own producer
+	// (`constNodeValueType`), so the instance this literal is interned at and the values that fill it cannot
+	// disagree about what the columns are.
+	//
+	// The `declName` it takes is only ever spent on a panic message naming what held the value; a map literal's
+	// answer to that is the container, exactly as a struct literal's door answers with its layout's name.
+	function constMapColumnType(value ConstFactoryArgumentValue, calls ConstFactoryCallArray) returns MaxonType
+		return self.signatures.constNodeValueType(value, calls: calls, declName: MapBuiltinBaseName, elementFilePath: self.filePath)
+	end 'constMapColumnType'
 
 	// ⭐⭐ **`Pair{a: 1, b: 2}` AS A TOP-LEVEL INITIALIZER OR AS A FIELD/ARGUMENT OF ONE (W116)** — the SAME
 	// construction `parseStructLiteral` reads inside a function, walked into the arena instead of emitted.

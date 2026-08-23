@@ -148,9 +148,7 @@ end 'main'
 1 2
 ```
 
-<!-- disabled-test: byte-string-literal.top-level-map -->
-<!-- P2 Map: byte-array-keyed Map is not yet built -->
-
+<!-- test: byte-string-literal.top-level-map -->
 
 ```maxon
 var m = [b"hello": 1, b"world": 2]
@@ -169,9 +167,7 @@ end 'main'
 1 2
 ```
 
-<!-- disabled-test: byte-string-literal.top-level-map-struct -->
-<!-- P2 Map: byte-array-keyed Map is not yet built -->
-
+<!-- test: byte-string-literal.top-level-map-struct -->
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

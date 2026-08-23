@@ -346,17 +346,7 @@ end 'ownedConstArrayRecord'
 // come to read a second field off it that the other two arms would not have — which is also what lets all
 // three serve a factory ARGUMENT unchanged.
 function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, elements ConstArrayElementArray, valueType MaxonType, range SourceRange) returns ValueId
-	var args = ValueIdArray.create()
-	for stamp in create.stamps 'eachStamp'
-		args.push(containerStampValue(fn, stamp: stamp, range: range))
-	end 'eachStamp'
-	let record = fn.emitPositionalCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
-
-	// ⚠ **A SECOND CALL STOOD HERE — `__managed_resize`, SIZING A FIXED-SIZE CONTAINER'S RECORD (W190).** A
-	// vector was the one container whose elements are addressable from birth, and its global record was born
-	// through the runtime `__managed_create` and then grown. `stdlib/Vector.maxon`'s own `create()` publishes
-	// those slots now, so the sizing rides inside the callee this function already emits and the description
-	// carries no `sizing` field at all.
+	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
 
 	// ⭐ **THE ADD CALLEE IS THE INSTANCE'S OWN** (spec-port `lazy-static`) — `__managed_push` for an `Array`,
 	// `Set.insert` for a declared `Set`. It used to be spelled here, which was true while an `Array` was the only
@@ -373,8 +363,72 @@ function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall
 	return record
 end 'builtContainerRecord'
 
+// The EMPTY record a container description is born as — the `create` callee with its stamps, and nothing
+// else. Split out when the map literal arrived, because the two container builders differ ONLY in how an
+// element joins: a one-column container pushes a value, a map upserts a labelled pair, and every fact about
+// the BIRTH — which callee, which stamps, which tag the result is minted at — is one answer both read.
+//
+// ⚠ **A SECOND CALL STOOD IN THIS SEQUENCE — `__managed_resize`, SIZING A FIXED-SIZE CONTAINER'S RECORD
+// (W190).** A vector was the one container whose elements are addressable from birth, and its global record
+// was born through the runtime `__managed_create` and then grown. `stdlib/Vector.maxon`'s own `create()`
+// publishes those slots now, so the sizing rides inside the callee this function emits and the description
+// carries no `sizing` field at all.
+function bornContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, valueType MaxonType, range SourceRange) returns ValueId
+	var args = ValueIdArray.create()
+	for stamp in create.stamps 'eachStamp'
+		args.push(containerStampValue(fn, stamp: stamp, range: range))
+	end 'eachStamp'
+	return fn.emitPositionalCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+end 'bornContainerRecord'
+
+// ⭐⭐ **`var keywordMap = [b"if": KeywordInfo.create(…), …]` — A MAP LITERAL AT FILE SCOPE**, emitted as the
+// two calls a body's literal emits: `Map.create()` then one `Map.upsert(key, value: v)` per pair
+// (`Parser.parseMapLiteralBody`). One desugar written at two positions, so a literal-built map is one
+// representation wherever it was written.
+//
+// ⚠ **IT IS AN ARENA NODE AND NOT A `ManagedGlobalRecord`, WHICH IS WHY IT TAKES `calls`.** Either half of a
+// pair may itself be a CALL — `KeywordInfo.create(TokenKind.if, helpText: …)` is the whole point of the
+// shape — and only an arena entry can name one. `materializedValue` recurses back through
+// `initializerNodeRecord`, exactly as a factory ARGUMENT does.
+function builtMapLiteralRecord(fn SynthesizedFunction, create ContainerCreateCall, entries GlobalInitMapEntryArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
+	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
+	if entries.count() > 0 'hasPairs'
+		let add = keyedElementAddCallee(create, count: entries.count())
+		for entry in entries 'eachPair'
+			emitMapEntryUpsert(fn, add: add, record: record, entry: entry, calls: calls, range: range)
+		end 'eachPair'
+	end 'hasPairs'
+
+	return record
+end 'builtMapLiteralRecord'
+
+// ⭐ **ONE PAIR INTO THE MAP.** The key is materialized before the value — a body's left-to-right order — and
+// each half is released after the call only if the CALL kept nothing, through the very `dropBorrowedArguments`
+// a factory's arguments go through. ⚠ For `Map.upsert` it keeps BOTH — the table pushes them into its own
+// column arrays, which is a type-parameter FEED and not a consume bit — so this emits no drop at all, and the
+// one reference this frame made becomes the table's (`ProgramSignatures.calleeKeepsArgumentAtAFeed`, whose
+// header carries the use-after-free measured without it). The LABELS are the resolution's
+// (`ProgramSignatures.globalMapEntry`): the receiver is positional, the key is positional and the value
+// carries `value:`, which is what `LowerMaxonToStd.lowerCall` slots the third argument against.
+function emitMapEntryUpsert(fn SynthesizedFunction, add ByteArray, record ValueId, entry GlobalInitMapEntry, calls GlobalInitCallArray, range SourceRange)
+	let key = materializedValue(fn, value: entry.key.value, valueType: entry.key.valueType, calls: calls, range: range)
+	let value = materializedValue(fn, value: entry.value.value, valueType: entry.value.valueType, calls: calls, range: range)
+
+	var labels = ByteArrayArray.create()
+	labels.push(EmptySourceText)
+	labels.push(entry.key.label)
+	labels.push(entry.value.label)
+	_ = fn.emitCall(add, args: tripleArgs(record, second: key, third: value), argLabels: labels, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+
+	var borrowed = GlobalInitArgumentArray.create()
+	borrowed.push(entry.key)
+	borrowed.push(entry.value)
+	dropBorrowedArguments(fn, args: borrowed, values: pairArgs(key, second: value), range: range)
+end 'emitMapEntryUpsert'
+
 // The callee one element joins this container through — asked only when there IS an element, so a container
-// that names none (a `Map`, a `List`, a declared generic's `create()`) is not required to have one. A
+// that names none (a `List`, a declared generic's bare `create()`) is not required to have one. ⚠ A `Map` no
+// longer belongs on that list: since the top-level map literal it names a KEYED add, which is the arm below. A
 // description that arrives holding elements and naming no callee is an INVARIANT BREAK, never a case: it
 // means an initializer form was opened without teaching the router what its container adds through, and
 // dropping the elements silently is the wrong answer to that.
@@ -382,8 +436,22 @@ function elementAddCallee(create ContainerCreateCall, count ParsedInt) returns B
 	return match create.elementAdd 'add'
 		push(callee) gives callee
 		unsupported panic("ModuleInit.elementAddCallee: `{String.from(create.callee)}` was handed {count} element(s) and `ProgramSignatures.containerCreateCall` names no add callee for it — a top-level form is producing elements for a container the router does not know how to fill")
+		// A KEYED add takes `(record, key, value:)`, and this caller holds ONE value per element — so passing
+		// it here would put a key where a value belongs, silently. `builtMapLiteralRecord` is the builder that
+		// has a pair to give; a one-column element list reaching a keyed container is a description built by
+		// one form and emitted by the other.
+		upsert panic("ModuleInit.elementAddCallee: `{String.from(create.callee)}` was handed {count} single-column element(s) and its add is KEYED — a one-column literal cannot fill a container whose add takes a `(key, value)` pair")
 	end 'add'
 end 'elementAddCallee'
+
+// The KEYED twin of the callee lookup above — asked only when there IS a pair, for its reason, and refusing
+// the one-column arms for the mirror of it: a pair cannot be handed to an add that takes a single value.
+function keyedElementAddCallee(create ContainerCreateCall, count ParsedInt) returns ByteArray
+	return match create.elementAdd 'add'
+		upsert(callee) gives callee
+		push to unsupported panic("ModuleInit.keyedElementAddCallee: `{String.from(create.callee)}` was handed {count} `(key, value)` pair(s) and `ProgramSignatures.containerCreateCall` names no keyed add for it — a map literal is filling a container the router does not know is keyed")
+	end 'add'
+end 'keyedElementAddCallee'
 
 // One stamp a container's `create` is born holding: a number, or the drop callee's raw `.text` ADDRESS. The
 // emitting twin of `Parser.columnDestroyValue`, over the ONE decision both read
@@ -398,8 +466,9 @@ function containerStampValue(fn SynthesizedFunction, stamp ContainerCreateStamp,
 	end 'stamp'
 end 'containerStampValue'
 
-// ⭐⭐ **THE TWO WAYS AN ARENA NODE PRODUCES ITS RECORD — the program's own code RETURNS one, or the compiler
-// BUILDS the box itself** (spec-port `map-struct-bytearray`; W116).
+// ⭐⭐ **THE THREE WAYS AN ARENA NODE PRODUCES ITS RECORD — the program's own code RETURNS one, the compiler
+// BUILDS the box itself, or a CONTAINER is created and then filled** (spec-port `map-struct-bytearray`; W116;
+// the top-level map literal).
 //
 // ⭐⭐ **AN ARGUMENT OR A FIELD MAY BE ANOTHER NODE, AND THEN THIS IS THE RECURSION** (spec-port
 // `module-level-struct-var`) — `var state = Outer.create(Inner.create(0))`, `static var base = Outer{inner:
@@ -415,6 +484,7 @@ function initializerNodeRecord(fn SynthesizedFunction, calls GlobalInitCallArray
 	return match globalInitCallAt(calls, id: id) 'node'
 		call(callee, args) gives calledFactoryRecord(fn, callee: callee, args: args, calls: calls, valueType: valueType, range: range)
 		construct(sizeBytes, fields) gives builtStructBox(fn, sizeBytes: sizeBytes, fields: fields, calls: calls, valueType: valueType, range: range)
+		mapLiteral(create, entries) gives builtMapLiteralRecord(fn, create: create, entries: entries, calls: calls, valueType: valueType, range: range)
 	end 'node'
 end 'initializerNodeRecord'
 

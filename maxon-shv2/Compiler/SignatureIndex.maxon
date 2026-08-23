@@ -1236,9 +1236,31 @@ export union GlobalInitCall
 	// would be a second reading of a layout — and a field stored at one width and loaded at another corrupts
 	// the box silently (`Parser.emitIndirectStore`'s header states the same hazard for the body's two doors).
 	construct(sizeBytes ByteOffset, fields GlobalStructFieldArray)
+	// ⭐⭐ **A MAP LITERAL'S RECORD — the `create` this instance is born through, then one keyed ADD per pair.**
+	// It is `ManagedGlobalRecord.containerRecord` one column wider, and it lives HERE rather than there for
+	// the reason that union's header gives: a pair's halves may each be another CALL, and only an arena entry
+	// can name one. `create` carries the callee, its stamps and the add callee resolved off the very instance
+	// the slot is typed by — `containerCreateCall`'s single description, so a literal-built map and a
+	// hand-built one are born identically.
+	mapLiteral(create ContainerCreateCall, entries GlobalInitMapEntryArray)
 end 'GlobalInitCall'
 
 export typealias GlobalInitCallArray = Array with GlobalInitCall
+
+// ⭐ **ONE `k: v` PAIR, RESOLVED INTO THE TWO ARGUMENTS THE KEYED ADD IS CALLED WITH.** Each half is a full
+// `GlobalInitArgument` — label, value, type and WHO FREES IT — because a map entry is passed to a declared
+// `Map.upsert` exactly as a factory's arguments are passed to a declared `create`, and the ownership question
+// is therefore the same one, asked through the same `recordArgumentCleanup`.
+export type GlobalInitMapEntry
+	export let key as GlobalInitArgument
+	export let value as GlobalInitArgument
+
+	export static function create(key GlobalInitArgument, value GlobalInitArgument) returns GlobalInitMapEntry
+		return Self{key: key, value: value}
+	end 'create'
+end 'GlobalInitMapEntry'
+
+export typealias GlobalInitMapEntryArray = Array with GlobalInitMapEntry
 
 // ⭐ **ONE SLOT OF A STRUCT-LITERAL BOX, RESOLVED (W116)** — where it goes, how wide the store is, and what
 // produces the value.
@@ -1358,18 +1380,26 @@ export type ContainerCreateCall
 	end 'create'
 end 'ContainerCreateCall'
 
-// ⭐ **HOW ONE ELEMENT JOINS A CONTAINER `__module_init` BUILT** — a runtime callee taking `(record, value)`,
-// or NOTHING for a container no top-level form can hand elements to.
+// ⭐ **HOW ONE ELEMENT JOINS A CONTAINER `__module_init` BUILT** — a callee taking `(record, value)`, a
+// KEYED one taking `(record, key, value:)`, or NOTHING for a container no top-level form can hand elements to.
 //
 // ⚠ **`unsupported` IS NOT "we have not got round to it": it is the honest answer for a container the
-// initializer grammar cannot give elements.** A `Map` global is only ever `MapAlias.create()` (there is no
-// top-level map literal) and a DECLARED generic's `create()` takes no arguments at all
-// (`Parser.requireDeclaredGenericGlobalCreate`), so both arrive with an EMPTY element list and never ask.
-// `ModuleInit` panics rather than defaulting, so the day a form does hand one elements, the missing callee is
-// a compile-time-loud gap and not a silently dropped element.
+// initializer grammar cannot give elements.** A DECLARED generic's `create()` takes no arguments at all
+// (`Parser.requireDeclaredGenericGlobalCreate`), so a `<Alias>.create()` global arrives with an EMPTY element
+// list and never asks. `ModuleInit` panics rather than defaulting, so the day a form does hand one elements,
+// the missing callee is a compile-time-loud gap and not a silently dropped element.
+//
+// ⭐⭐ **`upsert` IS A DIFFERENT SHAPE AND NOT A DIFFERENT NAME, WHICH IS WHY IT IS ITS OWN ARM.** A one-column
+// container's add is `(record, value)` and every caller may build that argument list from a single element; a
+// map's is `(record, key, value:)`, three arguments of which one is LABELLED. Folding the two into `push`
+// would leave every reader to re-derive the arity from the callee's spelling — and `ModuleInit`'s one-column
+// emitter would then have silently passed a key where a value belongs. The sentence *"a `Map` global is only
+// ever `MapAlias.create()` (there is no top-level map literal)"* stood in this header until the top-level map
+// literal arrived; it is what this arm replaces.
 export union ContainerElementAdd
 	push(callee ByteArray)
 	unsupported
+	upsert(callee ByteArray)
 end 'ContainerElementAdd'
 
 // ONE argument a container's `create` is stamped with — an `element_size@24` stride, or the
@@ -1723,6 +1753,19 @@ export union ConstFactoryCall
 	// declared parameter names; a field is already in its slot, so a label here would be a second spelling of
 	// the position, read by nothing.
 	construct(typeName ByteArray, fields ConstFactoryArgumentValueArray)
+	// ⭐⭐ **A MAP LITERAL — `var keywordMap = [b"if": KeywordInfo.create(…), …]`, which is how this compiler's
+	// own lexer writes its keyword table.** It is a NODE and not a `ConstFoldedValue` for the reason that
+	// union's header states: a folded value is *"everything an initializer can be WITHOUT running user
+	// code"*, and a map literal desugars to `Map.create()` plus one `Map.upsert` per pair — user code, twice
+	// over, before a single value of the author's is even considered. Its halves are `ConstFactoryArgumentValue`s
+	// for the same reason a factory's arguments are: a key or a value is anything an initializer may be,
+	// INCLUDING another call, and this arena is what already holds one flat.
+	//
+	// ⚠ **THE INSTANCE IS FIXED BY THE FIRST PAIR AND CARRIED, exactly as `parseMapLiteralBody`'s is.** A
+	// literal is the one door a map is born through with no `with (K, V)` to read, so the giid the first
+	// pair's column types interned is the only statement of what this container IS — and every later pair is
+	// held to it (`Parser.evalConstMapLiteralInto`).
+	mapLiteral(giid GenericInstanceId, entries ConstMapEntryArray)
 end 'ConstFactoryCall'
 
 export typealias ConstFactoryCallArray = Array with ConstFactoryCall
@@ -1750,6 +1793,10 @@ export function constFactoryCallHashName(call ConstFactoryCall) returns ByteArra
 	return match call 'node'
 		call(callee, _) gives callee
 		construct(typeName, _) gives typeName
+		// A map literal fixes its slot's type from its COLUMNS and names no callee of its own, so what it
+		// contributes is the container's base name — the coarsest of the three, and coarse for this
+		// function's stated reason: the arguments and the fields are deliberately out of the hash too.
+		mapLiteral gives MapBuiltinBaseName
 	end 'node'
 end 'constFactoryCallHashName'
 
@@ -1818,6 +1865,31 @@ end 'ConstFactoryArgumentValue'
 // The layout-parallel field column a `ConstFactoryCall.construct` carries — see there for why a field is an
 // argument VALUE with no label.
 export typealias ConstFactoryArgumentValueArray = Array with ConstFactoryArgumentValue
+
+// ⭐ **ONE `k: v` PAIR OF A TOP-LEVEL MAP LITERAL, AS THE EVALUATOR WALKED IT.** Two argument VALUES and no
+// labels: the `value:` label the desugared `Map.upsert` spells is not a fact about the SOURCE — the author
+// wrote `k: v`, not `upsert(k, value: v)` — so it is supplied where the call is resolved
+// (`ProgramSignatures.globalMapEntry`) rather than recorded here, which keeps this a description of the
+// literal and the label a property of the callee it lowers to.
+// ⭐ **DOES ONE HALF OF A LATER PAIR FIT THE COLUMN THE FIRST PAIR FIXED?** — asked by the FOLD tier, answered
+// on the index, for `ConstStructFieldCheck`'s reason one construct over: both sides are `MaxonType`s interned
+// in `ProgramSignatures`' own table, and the SPELLINGS a refusal prints can only be rendered there. The parser
+// throws; this decides and names.
+export union ConstMapColumnCheck
+	agrees
+	mismatch(got String, expected String)
+end 'ConstMapColumnCheck'
+
+export type ConstMapEntry
+	export let key as ConstFactoryArgumentValue
+	export let value as ConstFactoryArgumentValue
+
+	export static function create(key ConstFactoryArgumentValue, value ConstFactoryArgumentValue) returns ConstMapEntry
+		return Self{key: key, value: value}
+	end 'create'
+end 'ConstMapEntry'
+
+export typealias ConstMapEntryArray = Array with ConstMapEntry
 
 // Is this value a folded NUMBER, and which? A union rather than a bool beside an accessor, because "it is a
 // record" is an ANSWER here and not a failure: the two askers are the range check (which has nothing to
@@ -4123,6 +4195,31 @@ export function calleeConsumesArgument(consume CalleeConsume, argIndex ParamCoun
 	end 'c'
 end 'calleeConsumesArgument'
 
+// ⭐⭐ **DOES THE ARGUMENT AT `argIndex` LAND IN A DURABLE STORE — the CALLEE's own, or the record it
+// RETURNS?** The question above asked of the OTHER column `ParamConsumeInfo` carries (`feeds`), through the
+// identical `argSlotPosition` mapping, so the two are provably about one parameter.
+//
+// ⭐ **BOTH SINKS ANSWER TRUE, AND THAT IS `FeedSink`'s OWN SENTENCE RATHER THAN A CHOICE HERE**: a
+// `constructedValue` feed means *"the CALLER's value co-owns it and this frame drops nothing"*, and a
+// `calleeStorage` feed means *"the callee's own storage takes ownership and releases the value exactly once"*.
+// What differs between the sinks is who ends the ownership, never whether the caller's reference survives the
+// call — which is the only thing this asker needs.
+//
+// ⛔⛔ **`Map.upsert` IS THE FIRST FEED POSITION `__module_init` EVER CALLED, AND WITHOUT THIS IT WAS A
+// USE-AFTER-FREE.** `stdlib/Map.maxon`'s `upsert` pushes both halves into `Array with Key` / `Array with
+// Value`, which is a `calleeStorage` feed and NOT a consume bit — so a top-level `var m = [b"hello": 1]`
+// emitted `Map.upsert` and then `__managed_decref` on the very key the table had just stored. MEASURED:
+// the program printed `0 0` (both lookups missing) and then **segfaulted**, against the bootstrap's `1 2`.
+// A body's call site takes a real reference at the same position instead (`Parser.handleEscapingBorrowFeed`)
+// and drops the temp at statement end; `__module_init` has no statement, so the two net to the same one
+// reference by this frame taking none and releasing none.
+export function calleeKeepsArgumentAtAFeed(consume CalleeConsume, argIndex ParamCount, label ByteArray) returns bool
+	return match consume 'c'
+		borrowsAll gives false
+		consumes(info) gives info.typeParamFeedOf(argSlotPosition(info.paramNames, argIndex: argIndex, label: label)).isFeed()
+	end 'c'
+end 'calleeKeepsArgumentAtAFeed'
+
 // The answer to "does this callee take any parameter by reference?" — a union so "no recorded entry" is an
 // ANSWER (every parameter is passed by value), never confused with an empty-but-present one. The consume
 // union's shape one fact over, for the same reason it has that shape.
@@ -5890,6 +5987,23 @@ export let SliceMethod = b"slice"
 // string the parser's dispatch matched. `Array`, `Set` and `Map` all spell it, which is why it carries no
 // family prefix — the rule `set`/`append`/`slice`/`remove` above it already state.
 export let InsertMethod = b"insert"
+
+// ⚠ **`upsert` AND ITS `value:` LABEL JOINED THIS BLOCK WHEN THE TOP-LEVEL MAP LITERAL ARRIVED**, for the
+// block's own rule: `[k: v]` desugars to `Map.create()` plus one `Map.upsert(k, value: v)` per pair, and that
+// desugar is now written TWICE — by `Parser.emitMapLiteralUpsert` for a body's literal and by
+// `ProgramSignatures.globalMapEntry` for a file-scope one. Two tiers composing one call must compose it out
+// of one spelling, or the label the synthesis emits and the parameter the declaration names can drift apart
+// with nothing to catch it. `stdlib/Map.maxon:127`.
+export let UpsertMethod = b"upsert"
+export let MapUpsertValueLabel = b"value"
+
+// Where a pair's two halves sit in a CALL-ALIGNED argument list for `Map.upsert` — past the receiver, which
+// `recordScannedSignature` records as `SelfParamName` at slot 0 for every instance method. They are
+// deliberately NOT `HashTableKeyArgPosition`/`MapValueArgPosition`: those two number `Map with (K, V)`'s TYPE
+// arguments, and a reader that used them here would be off by the receiver and would ask about the wrong
+// parameter's consume bit — silently, because 0 and 1 are both valid positions.
+let MapKeyUpsertArgIndex = 1 as ParamCount
+let MapValueUpsertArgIndex = 2 as ParamCount
 
 // ⚠ **`byteAt` JOINED THIS BLOCK WHEN `String.byteAt` WAS BUILT (BATCH2 slice 6), AND IT WAS SPELLED
 // `ManagedMemoryByteAtMethod` ONE SURFACE ABOVE UNTIL THEN.** It belongs here for the same reason `set`,
@@ -8927,6 +9041,9 @@ export type ProgramSignatures
 	// aliases, each a distinct site to check + anchor; a `Box with Foo` with no `where` constraint contributes
 	// entries the check skips in O(1) (empty constraint list). Empty for a program with no generic aliases.
 	var genericAliasSites as GenericInstantiationSiteArray
+	// The same list for the instantiations a TOP-LEVEL literal inferred, which no `typealias` names and no
+	// parse artifact can carry — see `constInferredInstantiationSites` for both halves of why it lives here.
+	var constLiteralSites as GenericInstantiationSiteArray
 	// ⭐ INNER ranged typealias registry (P1.6-C) — a RANGED `typealias Idx` declared INSIDE a generic
 	// type, keyed by its BASE-QUALIFIED name ("Wrapper.Idx"). It is what makes a per-instance alias
 	// (`IntWrapper.Idx`) nominal: `isPerInstanceAlias` composes an instance alias's base with this
@@ -9663,7 +9780,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DivergingFunctionNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DivergingFunctionNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DivergingFunctionNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DivergingFunctionNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -13396,6 +13513,11 @@ export type ProgramSignatures
 		return match call 'node'
 			call(callee, _) gives self.resolvedReturnValueType(callee, name: name)
 			construct(typeName, _) gives MaxonType.structRef(self.typeNames.intern(typeName))
+			// A map literal's type is the INSTANCE its first pair fixed, which the evaluator interned in THIS
+			// index's registry (`builtinInstanceForColumns`) — so there is nothing to resolve, only to state.
+			// It is the same `genericInstance(id)` a `MapAlias.create()` global's slot is typed as, which is
+			// what makes a literal-built map and a hand-built one one type.
+			mapLiteral(giid, _) gives MaxonType.genericInstance(giid)
 		end 'node'
 	end 'constFactoryCallResultType'
 
@@ -13964,6 +14086,9 @@ export type ProgramSignatures
 			match call 'node'
 				call then continue
 				construct(typeName, _) then return self.existentialFieldOfStruct(typeName)
+				// A map literal constructs no struct of its own; a struct among its keys or values is its OWN
+				// arena entry, which this same loop reaches on its own pass.
+				mapLiteral then continue
 			end 'node'
 		end 'eachNode'
 
@@ -14014,10 +14139,23 @@ export type ProgramSignatures
 			match call 'node'
 				call(callee, args) then self.appendCallNodeCallees(callees, callee: callee, args: args)
 				construct(_, fields) then self.appendConstructNodeCallees(callees, fields: fields)
+				mapLiteral(giid, entries) then self.appendMapLiteralNodeCallees(callees, giid: giid, entries: entries)
 			end 'node'
 		end 'eachCall'
 		return callees
 	end 'factoryInitializerCallees'
+
+	// A MAP-LITERAL node: the container's own `create` and keyed `add` — through the very
+	// `appendDeclaredInstanceCreateCallee` an `<Alias>.create()` global's container goes through, so what is
+	// rooted here and what `ModuleInit` emits stay two readings of `containerCreateCall`'s one answer — then
+	// whatever the pairs name.
+	function appendMapLiteralNodeCallees(callees ByteArrayArray, giid GenericInstanceId, entries ConstMapEntryArray)
+		self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+		for entry in entries 'eachPair'
+			self.appendArgumentValueCallee(callees, value: entry.key)
+			self.appendArgumentValueCallee(callees, value: entry.value)
+		end 'eachPair'
+	end 'appendMapLiteralNodeCallees'
 
 	// A CALL node: the function it names, then whatever its arguments name.
 	function appendCallNodeCallees(callees ByteArrayArray, callee ByteArray, args ConstFactoryArgumentArray)
@@ -14101,6 +14239,10 @@ export type ProgramSignatures
 		match self.declaredContainerElementAdd(giid) 'add'
 			push(callee) then callees.push(callee)
 			unsupported then break 'add'
+			// A KEYED add is rooted on the identical rule its one-column sibling is, and for the identical
+			// reason: an over-rooted leaf is lowered and then dropped by dead-function elimination, while a
+			// missing root is `requireUnreachableStdlibStayedDead`.
+			upsert(callee) then callees.push(callee)
 		end 'add'
 	end 'appendDeclaredInstanceCreateCallee'
 
@@ -14356,6 +14498,7 @@ export type ProgramSignatures
 			match call 'node'
 				call(callee, args) then resolved.push(GlobalInitCall.call(callee, args: self.globalInitArguments(args, callee: callee, calls: calls, declName: declName, elementFilePath: elementFilePath)))
 				construct(typeName, fields) then resolved.push(self.globalStructConstruct(typeName, fields: fields, calls: calls, declName: declName, elementFilePath: elementFilePath))
+				mapLiteral(giid, entries) then resolved.push(self.globalMapLiteral(giid, entries: entries, calls: calls, declName: declName, elementFilePath: elementFilePath))
 			end 'node'
 		end 'eachCall'
 
@@ -14461,6 +14604,48 @@ export type ProgramSignatures
 		return GlobalInitCall.construct(layout.sizeBytes(), fields: resolved)
 	end 'globalStructConstruct'
 
+	// ⭐⭐ **A MAP LITERAL'S RECORD, RESOLVED** — the instance's `create` description plus one resolved pair per
+	// entry. The description comes from `containerCreateCall`, the SAME router a `MapAlias.create()` global's
+	// container goes through, so the callee, the stamps and the keyed add are one derivation and a
+	// literal-built map is born exactly as a hand-built one is.
+	function globalMapLiteral(giid GenericInstanceId, entries ConstMapEntryArray, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitCall
+		// ⚠ **THE CONSUME FACTS ARE THE `upsert`'s AND ARE READ ONCE**, exactly as `globalInitArguments` reads a
+		// factory's: which halves of a pair the callee KEEPS is a property of `Map.upsert`'s declaration, and a
+		// per-entry lookup would be the same key asked once per pair of a 62-entry table.
+		let consume = self.consumeOf(self.declaredMapUpsertCallee(giid))
+		var resolved = GlobalInitMapEntryArray.create()
+		for entry in entries 'eachPair'
+			resolved.push(self.globalMapEntry(entry, consume: consume, calls: calls, declName: declName, elementFilePath: elementFilePath))
+		end 'eachPair'
+
+		return GlobalInitCall.mapLiteral(self.containerCreateCall(giid), entries: resolved)
+	end 'globalMapLiteral'
+
+	// ⭐ **ONE PAIR, RESOLVED AS THE TWO ARGUMENTS THE KEYED ADD TAKES.** The positions are the CALL-ALIGNED
+	// ones — `MapKeyUpsertArgIndex` / `MapValueUpsertArgIndex`, past the receiver `Map.upsert`'s recorded
+	// `paramNames` carries at slot 0 — so `recordArgumentCleanup` reads the consume bit of the parameter the
+	// argument actually fills, which is the same slotting `Parser.transferConsumedArgs` uses at a body's call.
+	//
+	// ⚠ **THE `value:` LABEL IS SUPPLIED HERE AND THE KEY'S IS EMPTY**, because that is how the desugared call
+	// is WRITTEN — `Map.upsert(key, value: v)`. `LowerMaxonToStd.lowerCall` slots a labelled argument against
+	// the callee's declared names, so the label is not decoration: omitting it would slot the value against
+	// `key`.
+	function globalMapEntry(entry ConstMapEntry, consume CalleeConsume, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitMapEntry
+		let key = self.globalInitArgument(ConstFactoryArgument.create(EmptySourceText, value: entry.key), consume: consume, argIndex: MapKeyUpsertArgIndex, calls: calls, declName: declName, elementFilePath: elementFilePath)
+		let value = self.globalInitArgument(ConstFactoryArgument.create(MapUpsertValueLabel, value: entry.value), consume: consume, argIndex: MapValueUpsertArgIndex, calls: calls, declName: declName, elementFilePath: elementFilePath)
+		return GlobalInitMapEntry.create(key, value: value)
+	end 'globalMapEntry'
+
+	// The `Map.upsert` this instance's pairs join through, off the very `containerCreateCall` description the
+	// emitter reads — never a second composition of `<base>.upsert`, which is what would let the consume facts
+	// be read for one callee and the call emitted to another.
+	function declaredMapUpsertCallee(giid GenericInstanceId) returns ByteArray
+		return match self.containerCreateCall(giid).elementAdd 'add'
+			upsert(callee) gives callee
+			push to unsupported panic("ProgramSignatures.declaredMapUpsertCallee: generic instance {giid} holds a map literal's pairs but `containerCreateCall` names no keyed add for it — `Parser.evalConstMapLiteralInto` interns the instance through `builtinInstanceForColumns(MapBuiltinBaseName, …)`, which `isMapShapedInstanceAt` answers for")
+		end 'add'
+	end 'declaredMapUpsertCallee'
+
 	// ⭐⭐ **MAY THIS CONSTANT FILL THIS SLOT? (W116)** — asked by the FOLD tier, answered HERE, because both
 	// halves of the comparison have to be resolved against the interner and the registries this index owns.
 	// It is the const twin of `Parser.requireFieldType`, which cannot serve: that one reads a `ValueId` out of
@@ -14500,7 +14685,7 @@ export type ProgramSignatures
 			return ConstStructFieldCheck.agrees
 		end 'thisTierCannotSay'
 
-		let held = self.constFieldValueType(value, calls: calls, declName: declName, elementFilePath: elementFilePath)
+		let held = self.constNodeValueType(value, calls: calls, declName: declName, elementFilePath: elementFilePath)
 		if maxonTypeTag(slot) == maxonTypeTag(held) and (maxonTypeTag(slot) != ValueTypeTag.structRef or typeNameIdOf(slot) == typeNameIdOf(held)) 'fits'
 			return ConstStructFieldCheck.agrees
 		end 'fits'
@@ -14576,21 +14761,76 @@ export type ProgramSignatures
 		end 'form'
 	end 'constFieldSlotTypeOfForm'
 
-	// The type one field VALUE is minted at — a nested node's result, or what the constant folded to. It is
-	// `globalInitValue`'s type half asked on its own, because the check runs at PARSE time where no record may
-	// be built yet: `globalRecordOf` interns stamps and resolves drop callees, work that belongs to the
+	// The type one arena VALUE is minted at — a nested node's result, or what the constant folded to. It is
+	// `globalInitValue`'s type half asked on its own, because the two askers run at PARSE time where no record
+	// may be built yet: `globalRecordOf` interns stamps and resolves drop callees, work that belongs to the
 	// synthesis and would be thrown away here.
-	function constFieldValueType(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns MaxonType
+	//
+	// ⭐ **THE TWO ASKERS ARE A STRUCT LITERAL'S FIELD AND A MAP LITERAL'S COLUMN**, which is why it wears the
+	// arena's noun and not the field's: a top-level `[k: v]` fixes its `Map with (K, V)` instance from the
+	// TYPES of its first pair, and deriving those a second way would let the instance a literal is interned at
+	// and the type its values are minted at disagree.
+	export function constNodeValueType(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns MaxonType
 		return match value 'value'
 			call(id) gives self.constFactoryCallResultType(factoryCallAt(calls, id: id), name: declName)
 			folded(folded) gives self.foldedMintType(folded, elementFilePath: elementFilePath)
 		end 'value'
-	end 'constFieldValueType'
+	end 'constNodeValueType'
+
+	// ⭐⭐ **HOLD ONE HALF OF A LATER PAIR TO THE COLUMN THE FIRST PAIR FIXED (the top-level map literal).**
+	// The body's rule is `Parser.parseHashTableColumnArg`'s, and it CANNOT serve here for the reason that door
+	// reads a `ValueId` out of the parser's value columns while a top-level initializer mints no values at all.
+	// What is compared instead is the TYPE each half will be MINTED at — the very type the synthesis mints it
+	// at (`constNodeValueType`) — so a pair this admits is a pair the emitted `Map.upsert` can take.
+	//
+	// ⚠⚠ **IT LIVES HERE AND NOT IN THE EVALUATOR BECAUSE OF THE INTERNER, WHICH IS THE TRAP THIS TIER KEEPS
+	// SETTING.** These types are interned in `self.typeNames`, the WHOLE-PROGRAM table; the evaluator's
+	// `Parser` is a throwaway whose `artifact.typeNames` is its own, so `Parser.declaredColumnIdentity` — the
+	// body's identity reader — would `panic` on the first `structRef` id ("not in this file's interner"). The
+	// verdict AND both spellings are therefore produced where the ids live, exactly as `constStructFieldCheck`
+	// produces them one construct over.
+	//
+	// The comparison is the full `(tag, id)` identity rather than the tag alone, so a `structRef` column and a
+	// `genericInstance` column are held to WHICH struct and WHICH instance — the hazard
+	// `Parser.parseHashTableColumnArg`'s header measures for the body's spelling, where a nominal identity that
+	// matched only by tag stored one type's bits under another's reader.
+	//
+	// ⚠ **AN ENUM COLUMN IS NOT AMONG THE THINGS IT TELLS APART, AND IT DOES NOT HAVE TO BE**: a folded enum
+	// case loses its name at `foldedMintType` (see there for the measured panic that keeping it causes), so two
+	// different enums would read alike here — which is exactly why the evaluator refuses an enum column
+	// outright, one step earlier (`Parser.requireConstMapColumnIsNameable`). Nothing reaching this comparison
+	// carries a name this tier had to drop.
+	export function constMapColumnCheck(column MaxonType, value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns ConstMapColumnCheck
+		let got = self.constNodeValueType(value, calls: calls, declName: declName, elementFilePath: elementFilePath)
+		if maxonTypesDenoteSame(got, b: column) 'agrees'
+			return ConstMapColumnCheck.agrees
+		end 'agrees'
+
+		return ConstMapColumnCheck.mismatch(maxonTypeName(got, typeNames: self.typeNames), expected: maxonTypeName(column, typeNames: self.typeNames))
+	end 'constMapColumnCheck'
 
 	// `foldedValueType` plus the arm it deliberately refuses. That one is a RECORD builder's door and panics
 	// on a scalar for a good reason — a number occupies its slot as a value and has no record to describe —
 	// while a TYPE CHECK must be able to ask about a number, so the scalar arm lives here and the other five
 	// route through the one home they already had.
+	// ⚠⚠ **A FOLDED SCALAR THAT NAMES A TYPE LOSES THE NAME HERE, AND THAT IS A MEASURED LIMIT RATHER THAN
+	// THE SENTENCE THIS HEADER USED TO CARRY.** It read *"the evaluator folds an integer, a bool or a float
+	// and none of the three names a type"*, and a payload-free ENUM CASE is a fourth thing it folds
+	// (`Parser.evalConstNamed`) — it IS a number, and `ConstValue.typeName` carries its enum's bytes.
+	//
+	// ⛔⛔ **CARRYING THE NAME WAS TRIED AND MEASURED WORSE: it turns a wrong answer into a COMPILER PANIC.**
+	// `maxonTypeOfTag(value.tag, nameId: self.typeNames.intern(value.typeName))` makes the type a
+	// `named(<id in THIS index's table>)`, and the moment that type becomes a generic instance's ARGUMENT the
+	// reader is `SemanticCheck.aggregateNameFor`, which speaks the PROJECT interner:
+	// `panic at SemanticCheck.maxon:5851: aggregateNameFor: named id 314 is not in the project interner — a
+	// named value's name id is remapped project-global at merge (mergeArtifact)`, on
+	// `var m = [b"a": Kind.one, b"b": Kind.two]`. A file's artifact ids ARE remapped at merge; the evaluator is
+	// a THROWAWAY parser whose artifact is never merged, so this index's ids are not.
+	//
+	// ⇒ **The top-level map literal REFUSES an enum column instead** (`Parser.requireConstMapColumnIsNameable`),
+	// which is the one construct that made this observable. ⚠ `constArrayValueType`'s `enumCase` arm does put
+	// such an id into an `Array with <enum>` instance and survives only because `Array`'s members are
+	// parser-intrinsic and never reach `validateCall` — see that arm.
 	function foldedMintType(folded ConstFoldedValue, elementFilePath FilePath) returns MaxonType
 		match folded 'kind'
 			scalar(value) then return maxonTypeOfTag(value.tag, nameId: UnnamedTypeId)
@@ -14632,10 +14872,15 @@ export type ProgramSignatures
 	// `borrowsAll` for a callee with no recorded entry — the overwhelming majority — so a callee whose
 	// consume the sweep cannot see leaks nothing; the failure mode of a wrong answer here is a double-free
 	// only in the direction the sweep is POSITIVE about, which is the direction it is exact in.
+	// ⭐ **THE TWO WAYS THE CALL KEEPS THE RECORD ARE ONE ANSWER, and they are asked together because the
+	// question is "does this frame still own it?" and not "how did the callee take it".** A CONSUMED parameter
+	// is moved into a non-type-parameter field; a FED one lands in the callee's own storage or in the record it
+	// returns (`calleeKeepsArgumentAtAFeed`, which carries the use-after-free the second arm was added for).
+	// Either way the reference this frame made has a new home, and dropping it here would be a double free.
 	function recordArgumentCleanup(consume CalleeConsume, argIndex ParamCount, label ByteArray, valueType MaxonType) returns GlobalInitArgumentCleanup
-		if calleeConsumesArgument(consume, argIndex: argIndex, label: label) 'movedIntoTheCallee'
+		if calleeConsumesArgument(consume, argIndex: argIndex, label: label) or calleeKeepsArgumentAtAFeed(consume, argIndex: argIndex, label: label) 'keptByTheCall'
 			return GlobalInitArgumentCleanup.none
-		end 'movedIntoTheCallee'
+		end 'keptByTheCall'
 
 		return GlobalInitArgumentCleanup.dropAfterCall(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType))
 	end 'recordArgumentCleanup'
@@ -16086,6 +16331,27 @@ export type ProgramSignatures
 	export function instantiationSites() returns GenericInstantiationSiteArray
 		return self.genericAliasSites
 	end 'instantiationSites'
+
+	// ⭐⭐ **THE INSTANTIATIONS A TOP-LEVEL LITERAL INFERRED — the THIRD list `checkWhereConstraints` walks.**
+	// A `var m = [k: v]` interns a real `Map with (K, V)` from its first pair, with a real source position and
+	// no type name anywhere in the program: the token SWEEP reads `typealias` declarations and cannot see one,
+	// and `Project.inferredInstantiationSites` cannot hold it either, because the constant evaluator is a
+	// THROWAWAY `Parser` (`walkConstInitializer`) whose artifact is never committed. So it is recorded here,
+	// on the index the evaluator already holds, and read by the same one loop over the same one rule.
+	//
+	// ⚠ **THE ORDERING IS WHAT MAKES THIS SOUND, and it is stated by `managedGlobals`' own panic:**
+	// *"`evaluateInitializers` runs to completion inside `queryProgramSignatures`"* — which `Compiler.maxon`
+	// runs at its line 304, where `checkWhereConstraints` is at 350. Every top-level initializer is therefore
+	// walked, and every site it infers recorded, strictly before the check reads them.
+	export function constInferredInstantiationSites() returns GenericInstantiationSiteArray
+		return self.constLiteralSites
+	end 'constInferredInstantiationSites'
+
+	// Record one — the evaluator's twin of `ParseStaging.recordInferredInstantiationSite`, which serves the
+	// literal written inside a function body.
+	export function recordConstInferredInstantiationSite(site GenericInstantiationSite)
+		self.constLiteralSites.push(site)
+	end 'recordConstInferredInstantiationSite'
 
 	// ⭐⭐ **WHICH ASSOCIATED POSITIONS THIS PROGRAM HOLDS AT AN INTERFACE — one walk of the instantiation
 	// sites, with every declaration in and no file yet parsed.**
@@ -19931,11 +20197,19 @@ export type ProgramSignatures
 	// a top-level form was opened without teaching this router what its container adds through, and dropping
 	// the elements silently is the wrong answer to that.
 	function declaredContainerElementAdd(id GenericInstanceId) returns ContainerElementAdd
-		if not self.isSetShapedInstance(id) 'noTopLevelFormProducesElements'
-			return ContainerElementAdd.unsupported
-		end 'noTopLevelFormProducesElements'
+		if self.isSetShapedInstance(id) 'aSetFromConstruction'
+			return ContainerElementAdd.push(qualifiedMethodName(self.genericInstanceBaseName(id), methodName: InsertMethod))
+		end 'aSetFromConstruction'
 
-		return ContainerElementAdd.push(qualifiedMethodName(self.genericInstanceBaseName(id), methodName: InsertMethod))
+		// ⭐ **A `Map`-SHAPED INSTANCE IS THE SECOND, AND IT ARRIVES THROUGH THE TOP-LEVEL MAP LITERAL.** Its
+		// add is KEYED — `(record, key, value:)` — which is a different SHAPE and not a different name, so it
+		// answers with its own arm; see `ContainerElementAdd`. The predicate is the SHAPE question, exactly as
+		// the `Set` arm's is, and for the identical reason its header gives.
+		if self.isMapShapedInstanceAt(ValueTypeTag.genericInstance, nameId: id) 'aMapLiteral'
+			return ContainerElementAdd.upsert(qualifiedMethodName(self.genericInstanceBaseName(id), methodName: UpsertMethod))
+		end 'aMapLiteral'
+
+		return ContainerElementAdd.unsupported
 	end 'declaredContainerElementAdd'
 
 	// The element CLONE strategy for a managed-element container instance (P1.7 slice 3b-vi-b) — the DUAL of

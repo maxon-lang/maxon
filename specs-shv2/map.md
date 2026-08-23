@@ -1276,3 +1276,115 @@ trips 0 counts 0 0
 ```exitcode
 0
 ```
+
+## A map literal at FILE SCOPE
+
+A `[k: v]` written as a top-level `let`/`var` initializer is the same desugar a body's literal is —
+`Map.create()` plus one `Map.upsert(k, value: v)` per pair — emitted by `__module_init` before `main`
+instead of into the function that wrote it. The first pair fixes both columns; every later pair is held
+to them.
+
+⛔⛔ **BOTH HALVES OF EVERY PAIR ARE KEPT BY THE TABLE, AND `__module_init` MUST THEREFORE RELEASE
+NEITHER.** `Map.upsert` pushes its `key` and its `value` into `Array with Key` / `Array with Value`, which
+is a type-parameter FEED and not a consume bit — so the synthesis' ordinary "the callee only borrowed it,
+drop it after the call" rule is a use-after-free here. MEASURED with that rule applied: the first case
+below printed `0 0` (both lookups missing, the keys having been freed the instant they were stored) and
+then **segfaulted**, against the reference compiler's `1 2`. A body's call site takes a real reference at
+the same position and drops the temp at statement end; `__module_init` has no statement, so the two net to
+the same one reference by this frame taking none and releasing none.
+
+<!-- test: top-level-literal.managed-value-column -->
+Both columns managed, and the map is read only AFTER `main` has allocated over whatever the init freed —
+so a released key or value is a wrong answer here rather than a lucky one.
+```maxon
+var m = [b"alpha": "one", b"beta": "two"]
+
+function main() returns ExitCode
+	var churn = ByteArray.create()
+	var i = 0
+	while i < 64 'allocate'
+		churn.push(65)
+		i = i + 1
+	end 'allocate'
+
+	let a = try m.get(b"alpha") otherwise panic("the file-scope literal lost a key")
+	let b = try m.get(b"beta") otherwise panic("the file-scope literal lost a key")
+	print("{a}/{b} count {m.count()} churn {churn.count()}")
+	return 0
+end 'main'
+```
+```stdout
+one/two count 2 churn 64
+```
+```exitcode
+0
+```
+
+<!-- test: top-level-literal.struct-value-column -->
+A value built by a static FACTORY, which is what makes the literal an arena node rather than a fold: the
+record is a call `__module_init` makes, and the `String` it holds is released once, by the map's teardown.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Info
+	export var help as String
+	export var n as Integer
+
+	export static function create(help String, n Integer) returns Info
+		return Self{help: help, n: n}
+	end 'create'
+end 'Info'
+
+var table = [b"if": Info.create("conditional", n: 1), b"else": Info.create("alternative", n: 2)]
+
+function main() returns ExitCode
+	let e = try table.get(b"else") otherwise panic("the file-scope literal lost a key")
+	print("{e.help} {e.n} count {table.count()}")
+	return 0
+end 'main'
+```
+```stdout
+alternative 2 count 2
+```
+```exitcode
+0
+```
+
+<!-- test: error.top-level-literal-mixed-value-column -->
+The first pair fixes both columns. A later pair whose half has another type is refused where it is
+written — the file-scope twin of the body's `parseHashTableColumnArg` refusal, which cannot serve here
+because it reads a `ValueId` and a top-level initializer mints none.
+```maxon
+var m = [b"a": 1, b"b": "two"]
+
+function main() returns ExitCode
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:25: Unsupported: this `Map`'s value is 'int' — got a 'String' value. A top-level map literal's FIRST pair fixes both columns, and every later pair must match them
+```
+
+<!-- test: error.top-level-literal-enum-column -->
+⛔ **AN ENUM CASE IS REFUSED AS A FILE-SCOPE COLUMN, AND THE LIMIT IS THE INTERNER.** A payload-free case
+folds to a `named`-tagged scalar carrying its enum's name as BYTES — the constant evaluator is a throwaway
+parser, so an id minted during the fold names nothing where it is read — and a `Map with (K, V)` needs a
+type argument the whole program can name. Admitting it either drops the name (and `m.get(…)` then hands
+back a bare `int` for a program whose every arm is the enum) or keeps this index's id (and
+`SemanticCheck.aggregateNameFor` panics on it). The same literal inside a function is correct today, which
+is what the message points at.
+```maxon
+enum Kind
+	one
+	two
+end 'Kind'
+
+var m = [b"a": Kind.one, b"b": Kind.two]
+
+function main() returns ExitCode
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:16: Unsupported: a `Kind` case as a top-level map literal's value — a `Map`'s column type has to be nameable from the whole-program index, and an enum case folded at file scope carries its enum's name as BYTES rather than as an id this tier can put in `Map with (…)`. Build the map inside a function, where the literal's instance is interned from the file's own parse artifact
+```
