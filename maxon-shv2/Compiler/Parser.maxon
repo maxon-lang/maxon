@@ -1989,7 +1989,7 @@ let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 // present), so it is safe across the per-file parse fan-out.
 let sharedEmptyInterfaceConformances = InterfaceConformanceArray.create()
 
-// The INITIAL `Parser.siblingReceivers`, held here (like `sharedEmptyTypeParamFeeds`) so a parser
+// The INITIAL `Parser.siblingReceivers`, held here (like `sharedEmptyBoolColumn`) so a parser
 // allocates none of its own until a bare call inside a type body actually needs the map. The lazy builder
 // REPLACES the field with a fresh map — it never mutates in place — so this placeholder stays empty and is
 // safe to share across the per-file parse fan-out. A method-free file never touches the field at all.
@@ -2027,12 +2027,6 @@ let sharedEmptyWitnessSlots = WitnessSlotsByInterfaceMap.create()
 // resolves to nothing. Read-only (its one reader scans it for a method name), so ONE allocation serves the
 // whole compile — the discipline every `sharedEmpty*` here states.
 let sharedEmptyRequirementSlots = CollectedInterfaceMethodArray.create()
-
-// The module-level shared empty type-parameter-FEED array (P1.6-B2) every non-generic consuming function's
-// `ParamConsumeInfo` holds — a feed requires a type parameter, so such a function never fills one and it is
-// never mutated. ONE allocation for the whole compile (like `sharedEmptyTypeParamFeeds`), so a generics-free
-// program pays nothing per function OR per parser (`typeParamFeedOf` reads a missing index as `none`).
-let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 
 // The module-level shared empty CALL-ALIGNED parameter-name list the declaration sweep leaves in hand for a
 // declaration it does not walk the parameters of — a NON-GENERIC instance method, which needs neither the
@@ -2102,13 +2096,16 @@ let sharedOverloadUnscoreable = SweptOverloadFit.unscoreable
 // `ProgramSignatures.returnTypeOf`, whose one entry per key is written by whichever declaration was swept
 // last — visible from the reader or not.
 
-// The module-level shared EMPTY working columns `scanBodyFacts` starts from — the `sharedEmptyTypeParamFeeds`
-// discipline, one column each, for the three shapes that walk a body and write none of them: a declaration
-// with no parameters to watch (the bit columns, the brace stack, the bracket openers and the forwarding
-// edges) and a body with no `return` in it at all (the two return columns). ONE allocation apiece for the
-// whole compile; never mutated, because every writer of each is reached only past the test that privatises it.
-// `sharedEmptyBoolColumn` serves the parameter bit columns AND the brace stack: one empty `BoolArray` is one
-// empty `BoolArray`, and a second anchor would be the same object under a second name.
+// The module-level shared EMPTY working columns `scanBodyFacts` starts from — one column each, for the two
+// shapes that walk a body and write none of them: a declaration with no parameters to watch (the brace stack,
+// the bracket openers and the forwarding edges) and a body with no `return` in it at all (the two return
+// columns). ONE allocation apiece for the whole compile; never mutated, because every writer of each is
+// reached only past the test that privatises it.
+//
+// ⛔⛔ **THE THREE PER-PARAMETER BIT COLUMNS WERE ANCHORED HERE TOO AND ARE NOT ANY MORE** — they are the
+// ones this sweep WRITES, and an anchor a writer can reach launders a `let` global's record into a mutable
+// position. `setParamBit` carries the measurement; the anchors that remain are safe for the opposite reason,
+// which is that nothing writes them at all.
 let sharedEmptyBoolColumn = BoolArray.create()
 let sharedEmptyBracketOpeners = TokenIndexArray.create()
 let sharedEmptyForwardCalls = ForwardCallArray.create()
@@ -2121,12 +2118,12 @@ let sharedEmptyReturnedAt = TokenIndexColumn.create()
 
 // The module-level shared EMPTY per-instance-alias placeholders (P1.6-C), held as the INITIAL value of the
 // `enclosingInnerAliases` / `valueInstanceAlias` working fields AND as the COW anchors the reset points at.
-// ONE allocation for the whole compile each (like `sharedEmptyTypeParamFeeds`), so a generics-free program
+// ONE allocation for the whole compile each (like `sharedEmptyBoolColumn`), so a generics-free program
 // — which never declares a nested typealias nor constructs a generic instance — pays NOTHING per parser: a
 // parser INCREFS these rather than allocating its own. They are never mutated: `readNestedRangedAlias` and
 // `recordValueInstanceAlias` copy-on-write a fresh collection the first time they must write, keyed on the
 // `is`-identity of these very instances, so the shared ones stay empty and safe to share across the per-file
-// parse fan-out — exactly the invariant `sharedEmptyTypeParamFeeds` relies on.
+// parse fan-out — exactly the invariant `sharedEmptyBoolColumn` relies on.
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 
@@ -11944,7 +11941,7 @@ export type Parser
 	var emptyTypeParams as ByteArrayArray
 	// P1.6-C's shared-empty inner-alias / instance-alias placeholders are MODULE-LEVEL globals
 	// (`sharedEmptyInnerAliases`, `sharedEmptyInstanceAliasMap`, `sharedEmptyInstanceAliasNames`), not
-	// per-parser fields — one allocation for the whole compile, like `sharedEmptyTypeParamFeeds`. The
+	// per-parser fields — one allocation for the whole compile, like `sharedEmptyBoolColumn`. The
 	// working fields `enclosingInnerAliases` / `valueInstanceAlias` INCREF a global as their initial value.
 	// The struct-typed bindings currently IN SCOPE, in declaration order — the values a `return`
 	// must DROP (`emitScopeDrops`). Held as the `VarInfo` objects, exactly as `mutableVars` is, and
@@ -13743,11 +13740,13 @@ export type Parser
 		// `scansParams` into the probes individually — it is the pre-W117 guard, and keeping it whole is what
 		// makes "what this widening costs" one predicate rather than five.
 		let scansParams = paramNames.count() > 0 or byRefParamNames.count() > 0
-		var consumed = initialBitColumn(paramNames.count())
+		// ⭐ **THE THREE PER-PARAMETER BIT COLUMNS START EMPTY AND ARE GROWN AT THE FACT** — see `setParamBit`,
+		// which carries both halves of why they are no longer pre-filled from a shared module-level empty.
+		var consumed = BoolArray.create()
 		// The two by-reference columns — see `SignatureIndex.ParamReassignInfo` for what each means and why the
 		// sweep records them separately instead of combining them here.
-		var reassignedDirect = initialBitColumn(byRefParamNames.count())
-		var reassignedForwarded = initialBitColumn(byRefParamNames.count())
+		var reassignedDirect = BoolArray.create()
+		var reassignedForwarded = BoolArray.create()
 		var forwardCalls = ForwardCallArray.create() if scansParams else sharedEmptyForwardCalls
 		var statesByRef = false
 		// ⭐ **W117's THREE COLUMNS: the names this body RETURNS as a whole statement, their first SEGMENTS, and
@@ -13765,13 +13764,12 @@ export type Parser
 		var returnedAt = sharedEmptyReturnedAt
 		var returnCalls = sharedEmptyForwardCalls
 		var returnColumnsArePrivate = false
-		// The type-parameter FEED map is a fresh array pre-filled with `none` ONLY inside a generic type's
-		// body — a feed requires a type-parameter-typed field, so a top-level function and a non-generic type's
-		// method (all of them on the generics-free corpus) keep the SHARED empty array (⚡ no per-function
-		// allocation; a missing index reads as `none`). `feeds.set` below is reached only through the feed
-		// branch, which itself requires a below-count position, so the shared empty array is never mutated.
+		// The type-parameter FEED column, EMPTY until a feed is actually recorded (`setParamFeed`) — a feed
+		// requires a type-parameter-typed field, so a top-level function and a non-generic type's method (all of
+		// them on the generics-free corpus) never grow it past zero and `typeParamFeedOf` reads every one of their
+		// positions as `none`.
 		let genericScope = self.enclosingTypeParams.count() > 0
-		var feeds = self.initialTypeParamFeeds(paramNames.count(), genericScope: genericScope)
+		var feeds = TypeParamFeedArray.create()
 		var any = false
 		// The bracket stack: `true` for a `{` (struct literal), `false` for a `(`. A `[` is not pushed at all
 		// (`trackBracketAt`). The innermost open bracket being a `{` is what distinguishes a struct-field `:`
@@ -13872,7 +13870,7 @@ export type Parser
 				if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'rebindsAName'
 					let target = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
 					if target < byRefParamNames.count() 'ofOwnParameter'
-						try reassignedDirect.set(target, value: true) otherwise panic("scanBodyFacts: reassignedDirect.set OOB at {target} despite target < byRefParamNames.count()")
+						setParamBit(reassignedDirect, index: target)
 						statesByRef = true
 					end 'ofOwnParameter'
 				end 'rebindsAName'
@@ -13883,7 +13881,7 @@ export type Parser
 				if self.bareCallArgumentAt(q, braceStack: braceStack) 'handedOn'
 					let forwarded = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
 					if forwarded < byRefParamNames.count() 'ofOwnParameter'
-						try reassignedForwarded.set(forwarded, value: true) otherwise panic("scanBodyFacts: reassignedForwarded.set OOB at {forwarded} despite forwarded < byRefParamNames.count()")
+						setParamBit(reassignedForwarded, index: forwarded)
 						noteForwardCall(forwardCalls, call: self.forwardCallOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("scanBodyFacts: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`")))
 						statesByRef = true
 					end 'ofOwnParameter'
@@ -13902,13 +13900,13 @@ export type Parser
 							// heap (`Box with String`) and borrows it otherwise (`Box with Point`, byte-identical to A).
 							// The sink is the CONSTRUCTED VALUE: the store lands in a field of the `Self` this call
 							// RETURNS, so the caller's value owns it and this frame must not be enrolled its owner.
-							try feeds.set(idx, value: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue)) otherwise panic("scanBodyFacts: feeds.set OOB at {idx} despite idx < paramNames.count()")
+							setParamFeed(feeds, index: idx, feed: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue))
 							any = true
 						end 'typeParamField' else 'plainField'
 							// A NON-type-parameter field store (a monomorphic `Self{value: v}` into an `Integer` field,
 							// or a direct `String`/struct field) — the callee OWNS it whatever the concrete type, so the
 							// plain consume bit is set. A scalar argument makes it inert at the call site anyway.
-							try consumed.set(idx, value: true) otherwise panic("scanBodyFacts: consumed.set OOB at {idx} despite idx < paramNames.count()")
+							setParamBit(consumed, index: idx)
 							any = true
 						end 'plainField'
 					end 'isParam'
@@ -14241,36 +14239,94 @@ export type Parser
 		return DeclCallability.bareCallOrDirectoryRoute if not self.namespace.isEmpty() else DeclCallability.bareCallOnly
 	end 'declarationCallability'
 
-	// The type-parameter-feed array `scanBodyFacts` starts from: the SHARED empty array outside a generic
-	// type (no feed is possible, ⚡ no allocation), or a fresh `count`-long array pre-filled with `none` inside
-	// one (which the feed branch then `set`s). Single-assignment, so it needs no cross-block `var`.
-	function initialTypeParamFeeds(count ParamCount, genericScope bool) returns TypeParamFeedArray
-		if not genericScope 'nonGeneric'
-			return sharedEmptyTypeParamFeeds
-		end 'nonGeneric'
-		var feeds = TypeParamFeedArray.create()
-		for _ in 0 upto count 'fill'
-			feeds.push(TypeParamFeed.none)
-		end 'fill'
-		return feeds
-	end 'initialTypeParamFeeds'
+	// ⭐⭐ **RECORD ONE PARAMETER'S BIT IN A SWEEP COLUMN, GROWING THE COLUMN TO REACH IT** — the ONE writer of
+	// the three (the consume column and the two by-reference ones), paired with the ONE reader every consumer
+	// goes through (`SignatureIndex.bitAt` / `ParamConsumeInfo.isConsumed`). A column reaches only as far as the
+	// highest position that has a fact, which is exactly what those readers already mean by a SHORT column:
+	// *"a position past either column is a parameter the sweep recorded nothing for"*. So the old pre-fill was
+	// writing out, per parameter of every declaration in the program, the very default its readers supply free.
+	//
+	// ⛔⛔ **THE COLUMNS USED TO START FROM `sharedEmptyBoolColumn` FOR AN EMPTY NAME LIST, AND THAT HANDED A
+	// `let` GLOBAL'S RECORD TO A NAME THIS SWEEP THEN WRITES.** `initialBitColumn` returned the module-level
+	// shared empty when the count was zero and a fresh array otherwise — so whether its result could be written
+	// depended on an ARGUMENT, and the only thing making that safe was the caller's own `target <
+	// byRefParamNames.count()` gate: an invariant no analysis can see and nothing but a comment held. W117 —
+	// shv2's rule that a value which may alias a `let` global's record may not be written through — refused the
+	// write on this compiler's own source (`E3019 cannot pass 'reassignedDirect' to function that mutates
+	// parameter 'self'`), and it was right to: the laundering was real, and only the gate made it harmless.
+	// A column that is always fresh can alias nothing, and costs one empty record where the shared anchor cost
+	// a `count`-long fill.
+	//
+	// ⚡ **WHY THESE GO FRESH WHILE `nameColumnWith`'s COLUMNS KEEP THEIR ANCHOR AND COPY — MEASURED, NOT
+	// TASTE.** Both obey the one rule (nothing writes a shared anchor); which side of it is cheaper follows
+	// from what the column DID. These were PRE-FILLED per declaration, so dropping the anchor drops the fill
+	// with it and freshness costs a record while saving a buffer. An edge column has no fill to drop, so
+	// freshness would be a record for nothing — measured on one compile, `phase:signatures` reads 163,839
+	// allocations with the edge columns copying against 164,147 with them fresh (163,839 / 164,147 / 164,579
+	// for copy / fresh / the shared-anchor original).
+	function setParamBit(column BoolArray, index ParamCount)
+		while column.count() <= index 'reach'
+			column.push(false)
+		end 'reach'
 
-	// The per-parameter BIT column `scanBodyFacts` starts from — `initialTypeParamFeeds`' twin, and the ONE
-	// spelling of "one `false` per name in this list" for all three of them (the consume column and the two
-	// by-reference ones, which used to write the same fill loop twice between them). ⚡ The SHARED empty array
-	// when the name list is empty: a column with no slots can never be `set`, because every writer is gated on
-	// an index below the very count that is zero.
-	function initialBitColumn(count ParamCount) returns BoolArray
-		if count == 0 'noSlotsToTrack'
-			return sharedEmptyBoolColumn
-		end 'noSlotsToTrack'
+		try column.set(index, value: true) otherwise panic("setParamBit: column.set OOB at {index} despite the growth above reaching it")
+	end 'setParamBit'
 
-		var bits = BoolArray.create()
-		for _ in 0 upto count 'fill'
-			bits.push(false)
-		end 'fill'
-		return bits
-	end 'initialBitColumn'
+	// `setParamBit`'s twin for the type-parameter FEED column (P1.6-B2), read under the same rule —
+	// `ParamConsumeInfo.typeParamFeedOf` answers `none` for a position past the end, *"exactly as `isConsumed`
+	// answers `false` for its short `bits`"*. Growing on demand buys more here than it does for a bit:
+	// `TypeParamFeed.none` is a UNION value, so the old pre-fill BOXED one per parameter of every method of
+	// every generic type in the program purely to say "nothing here".
+	function setParamFeed(column TypeParamFeedArray, index ParamCount, feed TypeParamFeed)
+		while column.count() <= index 'reach'
+			column.push(TypeParamFeed.none)
+		end 'reach'
+
+		try column.set(index, value: feed) otherwise panic("setParamFeed: column.set OOB at {index} despite the growth above reaching it")
+	end 'setParamFeed'
+
+	// ⭐ `setParamFeed`'s READER twin for a bare feed column — does position `index` carry a feed? A position past
+	// the end carries none, which is the same "absence is the answer" default `ParamConsumeInfo.typeParamFeedOf`
+	// reads a short column under, and the reason a column need only reach its highest fact.
+	//
+	// ⚠ It answers the BOOLEAN rather than the `TypeParamFeed`, deliberately: a miss returning `TypeParamFeed.none`
+	// would BOX a union value per unfed parameter of every method in the fixpoint — the same cost
+	// `SignatureIndex.recordParamConsume` names when it reads its stored feeds directly rather than through
+	// `typeParamFeedOf` — and `isFeed()` is the whole of what the one asker wants.
+	function paramIsFed(column TypeParamFeedArray, index ParamCount) returns bool
+		if index >= column.count() 'past'
+			return false
+		end 'past'
+
+		return (try column.get(index) otherwise panic("paramIsFed: column.get OOB at {index} despite index < count")).isFeed()
+	end 'paramIsFed'
+
+	// ⭐⭐ **APPEND ONE NAME TO A COLUMN THAT MAY STILL BE ITS SHARED EMPTY ANCHOR — BY COPYING, WHICH IS THE
+	// ONLY WAY A SHARED ANCHOR CAN BE SAFE.** The descriptor scan's three edge columns
+	// (`sizedContainerSelfCallees`, `corpusContainerCallees`, `nestedInstanceCallees`) start at a module-level
+	// `let` empty so that a body recording no edge — nearly every body — allocates nothing for them, and that
+	// property is what a copying append keeps: the first edge pays one array, the anchor is never touched, and
+	// a body with no edge pays nothing at all.
+	//
+	// ⛔⛔ **THEY USED TO PRIVATISE IN PLACE ON AN `is`-IDENTITY TEST AND THEN `push`, AND THE COMPILER WAS
+	// RIGHT TO REFUSE IT.** `if col is sharedEmpty then col = fresh end  col.push(…)` is safe only because the
+	// test ran — and the binding the `push` sees JOINS both arms, so what it may hold is a `let` global's
+	// record. W117 says a value that may alias one may not be written through, and it named this exact site:
+	// `E3019 cannot pass 'sizedContainerSelfCallees' to function that mutates parameter 'self'`. Copying
+	// removes the join rather than arguing with it — the value handed back was built here and can alias
+	// nothing. `append` copies element-by-element with copy semantics (`stdlib/Array.appendMemory`), so the
+	// anchor is only ever READ.
+	//
+	// ⚡ The COPY is bounded by the column's own length, and an edge column holds a handful of names: a body
+	// recording `k` edges does `k` appends over at most `k` elements, against the ONE array a body recording
+	// none no longer has to allocate. That trade is why these columns keep an anchor where `setParamBit`'s go
+	// FRESH — see there for the measurement that decided each.
+	function nameColumnWith(column ByteArrayArray, name ByteArray) returns ByteArrayArray
+		var out = ByteArrayArray.create()
+		out.append(column)
+		out.push(name)
+		return out
+	end 'nameColumnWith'
 
 	// ⭐⭐ **ONE SITE'S CONTRIBUTION TO THE WHOLE-PROGRAM LAYOUT-DESCRIPTOR-NEED FIXPOINT (P1.6-B1, W23c)** —
 	// every method declared between `site.bodyStart` and the body's `end`, with its direct-need seed and the
@@ -14812,8 +14868,8 @@ export type Parser
 		var direct = false
 		var readsFixedElementCount = false
 		var callees = ByteArrayArray.create()
-		// ⭐ Minted on the first chained edge, so every body of every other type allocates nothing for it — the
-		// `sharedEmptyCorpusContainerCallees` discipline, one column over.
+		// ⭐ Copied off its shared anchor at each chained edge (`nameColumnWith`), so every body of every other
+		// type allocates nothing for it — the `sharedEmptyCorpusContainerCallees` discipline, one column over.
 		var sizedContainerSelfCallees = sharedEmptySizedContainerSelfCallees
 		// Hoisted out of the walk: it is a property of the enclosing DECLARATION, not of a token.
 		let insideTheSizedContainer = self.signatures.isVectorBaseName(self.enclosingType)
@@ -14844,10 +14900,10 @@ export type Parser
 		var storesContainerElement = false
 		// ⭐ Does this region walk `for … in self` (W159)? See `MethodDescriptorScan.walksReceiverAsACursor`.
 		var walksReceiverAsACursor = false
-		// ⭐ The cross-type call edges (ARRG), minted on the first one. See
+		// ⭐ The cross-type call edges (ARRG), copied off the anchor at each one (`nameColumnWith`). See
 		// `MethodDescriptorScan.corpusContainerCallees` and `sharedEmptyCorpusContainerCallees`.
 		var corpusContainerCallees = sharedEmptyCorpusContainerCallees
-		// ⭐ The nested-instance construction edges (W161), minted on the first one. See
+		// ⭐ The nested-instance construction edges (W161), copied off the anchor at each one (`nameColumnWith`). See
 		// `MethodDescriptorScan.nestedInstanceCallees` and `sharedEmptyNestedInstanceCallees`.
 		var nestedInstanceCallees = sharedEmptyNestedInstanceCallees
 		// The open `(`/`[`/`{` groups enclosing the cursor, each carrying whether a comma directly inside it
@@ -14958,14 +15014,10 @@ export type Parser
 			// `descriptorEdgesFor`, on those columns' own terms; a name this type does not declare is dropped
 			// by the fixpoint's own name→index filter.
 			if insideTheSizedContainer and kind == TokenKind.dot and self.memberCallFollows(q) and q != 0 and self.kindAt((q - 1) as TokenIndex) == TokenKind.rightParen 'aChainedSelfCallInTheSizedContainer'
-				if sizedContainerSelfCallees is sharedEmptySizedContainerSelfCallees 'firstChainedEdgeInThisRegion'
-					sizedContainerSelfCallees = ByteArrayArray.create()
-				end 'firstChainedEdgeInThisRegion'
-
 				// Already QUALIFIED, like `corpusContainerCallees` and unlike `callees`: this column is appended to
 				// the edge list directly rather than through `qualifiedSelfCallees`, so a bare name here would match
 				// no node and the edge would be silently dropped by the fixpoint's own name filter.
-				sizedContainerSelfCallees.push(qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 1).value))
+				sizedContainerSelfCallees = nameColumnWith(sizedContainerSelfCallees, name: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 1).value))
 			end 'aChainedSelfCallInTheSizedContainer'
 			// ⭐⭐ **`Self.<member>(…)` IS THE SAME EDGE UNDER THE OTHER KEYWORD, AND IT WAS MISSING (W190).**
 			// `self.m(` is an instance call and `Self.m(` a STATIC one, but the fixpoint does not ask which:
@@ -15052,20 +15104,16 @@ export type Parser
 			// ⭐⭐ **THE CROSS-TYPE EDGE (ARRG)** — a `.<member>(` the CORPUS serves on a builtin generic
 			// container. Read at the `.` for the arm above's reason, and recorded as an EDGE rather than as a
 			// seed because whether the callee needs a descriptor is the fixpoint's own answer, not this scan's.
-			// The list is minted on the FIRST edge (`sharedEmptyCorpusContainerCallees`), so a body with no
-			// corpus call — nearly every body there is — allocates nothing for this arm.
+			// The list is COPIED off `sharedEmptyCorpusContainerCallees` at each edge (`nameColumnWith`), so a body
+			// with no corpus call — nearly every body there is — allocates nothing for this arm.
 			if kind == TokenKind.dot and self.memberCallFollows(q) and self.corpusServesArrayMember(self.tokenAt(q + 1).value) 'aCorpusContainerCall'
-				if corpusContainerCallees is sharedEmptyCorpusContainerCallees 'firstEdgeInThisRegion'
-					corpusContainerCallees = ByteArrayArray.create()
-				end 'firstEdgeInThisRegion'
-
 				// ONE edge per `Array` DECLARATION that serves the name (ARR2) — normally one, and two only
 				// while a user program's own `type Array` has the corpus declaration in the reserved space. The
 				// gate above says SOME declaration serves it; the callee name has to say WHICH, because that is
 				// what the fixpoint indexes by.
 				for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
 					if self.corpusArrayDeclarationServes(declaration, member: self.tokenAt(q + 1).value) 'thisDeclarationServesIt'
-						corpusContainerCallees.push(qualifiedMethodName(declaration, methodName: self.tokenAt(q + 1).value))
+						corpusContainerCallees = nameColumnWith(corpusContainerCallees, name: qualifiedMethodName(declaration, methodName: self.tokenAt(q + 1).value))
 					end 'thisDeclarationServesIt'
 				end 'eachArrayDeclaration'
 			end 'aCorpusContainerCall'
@@ -15086,11 +15134,7 @@ export type Parser
 			self.recordNestedInstanceDeclarationAt(q, locals: nestedInstanceLocals, localBases: nestedInstanceLocalBases)
 			let nestedCallee = self.nestedInstanceCalleeAt(q, locals: nestedInstanceLocals, localBases: nestedInstanceLocalBases)
 			if not nestedCallee.isEmpty() 'aNestedInstanceCall'
-				if nestedInstanceCallees is sharedEmptyNestedInstanceCallees 'firstEdgeInThisRegion'
-					nestedInstanceCallees = ByteArrayArray.create()
-				end 'firstEdgeInThisRegion'
-
-				nestedInstanceCallees.push(nestedCallee)
+				nestedInstanceCallees = nameColumnWith(nestedInstanceCallees, name: nestedCallee)
 			end 'aNestedInstanceCall'
 			// ⭐⭐ **A `for … in self` IS AN EMITTED `current()` CALL, AND NO TOKEN SPELLS IT (W159).** See
 			// `forStatementWalksBareReceiverAt` for why the source must be the BARE receiver and why every
@@ -15992,7 +16036,7 @@ export type Parser
 
 		var any = false
 		for arg in self.bareTypeParamArgsIn((mutatorPos + 2) as TokenIndex, paramNames: paramNames, typeParamPositions: typeParamPositions) 'eachArg'
-			try feeds.set(arg.paramIndex, value: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: arg.paramIndex), sink: FeedSink.calleeStorage)) otherwise panic("markOpaqueContainerMutatorFeeds: feeds.set OOB at {arg.paramIndex} despite it being a resolved parameter position")
+			setParamFeed(feeds, index: arg.paramIndex, feed: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: arg.paramIndex), sink: FeedSink.calleeStorage))
 			any = true
 		end 'eachArg'
 		return any
@@ -16067,7 +16111,7 @@ export type Parser
 		if idx >= paramNames.count() or not self.paramIsTypeParamTyped(typeParamPositions, index: idx) 'notTypeParamArg'
 			return false
 		end 'notTypeParamArg'
-		try feeds.set(idx, value: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: idx), sink: FeedSink.calleeStorage)) otherwise panic("markOpaqueFieldReassignFeed: feeds.set OOB at {idx} despite idx < paramNames.count()")
+		setParamFeed(feeds, index: idx, feed: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: idx), sink: FeedSink.calleeStorage))
 		return true
 	end 'markOpaqueFieldReassignFeed'
 
@@ -16200,7 +16244,7 @@ export type Parser
 	// scanning from `startPos` costs one harmless pass over them — mirroring `scanOneMethodDescriptorSignals`,
 	// which starts at the same token.
 	function scanOneMethodFeedSignals(startPos TokenIndex, funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, takesReceiver bool) returns MethodFeedScan
-		var directFeeds = self.initialTypeParamFeeds(paramNames.count(), genericScope: true)
+		var directFeeds = TypeParamFeedArray.create()
 		var edges = ForwardFeedEdgeArray.create()
 		var depth = 1 as BlockDepth
 		var q = startPos
@@ -16327,7 +16371,7 @@ export type Parser
 		for i in 0 upto methodCount 'seedNodes'
 			let scan = try scans.get(i) otherwise panic("solveAndPublishTransitiveFeeds: scans.get({i}) OOB in seed")
 			for p in 0 upto scan.paramNames.count() 'param'
-				seeds.push((try scan.directFeeds.get(p) otherwise panic("solveAndPublishTransitiveFeeds: directFeeds.get({p}) OOB")).isFeed())
+				seeds.push(paramIsFed(scan.directFeeds, index: p))
 			end 'param'
 		end 'seedNodes'
 		let isFeed = reverseReachabilityMark(feedersOf, seeds: seeds)
