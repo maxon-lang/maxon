@@ -887,42 +887,42 @@ export typealias SourcePathSpellingArray = Array with String
 // Exported: the scale-test runner lives in Testing/ and takes the parsed args, exactly as the
 // spec-test runner takes them from inside Main.
 export type MaxonArgs
-	export let command as MaxonCommand
+	export var command as MaxonCommand
 	// ⭐⭐ **EVERY POSITIONAL, IN THE ORDER TYPED (A3m).** `build` compiles them all and the ORDER is
 	// load-bearing — `Compiler.loadSourceFiles` registers sources in exactly this order, which is how
 	// a caller states which of two sibling files declares first without the loader ever sorting (see
 	// that function, and `StdlibLoader`'s no-sort ruling). Every other command takes at most one and
 	// `refusedPositionalBeyond` says so; before A3m the parser kept the first and dropped the rest
 	// here, silently, without even setting `badOption`.
-	export let paths as SourcePathSpellingArray
-	export let outputOverride as String
-	export let emitIr as bool
+	export var paths as SourcePathSpellingArray
+	export var outputOverride as String
+	export var emitIr as bool
 	// Whether this build emits the green-thread async trace (`--async-trace`). See `AsyncTraceFlag`.
-	export let asyncTrace as bool
+	export var asyncTrace as bool
 	// Whether this build emits the DebugStream producer (`--debugstream`). See `DebugStreamFlag`.
-	export let debugStream as bool
+	export var debugStream as bool
 	// `--emit-ir-runtime=<name>,<name>` (build only): the compiler-EMITTED functions the IR sidecar
 	// must ALSO render. EMPTY is the ordinary build and is the literal count of names given, not a
 	// sentinel. It IMPLIES `--emit-ir` (see `parse`), because a list of functions to print is a
 	// request for the printing.
-	export let runtimeIrNames as RuntimeFunctionNameArray
+	export var runtimeIrNames as RuntimeFunctionNameArray
 	// `--filter=<pattern>` (spec-test only): run only the tests whose `<spec>/<test>` label
 	// contains <pattern>. Empty selects the whole suite.
-	export let filter as String
+	export var filter as String
 	// `--update-required` (spec-test only): REWRITE the committed `.test` goldens instead of
 	// checking the emitted IR against them. The goldens are a code-quality gate — running a test
 	// proves its allocation is CORRECT, but only the pinned IR can say the code did not get WORSE
 	// (an extra spill still computes the right answer). So regenerating them is the one way a
 	// codegen change enters the tree, and it is deliberately an explicit act: the diff is the review.
-	export let updateRequired as bool
+	export var updateRequired as bool
 	// `--workers=<n>` (spec-test only): how many persistent worker subprocesses the pool runs. 1 is
 	// the SAME pool with one worker in it, not a serial in-process branch — see runSpecTest.
-	export let workers as WorkerCount
+	export var workers as WorkerCount
 	// `--worker-persistent` (spec-test only, INTERNAL): this process IS a pool worker. Set by the
 	// parent dispatcher on the command line it spawns, never typed by a person, and therefore left
 	// out of the usage text. Undocumented but PARSED: an unrecognized flag aborts the run, so a
 	// worker whose own flag was not understood would fail to start at all.
-	export let workerPersistent as bool
+	export var workerPersistent as bool
 	// `--compiler=<path>` (spec-test only): the COMPILER UNDER TEST — the binary each selected test
 	// is built with. Empty means the flag was ABSENT — "the running executable", the in-tree case
 	// where the harness IS the compiler and a freshly built maxon-shv2.exe tests itself. A
@@ -933,26 +933,26 @@ export type MaxonArgs
 	// see runSpecTest). The Phase 1 gate is the configuration that separates them — a harness
 	// compiled by maxon.exe driving maxon-shv2.exe as the compiler — and without this flag that gate
 	// would pass while every verdict came from the in-tree harness.
-	export let compilerPath as String
+	export var compilerPath as String
 	// `--metrics=<path>` (build only): write this compile's per-phase time + memory attribution as
 	// TSV to <path> (see MetricsEmit). The scale-test harness reads it back; a human wants
 	// `--log=compiler:debug`, which prints the same numbers as a table.
-	export let metricsPath as String
+	export var metricsPath as String
 	// `--emit-corpus=<dir>` (scale-test only): dump the generated scaling corpus to <dir> for
 	// inspection instead of the temp directory it is otherwise built into and thrown away.
-	export let emitCorpus as String
+	export var emitCorpus as String
 	// `--rungs=<n>` (scale-test only): how many rungs of the ladder to climb. Each doubles the
 	// program, so this is exponential in cost — see ScaleCorpus.
-	export let rungs as RungCount
+	export var rungs as RungCount
 	// `--repeat=<n>` (scale-test only): how many times each rung is compiled. The CPU column takes
 	// the MINIMUM of the repeats (the least-disturbed sample); the memory columns take the first and
 	// are cross-checked for equality across the rest, since they are bit-for-bit reproducible and a
 	// difference is a broken run — see ScaleTestRunner's header.
-	export let repeat as RepeatCount
+	export var repeat as RepeatCount
 	// `--per-type` (scale-test only): also run the untimed `--mm-trace` pass, which attributes
 	// allocations to the TYPE allocated AND to the SCOPE that allocated it. Off by default: it traces
 	// every allocation individually and is far slower than the timed run.
-	export let perType as bool
+	export var perType as bool
 	// `--note=<text>` (scale-test only): RECORD this run in docs/optimization-log.md, with <text> as
 	// the reason. A run without it reports and records nothing — scale-test is run dozens of times a
 	// day against dirty trees, and a log of all of them would be a log nobody reads. WITH it the row is
@@ -960,26 +960,38 @@ export type MaxonArgs
 	// party who knows whether the run is a datapoint. The instrument can see exactly WHAT moved and can
 	// never see why, so the reason is demanded at the one moment it is still known — see
 	// Testing/ScaleHistory.maxon.
-	export let note as String
+	export var note as String
 	// `--result-json=<path>` (scale-test only): write the run's full result — per-rung and per-phase
 	// memory, and the deltas from the last recorded run — as JSON.
 	//
 	// This exists so the MCP tool does not SCRAPE the human report. The report's columns are padded
 	// to be read by a person; the day a phase name outgrows its column, a scrape would silently
 	// mis-parse rather than fail. A caller that wants data gets data.
-	export let resultJson as String
+	export var resultJson as String
 	// `--target=<cpu>-<os>` (build, spec-test): use this target instead of the host
 	// (`detectHostTarget`). Empty selects the host. Resolved to a Target via `resolveTargetFlag` in
 	// both `runBuild` and `runSpecTest`; an unknown spelling aborts. Needed to cross-compile
 	// x64-windows on an arm64 host for golden verification, to select arm64-macos explicitly, and to
 	// drive the spec suite through the wasm32-wasi backend (cross-compile-and-run under wasmtime).
-	export let targetSpec as String
+	export var targetSpec as String
 	// Whether this spec run may reach a real external host (`--network`). FALSE by default, and the
 	// default is the whole point — see `NetworkFlag`.
-	export let includeNetwork as bool
+	export var includeNetwork as bool
 	// Set when an argument could not be understood. The driver refuses to run rather
 	// than proceed on a command line it only partly parsed — see `parse`.
-	export let badOption as String
+	export var badOption as String
+
+	// ⭐ **THE COMMAND LINE WITH NOTHING ON IT** — every field at the value an absent flag leaves it.
+	// The defaults live here, in ONE place, rather than in `parse`'s locals: `parse` accumulates into a
+	// record precisely so that it HAS no per-flag local (see its own note), and a default written at the
+	// declaration is a default no arm can forget to carry through.
+	//
+	// ⚠ **EVERY FIELD ABOVE IS `var` FOR THAT ONE CALLER.** Nothing else mutates a `MaxonArgs`, and
+	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
+	// and the binding states whether anyone does.
+	export static function create() returns MaxonArgs
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: DefaultWorkerCount, workerPersistent: false, compilerPath: "", metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, badOption: ""}
+	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
 	// the same "empty means absent" convention every other optional field here uses
@@ -1001,52 +1013,42 @@ export type MaxonArgs
 	// and reported an empty suite. A flag the driver does not implement must fail
 	// loudly, not be absorbed into an unrelated slot.
 	export static function parse() returns MaxonArgs
-		var command = MaxonCommand.unknown
-		var paths = SourcePathSpellingArray.create()
-		var outputOverride = ""
-		var emitIr = false
-		var asyncTrace = false
-		var debugStream = false
-		var runtimeIrNames = RuntimeFunctionNameArray.create()
-		var filter = ""
-		var updateRequired = false
-		var workers = DefaultWorkerCount
-		var workerPersistent = false
-		var compilerPath = ""
-		var metricsPath = ""
-		var emitCorpus = ""
-		var rungs = DefaultRungCount
-		var repeat = DefaultRepeatCount
-		var perType = false
-		var note = ""
-		var resultJson = ""
-		var targetSpec = ""
-		var includeNetwork = false
-		var badOption = ""
+		// ⚠ **THE WORKING SET IS ONE RECORD BECAUSE TWENTY-ONE `var`s DO NOT FIT IN x64's REGISTERS**
+		// (`E5001`). A `var` assigned in one arm of this chain is handed on at every join, so each one
+		// becomes a phi on the loop header and the loop carries a register per flag — MEASURED at 33
+		// values live against 14 GPRs, which is a refusal, not a slowdown. `parsed.filter = …` is a FIELD
+		// STORE into one frame slot, so the loop carries ONE value however many flags are added below.
+		// ⇒ Adding a flag means adding a FIELD, never a local.
+		//
+		// ⚠ **AND A GREEN SUITE ON ANOTHER HOST WOULD NOT HAVE CAUGHT IT.** The refusal is x64's alone:
+		// arm64 allocates from 26 GPRs and fits a shape x64's 14 cannot, which is why
+		// `specs-shv2/register-pressure.md`'s `assigned-only-loop-carried-vars-overflow` — the smaller
+		// twin of this loop — carries `targets: x64-windows, x64-linux`.
+		var parsed = Self.create()
 
 		let args = CommandLine.args()
 		var i = 1
 		while i < args.count() 'each'
 			let arg = try args.get(i) otherwise panic("MaxonArgs.parse: index {i} >= args.count() despite the while guard i<args.count()")
 			if arg == "build" 'buildCmd'
-				command = MaxonCommand.build
+				parsed.command = MaxonCommand.build
 			end 'buildCmd' else if arg == "verify-warm-rebuild" 'verifyCmd'
-				command = MaxonCommand.verifyWarmRebuild
+				parsed.command = MaxonCommand.verifyWarmRebuild
 			end 'verifyCmd' else if arg == SpecTestCommandName 'specTestCmd'
-				command = MaxonCommand.specTest
+				parsed.command = MaxonCommand.specTest
 			end 'specTestCmd' else if arg == "scale-test" 'scaleTestCmd'
-				command = MaxonCommand.scaleTest
+				parsed.command = MaxonCommand.scaleTest
 			end 'scaleTestCmd' else if arg == "-o" 'dashOutput'
 				i = i + 1
-				outputOverride = try args.get(i) otherwise ""
+				parsed.outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
-				outputOverride = try CommandLine.optionValue(arg) otherwise ""
+				parsed.outputOverride = try CommandLine.optionValue(arg) otherwise ""
 			end 'longOutput' else if arg == EmitIrFlag 'emitIrFlag'
-				emitIr = true
+				parsed.emitIr = true
 			end 'emitIrFlag' else if arg == AsyncTraceFlag 'asyncTraceFlag'
-				asyncTrace = true
+				parsed.asyncTrace = true
 			end 'asyncTraceFlag' else if arg == DebugStreamFlag 'debugStreamFlag'
-				debugStream = true
+				parsed.debugStream = true
 			end 'debugStreamFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
 				// ⚠ It cannot be swallowed by the arm above even though it shares its prefix: that one
 				// tests `==`, and this one is the only arm that tests this prefix.
@@ -1062,31 +1064,31 @@ export type MaxonArgs
 				// actually reaches the printer.
 				let named = splitRuntimeNames(try CommandLine.optionValue(arg) otherwise "")
 				if named.count() == 0 'noRuntimeNames'
-					badOption = firstBadOption(badOption, arg: arg)
+					parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'noRuntimeNames' else 'hasRuntimeNames'
-					runtimeIrNames = named
+					parsed.runtimeIrNames = named
 					// A list of functions to PRINT is a request for the printing. Without this the flag
 					// would be silently inert whenever `--emit-ir` was forgotten — a no-op that looks like
 					// a rendering, which is the one outcome the printer's own refusals exist to prevent.
-					emitIr = true
+					parsed.emitIr = true
 				end 'hasRuntimeNames'
 			end 'emitIrRuntimeFlag' else if arg.startsWith(FilterFlagPrefix) 'filterFlag'
-				filter = try CommandLine.optionValue(arg) otherwise ""
+				parsed.filter = try CommandLine.optionValue(arg) otherwise ""
 			end 'filterFlag' else if arg == UpdateRequiredFlag 'updateRequiredFlag'
-				updateRequired = true
+				parsed.updateRequired = true
 			end 'updateRequiredFlag' else if arg == NetworkFlag 'networkFlag'
-				includeNetwork = true
+				parsed.includeNetwork = true
 			end 'networkFlag' else if arg.startsWith(WorkersFlagPrefix) 'workersFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 				// A bad value is a BAD OPTION, not a clamp — the same door as `--rungs`. `--workers=0`
 				// asks for a pool that can run nothing; quietly running the default instead would
 				// answer a question the caller never asked. See SpecWorkerPool.parseWorkerCount.
 				match parseWorkerCount(raw) 'workersArg'
-					valid(count) then workers = count
-					invalid then badOption = firstBadOption(badOption, arg: arg)
+					valid(count) then parsed.workers = count
+					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'workersArg'
 			end 'workersFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
-				workerPersistent = true
+				parsed.workerPersistent = true
 			end 'workerPersistentFlag' else if arg.startsWith(CompilerFlagPrefix) 'compilerFlag'
 				let named = try CommandLine.optionValue(arg) otherwise ""
 				// A VALUELESS `--compiler=` is a BAD OPTION, not "no flag" — the same door as
@@ -1098,14 +1100,14 @@ export type MaxonArgs
 				// `--compiler=$CUT` expanded empty gets a GREEN suite that tested the wrong binary, and
 				// green is the one answer nobody re-reads.
 				if named.isEmpty() 'noCompilerValue'
-					badOption = firstBadOption(badOption, arg: arg)
+					parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'noCompilerValue' else 'hasCompilerValue'
-					compilerPath = named
+					parsed.compilerPath = named
 				end 'hasCompilerValue'
 			end 'compilerFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
-				metricsPath = try CommandLine.optionValue(arg) otherwise ""
+				parsed.metricsPath = try CommandLine.optionValue(arg) otherwise ""
 			end 'metricsFlag' else if arg.startsWith("--emit-corpus=") 'emitCorpusFlag'
-				emitCorpus = try CommandLine.optionValue(arg) otherwise ""
+				parsed.emitCorpus = try CommandLine.optionValue(arg) otherwise ""
 			end 'emitCorpusFlag' else if arg.startsWith("--rungs=") 'rungsFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 				// A bad value is recorded as a BAD OPTION, not clamped to the default. `main` refuses
@@ -1114,8 +1116,8 @@ export type MaxonArgs
 				// (each rung DOUBLES the program), and quietly climbing a different one would answer
 				// a question they never asked. See ScaleCorpus.parseRungCount.
 				match parseRungCount(raw) 'rungsArg'
-					valid(count) then rungs = count
-					invalid then badOption = firstBadOption(badOption, arg: arg)
+					valid(count) then parsed.rungs = count
+					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'rungsArg'
 			end 'rungsFlag' else if arg.startsWith("--repeat=") 'repeatFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
@@ -1125,36 +1127,34 @@ export type MaxonArgs
 				// back would then differ from the one they typed in the column that is least able to
 				// prove it. See ScaleTestRunner.parseRepeatCount.
 				match parseRepeatCount(raw) 'repeatArg'
-					valid(count) then repeat = count
-					invalid then badOption = firstBadOption(badOption, arg: arg)
+					valid(count) then parsed.repeat = count
+					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'repeatArg'
 			end 'repeatFlag' else if arg == "--per-type" 'perTypeFlag'
-				perType = true
+				parsed.perType = true
 			end 'perTypeFlag' else if arg.startsWith("--note=") 'noteFlag'
-				note = try CommandLine.optionValue(arg) otherwise ""
+				parsed.note = try CommandLine.optionValue(arg) otherwise ""
 			end 'noteFlag' else if arg.startsWith("--result-json=") 'resultJsonFlag'
-				resultJson = try CommandLine.optionValue(arg) otherwise ""
+				parsed.resultJson = try CommandLine.optionValue(arg) otherwise ""
 			end 'resultJsonFlag' else if arg.startsWith(TargetFlagPrefix) 'targetFlag'
-				targetSpec = try CommandLine.optionValue(arg) otherwise ""
+				parsed.targetSpec = try CommandLine.optionValue(arg) otherwise ""
 			end 'targetFlag' else if arg.startsWith("--log=") 'logFlag'
-				var spec = try CommandLine.optionValue(arg) otherwise ""
+				let spec = try CommandLine.optionValue(arg) otherwise ""
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
 				end 'badSpec'
 			end 'logFlag' else if arg.startsWith("-") 'unknownFlag'
-				if badOption.isEmpty() 'firstBad'
-					badOption = arg
-				end 'firstBad'
+				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'unknownFlag' else 'positional'
 				// KEPT, never dropped. WHICH of them a command uses is the COMMAND's question — `build`
 				// compiles them all in this order, everything else refuses a second — and that answer
 				// cannot be given here, where the arity of the command being parsed is not yet known.
-				paths.push(arg)
+				parsed.paths.push(arg)
 			end 'positional'
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, paths: paths, outputOverride: outputOverride, emitIr: emitIr, asyncTrace: asyncTrace, debugStream: debugStream, runtimeIrNames: runtimeIrNames, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, includeNetwork: includeNetwork, badOption: badOption}
+		return parsed
 	end 'parse'
 end 'MaxonArgs'
 
