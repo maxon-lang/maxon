@@ -90,8 +90,61 @@ end 'fileChanged'
 //
 // ⇒ A clone on the way out of the store is necessary and **not sufficient**. Admitting a swept declaration
 // needs a DEPENDENCY key over what the walk can see, and the only complete one that is cheap — the index's
-// own `hash` as the walk begins — is fragment-specific by construction and would never hit. That is a rung of
-// its own, not a line here.
+// own `hash` as the walk begins — is fragment-specific by construction and would never hit.
+//
+// ⛔⛔ **AND IT WAS BUILT ANYWAY, IT WORKED, AND IT WAS REFUSED ON ITS COST — MEASURED 2026-08-23 (G20
+// wave 9, branch `slice/G20-wave9-b-mid-measured`). THE SOUNDNESS PROBLEM HAS AN ANSWER; THE ECONOMICS DO
+// NOT, AND THEY ARE THE HALF NOBODY PRICED.** All three bullets above were closed, and the answers are worth
+// keeping even though the code is not:
+//
+//   • the dependency key this paragraph could not find is the OTHER DIRECTION — not *"what did this walk
+//     SEE"* but *"could it have seen anything of THIS program's"*, decided once per compile by testing the
+//     names the USER half folds against every identifier TOKEN of each stdlib file (an over-approximation, so
+//     a 28th predicate cannot escape it), all-or-nothing over the stdlib half, and — wave 5's count over
+//     `specs-shv2/`'s 7,017 program blocks — true for **91.9%** of them;
+//   • the WRITES were excluded by a reading of the index taken either side of the walk with a term per FIELD,
+//     which refuses exactly the two files named above and no others;
+//   • the in-place MUTATION was answered by the compiler's own deep clone, no roster — which took finding
+//     that a SYNTHESIZED `clone` is FILE-PRIVATE (`maxon-sharp` registers the stub with neither
+//     `IsExported` nor `IsModuleVisible`), so `x.clone()` resolves only inside the file DECLARING `x`'s
+//     type and the call has to be placed there. Anyone trying this again meets that first.
+//
+// It was CORRECT: full suite **6619 passed / 0 failed**, exit 0, and the golden-drift SET byte-identical to
+// the base. It cost **+47% on a ten-compile process, +27% on the suite's own compile-CPU tick total, and
+// five times the memory per worker**.
+//
+// ⇒ **THE REASON IS GENERAL, AND IT IS THE ONE LINE TO REMEMBER: A MEMO WHOSE VALUE MUST BE DEEP-COPIED ON
+// EVERY USE CANNOT SAVE MORE THAN (PRODUCING IT − COPYING IT), AND A PRODUCER DOMINATED BY ALLOCATING RECORDS
+// IS COPIED AT VERY NEARLY ITS OWN PRICE.** Ten compiles of a seven-line program in one process, interleaved,
+// equal-length binary paths: **2084–2159 ms** without the store, **3044–3146 ms** with it. Pricing the copy
+// directly — a second, discarded copy per serve — put it at **140 ms per compile** against a walk worth
+// **40 ms** (wave 5 measured 38.9 ms independently, so the model is calibrated against a number taken for
+// another purpose). The copy costs three and a half times the walk it replaces.
+//
+// ⇒ **THE UPSIDE IS BOUNDED AND WAS MEASURED, NOT ARGUED.** Withholding only the stdlib files whose walk
+// produced a top-level binding — 72% of the copy cost, because every `TopLevelDecl` drags its file's whole
+// token array through the copy — leaves the store the most favourable arrangement it can have, and that
+// reads **−1.9%**, six of six interleaved runs. Everything this store can win is inside two percent.
+//
+// ⇒ **AND THE MEMORY IS THE HARDER NO, BECAUSE IT IS NOT A LEAK AND SO THERE IS NOTHING TO FIX.** Sampled
+// across 603 compiles in one worker, RSS climbs in the first two seconds and then sits FLAT: **73–77 MB
+// today, 365–375 MB with the store** — bounded exactly as designed, one entry per stdlib file and not one
+// per fragment, which is why `holding == admitted` stays true and why no leak gate fires. The constant is
+// simply an order of magnitude, and the suite runs twelve workers.
+//
+// ⚠ **WAVE 7's MEASURED −9.8…−11.5% AND WAVE 7's 269 FAILURES WERE THE SAME FACT — do not read its number
+// as a reason to try again.** It ran before unions were `Cloneable`, so eight of the record types were
+// RETAINED rather than copied, and every `TopLevelDecl` carries its whole FILE's `TokenArray`, which its hand
+// copy shared as well. **Its speed was bought by the copying it was not doing**, and both of its numbers fall
+// out of one model.
+//
+// ⇒ **WHAT WOULD HAVE TO CHANGE FIRST, so this is a prerequisite and not a dead end.** The copy is expensive
+// because the compiler's deep clone duplicates the two things a swept declaration deliberately SHARES: the
+// file's `TokenArray` (whose every field is a `let` — the very argument the next paragraph makes for sharing
+// tokens across compiles) and the interner's names (*"zero-copy slices of the source"*,
+// `TypeNameInterner`). The language has no way to say *"this value is a deeply immutable view, so a clone may
+// share it"*, so a memo of a walk's output pays to duplicate the source views the memo exists to stop
+// re-deriving. Give it one and the arithmetic above is worth re-running. Without one, it is not.
 //
 // A TOKEN has neither problem. `Token`'s every field is a `let` (Lexer.maxon:279-301), no consumer
 // mutates a token array (`filterConditionalTokens` returns its input or builds a fresh array, and

@@ -491,6 +491,12 @@ end 'foldOneFileInto'
 // rewrites a `StructLayout`'s field types in place; `evaluateInitializers` writes outcomes onto a
 // recorded `TopLevelDecl`), so sharing one would hand two compiles the same mutable object.
 //
+// ⚠ **"THE ONLY PIECE" IS NOW A MEASUREMENT AND NOT A HUNCH, AND THE MEASUREMENT IS NOT WHERE ANYONE
+// EXPECTED IT.** Sharing the DECLARATION WALK beside it was built and made correct, and it lost on cost
+// rather than on soundness — a record that must be deep-copied to be handed over is copied at very nearly
+// the price of producing it. `QueryEngine.sharedFileMemos`' header carries the numbers; read them before
+// proposing this again.
+//
 // ⛔ **BYPASSED ENTIRELY WHEN A STDLIB NAME IS CONTESTED, AND THAT GATE IS MEASURED, NOT ARGUED.**
 // The mask is read off `Parser.tokens`, which for a stdlib file is the SHADOW-RENAMED stream — so it
 // is a function of the file's bytes only while nothing has been renamed. Compiling a fragment that
