@@ -13,6 +13,16 @@
 //   • **A pointer, because a record cannot be baked.** A `.data` slot holding the ADDRESS of another
 //     section's bytes would need a compile-time VA, and there is none under ASLR
 //     (`specs/static-variables.md:729-730`). So the image holds zero and this function writes the address.
+//
+//     ⚠⚠ **SO EVERY SLOT ACCESS IS ONE WIDTH — `declaredAggregateSlotWidth()` — AND IT IS STATED RATHER
+//     THAN DERIVED FROM THE VALUE'S TYPE.** The store that fills a slot and the load that drains it pass
+//     that accessor and not `global.valueType`, which is a fact about the value's IDENTITY and not about
+//     the slot. Deriving it happened to give the machine word for every arm that existed — every managed
+//     `MaxonType` collapses to `i64` — and a boxed union is where the two part company, loudly:
+//     `maxonTypeToStdType` panics on a `named` outright (*"must be resolved to a primitive before
+//     lowering"*), that tag being the value's identity and never its storage. It is the same
+//     identity-vs-storage split `payloadStorageOf` states for a union PAYLOAD slot, reached through the
+//     same shared accessor so the two widths cannot come apart.
 //   • **OWNED, not the immortal `.rdata` record a `let` shares.** A `var` is MUTATED — `msg.append("!")`
 //     rewrites `buffer@0`/`length@8` in place — and mutating the one shared record would make every `let`
 //     of the same literal observe the change, while dropping it would free read-only data. The spec
@@ -132,7 +142,7 @@ function buildLazyStaticInit(module MaxonModule, project Project, global Managed
 	// detection, and it is why the store is not merged with the one below it.
 	fn.emit(MaxonOp.storeIndirect(guardWord.addr, offset: GlobalSlotOffset, value: fn.emitTypedLiteral(InitializingSlot, valueType: MaxonType.integer, range: range), valueType: MaxonType.integer), range: range)
 	let record = initialRecordOf(fn, global: global)
-	fn.emit(MaxonOp.storeIndirect(guardWord.addr, offset: GlobalSlotOffset, value: record, valueType: global.valueType), range: range)
+	fn.emit(MaxonOp.storeIndirect(guardWord.addr, offset: GlobalSlotOffset, value: record, valueType: declaredAggregateSlotWidth()), range: range)
 	fn.terminate(MaxonOp.retVoid, range: range)
 
 	let settled = fn.openBlock(b"settled")
@@ -204,7 +214,7 @@ function buildModuleInit(module MaxonModule, project Project, globals ManagedGlo
 		end 'onFirstAccess'
 
 		let record = initialRecordOf(fn, global: global)
-		fn.emit(MaxonOp.storeIndirect(fn.emitSlotAddr(global), offset: GlobalSlotOffset, value: record, valueType: global.valueType), range: global.range)
+		fn.emit(MaxonOp.storeIndirect(fn.emitSlotAddr(global), offset: GlobalSlotOffset, value: record, valueType: declaredAggregateSlotWidth()), range: global.range)
 	end 'eachGlobal'
 
 	fn.terminate(MaxonOp.retVoid, range: anchorRange(globals))
@@ -260,6 +270,7 @@ function builtRecord(fn SynthesizedFunction, build ManagedGlobalRecord, valueTyp
 		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: valueType, range: range)
 		constArrayRecord(elementSize, elementCount, bytes) gives ownedConstArrayRecord(fn, elementSize: elementSize, elementCount: elementCount, bytes: bytes, valueType: valueType, range: range)
 		containerRecord(create, elements) gives builtContainerRecord(fn, create: create, elements: elements, valueType: valueType, range: range)
+		boxedUnionCaseRecord(tag, payloadSlotOffsets, boxSize) gives builtUnionCaseBox(fn, tag: tag, payloadSlotOffsets: payloadSlotOffsets, boxSize: boxSize, valueType: valueType, range: range)
 	end 'build'
 end 'builtRecord'
 
@@ -273,6 +284,31 @@ function clonedStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType M
 	fn.emit(MaxonOp.stringLiteral(literal, bytes: bytes), range: range)
 	return fn.emitPositionalCall(StrCloneName, args: singletonArgs(literal), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 end 'clonedStringRecord'
+
+// ⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE AT MODULE SCOPE — THE BOX, THE TAG, THEN THE ZEROES.** The same
+// shape `Parser.emitEnumBox` emits inside a function for the same construct written at file scope, minus the
+// half a payload-free case does not have: there is no argument to type-check, nothing to move in, and so no
+// ownership to transfer. Every layout fact was resolved where the layout lives
+// (`ProgramSignatures.boxedUnionRecordOf`), so nothing here reads a registry — `builtStructBox`'s discipline.
+//
+// ⚠⚠ **THE ZERO-FILL IS NOT REDUNDANT WITH `__mm_alloc`'s ZEROED SLAB, AND `emitEnumBox` SAYS SO IN AS MANY
+// WORDS.** It pins a deterministic 0 in the unused slots, which is exactly what the destructor cascade's
+// null-guard skips — so a zeroed managed slot is never decref'd as a bogus pointer — and `emitEnumBox`'s own
+// note records that the slab's zeroing carries a "a future free-list must re-zero" caveat this store does
+// not. A global's box and a body's box of one case must be the same bytes: ONE `__destruct_<U>` drops both.
+//
+// ⚠ **THE BOX IS NOT ENROLLED AS AN OWNED TEMPORARY**, for the reason `SynthesizedFunction.emitBoxAlloc`
+// states: `__module_init` has no statement to hang a drop on, and this record is stored straight into a
+// `.data` slot whose owner releases it through `__maxon_global_cleanup`.
+function builtUnionCaseBox(fn SynthesizedFunction, tag ParsedInt, payloadSlotOffsets ByteOffsetArray, boxSize ByteOffset, valueType MaxonType, range SourceRange) returns ValueId
+	let box = fn.emitBoxAlloc(boxSize as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	fn.emit(MaxonOp.storeIndirect(box, offset: UnionTagOffset, value: fn.emitTypedLiteral(tag, valueType: MaxonType.integer, range: range), valueType: MaxonType.integer), range: range)
+	for offset in payloadSlotOffsets 'zeroFill'
+		fn.emit(MaxonOp.storeIndirect(box, offset: offset, value: fn.emitTypedLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range), valueType: MaxonType.integer), range: range)
+	end 'zeroFill'
+
+	return box
+end 'builtUnionCaseBox'
 
 // The constant-array arm: ONE op, because the literal's own materialization is already the owned heap
 // record the slot must hold. The stride and the element count ride the description rather than being
@@ -536,7 +572,7 @@ end 'buildGlobalCleanup'
 // come to load the slot differently.
 function dropGlobalSlot(fn SynthesizedFunction, global ManagedGlobal)
 	let record = fn.mintOfType(global.valueType)
-	fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(global), offset: GlobalSlotOffset, valueType: global.valueType), range: global.range)
+	fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), range: global.range)
 	_ = fn.emitPositionalCall(global.dropCallee, args: singletonArgs(record), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
 end 'dropGlobalSlot'
 

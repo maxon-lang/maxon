@@ -741,7 +741,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-enum-initializer -->
-<!-- The reason is NOT "P1.1 enums + `match`", which both landed long ago; RE-MEASURED 2026-08-12 (BATCH36 W65). The blocker is the CONSTANT EVALUATOR's missing enum-member arm, and it says so itself, positioned at the initializer: `E2015: Unsupported: `Color.Green` in a constant initializer - a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else`. Correctly disabled, wrongly explained: the marker sent a reader to the enum/match rungs, which are done, instead of to the one arm that is missing. -->
+<!-- ⛔ RE-MEASURED 2026-08-22. The reason given here until now — "the CONSTANT EVALUATOR's missing enum-member arm" — is STALE: that arm LANDED, and a payload-free enum case is a top-level constant today (see `a-payload-free-enum-case-is-a-top-level-constant`). The blocker is now one step further on and is a different mechanism: a global whose folded value is an enum case is typed `named(<Enum>)`, and `ProgramSignatures.constantValueTypeOf` interns that name into the WHOLE-PROGRAM table while the reader of the answer is a FILE's parse. So the id is meaningless where it is read, and the slot-width door panics on it: `slotStorageType: a slot's named type has an id that is not in the interner it was asked against`. Its own header calls itself "the twin of `Parser.constantValueTypeOf` on the other interner" — `resolvedGlobalOf` hands its result to a file and calls the whole-program twin. This is the same ADOPTION trap that arm's neighbours already warn about, and it is a defect of the enum-case-constant slice rather than of anything here; it needs its own rung and its own control. (Before that panic existed the same programs died one pass later in `maxonTypeToStdType: a `named` type must be resolved to a primitive before lowering` — so this case has never passed, and nothing regressed it.) -->
 ```maxon
 enum Color
 		Red
@@ -776,7 +776,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-enum-initializer-cross-file -->
-<!-- The reason is NOT "P1.1 enums + `match`", which both landed long ago; RE-MEASURED 2026-08-12 (BATCH36 W65). The blocker is the CONSTANT EVALUATOR's missing enum-member arm, and it says so itself, positioned at the initializer: `E2015: Unsupported: `Color.Green` in a constant initializer - a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else`. Correctly disabled, wrongly explained: the marker sent a reader to the enum/match rungs, which are done, instead of to the one arm that is missing. -->
+<!-- ⛔ RE-MEASURED 2026-08-22. The reason given here until now — "the CONSTANT EVALUATOR's missing enum-member arm" — is STALE: that arm LANDED, and a payload-free enum case is a top-level constant today (see `a-payload-free-enum-case-is-a-top-level-constant`). The blocker is now one step further on and is a different mechanism: a global whose folded value is an enum case is typed `named(<Enum>)`, and `ProgramSignatures.constantValueTypeOf` interns that name into the WHOLE-PROGRAM table while the reader of the answer is a FILE's parse. So the id is meaningless where it is read, and the slot-width door panics on it: `slotStorageType: a slot's named type has an id that is not in the interner it was asked against`. Its own header calls itself "the twin of `Parser.constantValueTypeOf` on the other interner" — `resolvedGlobalOf` hands its result to a file and calls the whole-program twin. This is the same ADOPTION trap that arm's neighbours already warn about, and it is a defect of the enum-case-constant slice rather than of anything here; it needs its own rung and its own control. (Before that panic existed the same programs died one pass later in `maxonTypeToStdType: a `named` type must be resolved to a primitive before lowering` — so this case has never passed, and nothing regressed it.) -->
 Cross-file: enum defined in one file, top-level var initialized with it in another.
 ```maxon
 // --- file: api/defs.maxon
@@ -2413,11 +2413,24 @@ TAGGED `named(E)` while the op it emits carries `integer`. Emitting the literal 
 instead is a compiler panic — *"a `named` type must be resolved to a primitive before lowering"* — because
 the op's valueType is a STORAGE question and `named` is not an answer to it.
 
-⛔ **A BOXED UNION'S CASE IS EXCLUDED, AND THAT IS THE RULE RATHER THAN A LIMIT OF THIS SLICE.** `isBoxed`
+⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE IS A CONSTANT TOO — IT IS MATERIALIZED, NOT FOLDED.** `isBoxed`
 means SOME case carries a payload, and then EVERY case — payload-free ones included — is a heap box rather
-than a bare tag. A heap object is not something a constant folds to. shv2's own
-`SemanticCheck.maxon:729` says it in as many words about its own binding: *"a payload-free union case is
-still a heap object in Maxon"*.
+than a bare tag; shv2's own `SemanticCheck.maxon:729` says so about its own binding (*"a payload-free union
+case is still a heap object in Maxon"*). But that settles HOW such a constant is built, never WHETHER it is
+one. The box is allocated before `main` by `__module_init` — `boxSizeBytes()` bytes, tag stored at offset 0,
+payload slots ZEROED, increfed into the `.data` slot — and released by `__maxon_global_cleanup`. That is the
+same path an empty container and a `create()`-style factory already took, which is why the fold tier was the
+wrong tier to ask the question in.
+
+⛔⛔ **THIS PARAGRAPH USED TO CLAIM THE OPPOSITE, AND IT WAS MEASURED FALSE.** It read *"A BOXED UNION'S CASE
+IS EXCLUDED, AND THAT IS THE RULE RATHER THAN A LIMIT OF THIS SLICE … A heap object is not something a
+constant folds to"*, and pinned that refusal as a passing case named
+`error.a-boxed-unions-case-is-still-not-a-constant`. The runnable oracle disagreed the whole time: it
+compiles the byte-identical program, runs it to exit 0, and its `__module_init` heap-allocates the box
+instead of folding anything. The sentence was a SLICE BOUNDARY wearing a rule's words — this tree's
+recurring defect, a comment asserting a property nothing tests — and the case that pinned it was INVERTED
+rather than deleted, so the claim reads as measured false rather than quietly dropped. The refusal that
+survives is the honest one: a case the union does not declare.
 
 <!-- test: a-payload-free-enum-case-is-a-top-level-constant -->
 A plain enum, and a constant that REFERENCES another constant — which is the path through
@@ -2485,9 +2498,11 @@ end 'main'
 raw=404 ord=1
 ```
 
-<!-- test: error.a-boxed-unions-case-is-still-not-a-constant -->
-⛔ **THE BOUNDARY.** `Boxed` has a payload-carrying case, so every case of it — `plain` included — is a
-heap box, and a heap object is not a folded constant. The original refusal stands, unchanged.
+<!-- test: a-boxed-unions-payload-free-case-is-a-constant -->
+⭐⭐ **THE INVERTED CONTROL — the program this spec pinned as an ERROR until the claim was measured against
+the oracle.** `Boxed` has a payload-carrying case, so `plain` is a heap box; it is a constant all the same,
+built by `__module_init` rather than folded. Byte-identical to the old `error.` case but for the binding's
+name, which no longer describes what happens to it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2496,7 +2511,162 @@ union Boxed
 	withPayload(n Integer)
 end 'Boxed'
 
-let stillRefused = Boxed.plain
+let boxedCase = Boxed.plain
+
+function main() returns ExitCode
+	return match boxedCase 'k'
+		plain gives 0
+		withPayload(n) gives n as ExitCode
+	end 'k'
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-boxed-union-constant-stores-its-tag-and-zeroes-the-payload -->
+⚠ **WHICH NUMBER GOES IN THE BOX, AND WHAT SITS BESIDE IT.** `beta` is tag 1 with a payload-free case on
+either side of it, so a build that stored the wrong case's tag answers something other than 20 — and one
+that folded the constant to a bare tag instead of allocating would hand `match` the number 1 to dereference.
+The payload slot must be ZEROED rather than left holding whatever `__mm_alloc` returned: `withPayload`'s arm
+is never taken here, but the slot is part of the record the cleanup releases.
+
+Reading the same global three times must give ONE answer — the slot holds a record, not a value each read
+rematerializes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Boxed
+	alpha
+	beta
+	withPayload(n Integer)
+end 'Boxed'
+
+let konst = Boxed.beta
+
+function tagOf(b Boxed) returns Integer
+	return match b 'k'
+		alpha gives 10
+		beta gives 20
+		withPayload(n) gives n
+	end 'k'
+end 'tagOf'
+
+function main() returns ExitCode
+	let copy = konst
+	print("direct={tagOf(konst)} copy={tagOf(copy)} again={tagOf(konst)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+direct=20 copy=20 again=20
+```
+
+<!-- test: a-boxed-union-constant-shared-across-many-reads-frees-cleanly -->
+⭐ **THE SHAPE THE COMPILER'S OWN SOURCE USES, AND THE EXIT CODE IS THE GATE.** One shared payload-free
+sentinel read and stored many times is exactly `Parser.sharedUnreadParamType` and `Project.NoPayloadStorage`
+— a single box for the whole program instead of one allocation per site. Every push CO-OWNS that one box, so
+`__module_init`'s incref, each push's own, and `__maxon_global_cleanup`'s decref have to balance: an
+unbalanced pair is a leak (exit 101) or a double free, neither of which a stdout comparison can see.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BoxedArray = Array with Boxed
+
+union Boxed
+	plain
+	withPayload(n Integer)
+end 'Boxed'
+
+let sentinel = Boxed.plain
+
+function tagOf(b Boxed) returns Integer
+	return match b 'k'
+		plain gives 7
+		withPayload(n) gives n
+	end 'k'
+end 'tagOf'
+
+function main() returns ExitCode
+	var xs = BoxedArray.create()
+	var i = 0 as Integer
+	var sum = 0 as Integer
+	while i < 4 'each'
+		xs.push(sentinel)
+		sum = sum + tagOf(sentinel)
+		i = i + 1
+	end 'each'
+	let first = try xs.get(0) otherwise Boxed.plain
+	print("count={xs.count()} sum={sum} first={tagOf(first)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+count=4 sum=28 first=7
+```
+
+<!-- test: a-boxed-union-constants-payload-slots-are-zeroed -->
+⚠⚠ **THE ONE CASE HERE THAT CAN SEE THE ZERO-FILL — and finding it took ruling out the obvious candidate.**
+An `or` pattern may bind a payload the matched case does not declare (`none or some(n)`), and reading `n` on
+the `none` path reads the box's payload SLOT directly. `Parser.emitEnumBox` says a diagnostic rests on
+exactly this: E3129 admits the pattern *because* the fill pins a deterministic 0 there, and
+`zeroInhabitsPayloadType` decides whether that 0 is a value of the binding's type. So this program's answer
+IS the slot's contents, and the box `__module_init` builds owes the same 0 the box a function body builds does.
+
+⚠ **THE DESTRUCTOR CANNOT SEE IT, WHICH IS WHY THE FIRST VERSION OF THIS CASE PROVED NOTHING.** It used a
+MANAGED payload (`held(s String)`) on the theory that a slot left un-zeroed would be `__str_decref`'d as a
+bogus pointer at cleanup. MEASURED, that is false: `synthesizeUnionDestructor` is TAG-DISPATCHED — it loads
+the tag and drops managed fields only for the case that matches, and a payload-free case's tag matches no
+managed case and branches straight to the free. That case passed with the slots deliberately filled with `1`.
+
+⚠ **AND `__mm_alloc` ALREADY RETURNS ZEROED MEMORY, so "delete the fill" is not the sabotage that tests it** —
+the slab would hand back zeros anyway and every case here would stay green. The fill is what keeps the
+guarantee once an allocator recycles (`emitEnumBox`'s own note carries that caveat). MEASURED with the slots
+filled with `1` instead: this case answers `1`, and it is the only one in this group that moves.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Counter
+	none
+	some(n Integer)
+end 'Counter'
+
+let sentinel = Counter.none
+
+function valueOf(c Counter) returns Integer
+	return match c 'k'
+		none or some(n) gives n
+	end 'k'
+end 'valueOf'
+
+function main() returns ExitCode
+	return valueOf(sentinel) as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-case-the-union-does-not-declare-is-still-refused -->
+⛔ **THE BOUNDARY THAT SURVIVED, and it is one BOTH compilers keep.** Admitting a boxed union's
+payload-free case does not admit any member name at all: `noSuchCase` is not a case of `Boxed`, so the arm
+declines it and the constant evaluator reports it where the author wrote it. The oracle refuses the same
+program too (E3034, *unknown enum case*) — unlike the case above, this refusal is a RULE and not a slice
+boundary, which is the whole reason it is the one kept as the control.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Boxed
+	plain
+	withPayload(n Integer)
+end 'Boxed'
+
+let stillRefused = Boxed.noSuchCase
 
 function main() returns ExitCode
 	return match stillRefused 'k'
@@ -2506,7 +2676,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/static-variables/error.a-boxed-unions-case-is-still-not-a-constant.test:9:20: Unsupported: `Boxed.plain` in a constant initializer — a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+error E2015: <fragment>:9:20: Unsupported: `Boxed.noSuchCase` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, a payload-free enum or union case, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
 ```
 
 ### AN ARRAY LITERAL OF ENUM CASES
