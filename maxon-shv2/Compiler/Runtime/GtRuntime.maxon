@@ -2530,12 +2530,15 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asy
 	// points a program took rather than collapsing them (`specs-shv2/async-tcp.md`'s cases pin the second
 	// spelling against `async-await.md`'s first).
 	let awaitTag = tags.tryAwaitTag if throwing else tags.awaitTag
+	// ⚠ **FROM HERE `cur` IS THE ONLY NAME FOR THE ENTRY BLOCK, AND `entry` IS SPENT.** Both bindings are
+	// mutable and mutability is what decides move-vs-alias, so this bind MOVES — naming `entry` again below
+	// is use-after-move (E3102), not a second reference to a block the module also holds.
 	var cur = entry
 	if asyncTrace 'emitAwaitTrace'
 		var immediateBlock = module.addBlock(func, label: b"awaitimm")
 		var yieldedBlock = module.addBlock(func, label: b"awaityield")
 		let joinBlock = module.addBlock(func, label: b"awaitjoin")
-		module.setTerminator(entry, op: StdOp.condBranch(alreadyDone, thenBlockId: immediateBlock.id, elseBlockId: yieldedBlock.id))
+		module.setTerminator(cur, op: StdOp.condBranch(alreadyDone, thenBlockId: immediateBlock.id, elseBlockId: yieldedBlock.id))
 		emitGtTraceLine(module, block: immediateBlock, traced: asyncTrace, tag: awaitTag, gtId: awaitedTraceId, suffix: tags.immediateSuffix, ids: ids)
 		module.setTerminator(immediateBlock, op: StdOp.branch(joinBlock.id))
 		emitGtTraceLine(module, block: yieldedBlock, traced: asyncTrace, tag: awaitTag, gtId: awaitedTraceId, suffix: tags.yieldSuffix, ids: ids)

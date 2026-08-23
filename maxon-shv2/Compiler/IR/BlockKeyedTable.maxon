@@ -117,10 +117,23 @@ export type BlockKeyedTable uses Value
 	// close that gap for all three users, and is a contract change rather than a comment.
 	export function place(id BlockId, value Value)
 		let needed = id + 1
-		self.values.growFilled(needed, value: value)
 		self.present.growFilled(needed, value: false)
 
-		try self.values.set(id, value: value) otherwise panic("BlockKeyedTable.place: values.set OOB for block {id} — the column was just extended to {needed}")
+		// ⭐ **`value` REACHES EXACTLY ONE STORE, AND THAT IS AN OWNERSHIP RULE RATHER THAN A TIDY-UP.** An
+		// extension fills `[count, needed)` and `id` IS `needed - 1`, so when the column grows `growFilled`
+		// has ALREADY written slot `id` — the `set` that used to follow it unconditionally wrote the same
+		// value into the same slot a second time. For a concrete element that is merely redundant; for the
+		// type parameter `Value` it is refused (E3102), because the shared generic body compiles once for
+		// every instantiation and a store of an opaque `T` may INHERIT this frame's one reference rather
+		// than take its own, which two stores would then release twice. So `set` is the arm for an id
+		// ALREADY inside the column — exactly the case `growFilled` declines to write, since it no-ops when
+		// `newLength <= existing`.
+		if needed > self.values.count() 'extendsColumn'
+			self.values.growFilled(needed, value: value)
+		end 'extendsColumn' else 'alreadySized'
+			try self.values.set(id, value: value) otherwise panic("BlockKeyedTable.place: values.set OOB for block {id} — the column already holds at least {needed} slots")
+		end 'alreadySized'
+
 		try self.present.set(id, value: true) otherwise panic("BlockKeyedTable.place: present.set OOB for block {id} — the column was just extended to {needed}")
 	end 'place'
 
