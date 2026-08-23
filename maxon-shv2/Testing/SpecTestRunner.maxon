@@ -2492,6 +2492,8 @@ end 'stageTest'
 
 // A MULTI-file test: one directory, one file per `// --- file:` section, compiled as a project — and
 // the build NAMES those files, in the order the case declared them, ahead of the directory itself.
+// One under a `.maxonignore` is staged but NOT named, because naming it would compile it; see
+// `compilationUnitsAmong`.
 //
 // ⭐⭐ **THE DECLARED ORDER IS THE COMPILED ORDER (A3m), AND NOTHING NEW SAYS SO.** The `// --- file:`
 // sections were already ordered and already staged in that order; the only thing missing was a way to
@@ -2517,8 +2519,10 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 	var paths = FragmentPathMappingArray.create()
 	var written = FilePathArray.create()
 	// Separate from `written` on purpose: an overlay appends its own files to that list below, and a
-	// case's private stdlib is not one of the units the program is built FROM.
-	var buildTargets = FilePathArray.create()
+	// case's private stdlib is not one of the units the program is built FROM. `staged` is separate
+	// from BOTH: it is every file the case declared, before `compilationUnitsAmong` decides which of
+	// them are part of the program.
+	var staged = FilePathArray.create()
 
 	for file in test.sourceFiles 'eachFile'
 		if not isSafeRelativeName(file.name) 'unsafeName'
@@ -2539,8 +2543,10 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 
 		paths.push(FragmentPathMapping.create(path.toString(), lineOffset: file.mergedLineOffset, sourceDirPrefix: sourceDirPrefixOf(file.name)))
 		written.push(path)
-		buildTargets.push(path)
+		staged.push(path)
 	end 'eachFile'
+
+	var buildTargets = compilationUnitsAmong(staged)
 
 	var compiler = compilerExe
 	if test.stdlibOverlays.count() > 0 'hasStdlibOverlay'
@@ -2558,6 +2564,46 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 	let stdlibRoot = try stdlibRootOf(compiler) otherwise return StagingResult.failed(missingStdlibReason(compiler))
 	return StagingResult.staged(StagedTest.create(buildTargets, compilerExe: compiler, stdlibRoot: stdlibRoot, paths: paths, writtenFiles: written))
 end 'stageSourceFiles'
+
+// ⭐⭐ **WHICH OF THE STAGED FILES BELONG TO THE PROGRAM — ASKED WITH THE COMPILER'S OWN PREDICATE,
+// NOT DECIDED HERE.** `staged` is every `// --- file:` section the case declared, on disk and in
+// declared order; the answer is that same list minus the ones sitting under a `.maxonignore`, and the
+// ORDER is the case's throughout.
+//
+// ⚠ **NAMING A PATH OVERRIDES EVERY EXCLUSION THE WALK APPLIES** (`Compiler.loadSourceFiles`), so a
+// runner that named all of them would compile files the compiler had excluded and no `// --- file:`
+// case could ever observe an exclusion at all. `buildTargets` exists to state the ORDER of the units —
+// not to add units. A file left out here is still WRITTEN, because it is what the walk has to
+// encounter in order to exclude it; `stdlibOverlays` is the same distinction one step further out,
+// staged and never named.
+//
+// ⛔⛔ **IT ASKS ONE EXCLUSION, NOT ALL OF THEM, AND THE DIFFERENCE COST A GREEN SUITE.** The first
+// draft narrowed `buildTargets` to *whatever `collectMaxonSources` returns*, which reads as the tighter
+// and more principled rule and is wrong: that walk drops **two** kinds of file and only one of them
+// means *not part of the program*. A `.maxonignore`d subtree is out by every route. A `build.maxon` is
+// a MANIFEST — out of the SWEEP, and compiled when you NAME it, which is exactly what
+// `unused-export.md`'s `api/build.maxon` section does. The walk-derived rule dropped that file and the
+// case lost the type it needed: `E2015 … 'a' … is declared 'unknown'`, one FAIL in 6,655, caught by the
+// full suite and by nothing smaller.
+//
+// ⇒ The predicate is `Compiler.isIgnoredDirectory`, the walk's OWN, called rather than re-spelled — so
+// this is not a second copy of the marker rule, it is the same one asked a second time.
+//
+// ⚠ Asked only after every file is on disk — never per file inside the staging loop. A `.maxonignore`
+// declared AFTER the file it excludes would not exist yet, and the case's meaning would depend on the
+// order its sections happen to be written in.
+function compilationUnitsAmong(staged FilePathArray) returns FilePathArray
+	var targets = FilePathArray.create()
+
+	for path in staged 'eachStaged'
+		let dir = try path.parent() otherwise panic("SpecTestRunner.compilationUnitsAmong: {path.toString()} has no parent directory, though `stageSourceFiles` created one to write it into")
+		if not isIgnoredDirectory(dir) 'inTheProgram'
+			targets.push(path)
+		end 'inTheProgram'
+	end 'eachStaged'
+
+	return targets
+end 'compilationUnitsAmong'
 
 // The `stdlib/` a compile driven by `compilerExe` will load, in the spelling a diagnostic from inside it
 // will carry.
@@ -2658,9 +2704,9 @@ end 'stageStdlibOverlay'
 //
 // ⚠ **THE SET OF FILES IS ASKED OF `Compiler.collectMaxonSources`, WHICH IS THE COMPILER'S OWN ANSWER
 // TO "WHAT IS A SOURCE UNDER A DIRECTORY?"** A copy built from a second rule here — every `.maxon`,
-// say — would drift the day that walk grows a clause (`.maxonignore` is already named as its next
-// one), and the drift would show up as a case compiling against a library subtly unlike the one the
-// same compiler loads everywhere else.
+// say — would drift the day that walk grows a clause (it has since grown one, `.maxonignore`, and this
+// copy inherited it for free), and the drift would show up as a case compiling against a library
+// subtly unlike the one the same compiler loads everywhere else.
 function copyStdlibSources(from FilePath, into FilePath, written FilePathArray) throws OverlayError
 	var sources = MaxonSourcePathArray.create()
 	_ = try collectMaxonSources(from, into: sources) otherwise throw OverlayError.refused("could not walk {from.toString()} to copy it for a '{StdlibOverlayMarker}' case")

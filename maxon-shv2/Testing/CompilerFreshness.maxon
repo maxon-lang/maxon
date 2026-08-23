@@ -31,13 +31,19 @@
 //
 // ⚠ NOT every `.maxon` file under the project root either — only the ones `maxon build` actually
 // compiles. `maxon-shv2/track0/` carries a `.maxonignore` and its program is not in the binary, so an
-// edit to it cannot change a single verdict. `collectMaxonSources` answers the first half of that
-// question (every `.maxon` under a directory except the build manifest) and is used here rather than
-// re-spelled; the clauses it does not carry — `.maxonignore`, `*.test.maxon` and the compiler's own
-// `.maxon/` output directory, the first two named as future growth in its own header — are applied on
-// top, HERE, because they are what separates "a source of this project" from "a source of THIS
-// BINARY". `SourceCollector.ExclusionFor` in the bootstrap is the authority for all three: the
-// bootstrap is what built this binary, so its answer is the one that decides what went in.
+// edit to it cannot change a single verdict. `collectMaxonSources` is what answers that, and is used
+// here rather than re-spelled: it excludes the build manifest AND every `.maxonignore`d subtree, which
+// is two of the three clauses. The two it does NOT carry — `*.test.maxon` and the compiler's own
+// `.maxon/` output directory — are applied on top, HERE, because they are what is left of the gap
+// between "a source of this project" and "a source of THIS BINARY".
+//
+// ⭐ **THE `.maxonignore` CLAUSE USED TO BE APPLIED HERE TOO, AND ITS REMOVAL IS THE POINT.** It was a
+// hand-written mirror of `MaxonIgnore.IsIgnored`, in a file whose header already records losing a
+// clause off a mirror TWICE. The walk carries it now (measured against the bootstrap on a probe tree —
+// see `Compiler.collectMaxonSources`), so a copy here could only ever be a second answer waiting to
+// drift from the first. `SourceCollector.ExclusionFor` in the bootstrap remains the authority for what
+// went in — the bootstrap is what built this binary — and the walk agreeing with it is now a pinned
+// spec (`specs-shv2/maxonignore.md`) rather than an assertion.
 //
 // ============================================================================================
 // TWO THINGS IT STRUCTURALLY CANNOT SEE. NEITHER IS CLAIMED IN THE MESSAGE.
@@ -78,17 +84,6 @@ let CompilerOutputDirName = ".maxon"
 // installed copy. Detected, never guessed from the path's spelling: a released binary's own path can
 // be anything at all, and the one fact that distinguishes it is whether its sources are there.
 let SourceRootMarkerDirName = "Compiler"
-
-// A directory holding this file — and everything beneath it — is not compiled. `MaxonIgnore.IsIgnored`
-// in the bootstrap is the rule this mirrors; the bootstrap is what built this binary, so its answer is
-// the one that decides what went in.
-//
-// The ONE exclusion here that is deliberately NOT `caseFolded`: the bootstrap asks it with
-// `File.Exists`, so the FILESYSTEM decides the casing — insensitively on Windows, exactly on POSIX —
-// and `File.exists` here inherits the identical answer from the identical OS call. Folding the name
-// by hand would make this mirror STRICTER than the rule it mirrors on POSIX, which is the direction
-// that invents refusals.
-let IgnoreMarkerName = ".maxonignore"
 
 // A `*.test.maxon` holds `test` declarations and is left out of a production build
 // (`SourceCollector.ExclusionFor`), so it is not in the binary either.
@@ -179,27 +174,26 @@ function stalenessOf(binary FilePath) returns StalenessVerdict
 end 'stalenessOf'
 
 // Whether `maxon build` compiled `source` into the binary, given that `collectMaxonSources` has
-// already dropped the build manifest. See this file's header for why the remaining two clauses live
-// here rather than in that walk.
+// already dropped the build manifest and every `.maxonignore`d subtree. See this file's header for why
+// the remaining two clauses live here rather than in that walk.
 function isCompiledInto(source FilePath, sourceRoot FilePath) returns bool
 	if caseFolded(source.filename()).endsWith(TestFileSuffix) 'testFile'
 		return false
 	end 'testFile'
 
-	return not isUnderExcludedDirectory(source, sourceRoot: sourceRoot)
+	return not isUnderCompilerOutputDirectory(source, sourceRoot: sourceRoot)
 end 'isCompiledInto'
 
-// Does `source` sit under a directory `maxon build` will not read — one carrying an `.maxonignore`,
-// or the compiler's own output directory?
+// Does `source` sit under the compiler's OWN output directory, at any depth?
 //
-// BOTH are questions about a file's ANCESTORS rather than about the file, so they are asked in one
-// upward walk. Two walks would be two places to get the stopping condition wrong.
+// A question about a file's ANCESTORS rather than about the file, hence the upward walk. It is the one
+// exclusion left that `collectMaxonSources` does not apply itself: that walk recurses into a `.maxon/`
+// output directory (PLAN.md A2z), so a `.maxon` file the compiler WROTE still reaches this filter and
+// must be stopped here — a file the compiler produced is not a source it was built from.
 //
-// That walk stops at `sourceRoot`, where the bootstrap's own `MaxonIgnore.IsIgnored` continues to the
-// filesystem root. The difference is unreachable: a marker ABOVE the project root would exclude every
-// file in it, and a binary built from no sources at all is not a state this check can be reached in.
-function isUnderExcludedDirectory(source FilePath, sourceRoot FilePath) returns bool
-	let marker = pathComponent(IgnoreMarkerName)
+// The walk stops at `sourceRoot`, which is where a file that came out of `collectMaxonSources(sourceRoot)`
+// is guaranteed to be under; above it there is nothing this question could be about.
+function isUnderCompilerOutputDirectory(source FilePath, sourceRoot FilePath) returns bool
 	var dir = try source.parent() otherwise panic("CompilerFreshness: {source.toString()} has no parent directory, though a directory walk found it inside one")
 
 	while true 'upwards'
@@ -207,24 +201,20 @@ function isUnderExcludedDirectory(source FilePath, sourceRoot FilePath) returns 
 			return true
 		end 'compilerOutput'
 
-		if File.exists(dir.join(marker)) 'ignored'
-			return true
-		end 'ignored'
-
 		if dir.equals(sourceRoot) 'reachedRoot'
 			break
 		end 'reachedRoot'
 
 		// A path with no parent left is the filesystem root, which `sourceRoot` is not — so this arm
-		// is only reachable if the walk somehow started outside the project, and there is nothing
-		// above it that could be ignoring anything.
+		// is only reachable if the walk somehow started outside the project, and nothing above it
+		// could be an output directory of THIS one.
 		dir = try dir.parent() otherwise 'atFilesystemRoot'
 			break
 		end 'atFilesystemRoot'
 	end 'upwards'
 
 	return false
-end 'isUnderExcludedDirectory'
+end 'isUnderCompilerOutputDirectory'
 
 // One path component, lower-cased for comparison against `CompilerOutputDirName` or
 // `TestFileSuffix` — which are therefore both spelled in lower case.

@@ -1027,8 +1027,16 @@ end 'reportBindingHygieneDiagnostics'
 
 // ⭐⭐ **REGISTER EVERY SOURCE THE CALLER NAMED, IN THE ORDER THE CALLER NAMED IT (A3m).** A single
 // `.maxon` file loads directly; a directory loads every `.maxon` file beneath it (except
-// `build.maxon`). Throws when a path does not exist or the whole list yields no sources. (v1's
-// `.maxonignore` support + `.test`-fragment stripping grow back when the spec runner needs them.)
+// `build.maxon`, and except the subtrees a `.maxonignore` excludes — see `collectMaxonSources`).
+// Throws when a path does not exist or the whole list yields no sources. (`.test`-fragment stripping
+// grows back when the spec runner needs it.)
+//
+// ⭐ **A PATH THE CALLER NAMED IS LOADED WHATEVER A `.maxonignore` SAYS, AND THAT IS THE BOOTSTRAP'S
+// RULE MEASURED RATHER THAN GUESSED.** `maxon build <ignored>/prog.maxon` compiles that file on both
+// compilers — it is how `maxon-shv2/track0/`'s program is built at all, and how `maxon fmt <file>`
+// reaches a fixture inside a marked directory. The marker says *"do not SWEEP me into somebody else's
+// program"*, never *"this file may not be compiled"*, so it is a property of the WALK and belongs to
+// `collectMaxonSources` alone; naming a path is the explicit act it cannot override.
 //
 // ⚠⚠ **THE ORDER IS THE CALLER'S INPUT, AND IT IS NEVER A POLICY THIS LOADER APPLIES — SO NOTHING
 // HERE SORTS, AND NOTHING BELOW IT SORTS EITHER.** That is exactly the shape `StdlibLoader`'s header
@@ -1151,14 +1159,36 @@ end 'loadSourceDirectory'
 
 // ⭐ **WHAT COUNTS AS A MAXON SOURCE FILE UNDER A DIRECTORY — asked in ONE place.** Every `.maxon`
 // file beneath `dir`, subdirectories included, minus the build manifest (a project description, not
-// a compilation unit).
+// a compilation unit) and minus every subtree a `.maxonignore` marker excludes.
 //
 // ⚠ BOTH of a compile's directory walks go through it — the USER's own root (`loadSourceDirectory`)
 // and the checkout's `stdlib/` (`loadStdlibSources`) — because that is ONE question, and two copies
-// of the answer are two copies that can come to disagree. The next clauses this rule grows are
-// already named in `loadSourceFiles`: v1's `.maxonignore`, and `.test`-fragment stripping. Added to
-// one walk and not the other, either would read as correct at BOTH sites while a file was silently
-// compiled on one side and silently skipped on the other.
+// of the answer are two copies that can come to disagree. The remaining clause this rule owes is
+// named in `loadSourceFiles`: `.test`-fragment stripping. Added to one walk and not the other, it
+// would read as correct at BOTH sites while a file was silently compiled on one side and silently
+// skipped on the other.
+//
+// ⭐⭐ **THE `.maxonignore` RULE IS THE BOOTSTRAP'S, ESTABLISHED BY RUNNING IT AND NOT BY READING IT.**
+// The bootstrap (`maxon-sharp`'s `MaxonIgnore.IsIgnored` + `SourceCollector.ExclusionFor`) is what
+// compiles this compiler, so a file set that disagreed with it would build a different program than
+// the one anybody reviewed. Four facts, each MEASURED against `./bin/maxon.exe` on a probe tree:
+//
+//   • **the marker is a FLAG — its contents are never read.** A `.maxonignore` whose text is
+//     `!Skipped.maxon` still excludes `Skipped.maxon`, so the two markers in this repo carrying prose
+//     carry it for the human reading the tree and for nothing else.
+//   • **it excludes its directory AND EVERYTHING BENEATH IT**, at any depth.
+//   • **it applies when the marker sits AT or ABOVE the walk root**, not only below it: the bootstrap
+//     answers `No .maxon files found` for both `build <marked>` and `build <marked>/deeper`, because
+//     its per-file test climbs to the filesystem root.
+//   • **a path the CALLER NAMED escapes it entirely** — see `loadSourceFiles`. Not this walk's
+//     business: it only ever sees paths it discovered itself.
+//
+// ⛔ **v1 IS NOT THE REFERENCE HERE, AND COPYING IT WOULD HAVE FIXED NOTHING.** `maxon-selfhosted`'s
+// `Compiler.isIgnoredPath` (`Compiler.maxon:634`) starts its upward walk at `path.parent()` and is
+// called on a DIRECTORY entry (`:595`), so for `track0/` it asks about `maxon-shv2/.maxonignore` and
+// never about `track0/`'s own — one level off, and the directory-level support it advertises does not
+// fire at all. Its FILE arm (`:561`) is correct because a file's parent IS its directory. The
+// bootstrap is the authority for that reason: it is the one that can be run.
 //
 // It COLLECTS rather than loading, because the callers do different things with the answer: the user
 // walk registers every path it is given, while the stdlib loader filters first and records what it
@@ -1167,19 +1197,44 @@ end 'loadSourceDirectory'
 // ⚠ IT RETURNS THE DIRECTORIES IT LISTED, WHICH IS A FACT ONLY THE WALK HOLDS. The files it found are
 // in `into`, and the parents of those files are NOT the same set: an EMPTY directory is walked, costs
 // a `Directory.list`, and contributes no path anybody outside can see. `scale-test` reports both
-// numbers so that an ignored directory — invisible to git, visible here — cannot go on being an
-// unattributed constant in the trend log (see `printStdlibWalkCensus`), and the count is returned from
+// numbers so that a GITIGNORED directory — invisible to git, visible here, and not the same thing as a
+// `.maxonignore`d one, which this walk no longer lists at all — cannot go on being an unattributed
+// constant in the trend log (see `printStdlibWalkCensus`), and the count is returned from
 // the recursion rather than re-derived by a second traversal because a second traversal would be free
 // to disagree the moment this one grows an exclusion.
 export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray) returns DirectoryWalkCount throws CompileError
+	if isIgnoredDirectory(dir) 'notACompilationUnit'
+		return 0 as DirectoryWalkCount
+	end 'notACompilationUnit'
+
+	return try collectMaxonSourcesUnder(dir, into: into)
+end 'collectMaxonSources'
+
+// The recursion, entered only for a directory whose ANCESTRY the entry above has already cleared.
+//
+// ⚠ **THE ANCESTRY QUESTION IS ASKED ONCE, FOR THE ROOT, AND THIS RECURSION MUST NOT RE-ASK IT.** Every
+// directory below an un-ignored root already knows everything above it is clear, so it needs only its
+// OWN marker — which is the whole reason the walk is two functions rather than one. Asking
+// `isIgnoredDirectory` at each level instead would make the marker probes O(directories × depth) where
+// this makes them O(directories), and each probe is a filesystem call on a walk the spec suite runs
+// thousands of times: re-deriving a fact the caller already established is exactly the cost curve this
+// compiler exists to not inherit.
+function collectMaxonSourcesUnder(dir FilePath, into MaxonSourcePathArray) returns DirectoryWalkCount throws CompileError
 	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 
-	// `dir` itself was listed, so a leaf directory answers 1 and never 0.
+	// `dir` itself was listed, so a leaf directory answers 1.
 	var walked = 1 as DirectoryWalkCount
 
 	for entry in entries 'each'
 		if Directory.isDirectory(entry) 'isSubdir'
-			let below = try collectMaxonSources(entry, into: into)
+			// Pruned rather than descended-into-and-filtered, so the exclusion costs ONE probe for a
+			// whole subtree and the "and everything beneath it" half of the rule is structural instead
+			// of being a condition every level has to remember to repeat.
+			if holdsIgnoreMarker(entry) 'ignoredSubtree'
+				continue
+			end 'ignoredSubtree'
+
+			let below = try collectMaxonSourcesUnder(entry, into: into)
 			walked = walked + below
 		end 'isSubdir' else 'isFile'
 			let name = entry.filename()
@@ -1190,7 +1245,70 @@ export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray) ret
 	end 'each'
 
 	return walked
-end 'collectMaxonSources'
+end 'collectMaxonSourcesUnder'
+
+// Does `dir` ITSELF carry the marker that takes it, and everything beneath it, out of every project?
+//
+// ⚠ **ASKED WITH `File.exists`, SO THE FILESYSTEM DECIDES THE CASING** — insensitively on Windows,
+// exactly on POSIX. That is precisely what the bootstrap's `MaxonIgnore.IsIgnored` does (a bare
+// `File.Exists`), and folding the name by hand here would make this walk STRICTER than its authority on
+// POSIX, which is the direction that invents refusals. `Testing/CompilerFreshness.maxon` records the
+// same reasoning for the same name, and for the same reason.
+//
+// Exported because `Testing/ScalePerType.copyMaxonTree` copies a source tree the compiler will then
+// build, and a copy deciding "which directories are the project's" for itself would be a second answer
+// to this question — which is how it once produced a tree with two `main`s.
+export function holdsIgnoreMarker(dir FilePath) returns bool
+	// Interpolated so the argument is a committed `String` — a bare module-`let` constant is ambiguous
+	// between `join`'s two overloads, the same reason `SpecTestRunner.stageStdlibOverlay` spells its
+	// directory name this way.
+	return File.exists(dir.join("{IgnoreMarkerName}"))
+end 'holdsIgnoreMarker'
+
+// Is `dir` excluded — by its own marker, or by one in ANY directory above it?
+//
+// The upward walk is unbounded, matching `MaxonIgnore.IsIgnored`, which is what makes
+// `maxon build <marked>` and `maxon build <marked>/deeper` both answer "no source files" rather than
+// only the first of the two. Asked ONCE per walk, for the root; see `collectMaxonSourcesUnder`.
+//
+// Exported for `Testing/SpecTestRunner.compilationUnitsAmong`, which has to answer the SAME question
+// about a staged file — and must answer it with this predicate rather than with "did the walk return
+// it", because the walk also drops a `build.maxon`, which naming DOES compile. See there.
+export function isIgnoredDirectory(dir FilePath) returns bool
+	// Resolved first: the climb runs out of parents at a RELATIVE spelling's own first component while
+	// the directories that could hold a marker are still above it — `maxon build maxon-shv2` would ask
+	// about nothing at all. The bootstrap sees only absolute paths here for the same reason
+	// (`SourceCollector` normalizes every discovered path before `ExclusionFor` asks).
+	//
+	// ⚠ The cost is ONE `Directory.currentPath()` per WALK — not per file, and not per directory, which
+	// is the whole reason the ancestry question is asked here and not inside the recursion. Skipping it
+	// for an already-absolute `dir` was written and then taken back out: `resolve` returns the receiver
+	// unchanged in that case, so the saving is the ARGUMENT alone, and buying two allocations with a
+	// `var` bound directly to a managed parameter is the wrong trade in a walk this shared.
+	var current = dir.resolve(Directory.currentPath())
+
+	while true 'upwards'
+		if holdsIgnoreMarker(current) 'ignored'
+			return true
+		end 'ignored'
+
+		let above = try current.parent() otherwise 'noParentLeft'
+			break
+		end 'noParentLeft'
+
+		// `FilePath.parent()` cannot express a filesystem root — it cuts the separator off, so on
+		// Windows `parent("C:\\x")` is `"C:"` and on POSIX `parent("/x")` is `""`. Neither names a
+		// directory, and `isAbsolute` denies both, which is the one test that marks having walked off
+		// the top on BOTH platforms. `commonAncestorOf` carries the measurement this is taken from.
+		if not above.isAbsolute() 'walkedOffTheTop'
+			break
+		end 'walkedOffTheTop'
+
+		current = above
+	end 'upwards'
+
+	return false
+end 'isIgnoredDirectory'
 
 // Read one source file and register its content with the query system. Exported so stdlib modules
 // are loaded through the identical read+register path a user file takes.
@@ -1201,12 +1319,18 @@ end 'loadOneSourceFile'
 
 // --- Output path resolution ---
 
-// The build manifest filename and Maxon source extension. Named, not bare
-// literals — both are file-discovery contracts, and `collectMaxonSources` is the
-// only reader of either: `stdlib/` is enumerated by that same function, so what a
-// source file is called is stated once for the whole compiler.
+// The build manifest filename, the Maxon source extension, and the flag file that excludes a
+// directory. Named, not bare literals — all three are file-discovery contracts, and the walk rooted at
+// `collectMaxonSources` is the only reader of any of them: `stdlib/` is enumerated by that same
+// function, so what a source file is called, and what says a directory holds none, are stated once for
+// the whole compiler.
 let BuildManifestName = "build.maxon"
 let MaxonSourceExtension = ".maxon"
+
+// A directory holding this file is not part of any program, and neither is anything beneath it. The
+// name is the bootstrap's and the repo's — five directories carry one today — and the file's CONTENTS
+// are never read; see `collectMaxonSources` for the measurements.
+let IgnoreMarkerName = ".maxonignore"
 
 // Paths of Maxon source files, in the order a walk found them — what `collectMaxonSources`
 // produces and what `Project.stdlibSourcePaths` keeps. The ORDER is the fact this name carries and
@@ -1233,8 +1357,10 @@ export typealias MaxonSourcePathArray = Array with FilePath
 // instrument comparing two checkouts needs, and not "how many directories exist" (a walk that grows an
 // exclusion stops answering that question and keeps answering this one).
 //
-// From 1: a call always lists the directory it was handed, so 0 is not a value the walk can report.
-export typealias DirectoryWalkCount = int(1 to u64.max)
+// From 0, and 0 means exactly one thing: the directory the walk was handed is EXCLUDED — by its own
+// `.maxonignore` or by one above it — so the walk listed nothing, not even the root. Every other call
+// lists at least the directory it was handed and therefore answers 1 or more.
+export typealias DirectoryWalkCount = int(0 to u64.max)
 
 // The same paths where the question is MEMBERSHIP rather than order, so it is answered by one hash
 // instead of a scan — and each pair a scan would compare is about four String allocations, because
