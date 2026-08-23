@@ -32,7 +32,7 @@ associated formals) are typed through the binding, and the position counts as CL
 
 A binding is a CLAIM about the type argument, checked at each instantiation exactly as `where T is I`
 itself is (E3017): the argument must conform, and its conformance must bind each named position to
-the type the constraint names, substituted through the instantiation. A disagreement is **E3131**.
+the type the constraint names, substituted through the instantiation. A disagreement is **E3133**.
 
 ### Per-instance witness tables
 
@@ -339,7 +339,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3131: <fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor with Integer', but 'TextCur' binds 'Cursor's associated type 'Element' to 'String' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
+error E3133: <fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor with Integer', but 'TextCur' binds 'Cursor's associated type 'Element' to 'String' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
 ```
 
 <!-- test: error.a-where-constraint-cannot-bind-more-than-the-interface-declares -->
