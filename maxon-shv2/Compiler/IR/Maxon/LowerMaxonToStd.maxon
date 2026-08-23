@@ -3035,11 +3035,27 @@ type MaxonToStdLowering
 		// arm, and for the identical reason: there is no `__guarded_mod` function to call.** It is the only
 		// division kind that can reach a plain `call`, because it is the only one that does not throw; the two
 		// `__checked_*` names arrive through `lowerTryCall` and are refused below if they somehow do not.
+		//
+		// ⚠ **THE MATCH IS TERMINAL: the "not a division" arm CARRIES the rest of the lowering rather than
+		// falling out of it.** A `match` arm is exactly one statement, so an arm that expands AND then leaves
+		// the function ahead of the call path cannot be written — and `return self.lowerDivisionExpansion(…)`
+		// is not the way out of that, because a void callee yields nothing to return
+		// (`specs-shv2/void-call-result.md`). Routing the residue through `appendRuntimeCall` asks
+		// `divisionKindOf` ONCE and keeps the classification exhaustive in one place, which is the shape
+		// `lowerOp`'s own dispatch already has.
 		match divisionKindOf(callee) 'guardedDivision'
-			guardedRemainder then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.guardedRemainder, signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
+			guardedRemainder then self.lowerDivisionExpansion(result, expansion: DivisionExpansion.guardedRemainder, signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
 			quotient to remainder then panic("lowerRuntimeCall: the THROWING '{String.from(callee)}' reached the plain call path — `isThrowingRuntimeCallee` names it, so `Parser.emitDivOrMod` must have emitted it without the `try` that E3057 requires")
-			notCheckedDivision then break 'guardedDivision'
+			notCheckedDivision then self.appendRuntimeCall(result, callee: callee, args: args, dstBlock: dstBlock)
 		end 'guardedDivision'
+	end 'lowerRuntimeCall'
+
+	// Every runtime callee `lowerRuntimeCall`'s division match hands on — that is, every one that is not
+	// expanded in place. Most become the plain `StdOp.call` at the end; the guards ahead of it are the
+	// callees this tier has to finish building, because the parser could not: an argument only a
+	// whole-program view can supply (a layout descriptor, an allocation tag), or a marker that folds to a
+	// constant rather than being called at all.
+	function appendRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		// An OPAQUE-`T` container create arrives SHORT ONE ARGUMENT — a `__managed_create` (P1.7 slice 3b-i)
 		// with only element_size, a `__list_create` (W134) with none at all; its element destructor is not
 		// known statically, so it is READ from the enclosing instance's threaded layout descriptor
@@ -3101,7 +3117,7 @@ type MaxonToStdLowering
 		// ⇒ **No compiler-owned runtime callee threads a witness table today**, and a new one would rebuild the
 		// arm here — see `materializeWitnessTableAddr`, which holds what such an arm must not get wrong.
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
-	end 'lowerRuntimeCall'
+	end 'appendRuntimeCall'
 
 	// The `rdataAddr` of the `__witness_<conformerType>.<interface>` table (P1.7b slice A) — the address of one
 	// of a conformer's protocol witnesses. `ensureWitnessTable` registers the blob and its `funcAbs64` slot
@@ -4107,22 +4123,31 @@ type MaxonToStdLowering
 
 	// Lower a Maxon unary op to its Std counterpart. Like lowerBinOp, the operand
 	// and result ValueIds pass through verbatim; only the source-level operator maps
-	// to a width/ABI-resolved Std opcode.
+	// to a width/ABI-resolved Std opcode — except the sign extensions, which have no
+	// single Std opcode and EXPAND (see `lowerSignExtend`).
+	//
+	// ⚠ The match is TERMINAL — the non-extension arm carries the 1:1 lowering rather than falling out of
+	// it — for the reason `lowerRuntimeCall`'s division match carries its own residue: a `match` arm is one
+	// statement, and a void callee has no value for a `return` to hand back.
+	function lowerUnaryOp(result ValueId, operand ValueId, op MaxonUnaryOp, dstBlock IrBlock)
+		match signExtendSlotOf(op) 'aSignExtension'
+			fromBytes(slotBytes) then self.lowerSignExtend(result, operand: operand, slotBytes: slotBytes, dstBlock: dstBlock)
+			notASignExtension then self.appendStdUnaryOp(result, operand: operand, op: op, dstBlock: dstBlock)
+		end 'aSignExtension'
+	end 'lowerUnaryOp'
+
+	// The 1:1 half of `lowerUnaryOp`: the operators that map straight onto one Std opcode.
+	//
 	// ⭐ `operandType` IS THE OPERAND'S TYPE — the SOURCE the instruction reads — and on the two
 	// CONVERSION opcodes that is emphatically not the result's: `trunc` reads an f64 and produces
 	// an i64, `promoteToFloat` the reverse. Taking it from `operand` rather than from `result` is
 	// therefore correct for every opcode at once, and is the only spelling that is.
-	function lowerUnaryOp(result ValueId, operand ValueId, op MaxonUnaryOp, dstBlock IrBlock)
-		match signExtendSlotOf(op) 'aSignExtension'
-			fromBytes(slotBytes) then return self.lowerSignExtend(result, operand: operand, slotBytes: slotBytes, dstBlock: dstBlock)
-			notASignExtension then break 'aSignExtension'
-		end 'aSignExtension'
-
+	function appendStdUnaryOp(result ValueId, operand ValueId, op MaxonUnaryOp, dstBlock IrBlock)
 		let opcode = maxonUnaryOpToStdOpcode(op)
 		let operandType = self.stdTypeOf(operand)
 		assertUnaryOperandDomain(opcode, operandType: operandType)
 		self.stdModule.appendOp(dstBlock, op: StdOp.unaryOp(result, operand: operand, opcode: opcode, operandType: operandType))
-	end 'lowerUnaryOp'
+	end 'appendStdUnaryOp'
 
 	// ⭐⭐ **A SIGN EXTENSION BECOMES `shl` THEN ARITHMETIC `shr` BY THE SAME COUNT** — the slot's top bit
 	// walked up to bit 63 and back down with the sign fill. `StdBinOpcode.shr` IS the arithmetic shift (its
@@ -4344,12 +4369,12 @@ type MaxonToStdLowering
 	// construction, so a label would silently mis-slot.
 	//
 	// ⚠ A source-written `try __int_fromString(s)` from `stdlib/Builtins.maxon` (A1r) is NOT that: it names a
-	// DECLARED throwing function, so it takes the slotting path below like every other `try f(…)`. The
+	// DECLARED throwing function, so it takes `appendThrowingCall`'s slotting path like every other `try f(…)`. The
 	// discriminator is `isSignaturelessCompilerCallee`, `lowerCall`'s exactly — this is the throwing twin of
 	// that site and the two must part company on the same fact.
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		// ⭐ **A CHECKED DIVIDE IS EXPANDED, NOT CALLED (A1).** Asked FIRST, and exhaustively, so a checked
-		// division callee can never fall through to the `StdOp.tryCall` below — there is no `__checked_div`
+		// division callee can never fall through to the `StdOp.tryCall` `appendThrowingCall` emits — there is no `__checked_div`
 		// function for such a call to reach, and the linker's "call to unknown function" would be the failure.
 		// `CheckedDivisionRuntime`'s header explains why this family has no body to call.
 		//
@@ -4357,13 +4382,23 @@ type MaxonToStdLowering
 		// expansion's door: it is TOTAL, so it is not a `try` target at all — the parser refuses a `try` over it
 		// (E3055) and reaches the expansion through `lowerRuntimeCall` instead. Answering it here would mean a
 		// `tryCall` whose error flag nothing ever sets.
+		//
+		// ⚠ **THE MATCH IS TERMINAL — the "not a division" arm CARRIES the call path rather than falling out
+		// of it.** A `match` arm is exactly one statement, so an arm that expands AND then leaves the function
+		// ahead of that path cannot be written, and `return self.lowerDivisionExpansion(…)` is not the escape:
+		// a void callee yields nothing to return (`specs-shv2/void-call-result.md`). It is
+		// `lowerRuntimeCall`'s arrangement, for `lowerRuntimeCall`'s reason.
 		match divisionKindOf(callee) 'checkedDivision'
-			quotient then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedQuotient(errorFlag), signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
-			remainder then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedRemainder(errorFlag), signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
+			quotient then self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedQuotient(errorFlag), signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
+			remainder then self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedRemainder(errorFlag), signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
 			guardedRemainder then panic("lowerTryCall: a TOTAL `__guarded_mod` reached the throwing call path — `isThrowingDivisionRuntimeCallee` answers false for it, so `Parser.requireThrowingNamedTryTarget` must have refused the `try` before lowering")
-			notCheckedDivision then break 'checkedDivision'
+			notCheckedDivision then self.appendThrowingCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
 		end 'checkedDivision'
+	end 'lowerTryCall'
 
+	// Emit the `StdOp.tryCall` for every throwing callee that is not an expanded division — verbatim
+	// arguments for a compiler-owned one, label-slotted for a declared one.
+	function appendThrowingCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'compilerOwnTryCall'
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
 			// ⚠ **A WITNESS-CARRYING `tryCall` ARM STOOD HERE FOR `__map_get`, AND WENT WITH IT (W105).**
@@ -4378,14 +4413,14 @@ type MaxonToStdLowering
 			return
 		end 'compilerOwnTryCall'
 
-		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerTryCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
+		let sig = try self.funcSignatures.get(callee) otherwise panic("appendThrowingCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
 			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock)))
-			arityMismatch then panic("lowerTryCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
-			unknownLabel then panic("lowerTryCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
-			duplicateArg then panic("lowerTryCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
+			arityMismatch then panic("appendThrowingCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
+			unknownLabel then panic("appendThrowingCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
+			duplicateArg then panic("appendThrowingCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 		end 'slot'
-	end 'lowerTryCall'
+	end 'appendThrowingCall'
 
 	// ⭐⭐ **EXPAND `__checked_div` / `__checked_mod` / `__guarded_mod` IN PLACE — AND BRANCHLESSLY (A1, A1x).**
 	// The whole body is a divisor test, and for the zero hazard the test IS the error flag:

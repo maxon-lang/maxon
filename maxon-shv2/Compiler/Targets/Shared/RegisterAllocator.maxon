@@ -1228,9 +1228,18 @@ type ColorHints
 	export var noPartner as ValueId
 
 	export static function create(valueCount ValueId) returns ColorHints
-		let fixedHint = filledColumn(valueCount, value: NoFixedHint)
-		let copyHint = filledColumn(valueCount, value: valueCount)
-		return Self{fixedHint: fixedHint, copyHint: copyHint, noPartner: valueCount}
+		// `fixedHint` is BUILT as a `RegNumColumn` for the reason `Allocation.create`'s colour column is —
+		// element stride ONE against `filledColumn`'s EIGHT, so filling a `DenseColumn` and storing it here
+		// would hand every later read a stride the buffer was not written at. Nothing is narrowed:
+		// `NoFixedHint` is `RegisterFileSize as RegNum`, and every value `setFixedIfUnset` writes is a
+		// `RegNum` already, so the mismatch was the fill's hard-typed element and never the data.
+		//
+		// `copyHint` needs no such treatment: `ValueIdArray` and `DenseColumn` are both `Array with
+		// int(0 to u64.max)`, one instance under two alias spellings.
+		var fixedHint = RegNumColumn.create()
+		fixedHint.refill(valueCount, value: NoFixedHint)
+
+		return Self{fixedHint: fixedHint, copyHint: filledColumn(valueCount, value: valueCount), noPartner: valueCount}
 	end 'create'
 
 	function setFixedIfUnset(v ValueId, regNum RegNum)
