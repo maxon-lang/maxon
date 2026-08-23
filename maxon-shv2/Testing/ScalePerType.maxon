@@ -357,10 +357,6 @@ function findBuiltExe(traceDir FilePath) returns FilePath throws ScaleError
 	throw ScaleError.reason("the --mm-trace build produced no executable under {outDir.toString()}")
 end 'findBuiltExe'
 
-// The flag file that excludes a directory from compilation. A directory containing one is not part
-// of the project, and the copy must honour that for the same reason the compiler does — see below.
-let MaxonIgnoreFileName = ".maxonignore"
-
 // Recursively copy every `.maxon` file (and `build.maxon`, which names the output) from `from` into
 // `into`, preserving the directory structure.
 //
@@ -370,9 +366,9 @@ let MaxonIgnoreFileName = ".maxonignore"
 // source tree with two `main`s and a clashing typealias, and the trace build would fail with a
 // hundred errors that had nothing to do with tracing. (It did exactly that.)
 //
-// The rule is the compiler's own (`MaxonIgnore.IsIgnored`): a directory holding the marker is not
-// part of the project. Re-deriving "which files are sources" any other way would be a second answer
-// to a question the compiler already answers.
+// The rule is the compiler's own and is now CALLED rather than re-spelled: `Compiler.holdsIgnoreMarker`
+// is the same predicate the source walk prunes with. A private copy of it lived here until the walk
+// grew the clause, and a copy is only ever a second answer waiting to drift from the first.
 //
 // THE COPY IS A VALUE, NOT A PLACE — it is exactly the source tree, and `pruneCopiedDir` is what
 // makes that true. `.scale-tmp/` is never cleaned, and this copy used only ever to WRITE: a source
@@ -405,7 +401,7 @@ function copyMaxonTree(from FilePath, into FilePath) throws ScaleError
 			// directory is deliberately not part of this project. Neither is `copied` — an ignored
 			// directory that an OLDER copy took along is residue like any other, and the prune below
 			// empties it.
-			if name.startsWith(".") or isIgnoredDir(entry) 'skipNonSource'
+			if name.startsWith(".") or holdsIgnoreMarker(entry) 'skipNonSource'
 				continue
 			end 'skipNonSource'
 			let childName = try FilePath.from(name) otherwise throw ScaleError.reason("'{name}' is not a valid path component")
@@ -466,11 +462,6 @@ function pruneCopiedDir(into FilePath, copied StringArray) throws ScaleError
 		try File.delete(entry) otherwise throw ScaleError.reason("could not delete the stale source {entry.toString()} from the trace tree, and `build` would compile it as part of the trace compiler")
 	end 'each'
 end 'pruneCopiedDir'
-
-function isIgnoredDir(dir FilePath) returns bool
-	let marker = try FilePath.from(MaxonIgnoreFileName) otherwise panic("isIgnoredDir: '{MaxonIgnoreFileName}' must be a valid path component")
-	return File.exists(dir.join(marker))
-end 'isIgnoredDir'
 
 // The root arrives as an argument rather than being rebuilt from `CorpusRelativeRoot`, which this file
 // did at all three places it needed a corpus path. That is a DUPLICATION removal and nothing more.
