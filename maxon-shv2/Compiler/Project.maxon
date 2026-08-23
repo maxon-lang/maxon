@@ -6764,11 +6764,14 @@ export function projectHasErrors(project Project) returns bool
 	return project.diagnostics.count() > 0
 end 'projectHasErrors'
 
-// Render every accumulated diagnostic to stderr, one per line, in report order.
-// The driver calls this on the failure path so the exact `error EXXXX: ...`
-// lines the spec compares against reach stderr.
+// Render every accumulated diagnostic, one per line, in report order. The driver calls this on the
+// failure path so the exact `error EXXXX: ...` lines the spec compares against reach the user.
+//
+// ⚠ It writes through `emitDiagnosticLine` rather than to stderr directly, which is what lets a
+// caller compiling IN PROCESS read the same bytes a subprocess would have printed — see that
+// function, which owns the argument. There is no second route: the line ending is decided there too.
 export function printDiagnostics(project Project)
 	for diagnostic in project.diagnostics 'each'
-		printError("{diagnostic.render()}\n")
+		emitDiagnosticLine(diagnostic.render())
 	end 'each'
 end 'printDiagnostics'

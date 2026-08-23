@@ -6,9 +6,15 @@
 // gate) and end at a StdModule — shv2's last IR tier before the target dialect
 // (see StdDialect: there is no MIR tier). The backend runs backend-direct (a
 // CodeResult is not an IR module, so it does not fit the pass-dispatch model —
-// mirrors v1's Phase-7 shape). On any failure the accumulated diagnostics are
-// printed to stderr, so the exact `error EXXXX: ...` lines the spec compares
-// against reach the user.
+// mirrors v1's Phase-7 shape). On any failure the accumulated diagnostics go to
+// `emitDiagnosticLine` — stderr for a command line, an open capture for a caller
+// compiling in process — so the exact `error EXXXX: ...` lines the spec compares
+// against reach the reader whichever of the two it is.
+//
+// ⭐ **TWO ENTRIES, ONE DRIVER.** `compileToProduct` is the whole build and hands its
+// products back as VALUES; `compile` is the command line's adapter over it and adds
+// only the `.ir` sidecar write. There is deliberately no second
+// `loadProject → compileToCodeResult → writeExecutable` sequence anywhere.
 
 // Compile the files and/or directories `inputPaths` for `target`, returning the path of
 // the produced executable. `outputOverride` (the `-o`/`--output` value, empty
@@ -17,27 +23,94 @@
 // `runtimeIrNames` (the `--emit-ir-runtime=` list) names the compiler-EMITTED
 // functions that IR must also render — empty for every build that names none.
 //
-// The pipeline-driving body lives in `compileToCodeResult` so that the
-// `verify-warm-rebuild` gate compiles through the EXACT same path — a determinism
-// gate over a divergent code path would prove nothing. `compile` adds only the
-// steps unique to a real build: loading the project, writing the executable, and
-// (opt-in) writing the IR sidecar.
+// ⭐⭐ **THE COMMAND LINE'S ADAPTER OVER `compileToProduct`, AND THE ONE THING IT ADDS IS THE `.ir`
+// SIDECAR.** A `build` wants a FILE beside the exe; a caller compiling IN PROCESS wants the TEXT and
+// no filesystem round trip (see `CompileProduct`). The RENDER — which is the whole cost of that flag
+// — happens once, inside the core, so both callers read bytes from ONE renderer; only the WRITE is
+// the command line's, and it is the whole of this side of the seam.
 //
-// Two failure channels: (1) file/IO errors (`fileNotFound`, `noSourceFiles`,
-// `readError`) carry NO diagnostics and propagate straight to Main, which prints
-// a specific message; (2) reported diagnostics (semantic/lexer) are printed inside
-// `compileToCodeResult` and re-signaled as a FRESH `compileError`.
-// `compile` owns the TOTAL: it is the only entry that spans a whole build, so it is
-// the only one that can measure the denominator every phase's share is taken against
-// (the warm-rebuild gate drives `compileToCodeResult` directly and never reports).
-// Every phase timed below and in the passes/backend is a disjoint sub-interval of the
-// wall time measured here, so they sum to at most the total, and whatever they leave
-// over is printed as `unattributed` rather than absorbed — see CompileTimings.
+// ⚠ **THE SIGNATURE IS UNCHANGED BY THAT SPLIT, AND THAT IS WHY THE SPLIT IS HERE**:
+// `Main.compileAndReport` calls this exactly as it always did, so nothing about the command line
+// moved when the compiler grew a second caller.
+//
+// A file/IO error (`fileNotFound` / `noSourceFiles` / `readError`) propagates from here UNCHANGED —
+// `compileToProduct`'s drain owns that reason.
 export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false) returns FilePath throws CompileError
+	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream)
+
+	if emitIr 'emitIr'
+		writeTargetIr(product.irText, outputPath: product.outputPath)
+	end 'emitIr'
+
+	return product.outputPath
+end 'compile'
+
+// ⭐⭐ **WHAT ONE COMPILE PRODUCED, HANDED BACK AS VALUES RATHER THAN PUBLISHED TO THE FILESYSTEM.**
+//
+// The command line's products are a binary and a sidecar; an in-process caller's are a String and
+// three numbers, and it must not have to read any of them back off disk. Every field is something the
+// build already computed for its own use — the IR the `--emit-ir` bracket renders, the code size
+// `--metrics` reports, the totals the timing table divides by — so nothing here is measured twice and
+// no caller re-derives one from outside.
+export type CompileProduct
+	export let outputPath as FilePath
+	// The rendered Target IR, or EMPTY when this build did not ask for one. Empty is not a sentinel
+	// standing in for a value that could not be produced: `emitIr` is the CALLER's own argument, so
+	// "no IR" is a thing the caller asked for and already knows. A union arm would cost a heap box on
+	// every compile to tell it something it decided one line earlier.
+	export let irText as String
+	// What `--metrics` reports as this build's emitted code size, and what the `Wrote N bytes` line
+	// names — read off the same `CodeResult`, so a caller cannot get a second answer.
+	export let codeBytes as CodeByteCount
+	// The whole compile's two costs, exactly as `CompileTimings` carries them. They are the
+	// denominator every phase's share divides by (see `compileToProduct`), so a caller reporting a
+	// per-compile cost reads the number the timing table read rather than clocking the call itself —
+	// which would include its own bookkeeping and could not agree with the table.
+	export let totalNanos as DurationNanos
+	export let totalCpuTicks as CpuTicks
+
+	export static function create(outputPath FilePath, irText String, codeBytes CodeByteCount, totalNanos DurationNanos, totalCpuTicks CpuTicks) returns CompileProduct
+		return Self{outputPath: outputPath, irText: irText, codeBytes: codeBytes, totalNanos: totalNanos, totalCpuTicks: totalCpuTicks}
+	end 'create'
+end 'CompileProduct'
+
+// ⭐⭐ **THE WHOLE BUILD — the ONE pipeline driver, for the command line and for an in-process caller
+// alike.** It loads the project, resolves and clears the output, drives `compileToCodeResult`, writes
+// the executable, renders the IR when asked, and reports the timings and `--metrics`. The one thing it
+// does NOT do is publish the IR, because its two callers want that in different forms (see `compile`).
+//
+// ⛔ **A SECOND `loadProject → compileToCodeResult → writeExecutable` SEQUENCE ANYWHERE IS THE ONE
+// SHAPE THIS SPLIT MUST NOT PRODUCE.** The pipeline-driving half of it already lives in
+// `compileToCodeResult` so the `verify-warm-rebuild` gate compiles through the EXACT same path — a
+// determinism gate over a divergent code path would prove nothing — and the steps unique to a real
+// build (load, clear the output, write the executable, render the IR) are here, once.
+//
+// `stdlibDirOverride` names the `stdlib/` this compile reads instead of the one above the compiler's
+// own executable; empty ⇒ the walk-up, byte-for-byte unchanged (see `loadProject`).
+//
+// ⭐ **IT OWNS THE TOTAL: it is the only entry that spans a whole build**, so it is the only one that
+// can measure the denominator every phase's share is taken against (the warm-rebuild gate drives
+// `compileToCodeResult` directly and never reports). Every phase timed below and in the
+// passes/backend is a disjoint sub-interval of the wall time measured here, so they sum to at most the
+// total, and whatever they leave over is printed as `unattributed` rather than absorbed — see
+// CompileTimings.
+//
+// Two failure channels: (1) file/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
+// diagnostics and propagate straight out, and the caller prints a specific message; (2) reported
+// diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
+// `emitDiagnosticLine`, so a caller may CAPTURE them instead (see Diagnostics.maxon) — and
+// re-signaled as a FRESH `compileError`.
+export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, stdlibDirOverride String = "") returns CompileProduct throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
 	// agree on which compile they are.
+	//
+	// ⚠ `setTraceUnit` writes a PROCESS-WIDE latch (`Logger.currentTraceUnit`), so it is last-writer-
+	// wins across compiles. That is EXACT rather than merely tolerated, for the reason the capture
+	// latch in Diagnostics.maxon states about itself: a compile is SERIAL — shv2's scheduler is
+	// single-M and the pipeline contains no yield point — so there is no second compile running whose
+	// events this could misattribute.
 	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
 	setTraceUnit(unit)
 
@@ -48,29 +121,38 @@ export function compile(inputPaths MaxonSourcePathArray, target Target, outputOv
 	// written once per site, forgotten by the next throwing exit exactly as it was by the last two (see
 	// `PhaseProbe.openPhaseSpans`).
 	//
+	// ⚠⚠ **IT SITS ON THIS FUNCTION RATHER THAN ON `compile`, BECAUSE A CALLER NOW SURVIVES A FAILED
+	// COMPILE AND THEN DOES THOUSANDS MORE (G20).** `openPhaseSpans` is process-wide, so a compile that
+	// threw with spans open leaves every later compile in that process reading as nested inside a phase
+	// that had already finished. The justification this drain used to be able to lean on — *"a throw out
+	// of it ends the process"* — is exactly what stopped being true when `spec-test` began compiling in
+	// process, so the drain sits at the entry EVERY whole build goes through.
+	//
 	// The error is RE-THROWN unchanged, never flattened: `Main` distinguishes the file/IO cases
 	// (`fileNotFound`/`noSourceFiles`/`readError`) from a reported `compileError` and prints a different
 	// message for each, so a fresh `compileError` here would replace three specific messages with one wrong
 	// one.
 	//
-	// `verifyWarmRebuild` drives `compileToCodeResult` directly and so does not pass through here. It needs
-	// no drain of its own for the reason this function's header already gives for the TOTAL: it is the only
-	// other whole-build entry, and a throw out of it ends the process with nothing left to mis-nest.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, unit: unit) otherwise (e) 'compileFailed'
+	// `verifyWarmRebuild` drives `compileToCodeResult` directly and so does not pass through here. It
+	// needs no drain of its own — but that is now a claim about ITS caller rather than about compiles
+	// in general: it is reached only from `Main.runVerifyWarmRebuild`, which turns a throw into an exit
+	// code, so a throw really does end the process there with nothing left to mis-nest. An in-process
+	// caller of THAT gate would need this drain too.
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, stdlibDirOverride: stdlibDirOverride, unit: unit) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(unit)
 		throw e
 	end 'compileFailed'
-end 'compile'
+end 'compileToProduct'
 
-// The build itself, from the whole-compile probe to the timing report — everything `compile` measures. It
-// is a separate function for the single reason its caller states: one failure path to hang the trace-span
-// drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, unit TraceUnit) returns FilePath throws CompileError
+// The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
+// measures. It is a separate function for the single reason its caller states: one failure path to hang
+// the trace-span drain on, rather than one per `try` in this body.
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, stdlibDirOverride String, unit TraceUnit) returns CompileProduct throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPaths, target: target)
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride)
 	project.asyncTrace = asyncTrace
 	project.debugStream = debugStream
 	recordPhase(project, phase: CompilePhase.load, probe: whole)
@@ -93,9 +175,23 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
 	try requireOutputWritten(project, outputPath: outputPath)
 
+	// ⭐ **THE BRACKET KEEPS THE RENDER, WHICH IS THE COST — the WRITE is the command line's and is
+	// not in it** (see `compile` and `writeTargetIr`). `printTargetModule` walks the whole Target
+	// module, every chunk and the data section; `File.writeText` is one call nobody ever read this
+	// row for.
+	//
+	// The emitted runtime — the entry stub `mrt_start`, the allocator, the `__str_*`/`__managed_*`
+	// families — is invariant scaffolding, so it is excluded and both the fragment and `--emit-ir`
+	// show the program's own functions. `runtimeIrNames` (`--emit-ir-runtime=`) is how a caller asks
+	// for a NAMED one of those bodies anyway: it is the only route an emitted body has to a golden,
+	// and it is per-build so no fragment that does not ask for one moves a byte. The CHUNKS ride
+	// along for that same list's sake — a hand-assembled runtime piece has no `IrFunction` to print,
+	// so `printTargetModule` renders its assembled bytes instead, and this is the only place holding
+	// both the module and the chunks it was encoded into. See `printTargetModule`.
+	var irText = ""
 	if emitIr 'emitIr'
 		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
-		writeTargetIr(codeResult, outputPath: outputPath, runtimeIrNames: runtimeIrNames)
+		irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks)
 		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
 	end 'emitIr'
 
@@ -109,14 +205,18 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	logDebug(LogCategory.compiler, message: function() gives compileTimingsReport(project.timings))
 	logDebug(LogCategory.compiler, message: function() gives compileMemoryReport(project.memory))
 
+	// Read ONCE, for the three readers below — `--metrics`, the log line and the product. It is one
+	// fact about this build, and three calls are three places a later change could make it two.
+	let codeBytes = codeResult.code.count()
+
 	// `--metrics=<path>`: the machine-readable twin of those two tables. Written last, so
 	// it can report the code size the degeneracy self-check needs (see MetricsEmit).
 	if not metricsPath.isEmpty() 'metrics'
-		writeMetrics(project, metricsPath: metricsPath, codeBytes: codeResult.code.count())
+		writeMetrics(project, metricsPath: metricsPath, codeBytes: codeBytes)
 	end 'metrics'
 
-	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes of code to {outputPath}")
-	return outputPath
+	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeBytes} bytes of code to {outputPath}")
+	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks)
 end 'compileMeasured'
 
 // ⭐ **EVERYTHING THIS BUILD WOULD PUBLISH IS REMOVED BEFORE THE FIRST STEP THAT CAN FAIL.**
@@ -206,26 +306,21 @@ function refuseCompile(project Project) throws CompileError
 	throw CompileError.compileError
 end 'refuseCompile'
 
-// Write the lowered Target IR (via `printTargetModule`) beside the produced exe
-// as `<output>.ir`, for `build --emit-ir` and the spec runner's fragment capture.
-// This is a diagnostic side output that runs ONLY on the opt-in flag, so a plain
-// `build` emits exactly what it did before. A write failure is logged and
-// swallowed — mirroring `writePe`, which treats the executable write the same way
-// — because the IR sidecar is diagnostic, never a build gate.
+// Publish the already-rendered Target IR beside the produced exe as `<output>.ir`, for
+// `build --emit-ir`.
 //
-// The emitted runtime — the entry stub `mrt_start`, the allocator, the `__str_*`/
-// `__managed_*` families — is invariant scaffolding, so it is excluded and both the
-// fragment and `--emit-ir` show the program's own functions. `runtimeIrNames`
-// (`--emit-ir-runtime=`) is how a caller asks for a NAMED one of those bodies
-// anyway: it is the only route an emitted body has to a golden, and it is per-build
-// so no fragment that does not ask for one moves a byte. See `printTargetModule`.
+// ⚠ **IT TAKES THE TEXT, NOT THE `CodeResult` — the RENDER belongs to the compile and the WRITE to
+// the command line.** A caller compiling in process reads the same text off `CompileProduct.irText`
+// and writes no file at all, so rendering here would either give it a second renderer or make it
+// read back a file this one just wrote. What the IR CONTAINS is stated at the render, in
+// `compileMeasured`.
 //
-// The CHUNKS ride along for the same list's sake: a hand-assembled runtime piece has no `IrFunction`
-// to print, so `printTargetModule` renders its assembled bytes instead — and this is the only place
-// that holds both the module and the chunks it was encoded into.
-function writeTargetIr(codeResult CodeResult, outputPath FilePath, runtimeIrNames RuntimeFunctionNameArray)
+// This is a diagnostic side output that runs ONLY on the opt-in flag, so a plain `build` emits
+// exactly what it did before. A write failure is logged and swallowed — mirroring `writePe`, which
+// treats the executable write the same way — because the IR sidecar is diagnostic, never a build
+// gate.
+function writeTargetIr(irText String, outputPath FilePath)
 	let irPath = outputPath.changeExtension(IrFileExtension)
-	let irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks)
 
 	try File.writeText(irPath, content: irText) otherwise 'writeErr'
 		logError(LogCategory.binary, message: function() gives "Failed to write Target IR to {irPath}")
@@ -243,11 +338,11 @@ end 'writeTargetIr'
 // File/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
 // diagnostics and propagate straight to the caller, which prints a specific
 // message. `loadSourceFiles` is what raises them.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target) returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "") returns Project throws CompileError
 	// The checkout's `stdlib/` is found BEFORE the project exists, because the project carries it to
 	// the loader below. Nothing after the load asks where `stdlib/` is — a later pass asks about a
 	// FUNCTION (`isStdlibFunction`), which is answered from a set the loader already built.
-	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: try locateStdlibDir())
+	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: try stdlibDirFor(stdlibDirOverride))
 	try loadSourceFiles(project, paths: inputPaths)
 	// AFTER the user's own sources — so a directory build's output name still derives from a user
 	// file (not from a stdlib module), and an empty user project still fails with `noSourceFiles`
@@ -255,6 +350,37 @@ export function loadProject(inputPaths MaxonSourcePathArray, target Target) retu
 	try loadStdlibSources(project)
 	return project
 end 'loadProject'
+
+// ⭐ **WHICH `stdlib/` THIS COMPILE READS — the walk-up, or a directory the CALLER names.**
+//
+// Empty is the command line's answer and every build's answer until now: walk up from the compiler's
+// own executable (`locateStdlibDir`, whose header owns why it is the executable and not the working
+// directory). A non-empty override is a caller that STAGED a stdlib of its own and knows exactly
+// where it put it — which is what lets a `// --- stdlib-overlay:` case be compiled by this process,
+// instead of by a COPY OF THE COMPILER BINARY planted beside the overlay so that the walk-up would
+// land on it.
+//
+// ⚠⚠ **THE OVERRIDE IS RESOLVED AGAINST THE WORKING DIRECTORY, AND IT MUST BE — `Project.stdlibDir`
+// IS AN ABSOLUTE PATH BY CONTRACT, AND ITS READERS DO NOT RESOLVE IT.** `Queries.isStdlibSourceFile`
+// asks `resolvedPath.isInside(project.stdlibDir)`: it resolves the FILE and compares SPELLINGS, so a
+// relative `stdlibDir` matches nothing and every staged stdlib file reads as USER code — promoting
+// `module`-private declarations to global visibility and dropping the diagnostics they are owed. That
+// is the exact defect `isStdlibSourceFile`'s own header records from the other side of the same
+// comparison, and the walk-up cannot hit it because `Process.executablePath()` is absolute. So this
+// is the one place an override could introduce it, and the one place it is prevented.
+//
+// ⚠ An unspellable override PANICS rather than falling back to the walk-up. The path comes from a
+// directory the caller just created, so a bad one is a caller bug — and a silent fall-back would
+// compile the overlay case against the CHECKOUT's stdlib and report a confident wrong verdict, which
+// is the exact failure the override exists to remove.
+function stdlibDirFor(stdlibDirOverride String) returns FilePath throws CompileError
+	if stdlibDirOverride.isEmpty() 'walkUpFromTheCompiler'
+		return try locateStdlibDir()
+	end 'walkUpFromTheCompiler'
+
+	let staged = try FilePath.from(stdlibDirOverride) otherwise panic("stdlibDirFor: invalid stdlib directory '{stdlibDirOverride}' — the override names a directory the CALLER staged, so a path no FilePath can hold is a caller bug and not a user error")
+	return staged.resolve(Directory.currentPath())
+end 'stdlibDirFor'
 
 // Drive the query spine + mid/lowering pipeline + backend for an already-loaded
 // `project`, returning the emitted `CodeResult` (NOT yet written to disk). This is

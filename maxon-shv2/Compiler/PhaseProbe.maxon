@@ -64,6 +64,17 @@ typealias TraceNameArray = Array with TraceName
 // ⚠ **CLOSING A SPAN IS NOT RECORDING A PHASE.** The drain emits the END only; it writes no row into the
 // timing or memory tables. An aborted phase consumed a time and a byte count that describe half a stage, and
 // a table whose rows must sum to the whole compile has no honest place to put them (see CompileTimings).
+//
+// ⚠⚠ **THE STACK IS PROCESS-WIDE, AND SINCE G20 A PROCESS RUNS THOUSANDS OF COMPILES.** `spec-test`
+// compiles every case in this process, so a failed compile that left a span open no longer merely
+// mis-nests the rest of ITS OWN trace — it mis-nests every compile after it, for the life of the
+// worker. That is why the drain hangs off `Compiler.compileToProduct`, the entry EVERY whole build
+// goes through, rather than off the command-line entry it used to be enough to guard.
+//
+// A process-wide stack is exact here for the same reason the diagnostic-capture latch is (see
+// Diagnostics.maxon): a compile is SERIAL — single-M scheduler, no yield point in the pipeline — so
+// two compiles cannot interleave their brackets. Compiling two programs at once in one process needs
+// a per-compile home for this, not a lock around it.
 var openPhaseSpans = TraceNameArray.create()
 
 // What one phase consumed. The unit of attribution: every phase in the report is one of
@@ -284,7 +295,8 @@ function closePhaseSpan(name TraceName, unit TraceUnit)
 end 'closePhaseSpan'
 
 // Close every span a FAILED compile left open, innermost first. The one place a throwing stage's span is
-// accounted for — see `openPhaseSpans` for why it is here and not at each throw site.
+// accounted for — see `openPhaseSpans` for why it is here and not at each throw site, and for why its one
+// caller is `Compiler.compileToProduct` rather than the command-line entry above it.
 //
 // It is a no-op after a successful compile (every bracket recorded its own delta), which is what lets the
 // caller run it unconditionally on its failure path without asking which stage failed.

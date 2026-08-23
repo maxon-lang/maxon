@@ -148,3 +148,102 @@ end 'CompileError'
 export function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
 	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
 end 'reportPositioned'
+
+// ⭐⭐ **THE ONE WRITER OF A COMPILER-FACING DIAGNOSTIC LINE — so a caller compiling IN PROCESS can
+// READ exactly what a command line would have PRINTED.**
+//
+// `spec-test` compiles every case inside this process (G20), and a ```maxoncstderr``` block compares
+// the exact text a refused compile emits. Re-rendering `project.diagnostics` at that call site would
+// be a SECOND SPELLING of what the CLI prints — this tree's signature bug — so the capture is taken
+// at the SINK instead, and the bytes are computed ONCE for both destinations: byte identity holds by
+// CONSTRUCTION, not by two spellings happening to agree.
+//
+// ⚠ **WHAT ROUTES THROUGH IT TODAY IS `Project.printDiagnostics`, WHICH IS EVERY `Diagnostic` AND
+// NOT EVERY LINE A FAILED BUILD PRINTS.** The `CompileError` arms that never reach
+// `project.diagnostics` at all — `fileNotFound`, `noSourceFiles`, `readError`, `noCommonRoot`,
+// `stdlibNotFound` — are printed by `Main.reportCompileError`, which still writes to stderr
+// directly. Every one of them must come through here before a capture can claim to be what a
+// subprocess would have written; until then a capture is exact for a REFUSED compile (the whole
+// `maxoncstderr` corpus, whose blocks are `Diagnostic.render()` output and nothing else) and EMPTY
+// for a build that died on a missing file. The obligation is written here, at the sink, because
+// this is the one place a reader can see the whole set.
+//
+// ⚠ **THE LATCH IS MODULE-LEVEL, AND THAT IS EXACT ONLY BECAUSE A COMPILE IS SERIAL.** shv2's
+// scheduler is single-M and the compile pipeline contains no yield point, so two compiles cannot
+// interleave inside one process — which makes a second `begin` while one is open a CALLER BUG rather
+// than a race, and is why it panics instead of nesting. It is the same argument that lets
+// `PhaseProbe.openPhaseSpans` be a process-wide stack. A compiler that ever runs two compiles
+// concurrently in one process needs a per-compile home for both, not a lock around this one.
+
+// The exact bytes each captured line would have been printed as, in report order — TERMINATED, so
+// that joining them is a concatenation rather than a second decision about the line ending.
+typealias CapturedDiagnosticTextArray = Array with String
+
+var diagnosticCaptureOpen = false
+var capturedDiagnosticText = CapturedDiagnosticTextArray.create()
+
+// Print `line` to stderr, or append it to the open capture. Nothing else may write a diagnostic.
+//
+// ⚠ One CALL is one diagnostic, which is not always one physical line: `Diagnostic.render()` puts a
+// blamed diagnostic's `note:` on a second line, and E3016/E5001 render whole indented lists. That is
+// exactly what stderr received before, so the sink terminates what it is HANDED and never inspects
+// it — a splitter here would be a second opinion about a shape `render` already decided.
+export function emitDiagnosticLine(line String)
+	// ONE value, both destinations. A `printError` here and a separately-assembled string there is
+	// precisely the drift this sink exists to make unrepresentable.
+	let text = "{line}\n"
+
+	if diagnosticCaptureOpen 'capturing'
+		capturedDiagnosticText.push(text)
+		return
+	end 'capturing'
+
+	printError(text)
+end 'emitDiagnosticLine'
+
+// Begin capturing. Every `emitDiagnosticLine` until the matching close is buffered, not printed.
+export function beginDiagnosticCapture()
+	if diagnosticCaptureOpen 'alreadyOpen'
+		panic("beginDiagnosticCapture: a capture is already open — the latch is module-level because a compile is SERIAL (see this section's header), so a second open would splice two compiles' diagnostics into one text")
+	end 'alreadyOpen'
+
+	diagnosticCaptureOpen = true
+	capturedDiagnosticText = CapturedDiagnosticTextArray.create()
+end 'beginDiagnosticCapture'
+
+// Stop capturing and hand back everything captured, byte for byte as stderr would have received it.
+export function endDiagnosticCapture() returns String
+	requireCaptureOpen("endDiagnosticCapture")
+
+	var joined = StringBuilder.create()
+	for text in capturedDiagnosticText 'each'
+		joined.append(text)
+	end 'each'
+	closeDiagnosticCapture()
+
+	return joined.build()
+end 'endDiagnosticCapture'
+
+// Stop capturing and DISCARD — the failure-path twin, for a caller that opened a capture and then
+// has no use for the text (it took a different exit, or the text belongs to a run it abandoned).
+export function cancelDiagnosticCapture()
+	requireCaptureOpen("cancelDiagnosticCapture")
+	closeDiagnosticCapture()
+end 'cancelDiagnosticCapture'
+
+// Drop the latch and the buffer together, so no close can leave a finished compile's text behind for
+// the next one to inherit.
+function closeDiagnosticCapture()
+	diagnosticCaptureOpen = false
+	capturedDiagnosticText = CapturedDiagnosticTextArray.create()
+end 'closeDiagnosticCapture'
+
+// ⚠ **CLOSING A CAPTURE THAT WAS NEVER OPENED IS A HARD FAILURE, NOT AN EMPTY ANSWER.** `""` is a
+// LEGITIMATE result — a compile that reported nothing produces it — so an unpaired close would hand
+// back the value a clean compile gives, and a caller that forgot to open would read every refused
+// compile as having said nothing at all. That is the silent-wrong-answer shape, so it panics.
+function requireCaptureOpen(caller String)
+	if not diagnosticCaptureOpen 'notOpen'
+		panic("{caller}: no diagnostic capture is open — every close pairs with a `beginDiagnosticCapture`, and an unpaired one returns the empty text a compile with NO diagnostics legitimately produces")
+	end 'notOpen'
+end 'requireCaptureOpen'
