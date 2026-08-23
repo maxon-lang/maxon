@@ -237,6 +237,11 @@ let CreateEventManualReset = 0x0  // CreateEventA bManualReset = FALSE → AUTO-
 let CreateEventInitialUnsignaled = 0x0  // CreateEventA bInitialState = FALSE (unsignaled until the first SetEvent)
 let ThreadDefaultStackSize = 0x0  // CreateThread dwStackSize = 0 → the executable's default stack
 let ThreadRunImmediately = 0x0  // CreateThread dwCreationFlags = 0 (not CREATE_SUSPENDED)
+// GetActiveProcessorCount GroupNumber = ALL_PROCESSOR_GROUPS — the count for the WHOLE machine rather than
+// for the calling thread's processor group. Its own named constant rather than a bare 0xFFFF because a
+// sentinel group number reads as an arbitrary WORD at the call, and choosing it over group 0 is the whole
+// difference between reporting the machine and reporting 64 of its 128 processors (see `lowerOsCpuCount`).
+let AllProcessorGroups = 0xFFFF
 
 // The two WriteFile outgoing stack SLOTS `__print_string`'s frame reserves, past the shadow space:
 // slot 0 = the 5th argument `lpOverlapped` (NULL), slot 1 = a scratch DWORD `lpNumberOfBytesWritten`
@@ -877,13 +882,14 @@ type StdToX64Lowering
 			// not the only stack-arg subprocess op, and this comment used to claim it was.
 			osPipePeek gives win64OutgoingArgBytes(PeekPipeStackArgWords)
 			osHandleSetInherit gives 0
-			// ⚠ **THIS ARM NOW COVERS TEN OPS, AND ITS COMMENT SAID "the other three appended ops".**
+			// ⚠ **THIS ARM NOW COVERS ELEVEN OPS, AND ITS COMMENT ONCE SAID "the other three appended ops".**
 			// `osEnvRead` and `osProcessTerminate` finish the attached-subprocess band, then the eight
-			// `ws2_32` socket ops follow. All ten are register-only because the widest Win64 call any of them
-			// marshals takes FOUR arguments — `getaddrinfo`, `send` and `recv` — which is exactly the register
-			// file's capacity, so nothing overflows onto the stack. ⛔ A ws2_32 call with a fifth argument
-			// (`WSARecv`, `WSASend`) would belong on its OWN arm with a reserved slot count, never in here.
-			osEnvRead to osSocketClose gives 0
+			// `ws2_32` socket ops follow, and `osCpuCount` closes it. All eleven are register-only because the
+			// widest Win64 call any of them marshals takes FOUR arguments — `getaddrinfo`, `send` and `recv`
+			// — which is exactly the register file's capacity, so nothing overflows onto the stack.
+			// ⛔ A ws2_32 call with a fifth argument (`WSARecv`, `WSASend`) would belong on its OWN arm with
+			// a reserved slot count, never in here.
+			osEnvRead to osCpuCount gives 0
 			const to param gives 0
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
@@ -1122,7 +1128,7 @@ type StdToX64Lowering
 				// A frame address is a value-producing body op, never a terminator.
 				stackRecordAddr then break 'term'
 				osOpenNamedSegment to osTickCountMs then break 'term'
-				osHandleSetInherit to osSocketClose then break 'term'
+				osHandleSetInherit to osCpuCount then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1203,7 +1209,7 @@ type StdToX64Lowering
 				// A frame address, not the compare — the scan stops.
 				stackRecordAddr then break 'isTheCompare'
 				osOpenNamedSegment to osTickCountMs then break 'isTheCompare'
-				osHandleSetInherit to osSocketClose then break 'isTheCompare'
+				osHandleSetInherit to osCpuCount then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1324,6 +1330,8 @@ type StdToX64Lowering
 			osSocketSend(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketSend(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketRecv(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
+			// The MACHINE query behind `__Builtins.cpuCount()`; the clamp is builder-built Std, not here.
+			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstBlock: dstBlock)
 			osProcessExitCode(handleId, codePtrId) then self.lowerOsProcessExitCode(handleId, codePtrId: codePtrId, dstBlock: dstBlock)
 			osWaitHandles(handleArrayPtrId, countId, timeoutMsId) then self.lowerOsWaitHandles(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstBlock: dstBlock)
@@ -1360,7 +1368,7 @@ type StdToX64Lowering
 			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpenRead(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			// R4.1: close the handle. `CloseHandle`'s BOOL is discarded, so nothing is captured from RAX.
 			osFileClose(handleId) then self.lowerOsFileClose(handleId, dstBlock: dstBlock)
-			// R4.2: the rest of the file-IO primitives. Each routes through `requireWin64FileIo` for the
+			// R4.2: the rest of the file-IO primitives. Each routes through `requireWin64Import` for the
 			// x64-windows gate, then emits its one import call.
 			osReadFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsReadFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
@@ -1369,7 +1377,7 @@ type StdToX64Lowering
 			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
 			osFileFindFirst(resultId, pathPtrId, findDataPtrId) then self.lowerOsFileFindFirst(resultId, pathPtrId: pathPtrId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osFileFindClose(handleId) then self.lowerOsFileFindClose(handleId, dstBlock: dstBlock)
-			// R4.3: the four directory primitives. Each routes through the same `requireWin64FileIo` gate
+			// R4.3: the four directory primitives. Each routes through the same `requireWin64Import` gate
 			// and emits one register-only import call whose RAX answer is captured.
 			osFileFindNext(resultId, handleId, findDataPtrId) then self.lowerOsFileFindNext(resultId, handleId: handleId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osDirCreate(resultId, pathPtrId) then self.lowerOsDirCreate(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
@@ -1440,6 +1448,7 @@ type StdToX64Lowering
 			osWriteStderr then panic("lowerStdToX64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
 			stackRecordAddr then panic("lowerStdToX64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
 			osOpenNamedSegment to osTickCountMs then panic("lowerStdToX64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
+			osCpuCount then panic("lowerStdToX64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2318,7 +2327,7 @@ type StdToX64Lowering
 	// `SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)` — three register arguments,
 	// two of them the same immediate (the MASK and the VALUE, which is what "turn this flag on" spells).
 	function lowerOsHandleSetInherit(handleId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osHandleSetInherit")
+		self.requireWin64Import("osHandleSetInherit")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handleId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: HandleFlagInherit))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: HandleFlagInherit))
@@ -2330,7 +2339,7 @@ type StdToX64Lowering
 	// value; the read buffer, its size, the bytes-read out-word and the message-remaining out-word are all
 	// NULL/0 because this call asks HOW MUCH is there and never consumes it.
 	function lowerOsPipePeek(resultId ValueId, handleId ValueId, availPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osPipePeek")
+		self.requireWin64Import("osPipePeek")
 		// The two stack args (5, 6) FIRST, while every register is still free — `lowerOsProcessSpawnWin64`'s
 		// discipline, and for its reason.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(PeekPipeAvailSlot), src: TargetVReg.virtual(availPtrId), width: X64AccessWidth.word64))
@@ -2345,7 +2354,7 @@ type StdToX64Lowering
 
 	// `GetEnvironmentVariableA(name, buf, len)` — three register arguments, the character count in RAX.
 	function lowerOsEnvRead(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osEnvRead")
+		self.requireWin64Import("osEnvRead")
 		self.lowerOsWin64Call3(IatSlot.GetEnvironmentVariableA, arg0: namePtrId, arg1: bufPtrId, arg2: bufLenId, dstBlock: dstBlock)
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsEnvRead'
@@ -2353,7 +2362,7 @@ type StdToX64Lowering
 	// `TerminateProcess(handle, exitCode)` — two register arguments; the BOOL is discarded (a child that has
 	// already exited answers FALSE, which is the same outcome as success for the deadline this serves).
 	function lowerOsProcessTerminate(handleId ValueId, exitCodeId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osProcessTerminate")
+		self.requireWin64Import("osProcessTerminate")
 		self.lowerOsWin64Call2(IatSlot.TerminateProcess, arg0: handleId, arg1: exitCodeId, dstBlock: dstBlock)
 	end 'lowerOsProcessTerminate'
 
@@ -2542,7 +2551,7 @@ type StdToX64Lowering
 	// `ManagedFileRuntime`'s builder-built Std reads `osLastError` to choose the error variant. See the
 	// `osFileOpenRead` op's own comment in `StdDialect` for why that split is deliberate.
 	function lowerOsFileOpenRead(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileOpenRead")
+		self.requireWin64Import("osFileOpenRead")
 		self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericRead, shareMode: FileShareRead, disposition: OpenExisting, dstBlock: dstBlock)
 	end 'lowerOsFileOpenRead'
 
@@ -2554,7 +2563,7 @@ type StdToX64Lowering
 	// reference is a Unix 0755 mode bit and shv2's file IO is host-only Windows by the R4.1 ruling. See
 	// `StdDialect.osFileOpenWrite`.
 	function lowerOsFileOpenWrite(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileOpenWrite")
+		self.requireWin64Import("osFileOpenWrite")
 		self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericWrite, shareMode: FileShareReadWrite, disposition: CreateAlways, dstBlock: dstBlock)
 	end 'lowerOsFileOpenWrite'
 
@@ -2582,12 +2591,12 @@ type StdToX64Lowering
 	// --- The socket slice: eight ws2_32 lowerings ---
 	//
 	// ⭐ Each spells the Win32 constants its Std op deliberately does not carry, exactly as
-	// `emitWin64CreateFileA` spells `GENERIC_READ`. Every one guards with `requireWin64FileIo` first: these
+	// `emitWin64CreateFileA` spells `GENERIC_READ`. Every one guards with `requireWin64Import` first: these
 	// are Win32 imports, so a non-Windows target reaching them is a compiler bug that got past E3104 rather
 	// than a user-facing rejection.
 
 	function lowerOsSocketStartup(resultId ValueId, wsaDataPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osSocketStartup")
+		self.requireWin64Import("osSocketStartup")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: WinsockVersion22))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(wsaDataPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WSAStartup)))
@@ -2597,7 +2606,7 @@ type StdToX64Lowering
 	// `getaddrinfo(host, NULL, hints, out)` - the service argument is always NULL; see the op's own header
 	// for why no port is ever formatted as a string.
 	function lowerOsSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osSocketResolve")
+		self.requireWin64Import("osSocketResolve")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(hostPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(hintsPtrId)))
@@ -2607,13 +2616,13 @@ type StdToX64Lowering
 	end 'lowerOsSocketResolve'
 
 	function lowerOsSocketFreeAddrInfo(addrInfoPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osSocketFreeAddrInfo")
+		self.requireWin64Import("osSocketFreeAddrInfo")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(addrInfoPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.freeaddrinfo)))
 	end 'lowerOsSocketFreeAddrInfo'
 
 	function lowerOsSocketCreate(resultId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osSocketCreate")
+		self.requireWin64Import("osSocketCreate")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: AfInet))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: SockStream))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IpprotoTcp))
@@ -2622,7 +2631,7 @@ type StdToX64Lowering
 	end 'lowerOsSocketCreate'
 
 	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osSocketConnect")
+		self.requireWin64Import("osSocketConnect")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(sockId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(addrPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: SockaddrInBytes))
@@ -2642,45 +2651,77 @@ type StdToX64Lowering
 	end 'emitWin64SocketTransfer'
 
 	function lowerOsSocketSend(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osSocketSend")
+		self.requireWin64Import("osSocketSend")
 		self.emitWin64SocketTransfer(IatSlot.send, resultId: resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 	end 'lowerOsSocketSend'
 
 	function lowerOsSocketRecv(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osSocketRecv")
+		self.requireWin64Import("osSocketRecv")
 		self.emitWin64SocketTransfer(IatSlot.recv, resultId: resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 	end 'lowerOsSocketRecv'
 
 	function lowerOsSocketClose(sockId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osSocketClose")
+		self.requireWin64Import("osSocketClose")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(sockId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.closesocket)))
 	end 'lowerOsSocketClose'
 
-	// ⭐ **THE x64-WINDOWS GATE FOR THE WHOLE FILE-IO BAND, ASKED ONCE.** All nine file ops are
-	// x64-windows only by the R4.1 ruling, and `SemanticCheck.requireTargetSupportsCallee` refuses such a
-	// program at its own source span (E3104) long before lowering — so this is the backstop for a compiler
-	// bug that got one past that gate, never the user-facing rejection. Nine copies of the same
-	// `match x64OsCallKind` wrapper is the duplication this replaces; the op's name is the only thing that
-	// differed between them, so it is the only thing passed in.
+	// ⭐⭐ **`osCpuCount(result)` ⇒ `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`** — one immediate into
+	// rcx, one import call, and the count captured out of RAX. `emitCaptureRax` is the same capture
+	// `osGetPid` takes for `GetCurrentProcessId`'s DWORD, and the answer is left EXACTLY as the OS gave it:
+	// a 0 (the API's failure answer) reaches the caller, because the `< 1 ⇒ 1` clamp is builder-built Std's
+	// (`CpuParallelRuntime.buildCpuCount`) and stubbing it here as well would be one contract in two places.
+	//
+	// ⭐ **THE REFERENCE CALLS `GetSystemInfo` AND THIS DOES NOT, WHICH IS A DECISION AND NOT AN OVERSIGHT.**
+	// The bootstrap's WINDOWS emitter carves a 48-byte `SYSTEM_INFO` out of its own hand-built frame and
+	// reads `dwNumberOfProcessors` at offset 0x20 (`X86CodeEmitter.Runtime.cs:8076`); its arm64 emitter asks
+	// `sysconf(_SC_NPROCESSORS_ONLN)` and needs no buffer at all (`ARM64CodeEmitter.Runtime.cs:115`) — which
+	// is itself the evidence that the struct is a Windows shape rather than the question's.
+	// shv2's lowerings do not build frames — a scratch buffer would have to arrive from Std, i.e. a Windows
+	// struct in the target-neutral tier or a heap allocation for a 4-byte read (`StdOp.osCpuCount`'s comment
+	// carries that argument in full). This entry point needs neither, and its answer is the STRICTLY BETTER
+	// of the two on the one host class where they differ: `dwNumberOfProcessors` reports the CALLING
+	// THREAD's processor group, so a 128-processor machine answers 64, while `ALL_PROCESSOR_GROUPS` answers
+	// 128. On every host with at most 64 logical processors — one group, hence every machine either compiler
+	// is tested on — the two are identical (MEASURED: both answer 12 on the 12-CPU development host).
+	function lowerOsCpuCount(resultId ValueId, dstBlock IrBlock)
+		self.requireWin64Import("osCpuCount")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: AllProcessorGroups))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetActiveProcessorCount)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsCpuCount'
+
+	// ⭐ **THE x64-WINDOWS GATE FOR EVERY OP THAT LOWERS TO A WIN32 IMPORT, ASKED ONCE.** All of them are
+	// x64-windows only, and `SemanticCheck.requireTargetSupportsCallee` refuses such a program at its own
+	// source span (E3104) long before lowering — so this is the backstop for a compiler bug that got one
+	// past that gate, never the user-facing rejection. A copy of the same `match x64OsCallKind` wrapper per
+	// op is the duplication this replaces; the op's name is the only thing that differed between them, so
+	// it is the only thing passed in.
 	// ⚠ **THE SENTENCE NAMES THE OP AND NOT A RUNG, BECAUSE THE CALLERS ARE NO LONGER ONE FAMILY.** It read
 	// "file IO is x64-windows-gated at R4.1/R4.2" while every caller was a file or directory primitive;
 	// `osCommandLine` joined and is neither, so that clause became a diagnostic naming a rung the reader's
 	// op has nothing to do with — D12's wrong-noun defect, at the helper that outlived its first family. The
 	// gate itself is one fact for all of them (`SemanticCheck.calleeNeedsWin32Substrate`), so that is what
 	// the message points at.
-	function requireWin64FileIo(opName String)
+	// ⛔ **AND THE NAME OUTLIVED IT TOO, WHICH THAT FIX MISSED.** It was `requireWin64FileIo` until the
+	// machine query joined, by which point MOST of its callers were not file IO at all: the command line,
+	// the standard handles, the executable path, the DebugStream segment, the attached-subprocess
+	// primitives and the whole `ws2_32` socket band all ask it too. (Count them off the call sites, never
+	// off this sentence — a roster in prose has nothing between it and drift.) A helper named for one
+	// caller family is the same wrong-noun defect one level up, and a reader checking "is this op file IO?"
+	// against the name would have been told yes by every one of them.
+	function requireWin64Import(opName String)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then return
 			syscall then panic("lowerStdToX64: `{opName}` lowers to a Win32 import and is therefore x64-windows only. `SemanticCheck.calleeNeedsWin32Substrate` refuses such a program at its own source span (E3104), so reaching here is a compiler bug that got one past that gate rather than the user-facing rejection")
 		end 'route'
-	end 'requireWin64FileIo'
+	end 'requireWin64Import'
 
 	// ⭐ **R4.1: `CloseHandle(handle)`** — register-only (one argument in rcx), and the BOOL it returns is
 	// DISCARDED, exactly as `osWriteStdout` discards `WriteFile`'s. A close that fails leaves a caller
 	// nothing to do, and `close()` is documented idempotent, so there is no verdict worth capturing.
 	function lowerOsFileClose(handleId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileClose")
+		self.requireWin64Import("osFileClose")
 		self.lowerOsWin64Call1(IatSlot.CloseHandle, arg0: handleId, dstBlock: dstBlock)
 	end 'lowerOsFileClose'
 
@@ -2690,14 +2731,14 @@ type StdToX64Lowering
 	// port, so this is the read that handle supports; the bootstrap's overlapped `__io_submit_read` is a
 	// different call for a different handle.
 	function lowerOsReadFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osReadFile")
+		self.requireWin64Import("osReadFile")
 		self.emitWin64FileIoCall(IatSlot.ReadFile, resultId: resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 	end 'lowerOsReadFile'
 
 	// ⭐ **R4.2: `GetFileSizeEx(handle, sizeOutPtr)`** — the 64-bit size lands in the caller's out-param
 	// word and the BOOL verdict in `resultId`. Register-only (two arguments).
 	function lowerOsFileSize(resultId ValueId, handleId ValueId, sizeOutPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileSize")
+		self.requireWin64Import("osFileSize")
 		self.lowerOsWin64Call2(IatSlot.GetFileSizeEx, arg0: handleId, arg1: sizeOutPtrId, dstBlock: dstBlock)
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileSize'
@@ -2705,7 +2746,7 @@ type StdToX64Lowering
 	// ⭐ **R4.2: `DeleteFileA(path)`** — register-only, the BOOL captured. The `A` entry point for the
 	// reason every path-taking import here uses it: a Maxon path is a UTF-8 byte buffer.
 	function lowerOsFileDelete(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileDelete")
+		self.requireWin64Import("osFileDelete")
 		self.lowerOsWin64Call1(IatSlot.DeleteFileA, arg0: pathPtrId, dstBlock: dstBlock)
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileDelete'
@@ -2713,7 +2754,7 @@ type StdToX64Lowering
 	// ⭐ **R4.2: `MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`** — three
 	// register arguments, the BOOL captured. See `MoveFileReplaceWriteThrough` for the flags.
 	function lowerOsFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileRename")
+		self.requireWin64Import("osFileRename")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(oldPathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(newPathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: MoveFileReplaceWriteThrough))
@@ -2725,7 +2766,7 @@ type StdToX64Lowering
 	// `INVALID_HANDLE_VALUE`) is captured and the 320-byte `WIN32_FIND_DATAA` record is written through the
 	// caller's buffer pointer.
 	function lowerOsFileFindFirst(resultId ValueId, pathPtrId ValueId, findDataPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileFindFirst")
+		self.requireWin64Import("osFileFindFirst")
 		self.lowerOsWin64Call2(IatSlot.FindFirstFileA, arg0: pathPtrId, arg1: findDataPtrId, dstBlock: dstBlock)
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileFindFirst'
@@ -2733,7 +2774,7 @@ type StdToX64Lowering
 	// ⭐ **R4.2: `FindClose(handle)`** — register-only, the BOOL discarded for the reason `osFileClose`
 	// discards `CloseHandle`'s.
 	function lowerOsFileFindClose(handleId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileFindClose")
+		self.requireWin64Import("osFileFindClose")
 		self.lowerOsWin64Call1(IatSlot.FindClose, arg0: handleId, dstBlock: dstBlock)
 	end 'lowerOsFileFindClose'
 
@@ -2741,7 +2782,7 @@ type StdToX64Lowering
 	// is the only thing that distinguishes end-of-iteration from an OS error, and `ManagedDirectoryRuntime`
 	// makes that distinction from `GetLastError`.
 	function lowerOsFileFindNext(resultId ValueId, handleId ValueId, findDataPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileFindNext")
+		self.requireWin64Import("osFileFindNext")
 		self.lowerOsWin64Call2(IatSlot.FindNextFileA, arg0: handleId, arg1: findDataPtrId, dstBlock: dstBlock)
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileFindNext'
@@ -2750,7 +2791,7 @@ type StdToX64Lowering
 	// IMMEDIATE, which is why this does not go through `lowerOsWin64Call2` (that one moves two virtual
 	// registers): a second argument that is a constant has no ValueId to move from.
 	function lowerOsDirCreate(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osDirCreate")
+		self.requireWin64Import("osDirCreate")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(pathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateDirectoryA)))
@@ -2761,7 +2802,7 @@ type StdToX64Lowering
 	// first argument and the buffer the second, which is the reverse of every other path-taking import in
 	// this file. The three-way answer (0 / fits / required size) is classified in builder-built Std.
 	function lowerOsDirCurrentPath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osDirCurrentPath")
+		self.requireWin64Import("osDirCurrentPath")
 		self.lowerOsWin64Call2(IatSlot.GetCurrentDirectoryA, arg0: bufLenId, arg1: bufPtrId, dstBlock: dstBlock)
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsDirCurrentPath'
@@ -2770,7 +2811,7 @@ type StdToX64Lowering
 	// own comment in `StdDialect` for why this import exists beside `FindFirstFileA` rather than being
 	// folded into it.
 	function lowerOsFileAttributes(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osFileAttributes")
+		self.requireWin64Import("osFileAttributes")
 		self.lowerOsWin64Call1(IatSlot.GetFileAttributesA, arg0: pathPtrId, dstBlock: dstBlock)
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileAttributes'
@@ -2783,7 +2824,7 @@ type StdToX64Lowering
 	// The returned pointer is into the PEB and is owned by the OS — never freed, and the same address on
 	// every call. `CommandLineRuntime` copies out of it and frees only its own scratch.
 	function lowerOsCommandLine(resultId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osCommandLine")
+		self.requireWin64Import("osCommandLine")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetCommandLineA)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsCommandLine'
@@ -2804,7 +2845,7 @@ type StdToX64Lowering
 	// The handle is the OS's, not a duplicate: `__con_read_stdin` reads through it and must never close it,
 	// and neither must a spawn that hands it to a child's STARTUPINFO.
 	function lowerOsStdHandle(resultId ValueId, whichId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osStdHandle")
+		self.requireWin64Import("osStdHandle")
 		self.lowerOsWin64Call1(IatSlot.GetStdHandle, arg0: whichId, dstBlock: dstBlock)
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsStdHandle'
@@ -2823,7 +2864,7 @@ type StdToX64Lowering
 	// ⚠ `bufPtr` is live ACROSS the first `iatCall` and needs no hand-holding: it is a VIRTUAL operand of
 	// this op, so the allocator forces it callee-saved exactly as `CreateProcessA`'s `procInfoPtr` is.
 	function lowerOsOpenNamedSegment(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osOpenNamedSegment")
+		self.requireWin64Import("osOpenNamedSegment")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(namePtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufLenId)))
@@ -2844,7 +2885,7 @@ type StdToX64Lowering
 	// and it is the CONSUMER's number: a view longer than the section returns NULL, which is why
 	// `DebugStreamRuntime` derives it from the reference's own three parts rather than choosing one.
 	function lowerOsMapNamedSegment(resultId ValueId, handleId ValueId, sizeId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osMapNamedSegment")
+		self.requireWin64Import("osMapNamedSegment")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(0), src: TargetVReg.virtual(sizeId), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handleId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: FileMapAllAccess))
@@ -2862,7 +2903,7 @@ type StdToX64Lowering
 	// — and every ring entry carries `now - start` as a millisecond delta. Two different clocks either end
 	// would make that subtraction meaningless, and nothing would report it.
 	function lowerOsTickCountMs(resultId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osTickCountMs")
+		self.requireWin64Import("osTickCountMs")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetTickCount64)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsTickCountMs'
@@ -2880,7 +2921,7 @@ type StdToX64Lowering
 	// first argument here is an IMMEDIATE with no ValueId to move from — exactly the case `lowerOsDirCreate`
 	// documents, whose hand-written form this follows.
 	function lowerOsExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64FileIo("osExecutablePath")
+		self.requireWin64Import("osExecutablePath")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: CurrentModuleHandle))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufLenId)))
@@ -3418,7 +3459,7 @@ type StdToX64Lowering
 			// Nor is a frame address.
 			stackRecordAddr gives false
 			osOpenNamedSegment to osTickCountMs gives false
-			osHandleSetInherit to osSocketClose gives false
+			osHandleSetInherit to osCpuCount gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3570,6 +3611,7 @@ type StdToX64Lowering
 			osOpenNamedSegment to osTickCountMs panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a DebugStream host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osHandleSetInherit to osProcessTerminate panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an attached-subprocess host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osSocketStartup to osSocketClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a socket host primitive, not a condBranch")
+			osCpuCount panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCpuCount`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 
