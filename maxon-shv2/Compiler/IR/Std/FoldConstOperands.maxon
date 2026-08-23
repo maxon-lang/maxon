@@ -144,10 +144,10 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// compile-time constants.
 		osOpenNamedSegment to osTickCountMs gives StdConstInfo.notConst
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-		// band AND the machine query — are import
-		// calls too: a pipe's byte count, an environment string, a SOCKET and a byte count the kernel chose
-		// are OS answers, never compile-time constants.
-		osHandleSetInherit to osCpuCount gives StdConstInfo.notConst
+		// band, the machine query AND the thread-CPU read — are import calls too: a pipe's byte count, an
+		// environment string, a SOCKET and a byte count the kernel chose are OS answers, never compile-time
+		// constants.
+		osHandleSetInherit to osThreadCpuTicks gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -253,10 +253,9 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// immediate form to fold into, and the tick read has no operand at all.
 		osOpenNamedSegment to osTickCountMs gives FoldResult.unchanged
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-		// band AND the machine query — are import
-		// calls too: every operand is an address, a handle or a length the caller computed, so none has an
-		// immediate form to fold into.
-		osHandleSetInherit to osCpuCount gives FoldResult.unchanged
+		// band, the machine query AND the thread-CPU read — are import calls too: every operand is an address,
+		// a handle or a length the caller computed, so none has an immediate form to fold into.
+		osHandleSetInherit to osThreadCpuTicks gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

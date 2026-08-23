@@ -1,0 +1,211 @@
+// Test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding
+function work(n ExitCode) returns ExitCode
+	__Builtins.parallelBoundary()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	let before = __Builtins.mmRawAllocTotal()
+	let bytesBefore = __Builtins.mmRawAllocBytes()
+	let p = async work(1)
+	let a = await p
+	let after = __Builtins.mmRawAllocTotal()
+	let bytesAfter = __Builtins.mmRawAllocBytes()
+	var score = a
+	if before == 0 'nothingRawBeforeTheScheduler'
+		score = score + 1
+	end 'nothingRawBeforeTheScheduler'
+	if after > before 'theSchedulerAllocatedRaw'
+		score = score + 2
+	end 'theSchedulerAllocatedRaw'
+	if bytesAfter - bytesBefore > after - before 'bytesAreBytesNotACount'
+		score = score + 3
+	end 'bytesAreBytesNotACount'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __mm_alloc_total@24 = i64 0
+  __mm_alloc_bytes@32 = i64 0
+  __mm_raw_alloc_count@40 = i64 0
+  __mm_raw_alloc_bytes@48 = i64 0
+  __gt_current_gt@56 = i64 0
+  __gt_run_queue_head@64 = i64 0
+  __gt_run_queue_tail@72 = i64 0
+  __gt_init_done@80 = i64 0
+  __gt_system_stack_top@88 = i64 0
+  __gt_timer_count@96 = i64 0
+  __gt_timer_heap_base@104 = i64 0
+  __gt_timer_capacity@112 = i64 0
+  __gt_trace_counter@120 = i64 0
+  __gt_trace_digits@128 = i64 0
+  __gt_clock_ticks@136 = i64 0
+  __gt_clock_freq@144 = i64 0
+  __gt_proc_count@152 = i64 0
+  __gt_proc_handles_base@160 = i64 0
+  __gt_proc_gts_base@168 = i64 0
+  __gt_free_list_head@176 = i64 0
+  __gt_live_count@184 = i64 0
+  __gt_startup_base@192 = i64 0
+  __gt_procinfo_base@200 = i64 0
+  __gt_exitcode_base@208 = i64 0
+  __gt_cmdline_buf_base@216 = i64 0
+  __gt_cmdline_buf_cap@224 = i64 0
+}
+
+func @work {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#2
+    x64.jmp __rc_chk#3
+  __rc_chk#3:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic#2
+    x64.jmp __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.callDirect __parallel_boundary
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#5
+    x64.jmp __rc_chk#6
+  __rc_chk#6:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic#5
+    x64.jmp __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.callDirect __mm_counter_raw_alloc_total
+    x64.movRegReg rbx, r8
+    x64.callDirect __mm_counter_raw_alloc_bytes
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 1
+    x64.leaRegFunc rcx, [rip + work]
+    x64.callDirect __gt_spawn
+    x64.storeBaseDispReg.word64 [r8 + 192], r13
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.movRegReg r13, r8
+    x64.callDirect __mm_counter_raw_alloc_total
+    x64.movRegReg r14, r8
+    x64.callDirect __mm_counter_raw_alloc_bytes
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, nothingRawBeforeTheScheduler
+    x64.jmp critsplit#13
+  nothingRawBeforeTheScheduler:
+    x64.leaRegRegImm32 rax, r13, 1
+    x64.jmp ifcont#2
+  critsplit#13:
+    x64.movRegReg rax, r13
+    x64.jmp ifcont#2
+  ifcont#2:
+    x64.cmpRegReg r14, rbx
+    x64.jcc greater, theSchedulerAllocatedRaw
+    x64.jmp critsplit#14
+  theSchedulerAllocatedRaw:
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.jmp ifcont#4
+  critsplit#14:
+    x64.jmp ifcont#4
+  ifcont#4:
+    x64.subRegReg r8, r8, r12
+    x64.subRegReg r14, r14, rbx
+    x64.cmpRegReg r8, r14
+    x64.jcc greater, bytesAreBytesNotACount
+    x64.jmp critsplit#15
+  bytesAreBytesNotACount:
+    x64.leaRegRegImm32 r8, rax, 3
+    x64.jmp ifcont#6
+  critsplit#15:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont#6
+  ifcont#6:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#8
+    x64.jmp __rc_chk#9
+  __rc_chk#9:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic#8
+    x64.jmp __rc_ok#7
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#7:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#11
+    x64.jmp __rc_chk#12
+  __rc_chk#12:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic#11
+    x64.jmp __rc_ok#10
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#10:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

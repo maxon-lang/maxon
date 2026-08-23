@@ -392,9 +392,35 @@ export type RuntimeUsage
 	// checkpoint's: the body is a constant return, so it declares nothing — emphatically not `usesGt`, since
 	// a program may ask the question having spawned nothing (see `CpuParallelRuntime`'s header).
 	export var usesSchedMaxActiveWorkers as bool
+	// ⭐⭐ **THE PROGRAM READS THE ALLOCATOR'S OWN TRAFFIC COUNTERS** (`__Builtins.mmAllocTotal` and its five
+	// siblings ⇒ the `__mm_counter_*` band). Its own bit, and here the discipline buys the most it ever has:
+	// the bit gates not just an entry point but the COUNTER MAINTENANCE ITSELF — the loads, adds and stores
+	// `__mm_alloc` and `__slab_alloc` make on every allocation in the language. A program that never asks how
+	// much it allocated carries no counter word and not one extra instruction on that path — MEASURED against a
+	// control built from the parent commit, and see `MmRuntime.MmAllocTotalLabel` for the 35 bytes that DO
+	// move and why they are not the counters. It is the same rule `--debugstream`'s box prefix follows and for
+	// the same reason: an instrument may not tax a program that is not being measured.
+	//
+	// ⚠ It declares `usesHeap`, and that is a STRUCTURAL dependency rather than a convenience: the counters
+	// ARE the allocator's `.data` state, laid out by `runtimeGlobals`, so reading one without the allocator
+	// would be a `globalAddr` at a slot the image never laid out — the relocation panic `IrModule.debugStream`
+	// documents. The `__mm_` prefix already carries that declaration (`isRuntimeCallee`); this narrower band
+	// test is what adds the maintenance.
+	export var usesMmCounters as bool
+	// The program asks how much CPU TIME its own thread has consumed (`__Builtins.threadCpuTicks` ⇒
+	// `__thread_cpu_ticks`). Its own bit rather than `usesWallClock`'s: the two share a file and a shape but
+	// reach different Win32 imports, so a program that reads the calendar must not import
+	// `QueryThreadCycleTime` and a program that measures its own cost must not import
+	// `GetSystemTimeAsFileTime`. Like the wall clock it declares NO transitive dependency — one import call,
+	// one `.data` word, no heap and no scheduler.
+	//
+	// ⚠ **IT IS THE ONE BIT HERE THAT COSTS AN IMPORT BESIDE `usesCpuCount`**, and for the same reason it must
+	// stay its own: it is the sole producer of `QueryThreadCycleTime`, whose OPTIONAL TRAILING BAND
+	// (`PeWriter.isOptionalTrailingImport`) is emitted when it is set.
+	export var usesThreadCpuTicks as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesDebugStreamLog: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -637,6 +663,20 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isSchedRuntimeCallee(callee) 'schedMaxActiveWorkers'
 		usage.usesSchedMaxActiveWorkers = true
 	end 'schedMaxActiveWorkers'
+	// ⭐ **THE ALLOCATOR'S TRAFFIC COUNTERS.** The `__mm_counter_` band is a STRICT SUBSET of the `__mm_` one
+	// the first arm of this function already matched, so `usesHeap` is set by the time this line runs — which
+	// is exactly the transitive declaration the counters need (see `usesMmCounters`) and the reason the band
+	// wears the heap prefix rather than one of its own. What this narrower test adds is the MAINTENANCE:
+	// without it the allocator keeps only the live count it has always kept.
+	if isMmCounterCallee(callee) 'mmCounters'
+		usage.usesMmCounters = true
+	end 'mmCounters'
+	// The THREAD-CPU clock. It carries nothing beside itself, exactly as the wall clock two families up does
+	// and for the identical reason: `__thread_cpu_ticks`'s Std body reads one `.data` word through one Win32
+	// import and returns it, calling nothing this Maxon-module scan cannot see.
+	if isThreadCpuRuntimeCallee(callee) 'threadCpuTicks'
+		usage.usesThreadCpuTicks = true
+	end 'threadCpuTicks'
 	if callee.equals(StreamWriteStdoutName) 'writestdout'
 		usage.usesWriteStdout = true
 	end 'writestdout'

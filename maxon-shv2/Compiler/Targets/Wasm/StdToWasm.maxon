@@ -692,9 +692,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		stackRecordAddr then break 'k'
 		osOpenNamedSegment to osTickCountMs then break 'k'
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-		// band AND the machine query — makes no wasm call
-		// either: it is x64-windows only.
-		osHandleSetInherit to osCpuCount then break 'k'
+		// band, the machine query AND the thread-CPU read — makes no wasm call either: it is x64-windows only.
+		osHandleSetInherit to osThreadCpuTicks then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1290,6 +1289,9 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// though this target refuses it, for the reason the socket family states one line up: this column is
 		// built before any lowering decides anything.
 		osCpuCount(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		// The thread-CPU read DEFINES nothing — its answer lands in the caller's out-param word, exactly as
+		// the wall-clock read's does, so there is no value to class.
+		osThreadCpuTicks then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1510,6 +1512,7 @@ type WasmFuncEmitter
 			osHandleSetInherit to osProcessTerminate then panic("emitStraightLineTerminator: an attached-subprocess host primitive is a body op, never a terminator")
 			osSocketStartup to osSocketClose then panic("emitStraightLineTerminator: a socket host primitive is a body op, never a terminator")
 			osCpuCount then panic("emitStraightLineTerminator: an `osCpuCount` is a body op, never a terminator")
+			osThreadCpuTicks then panic("emitStraightLineTerminator: an `osThreadCpuTicks` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1594,6 +1597,7 @@ type WasmFuncEmitter
 			osHandleSetInherit to osProcessTerminate then panic("emitDispatcherTerminator: an attached-subprocess host primitive is a body op, never a terminator")
 			osSocketStartup to osSocketClose then panic("emitDispatcherTerminator: a socket host primitive is a body op, never a terminator")
 			osCpuCount then panic("emitDispatcherTerminator: an `osCpuCount` is a body op, never a terminator")
+			osThreadCpuTicks then panic("emitDispatcherTerminator: an `osThreadCpuTicks` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1714,6 +1718,7 @@ type WasmFuncEmitter
 			// ⚠ Its band-mate `__sched_max_active_workers` reaches NO op here at all: its body is a constant
 			// return, so it lowers on this target through `const`/`ret` like any other function.
 			osCpuCount then panic("emitBodyOp: `osCpuCount` is x64-windows only — WASI reports no processor count, and SemanticCheck refuses such a program on wasm at its own source span (E3104)")
+			osThreadCpuTicks then panic("emitBodyOp: `osThreadCpuTicks` is x64-windows only — WASI exposes no per-thread CPU clock, and SemanticCheck refuses such a program on wasm at its own source span (E3104)")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2946,6 +2951,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osHandleSetInherit to osProcessTerminate then panic("decideDispatcher: an attached-subprocess host primitive is a body op, never a terminator")
 		osSocketStartup to osSocketClose then panic("decideDispatcher: a socket host primitive is a body op, never a terminator")
 		osCpuCount then panic("decideDispatcher: an `osCpuCount` is a body op, never a terminator")
+		osThreadCpuTicks then panic("decideDispatcher: an `osThreadCpuTicks` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

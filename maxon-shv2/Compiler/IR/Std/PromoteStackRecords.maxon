@@ -406,7 +406,7 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 	return match term 'term'
 		const to branch gives BlockExit.notAValueReturn
 		ret(retValId) gives BlockExit.returns(retValId)
-		param to osCpuCount gives BlockExit.notAValueReturn
+		param to osThreadCpuTicks gives BlockExit.notAValueReturn
 	end 'term'
 end 'returnedValueOf'
 
@@ -445,7 +445,7 @@ type ConstructorScan
 			call(resultId, callee, args) gives self.admitAlloc(resultId, callee: callee, args: args, box: box)
 			retVoid to loadIndirect gives false
 			storeIndirect(addrId, offset, valueId, valueType) gives self.admitStore(addrId, offset: offset, valueId: valueId, valueType: valueType, box: box)
-			osAllocPages to osCpuCount gives false
+			osAllocPages to osThreadCpuTicks gives false
 		end 'op'
 	end 'admit'
 
@@ -699,7 +699,7 @@ function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction
 		match op 'op'
 			const to ret then break 'op'
 			param(resultId, index, _) then markParameterValue(tracked, resultId: resultId, index: index)
-			call to osCpuCount then break 'op'
+			call to osThreadCpuTicks then break 'op'
 		end 'op'
 	end 'eachOp'
 	return tracked
@@ -793,7 +793,7 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 		// A field write through the pointer is admitted; the pointer as the STORED VALUE is the
 		// container / global / error-payload escape route, and is not.
 		storeIndirect(_, _, valueId, _) then markIfTracked(tracked, v: valueId, scan: scan)
-		osAllocPages to osCpuCount then collectStdOpUses(op, referenced: readByOtherOps)
+		osAllocPages to osThreadCpuTicks then collectStdOpUses(op, referenced: readByOtherOps)
 	end 'shape'
 end 'scanOneOp'
 
@@ -912,7 +912,7 @@ function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameI
 	return match op 'op'
 		const to param gives ConstructorCallSite.notAConstructorCall
 		call(resultId, callee, args) gives constructorCallOf(module, resultId: resultId, callee: callee, args: args, byName: byName, constructors: constructors)
-		retVoid to osCpuCount gives ConstructorCallSite.notAConstructorCall
+		retVoid to osThreadCpuTicks gives ConstructorCallSite.notAConstructorCall
 	end 'op'
 end 'constructorCallAt'
 
@@ -1119,7 +1119,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 	return match op 'op'
 		const to param gives false
 		call(_, callee, args) gives callDropsAPromotedRecord(callee, args: args, promoted: promoted)
-		retVoid to osCpuCount gives false
+		retVoid to osThreadCpuTicks gives false
 	end 'op'
 end 'opDropsAPromotedRecord'
 

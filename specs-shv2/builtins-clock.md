@@ -1,7 +1,7 @@
 ---
 feature: builtins-clock
 status: stable
-keywords: [builtins, __Builtins, clock, time, monotonic, wall-clock, intrinsics]
+keywords: [builtins, __Builtins, clock, time, monotonic, wall-clock, cpu-time, intrinsics]
 category: system
 ---
 
@@ -11,17 +11,51 @@ category: system
 
 `__Builtins` is the compiler's builtin TYPE: a name reserved for the compiler, whose static
 methods are INTRINSICS rather than functions any file declares. `stdlib/Clock.maxon` is written
-against three of them, and they are what this spec pins:
+against three of them; a fourth has no stdlib surface and is read by the compiler itself. All four
+are what this spec pins:
 
 | Intrinsic | Meaning |
 |---|---|
 | `__Builtins.currentTimeNanos()` | monotonic nanoseconds, from the platform's high-resolution counter |
 | `__Builtins.currentTimeMs()` | the same reading, in whole milliseconds |
 | `__Builtins.currentUnixTimeSeconds()` | WALL-clock seconds since 1970-01-01 UTC |
+| `__Builtins.threadCpuTicks()` | CPU time consumed by the CALLING THREAD, in a platform-defined unit |
 
 The first two are a STOPWATCH (monotonic; only a difference between two readings means anything);
 the third is a CALENDAR (it can step backwards when NTP corrects a drift, so it must never be used
 to measure a duration). They are `int`-valued and take no arguments.
+
+### The fourth is the only one that is NOT a clock
+
+The three above all measure WALL time, so a duration taken with any of them counts every OTHER
+process on the box: a compiler phase timed on a busy machine reports the machine. A single
+`scale-test` run once read its parse phase at ×5.03 and then ×1.78 across a DOUBLING ladder, which
+is not a curve of any shape — it is preemption.
+
+`threadCpuTicks` advances only while the CALLING THREAD is scheduled on a core, so it cannot see
+preemption and it cannot see any other process. That is what makes a per-phase cost survive a
+loaded host, and it is why `Compiler/PhaseProbe.maxon` brackets it beside the wall clock and
+`docs/optimization-log.md` carries a `## CPU` table.
+
+MEASURED on this host, in one program: a busy loop advanced it **137,272,601** ticks while a
+200 ms `sleep` advanced it **101,505** — a ratio of **1352** between a thread that was running and
+one that was not, across two intervals of comparable WALL length. The bootstrap answers the same
+shape (126,231,142 against 459,968).
+
+⚠ **ITS UNIT IS PLATFORM-DEFINED AND NOTHING CONVERTS IT**: TSC ticks on Windows
+(`QueryThreadCycleTime`), nanoseconds under POSIX (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`).
+`QueryPerformanceFrequency` is the PERFORMANCE COUNTER's rate and not the TSC's, so a normalization
+would be a guess wearing a unit's name. Compare RATIOS, which are unit-free, or absolutes within
+one platform. It is also NOT a retired-instruction count and is not reproducible to the digit — it
+still moves with turbo, thermal throttling and cache pressure from other cores, by a few percent.
+Against the only question a doubling ladder asks (×2 is linear, ×4 is quadratic) that band has a
+100% margin; against a claimed 3% constant-factor win it is worth nothing, and the allocation
+columns are what answer that.
+
+⚠ **IT IS NOT CLAMPED, unlike `__Builtins.cpuCount()`.** A processor count is a DIVISOR for its
+callers, so a 0 escaping there would be a division by zero; a tick count is only ever subtracted
+from a later one, and a floor would make the first bracket of a phase report a cost it did not
+have.
 
 ### `currentTimeMs` is the NANOSECOND clock scaled, not the coarse tick
 
@@ -56,10 +90,23 @@ panic at X64Backend.maxon:1794: resolveCallFixups: call to unknown function '__B
 
 ### The substrate is x64-windows only at this rung
 
-All three read the host clock through Win32 imports, and the green-thread runtime that hosts the
-monotonic one has no arm64/wasm lowering. A program that reaches any of them on another target is
-refused with `E3104` at the call site rather than panicking three tiers down in the wasm/arm64
-backend.
+All four read the host through Win32 imports, and the green-thread runtime that hosts the monotonic
+one has no arm64/wasm lowering. A program that reaches any of them on another target is refused
+with `E3104` at the call site rather than panicking three tiers down in the wasm/arm64 backend.
+
+For `threadCpuTicks` the refusal is stronger than *"not yet"*, and it is the SHAPE argument the
+machine query makes one family over: `QueryThreadCycleTime` answers TSC ticks through a `ULONG64*`
+while `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` answers nanoseconds through a `timespec`, so a POSIX
+lane is a rung rather than a lowering — and WASI exposes no per-thread CPU clock at all. A lowering
+there could only fabricate a cost, which is a silent wrong answer rather than a missing feature.
+
+⚠ **ITS BAND IS `__thread_`, DELIBERATELY NOT `__clock_`**, and the split is about COST rather than
+about targets: the two reach different kernel32 imports, and shv2 emits the optional trailing import
+band per producer, so one shared bit would make a calendar-reading program import
+`QueryThreadCycleTime` and a phase-timing program import `GetSystemTimeAsFileTime`. The ACCEPTANCE
+half of the refusal below lives in `builtins-mm-counters.md` (`all-six-run-on-wasm`): without it,
+`thread-cpu-ticks-rejected-on-wasm` would pass just as happily against a compiler that had stopped
+serving the whole instrumentation family on that lane.
 
 ⚠ **Which cases that gates, exactly**: only the ones that REACH `__gt_now_ns`/`__clock_now_unix_s`.
 `arity-checked` and `unknown-intrinsic` are refused in the front end, are target-neutral, and carry NO
@@ -330,4 +377,142 @@ end 'main'
 ```
 ```maxoncstderr
 error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: it lowers to the runtime entry '__clock_now_unix_s', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-clock.thread-cpu-ticks-monotonic -->
+<!-- targets: x64-windows -->
+Three reads in one program never go backwards. A thread's consumed CPU time cannot decrease, so
+this is what a capture of the wrong register, a sign-extension of a 32-bit half or a stale value
+left in the out-param word would fail.
+```maxon
+function main() returns ExitCode
+	let first = __Builtins.threadCpuTicks()
+	let second = __Builtins.threadCpuTicks()
+	let third = __Builtins.threadCpuTicks()
+	var score = 0
+	if second >= first 'firstPair'
+		score = score + 1
+	end 'firstPair'
+	if third >= second 'secondPair'
+		score = score + 2
+	end 'secondPair'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: builtins-clock.thread-cpu-ticks-advances-under-work -->
+<!-- targets: x64-windows -->
+Two million additions move it. The direct statement of the contract, and the property a lowering
+that never called the OS — answering the `.data` scratch word's zero initializer forever — fails
+first.
+```maxon
+function main() returns ExitCode
+	let before = __Builtins.threadCpuTicks()
+	var sum = 0
+	for i in 0 upto 2000000 'spin'
+		sum = sum + i
+	end 'spin'
+	let after = __Builtins.threadCpuTicks()
+	var score = 0
+	if sum > 0 'workHappened'
+		score = score + 1
+	end 'workHappened'
+	if after > before 'cpuAdvanced'
+		score = score + 3
+	end 'cpuAdvanced'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: builtins-clock.thread-cpu-ticks-is-not-wall-time -->
+<!-- targets: x64-windows -->
+**THE DISCRIMINATOR, AND THE WHOLE REASON THIS INTRINSIC EXISTS.** The program measures its own CPU
+across two intervals of comparable WALL length — one spent RUNNING, one spent asleep — and requires
+the running one to cost multiples more. A wall clock, which is the wrong lowering somebody would
+plausibly write, reports the two intervals as roughly equal and fails; so does a constant.
+
+It is written as a RATIO between two readings of the same instrument rather than as a comparison
+against the wall clock, and deliberately: the two are in different, unconvertible units, so any
+absolute threshold across them would be a normalization this spec's Documentation refuses. A ratio
+is unit-free.
+
+MEASURED on this host: 137,272,601 ticks busy against 101,505 asleep, a factor of **1352** where
+the case asks for 4. Under a wall-clock lowering both readings become the interval's own duration,
+and the busy interval is the SHORTER of the two.
+```maxon
+typealias SpinCount = int(0 to 100000000)
+typealias SpinSum = int(0 to i64.max)
+
+function spin(n SpinCount) returns SpinSum
+	var sum = 0
+	for i in 0 upto n 'each'
+		sum = sum + i
+	end 'each'
+	return sum as SpinSum
+end 'spin'
+
+function main() returns ExitCode
+	let busyCpuBefore = __Builtins.threadCpuTicks()
+	let worked = spin(20000000)
+	let busyCpuAfter = __Builtins.threadCpuTicks()
+
+	let sleepWallBefore = __Builtins.currentTimeNanos()
+	let sleepCpuBefore = __Builtins.threadCpuTicks()
+	__Builtins.sleep(200)
+	let sleepCpuAfter = __Builtins.threadCpuTicks()
+	let sleepWallAfter = __Builtins.currentTimeNanos()
+
+	let busyCpu = busyCpuAfter - busyCpuBefore
+	let sleepCpu = sleepCpuAfter - sleepCpuBefore
+	let sleepWall = sleepWallAfter - sleepWallBefore
+	var score = 0
+	if worked > 0 'workReallyRan'
+		score = score + 1
+	end 'workReallyRan'
+	if sleepWall >= 200000000 'sleptTheWholeTime'
+		score = score + 2
+	end 'sleptTheWholeTime'
+	if busyCpu > sleepCpu * 4 'cpuFollowsTheThreadNotTheClock'
+		score = score + 4
+	end 'cpuFollowsTheThreadNotTheClock'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: builtins-clock.thread-cpu-ticks-arity-checked -->
+The CPU clock takes no arguments, and earns the same `builtinArity` refusal its three wall siblings
+do. Front-end only and target-neutral, so it carries no marker.
+```maxon
+function main() returns ExitCode
+	return __Builtins.threadCpuTicks(5) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.threadCpuTicks' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: builtins-clock.thread-cpu-ticks-rejected-on-wasm -->
+<!-- targets: wasm32-wasi -->
+The CPU clock is refused the same way the other three are, naming its OWN runtime entry — which is
+what says the gate is keyed on the `__thread_` band rather than on the clock band it shares a file
+with. WASI exposes no per-thread CPU clock, so a lowering there could only fabricate a cost.
+
+Its ACCEPTANCE half is `builtins-mm-counters.md`'s `all-six-run-on-wasm`, which proves the same
+compiler still serves the rest of the instrumentation family on this lane.
+```maxon
+function main() returns ExitCode
+	return __Builtins.threadCpuTicks() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: it lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
 ```

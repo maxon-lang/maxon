@@ -1820,6 +1820,39 @@ export union StdOp
 	// silent wrong answer about the machine on a lane that cannot ask it. Full call-barrier metadata: it IS
 	// an indirect call once lowered.
 	osCpuCount(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- The THREAD-CPU clock behind `__Builtins.threadCpuTicks()` ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osCpuCount`, per the band-append invariant every
+	// entry above states: a mid-band insert is silently swallowed by a `… to X` range arm. Its
+	// `category: system` places it logically in the system band, independent of this tail position.
+	//
+	// `osThreadCpuTicks(outPtr)` = `QueryThreadCycleTime(GetCurrentThread(), outPtr)` — writes the CPU time
+	// the CALLING THREAD has consumed, in the host's own unit, to `[outPtr]`. ONE VALUE operand (the
+	// out-param address, a `globalAddr` of the runtime's `.data` scratch word), no result: `osReadWallClock`'s
+	// shape exactly, and for its reason — the Win32 entry point answers through memory.
+	//
+	// ⭐⭐ **IT IS NOT A CLOCK, AND THAT IS THE WHOLE POINT OF HAVING A FOURTH ONE.** `osReadClock` and
+	// `osReadWallClock` both measure WALL time, so a duration taken with either includes every other process
+	// on the box — a compiler phase timed on a busy machine reports the machine. This counter advances only
+	// while this thread is scheduled, so it cannot see preemption at all. `PhaseProbe` reads it beside the
+	// wall clock for exactly that reason, and `docs/optimization-log.md`'s CPU table is what it feeds.
+	//
+	// ⚠ **ITS UNIT IS PLATFORM-DEFINED AND NOTHING CONVERTS IT**: TSC ticks on Windows
+	// (`QueryThreadCycleTime`), nanoseconds under POSIX (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`).
+	// `QueryPerformanceFrequency` is the PERFORMANCE COUNTER's rate and not the TSC's, so there is no honest
+	// normalization to write — which is why the op's name says `ticks` and callers compare RATIOS.
+	//
+	// ⭐ **THE OUT-PARAM IS A BARE `u64` SLOT, WHICH IS WHY IT MAY LIVE AT THIS TIER AT ALL.** It is
+	// `osCpuCount`'s rejected `SYSTEM_INFO` argument answered the other way: a POSIX lane fills the same
+	// word from its own stack `timespec` (`tv_sec * 1e9 + tv_nsec`), so no foreign struct layout enters the
+	// target-neutral tier and the op stays "put this thread's CPU time in that word".
+	//
+	// ⭐ x64-WINDOWS ONLY at this rung, like `osReadWallClock`. Every other target refuses at the CALL SITE
+	// with the existing E3104 (`SemanticCheck.calleeNeedsWin32Substrate`, by the `__thread_` prefix), so no
+	// backend ever sees this op — which is why the arm64 and wasm lowerings are absent rather than stubbed.
+	// A stub would be a silent wrong answer about a cost, on a lane that cannot ask for it. Full
+	// call-barrier metadata: it IS an indirect call once lowered.
+	osThreadCpuTicks(outPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -2034,6 +2067,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// `osCpuCount` takes NO operands — it asks the host a question rather than reading a value, so it
 		// joins `osSocketCreate` and `osGetPid` as one of the few system ops with nothing to collect.
 		osCpuCount then break 'u'
+		// The out-param ADDRESS is the one value operand the thread-CPU read has, and it must be reported for
+		// `osReadWallClock`'s reason: the allocator would otherwise free its register before the OS call
+		// writes through it. It defines nothing.
+		osThreadCpuTicks(outPtr) then referenced.insert(outPtr)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -2218,6 +2255,9 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osSocketRecv(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osSocketClose gives DefinedValueLookup.none
 		osCpuCount(resultId) gives DefinedValueLookup.defines(resultId)
+		// The thread-CPU read defines nothing — its answer lands in the caller's out-param word, exactly as
+		// the wall-clock read's does.
+		osThreadCpuTicks gives DefinedValueLookup.none
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -2418,6 +2458,9 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osSocketClose(sock) gives StdOp.osSocketClose(remappedValue(sock, subst: subst))
 		// No operands to remap; the def is carried through unchanged, exactly as `osSocketCreate`'s is.
 		osCpuCount(resultId) gives StdOp.osCpuCount(resultId)
+		// The exact mirror of `collectStdOpUses`'s arm: the out-param address is the one read, so it is the
+		// one rewrite. It defines nothing.
+		osThreadCpuTicks(outPtr) gives StdOp.osThreadCpuTicks(remappedValue(outPtr, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 
