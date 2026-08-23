@@ -168,6 +168,19 @@ export type RuntimeUsage
 	// `stdlib/Subprocess.maxon`'s executable lookup, and a program that never asks the question must not carry
 	// the answer. The parser emits the call directly, so this scan sees it.
 	export var usesMmIsNull as bool
+	// ⭐⭐ **THE PROGRAM WRITES A `__DebugStream` LOG EVENT (Workstream O3).** It is not an install bit like
+	// its neighbours — nothing is keyed on it directly. It records the one thing this walk of the MAXON
+	// module is the only pass that can see, so `Compiler.compileMeasured` can declare what the DebugStream
+	// PRODUCER needs on such a program's behalf: `usesHeap` (the producer's `__ds_init` `__slab_alloc`s its
+	// lock and its env buffer) and `usesStrCopy` (`__ds_emit_log_text` blits the message into the ring).
+	// Both are transitive needs of a SYNTHESIZED body, which is rule 2 of this file's header — declared,
+	// never discovered.
+	//
+	// ⚠ **IT IS SET WHETHER OR NOT `--debugstream` IS ON, AND THE FLAG IS ASKED WHERE IT IS CONSUMED.** The
+	// markers are in the Maxon module of a traced and an untraced build alike (the parser cannot know which
+	// this is), and turning `usesHeap` on HERE would give an untraced program the allocator and the leak
+	// check it never asked for — a codegen change in a build the flag is supposed to leave untouched.
+	export var usesDebugStreamLog as bool
 	// The program co-owns a BORROWED managed-aggregate parameter into a `var` (`var q = p`, OPEN #40),
 	// which the parser makes a second owner of the caller's box via `__mm_retain`. Its OWN bit, not
 	// `usesIncref`: `__mm_retain` (returns the pointer) and `__mm_incref` (void) have independent callers,
@@ -366,7 +379,7 @@ export type RuntimeUsage
 	export var usesParallelBoundary as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesDebugStreamLog: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -500,6 +513,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(MmIsNullName) 'mmIsNull'
 		usage.usesMmIsNull = true
 	end 'mmIsNull'
+	// A `__ds_log_*` marker is a `__DebugStream` member the SOURCE wrote (Workstream O3). It records only
+	// that the program HAS one; what a traced build then owes for it is declared at the one place that also
+	// knows whether this build is traced — see `usesDebugStreamLog`.
+	if isDebugStreamLogMarker(callee) 'debugStreamLog'
+		usage.usesDebugStreamLog = true
+	end 'debugStreamLog'
 	// A `__gt_subp_*` call (the P1.5 streaming subprocess API, slice 1b) carries the whole streaming runtime: the
 	// handle table + the `__gt_subp_*` functions, which ride the IOCP substrate (`usesIocp`) and build owned Strings
 	// from raw bytes (`__mm_alloc`/`__str_copy` inside their bodies — `usesHeap`/`usesStrCopy`, declared here because

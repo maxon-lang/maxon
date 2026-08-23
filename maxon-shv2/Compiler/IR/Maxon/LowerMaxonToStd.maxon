@@ -2978,6 +2978,90 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(result, value: self.globalData.debugStreamNames.intern(String.from(name)), valueType: StdType.i64))
 	end 'lowerDebugStreamNameId'
 
+	// ⭐⭐ **THE COMPILE-TIME GATE, AND THE ONLY PLACE IT IS DECIDED: `--debugstream` OFF MEANS ZERO
+	// INSTRUCTIONS.** Not a branch that is never taken, not a call that returns immediately — the four
+	// emitting markers lower to NO OPS AT ALL, so an ordinary build's emitted code is what it would have been
+	// had the calls not been written. `enabled()` is the one exception and it has to be: it has a RESULT, so
+	// it folds to the constant `false`, which every later fold and dead-branch elimination then sees.
+	//
+	// ⚠⚠ **THE BARE `project.debugStream` FLAG IS THE RIGHT GATE HERE, THOUGH THE INSTALL'S IS THE
+	// CONJUNCTION `buildCarriesDebugStream`, AND THE TWO CANNOT DISAGREE FOR A PROGRAM THAT REACHES THIS
+	// FUNCTION.** That conjunction is `--debugstream` AND `usesHeap`, and a program holding ANY of these
+	// markers has already had `usesHeap` declared for it by `scanRuntimeUsage`'s log arm — the producer needs
+	// `__slab_alloc` to attach and `__str_copy` to write a message, and neither is a bit this Maxon-module
+	// walk could otherwise see. So for exactly the programs this arm can be reached from, the flag IS the
+	// full condition. Reading the conjunction here instead would mean threading `RuntimeUsage` into a pass
+	// that runs before the usage scan's answer is anyone else's business.
+	//
+	// ⚠ A DROPPED marker leaves its `result` ValueId undefined, which is correct rather than tolerated: the
+	// four emitting members are VOID (`Parser.emitDebugStreamEmit` mints `ValueTypeTag.void`), so nothing can
+	// read it — a void result is a discarded statement result and can never be an operand
+	// (`valueTagToStdType`'s own `void` arm says so).
+	function lowerDebugStreamEmit(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		if not self.debugStream 'untracedBuild'
+			if callee.equals(DsLogEnabledMarkerName) 'enabled'
+				self.stdModule.appendOp(dstBlock, op: StdOp.const(result, value: PredicateFalse, valueType: StdType.i1))
+			end 'enabled'
+
+			return
+		end 'untracedBuild'
+
+		if callee.equals(DsLogEnabledMarkerName) 'enabled'
+			self.appendDebugStreamAttachedTest(result, dstBlock: dstBlock)
+			return
+		end 'enabled'
+
+		// The two ends of a phase span share ONE entry point and differ in the wire code, which the parser
+		// could not supply — it is the producer's constant, not the source's.
+		if callee.equals(DsLogPhaseBeginMarkerName) 'phaseBegin'
+			self.appendDebugStreamPhaseCall(result, eventType: DsEvLogPhaseBegin, args: args, dstBlock: dstBlock)
+			return
+		end 'phaseBegin'
+
+		if callee.equals(DsLogPhaseEndMarkerName) 'phaseEnd'
+			self.appendDebugStreamPhaseCall(result, eventType: DsEvLogPhaseEnd, args: args, dstBlock: dstBlock)
+			return
+		end 'phaseEnd'
+
+		// These two arrive with exactly the arguments their entry point takes, so the marker becomes the call
+		// and nothing else moves.
+		if callee.equals(DsLogEventMarkerName) 'event'
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: DsEmitLogEventName, args: args))
+			return
+		end 'event'
+
+		if callee.equals(DsLogTextMarkerName) 'text'
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: DsEmitLogTextName, args: args))
+			return
+		end 'text'
+
+		panic("lowerDebugStreamEmit: '{String.from(callee)}' wears the `__ds_log_` marker prefix and no arm here claims it — `isDebugStreamLogMarker` and this dispatch are two readings of one roster (`DebugStreamRuntime`'s marker names), so a member was taught to the parser and not to the lowering")
+	end 'lowerDebugStreamEmit'
+
+	// `__ds_base != 0` — the run-time gate as a VALUE, which is the whole of `__DebugStream.enabled()`. A
+	// load and a compare: no call, so a guarded body costs nothing when nothing is listening.
+	function appendDebugStreamAttachedTest(result ValueId, dstBlock IrBlock)
+		let addr = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(addr, label: DsBaseLabel))
+		let base = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(base, addrId: addr, offset: 0, valueType: StdType.i64))
+		let detached = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(detached, value: 0, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: base, rhs: detached, pred: StdCmpPred.ne, operandType: StdType.i64))
+	end 'appendDebugStreamAttachedTest'
+
+	// `__ds_emit_log_phase(eventType, nameId, unitId)` — the source's two arguments with the producer's wire
+	// code in front of them. ONE function for both ends of a span, because the code is the only difference
+	// and a second copy is where the two would come to disagree about which end is which.
+	function appendDebugStreamPhaseCall(result ValueId, eventType ParsedInt, args ValueIdArray, dstBlock IrBlock)
+		let code = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(code, value: eventType, valueType: StdType.i64))
+		var callArgs = ValueIdArray.create()
+		callArgs.push(code)
+		callArgs.append(args)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: DsEmitLogPhaseName, args: callArgs))
+	end 'appendDebugStreamPhaseCall'
+
 	function allocTagFromResultType(result ValueId) returns ParsedInt
 		if self.valueTagOf(result) == ValueTypeTag.string 'stringRecord'
 			return mmTagIndex(MmTag.StringRecord)
@@ -3089,6 +3173,12 @@ type MaxonToStdLowering
 			self.lowerDebugStreamNameId(result, dstBlock: dstBlock)
 			return
 		end 'debugStreamNameId'
+		// ⭐⭐ **AND THE FIVE RUNTIME CALLEES THAT BECOME NOTHING AT ALL** — the `__DebugStream` log markers.
+		// See `lowerDebugStreamEmit`, which is where the compile-time half of the gating rule is decided.
+		if isDebugStreamLogMarker(callee) 'debugStreamLog'
+			self.lowerDebugStreamEmit(result, callee: callee, args: args, dstBlock: dstBlock)
+			return
+		end 'debugStreamLog'
 		if callee.equals(DropTypeParamName) or callee.equals(RetainTypeParamName) 'typeParamOwnership'
 			self.appendTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return

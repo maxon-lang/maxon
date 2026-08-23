@@ -211,23 +211,55 @@ let ArgsMarker = "<!-- Args:"
 // stay independent and none can swallow another.
 let AsyncTraceMarker = "<!-- AsyncTrace"
 
-// ⭐ **THE SECOND VALUELESS MARKER — `<!-- MmTrace -->`.** It says a case asserts the program's MEMORY
-// MANAGEMENT: the allocations it makes, the refcount transitions they go through and the frees that end
-// them. Like `<!-- AsyncTrace -->` it changes how the program is BUILT (`--debugstream`, which emits the
-// DebugStream producer) and how its output is COMPARED (the run happens under `maxon monitor --filter=mm`
-// and both sides go through `normalizeMmTrace`), and neither is a value.
+// ⭐⭐ **WHICH FAMILY OF THE DEBUG STREAM A CAPTURE CASE ASSERTS.** Both families ride the SAME shared-memory
+// ring, are built the same way (`--debugstream`) and are read by the same consumer (`maxon monitor`), and
+// they differ in exactly four derived things: the marker that requests one, the fence that holds the
+// golden, the `--filter=` the monitor is given, and the prefix a decoded line of that family starts with.
+// That is why this is ONE mode with a family rather than two capture modes — a second copy of the build
+// flag, the target restriction, the normalizer, the remint and the splice is five places for the two to
+// drift.
+//
+// ⚠ **THE TWO ASK DIFFERENT QUESTIONS OF THE SAME PROGRAM.** `mm` is the RUNTIME talking about itself —
+// what the program allocated, retained and freed. `log` is the PROGRAM's own sentences, written through
+// the `__DebugStream` builtin. A case selects one; asking for both at once would need a golden whose lines
+// interleave two families, which no reader has wanted.
+export enum TraceFamily
+	// The memory manager's own events — `mm_alloc` / `mm_incref` / `mm_decref` / `mm_free`.
+	mm
+	// The events the program AUTHORS through `__DebugStream` — `log_phase_begin` / `log_event` /
+	// `log_text` / `log_phase_end`.
+	log
+end 'TraceFamily'
+
+// ⭐ **THE SECOND AND THIRD VALUELESS MARKERS — `<!-- MmTrace -->` and `<!-- LogTrace -->`.** Each says a
+// case asserts one family of the debug stream: `MmTrace` the allocations it makes, the refcount
+// transitions they go through and the frees that end them; `LogTrace` the events its own source writes.
+// Like `<!-- AsyncTrace -->` they change how the program is BUILT (`--debugstream`, which emits the
+// DebugStream producer) and how its output is COMPARED (the run happens under `maxon monitor --filter=…`
+// and both sides go through `normalizeTrace`), and neither is a value.
 //
 // ⚠ **THE MODE IS ENTERED BY EITHER THE MARKER OR THE BLOCK**, which is the reference's rule
 // (`TestRunner.cs`, `fragment.MmTrace`) and the one the spec's own prose states. The marker alone is the
-// AUTHORING state: write it, run `--update-required`, and the harness mints the ` ```mm-trace ` block from
-// what the program actually did. So a marker with no block is not an error — it is a request.
+// AUTHORING state: write it, run `--update-required`, and the harness mints the matching block from what
+// the program actually did. So a marker with no block is not an error — it is a request.
 //
-// ⚠ It carries no payload, so it must not go through `markerValue` — see `AsyncTraceMarker` for why an
+// ⚠ Neither carries a payload, so neither may go through `markerValue` — see `AsyncTraceMarker` for why an
 // empty answer being indistinguishable from a missing one is the failure that arrangement prevents.
 //
-// It is not a superstring or substring of any other marker ("<!-- MmTrace" first differs from every one of
-// them at the character after "<!-- "), so the marker checks stay independent and none can swallow another.
+// Neither is a superstring or substring of any other marker ("<!-- MmTrace" and "<!-- LogTrace" first
+// differ from every one of them, and from each other, at the character after "<!-- "), so the marker checks
+// stay independent and none can swallow another.
 let MmTraceMarker = "<!-- MmTrace"
+let LogTraceMarker = "<!-- LogTrace"
+
+// The marker a family's case is REQUESTED with. Read by the splice, which has to find the line it inserts
+// a minted golden after — see `SpecTestRunner.traceMarkerLineOf`.
+export function traceMarkerOf(family TraceFamily) returns String
+	return match family 'f'
+		mm gives MmTraceMarker
+		log gives LogTraceMarker
+	end 'f'
+end 'traceMarkerOf'
 
 // ⭐⭐ **WHAT THIS CASE NEEDS FROM THE NETWORK — `<!-- network: live -->`, the marker that keeps somebody
 // else's uptime out of this suite's verdict.** The cases carrying it across `tcp-client`, `async-tcp` and
@@ -263,7 +295,8 @@ let MmTraceMarker = "<!-- MmTrace"
 // today — v1's hard-coded list still excludes them, the bootstrap still runs them.
 //
 // It is not a superstring or substring of any other marker ("<!-- network:" first differs from
-// "<!-- test:", "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace" and "<!-- MmTrace"
+// "<!-- test:", "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace", "<!-- MmTrace"
+// and "<!-- LogTrace"
 // at the character after "<!-- "), so the marker checks stay independent and none can swallow another.
 export let NetworkMarker = "<!-- network:"
 
@@ -360,16 +393,32 @@ let TargetStdoutFencePrefix = "```Stdout:"
 let TargetCompilerErrorFencePrefix = "```Maxoncstderr:"
 let TargetStderrFencePrefix = "```Stderr:"
 
-// ⭐ **THE DECODED MEMORY-MANAGEMENT EVENT TRACE — what `maxon monitor --filter=mm` printed, normalized.**
-// One `mm_<verb> <Tag> #<id>[ size=N | rc=N]` line per event, in emission order, with the monitor's
-// timestamp prefix and depth indent stripped and the allocation ids densely renumbered from 1 by first
-// appearance (see `SpecTestRunner.normalizeMmTrace` for why every one of those steps is needed to make the
-// text stable across runs and machines).
+// ⭐ **THE DECODED EVENT TRACE OF ONE FAMILY — what `maxon monitor --filter=…` printed, normalized.**
+// One event per line, in emission order, with the monitor's timestamp prefix and depth indent stripped and
+// the family's own volatile fields reduced (see `SpecTestRunner.normalizeTrace` for why every one of those
+// steps is needed to make the text stable across runs and machines):
+//   • ```mm-trace  — `mm_<verb> <Tag> #<id>[ size=N | rc=N]`, allocation ids densely renumbered from 1.
+//   • ```log-trace — `log_<verb> [<name>] [cat=N lvl=N] unit=N […]`, with the emitting green thread and
+//     processor dropped.
 //
-// ⚠ **IT IS ITSELF A RESULT CHECK.** A case carrying one needs no ```exitcode / ```stdout / ```stderr
-// block to be a test — it is asserting the program's ALLOCATION BEHAVIOUR, which no other block can state
-// — so `pinsAnyResult` counts it.
+// ⚠ **EITHER IS ITSELF A RESULT CHECK.** A case carrying one needs no ```exitcode / ```stdout / ```stderr
+// block to be a test — it is asserting what the program did rather than what it computed, which no other
+// block can state — so `pinsAnyResult` counts it.
+//
+// ⚠⚠ **THE TWO FENCES ARE IN NO PREFIX RELATION WITH EACH OTHER OR WITH ANY OTHER FENCE.** "```log-trace"
+// first differs from "```mm-trace" at the character after the backticks, which is the relation the
+// `--- Spec-markdown grammar tokens ---` header requires of every added pair.
 export let MmTraceFence = "```mm-trace"
+export let LogTraceFence = "```log-trace"
+
+// The fence a family's golden lives in. Read by the parser (which claims the block) and by the splice
+// (which writes one), so the two cannot come to disagree about which fence holds which family.
+export function traceFenceOf(family TraceFamily) returns String
+	return match family 'f'
+		mm gives MmTraceFence
+		log gives LogTraceFence
+	end 'f'
+end 'traceFenceOf'
 
 // ⭐ A LINKED SECTION'S BYTES, as typed values — `i64 42` / `i8 1` / `f64 3.14`, one per line. Not
 // what the compiler thinks it laid out, but what the linked binary actually contains, read back out
@@ -620,23 +669,49 @@ export typealias TargetKeyArray = Array with String
 // marker-less test names — so it is not a sentinel. Named for its PURPOSE, as `TargetKeyArray` is.
 export typealias ProgramArgArray = Array with String
 
-// ⭐⭐ **WHETHER A CASE ASSERTS ITS MEMORY-MANAGEMENT TRACE, AND WHAT IT EXPECTS — THREE STATES IN ONE
-// FIELD.** A case can be in mm-trace MODE with no golden yet (the authoring state: a bare
-// `<!-- MmTrace -->` marker, which `--update-required` turns into a block), or in mode WITH one, or not in
-// mode at all. Two fields — a bool and a String — would need "" to mean "no block", and an EMPTY trace is
-// a legitimate expectation: it is exactly what a program that allocates nothing must produce. A sentinel
-// there would make that case unwritable, which is the shape `SpecStdout.unpinned` exists to avoid one
-// stream over.
-export union SpecMmTrace
-	// Not an mm-trace case: built and run exactly as any other.
+// ⭐⭐ **WHETHER A CASE ASSERTS A DEBUG-STREAM TRACE, WHICH FAMILY, AND WHAT IT EXPECTS — THREE STATES IN
+// ONE FIELD.** A case can be in capture MODE with no golden yet (the authoring state: a bare
+// `<!-- MmTrace -->` / `<!-- LogTrace -->` marker, which `--update-required` turns into a block), or in
+// mode WITH one, or not in mode at all. Two fields — a bool and a String — would need "" to mean "no
+// block", and an EMPTY trace is a legitimate expectation: it is exactly what a program that allocates
+// nothing must produce. A sentinel there would make that case unwritable, which is the shape
+// `SpecStdout.unpinned` exists to avoid one stream over.
+//
+// ⚠ **THE FAMILY RIDES BOTH LIVE ARMS AND NOT THE TEST**, because it is only meaningful when there is a
+// capture at all: a field beside this one would need a value for `off`, which is the same sentinel this
+// union exists to avoid one level up.
+export union SpecTraceCapture
+	// Not a capture case: built and run exactly as any other.
 	off
-	// In mm-trace mode with no golden. The program is built with `--debugstream` and run under the
-	// monitor, and the trace is compared against NOTHING — so the case fails unless it allocates nothing,
+	// In capture mode with no golden. The program is built with `--debugstream` and run under the monitor,
+	// and the trace is compared against NOTHING — so the case fails unless the family it names is silent,
 	// and `--update-required` mints the block that makes it a real assertion.
-	unpinned
-	// In mm-trace mode with a golden, normalized and compared line for line.
-	pinned(trace String)
-end 'SpecMmTrace'
+	unpinned(family TraceFamily)
+	// In capture mode with a golden, normalized and compared line for line.
+	pinned(family TraceFamily, trace String)
+end 'SpecTraceCapture'
+
+// The family a capture case names. `off` has none — a caller that reaches here has already established
+// the case IS a capture (`SpecTestRunner.traceCaptureMode`), so an `off` here is a caller that did not.
+// A marker RAISES the capture mode and never lowers it: a `pinned` set by a block earlier in the case must
+// not become `unpinned` again, so a marker's family is the case's only when no block has already named
+// one. Written once because both markers ask it, and because the arm that must NOT fire is the easy one to
+// get wrong.
+function raisedTraceCapture(current SpecTraceCapture, family TraceFamily) returns SpecTraceCapture
+	return match current 'raise'
+		off gives SpecTraceCapture.unpinned(family)
+		unpinned(existing) gives SpecTraceCapture.unpinned(existing)
+		pinned(existing, trace) gives SpecTraceCapture.pinned(existing, trace: trace)
+	end 'raise'
+end 'raisedTraceCapture'
+
+export function traceCaptureFamilyOf(capture SpecTraceCapture) returns TraceFamily
+	return match capture 'mode'
+		off panic("traceCaptureFamilyOf: a case not in capture mode names no family — ask `traceCaptureMode` before asking this")
+		unpinned(family) gives family
+		pinned(family, _) gives family
+	end 'mode'
+end 'traceCaptureFamilyOf'
 
 // ⭐ **WHAT A CASE NEEDS FROM THE NETWORK — see `NetworkMarker` for why this is a per-case fact.**
 //
@@ -694,16 +769,16 @@ export type SpecTest
 	// one fact in two places.
 	export let asyncTrace as bool
 
-	// Whether this case asserts its MEMORY-MANAGEMENT trace, and what it expects (see `SpecMmTrace`). It
+	// Whether this case asserts its MEMORY-MANAGEMENT trace, and what it expects (see `SpecTraceCapture`). It
 	// sits beside `asyncTrace` for that field's stated reason and it is the same kind of fact: it changes
 	// how the program is BUILT (`--debugstream`) and how its output is COMPARED (under `maxon monitor`,
-	// through `normalizeMmTrace`), rather than what the run must produce.
+	// through `normalizeTrace`), rather than what the run must produce.
 	//
 	// ⚠ The EXPECTATION rides here too, unlike `asyncTrace`'s, because an mm-trace block IS the
 	// assertion — there is no other slot on `SpecExpectation` it could land in, and putting the mode on
 	// the test and the golden on the expectation would be the one fact in two places this file's
 	// `asyncTrace` note already refuses.
-	export let mmTrace as SpecMmTrace
+	export let traceCapture as SpecTraceCapture
 
 	// What this case needs from the network (a `<!-- network: … -->` marker). It rides HERE for the reason
 	// `targets` does and is the same kind of fact: it decides whether this run SELECTS the case at all,
@@ -714,9 +789,9 @@ export type SpecTest
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, mmTrace SpecMmTrace, network SpecNetwork) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, traceCapture SpecTraceCapture, network SpecNetwork) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace, network: network}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1025,7 +1100,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var asyncTrace = false
 	// Starts `off`; the MARKER raises it to `unpinned` and the BLOCK to `pinned`. A case carrying both
 	// ends `pinned` whichever order they appear in, because the block never lowers the mode.
-	var mmTrace = SpecMmTrace.off
+	var traceCapture = SpecTraceCapture.off
 	// `none` unless a `<!-- network: … -->` marker says otherwise — the ordinary case, and the literal
 	// answer for a case that reaches no host, not a default standing in for an unread marker.
 	var network = SpecNetwork.none
@@ -1078,17 +1153,20 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'asyncTraceMarker'
 
-		// The other valueless flag marker, consumed identically — including on a DISABLED case, so shelving
-		// an mm-trace case does not leave its marker to fall through as unread prose. It only raises the
-		// mode: a `pinned` set by a block earlier in the case must not be lowered back to `unpinned`.
+		// The other two valueless flag markers, consumed identically — including on a DISABLED case, so
+		// shelving a capture case does not leave its marker to fall through as unread prose. Each only RAISES
+		// the mode; see `raisedTraceCapture` for what that means when a block has already named a family.
 		if line.contains(MmTraceMarker) 'mmTraceMarker'
-			match mmTrace 'raise'
-				off then mmTrace = SpecMmTrace.unpinned
-				unpinned to pinned then break 'raise'
-			end 'raise'
+			traceCapture = raisedTraceCapture(traceCapture, family: TraceFamily.mm)
 			i = i + 1
 			continue
 		end 'mmTraceMarker'
+
+		if line.contains(LogTraceMarker) 'logTraceMarker'
+			traceCapture = raisedTraceCapture(traceCapture, family: TraceFamily.log)
+			i = i + 1
+			continue
+		end 'logTraceMarker'
 
 		// The network gate the author SPELLED, consumed identically to the five above — including on a
 		// DISABLED case, so shelving a live-network case does not leave its marker to fall through as
@@ -1181,15 +1259,22 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'runtimeBlock'
 
-		// The mm-trace golden. It is a result check in its own right (see `MmTraceFence`), and it puts the
-		// case into mm-trace mode on its own — the `<!-- MmTrace -->` marker beside it is then a second
+		// The two capture goldens. Either is a result check in its own right (see `MmTraceFence`), and either
+		// puts the case into capture mode on its own — the matching marker beside it is then a second
 		// statement of one fact rather than a requirement.
 		if line.startsWith(MmTraceFence) 'mmTraceBlock'
 			let block = readFence(lines, openIndex: i)
-			mmTrace = SpecMmTrace.pinned(block.text)
+			traceCapture = SpecTraceCapture.pinned(TraceFamily.mm, trace: block.text)
 			i = block.nextIndex
 			continue
 		end 'mmTraceBlock'
+
+		if line.startsWith(LogTraceFence) 'logTraceBlock'
+			let block = readFence(lines, openIndex: i)
+			traceCapture = SpecTraceCapture.pinned(TraceFamily.log, trace: block.text)
+			i = block.nextIndex
+			continue
+		end 'logTraceBlock'
 
 		if line.startsWith(ExitCodeFence) 'exitCodeBlock'
 			let block = readFence(lines, openIndex: i)
@@ -1259,15 +1344,15 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
 		end 'pinsOnARejectedCase'
 
-		// ⛔ An mm-trace block on a REJECTED case is refused for the reason the section pins beside it are:
+		// ⛔ A capture block on a REJECTED case is refused for the reason the section pins beside it are:
 		// a compile that fails produces no binary, so there is no program to run under the monitor and no
 		// trace the block could ever be compared against. It would pin nothing while reading as coverage.
-		match mmTrace 'mmTraceOnARejectedCase'
-			off then break 'mmTraceOnARejectedCase'
-			unpinned to pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries an mm-trace block or `{MmTraceMarker} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
-		end 'mmTraceOnARejectedCase'
+		match traceCapture 'traceCaptureOnARejectedCase'
+			off then break 'traceCaptureOnARejectedCase'
+			unpinned to pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a `{traceFenceOf(traceCaptureFamilyOf(traceCapture))}` block or `{traceMarkerOf(traceCaptureFamilyOf(traceCapture))} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
+		end 'traceCaptureOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace, network: network))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network))
 		return i
 	end 'rejected'
 
@@ -1277,11 +1362,11 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// types, each naming ITS stream; everything above the constructor is already shared.
 	let resolvedStdout = SpecStdout.pinned(stdout.resolved()) if stdout.isPinned() else SpecStdout.unpinned
 	let resolvedStderr = SpecStderr.pinned(stderr.resolved()) if stderr.isPinned() else SpecStderr.unpinned
-	if not pinsAnyResult(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins, mmTrace: mmTrace) 'pinsNothing'
+	if not pinsAnyResult(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins, traceCapture: traceCapture) 'pinsNothing'
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace, network: network))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network))
 
 	return i
 end 'scanTestFromMarker'
@@ -1389,11 +1474,11 @@ end 'refuseVacuousDirective'
 // Does this case assert ANYTHING about the run? The push condition, and the one place the four halves of
 // a run expectation are asked as a group — a fifth half added to `SpecExpectation.run` without a clause
 // here would be a result block that still counts as no result.
-function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, mmTrace SpecMmTrace) returns bool
-	// An mm-trace GOLDEN is a result check; the bare MARKER is not — it is a request for one, and a case
-	// carrying only that has nothing to compare until `--update-required` has run. Both are mm-trace mode,
+function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, traceCapture SpecTraceCapture) returns bool
+	// A capture GOLDEN is a result check; the bare MARKER is not — it is a request for one, and a case
+	// carrying only that has nothing to compare until `--update-required` has run. Both are capture mode,
 	// and only one of them is an assertion, which is the distinction the three-state field exists to make.
-	match mmTrace 'trace'
+	match traceCapture 'trace'
 		off to unpinned then break 'trace'
 		pinned then return true
 	end 'trace'

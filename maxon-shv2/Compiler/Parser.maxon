@@ -4961,15 +4961,79 @@ let BuiltinsUcdI64AtName = b"__Builtins.ucdI64At"
 // ever built at run time** — which is the whole reason a pass may emit a trace event from inside the
 // register allocator without allocating into the very `mm` stream the trace exists to read.
 //
-// ⇒ It is the ONE `__DebugStream` member this compiler recognizes. The five that EMIT an event
-// (`enabled`, `phaseBegin`, `phaseEnd`, `event`, `text`) arrive with the producer that consumes a name id;
-// until then an unrecognized member takes the same reserved-callee refusal every other unknown `__` callee
-// gets (`requireCalleeIsNotReservedName`).
+// ⇒ It is the one member intercepted BEFORE the arguments are parsed, and the only one whose argument is
+// not a value. The five that reach the RING (`enabled`, `phaseBegin`, `phaseEnd`, `event`, `text`) take
+// ordinary Maxon values and are recognized AFTER their arguments are parsed, exactly as the `__Builtins`
+// table's members are — see `DebugStreamQualifierPrefix`.
 //
 // ⚠ It is NOT in `isBuiltinsIntrinsicCallee`'s table: that arm is gated on the `__Builtins.` prefix and this
 // is a different type. It is intercepted at `parseCallNamed`, BEFORE the arguments are parsed, beside the
 // two UCD table loads and for their exact reason — the literal's token is only the cursor there.
 let DebugStreamNameIdCallee = b"__DebugStream.nameId"
+
+// ⭐⭐ **THE FIVE `__DebugStream` MEMBERS THAT REACH THE RING (Workstream O3).** `nameId` above turns a NAME
+// into a number; these are what a program does with it — open and close a PHASE span, put a structured
+// EVENT on the wire, put a human message there, and ask whether anything is listening at all. They are the
+// only events in the whole wire schema a compiled program AUTHORS; every other family is the runtime
+// talking about itself.
+//
+// ⚠ **THE FOUR EMITTING MEMBERS RETURN NOTHING, WHICH IS WHY THE STATEMENT DOOR HAS TO CLAIM THEM**
+// (`voidStaticCallsAt`). A bare statement is the only position a void call can be written in, and
+// `Logger.logEvent` / `PhaseProbe.begin` — the compiler's own emitters — write exactly that.
+//
+// ⚠⚠ **THE QUALIFIER IS THE TEST, NOT A ROSTER OF THE FIVE, AND THAT IS `isBuiltinsIntrinsicCallee`'s
+// RULE ONE TYPE OVER.** A member this compiler does not recognize must reach the reserved-callee rejection
+// that names it (`E3004: call to undefined function '__DebugStream.nope'`) rather than a complaint about
+// SHAPE — in STATEMENT position exactly as in expression position, which is the asymmetry D10 removed for
+// the user half of the same question.
+let DebugStreamQualifierPrefix = b"__DebugStream."
+let DebugStreamEnabledCallee = b"__DebugStream.enabled"
+let DebugStreamPhaseBeginCallee = b"__DebugStream.phaseBegin"
+let DebugStreamPhaseEndCallee = b"__DebugStream.phaseEnd"
+let DebugStreamEventCallee = b"__DebugStream.event"
+let DebugStreamTextCallee = b"__DebugStream.text"
+
+// Each member's arity, named for `SleepIntrinsicArity`'s reason: an intrinsic has no signature for
+// SemanticCheck's ordinary arity check to read, so the count IS the declaration and it belongs beside the
+// name it declares.
+let DebugStreamEnabledArity = 0 as ParamCount
+// `phaseBegin(nameId, unitId)` / `phaseEnd(nameId, unitId)` — the same two, which is why they share a
+// constant as they share an entry point.
+let DebugStreamPhaseArity = 2 as ParamCount
+// `event(nameId, category, level, unitId, arg0, arg1)`.
+let DebugStreamEventArity = 6 as ParamCount
+// `text(category, level, unitId, message)`.
+let DebugStreamTextArity = 4 as ParamCount
+
+// ⭐ **WHICH ARGUMENTS OF A `__DebugStream` EMITTER ARE MACHINE WORDS** — `SubprocessBufferSlots`' question
+// one type over, and an ENUM for that one's reason rather than a union: a payload-free union case still
+// heap-allocates, and this is read on a parse path. Three of the four members are all numbers; `text` ends
+// in the message BUFFER. Naming the SHAPE rather than an index is what keeps a "no buffer here" sentinel
+// out of it, and it makes every reader's `match` total.
+enum DebugStreamArgShape
+	// `phaseBegin`, `phaseEnd`, `event` — every argument is a machine word.
+	allNumeric
+	// `text` — the LAST argument is the message buffer, the ones before it are machine words.
+	trailingMessage
+end 'DebugStreamArgShape'
+
+// Is position `index` of a `__DebugStream` emitter's call the message buffer rather than a machine word?
+// The one place the shape above is decoded, exactly as `subprocessSlotIsBuffer` is the one place its own
+// is. The arity is a parameter because the message is the LAST slot rather than a fixed one — which is
+// what lets a member of a different width join without a second constant to keep in step.
+function debugStreamSlotIsMessage(shape DebugStreamArgShape, index ParamCount, arity ParamCount) returns bool
+	return match shape 's'
+		allNumeric gives false
+		trailingMessage gives index == arity - 1
+	end 's'
+end 'debugStreamSlotIsMessage'
+
+// ⭐ **IS THIS CALLEE A MEMBER OF THE `__DebugStream` TYPE?** THE one test, with the same two askers
+// `isBuiltinsIntrinsicCallee` has and the same obligation not to disagree: the member table in
+// `parseCallNamed` and the STATEMENT door's `voidStaticCallsAt`.
+function isDebugStreamCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: DebugStreamQualifierPrefix)
+end 'isDebugStreamCallee'
 
 // ⭐⭐ **THE TWENTY `__Builtins` INTRINSICS `stdlib/Subprocess.maxon` BOTTOMS OUT IN — NINETEEN
 // `subprocess*` NAMES PLUS `managedIsNull`, WHICH IS NOT ONE OF THEM.** That module is the
@@ -5173,8 +5237,21 @@ end 'isBuiltinsIntrinsicCallee'
 //
 // No committed expectation moves: the only `maxoncstderr` pin of E2052 against a `__Builtins` callee is
 // `specs-shv2/builtins-ucd.md`'s, and that one is on the ucd path above.
+//
+// ⚠⚠ **THE `__DebugStream` MEMBERS ARE THE THIRD FAMILY, AND THEY ARE A DELIBERATE DIVERGENCE FROM THE
+// BOOTSTRAP.** That compiler REGISTERS parameter names for them (`2-Parser.cs:1786-1799`) and therefore
+// accepts an optional label — MEASURED: `phaseBegin(phase, unitId: 7)` compiles there, `wrongLabel: 7`
+// earns E3003, and `nameId: phase` on the FIRST argument earns E2052. shv2 registers none: its five
+// members are recognized by name and their arguments are read by POSITION
+// (`emitDebugStreamEmit`), so there is nothing here for a label to be checked against.
+//
+// ⇒ An unchecked label on a SIX-ARGUMENT call is not a convenience, it is a silent mis-slot:
+// `event(n, level: 1, category: 2, …)` would be accepted and the two fields swapped, and no later pass can
+// notice — no signature exists for one to read. Refusing the label is what makes the positional order the
+// only order. The positional spelling is the one BOTH compilers accept, it is what `Logger`/`PhaseProbe`
+// write, and `specs-shv2/debugstream-log-events.md` pins the refusal so the divergence stays deliberate.
 function argLabelRuleForCallee(callee ByteArray) returns ArgLabelRule
-	return ArgLabelRule.allPositional if calleeTakesPositionalArgsOnly(callee) or isBuiltinsIntrinsicCallee(callee) else ArgLabelRule.ordinary
+	return ArgLabelRule.allPositional if calleeTakesPositionalArgsOnly(callee) or isBuiltinsIntrinsicCallee(callee) or isDebugStreamCallee(callee) else ArgLabelRule.ordinary
 end 'argLabelRuleForCallee'
 
 // Every clock intrinsic reads a clock and takes nothing.
@@ -69174,8 +69251,96 @@ export type Parser
 			end 'subprocessLastErrorMessage'
 		end 'builtinsIntrinsic'
 
+		// ⭐⭐ **THE `__DebugStream` MEMBERS THAT REACH THE RING (Workstream O3)** — the second builtin TYPE's
+		// table, gated behind ONE prefix compare for the `__Builtins` table's reason: a call to anything else
+		// pays fourteen bytes and no allocation. `nameId` never arrives here; it was taken above, before the
+		// arguments were parsed, because its argument is a NAME rather than a value.
+		//
+		// An unrecognized member falls through to `emitCall`'s reserved-callee rejection, which is this
+		// table's "unknown member" arm and names the callee — see `DebugStreamQualifierPrefix`.
+		if isDebugStreamCallee(callee) 'debugStreamMember'
+			if callee.equals(DebugStreamEnabledCallee) 'enabled'
+				return try self.emitDebugStreamEnabled(args, calleeTok: anchor)
+			end 'enabled'
+
+			// The two ends of a phase SPAN. One entry point, two markers: they differ in the wire code and in
+			// nothing else, and the lowering is what supplies it (`DsEvLogPhaseBegin`/`DsEvLogPhaseEnd`).
+			if callee.equals(DebugStreamPhaseBeginCallee) 'phaseBegin'
+				return try self.emitDebugStreamEmit(args, callee: callee, marker: DsLogPhaseBeginMarkerName, arity: DebugStreamPhaseArity, shape: DebugStreamArgShape.allNumeric, resultUsed: resultUsed, calleeTok: anchor)
+			end 'phaseBegin'
+
+			if callee.equals(DebugStreamPhaseEndCallee) 'phaseEnd'
+				return try self.emitDebugStreamEmit(args, callee: callee, marker: DsLogPhaseEndMarkerName, arity: DebugStreamPhaseArity, shape: DebugStreamArgShape.allNumeric, resultUsed: resultUsed, calleeTok: anchor)
+			end 'phaseEnd'
+
+			if callee.equals(DebugStreamEventCallee) 'event'
+				return try self.emitDebugStreamEmit(args, callee: callee, marker: DsLogEventMarkerName, arity: DebugStreamEventArity, shape: DebugStreamArgShape.allNumeric, resultUsed: resultUsed, calleeTok: anchor)
+			end 'event'
+
+			if callee.equals(DebugStreamTextCallee) 'text'
+				return try self.emitDebugStreamEmit(args, callee: callee, marker: DsLogTextMarkerName, arity: DebugStreamTextArity, shape: DebugStreamArgShape.trailingMessage, resultUsed: resultUsed, calleeTok: anchor)
+			end 'text'
+		end 'debugStreamMember'
+
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint)
 	end 'parseCallNamed'
+
+	// ⭐ **THE ONE `__DebugStream` MEMBER THAT ANSWERS A VALUE — the SOURCE-LEVEL half of the run-time gate.**
+	// It lowers to the `__ds_base != 0` test itself: a load and a compare, no call. That is what makes it the
+	// right guard for a tier that ALLOCATES — `Logger.log` builds a String before it can hand one over, and
+	// the emitting members' own in-body test would only be reached after that cost had been paid.
+	//
+	// ⚠ In a build carrying no producer it folds to the constant `false`, so every body it guards is dead
+	// before the optimizer sees it (`LowerMaxonToStd.lowerDebugStreamEmit`). Its result is a `bool` and not
+	// the `integer` the `__Builtins` predicates answer, because unlike them it has no stdlib declaration in
+	// front of it to do the conversion: the source writes `if __DebugStream.enabled()` directly.
+	function emitDebugStreamEnabled(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != DebugStreamEnabledArity 'arity'
+			throw ParseError.builtinArity(String.from(DebugStreamEnabledCallee), expected: DebugStreamEnabledArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		return self.emitRuntimeCall(DsLogEnabledMarkerName, args: ValueIdArray.create(), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitDebugStreamEnabled'
+
+	// ⭐⭐ **THE FOUR EMITTING MEMBERS, ONE DOOR.** They differ in arity, in the marker they emit and in
+	// whether their LAST argument is a buffer rather than a number — and in nothing else. Each checks its
+	// count, checks every argument's class, refuses a result nobody can have, and emits a marker the lowering
+	// either DROPS (an untraced build) or turns into the runtime call. Four verbatim copies of that would be
+	// four places for the rule to drift, which is what `requireSubprocessArgs`'s header says this file exists
+	// to stop.
+	//
+	// ⚠ Checking arity and argument class HERE at all is what an intrinsic needs BECAUSE no file declares it:
+	// there is no signature for SemanticCheck's ordinary checks to read.
+	//
+	// ⚠ **THE MESSAGE BUFFER IS BORROWED** — `__ds_emit_log_text` reads `buffer`/`length` through the record
+	// and copies the bytes into the ring, taking no ownership, exactly as `__print_string` borrows its String
+	// — so this emits an ordinary `emitRuntimeCall` and enrols no drop.
+	function emitDebugStreamEmit(args ValueIdArray, callee ByteArray, marker ByteArray, arity ParamCount, shape DebugStreamArgShape, resultUsed bool, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != arity 'arity'
+			throw ParseError.builtinArity(String.from(callee), expected: arity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		// The member returns nothing, so using its result is using a value that is not there — the same error
+		// a void user call gets in value position.
+		if resultUsed 'noValueToUse'
+			throw ParseError.voidCallResultUsed(String.from(callee), line: calleeTok.line, column: calleeTok.column)
+		end 'noValueToUse'
+
+		var callArgs = ValueIdArray.create()
+		for i in 0 upto arity 'each'
+			let arg = try args.get(i) otherwise panic("emitDebugStreamEmit: args.count() == arity just checked but get({i}) failed")
+			if debugStreamSlotIsMessage(shape, index: i, arity: arity) 'aMessage'
+				if not self.valueIsByteArray(arg) 'notAManagedBuffer'
+					throw ParseError.builtinOperandType(String.from(callee), required: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
+				end 'notAManagedBuffer'
+			end 'aMessage' else 'aMachineWord'
+				try self.requireIntrinsicMachineWordArg(arg, callee: callee, calleeTok: calleeTok)
+			end 'aMachineWord'
+			callArgs.push(arg)
+		end 'each'
+
+		return self.emitRuntimeCall(marker, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitDebugStreamEmit'
 
 	// ⭐ **`__Builtins.currentTimeMs()` — THE NANOSECOND READING, SCALED. NOT the coarse tick.**
 	//
@@ -74097,6 +74262,23 @@ export type Parser
 		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
 			return true
 		end 'builtinsIntrinsic'
+
+		// ⭐ **THE SECOND BUILTIN TYPE, ON THE SAME TERMS (Workstream O3).** `__DebugStream`'s four emitting
+		// members return nothing, so a bare statement is the only position they can be written in — and the
+		// compiler's own emitters write exactly that (`Logger.logEvent`, `PhaseProbe.begin`). Without this arm
+		// they died as `E2015: Unsupported: identifier statement`, which is `__Builtins.sleep`'s history
+		// repeating for the third time and for the same structural reason: a VOID member of a family whose
+		// other members all return a value.
+		//
+		// ⚠ **THE QUALIFIER IS THE TEST, NOT A ROSTER OF THE VOID FOUR**, which is `isBuiltinsIntrinsicCallee`'s
+		// rule above and D10's finding one type over: claiming the whole family is what routes an unrecognized
+		// member to `parseCallNamed` and so to the positioned `E3004` that NAMES it, instead of a refusal about
+		// SHAPE that says nothing about the name. `nameId` is claimed too and its value is then discarded,
+		// exactly as a `__Builtins` value-returning intrinsic's is here — an intrinsic allocates nothing, so
+		// there is no box for a bare statement to strand.
+		if isDebugStreamCallee(callee) 'debugStreamMember'
+			return true
+		end 'debugStreamMember'
 
 		// ⭐ **A USER TYPE'S VOID STATIC — the same position, asked of the whole-program index instead of a
 		// table (D10).** `Helper.shout()` on a line of its own was `E2015: Unsupported: identifier statement`

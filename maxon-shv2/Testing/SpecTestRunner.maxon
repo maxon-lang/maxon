@@ -187,16 +187,33 @@ let FaultRipSuffixMarker = " at rip=0x"
 let AsyncTraceWorkerMarker = " [M="
 
 // ============================================================================
-// mm-trace capture mode
+// Debug-stream capture mode — the `mm` and `log` families
 // ============================================================================
 //
-// ⭐⭐ **THE PRODUCER IS shv2'S AND THE CONSUMER IS THE BOOTSTRAP'S, AND THAT SPLIT IS THE DESIGN.** An
-// `<!-- MmTrace -->` case is built with `--debugstream` (shv2 emits the shared-memory ring producer — see
-// `DebugStreamRuntime`) and RUN UNDER `maxon monitor --filter=mm`, which creates the segment, spawns the
-// binary into it, decodes every event and prints it. There is no decoder in shv2 and there is not meant to
-// be one: two decoders of one wire format is the defect this project has already paid for once.
+// ⭐⭐ **THE PRODUCER IS shv2'S AND THE CONSUMER IS THE BOOTSTRAP'S, AND THAT SPLIT IS THE DESIGN.** A
+// capture case (an `<!-- MmTrace -->` or `<!-- LogTrace -->` marker, or either golden) is built with
+// `--debugstream` (shv2 emits the shared-memory ring producer — see `DebugStreamRuntime`) and RUN UNDER
+// `maxon monitor --filter=<family>`, which creates the segment, spawns the binary into it, decodes every
+// event of that family and prints it. There is no decoder in shv2 and there is not meant to be one: two
+// decoders of one wire format is the defect this project has already paid for once.
+//
+// ⚠ **THE FAMILY REACHES EXACTLY FOUR DERIVED THINGS AND NOTHING ELSE** — the marker, the fence, the
+// filter below, and the prefix a decoded line of that family starts with. Everything else about a capture
+// case is family-blind, which is why this is one mode with a parameter rather than two modes.
 let MonitorSubcommand = "monitor"
 let MonitorMmFilterArg = "--filter=mm"
+let MonitorLogFilterArg = "--filter=log"
+
+// The `--filter=` the monitor is given. Stated per family rather than derived from the enum case's name,
+// because the spelling is the CONSUMER's (`DebugStreamDecoder.Families`) and not this side's to compute —
+// a derived one would keep compiling on the day the decoder renamed a family and would simply stop
+// selecting anything.
+function traceFilterArgOf(family TraceFamily) returns String
+	return match family 'f'
+		mm gives MonitorMmFilterArg
+		log gives MonitorLogFilterArg
+	end 'f'
+end 'traceFilterArgOf'
 
 // The host compiler that carries the monitor, relative to the checkout root. The `.exe`-vs-extensionless
 // ordering is `hostBinaryCandidates`', asked rather than restated — see `findMonitorPath`.
@@ -209,10 +226,23 @@ let MonitorExeStem = "maxon"
 let MonitorLinePrefix = "[+"
 let MonitorTimestampEnd = "] "
 
-// Every decoded mm event line's payload starts here (`mm_alloc`, `mm_incref`, `mm_free`, …). Keeping only
-// these is what makes the normalizer IDEMPOTENT: an already-normalized golden line survives it unchanged,
-// and anything that is not an event — the child's stdout, a blank line — is dropped by the same test.
+// Every decoded event line's payload starts with its family's prefix (`mm_alloc`, `mm_incref`, …;
+// `log_event`, `log_phase_begin`, …). Keeping only these is what makes the normalizer IDEMPOTENT: an
+// already-normalized golden line survives it unchanged, and anything that is not an event of the family —
+// the child's stdout, another family's event, a blank line — is dropped by the same test.
 let MmTraceEventPrefix = "mm_"
+let LogTraceEventPrefix = "log_"
+
+function traceEventPrefixOf(family TraceFamily) returns String
+	return match family 'f'
+		mm gives MmTraceEventPrefix
+		log gives LogTraceEventPrefix
+	end 'f'
+end 'traceEventPrefixOf'
+
+// The token that opens a decoded LOG line's emitting identity — `gt=0x<hex> P<n>`. See
+// `withoutLogIdentity` for why both tokens go.
+let LogTraceGtTokenPrefix = "gt=0x"
 
 // The `#<id>` token the normalizer densely renumbers. A run's allocation ids are a monotonic counter over
 // the WHOLE process, so they depend on what the runtime allocated before `main` — pinning them would make
@@ -877,7 +907,7 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 	// Every mm-trace golden this run would re-mint, collected across the verdict loop and spliced ONCE at
 	// the end. Per-SPEC rather than per-test because the file is read and written whole: N tests re-minting
 	// would otherwise be N read-modify-writes of one file, and the last would win.
-	var reminted = MmTraceRemintArray.create()
+	var reminted = TraceRemintArray.create()
 
 	var prepared = PreparedTestArray.create()
 	for test in tests 'eachCompile'
@@ -894,15 +924,15 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 			awaiting(pending) gives finishPendingRun(pending, observation: observation, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 		end 'phase'
 
-		if updateRequired 'collectMmTraceRemint'
-			collectMmTraceRemint(reminted, test: test, observation: observation)
-		end 'collectMmTraceRemint'
+		if updateRequired 'collectTraceRemint'
+			collectTraceRemint(reminted, test: test, observation: observation)
+		end 'collectTraceRemint'
 
 		results.push(SpecTestResult.create(specName, testName: test.name, outcome: run.outcome, golden: run.golden))
 		cpu = cpu.adding(run.cpu)
 	end 'eachVerdict'
 
-	spliceMmTraceGoldens(specPath, reminted: reminted)
+	spliceTraceGoldens(specPath, reminted: reminted)
 
 	return SpecRun.create(results, cpu: cpu)
 end 'runOneSpec'
@@ -1009,7 +1039,7 @@ end 'selectedTests'
 // Named rather than left inline because the caller now asks it as a QUESTION with two answers to record,
 // not as one term of a conjunction — see `SpecSelection` for what depends on the two being separable.
 function selectableThisRun(test SpecTest, specName String, filter String, effectiveTarget Target, effectiveTargetKey String) returns bool
-	return selectedByFilter(specName, testName: test.name, filter: filter) and markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) and targetCanCheckSectionPins(test, effectiveTarget: effectiveTarget) and targetCanCaptureMmTrace(test, effectiveTarget: effectiveTarget)
+	return selectedByFilter(specName, testName: test.name, filter: filter) and markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) and targetCanCheckSectionPins(test, effectiveTarget: effectiveTarget) and targetCanCaptureTrace(test, effectiveTarget: effectiveTarget)
 end 'selectableThisRun'
 
 // ⭐⭐ **THE ONE GATE THAT IS ABOUT THE RUN AND NOT ABOUT THE TREE.** Every other question `selectedTests`
@@ -1044,13 +1074,13 @@ end 'networkModeAllows'
 //
 // ⚠ A gated-out case is NOT RUN, not failed — the same treatment `markerAllowsTarget` gives, and for the
 // same reason: nothing about the program was proved or disproved.
-function targetCanCaptureMmTrace(test SpecTest, effectiveTarget Target) returns bool
-	if not mmTraceMode(test) 'notATraceCase'
+function targetCanCaptureTrace(test SpecTest, effectiveTarget Target) returns bool
+	if not traceCaptureMode(test) 'notATraceCase'
 		return true
 	end 'notATraceCase'
 
 	return effectiveTarget.cpu == CpuArch.x64 and effectiveTarget.os == Os.windows
-end 'targetCanCaptureMmTrace'
+end 'targetCanCaptureTrace'
 
 // The MARKER's own gate — what the SPEC AUTHOR SPELLED. A gated-out test is not run, not failed and
 // not reported, exactly as a draft or filtered-out test is, which is why this lives beside
@@ -1796,7 +1826,7 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 
 	// An mm-trace case is built with the DebugStream producer. Per-CASE for `--async-trace`'s reason
 	// exactly: no other case pays for it, and an untraced program is byte-for-byte what it was.
-	if mmTraceMode(test) 'debugStreamFlag'
+	if traceCaptureMode(test) 'debugStreamFlag'
 		compileArgv.push(DebugStreamFlag)
 	end 'debugStreamFlag'
 
@@ -1910,37 +1940,42 @@ end 'recordFragmentAndCleanup'
 // written back is byte-for-byte the one the verdict was computed against, so a minted golden cannot
 // disagree with the run that produced it.
 
-// One golden to rewrite: the test it belongs to, and the normalized trace to put there.
-type MmTraceRemint
+// One golden to rewrite: the test it belongs to, WHICH FAMILY it captures, and the normalized trace to put
+// there. The family rides along because the splice has to write the matching FENCE — a remint that only
+// carried the text would put a `log` trace inside a ```mm-trace block, and the next run would then read it
+// back as the other family's golden and fail with a diff nobody could explain.
+type TraceRemint
 	export let testName as String
+	export let family as TraceFamily
 	export let trace as String
 
-	static function create(testName String, trace String) returns MmTraceRemint
-		return Self{testName: testName, trace: trace}
+	static function create(testName String, family TraceFamily, trace String) returns TraceRemint
+		return Self{testName: testName, family: family, trace: trace}
 	end 'create'
-end 'MmTraceRemint'
+end 'TraceRemint'
 
-typealias MmTraceRemintArray = Array with MmTraceRemint
+typealias TraceRemintArray = Array with TraceRemint
 
 // Record the golden this mm-trace case would now carry, if it is one and its program actually ran. A case
 // whose run never completed contributes nothing: minting a golden from an execution that failed to happen
 // would write an EMPTY trace over a real one, which is the "instrument that lies" failure one level up.
-function collectMmTraceRemint(reminted MmTraceRemintArray, test SpecTest, observation RunObservation)
-	if not mmTraceMode(test) 'notATraceCase'
+function collectTraceRemint(reminted TraceRemintArray, test SpecTest, observation RunObservation)
+	if not traceCaptureMode(test) 'notATraceCase'
 		return
 	end 'notATraceCase'
 
+	let family = traceCaptureFamilyOf(test.traceCapture)
 	match observation 'observed'
-		completed(capture) then reminted.push(MmTraceRemint.create(test.name, trace: normalizeMmTrace(capture.stdout)))
+		completed(capture) then reminted.push(TraceRemint.create(test.name, family: family, trace: normalizeTrace(capture.stdout, family: family)))
 		notRequired then break 'observed'
 		failed then break 'observed'
 		notRunnableHere then break 'observed'
 	end 'observed'
-end 'collectMmTraceRemint'
+end 'collectTraceRemint'
 
 // Write every collected golden back into the spec file. A no-op when nothing was collected — which is
 // every ordinary `--update-required` run, so a spec with no mm-trace case is never even read.
-function spliceMmTraceGoldens(specPath FilePath, reminted MmTraceRemintArray)
+function spliceTraceGoldens(specPath FilePath, reminted TraceRemintArray)
 	if reminted.isEmpty() 'nothingToSplice'
 		return
 	end 'nothingToSplice'
@@ -1955,13 +1990,13 @@ function spliceMmTraceGoldens(specPath FilePath, reminted MmTraceRemintArray)
 	end 'eachLine'
 
 	for remint in reminted 'eachRemint'
-		lines = spliceOneMmTraceGolden(lines, remint: remint, specPath: specPath)
+		lines = spliceOneTraceGolden(lines, remint: remint, specPath: specPath)
 	end 'eachRemint'
 
 	try File.writeText(specPath, content: joinFrom(lines, first: 0, separator: LineSeparator)) otherwise 'unwritable'
 		panic("SpecTestRunner: could not write the re-minted mm-trace golden(s) back to {specPath.toString()}")
 	end 'unwritable'
-end 'spliceMmTraceGoldens'
+end 'spliceTraceGoldens'
 
 // ⭐ Replace (or insert) ONE case's ```mm-trace block. The case's SLICE runs from its `<!-- test: NAME -->`
 // marker to the next test marker or `## ` heading — the same bound `SpecParser.scanTestFromMarker` reads a
@@ -1971,53 +2006,54 @@ end 'spliceMmTraceGoldens'
 // is the authoring path a bare `<!-- MmTrace -->` marker asks for; the reference inserts "after the last
 // fenced result block in the slice", and the last non-blank line of the slice IS that block's close in a
 // well-formed spec.
-function spliceOneMmTraceGolden(lines StringArray, remint MmTraceRemint, specPath FilePath) returns StringArray
-	let slice = mmTraceSliceOf(lines, testName: remint.testName, specPath: specPath)
+function spliceOneTraceGolden(lines StringArray, remint TraceRemint, specPath FilePath) returns StringArray
+	let fence = traceFenceOf(remint.family)
+	let slice = traceSliceOf(lines, testName: remint.testName, fence: fence, specPath: specPath)
 
 	var out = StringArray.create()
 	for i in 0 upto slice.blockStart 'beforeBlock'
-		out.push(try lines.get(i) otherwise panic("spliceOneMmTraceGolden: index {i} past {lines.count()} lines"))
+		out.push(try lines.get(i) otherwise panic("spliceOneTraceGolden: index {i} past {lines.count()} lines"))
 	end 'beforeBlock'
 
-	out.push(MmTraceFence)
+	out.push(fence)
 	for traceLine in remint.trace.split(LineSeparator) 'eachTraceLine'
 		out.push(traceLine)
 	end 'eachTraceLine'
 	out.push(FenceDelimiter)
 
 	for i in slice.blockEnd upto lines.count() 'afterBlock'
-		out.push(try lines.get(i) otherwise panic("spliceOneMmTraceGolden: index {i} past {lines.count()} lines"))
+		out.push(try lines.get(i) otherwise panic("spliceOneTraceGolden: index {i} past {lines.count()} lines"))
 	end 'afterBlock'
 
 	return out
-end 'spliceOneMmTraceGolden'
+end 'spliceOneTraceGolden'
 
 // The half-open line range `[blockStart, blockEnd)` the new block replaces. For a case that HAS a block
 // that is the block itself, fences included; for one that does not, it is the empty range at the end of the
 // case's slice, so the write becomes an insertion.
-type MmTraceSlice
+type TraceSlice
 	export let blockStart as LineIndex
 	export let blockEnd as LineIndex
 
-	static function create(blockStart LineIndex, blockEnd LineIndex) returns MmTraceSlice
+	static function create(blockStart LineIndex, blockEnd LineIndex) returns TraceSlice
 		return Self{blockStart: blockStart, blockEnd: blockEnd}
 	end 'create'
-end 'MmTraceSlice'
+end 'TraceSlice'
 
-function mmTraceSliceOf(lines StringArray, testName String, specPath FilePath) returns MmTraceSlice
-	let markerLine = mmTraceMarkerLineOf(lines, testName: testName, specPath: specPath)
+function traceSliceOf(lines StringArray, testName String, fence String, specPath FilePath) returns TraceSlice
+	let markerLine = traceMarkerLineOf(lines, testName: testName, specPath: specPath)
 
 	var lastContent = markerLine + 1
 	var i = markerLine + 1
 	while i < lines.count() 'scan'
-		let line = try lines.get(i) otherwise panic("mmTraceSliceOf: index {i} past {lines.count()} lines")
+		let line = try lines.get(i) otherwise panic("traceSliceOf: index {i} past {lines.count()} lines")
 
 		if line.startsWith(SectionHeadingPrefix) or line.contains(TestMarker) or line.contains(DisabledTestMarker) 'endOfSlice'
-			return MmTraceSlice.create(lastContent, blockEnd: lastContent)
+			return TraceSlice.create(lastContent, blockEnd: lastContent)
 		end 'endOfSlice'
 
-		if line.trim().startsWith(MmTraceFence) 'foundBlock'
-			return MmTraceSlice.create(i, blockEnd: fenceCloseAfter(lines, openIndex: i))
+		if line.trim().startsWith(fence) 'foundBlock'
+			return TraceSlice.create(i, blockEnd: fenceCloseAfter(lines, openIndex: i))
 		end 'foundBlock'
 
 		if not line.trim().isEmpty() 'content'
@@ -2029,8 +2065,8 @@ function mmTraceSliceOf(lines StringArray, testName String, specPath FilePath) r
 
 	// No block: insert one just past the case's last non-blank line, so the blank line that separates this
 	// case from the next survives the write.
-	return MmTraceSlice.create(lastContent, blockEnd: lastContent)
-end 'mmTraceSliceOf'
+	return TraceSlice.create(lastContent, blockEnd: lastContent)
+end 'traceSliceOf'
 
 // The line index one PAST the fence that closes the block opened at `openIndex`.
 function fenceCloseAfter(lines StringArray, openIndex LineIndex) returns LineIndex
@@ -2048,7 +2084,7 @@ end 'fenceCloseAfter'
 // The line carrying this case's `<!-- test: NAME -->` marker. It PANICS when absent, because the case was
 // parsed out of this very file moments ago: a marker that cannot be found again means the splice is about
 // to write a golden into some other case's slice, which is worse than not writing it at all.
-function mmTraceMarkerLineOf(lines StringArray, testName String, specPath FilePath) returns LineIndex
+function traceMarkerLineOf(lines StringArray, testName String, specPath FilePath) returns LineIndex
 	let marker = "{TestMarker} {testName}{TestMarkerEnd}"
 	for (iter, line) in lines.withIterator() 'eachLine'
 		if line.trim() == marker 'found'
@@ -2056,7 +2092,7 @@ function mmTraceMarkerLineOf(lines StringArray, testName String, specPath FilePa
 		end 'found'
 	end 'eachLine'
 	panic("SpecTestRunner: re-minting the mm-trace golden for '{testName}' but {specPath.toString()} has no line reading exactly '{marker}' — the case was parsed out of this file moments ago, so the marker's spelling and this one have drifted")
-end 'mmTraceMarkerLineOf'
+end 'traceMarkerLineOf'
 
 // ============================================================================
 // mm-trace: the mode question, the normalizer, and the verdict
@@ -2065,12 +2101,12 @@ end 'mmTraceMarkerLineOf'
 // Is this case in mm-trace mode? Asked at the COMPILE (which flag to pass), at the RUN (whether to go
 // through the monitor) and at the target gate. One reading of the three-state field, so the three cannot
 // come to disagree about what "an mm-trace case" is.
-export function mmTraceMode(test SpecTest) returns bool
-	return match test.mmTrace 'mode'
+export function traceCaptureMode(test SpecTest) returns bool
+	return match test.traceCapture 'mode'
 		off gives false
 		unpinned to pinned gives true
 	end 'mode'
-end 'mmTraceMode'
+end 'traceCaptureMode'
 
 // ⭐⭐ **NORMALIZE A DECODED TRACE INTO SOMETHING STABLE ACROSS RUNS AND MACHINES — AND IT IS IDEMPOTENT,
 // WHICH IS NOT A NICETY: THE SAME ROUTINE REDUCES BOTH SIDES.** The captured monitor output and the
@@ -2078,30 +2114,82 @@ end 'mmTraceMode'
 // next capture by construction, and there is no second, subtly different reduction for the expected side
 // to drift into. Three steps, each undoing something that is true of a RUN rather than of the PROGRAM:
 //
-//   1. Keep only lines whose payload starts `mm_`. That drops the monitor's `[debugstream]` summary, the
-//      CHILD's own forwarded stdout, and blank lines — and it is what makes the pass idempotent, because
-//      an already-reduced line is kept unchanged by the same test that keeps a raw one.
+//   1. Keep only lines whose payload starts with THIS FAMILY's prefix. That drops the monitor's
+//      `[debugstream]` summary, the CHILD's own forwarded stdout, and blank lines — and it is what makes
+//      the pass idempotent, because an already-reduced line is kept unchanged by the same test that keeps
+//      a raw one.
 //   2. Strip the monitor's `[+SSSS.mmm]` prefix and the depth indent behind it. The timestamp is a
 //      wall-clock delta and the indent is the trace's nesting depth; neither is a property of the program.
-//   3. Dense-renumber `#<id>` to 1, 2, 3… by FIRST APPEARANCE. The runtime's allocation counter is
-//      monotonic over the whole process, so the raw ids depend on everything allocated before `main` —
-//      pinning them would make the golden a hostage to an unrelated rung.
-export function normalizeMmTrace(text String) returns String
+//   3. Reduce the family's own VOLATILE fields — see `reduceTracePayload`, which is the one step the two
+//      families answer differently and the one place that difference is written down.
+export function normalizeTrace(text String, family TraceFamily) returns String
 	var out = ""
 	var seen = MmAllocIdMap.create()
+	let prefix = traceEventPrefixOf(family)
 
 	for rawLine in text.split(LineSeparator) 'eachLine'
-		let payload = mmTracePayloadOf(rawLine)
-		if not payload.startsWith(MmTraceEventPrefix) 'notAnEvent'
+		let payload = tracePayloadOf(rawLine)
+		if not payload.startsWith(prefix) 'notAnEvent'
 			continue
 		end 'notAnEvent'
 
-		let line = renumberAllocIds(payload, seen: seen)
+		let line = reduceTracePayload(family, payload: payload, seen: seen)
 		out = line if out.isEmpty() else "{out}{LineSeparator}{line}"
 	end 'eachLine'
 
 	return out.trim()
-end 'normalizeMmTrace'
+end 'normalizeTrace'
+
+// ⭐ **THE ONE STEP THE TWO FAMILIES ANSWER DIFFERENTLY: what in a decoded line is a property of the RUN
+// rather than of the PROGRAM.** Both reductions exist for the same reason the timestamp strip above them
+// does, and they are different KINDS of thing, which is why this dispatches instead of doing both:
+//   • `mm`  — the allocation id is a monotonic counter over the WHOLE process, so it depends on everything
+//     the runtime allocated before `main`. Dense-renumbered, so one box keeps one number for its whole
+//     life and its alloc / incref / decref / free read as one story.
+//   • `log` — the emitting green thread is a heap ADDRESS and its processor is a scheduler slot. Dropped
+//     outright: neither is reproducible, and neither is anything the program chose. What the program DID
+//     choose — the unit — is left exactly where it is.
+function reduceTracePayload(family TraceFamily, payload String, seen MmAllocIdMap) returns String
+	return match family 'f'
+		mm gives renumberAllocIds(payload, seen: seen)
+		log gives withoutLogIdentity(payload)
+	end 'f'
+end 'reduceTracePayload'
+
+// `gt=0x<hex> P<n>` removed from a decoded log line. The monitor prints both on EVERY log event — it is
+// what lets a LIVE reader demux N emitters — and a golden that pinned them would be a hostage to the
+// allocator's layout and to which processor happened to run the event.
+//
+// ⚠ **IT DROPS A TOKEN PAIR AT THE IDENTITY'S POSITION, NOT EVERY `gt=0x` IN THE LINE.** A `log_text`
+// tail is arbitrary UTF-8 and may contain anything, including that spelling; the identity always precedes
+// the tail, so only the FIRST match and the token behind it go. The processor is taken by POSITION because
+// that is what the decoder's format makes it (`gt=0x{gt:x} P{pId} unit={unitId}`) — matching `P<n>` by
+// shape would also match a message that began with one.
+//
+// ⚠ It is IDEMPOTENT, which the normalizer requires of every step: an already-reduced golden line carries
+// no such token, so nothing is found and the line is rebuilt exactly as it came in.
+function withoutLogIdentity(payload String) returns String
+	var out = ""
+	var dropped = false
+	var dropProcessor = false
+
+	for token in payload.split(TraceTokenSeparator) 'eachToken'
+		if dropProcessor 'theProcessor'
+			dropProcessor = false
+			continue
+		end 'theProcessor'
+
+		if not dropped and token.startsWith(LogTraceGtTokenPrefix) 'theGreenThread'
+			dropped = true
+			dropProcessor = true
+			continue
+		end 'theGreenThread'
+
+		out = token if out.isEmpty() else "{out}{TraceTokenSeparator}{token}"
+	end 'eachToken'
+
+	return out
+end 'withoutLogIdentity'
 
 // One line's EVENT PAYLOAD: what follows the monitor's `[+SSSS.mmm] ` prefix and the depth indent, or the
 // bare trimmed line when there is no prefix — an already-normalized golden line, or the child's own stdout,
@@ -2109,7 +2197,7 @@ end 'normalizeMmTrace'
 //
 // ⚠ The split rejoins everything past the FIRST separator, so a payload that itself contained `] ` would
 // survive intact. No decoded mm event does, but the rule costs one line and removes the question.
-function mmTracePayloadOf(rawLine String) returns String
+function tracePayloadOf(rawLine String) returns String
 	let line = rawLine.trim()
 	if not line.startsWith(MonitorLinePrefix) 'noTimestamp'
 		return line
@@ -2121,7 +2209,7 @@ function mmTracePayloadOf(rawLine String) returns String
 	end 'unterminatedPrefix'
 
 	return joinFrom(parts, first: 1, separator: MonitorTimestampEnd).trim()
-end 'mmTracePayloadOf'
+end 'tracePayloadOf'
 
 // Rewrite every `#<id>` in `payload` to its dense first-appearance number. `seen` carries the mapping
 // ACROSS lines, which is the whole point: one allocation keeps one number for its whole life, so the
@@ -2194,8 +2282,8 @@ end 'joinFrom'
 //
 // ⚠ A PINNED stdout is still checked, against the child's own half of the monitor's stream. Capture mode
 // takes the assertion away only where the spec never made one.
-function checkCapturedStdout(stdout SpecStdout, actual String, mmTrace SpecMmTrace) returns TestOutcome
-	match mmTrace 'mode'
+function checkCapturedStdout(stdout SpecStdout, actual String, traceCapture SpecTraceCapture) returns TestOutcome
+	match traceCapture 'mode'
 		off then return checkRunStdout(stdout, actual: actual)
 		unpinned to pinned then break 'mode'
 	end 'mode'
@@ -2217,8 +2305,8 @@ end 'checkCapturedStdout'
 // prefix-identifiable by construction. The one program this cannot serve is one whose stdout line begins
 // with a literal `[+`, and it would be caught the moment such a case existed: the line would go missing
 // from the pinned stdout rather than being silently accepted.
-function childStdoutOf(monitorStdout String, mmTrace SpecMmTrace) returns String
-	return match mmTrace 'mode'
+function childStdoutOf(monitorStdout String, traceCapture SpecTraceCapture) returns String
+	return match traceCapture 'mode'
 		off gives monitorStdout
 		unpinned to pinned gives linesWithoutMonitorPrefix(monitorStdout)
 	end 'mode'
@@ -2226,8 +2314,8 @@ end 'childStdoutOf'
 
 // The CHILD's own stderr, recovered from the monitor's: everything but the monitor's closing
 // `[debugstream] N events, …` summary, which it writes there itself.
-function childStderrOf(monitorStderr String, mmTrace SpecMmTrace) returns String
-	return match mmTrace 'mode'
+function childStderrOf(monitorStderr String, traceCapture SpecTraceCapture) returns String
+	return match traceCapture 'mode'
 		off gives monitorStderr
 		unpinned to pinned gives linesWithoutPrefix(monitorStderr, prefix: DebugStreamSummaryPrefix)
 	end 'mode'
@@ -2249,32 +2337,32 @@ function linesWithoutPrefix(text String, prefix String) returns String
 	return joinFrom(kept, first: 0, separator: LineSeparator)
 end 'linesWithoutPrefix'
 
-// ⭐ **THE mm-trace VERDICT.** `off` asserts nothing. `unpinned` is the AUTHORING state — the case is in
-// mm-trace mode with no golden yet — and it FAILS with the trace the run produced, quoted, so the message
+// ⭐ **THE CAPTURE VERDICT.** `off` asserts nothing. `unpinned` is the AUTHORING state — the case is in
+// capture mode with no golden yet — and it FAILS with the trace the run produced, quoted, so the message
 // is also the block to paste (or to mint with `--update-required`). `pinned` compares both sides through
-// the one normalizer.
-function checkMmTrace(mmTrace SpecMmTrace, monitorStdout String, monitorStderr String) returns TestOutcome
-	return match mmTrace 'mode'
+// the one normalizer, under the family the case named.
+function checkTraceCapture(traceCapture SpecTraceCapture, monitorStdout String, monitorStderr String) returns TestOutcome
+	return match traceCapture 'mode'
 		off gives TestOutcome.pass
-		unpinned gives TestOutcome.fail(withMonitorStderrText("this case is in mm-trace mode (an `<!-- MmTrace -->` marker) but carries no ```mm-trace golden, so there is nothing to compare its allocations against. Run the suite with --update-required to mint one, or paste this:\n{normalizeMmTrace(monitorStdout)}", monitorStderr: monitorStderr))
-		pinned(expected) gives compareMmTrace(normalizeMmTrace(expected), actual: normalizeMmTrace(monitorStdout), monitorStderr: monitorStderr)
+		unpinned(family) gives TestOutcome.fail(withMonitorStderrText("this case is in capture mode (a `{traceMarkerOf(family)} -->` marker) but carries no {traceFenceOf(family)} golden, so there is nothing to compare its trace against. Run the suite with --update-required to mint one, or paste this:\n{normalizeTrace(monitorStdout, family: family)}", monitorStderr: monitorStderr))
+		pinned(family, expected) gives compareTrace(normalizeTrace(expected, family: family), actual: normalizeTrace(monitorStdout, family: family), family: family, monitorStderr: monitorStderr)
 	end 'mode'
-end 'checkMmTrace'
+end 'checkTraceCapture'
 
-function compareMmTrace(expected String, actual String, monitorStderr String) returns TestOutcome
+function compareTrace(expected String, actual String, family TraceFamily, monitorStderr String) returns TestOutcome
 	if expected == actual 'matches'
 		return TestOutcome.pass
 	end 'matches'
-	return TestOutcome.fail(withMonitorStderrText("mm-trace mismatch:\nExpected:\n{expected}\nActual:\n{actual}", monitorStderr: monitorStderr))
-end 'compareMmTrace'
+	return TestOutcome.fail(withMonitorStderrText("{traceFenceOf(family)} mismatch:\nExpected:\n{expected}\nActual:\n{actual}", monitorStderr: monitorStderr))
+end 'compareTrace'
 
 // ⭐ **ATTACH THE MONITOR'S STDERR TO AN mm-trace FAILURE.** Every mm-trace verdict goes through here, so
 // no failure can report a symptom while the cause sits unread in a discarded stream: that stream carries
 // the `[debugstream]` event summary, the child's own stderr, AND the monitor's own crash report. The
 // reference records dropping it making a monitor that CRASHED before spawning the child indistinguishable
 // from a program that simply allocated nothing.
-function withMonitorStderr(outcome TestOutcome, mmTrace SpecMmTrace, monitorStderr String) returns TestOutcome
-	match mmTrace 'mode'
+function withMonitorStderr(outcome TestOutcome, traceCapture SpecTraceCapture, monitorStderr String) returns TestOutcome
+	match traceCapture 'mode'
 		off then return outcome
 		unpinned to pinned then break 'mode'
 	end 'mode'
@@ -2303,7 +2391,7 @@ end 'withMonitorStderrText'
 function finishPendingRun(pending PendingRun, observation RunObservation, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
 	// `asyncTrace` is read off the case itself rather than threaded through `PendingRun` — `CompiledTest`
 	// already carries the whole `SpecTest`, so a fifth field would be the same fact stored twice.
-	let outcome = checkObservedRun(pending.expected, stderr: pending.stderr, stdout: pending.stdout, observation: observation, effectiveTarget: effectiveTarget, asyncTrace: pending.compiled.test.asyncTrace, mmTrace: pending.compiled.test.mmTrace)
+	let outcome = checkObservedRun(pending.expected, stderr: pending.stderr, stdout: pending.stdout, observation: observation, effectiveTarget: effectiveTarget, asyncTrace: pending.compiled.test.asyncTrace, traceCapture: pending.compiled.test.traceCapture)
 	return recordFragmentAndCleanup(pending.compiled, outcome: outcome, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 end 'finishPendingRun'
 
@@ -3030,9 +3118,13 @@ end 'windowsLinuxRunner'
 // ⚠ The spawned process sees these starting at argv[1] — argv[0] is the program's own path, which
 // `Subprocess` supplies from the executable and which no caller may occupy. That is what a real
 // process sees, and what every `/specs` case reading `args.get(1)` was written against.
-function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArgs ProgramArgArray, mmTrace bool) returns RunCommand
-	if mmTrace 'underTheMonitor'
-		return buildMonitorRunCommand(modulePath, programArgs: programArgs)
+function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArgs ProgramArgArray, traceCapture SpecTraceCapture) returns RunCommand
+	// The whole CAPTURE union rather than a bool, because the run command needs the FAMILY: it is what the
+	// monitor is filtered by. A bool would answer "under the monitor" and then leave the family to be
+	// re-derived from the test at the one site that could still get it wrong.
+	match traceCapture 'underTheMonitor'
+		off then break 'underTheMonitor'
+		unpinned to pinned then return buildMonitorRunCommand(modulePath, family: traceCaptureFamilyOf(traceCapture), programArgs: programArgs)
 	end 'underTheMonitor'
 
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
@@ -3067,14 +3159,14 @@ end 'buildRunCommand'
 // ⚠ **THE MONITOR'S EXIT CODE IS THE CHILD'S** (`DebugStreamMonitor.Run` returns `process.ExitCode`), so
 // an ```exitcode block on an mm-trace case is checked against the same number it would have been without
 // the monitor — EXCEPT when the monitor itself died, which is exactly why the exit code is checked FIRST.
-// See `checkMmTrace`.
+// See `checkTraceCapture`.
 //
 // ⚠ It is the HOST path only, and it has to be: the producer is x64-windows only, so an mm-trace case on
-// any other target is skipped before it is ever compiled (`targetCanCaptureMmTrace`).
-function buildMonitorRunCommand(modulePath FilePath, programArgs ProgramArgArray) returns RunCommand
+// any other target is skipped before it is ever compiled (`targetCanCaptureTrace`).
+function buildMonitorRunCommand(modulePath FilePath, family TraceFamily, programArgs ProgramArgArray) returns RunCommand
 	var argv = StringArray.create()
 	argv.push(MonitorSubcommand)
-	argv.push(MonitorMmFilterArg)
+	argv.push(traceFilterArgOf(family))
 	argv.push(modulePath.toString())
 	argv.append(programArgs)
 
@@ -3267,7 +3359,7 @@ function spawnOneRun(pending PendingRun, runWorkingDir FilePath, effectiveTarget
 	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned by
 	// the host, so it goes behind the vendored wasmtime instead — what is checked afterwards is
 	// IDENTICAL either way.
-	let runCommand = buildRunCommand(pending.compiled.exePath, effectiveTarget: effectiveTarget, programArgs: pending.compiled.test.programArgs, mmTrace: mmTraceMode(pending.compiled.test))
+	let runCommand = buildRunCommand(pending.compiled.exePath, effectiveTarget: effectiveTarget, programArgs: pending.compiled.test.programArgs, traceCapture: pending.compiled.test.traceCapture)
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingSubdirName`.
@@ -3690,17 +3782,17 @@ end 'runPreconditions'
 //
 // `notRequired` is unreachable and says so: the executors mint it for exactly the tests that FINISHED
 // in the compile pass, and nothing but a `PendingRun` reaches here.
-export function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, observation RunObservation, effectiveTarget Target, asyncTrace bool, mmTrace SpecMmTrace) returns TestOutcome
+export function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, observation RunObservation, effectiveTarget Target, asyncTrace bool, traceCapture SpecTraceCapture) returns TestOutcome
 	return match observation 'observed'
 		notRequired panic("checkObservedRun: a pending run was handed the 'no execution needed' observation — `executeRuns` answers one observation per PREPARED test and mints that arm only for a test that finished at its compile")
 		failed(reason) gives TestOutcome.fail(reason)
 		notRunnableHere gives TestOutcome.notRunHere
-		completed(capture) gives runAssertions(expected, stderr: stderr, stdout: stdout, spawned: capture, effectiveTarget: effectiveTarget, asyncTrace: asyncTrace, mmTrace: mmTrace)
+		completed(capture) gives runAssertions(expected, stderr: stderr, stdout: stdout, spawned: capture, effectiveTarget: effectiveTarget, asyncTrace: asyncTrace, traceCapture: traceCapture)
 	end 'observed'
 end 'checkObservedRun'
 
 // EVERY half the spec pinned, checked against that ONE execution.
-function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, spawned ProcessCapture, effectiveTarget Target, asyncTrace bool, mmTrace SpecMmTrace) returns TestOutcome
+function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, spawned ProcessCapture, effectiveTarget Target, asyncTrace bool, traceCapture SpecTraceCapture) returns TestOutcome
 	// What the PROGRAM said and how it ended, which under an external runner is not always what the
 	// PROCESS said and how the process ended — see `observedRun`. Every check below reads this one
 	// observation, so the three halves of a case's expectation cannot be compared against two
@@ -3715,7 +3807,7 @@ function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdo
 	// program that exits 0 is not.
 	let exitOutcome = checkRunExitCode(expected, actual: run.exitCode)
 	if not exitOutcome.isPass() 'exitDisagreed'
-		return withMonitorStderr(exitOutcome, mmTrace: mmTrace, monitorStderr: run.stderr)
+		return withMonitorStderr(exitOutcome, traceCapture: traceCapture, monitorStderr: run.stderr)
 	end 'exitDisagreed'
 
 	// ⭐⭐ **THE TRACE IS CHECKED AFTER THE EXIT CODE AND BEFORE THE STREAMS, AND THE ORDER IS THE POINT.**
@@ -3724,19 +3816,19 @@ function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdo
 	// that names it as a CRASH is never reached; the reference records exactly that reading a monitor
 	// exiting 134 against `ExitCode: 0` as "a program that allocated nothing". So the exit code comes
 	// first, and every mm-trace verdict carries the monitor's stderr with it.
-	let traceOutcome = checkMmTrace(mmTrace, monitorStdout: run.stdout, monitorStderr: run.stderr)
+	let traceOutcome = checkTraceCapture(traceCapture, monitorStdout: run.stdout, monitorStderr: run.stderr)
 	if not traceOutcome.isPass() 'traceDisagreed'
 		return traceOutcome
 	end 'traceDisagreed'
 
 	// Both streams are checked against the ONE execution. stdout first (it is what a `print` test
 	// exists to pin); on a pass, stderr is checked and its outcome returned.
-	let stdoutOutcome = checkCapturedStdout(stdout, actual: childStdoutOf(run.stdout, mmTrace: mmTrace), mmTrace: mmTrace)
+	let stdoutOutcome = checkCapturedStdout(stdout, actual: childStdoutOf(run.stdout, traceCapture: traceCapture), traceCapture: traceCapture)
 	if not stdoutOutcome.isPass() 'stdoutDisagreed'
 		return stdoutOutcome
 	end 'stdoutDisagreed'
 
-	return checkRunStderr(stderr, actual: childStderrOf(run.stderr, mmTrace: mmTrace), asyncTrace: asyncTrace)
+	return checkRunStderr(stderr, actual: childStderrOf(run.stderr, traceCapture: traceCapture), asyncTrace: asyncTrace)
 end 'runAssertions'
 
 // ⭐ **THE SECTION GATES — a linked binary's own bytes, for every section the case pinned.**
