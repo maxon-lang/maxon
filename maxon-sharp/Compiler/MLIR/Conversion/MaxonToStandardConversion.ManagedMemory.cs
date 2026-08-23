@@ -451,7 +451,8 @@ public static partial class MaxonToStandardConversion {
     var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 
     // COW check before mutation
-    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.ResultKind == MaxonValueKind.Bool);
+    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.ResultKind == MaxonValueKind.Bool,
+      isStructElement: op.IsStructElement);
 
     // Reload buffer/length after COW (COW may change the buffer pointer)
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
@@ -610,7 +611,8 @@ public static partial class MaxonToStandardConversion {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
     var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
     var isBitPacked = op.ElementKind == MaxonValueKind.Bool;
-    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: isBitPacked);
+    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: isBitPacked,
+      isStructElement: op.IsStructElement);
     // Check against capacity after COW (COW updates capacity from 0 to length)
     var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
     var index = (StdI64)valueMap[op.Index];
@@ -825,7 +827,8 @@ public static partial class MaxonToStandardConversion {
       EmitBoundsCheck(block, clampedOldCap, newCapPlusOne.Result, "__mm_panic_grow_shrink");
     }
 
-    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked);
+    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked,
+      isStructElement: op.IsStructElement);
 
     // A COW promoted a BORROWED buffer to an owned copy of the live elements and set the
     // capacity to that length — so the record may now hold MORE slots than the caller asked
@@ -892,7 +895,8 @@ public static partial class MaxonToStandardConversion {
     MaxonValue? errorFlagValue = null) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
     var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
-    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked);
+    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked,
+      isStructElement: op.IsStructElement);
     // Check after COW (COW updates capacity from 0 to length)
     var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
     var index = (StdI64)valueMap[op.Index];
@@ -1224,7 +1228,8 @@ public static partial class MaxonToStandardConversion {
     string managedVarName,
     Dictionary<string, string> varTypes,
     StdI64 elemSize,
-    bool isBitPacked = false) {
+    bool isBitPacked = false,
+    bool isStructElement = false) {
     var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
     var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 
@@ -1291,6 +1296,23 @@ public static partial class MaxonToStandardConversion {
     var parentAfter = new StdSelectI64Op(wasSliceAndCopied.Result, zeroPtr.Result, parentPtr);
     block.AddOp(parentAfter);
     EmitStructFieldStore(block, parentAfter.Result, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
+
+    // A COW of a MANAGED-element buffer memcpy'd 8-byte element POINTERS, and a raw copy of a
+    // pointer carries no claim on what it points at. Both buffers are now walked by a teardown
+    // that decrefs every slot, so without this the shared elements are released twice — which is
+    // exactly what `mm_decref: refcount underflow (already zero)` was, reached by cloning an
+    // `Array with <struct>` and then pushing onto the clone.
+    //
+    // RETAIN and not a deep clone: a COW materialises a private buffer for a value that ALREADY
+    // exists (a view and its parent are two buffers holding one array), so the elements are the
+    // same elements. Only a copy that mints a NEW array value deep-clones — see
+    // ManagedElementCopy.
+    if (isStructElement) {
+      var increfManagedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
+      var cowIncrefArg = new StdSelectI64Op(cowDidCopy.Result, increfManagedPtr, zeroPtr.Result);
+      block.AddOp(cowIncrefArg);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_incref_managed_elements", [cowIncrefArg.Result], null));
+    }
   }
 
   /// <summary>
@@ -1352,6 +1374,8 @@ public static partial class MaxonToStandardConversion {
     }
     // ByteGet/ByteSet operate on raw bytes, not logical elements, so COW uses elemSize directly.
     // For bit-packed arrays (elemSize==0), the runtime's maxon_cow_check handles capacity==-2 correctly.
+    // A byte write is only ever issued against a byte buffer, so the copy has no element pointers
+    // to claim — hence no isStructElement here.
     EmitCowCheck(block, managedVarName, varTypes, elemSize);
 
     // Now perform the actual byte write using the writable buffer
@@ -1486,7 +1510,8 @@ public static partial class MaxonToStandardConversion {
 
     // --- not terminated: COW + ensure capacity + write null ---
     var fixBlock = func.Body.AddBlock(needTermLabel);
-    // COW to get an owned buffer (handles rdata and slice cases)
+    // COW to get an owned buffer (handles rdata and slice cases). Null-terminating is a BYTE
+    // operation on a string/byte buffer, so the copy holds no element pointers to claim.
     var elemSize = (StdI64)EmitStructFieldLoad(fixBlock, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
     EmitCowCheck(fixBlock, managedVarName, varTypes, elemSize);
     // Ensure capacity >= length + 1
@@ -2052,7 +2077,7 @@ public static partial class MaxonToStandardConversion {
         var increfBody = func.Body.AddBlock(increfBodyLabel);
         var iBody = (StdI64)EmitLoad(increfBody, increfLoopVar, varTypes);
         var ptrBase = (StdI64)EmitLoad(increfBody, increfStartVar, varTypes);
-        var eightConst = new StdConstI64Op(8);
+        var eightConst = new StdConstI64Op(ManagedElementPointerSize);
         increfBody.AddOp(eightConst);
         var ptrOff = new StdMulI64Op(iBody, eightConst.Result);
         increfBody.AddOp(ptrOff);
@@ -2102,13 +2127,27 @@ public static partial class MaxonToStandardConversion {
       return (MaxonValueKind.Integer, null, false, false, null, null);
     if (typeDefs.TryGetValue(structTypeName, out var typeInfo)
       && typeInfo is IrStructType structType
-      && structType.TypeParams.TryGetValue("Element", out var elemType)) {
+      && structType.TypeParams.TryGetValue(IrStructType.ElementTypeParamName, out var elemType)) {
       var info = ManagedElementInfo.FromElementType(elemType);
       return (info.Kind, null, info.Kind == MaxonValueKind.Bool,
               info.IsStructElement, info.StructElementTypeName, info.ElementStorageType);
     }
     // Bare __ManagedMemory with no Element type param (raw byte buffer)
     return (MaxonValueKind.Integer, null, false, false, null, null);
+  }
+
+  /// <summary>
+  /// The `<Element>.clone` a copy of `managedTypeName`'s buffer deep-clones each element through,
+  /// or null when the elements are carried into the copy by RETAIN instead.
+  ///
+  /// Reads ManagedElementCopy so the answer is the one dead-function elimination already pinned:
+  /// re-deriving the rule here is how a call to a deleted symbol, or a silent downgrade from a
+  /// deep clone to an alias, would get in.
+  /// </summary>
+  private static string? ManagedElementCloneCallee(string managedTypeName) {
+    var module = _sourceModule
+      ?? throw new InvalidOperationException("Managed element clone lookup ran outside MaxonToStandardConversion.Run");
+    return ManagedElementCopy.ClonerNameFor(module, ManagedElementCopy.ElementTypeOf(module, managedTypeName));
   }
 
   /// <summary>
@@ -2140,6 +2179,7 @@ public static partial class MaxonToStandardConversion {
           ?? throw new InvalidOperationException($"Slice source arg has no concrete managed type in valueMap");
         var sliceOp = new MaxonManagedMemSliceOp(args[0], args[1], args[2]) {
           IsStructElement = isStructElem,
+          ElementClonerName = ManagedElementCloneCallee(sliceConcreteTypeName),
           TypeParamName = typeParamName,
           IsBitPacked = isBitPacked
         };
@@ -2201,9 +2241,10 @@ public static partial class MaxonToStandardConversion {
         return true;
       }
       case "__managed_mem_grow": {
-        var (_, _, isBitPacked, _, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+        var (_, _, isBitPacked, isGrowStructElem, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
         var growOp = new MaxonManagedMemGrowOp(args[0], args[1]) {
-          IsBitPacked = isBitPacked
+          IsBitPacked = isBitPacked,
+          IsStructElement = isGrowStructElem
         };
         LowerManagedMemGrow(growOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
         return true;
@@ -2219,17 +2260,19 @@ public static partial class MaxonToStandardConversion {
         return true;
       }
       case "__managed_mem_shift_right": {
-        var (_, _, isBitPacked, _, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+        var (_, _, isBitPacked, isShiftRightStructElem, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
         var shiftOp = new MaxonManagedMemShiftOp(args[0], args[1], args[2], shiftRight: true) {
-          IsBitPacked = isBitPacked
+          IsBitPacked = isBitPacked,
+          IsStructElement = isShiftRightStructElem
         };
         LowerManagedMemShift(shiftOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
         return true;
       }
       case "__managed_mem_shift_left": {
-        var (_, _, isBitPacked, _, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+        var (_, _, isBitPacked, isShiftLeftStructElem, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
         var shiftOp = new MaxonManagedMemShiftOp(args[0], args[1], args[2], shiftRight: false) {
-          IsBitPacked = isBitPacked
+          IsBitPacked = isBitPacked,
+          IsStructElement = isShiftLeftStructElem
         };
         LowerManagedMemShift(shiftOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
         return true;

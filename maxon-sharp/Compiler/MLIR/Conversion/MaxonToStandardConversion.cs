@@ -5,6 +5,11 @@ namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static IrModule<StandardOp>? _resultModule;
+  // The Maxon module being lowered. Read where a lowering has to ask a question about the WHOLE
+  // program rather than about the op in front of it — today, which function a managed element is
+  // deep-cloned through (ManagedElementCopy), a verdict that must match the one dead-function
+  // elimination already pinned.
+  [ThreadStatic] private static IrModule<MaxonOp>? _sourceModule;
   // Target the conversion is lowering for; drives platform-specific decisions
   // such as the Win32-vs-POSIX errno→ordinal mapping table used by the throwing
   // __ManagedFile / __ManagedDirectory builtins.
@@ -42,6 +47,7 @@ public static partial class MaxonToStandardConversion {
     _rdataStdlibPhase ? $"s{_nextStdlibRdataId++}" : $"{_nextRdataId++}";
 
   public static IrModule<StandardOp> Run(IrModule<MaxonOp> module, CompileTarget? target = null) {
+    _sourceModule = module;
     _currentTarget = target ?? CompileTarget.Default;
     _valueTupleReturnFunctions = module.ValueTupleReturnFunctions;
     _rdataStringCache = [];

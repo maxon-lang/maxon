@@ -559,6 +559,12 @@ public static partial class MaxonToStandardConversion {
   private const int ManagedFieldCapacity = 16;
   private const int ManagedFieldElementSize = 24;
   private const int ManagedFieldParentPtr = 32;
+
+  /// A MANAGED element occupies exactly one machine pointer in the buffer, whatever the element
+  /// type's own size is — the slot holds the record's address. Every walk over a managed buffer
+  /// strides by this, and `mm_incref_managed_elements` panics when a record's element_size says
+  /// otherwise.
+  private const int ManagedElementPointerSize = 8;
   private const int ManagedMemoryStructSize = 40;
 
   // Byte-fusion (inline storage). An OWNED record whose element/byte buffer lives INLINE in the

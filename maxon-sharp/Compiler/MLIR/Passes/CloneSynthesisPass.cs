@@ -12,7 +12,10 @@ public static class CloneSynthesisPass {
   public static void Run(IrModule<MaxonOp> module) {
     var funcByName = module.Functions.ToDictionary(f => f.Name);
 
-    // Collect struct type names that need clone() (from MaxonManagedMemGetOp)
+    // Collect struct type names that need clone() (from MaxonManagedMemGetOp), plus the ELEMENT
+    // types of every buffer copy: `ManagedElementCopy` deep-clones a Cloneable element through
+    // that type's own clone, and this pass is the only thing that can make one exist for a type
+    // minted after parsing.
     var neededClones = new HashSet<string>();
     foreach (var func in module.Functions) {
       if (func.IsBuiltinSynthetic) continue;
@@ -21,6 +24,9 @@ public static class CloneSynthesisPass {
         foreach (var op in block.Operations) {
           if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemType })
             neededClones.Add(elemType);
+
+          if (ManagedElementCopy.SlicedElementTypeOf(module, op) is IrStructType sliceElem)
+            neededClones.Add(sliceElem.Name);
         }
       }
     }

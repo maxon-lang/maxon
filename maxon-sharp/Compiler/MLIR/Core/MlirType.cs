@@ -241,6 +241,11 @@ public class IrStructType : IrType {
   /// key-building site that simply omitted it — see Parser.ConstArgSegments.
   public const string CapacityConstParamName = "__capacity";
 
+  /// The type parameter every element-bearing container declares its element under
+  /// (`Array uses Element`, `__ManagedMemory with Element`). It is the key three different
+  /// passes read a concrete instance's element type back out of.
+  public const string ElementTypeParamName = "Element";
+
   /// The CONST arguments this instance was applied to, keyed by const parameter name.
   /// Part of the instance's IDENTITY, exactly as TypeParams is: a `Vector with 3 Int` is a
   /// different type from a `Vector with 4 Int` (specs/vector.md).

@@ -1347,7 +1347,6 @@ public static partial class MaxonToStandardConversion {
 			// The slice stores a pointer into the parent's buffer and increfs the parent.
 			// Data is only copied on mutation (COW) or cstring conversion.
 			var srcElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, IrType.I64, varTypes);
-			var srcCapacity = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 
 			// Convert element index to byte offset: start * element_size
 			var startBytesOp = new StdMulI64Op(start, srcElemSize);
@@ -1377,53 +1376,65 @@ public static partial class MaxonToStandardConversion {
 			//   source capacity == -2 (rdata): slice gets capacity=-2, parentPtr=0 (static data, no refcounting)
 			//   source capacity == -1 (nested slice): slice gets capacity=-1, parentPtr=source.parentPtr
 			//   source capacity >= 0 (owned): copy data into new owned buffer
+			//
+			// ⚠ A DEEP-CLONING COPY HAS NO VIEW MODE, and skipping this dispatch is the whole of why.
+			// A view holds no buffer of its own, so there is nowhere to put the element clones — the
+			// copy would silently degrade back to sharing the source's elements. It bit exactly where
+			// a view is produced: `Array.clone` hands back `Self{managed: <the copy>}`, which IS a
+			// capacity==-1 view, so `a.clone().clone()` took the nested-slice arm and the second clone
+			// aliased the first (measured: `a=original b=MUTATED` where shv2 answers `b=original`).
+			bool deepCloneNeedsOwnBuffer = op.ElementClonerName != null;
 
 			// Spill sliceLenOp since conditional blocks may follow
 			var sliceLenVar = $"__slice_len_{op.Result.Id}";
 			EmitStore(block, sliceLenOp.Result, sliceLenVar, varTypes);
 
 			var uid = IrContext.Current.NextId();
-			var negTwoConst = new StdConstI64Op(-2);
-			block.AddOp(negTwoConst);
-			var isRdata = new StdCmpI64Op("eq", srcCapacity, negTwoConst.Result);
-			block.AddOp(isRdata);
-
 			var rdataBlock = $"__slice_rdata_{uid}";
 			var checkSliceBlock = $"__slice_check_{uid}";
 			var sliceOfSliceBlock = $"__slice_nested_{uid}";
 			var ownedBlock = $"__slice_owned_{uid}";
 			var doneBlock = $"__slice_done_{uid}";
 
-			block.AddOp(new StdCondBrOp(isRdata.Result, rdataBlock, checkSliceBlock));
+			if (deepCloneNeedsOwnBuffer) {
+				block.AddOp(new StdBrOp(ownedBlock));
+			} else {
+				var srcCapacity = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+				var negTwoConst = new StdConstI64Op(-2);
+				block.AddOp(negTwoConst);
+				var isRdata = new StdCmpI64Op("eq", srcCapacity, negTwoConst.Result);
+				block.AddOp(isRdata);
+				block.AddOp(new StdCondBrOp(isRdata.Result, rdataBlock, checkSliceBlock));
 
-			// --- rdata path: capacity=-2, parentPtr=0 ---
-			var rdataBody = func.Body.AddBlock(rdataBlock);
-			var rdataNegTwo = new StdConstI64Op(-2);
-			rdataBody.AddOp(rdataNegTwo);
-			var rdataZero = new StdConstI64Op(0);
-			rdataBody.AddOp(rdataZero);
-			EmitStructFieldStore(rdataBody, rdataNegTwo.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
-			EmitStructFieldStore(rdataBody, rdataZero.Result, tempName, ManagedFieldParentPtr, IrType.I64, varTypes);
-			rdataBody.AddOp(new StdBrOp(doneBlock));
+				// --- rdata path: capacity=-2, parentPtr=0 ---
+				var rdataBody = func.Body.AddBlock(rdataBlock);
+				var rdataNegTwo = new StdConstI64Op(-2);
+				rdataBody.AddOp(rdataNegTwo);
+				var rdataZero = new StdConstI64Op(0);
+				rdataBody.AddOp(rdataZero);
+				EmitStructFieldStore(rdataBody, rdataNegTwo.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
+				EmitStructFieldStore(rdataBody, rdataZero.Result, tempName, ManagedFieldParentPtr, IrType.I64, varTypes);
+				rdataBody.AddOp(new StdBrOp(doneBlock));
 
-			// --- check if source is a slice (capacity == -1) ---
-			var checkBody = func.Body.AddBlock(checkSliceBlock);
-			var negOneConst = new StdConstI64Op(-1);
-			checkBody.AddOp(negOneConst);
-			var srcCapReload = (StdI64)EmitStructFieldLoad(checkBody, srcVarName, ManagedFieldCapacity, IrType.I64, varTypes);
-			var isNestedSlice = new StdCmpI64Op("eq", srcCapReload, negOneConst.Result);
-			checkBody.AddOp(isNestedSlice);
-			checkBody.AddOp(new StdCondBrOp(isNestedSlice.Result, sliceOfSliceBlock, ownedBlock));
+				// --- check if source is a slice (capacity == -1) ---
+				var checkBody = func.Body.AddBlock(checkSliceBlock);
+				var negOneConst = new StdConstI64Op(-1);
+				checkBody.AddOp(negOneConst);
+				var srcCapReload = (StdI64)EmitStructFieldLoad(checkBody, srcVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+				var isNestedSlice = new StdCmpI64Op("eq", srcCapReload, negOneConst.Result);
+				checkBody.AddOp(isNestedSlice);
+				checkBody.AddOp(new StdCondBrOp(isNestedSlice.Result, sliceOfSliceBlock, ownedBlock));
 
-			// --- nested slice path: capacity=-1, parentPtr=source.parentPtr, incref(source.parentPtr) ---
-			var nestedBody = func.Body.AddBlock(sliceOfSliceBlock);
-			var nestedNegOne = new StdConstI64Op(-1);
-			nestedBody.AddOp(nestedNegOne);
-			EmitStructFieldStore(nestedBody, nestedNegOne.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
-			var srcParentPtr = (StdI64)EmitStructFieldLoad(nestedBody, srcVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
-			EmitStructFieldStore(nestedBody, srcParentPtr, tempName, ManagedFieldParentPtr, IrType.I64, varTypes);
-			EmitIncrefValue(nestedBody, srcParentPtr, scopeName: _currentFuncName);
-			nestedBody.AddOp(new StdBrOp(doneBlock));
+				// --- nested slice path: capacity=-1, parentPtr=source.parentPtr, incref(source.parentPtr) ---
+				var nestedBody = func.Body.AddBlock(sliceOfSliceBlock);
+				var nestedNegOne = new StdConstI64Op(-1);
+				nestedBody.AddOp(nestedNegOne);
+				EmitStructFieldStore(nestedBody, nestedNegOne.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
+				var srcParentPtr = (StdI64)EmitStructFieldLoad(nestedBody, srcVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
+				EmitStructFieldStore(nestedBody, srcParentPtr, tempName, ManagedFieldParentPtr, IrType.I64, varTypes);
+				EmitIncrefValue(nestedBody, srcParentPtr, scopeName: _currentFuncName);
+				nestedBody.AddOp(new StdBrOp(doneBlock));
+			}
 
 			// --- owned path: copy data (heap-allocated source cannot be zero-copy because
 			// struct-level COW can't distinguish slice refs from normal refs) ---
@@ -1450,10 +1461,25 @@ public static partial class MaxonToStandardConversion {
 			var ownedParentZero = new StdConstI64Op(0);
 			ownedBody.AddOp(ownedParentZero);
 			EmitInitManagedMemory(ownedBody, tempName, ownedNewBuf, ownedSliceLen, ownedSliceLen, ownedElemSize, ownedParentZero.Result, varTypes);
-			// For managed elements: incref each copied element
+			// The memcpy above copied raw 8-byte element POINTERS, which carry no claim on what they
+			// point at. This copy is a NEW array value (`Array.clone` and `Array.slice` are the two
+			// callers), so each element becomes the copy's OWN:
+			//
+			//  - a Cloneable element is DEEP-CLONED through its own `clone`. `specs/memory-safety.md`
+			//    says `.clone()` is "a new, independent copy", and an element reached through `get` is
+			//    a mutable heap record — sharing one made a write through the copy a write to the
+			//    original (`Array with <struct>`, and `Array with String` just as much: `append`
+			//    mutates the record the slot points at).
+			//  - anything with no Cloneable conformance is RETAINED, because the language defines no
+			//    independent copy of it and there is no cloner to call. ManagedElementCopy decides
+			//    which, once, for the pass that must MAKE the cloner and the pass that must KEEP it.
 			if (op.IsStructElement) {
-				var ownedManagedPtr = (StdI64)EmitLoad(ownedBody, tempName, varTypes);
-				ownedBody.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [ownedManagedPtr], null));
+				if (op.ElementClonerName != null) {
+					ownedBody = EmitDeepCloneManagedElements(func, ownedBody, tempName, op.ElementClonerName, varTypes);
+				} else {
+					var ownedManagedPtr = (StdI64)EmitLoad(ownedBody, tempName, varTypes);
+					ownedBody.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [ownedManagedPtr], null));
+				}
 			}
 			ownedBody.AddOp(new StdBrOp(doneBlock));
 
@@ -1462,6 +1488,128 @@ public static partial class MaxonToStandardConversion {
 
 			valueMap[op.Result] = new StdHeapPtr(slicePtr.Id, slicePtr.TypeName, tempName);
 		}
+	}
+
+	/// <summary>
+	/// Replace every live slot of a freshly copied managed buffer with an INDEPENDENT clone of what
+	/// the memcpy left there, so the copy owns its elements outright instead of sharing the source's.
+	///
+	/// The walk is the deep half of the same loop `mm_incref_managed_elements` runs shallowly: one
+	/// pass over `length` 8-byte pointer slots. It stays in the lowering rather than the runtime
+	/// because the cloner is per ELEMENT TYPE and the runtime helpers take no function pointer — the
+	/// concrete element type is known here and nowhere below.
+	///
+	/// A ZERO slot is left alone: `resize`/`remove` leave slots that hold nothing, and the same
+	/// null guard that keeps `get` from increfing one keeps this from calling a cloner on it.
+	///
+	/// Returns the block execution continues in.
+	/// </summary>
+	private static IrBlock<StandardOp> EmitDeepCloneManagedElements(
+	  IrFunction<StandardOp> func,
+	  IrBlock<StandardOp> block,
+	  string managedVarName,
+	  string clonerName,
+	  Dictionary<string, string> varTypes) {
+
+		var uid = IrContext.Current.NextId();
+		var loopVar = $"__elemclone_i_{uid}";
+		var slotVar = $"__elemclone_slot_{uid}";
+		var sourceVar = $"__elemclone_src_{uid}";
+		var startIndex = new StdConstI64Op(0);
+		block.AddOp(startIndex);
+		EmitStore(block, startIndex.Result, loopVar, varTypes);
+
+		var headerLabel = $"__elemclone_hdr_{uid}";
+		var bodyLabel = $"__elemclone_body_{uid}";
+		var cloneLabel = $"__elemclone_do_{uid}";
+		var stepLabel = $"__elemclone_step_{uid}";
+		var doneLabel = $"__elemclone_done_{uid}";
+		block.AddOp(new StdBrOp(headerLabel));
+
+		var headerBlock = func.Body.AddBlock(headerLabel);
+		var indexAtHeader = (StdI64)EmitLoad(headerBlock, loopVar, varTypes);
+		var length = (StdI64)EmitStructFieldLoad(headerBlock, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+		var moreToDo = new StdCmpI64Op("lt", indexAtHeader, length);
+		headerBlock.AddOp(moreToDo);
+		headerBlock.AddOp(new StdCondBrOp(moreToDo.Result, bodyLabel, doneLabel));
+
+		var bodyBlock = func.Body.AddBlock(bodyLabel);
+		var indexInBody = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+		var buffer = LoadManagedBuffer(bodyBlock, managedVarName, varTypes);
+		var pointerSize = new StdConstI64Op(ManagedElementPointerSize);
+		bodyBlock.AddOp(pointerSize);
+		var slotOffset = new StdMulI64Op(indexInBody, pointerSize.Result);
+		bodyBlock.AddOp(slotOffset);
+		var slotAddr = new StdAddI64Op(buffer, slotOffset.Result);
+		bodyBlock.AddOp(slotAddr);
+		EmitStore(bodyBlock, slotAddr.Result, slotVar, varTypes);
+		var slotValue = new StdLoadIndirectOp(slotAddr.Result, 0, IrType.I64);
+		bodyBlock.AddOp(slotValue);
+		EmitStore(bodyBlock, (StdI64)slotValue.Result, sourceVar, varTypes);
+		var emptySlot = new StdConstI64Op(0);
+		bodyBlock.AddOp(emptySlot);
+		var slotIsEmpty = new StdCmpI64Op("eq", (StdI64)slotValue.Result, emptySlot.Result);
+		bodyBlock.AddOp(slotIsEmpty);
+		bodyBlock.AddOp(new StdCondBrOp(slotIsEmpty.Result, stepLabel, cloneLabel));
+
+		var cloneBlock = func.Body.AddBlock(cloneLabel);
+		var sourceElement = (StdI64)EmitLoad(cloneBlock, sourceVar, varTypes);
+		var clonedElement = EmitElementCloneCall(cloneBlock, clonerName, sourceElement, varTypes);
+		var slotAddrReload = (StdI64)EmitLoad(cloneBlock, slotVar, varTypes);
+		cloneBlock.AddOp(new StdStoreIndirectOp(clonedElement, slotAddrReload, 0, IrType.I64));
+		cloneBlock.AddOp(new StdBrOp(stepLabel));
+
+		var stepBlock = func.Body.AddBlock(stepLabel);
+		var indexAtStep = (StdI64)EmitLoad(stepBlock, loopVar, varTypes);
+		var one = new StdConstI64Op(1);
+		stepBlock.AddOp(one);
+		var nextIndex = new StdAddI64Op(indexAtStep, one.Result);
+		stepBlock.AddOp(nextIndex);
+		EmitStore(stepBlock, nextIndex.Result, loopVar, varTypes);
+		stepBlock.AddOp(new StdBrOp(headerLabel));
+
+		return func.Body.AddBlock(doneLabel);
+	}
+
+	/// <summary>
+	/// Call one element cloner and hand back the pointer the buffer slot takes ownership of.
+	///
+	/// The +1 the cloner returns is the one the BUFFER holds — the array's teardown walk releases
+	/// it — so nothing here registers a scope temp and nothing here increfs an ordinary result.
+	/// A cloner that returns a TWO-REGISTER VALUE TUPLE hands its pair back in registers instead of
+	/// a record, so the record the slot must hold is built here, and that one does need its single
+	/// reference established (`EmitAlloc` publishes a record at zero).
+	/// </summary>
+	private static StdI64 EmitElementCloneCall(
+	  IrBlock<StandardOp> block,
+	  string clonerName,
+	  StdI64 elementPtr,
+	  Dictionary<string, string> varTypes) {
+
+		var module = _sourceModule
+		  ?? throw new InvalidOperationException("Element clone call emitted outside MaxonToStandardConversion.Run");
+		var valueTupleType = _valueTupleReturnFunctions?.Contains(clonerName) == true
+		  ? IrStructType.AsTwoRegisterValueTuple(module.FindFunctionByExactName(clonerName)?.ReturnType, module.TypeDefs)
+		  : null;
+
+		if (valueTupleType == null) {
+			var result = new StdI64(IrContext.Current.NextStdId());
+			block.AddOp(new StdCallOp(clonerName, [elementPtr], result));
+			return result;
+		}
+
+		var low = new StdI64(IrContext.Current.NextStdId());
+		var high = new StdI64(IrContext.Current.NextStdId());
+		block.AddOp(new StdCallOp(clonerName, [elementPtr], low, high));
+		var recordVar = $"__elemclone_tuple_{IrContext.Current.NextId()}";
+		var record = EmitAlloc(block, valueTupleType.SizeInBytes, valueTupleType.Name, scopeName: _currentFuncName);
+		EmitStore(block, record, recordVar, varTypes);
+		EmitStructFieldStore(block, low, recordVar, valueTupleType.Fields[0].Offset,
+		  IrType.Resolve(valueTupleType.Fields[0].Type), varTypes);
+		EmitStructFieldStore(block, high, recordVar, valueTupleType.Fields[1].Offset,
+		  IrType.Resolve(valueTupleType.Fields[1].Type), varTypes);
+		EmitIncrefValue(block, record, scopeName: _currentFuncName);
+		return record;
 	}
 
 	/// <summary>

@@ -218,6 +218,11 @@ public static class CallGraphDialects {
     switch (op) {
       case MaxonCallOp c:
         sink.Add(c.Callee);
+        // A managed-buffer COPY deep-clones each Cloneable element through that element type's
+        // own clone. That call is emitted at lowering rather than present as a call op here, so
+        // this pin is the only thing standing between it and dead-function elimination.
+        if (ManagedElementCopy.ClonerNameFor(module, ManagedElementCopy.SlicedElementTypeOf(module, c)) is string elementCloner)
+          sink.Add(elementCloner);
         break;
       case MaxonAsyncCallOp ac:
         sink.Add(ac.Callee);

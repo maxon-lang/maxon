@@ -242,6 +242,207 @@ end 'main'
 10
 ```
 
+<!-- test: clone-of-array-field-copies-its-struct-elements -->
+### Cloning a struct whose field is an Array of STRUCTS copies the elements
+`nested-struct-clone` proves the cascade reaches a struct FIELD. It stops there unless the
+Array's own clone reaches its ELEMENTS: an element copied by pointer leaves the clone and the
+original holding one `Leaf`, so a write through the clone is a write to the original.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Leaf
+	export var label as String
+	export var value as Integer
+
+	static function create(label String, value Integer) returns Self
+		return Self{label: label, value: value}
+	end 'create'
+end 'Leaf'
+
+typealias Leaves = Array with Leaf
+
+type Holder
+	export var leaves as Leaves
+
+	static function create(leaves Leaves) returns Self
+		return Self{leaves: leaves}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var a = Holder.create(Leaves.create())
+	a.leaves.push(Leaf.create("original label long enough for a heap record", value: 10))
+
+	let b = a.clone()
+	var cloned = try b.leaves.get(0) otherwise panic("no leaf")
+	cloned.label = "mutated"
+	cloned.value = 99
+
+	let kept = try a.leaves.get(0) otherwise panic("no leaf")
+	print("{kept.label} {kept.value}\n")
+	print("{cloned.label} {cloned.value}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original label long enough for a heap record 10
+mutated 99
+```
+
+<!-- test: clone-of-struct-array-survives-a-write-and-a-growth -->
+### A cloned Array of STRUCTS is independent under both mutation and growth
+Growth is the half that a shared element makes fatal rather than merely wrong: pushing past the
+clone's capacity copies its buffer, and a buffer of element pointers nobody owns twice is freed
+twice. Measured before the fix, this program printed the wrong first line and then DIED tearing
+the array down — `mm_decref: refcount underflow (already zero)`, through
+`mm_decref_managed_elements`, exit 1.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Leaf
+	export var label as String
+	export var value as Integer
+
+	static function create(label String, value Integer) returns Self
+		return Self{label: label, value: value}
+	end 'create'
+end 'Leaf'
+
+typealias Leaves = Array with Leaf
+
+function main() returns ExitCode
+	var a = Leaves.create()
+	a.push(Leaf.create("original label long enough for a heap record", value: 10))
+
+	var b = a.clone()
+	var cloned = try b.get(0) otherwise panic("no leaf")
+	cloned.label = "mutated"
+
+	// `cloned`'s last use is above: the borrow it holds on `b` has to end before `push`
+	// may grow `b` (E3070), which is why the clone is read back through a fresh `get`.
+	b.push(Leaf.create("second label long enough for a heap record", value: 20))
+
+	let kept = try a.get(0) otherwise panic("no leaf")
+	let reread = try b.get(0) otherwise panic("no leaf")
+	print("{a.count()}:{kept.label}\n")
+	print("{b.count()}:{reread.label}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1:original label long enough for a heap record
+2:mutated
+```
+
+<!-- test: clone-of-nested-array-copies-the-inner-array -->
+### Cloning an Array of ARRAYS copies the inner arrays
+The element is itself a container, so the copy has to reach one level further down: growing the
+clone's inner array must leave the original's inner array at the length it had.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Row = Array with Integer
+typealias Grid = Array with Row
+
+function main() returns ExitCode
+	var a = Grid.create()
+	var row = Row.create()
+	row.push(1)
+	a.push(row)
+
+	let b = a.clone()
+	var clonedRow = try b.get(0) otherwise panic("no row")
+	clonedRow.push(2)
+
+	let keptRow = try a.get(0) otherwise panic("no row")
+	print("{keptRow.count()} {clonedRow.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: clone-of-a-clone-is-independent-of-both -->
+### Cloning a CLONE copies the elements again
+`Array.clone` hands back a view onto the buffer it just filled, so the second clone's source is a
+view rather than an owned buffer — and a view has no buffer of its own to put element copies in.
+The second clone has to take its own buffer for exactly that reason; taking the view arm made
+`a.clone().clone()` share the first clone's elements.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Leaf
+	export var label as String
+	export var value as Integer
+
+	static function create(label String, value Integer) returns Self
+		return Self{label: label, value: value}
+	end 'create'
+end 'Leaf'
+
+typealias Leaves = Array with Leaf
+
+function main() returns ExitCode
+	var a = Leaves.create()
+	a.push(Leaf.create("original label long enough for a heap record", value: 10))
+
+	let b = a.clone()
+	let c = b.clone()
+	var cloned = try c.get(0) otherwise panic("no leaf")
+	cloned.label = "mutated"
+
+	let fromA = try a.get(0) otherwise panic("no leaf")
+	let fromB = try b.get(0) otherwise panic("no leaf")
+	print("{fromA.label}\n{fromB.label}\n{cloned.label}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original label long enough for a heap record
+original label long enough for a heap record
+mutated
+```
+
+<!-- test: clone-of-string-array-copies-its-strings -->
+### Cloning an Array of STRINGS copies the strings
+A `String` element is as writable as a struct one — `append` mutates the record the element slot
+points at — so sharing it makes the clone and the original one string.
+```maxon
+typealias Words = Array with String
+
+function main() returns ExitCode
+	var a = Words.create()
+	a.push("original word long enough for a heap record")
+
+	let b = a.clone()
+	var cloned = try b.get(0) otherwise panic("no word")
+	cloned.append(" and a tail")
+
+	let kept = try a.get(0) otherwise panic("no word")
+	print("{kept}\n{cloned}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original word long enough for a heap record
+original word long enough for a heap record and a tail
+```
+
 <!-- test: eq-requires-equatable -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

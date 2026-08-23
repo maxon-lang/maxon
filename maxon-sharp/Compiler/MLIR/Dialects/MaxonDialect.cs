@@ -1640,6 +1640,9 @@ public sealed class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue n
   public MaxonValue NewCapacity { get; } = newCapacity;
   /// When true, elements are bit-packed bools (byte size = (cap+7)/8 instead of cap*elemSize).
   public bool IsBitPacked { get; set; }
+  /// True when elements are refcounted heap pointers. A grow COWs first, and a COW that copies a
+  /// buffer of pointers has to give the copy its own claim on each one.
+  public bool IsStructElement { get; init; }
   public override IReadOnlyList<MaxonValue> Results => [];
   public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, NewCapacity];
 }
@@ -1685,6 +1688,9 @@ public sealed class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue 
   public bool ShiftRight { get; } = shiftRight;
   /// When true, elements are bit-packed bools (uses bit-by-bit loop instead of memcpy).
   public bool IsBitPacked { get; set; }
+  /// True when elements are refcounted heap pointers. A shift COWs first — see
+  /// MaxonManagedMemGrowOp.IsStructElement for what the copy owes each pointer it duplicates.
+  public bool IsStructElement { get; init; }
   public override IReadOnlyList<MaxonValue> Results => [];
   public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, Index, Count];
 }
@@ -1837,6 +1843,10 @@ public sealed class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start,
   public MaxonValue Start { get; } = start;
   public MaxonValue End { get; } = end;
   public bool IsStructElement { get; init; }
+  /// The `<Element>.clone` each copied element is DEEP-CLONED through, or null when the elements
+  /// are carried into the copy by RETAIN instead. Decided by ManagedElementCopy — the same verdict
+  /// dead-function elimination pinned, never a second reading of the rule.
+  public string? ElementClonerName { get; init; }
   public string? TypeParamName { get; init; }
   /// When true, elements are bit-packed bools.
   public bool IsBitPacked { get; set; }

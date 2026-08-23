@@ -9,9 +9,13 @@ category: memory
 ## Documentation
 
 `Array.clone` on a MANAGED-element array (String / struct / boxed union) produces an INDEPENDENT copy by
-deep-cloning each element (`__managed_clone_managed` + the element's `__clone_<E>`), not a COW view. shv2 is
-move-only, so an independent copy is a per-element deep clone rather than the reference compilers' incref.
-When the source array is later freed, the clone's elements survive because they are separate allocations.
+deep-cloning each element (`__managed_clone_managed` + the element's `__clone_<E>`), not a COW view. That is
+the CORPUS rule and not a shv2 choice: `specs/memory-safety.md` says `.clone()` yields "a new, independent
+copy", and an element reached through `get` is a mutable heap record — so an element carried into the copy by
+INCREF makes a write through the copy a write to the original. Both reference compilers increfed
+(`stdlib/Internals.maxon`'s `__managed_mem_slice` is v1's), and both were WRONG about it; the C# bootstrap
+was repaired at G20 and now agrees, while v1 keeps the defect. When the source array is later freed, the
+clone's elements survive because they are separate allocations.
 
 ## Tests
 

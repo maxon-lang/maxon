@@ -45,7 +45,7 @@ module {
     x64.mov [rbp-24], rdx
     x64.mov rdx, rbx
     x64.mov rcx, 16
-    x64.mov r8, 1
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov rcx, [rbp-8]
@@ -59,6 +59,48 @@ module {
     x64.mov rcx, [rbp-16]
     x64.call mm_incref
     x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Item.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call stdlib.String.clone
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+8]
+    x64.lea_func rbx, [__destruct_Item]
+    x64.mov rsi, rbx
+    x64.mov [rbp-40], rdx
+    x64.mov rdx, rsi
+    x64.mov rcx, 16
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-32], rax
+    x64.mov rdi, [rbp-24]
+    x64.mov r8, [rbp-32]
+    x64.mov [r8+0], rdi
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov r9, [rbp-32]
+    x64.mov rax, [rbp-40]
+    x64.mov [r9+8], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-32]
     x64.epilogue
     x64.ret
   }
