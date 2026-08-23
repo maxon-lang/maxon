@@ -1,0 +1,18 @@
+// Test: ternary-expression.error.mutable-binding-arm-still-moves
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x} padded out long enough to be a real heap allocation"
+end 'build'
+
+function main() returns ExitCode
+	var t = build(1)
+	let c = true
+	let u = t if c else build(2)
+	print(u)
+	print(t)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:13:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment

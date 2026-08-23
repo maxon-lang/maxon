@@ -242,7 +242,7 @@ func @main {
   tryok#1:
     x64.callDirect __md_current_path
     x64.movRegReg r13, r8
-    x64.storeSlotReg slot4, r13
+    x64.storeSlotReg slot5, r13
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#4
     x64.jmp tryok#3
@@ -299,9 +299,10 @@ func @main {
     x64.movRegReg r14, r8
     x64.jmp trycont
   trycont:
-    x64.storeSlotReg slot5, r14
+    x64.storeSlotReg slot6, r14
     x64.callDirect __md_current_path
     x64.movRegReg r15, r8
+    x64.storeSlotReg slot3, r15
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#11
     x64.jmp tryok#10
@@ -332,18 +333,17 @@ func @main {
   matcharm:
     x64.callDirect owned
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_decref
     x64.jmp matchcont#14
   matchdefault:
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_incref
     x64.movRegReg r13, r15
     x64.jmp matchcont#14
   matchcont#14:
     x64.callDirect Holder.create
     x64.movRegReg r14, r8
     x64.callDirect __md_current_path
-    x64.movRegReg r15, r8
-    x64.storeSlotReg slot3, r15
+    x64.storeSlotReg slot4, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#16
     x64.jmp tryok#15
@@ -352,11 +352,13 @@ func @main {
     x64.callDirect __destruct_Holder
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.loadRegSlot rcx, slot5
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot6
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.loadRegSlot rcx, slot4
+    x64.loadRegSlot rcx, slot5
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -370,9 +372,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok#15:
-    x64.movRegReg rcx, r15
+    x64.loadRegSlot r12, slot4
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_incref
-    x64.movRegReg rcx, r15
+    x64.movRegReg rcx, r12
     x64.callDirect Box.create
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
@@ -382,7 +385,7 @@ func @main {
     x64.jcc greater, andrhs#17
     x64.jmp critsplit#31
   andrhs#17:
-    x64.loadRegSlot rcx, slot4
+    x64.loadRegSlot rcx, slot5
     x64.callDirect sizeOf
     x64.cmpRegImm32 r8, 0
     x64.setccReg greater, rax
@@ -395,7 +398,7 @@ func @main {
     x64.jcc notEqual, andrhs#19
     x64.jmp critsplit#32
   andrhs#19:
-    x64.loadRegSlot rcx, slot5
+    x64.loadRegSlot rcx, slot6
     x64.callDirect sizeOf
     x64.cmpRegImm32 r8, 0
     x64.setccReg greater, rax
@@ -445,17 +448,19 @@ func @main {
     x64.storeSlotReg slot0, rax
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Box_Bytes
-    x64.loadRegSlot rcx, slot3
+    x64.loadRegSlot rcx, slot4
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r14
     x64.callDirect __destruct_Holder
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.loadRegSlot rcx, slot5
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot6
     x64.callDirect __managed_decref
     x64.loadRegSlot rcx, slot2
     x64.callDirect __managed_decref
-    x64.loadRegSlot rcx, slot4
+    x64.loadRegSlot rcx, slot5
     x64.callDirect __managed_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __managed_decref

@@ -18,17 +18,23 @@ A `match` handles two owned heap values whose lifetime the arms decide:
   the merge. A managed box drops through its `__destruct_<U>` cascade, which
   null-guards any slot a binding arm moved out. An already-bound scrutinee
   (`let m = …; match m`) is dropped by its own binding, unchanged.
-- **The `gives` RESULT.** When an expression arm yields an OWNED value — an owned
-  interpolation/heap `String`, a struct box, or a managed payload a binding arm
-  moved out (`text(s) gives s`) — ownership TRANSFERS to the result phi, which
-  becomes the sole owner and drops once at its consumer's scope. The yielded value
-  is therefore not dropped on the arm's edge nor in the post-match drain. When the
-  arms disagree (one owned give, one borrowed literal) the borrowed give is promoted
-  to an owned copy so the phi is uniformly owned and its consumer drops it
-  unconditionally. A borrowed **non-text aggregate** give (a struct or boxed-union
-  field read) has no such copy — the same boundary that refuses `return <borrowed
-  aggregate>` — so a match that merges one into an owned result is refused at parse
-  (E2015), exactly as the equivalent ternary is (OPEN #14).
+- **The `gives` RESULT.** The phi ends up owning exactly ONE reference on every edge,
+  and which of two ways an arm owes it is decided by whether anything else still owns
+  the value after the merge:
+  - An owned TEMPORARY — an owned interpolation/heap `String`, a struct box, or a
+    managed payload a binding arm moved out (`text(s) gives s`) — is owned by nothing
+    else, so ownership TRANSFERS and the value is dropped neither on the arm's edge
+    nor in the post-match drain.
+  - A value an IMMUTABLE binding declared outside the arm still owns is CO-OWNED
+    (⚖ 2026-08-04): the arm's edge takes a SECOND reference and the binding keeps the
+    one it already owed, so the source stays readable after the merge and each holder
+    releases its own. A **mutable** source still moves — a `var` can be written through
+    afterwards, so a second name for its value could watch it change (`moves.md`'s
+    boundary).
+  - A BORROWED give is promoted so the phi is uniformly owned: a `String` is copied,
+    and a non-text aggregate — which has no copy — is increfed, so the merge is CORRECT
+    on either arm rather than refused on both (see
+    `match-borrowed-aggregate-give-co-owned`, and the ternary's twin at OPEN #14/S5).
 
 Every case below is leak-free (a leak is exit 101) and crash-free (a double-free is
 `0xC0000005`).
@@ -362,4 +368,78 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: specs/fragments/match-owned-value-flow/gives-owned-string-arm-undeclared-call.test:5:17: call to undefined function 'undefinedThing'
+```
+
+<!-- test: gives-immutable-binding-is-co-owned -->
+⭐⭐ **AN ARM GIVING AN IMMUTABLE BINDING'S OWN VALUE CO-OWNS IT, IT DOES NOT MOVE IT (⚖ 2026-08-04).**
+The two constructs share one door (`Parser.settleArmGive`), so this is the ternary case's twin and the
+reason the rule is written down once: `let u = t` from an immutable `t` ALIASES at a rebind, and a
+`gives` arm reading the same `t` used to POISON it — one rule with two answers, decided by which
+construct the read stood in. The phi still owns its value outright; it simply takes a SECOND reference
+rather than stealing the binding's, which is what `try … otherwise <binding>` has always done
+(`Parser.transferFallbackToPhi`). Both bindings are read after the merge, and each box is released
+exactly once — a move here would double-free and an unbalanced incref would leak (exit 101).
+```maxon
+enum Pick
+	first
+	second
+end 'Pick'
+
+function choose(tag String, p Pick) returns String
+	let a = "A {tag} padded out long enough to be a real heap allocation"
+	let b = "B {tag} padded out long enough to be a real heap allocation"
+	let chosen = match p 'k'
+		first gives a
+		second gives b
+	end 'k'
+	return "{chosen} | {a} | {b}"
+end 'choose'
+
+function main() returns ExitCode
+	print(choose("x", p: Pick.first))
+	print("\n")
+	print(choose("y", p: Pick.second))
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A x padded out long enough to be a real heap allocation | A x padded out long enough to be a real heap allocation | B x padded out long enough to be a real heap allocation
+B y padded out long enough to be a real heap allocation | A y padded out long enough to be a real heap allocation | B y padded out long enough to be a real heap allocation
+```
+
+<!-- test: error.gives-mutable-binding-still-moves -->
+The control for the case above, in this construct: a `var` source can be written through after the
+merge, so a second name for its value could watch it change and the arm keeps the MOVE it always had
+(⚖ 2026-08-04's own rationale, read the other way). Without it the co-owning arm could be widened to
+every source and no case in this file would notice.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+function build(x Integer) returns String
+	return "v{x} padded out long enough to be a real heap allocation"
+end 'build'
+
+function main() returns ExitCode
+	var t = build(1)
+	let p = Pick.first
+	let u = match p 'k'
+		first gives t
+		second gives build(2)
+	end 'k'
+	print(u)
+	print(t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:21:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```

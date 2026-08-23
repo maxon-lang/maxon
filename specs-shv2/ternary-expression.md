@@ -375,13 +375,19 @@ runs first but parses second — reads that same binding LIVE. The move state th
 true arm left must be rewound before the condition parses, or the condition falsely
 sees the binding as already moved (a spurious use-after-move). Selecting the true
 arm here, its value transfers exactly once with no leak.
+
+⚠ **`k` IS A `var`, AND THE KEYWORD IS THE WHOLE CASE.** A ternary arm reading an
+IMMUTABLE binding CO-OWNS it (⚖ 2026-08-04) and poisons nothing, so with `let k`
+there is no move for the rewind to rewind and this case would pass without ever
+reaching its own subject. Only a MUTABLE source still moves, so only a `var` puts a
+poison between the arm's parse and the condition's.
 ```maxon
 function hasContent(s String) returns bool
 	return s.byteLength() > 0
 end 'hasContent'
 
 function main() returns ExitCode
-	let k = "key{1}"
+	var k = "key{1}"
 	let s = k if hasContent(k) else "fallback"
 	print(s)
 	return 0
@@ -600,11 +606,14 @@ parameter), while the other yields a **freshly-owned** one returned by a call.
 The merged result carries a single obligation, so the merge must reconcile the
 two rather than adopt one arm's and be wrong on the other.
 
-When **both** arms yield owned values the result is uniformly owned: whichever arm
-won, its reference transfers to the result exactly once, and the arm that lost —
-still evaluated in its own branch — releases the reference it held when its scope
-ends. When one arm borrows a **String**, the borrow is promoted to an owned copy so
-the result is still uniformly owned.
+Only the SELECTED arm runs (see *Only the selected arm is evaluated* below), so the
+rule is about what the arm that DID run owes the result. When both arms yield owned
+values the result is uniformly owned, by one of two routes: an owned TEMPORARY hands
+over the one reference it already holds, while a value an IMMUTABLE binding still owns
+is CO-OWNED — the arm's edge takes a SECOND reference and the binding keeps its own, so
+it stays readable after the merge (⚖ 2026-08-04). A **mutable** source still moves. When
+one arm borrows a **String**, the borrow is promoted to an owned copy so the result is
+still uniformly owned.
 
 A borrowed **non-text aggregate** (a struct or a boxed union) has no COPY promotion, and it
 does not need one: it is CO-OWNED instead, by an `__mm_retain` incref of the shared box —
@@ -856,6 +865,129 @@ end 'main'
 ```
 ```stdout
 3
+```
+
+<!-- test: ternary-expression.ownership.immutable-binding-arms-are-co-owned -->
+### An arm reading an IMMUTABLE binding CO-OWNS it — the binding stays readable
+⭐⭐ **THE MERGE ASKS THE SAME QUESTION `try … otherwise <binding>` ALREADY ANSWERED (⚖ 2026-08-04,
+⚖ 2026-08-12).** An arm whose value IS an immutable binding's own value hands the phi a reference
+the binding still owes a drop for, so the phi must take a SECOND one — exactly what
+`Parser.transferFallbackToPhi` does on a value `try`'s error edge, and exactly what a durable sink
+does (`Parser.storeOwnedValueIntoDurableSink`). Poisoning the source instead made `let` behave one
+way at a rebind (an ALIAS, both names live) and the opposite way one construct over, so this pair of
+ternaries — each reading both bindings, in opposite order — was refused E3102 on the second line
+while the identical `let receiversOwn = programsOwn` was accepted. Both bindings are read AFTER both
+merges here, and each box is released exactly once, so the leak gate is the assertion.
+```maxon
+function describe(spelling String, first bool) returns String
+	let programsOwn = "the `type {spelling}` this program declares"
+	let librarys = "the `{spelling}` the standard library declares"
+	let receiversOwn = programsOwn if first else librarys
+	let theOther = librarys if first else programsOwn
+	return "{receiversOwn} / {theOther} / {programsOwn}"
+end 'describe'
+
+function main() returns ExitCode
+	print(describe("Array", first: true))
+	print("\n")
+	print(describe("Array", first: false))
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+the `type Array` this program declares / the `Array` the standard library declares / the `type Array` this program declares
+the `Array` the standard library declares / the `type Array` this program declares / the `type Array` this program declares
+```
+
+<!-- test: ternary-expression.ownership.immutable-arm-merged-with-a-fresh-temp -->
+### One immutable-binding arm, one FRESH arm — one edge increfs, the other transfers
+The two edges owe the phi its single reference by different routes: the binding's edge takes a
+SECOND reference (the binding keeps its own and drops it at scope exit), while the fresh
+interpolation's edge hands over the one it already holds. Getting either backwards is visible
+here — increfing the temp leaks and moving the binding double-frees — and the binding is read
+after the merge on both runs, so the co-owning half is exercised whichever arm the condition picks.
+```maxon
+function pick(tag String, fresh bool) returns String
+	let held = "held {tag} padded out long enough to be a real heap allocation"
+	let chosen = "fresh {tag} padded out long enough to be a real heap allocation" if fresh else held
+	return "{chosen} | {held}"
+end 'pick'
+
+function main() returns ExitCode
+	print(pick("a", fresh: true))
+	print("\n")
+	print(pick("b", fresh: false))
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fresh a padded out long enough to be a real heap allocation | held a padded out long enough to be a real heap allocation
+held b padded out long enough to be a real heap allocation | held b padded out long enough to be a real heap allocation
+```
+
+<!-- test: ternary-expression.ownership.immutable-arm-inside-a-loop -->
+### The co-owning arm lifts a LOOP refusal that only a move ever earned
+⭐ **A REFUSAL WHOSE PREMISE WAS THE MOVE.** `poisonOwningBinding` refuses a move of a binding declared
+outside the innermost loop — the back edge would re-move it next iteration and a `break` would leave it
+live on the normal exit, neither of which the join model reaches. An arm that CO-OWNS moves nothing, so
+none of that reasoning applies: the incref is taken on the arm's edge inside the loop and the phi's drop
+falls inside the loop too, balanced per iteration, and `base` keeps its one scope-exit drop. The `var`
+spelling of the same program is still refused by that E2015 — the refusal is intact, it simply no longer
+stands over a program that never moved anything. Three iterations, one of them taking the fresh arm.
+```maxon
+function main() returns ExitCode
+	let base = "base {1} padded out long enough to be a real heap allocation"
+	var i = 0
+	var total = 0
+	while i < 3 'l'
+		let pick = i > 0
+		let chosen = base if pick else "alt {2} padded out long enough to be a real heap allocation"
+		total = total + chosen.byteLength()
+		i = i + 1
+	end 'l'
+	print("{total}|{base}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+173|base 1 padded out long enough to be a real heap allocation
+```
+
+<!-- test: ternary-expression.error.mutable-binding-arm-still-moves -->
+### A MUTABLE binding's arm still MOVES — the control for the case above
+⚠ **THE BOUNDARY, NOT AN OVERSIGHT.** Co-ownership rests on neither name being writable
+(⚖ 2026-08-04): a `var` source can be written through after the merge, so a second name for its
+value could watch it change, and the arm therefore keeps the MOVE it always had. Without this case
+the co-owning arm above could be widened to every source and nothing in the suite would notice.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x} padded out long enough to be a real heap allocation"
+end 'build'
+
+function main() returns ExitCode
+	var t = build(1)
+	let c = true
+	let u = t if c else build(2)
+	print(u)
+	print(t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: ternary-expression.error.owned-string-arm-undeclared-call -->
