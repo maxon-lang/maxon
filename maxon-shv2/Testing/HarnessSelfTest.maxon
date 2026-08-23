@@ -89,17 +89,17 @@ let ExpectRefusalMarker = "<!-- expect-refusal:"
 // no test to fail and nothing downstream that could act on it. It PANICS, naming the fixture and what
 // its sub-run actually did.
 //
-// `workerExe` is what a fixture sub-run IS (this harness — its parser's refusals are half of what is
-// under test); `compilerExe` is forwarded as `--compiler=` so the other half — the printer's two
-// refusals — is asked of the COMPILER UNDER TEST rather than of whatever compiler this harness happens
-// to be. In-tree they are the same binary; under the Phase 1 gate they are not, and that is exactly
-// the configuration in which asking the wrong one would be silent.
+// `harnessExe` is what a fixture sub-run IS — this harness, which since G20 is also the compiler each
+// fixture's cases are built with. ⛔ **IT USED TO FORWARD `--compiler=` AS WELL**, so that the two
+// PRINTER refusals were asked of the compiler under test rather than of whatever compiler this harness
+// happened to be. That flag is gone with the in-process compile (an in-process compile has no second
+// binary to name), and the distinction it protected went with it: one binary is both halves.
 //
 // ⚠ The sub-runs deliberately do NOT inherit the run's `--target`. What a fixture asks is whether the
 // HARNESS refuses a malformed directive, which no target changes — and two of the fixtures reach a
 // refusal in the IR printer, which a target emitting no Target IR (wasm32) never runs at all. Under a
 // cross-target suite run, forwarding the target would turn those two into false reds about nothing.
-export function requireHarnessRefusalsFire(workerExe FilePath, compilerExe FilePath, specDir FilePath)
+export function requireHarnessRefusalsFire(harnessExe FilePath, specDir FilePath)
 	if isHarnessFixtureSubRun(specDir) 'thisIsAFixtureSubRun'
 		return
 	end 'thisIsAFixtureSubRun'
@@ -118,7 +118,7 @@ export function requireHarnessRefusalsFire(workerExe FilePath, compilerExe FileP
 			continue
 		end 'notACase'
 
-		match checkFixture(workerExe, compilerExe: compilerExe, caseDir: caseDir) 'verdict'
+		match checkFixture(harnessExe, caseDir: caseDir) 'verdict'
 			fired then break 'verdict'
 			didNotFire(reason) then broken.push(reason)
 		end 'verdict'
@@ -235,13 +235,11 @@ end 'isFixtureCaseDir'
 // A fixture that could not be RUN AT ALL (a spawn failure, a missing or unmarked spec) panics on the
 // spot instead of joining the report: that is the harness's instrument being broken rather than a
 // refusal being gone, and the two must not read alike.
-function checkFixture(workerExe FilePath, compilerExe FilePath, caseDir FilePath) returns FixtureVerdict
+function checkFixture(harnessExe FilePath, caseDir FilePath) returns FixtureVerdict
 	let caseName = caseDir.filename()
 	let expected = expectedRefusalIn(caseDir, caseName: caseName)
 
-	let argv = fixtureArgv(caseDir, compilerExe: compilerExe)
-
-	let run = try runProcess(Executable.path(workerExe), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
+	let run = try runProcess(Executable.path(harnessExe), argv: fixtureArgv(caseDir), workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
 		panic("HarnessSelfTest: could not run the '{caseName}' fixture ({e.displayReason()}) — it proves a harness refusal still fires, and a refusal nothing runs is a claim")
 	end 'spawnFailed'
 
@@ -261,17 +259,14 @@ function checkFixture(workerExe FilePath, compilerExe FilePath, caseDir FilePath
 end 'checkFixture'
 
 // The command line EVERY sub-run of a fixture corpus starts from: this harness, pointed at ONE case
-// directory, told which compiler the run is about.
+// directory.
 //
 // Shared by the refusal sweep and the network gate below so the two cannot drift into asking different
-// questions of the same harness. `--compiler=` is forwarded for `requireHarnessRefusalsFire`'s stated
-// reason — half of what a fixture asks is asked of the COMPILER UNDER TEST rather than of whatever
-// compiler this harness happens to be — and that is true of any sub-run, not just a refusal's.
-function fixtureArgv(caseDir FilePath, compilerExe FilePath) returns StringArray
+// questions of the same harness.
+function fixtureArgv(caseDir FilePath) returns StringArray
 	var argv = StringArray.create()
 	argv.push(SpecTestCommandName)
 	argv.push(caseDir.toString())
-	argv.push("{CompilerFlagPrefix}{compilerExe.toString()}")
 	return argv
 end 'fixtureArgv'
 
@@ -301,7 +296,7 @@ end 'everythingSaid'
 //
 // Called ONCE by the suite's parent, beside the other tree-level guards, and PANICS naming every
 // property that failed — all of them together, because one careless edit breaks several.
-export function requireNetworkGateHolds(workerExe FilePath, compilerExe FilePath, specDir FilePath)
+export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 	if isHarnessFixtureSubRun(specDir) 'thisIsAFixtureSubRun'
 		return
 	end 'thisIsAFixtureSubRun'
@@ -330,7 +325,7 @@ export function requireNetworkGateHolds(workerExe FilePath, compilerExe FilePath
 
 	var broken = StringArray.create()
 
-	let byDefault = everythingSaid(runNetworkGate(workerExe, compilerExe: compilerExe, caseDir: caseDir, includeNetwork: false))
+	let byDefault = everythingSaid(runNetworkGate(harnessExe, caseDir: caseDir, includeNetwork: false))
 	if byDefault.contains(ranVerdict) 'defaultRanIt'
 		broken.push("a DEFAULT run of the fixture RAN '{label}', which is marked `{NetworkMarker} {NetworkLiveValue} -->`. Every suite in this tree would then be a coin toss on a third party's uptime.\n")
 	end 'defaultRanIt'
@@ -343,7 +338,7 @@ export function requireNetworkGateHolds(workerExe FilePath, compilerExe FilePath
 		broken.push("a DEFAULT run named the case it left out but not the REASON: the census headline no longer mentions `{NetworkMarker}`, so a reader is told coverage is missing and not what would bring it back.\n")
 	end 'defaultGaveNoReason'
 
-	let withNetwork = everythingSaid(runNetworkGate(workerExe, compilerExe: compilerExe, caseDir: caseDir, includeNetwork: true))
+	let withNetwork = everythingSaid(runNetworkGate(harnessExe, caseDir: caseDir, includeNetwork: true))
 	if not withNetwork.contains(ranVerdict) 'flagDidNotIncludeIt'
 		broken.push("a `{NetworkFlag}` run did NOT run '{label}'. The flag no longer reaches selection, so every `{NetworkMarker} {NetworkLiveValue} -->` case is unreachable by any command line — shelved in all but name. It said:\n{withNetwork}\n")
 	end 'flagDidNotIncludeIt'
@@ -365,13 +360,13 @@ end 'requireNetworkGateHolds'
 // One run of the gate fixture, with or without `NetworkFlag`. A spawn failure PANICS on the spot
 // rather than joining the report, for `checkFixture`'s reason: that is the instrument being broken
 // rather than the property being gone, and the two must not read alike.
-function runNetworkGate(workerExe FilePath, compilerExe FilePath, caseDir FilePath, includeNetwork bool) returns ProcessCapture
-	var argv = fixtureArgv(caseDir, compilerExe: compilerExe)
+function runNetworkGate(harnessExe FilePath, caseDir FilePath, includeNetwork bool) returns ProcessCapture
+	var argv = fixtureArgv(caseDir)
 	if includeNetwork 'wantsLiveNetwork'
 		argv.push(NetworkFlag)
 	end 'wantsLiveNetwork'
 
-	return try runProcess(Executable.path(workerExe), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
+	return try runProcess(Executable.path(harnessExe), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
 		panic("HarnessSelfTest: could not run the live-network gate fixture ({e.displayReason()}) — it proves a marked case stays out of a default run and comes back under `{NetworkFlag}`, and a gate nothing runs is a claim")
 	end 'spawnFailed'
 end 'runNetworkGate'

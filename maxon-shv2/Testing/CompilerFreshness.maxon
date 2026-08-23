@@ -105,30 +105,20 @@ end 'StalenessVerdict'
 // Refuse this command if `binary` is older than a source it was built from. Returns the exit code the
 // command should return: 0 to go ahead, `NothingRanExitCode` to stop.
 //
-// `role` names the executable in the message, because a `spec-test` run has TWO of them (see
-// `refuseIfSpecTestStale`) and "which binary is stale" is the first thing the reader needs.
+// `role` names the executable in the message, because two commands ask this about two different
+// binaries — `spec-test` about the harness-and-compiler it runs on, `scale-test` about the compiler it
+// drives — and "which binary is stale" is the first thing the reader needs.
+//
+// ⛔ **`spec-test` USED TO ASK IT TWICE, AND THAT PAIR IS GONE (G20).** `refuseIfSpecTestStale` asked
+// about the harness AND, when `--compiler=<path>` named a different file, about the compiler under
+// test. An in-process compile has exactly one binary to be stale, so there is one question again — and
+// the second one had, by its own admission, nothing to ask in an in-tree run.
 export function refuseIfStale(binary FilePath, role String) returns ExitCode
 	return match stalenessOf(binary) 'verdict'
 		mayProceed gives 0
 		stale(newerSource) gives reportStale(binary, role: role, newerSource: newerSource)
 	end 'verdict'
 end 'refuseIfStale'
-
-// The `spec-test` form: it runs TWO executables that need not be one file (see `Main.runSpecTest`) —
-// the harness this process IS, and the compiler under test. Both decide verdicts, so both are asked;
-// in-tree they are the same path and the second question is not worth asking twice.
-export function refuseIfSpecTestStale(workerExe FilePath, compilerExe FilePath) returns ExitCode
-	let harnessExit = refuseIfStale(workerExe, role: "the spec-test harness")
-	if harnessExit != 0 'staleHarness'
-		return harnessExit
-	end 'staleHarness'
-
-	if compilerExe.equals(workerExe) 'oneFile'
-		return 0
-	end 'oneFile'
-
-	return refuseIfStale(compilerExe, role: "the compiler under test (--compiler)")
-end 'refuseIfSpecTestStale'
 
 // Is any source compiled into `binary` newer than it?
 //

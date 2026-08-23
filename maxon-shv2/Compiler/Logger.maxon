@@ -110,7 +110,15 @@ export function parseLogOption(option String) returns bool
 end 'parseLogOption'
 
 // The unit every log event is attributed to — WHICH COMPILE produced the line. Set once per
-// compile by `compile()`, from the compile root (see DebugTrace.traceUnitOf).
+// compile by `Compiler.compileToProduct`, from the compile root (see DebugTrace.traceUnitOf).
+//
+// ⚠ **LAST WRITER WINS ACROSS COMPILES, AND THAT IS EXACT RATHER THAN MERELY TOLERATED.** A caller may
+// now perform thousands of compiles in one process (`spec-test` compiles every case in process since
+// G20), so this latch is overwritten once per compile — but a compile is SERIAL: shv2's scheduler is
+// single-M and the pipeline contains no yield point, so there is no second compile running whose
+// events this could misattribute. `compileToProduct` states the same argument at the write, and
+// `Diagnostics`' capture latch and `PhaseProbe.openPhaseSpans` rest on it too. A compiler that ever
+// ran two compiles concurrently in one process needs a per-compile home for all three.
 //
 // It is a module-level var rather than a parameter because the whole point of Workstream O1 is
 // that the CALL SITES DO NOT CHANGE: `logDebug(LogCategory.ir, ...)` reads the same in every one

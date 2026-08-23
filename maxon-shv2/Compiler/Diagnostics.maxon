@@ -158,15 +158,16 @@ end 'reportPositioned'
 // at the SINK instead, and the bytes are computed ONCE for both destinations: byte identity holds by
 // CONSTRUCTION, not by two spellings happening to agree.
 //
-// ⚠ **WHAT ROUTES THROUGH IT TODAY IS `Project.printDiagnostics`, WHICH IS EVERY `Diagnostic` AND
-// NOT EVERY LINE A FAILED BUILD PRINTS.** The `CompileError` arms that never reach
-// `project.diagnostics` at all — `fileNotFound`, `noSourceFiles`, `readError`, `noCommonRoot`,
-// `stdlibNotFound` — are printed by `Main.reportCompileError`, which still writes to stderr
-// directly. Every one of them must come through here before a capture can claim to be what a
-// subprocess would have written; until then a capture is exact for a REFUSED compile (the whole
-// `maxoncstderr` corpus, whose blocks are `Diagnostic.render()` output and nothing else) and EMPTY
-// for a build that died on a missing file. The obligation is written here, at the sink, because
-// this is the one place a reader can see the whole set.
+// ✅ **THE WHOLE SET ROUTES THROUGH IT, AND THE SECOND HALF LANDED WITH THE CALLER THAT NEEDED IT
+// (G20).** `Project.printDiagnostics` brings every `Diagnostic`; `Main.reportCompileError` brings the
+// five `CompileError` arms that never reach `project.diagnostics` at all — `fileNotFound`,
+// `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound` — which it used to print to stderr
+// directly, past this sink. Until it did, a capture was exact for a REFUSED compile (the whole
+// `maxoncstderr` corpus, whose blocks are `Diagnostic.render()` output and nothing else) and EMPTY for
+// a build that died on a missing file. `SpecTestRunner.compileOneTest` calls `reportCompileError`
+// INSIDE its capture, so what it reads back is what a command line would have written for the same
+// build, whichever way the build failed. The set is written here, at the sink, because this is the one
+// place a reader can see all of it.
 //
 // ⚠ **THE LATCH IS MODULE-LEVEL, AND THAT IS EXACT ONLY BECAUSE A COMPILE IS SERIAL.** shv2's
 // scheduler is single-M and the compile pipeline contains no yield point, so two compiles cannot

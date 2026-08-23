@@ -98,8 +98,10 @@ end 'printDataSection'
 // PER BUILD.** The emitted-runtime/entry functions (`mrt_start`, `__slab_*`/`__mm_*`/`__destruct_*`,
 // the `__str_*`/`__managed_*` families) are skipped by default because the shared scaffolding is
 // identical in every test and would be pure noise in all of them — and, until BATCH8, "by default"
-// meant "always": `Compiler.writeTargetIr` passed the old `includeRuntime: false` unconditionally
-// and nothing anywhere passed `true`, so those bodies carried **no golden at all**. The miss was
+// meant "always": this function's one caller (`Compiler.compileMeasured`, which was
+// `Compiler.writeTargetIr` when BATCH8 was written — G20 split the RENDER from the WRITE) passed the
+// old `includeRuntime: false` unconditionally and nothing anywhere passed `true`, so those bodies
+// carried **no golden at all**. The miss was
 // measured, not feared: `__str_bytes_view`'s owed-base arm holds an incref whose loss is a
 // use-after-free that BALANCES (the matching release disappears with it), and the exit codes, the
 // leak gate and every committed fragment stayed green over exactly that edit, together.

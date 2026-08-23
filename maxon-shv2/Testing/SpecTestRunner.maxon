@@ -1,12 +1,22 @@
 // Testing/SpecTestRunner.maxon — run every active test in a specs-shv2 directory
 // through the shv2 compiler and collect PASS/FAIL results.
 //
-// Each test is driven end-to-end through the REAL CLI as a SUBPROCESS:
-// `<compilerExe> build <fragment> -o <exeBase> --emit-ir`. Spawning (rather than compiling
-// in-process) is deliberate — a compiler crash is isolated to the one test that triggered it
-// instead of killing the whole runner, and the actual `build` command path (arg parsing,
-// output-path derivation) is exercised, not bypassed. A panic inside the compiler exits that
-// build non-zero, which surfaces as a FAILED test rather than a dead runner.
+// ⭐⭐ **EVERY TEST IS COMPILED IN THIS PROCESS (G20), THROUGH THE COMPILER'S ONE PIPELINE DRIVER
+// (`Compiler.compileToProduct`) — NOT BY SPAWNING `<compilerExe> build …`.**
+//
+// The spawn was deliberate once, and the argument it rested on was CONTAINMENT: a compiler panic
+// killed a grandchild rather than the runner, so it surfaced as one named FAIL. What it cost was a
+// process per test — **≈6,600 process creations per lane** — and on Windows that is not merely
+// latency. `G16` censused a landing that read **787 failures** on one lane whose single cause was
+// exit `0xC0000142`: the OS declining to create the process. A re-run of the same binary read
+// `4357 passed, 0 failed`. A harness whose verdicts depend on how many processes the box will start
+// is not measuring the compiler.
+//
+// ⇒ The containment the spawn bought is re-bought where it belongs, in the POOL: a compiler panic now
+// kills the WORKER, and `SpecWorkerPool` turns that into one named FAIL per unreported test of that
+// job, respawns, and carries on (see `emitWorkerCompiling` and the pool's dead-worker recovery). The
+// `build` command path — arg parsing, output-path derivation — is no longer exercised per test; it is
+// exercised by every real `maxon-shv2 build`, including the one that builds this compiler.
 //
 // Trimmed HARD from v1's SpecTestRunner: no fragment cache, no per-target run-command
 // building, no wasm/wasmtime path. Those return when a milestone needs them. What IS
@@ -74,21 +84,6 @@ let MultiFileSourceDirSuffix = ".src"
 let StdlibOverlayDirSuffix = ".stdlib"
 
 let DraftStatus = "draft"
-let BuildSubcommand = "build"
-let OutputFlag = "-o"
-
-// `--emit-ir` (and, for a ```RequiredRuntime case, `--emit-ir-runtime=<name>,<name>`) make the
-// subprocess build write a Target-IR sidecar next to the exe (`<exeBase>.ir`); the runner reads it
-// back to embed in a codegen fragment. Both spellings are the DRIVER's constants (`Main.maxon`),
-// named where the parser that reads them back lives — this file only emits them, and a second copy
-// here would be a flag the two halves could come to disagree about. The extension must match the
-// driver's `IrFileExtension` (Compiler.maxon).
-let IrFileExtension = ".ir"
-
-// Where each test's `--metrics` TSV lands, beside its exe and its IR sidecar. Unlike those two this
-// extension is nobody else's contract — the compiler writes wherever `--metrics=` points — so it is
-// declared here, by the only code that names it. See `readCompileCpu`.
-let MetricsFileExtension = ".metrics"
 
 // Committed-fragment layout: `<specDir>/fragments/<target>/<specName>/<testName>.test`.
 //
@@ -129,9 +124,16 @@ let ExitCodeLabel = "ExitCode: "
 let UnpinnedExitCodeLabel = "unpinned"
 let CompilerErrorLabel = "CompilerError:"
 
-// Stand-in for the IR section when the sidecar could not be read — only reachable
+// Stand-in for the IR section when the compile RENDERED no Target IR — only reachable
 // if a supposed exitCode test failed to compile (the run then FAILs regardless),
 // so it is a visible signal in the fragment, never the normal path.
+//
+// ⚠ The word is RENDERED, not "written": there is no `<exe>.ir` sidecar on this path any more.
+// `--emit-ir`'s file is the COMMAND LINE's product (`Compiler.compile`); an in-process caller gets
+// the same bytes back as `CompileProduct.irText` and never touches the filesystem for them. The
+// TEXT below is unchanged all the same — it is the only line a reader of a fragment would ever see
+// this by, and MEASURED 2026-08-23 no committed golden in `specs-shv2/` contains it, so rewording it
+// would move nothing and cost the one search term anyone who has met it already knows.
 let MissingIrPlaceholder = "// (no Target IR: compile produced no sidecar)\n"
 
 // The placeholder that replaces a fragment's on-disk path — in captured compiler output AND in
@@ -165,11 +167,6 @@ let LineSeparator = "\n"
 // in a source file is a fourth copy of the number space that goes on matching nothing after a renumber.
 let DiagnosticLinePrefix = "error "
 let DiagnosticCodeSuffix = ": "
-
-// What a compile that REPORTED DIAGNOSTICS exits with (`Main.compileAndReport`). `targetRefusalIn`
-// insists on exactly this code rather than on "non-zero", and the difference is the leak gate: a
-// compiler that leaked exits 101 having printed the very same diagnostics.
-let DiagnosticsReportedExitCode = 1
 
 // How deep the compiler's own diagnostics sit under the case they refused, in the skipped-case census.
 // The depth of the CASE itself is `IndentedReport.ResultNoteIndent`, shared with the golden-drift
@@ -601,8 +598,13 @@ end 'SpecTestResult'
 export typealias SpecTestResultArray = Array with SpecTestResult
 
 // Captured result of one spawned process: exit code + both streams. The single
-// spawn/capture choke point that BOTH the compile step and the run step go
-// through, so there is exactly one place that talks to `Subprocess`.
+// spawn/capture choke point every spawn this harness performs goes through, so there is exactly one
+// place that talks to `Subprocess`.
+//
+// ⚠ **THE COMPILE STEP IS NO LONGER ONE OF THEM (G20)** — it compiles in this process and answers
+// with a `CompileAnswer` below. What still comes back through here is the RUN step, the git probe,
+// the harness fixture sub-runs, the two `--target` runner probes and the scale runner's own rung
+// compiles.
 //
 // Exported because the scale-test runner spawns compiles too (one per rung) and must go through
 // the SAME choke point. A second, private copy of "spawn and capture" is how the two runners would
@@ -616,6 +618,72 @@ export type ProcessCapture
 		return Self{exitCode: exitCode, stdout: stdout, stderr: stderr}
 	end 'create'
 end 'ProcessCapture'
+
+// ⭐⭐ **WHICH OF THE THREE THINGS ONE COMPILE DID — AND IT IS NOT AN EXIT CODE, BECAUSE THERE IS NO
+// PROCESS TO EXIT.**
+//
+// ⛔ **NOTHING SYNTHESIZES A `1` HERE, DELIBERATELY.** A fabricated exit code would be a second
+// spelling of the driver's own mapping (`Main.compileAndReport`), free to disagree with it — and the
+// one number that mattered on this path is one it could never honestly produce. `targetRefusalIn`
+// used to insist on EXACTLY 1 rather than "non-zero", because a compiler that LEAKED exited 101
+// having printed the very same E3104 lines, and folding that into a skip would have deleted the leak
+// gate. What that check was really asking is *"did this compile fail by REPORTING DIAGNOSTICS?"* —
+// which is a state, not a number, and it is named below.
+//
+// ⚠⚠ **THE PER-COMPILE LEAK SIGNAL IS THE ONE THING THIS RUNG TOOK AWAY, AND IT IS WRITTEN DOWN HERE
+// RATHER THAN LEFT TO BE REDISCOVERED.** A leak-gated Maxon program reports its leak by EXITING 101,
+// and an in-process compile never exits: a leaking compile now accumulates inside the WORKER, whose
+// own exit code is still gated (`SpecWorkerPool.shutdownPool` fails the suite on 101, and
+// `Main.runSpecSuite` refuses to call that green). So the suite still goes red for a leaking compile
+// — it can no longer say WHICH of the several hundred compiles that worker ran was the leaker.
+// ⇒ Per-test attribution for a leak is recovered by re-running the suspect spec under `--filter`,
+// which puts one spec's compiles in one worker.
+enum CompileVerdict
+	// The build ran to completion and wrote its executable.
+	built
+	// The build REPORTED DIAGNOSTICS and stopped — `CompileError.compileError`, the arm the command
+	// line exits 1 for. The ONLY state a target refusal may be read off (see `targetRefusalIn`).
+	reportedDiagnostics
+	// The build never got as far as a diagnostic: a path it was pointed at could not be read, the
+	// inputs share no root, or `stdlib/` could not be located. Those five `CompileError` arms carry
+	// NO `Diagnostic` at all — `Main.reportCompileError` prints a sentence of its own for each — so
+	// what they leave in `CompileAnswer.diagnostics` is not `Diagnostic.render()` output and must
+	// never be read as though it were.
+	driverFailed
+end 'CompileVerdict'
+
+// ⭐⭐ **WHAT ONE COMPILE ANSWERED — the shape that replaced `ProcessCapture` on this path.**
+//
+// The two facts a spawned `build` handed back were an exit code and a stderr stream. In process the
+// honest pair is a VERDICT and the exact bytes a command line would have written while producing it.
+//
+// `diagnostics` is a FIELD rather than a payload on the two failing arms because EVERY compile has
+// one: a clean build's is the empty string, which is a real answer and not an absence — the same
+// distinction `Diagnostics.endDiagnosticCapture` panics to protect, since `""` is exactly what a
+// compile that said nothing legitimately returns.
+type CompileAnswer
+	export let verdict as CompileVerdict
+	// Byte for byte what `maxon-shv2 build` would have written to stderr, taken at the ONE sink every
+	// compiler-facing line goes through (`Diagnostics.emitDiagnosticLine`) — NOT re-rendered from
+	// `project.diagnostics`, which would be a second spelling of the text the corpus's ```maxoncstderr
+	// blocks are compared against. See `compileOneTest`.
+	export let diagnostics as String
+
+	static function create(verdict CompileVerdict, diagnostics String) returns CompileAnswer
+		return Self{verdict: verdict, diagnostics: diagnostics}
+	end 'create'
+
+	// Did this compile produce an executable? Asked by `runPreconditions` (a run expectation cannot
+	// proceed without one) and by `checkCompilerError` (a ```maxoncstderr case must NOT have one), and
+	// spelled once so the two cannot come to disagree about which of the two failure states counts.
+	export function isBuilt() returns bool
+		return match self.verdict 'v'
+			built gives true
+			reportedDiagnostics gives false
+			driverFailed gives false
+		end 'v'
+	end 'isBuilt'
+end 'CompileAnswer'
 
 // Takes an `Executable` rather than a `FilePath` so a caller can name a tool to be found on PATH
 // (`orb`) as easily as one whose exact location it already computed. The distinction belongs to the
@@ -639,11 +707,16 @@ end 'ProcessCapture'
 // tight deadline would inject flakes into a suite that currently has none, which is the one way
 // this guard could leave things worse than it found them.
 //
-// ⚠ EXPORTED BECAUSE THE POOL'S WEDGE WATCHDOG IS DERIVED FROM IT, and must be: this deadline and
-// `WedgeWatchdogMs` are NESTED — this one bounds a single subprocess, that one bounds the dispatch
-// loop waiting on the worker running it — so the outer must be strictly the longer or it fires first
-// and reports this failure as a pool wedge. Do not re-spell either number as a literal; see
-// `WedgeWatchdogMs`.
+// ⚠ EXPORTED BECAUSE TWO OF THE POOL'S BOUNDS ARE DERIVED FROM IT, and must be: this deadline,
+// `jobDeadlineMs`'s floor and `WedgeWatchdogMs` are NESTED — this one bounds a single subprocess, the
+// job deadline bounds the whole SPEC a worker is running, and the wedge watchdog bounds the dispatch
+// loop's idleness — so an outer bound must never fire first and report an inner one's failure as its
+// own. Do not re-spell any of the three as a literal; see `SpecWorkerPool.jobDeadlineMs`.
+//
+// ⛔ **IT NO LONGER BOUNDS A COMPILE, AND THAT IS THE GAP `jobDeadlineMs` EXISTS TO FILL (G20).** Every
+// selected test used to be built by a `build` SUBPROCESS carrying this deadline, so a compiler
+// infinite loop surfaced as one named FAIL. The compile happens in process now and this bounds only
+// the RUN — the job deadline is what ends a hung compile, one level up.
 //
 // ⚠ **IT IS THE DEADLINE FOR ONE EXECUTION, WHICH IS NO LONGER THE SAME THING AS ONE SPAWN.** The
 // batched WSL run performs a whole spec's executions inside a SINGLE `wsl` process (`runWslBatch`):
@@ -656,11 +729,12 @@ export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisPerSecond
 
 // `Subprocess`'s own sentinel for "give the child MY cwd" — the EMPTY path, which is exactly what
 // `Configuration.create` defaults `workingDirectory` to. Named here rather than spelled at each spawn
-// because `workingDirectory` below is a REQUIRED argument and SEVEN of this harness's EIGHT spawns want
-// this value (the compile, the git probe, the fixture sub-run, the two `--target` runner probes, the
-// bootstrap trace build and the scale rung compile — every one but the RUN step's): seven hand-written
-// `FilePath.from("")`s would be seven chances to write something that is not the sentinel, and a wrong
-// one is silent — the child simply starts somewhere else.
+// because `workingDirectory` below is a REQUIRED argument and every spawn but ONE wants this value
+// (the git probe, the fixture sub-runs, the two `--target` runner probes, the bootstrap trace build
+// and the scale rung compile — every one but the RUN step's; the per-test COMPILE was among them until
+// G20 made it an in-process call): six hand-written `FilePath.from("")`s would be six chances to write
+// something that is not the sentinel, and a wrong one is silent — the child simply starts somewhere
+// else.
 //
 // ⚠ It is a required argument rather than a defaulted one ON PURPOSE. The defect this parameter exists
 // to fix (see `RunWorkingSubdirName`) was precisely a spawn that never said where it should run and got
@@ -689,11 +763,18 @@ end 'runProcess'
 // THE CUMULATIVE COMPILE-CPU INDICATOR
 // ============================================================================================
 //
-// WHAT IT IS FOR. The suite already compiles every selected test through a real `build` subprocess,
-// and every one of those compiles already MEASURES its own CPU time — `PhaseProbe` brackets each
-// phase unconditionally, and `--metrics` decides only whether the numbers are WRITTEN. Summing the
-// `total` row across a whole run therefore costs one flag, one small file per test and one read, and
-// buys a single number that answers "did compiling this corpus get dramatically dearer?".
+// WHAT IT IS FOR. Every compile MEASURES its own CPU time whether or not anybody asks — `PhaseProbe`
+// brackets each phase unconditionally — so summing the whole-compile total across a run buys a single
+// number that answers "did compiling this corpus get dramatically dearer?".
+//
+// ⛔ **IT USED TO COST "ONE FLAG, ONE SMALL FILE PER TEST AND ONE READ", AND NOW IT COSTS NOTHING AT
+// ALL.** Each test was compiled by a `build` SUBPROCESS told to write a `--metrics` TSV, and this read
+// the `total` row back off disk. The compile happens in process now (G20) and hands the same number
+// back on `CompileProduct.totalCpuTicks` — the same whole-compile probe, the same tick count, with no
+// flag, no file and no read. ⚠ **THE NUMBER ITSELF IS NOT COMPARABLE ACROSS THAT CHANGE**: it never
+// included process startup (the probe opens inside `main`), but the thread it is measured on now
+// carries a whole worker's history of compiles rather than one, so caches and allocator state differ.
+// Read a post-G20 run against a post-G20 run.
 //
 // ⚠ IT IS AN INDICATOR, NOT A GATE. Nothing passes or fails on it, there is no budget, no golden and
 // no verdict, and none may be added: `scale-test` carried exactly that apparatus and it was deleted,
@@ -728,10 +809,10 @@ end 'runProcess'
 // zero folds them together in the direction that reads as an improvement.
 //
 // `unreported` is the ORDINARY case for a `compilerError` test, and that is not a failure of any
-// kind: `writeMetrics` is the last step of a SUCCESSFUL compile (see MetricsEmit), so a case that
-// passes precisely BY failing to compile can never leave a metrics file. It also covers the rare test
-// whose source could not be staged at all, which spawned no compiler. Both are one fact here — no
-// measurement exists — and the tally counts them so the gap is visible rather than absorbed.
+// kind: a compile that THREW produced no `CompileProduct`, so it has no total to report — and such a
+// case passes precisely BY failing to compile. It also covers the rare test whose source could not be
+// staged at all, and every test of a job whose WORKER DIED (`SpecWorkerPool`). All three are one fact
+// here — no measurement exists — and the tally counts them so the gap is visible rather than absorbed.
 union CompileCpu
 	reported(ticks CpuTicks)
 	unreported
@@ -772,6 +853,18 @@ export type SuiteCpuTally
 		return Self{ticks: self.ticks + other.ticks, reported: self.reported + other.reported, unreported: self.unreported + other.unreported}
 	end 'plus'
 
+	// ⭐ N tests that reported NOTHING — the shape a job whose WORKER DIED leaves behind. It printed no
+	// `WORKER_JOB_CPU` record, so no measurement exists for any of its tests, and the tally must still
+	// cover every test the run reports (`SpecWorkerPool.runSpecPool` cross-checks exactly that and
+	// panics on a gap).
+	//
+	// A method rather than the pool looping over `adding(CompileCpu.unreported)`, because `CompileCpu`
+	// is this file's own union and the pool has no business naming it: "no measurement exists" is the
+	// fact, and this is the one place that knows how the tally spells it.
+	export function addingUnreported(tests TestTally) returns SuiteCpuTally
+		return Self{ticks: self.ticks, reported: self.reported, unreported: self.unreported + tests}
+	end 'addingUnreported'
+
 	// Every test contributes exactly one `CompileCpu`, so this IS the number of tests the tally
 	// covers — which is what makes the parent's cross-check against its own result count meaningful.
 	export function tests() returns TestTally
@@ -794,7 +887,7 @@ export type SuiteCpuTally
 	// Every number is spelled out, including a zero `unreported`, because a shape that dropped a term
 	// when it happened to be zero would make two runs of the same suite print two different shapes.
 	export function reportLine(workers WorkerCount) returns String
-		return "compile CPU: {ticks} ticks from {reported} of {tests()} test compiles at {workers} worker(s) ({unreported} wrote no metrics — a compile that FAILS writes none, which every compilerError case and every case this target refused does by design)"
+		return "compile CPU: {ticks} ticks from {reported} of {tests()} test compiles at {workers} worker(s) ({unreported} reported none — a compile that FAILS produces no total, which every compilerError case and every case this target refused does by design)"
 	end 'reportLine'
 end 'SuiteCpuTally'
 
@@ -831,10 +924,14 @@ type TestRun
 	end 'notCompiled'
 end 'TestRun'
 
-// Run the active tests of ONE spec — `<specDir>/<specName>.md` — through `compilerExe`,
+// Run the active tests of ONE spec — `<specDir>/<specName>.md` — compiling each in THIS process and
 // returning one result per test that `filter` selects, in DECLARATION order (a `draft`
 // spec yields none). Throws only on a spec-file IO failure; a per-test compile or run
 // failure is captured as a FAIL result, never thrown, so one bad test can't abort the run.
+//
+// ⚠ **A compiler PANIC is the one failure this cannot capture, and that is the pool's to contain.**
+// It takes the whole worker process down; `SpecWorkerPool` reads the last `WORKER_COMPILING:`
+// breadcrumb, FAILs every test of the job naming the one being compiled, and respawns.
 //
 // One spec is the unit of work the pool dispatches (see SpecWorkerPool): a worker gets a
 // spec NAME on stdin and calls exactly this. Nothing above this function walks a directory
@@ -855,7 +952,7 @@ end 'TestRun'
 // including a `notRequired` observation for a test that never ran — so the third pass needs no counter,
 // no sorting and no name lookup, and a length that disagrees is a panic rather than a silently
 // misattributed result.
-export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns SpecRun throws CompileError
+export function runOneSpec(specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns SpecRun throws CompileError
 	var results = SpecTestResultArray.create()
 	var cpu = SuiteCpuTally.zero()
 
@@ -911,7 +1008,7 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 
 	var prepared = PreparedTestArray.create()
 	for test in tests 'eachCompile'
-		prepared.push(prepareOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
+		prepared.push(prepareOneTest(test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
 	end 'eachCompile'
 
 	let observations = executeRuns(prepared, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
@@ -1061,9 +1158,17 @@ function networkModeAllows(test SpecTest, includeNetwork bool) returns bool
 end 'networkModeAllows'
 
 // ⭐⭐ **THE THIRD DERIVED PER-TARGET GATE: CAN THIS TARGET BE TRACED AT ALL?** A capture case needs the
-// DebugStream PRODUCER, which opens a named Win32 section object and is x64-windows only — the compiler
-// REFUSES `--debugstream` on every other target at the command line (`Main.debugStreamSupports`). Without
-// this gate such a case would fail the whole cross lane on a compile that was correctly refused.
+// DebugStream PRODUCER, which opens a named Win32 section object and is x64-windows only. Without this
+// gate such a case would ask for a producer no other target has.
+//
+// ⚠⚠ **IT IS NOW THE ONLY GATE ON THIS PATH, AND IT USED TO HAVE A COMMAND-LINE BACKSTOP UNDER IT.**
+// The compiler refuses `--debugstream` on every other target BEFORE compiling anything
+// (`Main.debugStreamSupports`), and that refusal is `runBuild`'s — reached by a `build` command line
+// and not by `compileToProduct`, which is what this harness calls since G20. So a bug here no longer
+// surfaces as a clean refusal naming the flag: it reaches the three Std ops' own lowerings, which
+// PANIC on any target but x64-windows, and a panic inside a worker costs that spec (see
+// `SpecWorkerPool`'s dead-worker recovery) rather than one named FAIL. Loud either way, and that is
+// what matters — but it is a different loud, and worth knowing before reading such a failure.
 //
 // ⚠ **IT IS DERIVED, NOT SPELLED, AND THAT IS THE `targetCanCheckSectionPins` RULING APPLIED AGAIN.** The
 // alternative is a `<!-- targets: x64-windows -->` marker on every capture case, which is the same fact
@@ -1203,11 +1308,23 @@ end 'TargetRefusal'
 //     feature". That is stricter than "no OTHER diagnostic", deliberately: the failure mode being
 //     guarded against is a skip that swallows something real, so an unrecognised line must count
 //     AGAINST the skip rather than be walked past;
-//   * the exit code must be exactly the one a compile that REPORTED DIAGNOSTICS returns. A compiler
-//     that LEAKED exits 101 having printed the very same lines, and folding that into a skip would
-//     delete the leak gate.
-function targetRefusalIn(compile ProcessCapture) returns TargetRefusal
-	if compile.exitCode != DiagnosticsReportedExitCode 'notADiagnosticFailure'
+//   * the compile must have failed by REPORTING DIAGNOSTICS, and by nothing else. This used to read
+//     "the exit code must be exactly the one a compile that REPORTED DIAGNOSTICS returns", because a
+//     compiler that LEAKED exited 101 having printed the very same lines and folding that into a skip
+//     would have deleted the leak gate. ⚠ **THE NUMBER IS GONE AND THE RULE IS NOT.** An in-process
+//     compile has no exit code and reaches no 101 at this level (see `CompileVerdict`, which owns
+//     where the leak signal went); what the number stood for was the STATE, and the state is
+//     `reportedDiagnostics`. A build that died on a missing file or an unlocatable `stdlib/` is
+//     `driverFailed` and is refused here exactly as a 101 was — its text is not `Diagnostic.render()`
+//     output at all, so reading a construct out of it would be reading a sentence about the harness.
+function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
+	let diagnosticsWereReported = match compile.verdict 'v'
+		built gives false
+		reportedDiagnostics gives true
+		driverFailed gives false
+	end 'v'
+
+	if not diagnosticsWereReported 'notADiagnosticFailure'
 		return TargetRefusal.notRefused
 	end 'notADiagnosticFailure'
 
@@ -1217,7 +1334,7 @@ function targetRefusalIn(compile ProcessCapture) returns TargetRefusal
 	let refusalPrefix = "{DiagnosticLinePrefix}{ErrorCode.targetUnsupportedConstruct.rawValue}{DiagnosticCodeSuffix}"
 	var sawRefusal = false
 
-	for line in compile.stderr.split(LineSeparator) 'eachLine'
+	for line in compile.diagnostics.split(LineSeparator) 'eachLine'
 		let trimmed = line.trim()
 		if trimmed.isEmpty() 'blank'
 			continue
@@ -1231,12 +1348,12 @@ function targetRefusalIn(compile ProcessCapture) returns TargetRefusal
 	end 'eachLine'
 
 	if not sawRefusal 'saidNothingAtAll'
-		// Exit 1 with an empty stderr: a compile that failed without saying why is a defect to see, not
-		// a target that lacks a feature.
+		// A reported-diagnostics failure that reported no text: a compile that failed without saying
+		// why is a defect to see, not a target that lacks a feature.
 		return TargetRefusal.notRefused
 	end 'saidNothingAtAll'
 
-	return TargetRefusal.refused(compile.stderr.trim())
+	return TargetRefusal.refused(compile.diagnostics.trim())
 end 'targetRefusalIn'
 
 // The verdict, unless the target could not express the case — in which case the case did not run here
@@ -1258,7 +1375,7 @@ end 'targetRefusalIn'
 // ⇒ **THE QUESTION IS WHO THE SUBJECT IS.** A `compilerError` case asserts WHAT THE COMPILER SAYS, so
 // the diagnostics are the artifact under test and a disagreement is an assertion that did not hold. Only
 // a case that expected to BUILD AND RUN can be "not runnable here", and that is the one this converts.
-function outcomeOrTargetSkip(outcome TestOutcome, expectation SpecExpectation, compile ProcessCapture) returns TestOutcome
+function outcomeOrTargetSkip(outcome TestOutcome, expectation SpecExpectation, compile CompileAnswer) returns TestOutcome
 	if outcome.isPass() 'itRanHere'
 		return outcome
 	end 'itRanHere'
@@ -1640,9 +1757,11 @@ typealias FragmentPathMappingArray = Array with FragmentPathMapping
 //     names each file and each file's OWN line numbers, and both must be translated back onto the
 //     merged fragment before anything is compared or committed.
 type StagedTest
-	// ⭐⭐ **WHAT `build` IS POINTED AT — a LIST, because the ORDER is part of what a multi-file case
+	// ⭐⭐ **WHAT THE COMPILE IS POINTED AT — a LIST, because the ORDER is part of what a multi-file case
 	// SAYS (A3m).** One entry for a single-file test: the fragment. For a multi-file test, one entry
-	// per `// --- file:` section in DECLARATION order, followed by the test's source directory.
+	// per `// --- file:` section in DECLARATION order, followed by the test's source directory. It is
+	// `compileToProduct`'s `inputPaths`, which is the same list `maxon-shv2 build <file>… <dir>` builds
+	// from its positionals — the harness hands it over directly rather than spelling a command line.
 	//
 	// ⚠ **THE TRAILING DIRECTORY IS WHAT ROOTS THE PROJECT, AND IT IS NOT REDUNDANT.**
 	// `Compiler.commonAncestorOf` derives `Project.rootPath` from the paths it is handed, and
@@ -1652,25 +1771,32 @@ type StagedTest
 	// both into the root module and change what the case MEANS. Naming the directory last pins the
 	// root at `<testDir>` for every shape, and costs nothing: staging wrote exactly the declared
 	// files, and `Compiler.loadSourceFiles` registers a path it has already seen zero more times.
-	export let buildTargets as FilePathArray
-	// ⭐ WHICH BINARY COMPILES IT — the compiler under test, or, for a `// --- stdlib-overlay:` case,
-	// this test's private COPY of it (see `stageStdlibOverlay`). It rides on the staging rather than
-	// being threaded from the caller because the overlay is what chooses it, and staging is where the
-	// overlay happens: a caller that passed its own would silently compile against the checkout's
-	// `stdlib/` and the case would report on a program that was never staged.
-	export let compilerExe as FilePath
+	export let buildTargets as MaxonSourcePathArray
 	// Every path the compiler may name, with the offset that maps it onto the fragment.
 	export let paths as FragmentPathMappingArray
-	// ⭐ THE LIBRARY ROOT THAT COMPILE WILL LOAD, as a STRING because that is the form a diagnostic
-	// carries it in. Asked of `compilerExe` and not of this process: a `// --- stdlib-overlay:` case is
-	// compiled by its own copy beside its own `stdlib/`, and the checkout's is not the one it names.
-	// See `rewriteStdlibPaths` for what it is for.
-	export let stdlibRoot as String
+	// ⭐⭐ **WHICH `stdlib/` THIS TEST COMPILES AGAINST — ONE FIELD DOING BOTH OF ITS JOBS.** It is
+	// handed to `Compiler.compileToProduct` as `stdlibDirOverride`, AND it is the root
+	// `normalizeCompilerOutput` rewrites out of a diagnostic raised inside the library — which is why
+	// it is a STRING: that is the form a diagnostic carries it in.
+	//
+	// ⚠ **IT IS ALWAYS EXPLICIT, NEVER EMPTY, AND THAT IS WHAT KEEPS IT ONE FIELD.** The compiler's own
+	// answer for an empty override is `locateStdlibDir()` — the walk-up from this executable — so
+	// spelling "empty means walk up" HERE as well would be that rule written twice, in a file that
+	// cannot call the one place (`Compiler.stdlibDirFor`) that owns it. Staging asks
+	// `locateStdlibDir()` itself and hands the answer on, so the harness knows the directory it is
+	// about and does not have to infer it back out of a compile it did not watch.
+	//
+	// For a `// --- stdlib-overlay:` case this is the test's PRIVATE copy (see `stageStdlibOverlay`).
+	// It rides on the staging rather than being threaded from the caller because the overlay is what
+	// chooses it, and staging is where the overlay happens: a caller that passed its own would
+	// silently compile against the checkout's `stdlib/` and the case would report on a program that
+	// was never staged.
+	export let stdlibDir as String
 	// What was written, so it can be removed afterwards.
 	export let writtenFiles as FilePathArray
 
-	static function create(buildTargets FilePathArray, compilerExe FilePath, stdlibRoot String, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
-		return Self{buildTargets: buildTargets, compilerExe: compilerExe, paths: paths, stdlibRoot: stdlibRoot, writtenFiles: writtenFiles}
+	static function create(buildTargets MaxonSourcePathArray, stdlibDir String, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
+		return Self{buildTargets: buildTargets, paths: paths, stdlibDir: stdlibDir, writtenFiles: writtenFiles}
 	end 'create'
 end 'StagedTest'
 
@@ -1685,40 +1811,40 @@ end 'StagingResult'
 // ⭐ EVERYTHING ONE COMPILED TEST LEFT BEHIND — what the compile said, what it cost, and the artifacts
 // it wrote — carried from the compile pass to the verdict pass.
 //
-// ⚠ **`irText` IS THE SIDECAR'S BYTES, NOT ITS PATH, AND THAT IS A CORRECTNESS REQUIREMENT RATHER THAN
-// A CONVENIENCE.** `<name>.ir` and `<name>.metrics` are `changeExtension`'d from the output path, which
-// cuts at the LAST DOT — so on any target whose `executableExtension` is empty (linux, macos) two tests
-// whose names differ only after their last dot land on ONE sidecar path:
-// `async-linearity.error.double-await` and `…double-await-in-loop` are both `async-linearity.error.ir`,
-// and 1,701 of the suite's 4,677 test names contain a dot (RE-MEASURED 2026-08-06; the 1,271 written
-// here at this rung was an older count and understated it). That was survivable while a test's life —
-// compile, read, compare, delete — happened before the next test compiled. It is not survivable now
-// that the golden comparison waits for a batched run, so the bytes are taken at the ONE moment they
-// unambiguously belong to this test: immediately after the compile that wrote them. The path collision
-// is then harmless by construction rather than by execution order.
+// ⭐⭐ **`irText` IS THE RENDERED BYTES AND NOTHING ON DISK PRODUCES THEM — WHICH DELETED A WHOLE
+// COLLISION CLASS RATHER THAN MERELY SURVIVING IT (G20).** `<name>.ir` and `<name>.metrics` were
+// `changeExtension`'d from the output path, which cuts at the LAST DOT — so on any target whose
+// `executableExtension` is empty (linux, macos) two tests whose names differ only after their last dot
+// landed on ONE sidecar path: `async-linearity.error.double-await` and `…double-await-in-loop` were
+// both `async-linearity.error.ir`, and 1,701 of the suite's 4,677 test names contain a dot (RE-MEASURED
+// 2026-08-06). That was survivable only because the bytes were taken at the ONE moment they
+// unambiguously belonged to this test — immediately after the compile that wrote them. An in-process
+// compile hands the IR back as a VALUE (`CompileProduct.irText`) and the CPU total with it, so neither
+// file is written at all and the ordering rule is no longer load-bearing for them.
 //
-// ⚠ **THAT COVERS THE READS. IT DOES NOT COVER THE EXE, WHOSE LIFETIME THIS SAME CHANGE EXTENDED, AND
-// THE REMAINING INVARIANT IS A PROPERTY OF THE CORPUS RATHER THAN OF THIS FILE.** Every binary a spec
-// builds now survives from its own compile until the run pass, so a LATER test in the same spec whose
-// sidecar path happens to BE an earlier test's exe path overwrites a binary that has not run yet — a
-// test named `foo.ir` beside any test named `foo.<anything>`, or a test named `foo.test` beside a test
-// named `foo`, on any target whose `executableExtension` is empty. It cannot become a silent pass: the
-// clobbered file is IR text or Maxon source, `exec` refuses it, and the case fails on the exit code and
-// on the guest shell's own message in its stderr. MEASURED over all 4,677 test names in `specs-shv2/`,
-// 2026-08-06: ZERO such pairs, in any spec, for `.ir`, `.metrics`, `.test`, `.src` or `.stdlib`. Named
-// here because the census is the whole guarantee and it dates from outside the compiler.
+// ⚠ **THE EXE IS STILL A PATH, AND ITS REMAINING INVARIANT IS A PROPERTY OF THE CORPUS RATHER THAN OF
+// THIS FILE.** Every binary a spec builds survives from its own compile until the run pass, so a LATER
+// test in the same spec whose derived path happens to BE an earlier test's exe path would overwrite a
+// binary that has not run yet — a test named `foo.test` beside a test named `foo`, on any target whose
+// `executableExtension` is empty. It cannot become a silent pass: the clobbered file is Maxon source,
+// `exec` refuses it, and the case fails on the exit code and on the guest shell's own message in its
+// stderr. MEASURED over all 4,677 test names in `specs-shv2/`, 2026-08-06: ZERO such pairs, in any
+// spec, for `.ir`, `.metrics`, `.test`, `.src` or `.stdlib`. Named here because the census is the whole
+// guarantee and it dates from outside the compiler.
+//
+// ⚠ `Compiler.discardPreviousOutput` still deletes `<exeBase>.ir` ahead of every compile, and must:
+// this harness no longer writes one, but a sidecar left behind by an ordinary `build --emit-ir` beside
+// the same output name would otherwise outlive the run that made it.
 type CompiledTest
 	export let test as SpecTest
 	export let staged as StagedTest
-	export let compile as ProcessCapture
+	export let compile as CompileAnswer
 	export let cpu as CompileCpu
 	export let irText as String
 	export let exePath as FilePath
-	export let irPath as FilePath
-	export let metricsPath as FilePath
 
-	static function create(test SpecTest, staged StagedTest, compile ProcessCapture, cpu CompileCpu, irText String, exePath FilePath, irPath FilePath, metricsPath FilePath) returns CompiledTest
-		return Self{test: test, staged: staged, compile: compile, cpu: cpu, irText: irText, exePath: exePath, irPath: irPath, metricsPath: metricsPath}
+	static function create(test SpecTest, staged StagedTest, compile CompileAnswer, cpu CompileCpu, irText String, exePath FilePath) returns CompiledTest
+		return Self{test: test, staged: staged, compile: compile, cpu: cpu, irText: irText, exePath: exePath}
 	end 'create'
 end 'CompiledTest'
 
@@ -1753,116 +1879,108 @@ end 'PreparedTest'
 
 typealias PreparedTestArray = Array with PreparedTest
 
-// Compile one test via a subprocess build (with `--emit-ir` so the Target-IR sidecar is produced) and
-// take its verdict as far as it can go without running the program.
-function prepareOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns PreparedTest
+// Compile one test in this process and take its verdict as far as it can go without running the
+// program.
+function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns PreparedTest
 	let exeBase = tempDir.join(test.name)
-	// The driver appends the platform extension to the `-o` value
+	// The driver appends the platform extension to the `outputOverride` value
 	// (resolveOutputPath), so the produced exe is `<exeBase><ext>` — reconstruct
 	// that exact path to spawn it for the exit-code check.
 	let exePath = try FilePath.from("{exeBase.toString()}{exeExtension}") otherwise 'badExePath'
 		return PreparedTest.finished(TestRun.notCompiled("could not form output path for {test.name}"))
 	end 'badExePath'
-	// `--emit-ir` writes `<output>.ir` (Compiler.writeTargetIr uses the same
-	// changeExtension), so the sidecar sits beside the exe under `.ir`.
-	let irPath = exePath.changeExtension(IrFileExtension)
-	// `--metrics` writes where it is TOLD, so unlike the sidecar this path is chosen here rather than
-	// derived by the compiler — sited beside the exe so one `cleanup` removes everything one test made.
-	//
-	// ⚠ THIS PATH IS NOT UNIQUE, and neither is the `.ir` beside it — see `CompiledTest.irText` for the
-	// collision and for the rule that makes it harmless: every artifact is READ in the pass that
-	// compiled it, before any later compile in this spec can reuse the name. This one is also DELETED
-	// before the compile that writes it (below), so a leftover can never be read as a later compile's
-	// cost either.
-	let metricsPath = exePath.changeExtension(MetricsFileExtension)
 
-	match stageTest(tempDir, test: test, compilerExe: compilerExe) 'staging'
+	match stageTest(tempDir, test: test) 'staging'
 		failed(reason) then return PreparedTest.finished(TestRun.notCompiled(reason))
-		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, metricsPath: metricsPath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 	end 'staging'
 end 'prepareOneTest'
 
 // Compile a test whose source is already on disk and decide as much of its verdict as the compiler's
 // answer alone can decide. Split out of `prepareOneTest` only because staging can FAIL, and a union's
 // arms are the honest way to say so — the two functions are one story read top to bottom.
-//
-// ⚠ It takes NO `compilerExe`: staging decides which binary compiles this test (`StagedTest.compilerExe`),
-// because a `// --- stdlib-overlay:` case is compiled by its own copy. A parameter here as well would be a
-// second answer to that question, and the wrong one would silently compile against the checkout's stdlib.
-function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, metricsPath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns PreparedTest
-	let pinnable = emitsTargetIr(effectiveTarget)
+function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns PreparedTest
+	// ⭐⭐ **THE BREADCRUMB, IMMEDIATELY BEFORE THE COMPILE, AND THIS IS THE WHOLE REASON IT EXISTS.**
+	// The compile runs in THIS process, so a compiler panic kills this worker and the parent never
+	// receives a single record for the job. The parent's plan tells it which tests it is owed; only
+	// this line can tell it which of them was in the compiler's hands when it died. See
+	// `SpecWorkerPool.emitWorkerCompiling`.
+	emitWorkerCompiling("{specName}/{test.name}")
 
-	var compileArgv = StringArray.create()
-	compileArgv.push(BuildSubcommand)
-	// In order: a multi-file case's whole point is that the compiler registers its files in the order
-	// the case declared them (see `StagedTest.buildTargets`).
-	for buildTarget in staged.buildTargets 'eachSource'
-		compileArgv.push(buildTarget.toString())
-	end 'eachSource'
-	compileArgv.push(OutputFlag)
-	compileArgv.push(exeBase.toString())
-	// The cumulative-CPU indicator's only input. It costs the compile one small file write, and
-	// nothing else: `PhaseProbe` is unconditional, so the numbers exist either way (see MetricsEmit).
-	compileArgv.push("{MetricsFlagPrefix}{metricsPath.toString()}")
-	// ALWAYS explicit, even when the effective target IS the host. The runner states what it is
-	// testing rather than trusting the build's default to agree with it — and the two ARE the same
-	// value on the host path (`Main.resolveTargetFlag` defaults to `detectHostTarget()`), so this
-	// changes no byte of a host build, only who said so.
-	compileArgv.push("{TargetFlagPrefix}{targetToString(effectiveTarget)}")
-	if pinnable 'emitGolden'
-		compileArgv.push(EmitIrFlag)
-		// A ```RequiredRuntime block only means anything where there IS a golden, so it rides inside
-		// the same gate: under wasm32 there is no sidecar to name functions in.
-		if test.runtimeNames.count() > 0 'namesRuntime'
-			compileArgv.push("{EmitIrRuntimeFlagPrefix}{joinRuntimeNames(test.runtimeNames)}")
-		end 'namesRuntime'
-	end 'emitGolden'
+	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, pinnable: emitsTargetIr(effectiveTarget), effectiveTarget: effectiveTarget)
 
-	// An `<!-- AsyncTrace -->` case is built with the trace on. Per-CASE, exactly like the golden flags above,
-	// so no other case pays for it and an untraced program stays byte-for-byte what it was.
-	if test.asyncTrace 'asyncTraceFlag'
-		compileArgv.push(AsyncTraceFlag)
-	end 'asyncTraceFlag'
-
-	// A capture case is built with the DebugStream producer. Per-CASE for `--async-trace`'s reason
-	// exactly: no other case pays for it, and an untraced program is byte-for-byte what it was.
-	if traceCaptureMode(test) 'debugStreamFlag'
-		compileArgv.push(DebugStreamFlag)
-	end 'debugStreamFlag'
-
-	// ⭐ DELETED BEFORE THE COMPILE, NOT ONLY AFTER IT. A run killed part-way through leaves this
-	// test's metrics file on disk, and the next run's compile writes one only if it SUCCEEDS — so a
-	// failing compile would be credited with the ticks of whichever earlier run last passed here.
-	// The instrument would then report a number about a compile that did not happen, which is this
-	// project's own recurring stale-artifact trap (see `Compiler.discardPreviousOutput`, which
-	// applies the same rule to the exe and the IR sidecar for the same reason).
-	try File.delete(metricsPath) otherwise ignore
-
-	let compile = try runProcess(Executable.path(staged.compilerExe), argv: compileArgv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'compileSpawnFailed'
-		cleanup(staged, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
-		return PreparedTest.finished(TestRun.notCompiled("compiler spawn failed: {e.displayReason()}"))
-	end 'compileSpawnFailed'
-
-	// BOTH artifacts are read HERE, in the pass that compiled them — the metrics because `cleanup`
-	// removes it, the IR because the NEXT test's compile may write to the very same path (see
-	// `CompiledTest.irText`). Neither can be deferred to the verdict pass.
-	let compiled = CompiledTest.create(test, staged: staged, compile: compile, cpu: readCompileCpu(metricsPath), irText: try File.readText(irPath) otherwise MissingIrPlaceholder, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
-
-	return match preRunVerdict(test, specName: specName, compile: compile, staged: staged, exePath: exePath, effectiveTarget: effectiveTarget) 'verdict'
+	return match preRunVerdict(test, specName: specName, compile: compiled.compile, staged: staged, exePath: exePath, effectiveTarget: effectiveTarget) 'verdict'
 		// ⭐ THE ONE PLACE A CROSS-TARGET SKIP IS DECIDED, and it is here because here is where the
-		// compiler's verdict first exists: `compile` has just come back, and nothing downstream re-reads
-		// its stderr. It wraps the verdict rather than preceding it, because a case whose EXPECTATION is
-		// the refusal must keep its pass — and it is handed that EXPECTATION as well, because a
-		// `compilerError` case must keep its FAIL too. See `outcomeOrTargetSkip`.
+		// compiler's answer first exists: `compiled.compile` has just come back, and nothing downstream
+		// re-reads its diagnostics. It wraps the verdict rather than preceding it, because a case whose
+		// EXPECTATION is the refusal must keep its pass — and it is handed that EXPECTATION as well,
+		// because a `compilerError` case must keep its FAIL too. See `outcomeOrTargetSkip`.
 		//
 		// ⚠ **THE `awaiting` ARM NEEDS NO SUCH WRAP, AND THAT IS STRUCTURAL RATHER THAN AN OMISSION.**
-		// `runPreconditions` yields it only for a compile that exited 0, and `targetRefusalIn` answers
-		// `notRefused` for anything but the exit code a compile that REPORTED DIAGNOSTICS returns. A
-		// refusal therefore cannot be reachable from a test that got as far as being run.
-		settled(outcome) gives PreparedTest.finished(recordFragmentAndCleanup(compiled, outcome: outcomeOrTargetSkip(outcome, expectation: test.expectation, compile: compile), fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
+		// `runPreconditions` yields it only for a compile that BUILT, and `targetRefusalIn` answers
+		// `notRefused` for anything but a compile that REPORTED DIAGNOSTICS. A refusal therefore cannot
+		// be reachable from a test that got as far as being run.
+		settled(outcome) gives PreparedTest.finished(recordFragmentAndCleanup(compiled, outcome: outcomeOrTargetSkip(outcome, expectation: test.expectation, compile: compiled.compile), fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
 		needsExecution(expected, stderr, stdout) gives PreparedTest.awaiting(PendingRun.create(compiled, expected: expected, stderr: stderr, stdout: stdout))
 	end 'verdict'
 end 'compileStagedTest'
+
+// ⭐⭐ **THE COMPILE ITSELF — IN THIS PROCESS, THROUGH `Compiler.compileToProduct`, WHICH IS THE SAME
+// PIPELINE DRIVER A COMMAND LINE GOES THROUGH.** There is deliberately no second `loadProject →
+// compileToCodeResult → writeExecutable` sequence here: the harness calls the ONE driver and the
+// command line calls it too, so the two cannot come to disagree about what a build is.
+//
+// ⭐ **THE DIAGNOSTIC CAPTURE IS OPENED AROUND THE WHOLE CALL, INCLUDING THE FAILURE REPORT.** A
+// refused compile writes its diagnostics through `emitDiagnosticLine` from inside the pipeline; the
+// five `CompileError` arms that never reach `project.diagnostics` are written by
+// `Main.reportCompileError`, which is called HERE, still inside the capture. So the captured text is
+// what the command line would have printed on stderr for the same build — for every failure shape,
+// not just the diagnostic-carrying one — and there is exactly ONE renderer of it.
+//
+// ⚠ **EVERY EXIT CLOSES THE CAPTURE, AND THAT IS NOT A STYLE POINT.** The latch is module-level (it is
+// exact only because a compile is SERIAL — see `Diagnostics.maxon`), so a path that left it open would
+// splice this test's diagnostics onto the next test's, and `beginDiagnosticCapture` panics on the
+// second open rather than nesting. Both exits below close it, and neither can be reordered past a
+// `return`.
+//
+// `metricsPath` is deliberately not passed: `--metrics`'s TSV existed on this path only so the CPU
+// total could be read back off disk, and `CompileProduct.totalCpuTicks` IS that total — the same
+// number, from the same whole-compile probe, without the file.
+function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exePath FilePath, pinnable bool, effectiveTarget Target) returns CompiledTest
+	beginDiagnosticCapture()
+
+	// The target is stated EXPLICITLY even when it IS the host — the runner says what it is testing
+	// rather than trusting a default to agree with it, exactly as the old `--target=` argument did.
+	//
+	// `runtimeIrNames` rides unconditionally rather than behind the `pinnable` gate the old
+	// `--emit-ir-runtime=` flag sat behind: `emitIr` already gates it, because with no render there is
+	// no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
+	// their producer per CASE, so no other case pays for it and an untraced program is byte-for-byte
+	// what it was.
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: exeBase.toString(), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), stdlibDirOverride: staged.stdlibDir) otherwise (e) 'compileFailed'
+		reportCompileError(e)
+		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: endDiagnosticCapture()), cpu: CompileCpu.unreported, irText: MissingIrPlaceholder, exePath: exePath)
+	end 'compileFailed'
+
+	// EMPTY IR is the placeholder, and that reproduces exactly what reading a missing sidecar used to
+	// give: a target that emits no Target IR (`pinnable` false) renders none, and a fragment is never
+	// written for it anyway (`recordFragmentAndCleanup`).
+	let irText = MissingIrPlaceholder if product.irText.isEmpty() else product.irText
+	return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(CompileVerdict.built, diagnostics: endDiagnosticCapture()), cpu: CompileCpu.reported(product.totalCpuTicks), irText: irText, exePath: exePath)
+end 'compileOneTest'
+
+// Which of the two failure states a thrown `CompileError` is.
+//
+// `compileError` is the arm the driver raises once one or more diagnostics have been REPORTED (and
+// printed through the sink). Every other arm is a build that never got that far — no `Diagnostic`
+// exists for it and `Main.reportCompileError` prints a sentence of its own instead. The distinction is
+// what `targetRefusalIn` rests on; see `CompileVerdict`.
+function compileVerdictOf(e CompileError) returns CompileVerdict
+	return match e 'arm'
+		compileError gives CompileVerdict.reportedDiagnostics
+		fileNotFound to stdlibNotFound gives CompileVerdict.driverFailed
+	end 'arm'
+end 'compileVerdictOf'
 
 // The last step of EVERY test, whichever pass its verdict became final in: record the fragment (or
 // don't), remove what the test wrote, and hand back the run.
@@ -1902,13 +2020,13 @@ end 'compileStagedTest'
 // rule rather than an exception to it: its verdict really was established on this machine.
 function recordFragmentAndCleanup(compiled CompiledTest, outcome TestOutcome, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
 	if not outcome.pinsEmittedCode() or not emitsTargetIr(effectiveTarget) 'noFragment'
-		cleanup(compiled.staged, exePath: compiled.exePath, irPath: compiled.irPath, metricsPath: compiled.metricsPath)
+		cleanup(compiled.staged, exePath: compiled.exePath)
 		return TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.notPinned)
 	end 'noFragment'
 
 	let fragment = checkTestFragment(fragmentDir, test: compiled.test, compile: compiled.compile, staged: compiled.staged, irText: compiled.irText, updateRequired: updateRequired, mayMint: outcome.isPass())
 
-	cleanup(compiled.staged, exePath: compiled.exePath, irPath: compiled.irPath, metricsPath: compiled.metricsPath)
+	cleanup(compiled.staged, exePath: compiled.exePath)
 
 	// ⚖ ONLY ONE ARM IS A FAILURE. `compared`, `drifted`, `minted` and `unrecorded` all leave the
 	// behaviour verdict exactly as the assertions left it — the goldens are reference, reported and
@@ -2387,9 +2505,9 @@ end 'withMonitorStderrText'
 
 // The verdict of a test whose program HAS now run.
 //
-// ⚠ It does not consult `outcomeOrTargetSkip`: a test only reaches here through a compile that exited
-// 0, and a target refusal is read off a compile that exited 1 having printed nothing but E3104s. See
-// `compileStagedTest`'s `settled` arm, which is the only door onto that conversion.
+// ⚠ It does not consult `outcomeOrTargetSkip`: a test only reaches here through a compile that BUILT,
+// and a target refusal is read off a compile that REPORTED DIAGNOSTICS and printed nothing but E3104s.
+// See `compileStagedTest`'s `settled` arm, which is the only door onto that conversion.
 function finishPendingRun(pending PendingRun, observation RunObservation, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
 	// `asyncTrace` is read off the case itself rather than threaded through `PendingRun` — `CompiledTest`
 	// already carries the whole `SpecTest`, so a fifth field would be the same fact stored twice.
@@ -2397,74 +2515,11 @@ function finishPendingRun(pending PendingRun, observation RunObservation, fragme
 	return recordFragmentAndCleanup(pending.compiled, outcome: outcome, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 end 'finishPendingRun'
 
-// What this test's compile spent, read back out of the `--metrics` file it was told to write.
-//
-// ABSENT IS A REAL ANSWER, NOT AN ERROR. `writeMetrics` is the last step of a compile that SUCCEEDED,
-// so a `compilerError` case — which passes precisely by failing to compile — can never leave one. The
-// ticks it burned are genuinely unmeasurable from here, and the tally counts the test as `unreported`
-// so the indicator's coverage is visible instead of being quietly rolled into a total.
-//
-// MALFORMED IS NOT A REAL ANSWER. A file that exists but whose rows this cannot read means the writer
-// and the reader disagree about a format both halves of ONE tree are built from — the same class of
-// break the worker-pool protocol panics on, and for the same reason: skipping it silently would buy
-// an indicator that under-reports for a cause nobody can see.
-function readCompileCpu(path FilePath) returns CompileCpu
-	let text = try File.readText(path) otherwise 'noMetrics'
-		return CompileCpu.unreported
-	end 'noMetrics'
-
-	// `MetricsRowSep`, not this file's own `LineSeparator`: the spec-file text and the metrics TSV are
-	// two different formats that happen to agree about newlines today, and only one of them is
-	// MetricsEmit's to change.
-	for line in text.split(MetricsRowSep) 'eachRow'
-		let trimmed = line.trim()
-		if trimmed.isEmpty() or trimmed.startsWith(MetricsCommentPrefix) 'notARow'
-			continue
-		end 'notARow'
-
-		let fields = trimmed.split(MetricsColumnSep)
-		if fields.count() != MetricsFieldCount 'malformed'
-			panic("readCompileCpu: {path.toString()} has a row with {fields.count()} tab-separated fields, not {MetricsFieldCount} — either this harness and MetricsEmit disagree about the metrics format, or the file is TRUNCATED: `writeMetrics` deliberately swallows a write failure (a full disk must not fail a build), so a partial file is reachable and arrives here looking like a format drift: '{trimmed}'")
-		end 'malformed'
-
-		let kind = try fields.get(MetricsKindField) otherwise panic("readCompileCpu: kind field OOB after the count check")
-		if kind != MetricsKindTotal 'notTheTotal'
-			continue
-		end 'notTheTotal'
-
-		let raw = try fields.get(MetricsCpuTicksField) otherwise panic("readCompileCpu: cputicks field OOB after the count check")
-		// `parseCount` is the suite's ONE decimal parser (see ScaleTestRunner); its error union is
-		// named for the harness that first needed it, and a number this compiler itself wrote cannot
-		// fail it.
-		let ticks = try parseCount(raw) otherwise (e) 'unreadableTicks'
-			panic("readCompileCpu: {path.toString()} has an unreadable cputicks column '{raw}': {scaleErrorText(e)}")
-		end 'unreadableTicks'
-
-		return CompileCpu.reported(ticks)
-	end 'eachRow'
-
-	panic("readCompileCpu: {path.toString()} carries no `{MetricsKindTotal}` row — MetricsEmit writes one first on every metrics build, so either the format drifted or the file is TRUNCATED (`writeMetrics` swallows a write failure by design, so a zero-length or partial file is reachable). An ABSENT file is not this: it is `CompileCpu.unreported`, counted and reported, never a panic.")
-end 'readCompileCpu'
-
-// The `--emit-ir-runtime=` value for a case's ```RequiredRuntime names. A `StringBuilder` rather than
-// repeated `String` concatenation for the reason every accumulator in this file gives: a `String`
-// owns exactly the bytes it holds and its `append` recopies all of them.
-function joinRuntimeNames(names RuntimeFunctionNameArray) returns String
-	var out = StringBuilder.create()
-	for (iter, name) in names.withIterator() 'each'
-		if iter.index() > 0 'separator'
-			out.append(RuntimeNameSeparator)
-		end 'separator'
-		out.append(name)
-	end 'each'
-	return out.build()
-end 'joinRuntimeNames'
-
 // Write `test`'s source to disk and describe how the compiler's diagnostics map back onto the
 // merged fragment. THE one place a test's source reaches the filesystem.
-function stageTest(tempDir FilePath, test SpecTest, compilerExe FilePath) returns StagingResult
+function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
 	if test.isMultiFile() 'multiFile'
-		return stageSourceFiles(tempDir, test: test, compilerExe: compilerExe)
+		return stageSourceFiles(tempDir, test: test)
 	end 'multiFile'
 
 	// A `// --- stdlib-overlay:` section cannot reach this branch: `SpecParser.splitSourceSections`
@@ -2483,11 +2538,11 @@ function stageTest(tempDir FilePath, test SpecTest, compilerExe FilePath) return
 	var written = FilePathArray.create()
 	written.push(fragmentPath)
 
-	var buildTargets = FilePathArray.create()
+	var buildTargets = MaxonSourcePathArray.create()
 	buildTargets.push(fragmentPath)
 
-	let stdlibRoot = try stdlibRootOf(compilerExe) otherwise return StagingResult.failed(missingStdlibReason(compilerExe))
-	return StagingResult.staged(StagedTest.create(buildTargets, compilerExe: compilerExe, stdlibRoot: stdlibRoot, paths: paths, writtenFiles: written))
+	let stdlibDir = try locateStdlibDir() otherwise return StagingResult.failed(missingStdlibReason())
+	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: stdlibDir.toString(), paths: paths, writtenFiles: written))
 end 'stageTest'
 
 // A MULTI-file test: one directory, one file per `// --- file:` section, compiled as a project — and
@@ -2497,7 +2552,7 @@ end 'stageTest'
 //
 // ⭐⭐ **THE DECLARED ORDER IS THE COMPILED ORDER (A3m), AND NOTHING NEW SAYS SO.** The `// --- file:`
 // sections were already ordered and already staged in that order; the only thing missing was a way to
-// TELL the compiler, which `build <file>... <dir>` now is. Five `-either-order` spec pairs exist to pin
+// TELL the compiler, which the ORDERED `inputPaths` list now is. Five `-either-order` spec pairs exist to pin
 // a program's answer in BOTH sibling-file orders and could pin neither: `build` took one path, the
 // loader walked raw `Directory.list`, and the order was therefore a property of the staging directory's
 // on-disk state rather than of the case. Both halves of every such pair got whichever order the host
@@ -2508,7 +2563,7 @@ end 'stageTest'
 // this test would join the build silently and change what the test MEANS — and "the instrument died
 // on its own leftovers" is a failure this project has already had twice (OPEN.md #6). Whatever this
 // run did not write, this run removes.
-function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath) returns StagingResult
+function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 	// `.src`-suffixed so it never equals `exeBase` (`<tempDir>/<name>`) — see MultiFileSourceDirSuffix.
 	let testDir = tempDir.join("{test.name}{MultiFileSourceDirSuffix}")
 	if not Directory.create(testDir) 'noTestDir'
@@ -2522,7 +2577,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 	// case's private stdlib is not one of the units the program is built FROM. `staged` is separate
 	// from BOTH: it is every file the case declared, before `compilationUnitsAmong` decides which of
 	// them are part of the program.
-	var staged = FilePathArray.create()
+	var staged = MaxonSourcePathArray.create()
 
 	for file in test.sourceFiles 'eachFile'
 		if not isSafeRelativeName(file.name) 'unsafeName'
@@ -2548,21 +2603,26 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 
 	var buildTargets = compilationUnitsAmong(staged)
 
-	var compiler = compilerExe
+	// The checkout's own library, located exactly as a compile with no override would locate it — and
+	// the SOURCE an overlay case's private copy is made from.
+	let checkoutStdlib = try locateStdlibDir() otherwise return StagingResult.failed(missingStdlibReason())
+
+	// A STRING from here on, because that is what it is FOR: it is handed to `compileToProduct` as
+	// `stdlibDirOverride` and read by `normalizeCompilerOutput` as the root to rewrite out of a
+	// diagnostic, and both take the spelling rather than the path.
+	var stdlibDir = checkoutStdlib.toString()
 	if test.stdlibOverlays.count() > 0 'hasStdlibOverlay'
-		compiler = try stageStdlibOverlay(tempDir, test: test, compilerExe: compilerExe, paths: paths, written: written) otherwise (e) 'overlayFailed'
+		let overlayStdlib = try stageStdlibOverlay(tempDir, test: test, sourceStdlib: checkoutStdlib, paths: paths, written: written) otherwise (e) 'overlayFailed'
 			return StagingResult.failed(overlayErrorText(e))
 		end 'overlayFailed'
+		stdlibDir = overlayStdlib.toString()
 	end 'hasStdlibOverlay'
 
 	// LAST, so every file above is registered before the walk reaches it and the walk finds nothing
 	// new — the directory is here to fix the project ROOT, not to contribute a unit.
 	buildTargets.push(testDir)
 
-	// Asked of `compiler` rather than of `compilerExe`, so an overlay case's root is the PRIVATE
-	// checkout its copy will load and not this one's.
-	let stdlibRoot = try stdlibRootOf(compiler) otherwise return StagingResult.failed(missingStdlibReason(compiler))
-	return StagingResult.staged(StagedTest.create(buildTargets, compilerExe: compiler, stdlibRoot: stdlibRoot, paths: paths, writtenFiles: written))
+	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: stdlibDir, paths: paths, writtenFiles: written))
 end 'stageSourceFiles'
 
 // ⭐⭐ **WHICH OF THE STAGED FILES BELONG TO THE PROGRAM — ASKED WITH THE COMPILER'S OWN PREDICATE,
@@ -2592,8 +2652,8 @@ end 'stageSourceFiles'
 // ⚠ Asked only after every file is on disk — never per file inside the staging loop. A `.maxonignore`
 // declared AFTER the file it excludes would not exist yet, and the case's meaning would depend on the
 // order its sections happen to be written in.
-function compilationUnitsAmong(staged FilePathArray) returns FilePathArray
-	var targets = FilePathArray.create()
+function compilationUnitsAmong(staged MaxonSourcePathArray) returns MaxonSourcePathArray
+	var targets = MaxonSourcePathArray.create()
 
 	for path in staged 'eachStaged'
 		let dir = try path.parent() otherwise panic("SpecTestRunner.compilationUnitsAmong: {path.toString()} has no parent directory, though `stageSourceFiles` created one to write it into")
@@ -2605,27 +2665,13 @@ function compilationUnitsAmong(staged FilePathArray) returns FilePathArray
 	return targets
 end 'compilationUnitsAmong'
 
-// The `stdlib/` a compile driven by `compilerExe` will load, in the spelling a diagnostic from inside it
-// will carry.
-//
-// ⚠ **IT IS THE COMPILER'S OWN WALK, CALLED ON THE COMPILER'S OWN DIRECTORY** (`stdlibDirAbove`, which
-// `StdlibSource.locateStdlibDir` reaches from `Process.executablePath()`). A second rule here would be a
-// second answer to "where is the library", and the way that failure presents is the nastiest kind: the
-// rewrite silently does not fire and a case reports the host's absolute path as though normalization had
-// never been asked for.
-function stdlibRootOf(compilerExe FilePath) returns String throws CompileError
-	let exeDir = try compilerExe.resolve(Directory.currentPath()).parent() otherwise throw CompileError.stdlibNotFound
-	let root = try stdlibDirAbove(exeDir)
-	return root.toString()
-end 'stdlibRootOf'
-
 // Why staging stopped when the library could not be located. Its own function because both staging
 // shapes report it and the sentence has to say the same thing in both — and because it is worth being
 // explicit that this is a STAGING failure rather than a compile one: the compile would have failed too
 // (`CompileError.stdlibNotFound`), but it would have failed AFTER the runner had already promised it
 // could rewrite what the compiler printed.
-function missingStdlibReason(compilerExe FilePath) returns String
-	return "no {StdlibDirName}/ above the compiler under test {compilerExe.toString()}, so a diagnostic raised inside the library could not be rewritten to a portable path"
+function missingStdlibReason() returns String
+	return "no {StdlibDirName}/ above this executable, so a diagnostic raised inside the library could not be rewritten to a portable path"
 end 'missingStdlibReason'
 
 // Why a `// --- stdlib-overlay:` case could not be staged. A one-arm union implementing `Error` — the
@@ -2654,11 +2700,19 @@ end 'overlayErrorText'
 // cannot fake it by taking the basename. Those findings were therefore recorded as SHELL TRANSCRIPTS in
 // `specs-shv2/reserved-double-underscore.md` — three checks that could not fail.
 //
-// ⭐ **THE LEVER IS `StdlibSource.locateStdlibDir`: A COMPILER FINDS ITS `stdlib/` BY WALKING UP FROM
-// ITS OWN EXECUTABLE.** So a COPY of the compiler, placed in a directory that has its own `stdlib/`,
-// loads that one — no flag, no environment variable, and no change to the compiler at all. The copied
-// tree is this test's own, so the checkout's `stdlib/` is never written to and nothing outside this
-// directory can observe the overlay.
+// ⭐ **THE LEVER IS `Compiler.compileToProduct`'s `stdlibDirOverride`: THE COMPILE IS TOLD WHICH
+// `stdlib/` TO READ.** The staged tree is this test's own, so the checkout's `stdlib/` is never written
+// to and nothing outside this directory can observe the overlay.
+//
+// ⛔ **IT USED TO COPY THE COMPILER BINARY — 15 MB PER CASE — AND THAT IS GONE (G20).** The old lever
+// was `StdlibSource.locateStdlibDir`'s walk-up: a COPY of the compiler placed in a directory holding
+// its own `stdlib/` would load that one, with no flag and no change to the compiler. It worked, and it
+// only ever worked because the compile was a SUBPROCESS whose executable the harness could choose. An
+// in-process compile has exactly one executable — this one — so the directory has to be an ARGUMENT,
+// which is both cheaper and the honest way to say it. The eleven `// --- stdlib-overlay:` cases
+// (`print-error-function` x2, `reserved-double-underscore` x9) are the sharpest test that the argument
+// actually takes: every one of them asserts a diagnostic only a private stdlib can produce, so an
+// ignored override would show up as eleven reds and not as a silent pass.
 //
 // ⚠ **ISOLATION, in a suite that runs 12 workers over ONE tree.** The overlay root is
 // `<tempDir>/<test.name>.stdlib`, and every term of that is already private: `tempDir` is per SPEC
@@ -2668,15 +2722,10 @@ end 'overlayErrorText'
 // behind would otherwise join a later compile — and every byte it writes is recorded in `written`, so
 // `cleanup` removes it.
 //
-// ⚠ **THE SOURCE OF THE COPY IS THE COMPILER UNDER TEST'S OWN `stdlib/`, NOT THIS PROCESS'S.** They are
-// the same directory in every in-tree run and are not required to be: `--compiler=<path>` names some
-// other binary, and copying THIS harness's stdlib into a tree that other binary then loads would build
-// the case against a library its compiler was never written for.
-function stageStdlibOverlay(tempDir FilePath, test SpecTest, compilerExe FilePath, paths FragmentPathMappingArray, written FilePathArray) returns FilePath throws OverlayError
-	let exeUnderTest = compilerExe.resolve(Directory.currentPath())
-	let exeDir = try exeUnderTest.parent() otherwise throw OverlayError.refused("could not derive a directory for the compiler under test {exeUnderTest.toString()}")
-	let sourceStdlib = try stdlibDirAbove(exeDir) otherwise throw OverlayError.refused("no {StdlibDirName}/ above the compiler under test {exeUnderTest.toString()}, so there is nothing for '{StdlibOverlayMarker}' to overlay")
-
+// `sourceStdlib` is the checkout's own library, located ONCE by the caller: it is both what this copies
+// from and what a case with no overlay compiles against, and asking for it twice would be two answers
+// to one question.
+function stageStdlibOverlay(tempDir FilePath, test SpecTest, sourceStdlib FilePath, paths FragmentPathMappingArray, written FilePathArray) returns FilePath throws OverlayError
 	let overlayRoot = tempDir.join("{test.name}{StdlibOverlayDirSuffix}")
 	if not Directory.create(overlayRoot) 'noRoot'
 		throw OverlayError.refused("could not create stdlib-overlay directory {overlayRoot.toString()}")
@@ -2689,15 +2738,7 @@ function stageStdlibOverlay(tempDir FilePath, test SpecTest, compilerExe FilePat
 	try copyStdlibSources(sourceStdlib, into: stagedStdlib, written: written)
 	try applyOverlaySections(test, stagedStdlib: stagedStdlib, sourceStdlib: sourceStdlib, paths: paths)
 
-	// The copy is spawned, so on a POSIX host it needs the execute bit the original has —
-	// `FilePermission.normal` would produce a file the runner then fails to start, which reads as a
-	// compiler crash rather than as a staging bug.
-	let stagedExe = overlayRoot.join(exeUnderTest.filename())
-	let image = try File.readBinary(exeUnderTest) otherwise throw OverlayError.refused("could not read the compiler under test {exeUnderTest.toString()} to copy it beside the overlaid {StdlibDirName}/")
-	try File.writeBinary(stagedExe, content: image, mode: FilePermission.executable) otherwise throw OverlayError.refused("could not write {stagedExe.toString()}")
-	written.push(stagedExe)
-
-	return stagedExe
+	return stagedStdlib
 end 'stageStdlibOverlay'
 
 // Copy every file the compiler would LOAD from `from` into `into`, preserving the tree.
@@ -2855,21 +2896,30 @@ end 'FragmentCheck'
 // `--update-required` regenerates instead of comparing. That is still the door a change enters
 // through, and it is deliberately a door you have to open: the diff is the review.
 //
-// ⭐ **A GOLDEN IS INDEPENDENT OF WHICH OTHER TESTS RAN, AND `scripts/remote-mac.sh` RELIES ON IT.**
+// ⭐⭐ **A GOLDEN IS INDEPENDENT OF WHICH OTHER TESTS RAN, AND `scripts/remote-mac.sh` RELIES ON IT.**
 // The content compared (or written) here comes from ONE compile of ONE test: `runOneSpec` walks its
-// selected tests one at a time and `stageTest` puts a single source file on disk for each, which a
-// single `build` subprocess compiles alone. Nothing is shared between two tests — no module, no
-// literal pool — so `--filter` cannot move a byte of any fragment it does not exclude, and a
-// FILTERED `--update-required` regenerates exactly what an unfiltered one would. That is what lets
-// the remote-golden script carry an arm64 run's `specs-shv2/fragments` home from a filtered run; the
-// C# suite, which batches a spec's tests into one module, is excluded there for exactly the reason
-// this runner does not need to be. ⚠ If shv2 ever compiles several tests together, that script's
-// exclusion list is the OTHER end of this invariant and must change with it.
+// selected tests one at a time, `stageTest` puts that test's source on disk alone, and one
+// `compileToProduct` compiles it. So `--filter` cannot move a byte of any fragment it does not
+// exclude, and a FILTERED `--update-required` regenerates exactly what an unfiltered one would. That
+// is what lets the remote-golden script carry an arm64 run's `specs-shv2/fragments` home from a
+// filtered run; the C# suite, which batches a spec's tests into one module, is excluded there for
+// exactly the reason this runner does not need to be. ⚠ If shv2 ever compiles several tests together,
+// that script's exclusion list is the OTHER end of this invariant and must change with it.
+//
+// ⚠⚠ **SINCE G20 THAT INDEPENDENCE IS A PROPERTY OF THE COMPILER'S PER-COMPILE STATE, NOT OF PROCESS
+// ISOLATION, AND THE CHANGE IS WORTH STATING RATHER THAN ASSUMING.** Every test used to be compiled by
+// its own `build` SUBPROCESS, which made the claim free: a fresh process shares nothing by
+// construction. Now hundreds of compiles run in one worker, so what carries it is that each one builds
+// a fresh `Project` (`Compiler.loadProject`) and every memo, interner and counter the pipeline uses
+// hangs off THAT — nothing in the compile pipeline is module-level mutable state that outlives it.
+// MEASURED 2026-08-23 rather than asserted: `--update-required --filter=<spec>` and
+// `--update-required --filter=<spec>.<one test>` produce BYTE-IDENTICAL goldens for that test, which
+// is exactly the difference between "compiled after 130 other programs" and "compiled first".
 //
 // `mayMint` is the caller's verdict-derived permission to WRITE a first golden — see
 // `recordFragmentAndCleanup`, which is the one place it is decided. It gates both write doors, because
 // `--update-required` writes unvalidated content exactly as a first mint does.
-function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, staged StagedTest, irText String, updateRequired bool, mayMint bool) returns FragmentCheck
+function checkTestFragment(fragmentDir FilePath, test SpecTest, compile CompileAnswer, staged StagedTest, irText String, updateRequired bool, mayMint bool) returns FragmentCheck
 	// The fragment records the CODE, so a run expectation contributes only its exit code and
 	// its IR — a pinned ```stderr is an assertion about the RUN, checked there, and adding
 	// it here would move every golden for nothing.
@@ -2987,8 +3037,8 @@ end 'fragmentExitCodeText'
 // A compilerError test's fragment: the shared head plus the compiler's normalized
 // stderr (the ACTUAL diagnostic the compiler produced — what the fragment exists
 // to track — with every compiled file's path and line rewritten onto the fragment).
-function buildErrorFragment(test SpecTest, compile ProcessCapture, staged StagedTest) returns String
-	let normalizedError = normalizeCompilerOutput(compile.stderr, paths: staged.paths, stdlibRoot: staged.stdlibRoot).trim()
+function buildErrorFragment(test SpecTest, compile CompileAnswer, staged StagedTest) returns String
+	let normalizedError = normalizeCompilerOutput(compile.diagnostics, paths: staged.paths, stdlibRoot: staged.stdlibDir).trim()
 	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
 end 'buildErrorFragment'
 
@@ -3004,7 +3054,7 @@ union PreRunVerdict
 	needsExecution(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout)
 end 'PreRunVerdict'
 
-function preRunVerdict(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath, effectiveTarget Target) returns PreRunVerdict
+function preRunVerdict(test SpecTest, specName String, compile CompileAnswer, staged StagedTest, exePath FilePath, effectiveTarget Target) returns PreRunVerdict
 	return match test.expectation 'e'
 		run(expected, stderr, stdout, sectionPins) gives runPreconditions(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget)
 		compilerError(text) gives PreRunVerdict.settled(checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged))
@@ -3021,19 +3071,19 @@ end 'preRunVerdict'
 // is a claim about the language, so neither should decide whether a test passes. Everything that
 // IS a claim — the code, the message, the line, the column — survives normalization untouched and
 // is compared exactly.
-function checkCompilerError(expectedText String, specName String, testName String, compile ProcessCapture, staged StagedTest) returns TestOutcome
-	if compile.exitCode == 0 'unexpectedSuccess'
+function checkCompilerError(expectedText String, specName String, testName String, compile CompileAnswer, staged StagedTest) returns TestOutcome
+	if compile.isBuilt() 'unexpectedSuccess'
 		return TestOutcome.fail("expected a compile error but compilation succeeded")
 	end 'unexpectedSuccess'
 
-	let actual = normalizeCompilerOutput(compile.stderr, paths: staged.paths, stdlibRoot: staged.stdlibRoot).trim()
+	let actual = normalizeCompilerOutput(compile.diagnostics, paths: staged.paths, stdlibRoot: staged.stdlibDir).trim()
 	// The EXPECTED side needs no renumbering: an expectation — ported or authored — already names
 	// the MERGED fragment's lines, because that is the file a reader has in front of them. Only its
 	// PATH is rewritten, which is one mapping with no offset. It goes through the SAME library rewrite
 	// for the reason this whole routine is one function: what "normalized" means may not differ by side,
 	// and an expectation naming a host's absolute checkout is a mistake worth normalizing INTO agreement
 	// rather than one worth passing through so it can fail somewhere else.
-	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(specName, testName: testName), stdlibRoot: staged.stdlibRoot).trim()
+	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(specName, testName: testName), stdlibRoot: staged.stdlibDir).trim()
 	if actual == expected 'matched'
 		return TestOutcome.pass
 	end 'matched'
@@ -3796,9 +3846,9 @@ end 'requireWslAvailable'
 // A RUN test (whatever result blocks the case carried — an ```exitcode, a ```stdout, a ```stderr, a
 // ```RequiredData, a ```RequiredRdata, in any combination): the compile MUST succeed and every section
 // the case pinned must hold BEFORE the program is worth running at all.
-function runPreconditions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile ProcessCapture, exePath FilePath, effectiveTarget Target) returns PreRunVerdict
-	if compile.exitCode != 0 'compileFailed'
-		return PreRunVerdict.settled(TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}"))
+function runPreconditions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile CompileAnswer, exePath FilePath, effectiveTarget Target) returns PreRunVerdict
+	if not compile.isBuilt() 'compileFailed'
+		return PreRunVerdict.settled(TestOutcome.fail("compilation failed: {compile.diagnostics.trim()}"))
 	end 'compileFailed'
 
 	// The section gates read the BINARY, so they run before the program does — they are properties of
@@ -4477,17 +4527,17 @@ function referenceFragmentPath(specName String, testName String) returns String
 	return "{ReferenceFragmentDir}/{specName}/{testName}{FragmentExtension}"
 end 'referenceFragmentPath'
 
-// Best-effort removal of everything this test wrote: its staged source file(s), the produced exe,
-// the IR sidecar and the metrics TSV. A delete failure — e.g. the exe/IR/metrics were never produced
-// because the compile failed — is ignored. Correctness does not rest on this succeeding: a multi-file
-// test's directory is PURGED before it is written (`stageSourceFiles`), and the metrics file is
-// deleted before the compile that would write it (`compileStagedTest`), so a leftover can never join a
-// later build or be read as a later compile's cost.
-function cleanup(staged StagedTest, exePath FilePath, irPath FilePath, metricsPath FilePath)
+// Best-effort removal of everything this test wrote: its staged source file(s) and the produced exe.
+// A delete failure — e.g. the exe was never produced because the compile failed — is ignored.
+// Correctness does not rest on this succeeding: a multi-file test's directory is PURGED before it is
+// written (`stageSourceFiles`) and `Compiler.discardPreviousOutput` clears the output ahead of every
+// compile, so a leftover can never join a later build.
+//
+// ⚠ There are no sidecars to remove any more. The IR comes back as a VALUE and the CPU total with it
+// (see `CompiledTest`), so this run writes no `<name>.ir` and no `<name>.metrics` at all.
+function cleanup(staged StagedTest, exePath FilePath)
 	for path in staged.writtenFiles 'eachSource'
 		try File.delete(path) otherwise ignore
 	end 'eachSource'
 	try File.delete(exePath) otherwise ignore
-	try File.delete(irPath) otherwise ignore
-	try File.delete(metricsPath) otherwise ignore
 end 'cleanup'
