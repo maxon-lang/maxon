@@ -3,8 +3,7 @@
 // `<!-- test: NAME -->` marker, the ```maxon source block, and one expected
 // block (```exitcode or ```maxoncstderr), plus the `status:` frontmatter. Every
 // v1 feature the specs-shv2 corpus does not use — fragment caching, RequiredIR /
-// RequiredLowering, mm-trace,
-// `TimeoutMs` directive, doc-example extraction — is dropped; each
+// RequiredLowering, the `TimeoutMs` directive, doc-example extraction — is dropped; each
 // returns when a spec first needs it. **Per-target `Stdout:<target>` was the first
 // one to have come back** — BATCH2 slice 3, for `specs/filepath.md`, whose 26
 // separator-printing cases pin one answer per platform (see `TargetStdoutFencePrefix`, and
@@ -100,11 +99,14 @@
 //     the same distance apart as their lowercase originals, one case-flip up. Sharing a prefix is
 //     harmless — neither is a prefix OF the other — but it does mean neither may ever be recognized by a
 //     test that stops short of byte 6, which is the shortcut this one pair invites.
-//   • **THE mm-trace FENCE.** "```mm-trace" is in no prefix relation with any other: it differs from
+//   • **THE TWO CAPTURE FENCES.** "```mm-trace" is in no prefix relation with any other: it differs from
 //     both `maxon` spellings at byte 4 (`m`/`a` — they share the `m` at byte 3 and nothing further),
 //     from "```exitcode", "```stderr" and "```stdout" at byte 3 (`m` vs `e`/`s`), and from every
 //     capitalized fence at byte 3 by the QUALIFIED-vs-PORTABLE rule two bullets up (its byte 3 is
 //     lowercase). Nothing is a prefix of it and it is a prefix of nothing, so its arm's position is free.
+//     "```log-trace" is separated from it at byte 3 (`l` vs `m`), from `maxon` at byte 3 as well, and
+//     from "```exitcode"/"```stderr"/"```stdout" there too — so the SECOND capture fence joined without
+//     disturbing the relation this bullet states, which is the check every added fence owes.
 //   • **THE `Required*` FAMILY**, which is the one group the capitalization rule does not separate from
 //     the qualified fences, because it is capitalized at byte 3 as well: "```RequiredData",
 //     "```RequiredRdata" and "```RequiredRuntime" all differ from "```Maxoncstderr:", "```Stderr:" and
@@ -769,12 +771,12 @@ export type SpecTest
 	// one fact in two places.
 	export let asyncTrace as bool
 
-	// Whether this case asserts its MEMORY-MANAGEMENT trace, and what it expects (see `SpecTraceCapture`). It
-	// sits beside `asyncTrace` for that field's stated reason and it is the same kind of fact: it changes
-	// how the program is BUILT (`--debugstream`) and how its output is COMPARED (under `maxon monitor`,
-	// through `normalizeTrace`), rather than what the run must produce.
+	// Whether this case asserts a DEBUG-STREAM trace, which family, and what it expects (see
+	// `SpecTraceCapture`). It sits beside `asyncTrace` for that field's stated reason and it is the same
+	// kind of fact: it changes how the program is BUILT (`--debugstream`) and how its output is COMPARED
+	// (under `maxon monitor`, through `normalizeTrace`), rather than what the run must produce.
 	//
-	// ⚠ The EXPECTATION rides here too, unlike `asyncTrace`'s, because an mm-trace block IS the
+	// ⚠ The EXPECTATION rides here too, unlike `asyncTrace`'s, because a capture block IS the
 	// assertion — there is no other slot on `SpecExpectation` it could land in, and putting the mode on
 	// the test and the golden on the expectation would be the one fact in two places this file's
 	// `asyncTrace` note already refuses.

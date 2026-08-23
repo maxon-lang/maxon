@@ -18,6 +18,13 @@ the shared-memory debug stream enabled, runs it under `maxon monitor --filter=mm
 and compares the decoded, normalized event trace against the ` ```mm-trace `
 golden block.
 
+⚠ It is ONE capture mode with a FAMILY, not a mode of its own. Its sibling is `log-trace`
+(`<!-- LogTrace -->` and ` ```log-trace `), which captures the events the PROGRAM authors
+through `__DebugStream` rather than the ones its memory manager emits — see
+`specs-shv2/debugstream-log-events.md`. The build flag, the target restriction, the
+normalizer, the `--update-required` mint and the splice are the same for both; only the
+marker, the fence, the `--filter=` and the decoded line's prefix differ.
+
 The golden is normalized so it is stable across runs and machines:
 
 - Timestamps (`[+SSSS.mmm]`) and depth indentation are stripped, leaving the

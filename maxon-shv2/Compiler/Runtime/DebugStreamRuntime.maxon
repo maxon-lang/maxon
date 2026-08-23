@@ -999,8 +999,7 @@ function buildDsEmitMm(module StdModule)
 	let allocId = emitBin(module, block: write, a: packedId, b: shift, opcode: StdBinOpcode.shrLogical, ids: ids)
 	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsMmOffAllocId, valueId: allocId, valueType: StdType.i64))
 
-	let tagMask = emitConst(module, block: write, value: DsMmTagIndexMask, ids: ids)
-	let tagIndex = emitBin(module, block: write, a: packedId, b: tagMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let tagIndex = emitMaskedField(module, block: write, value: packedId, mask: DsMmTagIndexMask, ids: ids)
 	// `scope_len` (bits 16..31) stays zero: this producer emits no scope names, so the slot has nothing to
 	// carry and the monitor's mm formatter never reads it.
 	let valueField = emitShiftedField(module, block: write, value: value, shift: DsMmValueShift, ids: ids)
@@ -1060,8 +1059,9 @@ function emitStoreLogIdentity(module StdModule, block IrBlock, entryPtr ValueId,
 	module.appendOp(block, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffPid, valueId: zero, valueType: StdType.i64))
 end 'emitStoreLogIdentity'
 
-// `value & mask` — one field of a packed word, narrowed to its wire width. `emitShiftedField`'s sibling:
-// four sites narrow a field before positioning it, and every one of them is this.
+// `value & mask` — one field of a packed word, narrowed to its wire width. `emitShiftedField`'s sibling,
+// and read by BOTH families: five sites narrow a field before positioning it (the mm entry's tag index and
+// the four log fields), and every one of them is this.
 function emitMaskedField(module StdModule, block IrBlock, value ValueId, mask ParsedInt, ids ValueMinter) returns ValueId
 	let maskConst = emitConst(module, block: block, value: mask, ids: ids)
 	return emitBin(module, block: block, a: value, b: maskConst, opcode: StdBinOpcode.bitAnd, ids: ids)

@@ -904,7 +904,7 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 		_ = Directory.create(fragmentDir)
 	end 'hasGoldens'
 
-	// Every mm-trace golden this run would re-mint, collected across the verdict loop and spliced ONCE at
+	// Every capture golden this run would re-mint, collected across the verdict loop and spliced ONCE at
 	// the end. Per-SPEC rather than per-test because the file is read and written whole: N tests re-minting
 	// would otherwise be N read-modify-writes of one file, and the last would win.
 	var reminted = TraceRemintArray.create()
@@ -1060,13 +1060,13 @@ function networkModeAllows(test SpecTest, includeNetwork bool) returns bool
 	end 'need'
 end 'networkModeAllows'
 
-// ⭐⭐ **THE THIRD DERIVED PER-TARGET GATE: CAN THIS TARGET BE TRACED AT ALL?** An mm-trace case needs the
+// ⭐⭐ **THE THIRD DERIVED PER-TARGET GATE: CAN THIS TARGET BE TRACED AT ALL?** A capture case needs the
 // DebugStream PRODUCER, which opens a named Win32 section object and is x64-windows only — the compiler
 // REFUSES `--debugstream` on every other target at the command line (`Main.debugStreamSupports`). Without
 // this gate such a case would fail the whole cross lane on a compile that was correctly refused.
 //
 // ⚠ **IT IS DERIVED, NOT SPELLED, AND THAT IS THE `targetCanCheckSectionPins` RULING APPLIED AGAIN.** The
-// alternative is a `<!-- targets: x64-windows -->` marker on every mm-trace case, which is the same fact
+// alternative is a `<!-- targets: x64-windows -->` marker on every capture case, which is the same fact
 // written once per case — exactly the arrangement `enum-narrow-storage.md`'s six cases were fixed OUT of
 // one gate up. The restriction belongs to the CAPTURE MECHANISM, never to the program being traced: the
 // case's source is ordinary Maxon that compiles and runs everywhere, and it is the instrument that has one
@@ -1824,7 +1824,7 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 		compileArgv.push(AsyncTraceFlag)
 	end 'asyncTraceFlag'
 
-	// An mm-trace case is built with the DebugStream producer. Per-CASE for `--async-trace`'s reason
+	// A capture case is built with the DebugStream producer. Per-CASE for `--async-trace`'s reason
 	// exactly: no other case pays for it, and an untraced program is byte-for-byte what it was.
 	if traceCaptureMode(test) 'debugStreamFlag'
 		compileArgv.push(DebugStreamFlag)
@@ -1927,11 +1927,11 @@ end 'recordFragmentAndCleanup'
 
 
 // ============================================================================
-// mm-trace: --update-required
+// Debug-stream capture: --update-required
 // ============================================================================
 //
-// ⭐⭐ **RE-MINTING AN mm-trace GOLDEN IS THE ONE THING `--update-required` DOES TO A SPEC FILE.** Every
-// other golden this flag regenerates is a `.test` FRAGMENT beside the suite; the mm-trace block lives in
+// ⭐⭐ **RE-MINTING A CAPTURE GOLDEN IS THE ONE THING `--update-required` DOES TO A SPEC FILE.** Every
+// other golden this flag regenerates is a `.test` FRAGMENT beside the suite; a capture block lives in
 // the `.md` itself, because it is an EXPECTATION a spec author reads and reviews rather than a rendering
 // of what the compiler emitted. So the diff IS the review, which is the same argument the fragment
 // goldens' own regeneration rests on.
@@ -1956,7 +1956,7 @@ end 'TraceRemint'
 
 typealias TraceRemintArray = Array with TraceRemint
 
-// Record the golden this mm-trace case would now carry, if it is one and its program actually ran. A case
+// Record the golden this capture case would now carry, if it is one and its program actually ran. A case
 // whose run never completed contributes nothing: minting a golden from an execution that failed to happen
 // would write an EMPTY trace over a real one, which is the "instrument that lies" failure one level up.
 function collectTraceRemint(reminted TraceRemintArray, test SpecTest, observation RunObservation)
@@ -1974,14 +1974,14 @@ function collectTraceRemint(reminted TraceRemintArray, test SpecTest, observatio
 end 'collectTraceRemint'
 
 // Write every collected golden back into the spec file. A no-op when nothing was collected — which is
-// every ordinary `--update-required` run, so a spec with no mm-trace case is never even read.
+// every ordinary `--update-required` run, so a spec with no capture case is never even read.
 function spliceTraceGoldens(specPath FilePath, reminted TraceRemintArray)
 	if reminted.isEmpty() 'nothingToSplice'
 		return
 	end 'nothingToSplice'
 
 	let original = try File.readText(specPath) otherwise 'unreadable'
-		panic("SpecTestRunner: could not re-read {specPath.toString()} to splice {reminted.count()} mm-trace golden(s) into it — the file was parsed moments ago, so it is there and readable")
+		panic("SpecTestRunner: could not re-read {specPath.toString()} to splice {reminted.count()} capture golden(s) into it — the file was parsed moments ago, so it is there and readable")
 	end 'unreadable'
 
 	var lines = StringArray.create()
@@ -1994,16 +1994,18 @@ function spliceTraceGoldens(specPath FilePath, reminted TraceRemintArray)
 	end 'eachRemint'
 
 	try File.writeText(specPath, content: joinFrom(lines, first: 0, separator: LineSeparator)) otherwise 'unwritable'
-		panic("SpecTestRunner: could not write the re-minted mm-trace golden(s) back to {specPath.toString()}")
+		panic("SpecTestRunner: could not write the re-minted capture golden(s) back to {specPath.toString()}")
 	end 'unwritable'
 end 'spliceTraceGoldens'
 
-// ⭐ Replace (or insert) ONE case's ```mm-trace block. The case's SLICE runs from its `<!-- test: NAME -->`
+// ⭐ Replace (or insert) ONE case's capture block, in the fence its FAMILY names. The case's SLICE runs
+// from its `<!-- test: NAME -->`
 // marker to the next test marker or `## ` heading — the same bound `SpecParser.scanTestFromMarker` reads a
 // case's blocks within, so the splice cannot reach into a neighbour's.
 //
 // ⚠ **AN ABSENT BLOCK IS INSERTED AT THE END OF THE SLICE, WHICH IS WHERE THE RESULT BLOCKS ARE.** That
-// is the authoring path a bare `<!-- MmTrace -->` marker asks for; the reference inserts "after the last
+// is the authoring path a bare `<!-- MmTrace -->` / `<!-- LogTrace -->` marker asks for; the reference
+// inserts "after the last
 // fenced result block in the slice", and the last non-blank line of the slice IS that block's close in a
 // well-formed spec.
 function spliceOneTraceGolden(lines StringArray, remint TraceRemint, specPath FilePath) returns StringArray
@@ -2091,16 +2093,16 @@ function traceMarkerLineOf(lines StringArray, testName String, specPath FilePath
 			return iter.index()
 		end 'found'
 	end 'eachLine'
-	panic("SpecTestRunner: re-minting the mm-trace golden for '{testName}' but {specPath.toString()} has no line reading exactly '{marker}' — the case was parsed out of this file moments ago, so the marker's spelling and this one have drifted")
+	panic("SpecTestRunner: re-minting the capture golden for '{testName}' but {specPath.toString()} has no line reading exactly '{marker}' — the case was parsed out of this file moments ago, so the marker's spelling and this one have drifted")
 end 'traceMarkerLineOf'
 
 // ============================================================================
-// mm-trace: the mode question, the normalizer, and the verdict
+// Debug-stream capture: the mode question, the normalizer, and the verdict
 // ============================================================================
 
-// Is this case in mm-trace mode? Asked at the COMPILE (which flag to pass), at the RUN (whether to go
+// Is this case in capture mode? Asked at the COMPILE (which flag to pass), at the RUN (whether to go
 // through the monitor) and at the target gate. One reading of the three-state field, so the three cannot
-// come to disagree about what "an mm-trace case" is.
+// come to disagree about what "a capture case" is.
 export function traceCaptureMode(test SpecTest) returns bool
 	return match test.traceCapture 'mode'
 		off gives false
@@ -2264,7 +2266,7 @@ end 'joinFrom'
 // ⭐⭐ **IN CAPTURE MODE AN UNPINNED STDOUT IS NOT ASSERTED SILENT, AND THAT IS A RULING RATHER THAN AN
 // EXEMPTION.** shv2's ordinary rule is that declining to mention stdout ASSERTS the program printed
 // nothing (`checkStreamSilent`), which is a real strengthening over the reference and stays in force for
-// every other case. An mm-trace case is where it cannot hold, for two independent reasons:
+// every other case. A capture case is where it cannot hold, for two independent reasons:
 //
 //   • **THE SPEC FORMAT IS SHARED, AND ITS OTHER READER ASSERTS NOTHING HERE.** The reference's capture
 //     path checks stdout only `if (successExpectation.Stdout != null)` — these are the same `.md` files
@@ -2273,7 +2275,7 @@ end 'joinFrom'
 //   • **A CAPTURE-MODE PROGRAM'S OUTPUT IS PROBE SCAFFOLDING, NOT A CLAIM.** `heap-alloc-free`'s
 //     `print(s)` is there to MATERIALIZE the String and to give `print` its incref/decref pair — the
 //     spec's own prose says exactly that — and what it prints is a side effect of reaching the
-//     allocation the case is about. The case's assertion is the ```mm-trace block.
+//     allocation the case is about. The case's assertion is its capture block.
 //
 // ⚠ **IT IS STDOUT ONLY, AND STDERR KEEPS THE SILENCE RULE.** Nothing forces weakening that one: the
 // monitor's own `[debugstream]` summary is filtered out (`childStderrOf`) and what is left is the child's
@@ -2295,7 +2297,7 @@ function checkCapturedStdout(stdout SpecStdout, actual String, traceCapture Spec
 end 'checkCapturedStdout'
 
 // The CHILD's own stdout, recovered from the monitor's. The monitor forwards the target's stdout into the
-// same stream it prints events on, so an ```stdout block on an mm-trace case is checked against the lines
+// same stream it prints events on, so an ```stdout block on a capture case is checked against the lines
 // the monitor did NOT author — the ones carrying no `[+SSSS.mmm]` prefix.
 //
 // ⚠ **THIS IS A DIVERGENCE FROM THE REFERENCE, AND IT IS THE CHEAPER OF TWO HONEST ANSWERS.** The
@@ -3154,14 +3156,14 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 	return RunCommand.create(launch.exe, argv: argv)
 end 'buildRunCommand'
 
-// ⭐ `maxon monitor --filter=mm <exe> [args…]` — the mm-trace capture command.
+// ⭐ `maxon monitor --filter=<family> <exe> [args…]` — the capture command.
 //
 // ⚠ **THE MONITOR'S EXIT CODE IS THE CHILD'S** (`DebugStreamMonitor.Run` returns `process.ExitCode`), so
-// an ```exitcode block on an mm-trace case is checked against the same number it would have been without
+// an ```exitcode block on a capture case is checked against the same number it would have been without
 // the monitor — EXCEPT when the monitor itself died, which is exactly why the exit code is checked FIRST.
 // See `checkTraceCapture`.
 //
-// ⚠ It is the HOST path only, and it has to be: the producer is x64-windows only, so an mm-trace case on
+// ⚠ It is the HOST path only, and it has to be: the producer is x64-windows only, so a capture case on
 // any other target is skipped before it is ever compiled (`targetCanCaptureTrace`).
 function buildMonitorRunCommand(modulePath FilePath, family TraceFamily, programArgs ProgramArgArray) returns RunCommand
 	var argv = StringArray.create()
