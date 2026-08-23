@@ -1784,6 +1784,42 @@ export union StdOp
 	// `osSocketClose(sock)` = `closesocket(sock)`. No result: the int is ignored for `osFileClose`'s reason —
 	// a close that fails leaves nothing a caller could do, and `close()` is documented as non-throwing.
 	osSocketClose(sockId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- The MACHINE query behind `__Builtins.cpuCount()` ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osSocketClose`, per the band-append invariant every
+	// entry above states: a mid-band insert is silently swallowed by a `… to X` range arm. Its
+	// `category: system` places it logically in the system band, independent of this tail position.
+	//
+	// `osCpuCount(result)` = "ask the host how many logical processors this machine has, and put the
+	// answer in `result`". NO operands and ONE def — `osGetPid`'s direct-return shape, because the answer
+	// is a scalar the API hands back rather than something it writes through a pointer.
+	//
+	// ⭐⭐ **IT IS THE QUESTION, NOT THE WIN32 CALL, AND THAT IS WHY IT TAKES NO BUFFER.** The obvious
+	// transcription of the reference is `GetSystemInfo(&si)` + a read of `si.dwNumberOfProcessors`, which is
+	// what the bootstrap's Windows emitter does (`X86CodeEmitter.Runtime.cs:8076`) — and it would put a
+	// 48-byte `SYSTEM_INFO` out-param into this tier. That is a WINDOWS SHAPE, and the Std tier is
+	// target-neutral. **The reference proves it itself**: its arm64 emitter answers the SAME question with
+	// `sysconf(_SC_NPROCESSORS_ONLN)` (`ARM64CodeEmitter.Runtime.cs:115`) — a bare scalar return with no
+	// struct anywhere — so an op shaped like the Windows call would have left a POSIX lane fabricating a
+	// `SYSTEM_INFO` to fill. `osReadWallClock` can carry its FILETIME out-param honestly because a POSIX
+	// clock CAN produce 100 ns ticks since 1601; there is no such reading for a processor-count struct.
+	// ⇒ The x64-windows lowering therefore uses `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`, which
+	// answers the count in EAX with no buffer at all (`StdToX64Conversion.lowerOsCpuCount` carries why
+	// that is also the MORE correct answer of the two on a multi-processor-group host).
+	//
+	// ⚠ **IT DOES NOT CLAMP, AND THAT IS DELIBERATE** — the op yields whatever the host said, INCLUDING a
+	// failure answer (`0` from `GetActiveProcessorCount`, `-1` from `sysconf`). The `< 1 ⇒ 1` guard both
+	// reference emitters spell in their own instruction set lives in builder-built Std instead
+	// (`CpuParallelRuntime.buildCpuCount`), for `osFileOpenRead`'s stated reason: the classification is the
+	// same arithmetic on every platform even though the read is not, and one signed test covers both
+	// failure spellings.
+	//
+	// ⭐ x64-WINDOWS ONLY at this rung. Every other target refuses at the CALL SITE with the existing E3104
+	// (`SemanticCheck.calleeNeedsWin32Substrate`, by the `__cpu_` prefix), so no backend ever sees this op
+	// — which is why the three non-Windows lowerings are absent rather than stubbed. A stub would be a
+	// silent wrong answer about the machine on a lane that cannot ask it. Full call-barrier metadata: it IS
+	// an indirect call once lowered.
+	osCpuCount(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1995,6 +2031,9 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osSocketSend(_, sock, bufPtr, len) then insertUseTriple(referenced, a: sock, b: bufPtr, c: len)
 		osSocketRecv(_, sock, bufPtr, len) then insertUseTriple(referenced, a: sock, b: bufPtr, c: len)
 		osSocketClose(sock) then referenced.insert(sock)
+		// `osCpuCount` takes NO operands — it asks the host a question rather than reading a value, so it
+		// joins `osSocketCreate` and `osGetPid` as one of the few system ops with nothing to collect.
+		osCpuCount then break 'u'
 	end 'u'
 end 'collectStdOpUses'
 
@@ -2178,6 +2217,7 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osSocketSend(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osSocketRecv(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osSocketClose gives DefinedValueLookup.none
+		osCpuCount(resultId) gives DefinedValueLookup.defines(resultId)
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -2376,6 +2416,8 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osSocketSend(resultId, sock, bufPtr, len) gives StdOp.osSocketSend(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
 		osSocketRecv(resultId, sock, bufPtr, len) gives StdOp.osSocketRecv(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
 		osSocketClose(sock) gives StdOp.osSocketClose(remappedValue(sock, subst: subst))
+		// No operands to remap; the def is carried through unchanged, exactly as `osSocketCreate`'s is.
+		osCpuCount(resultId) gives StdOp.osCpuCount(resultId)
 	end 'r'
 end 'remapStdOpUses'
 

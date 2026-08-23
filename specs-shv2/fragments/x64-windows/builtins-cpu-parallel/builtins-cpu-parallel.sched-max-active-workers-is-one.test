@@ -1,0 +1,61 @@
+// Test: builtins-cpu-parallel.sched-max-active-workers-is-one
+function main() returns ExitCode
+	let workers = __Builtins.schedMaxActiveWorkers()
+	var score = 0
+	if workers >= 1 'contractFloor'
+		score = score + 1
+	end 'contractFloor'
+	if workers == 1 'singleM'
+		score = score + 2
+	end 'singleM'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __sched_max_active_workers
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 1
+    x64.jcc greaterEqual, contractFloor
+    x64.jmp critsplit#8
+  contractFloor:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#2
+  critsplit#8:
+    x64.jmp ifcont#2
+  ifcont#2:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, singleM
+    x64.jmp critsplit#9
+  singleM:
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.jmp ifcont#4
+  critsplit#9:
+    x64.jmp ifcont#4
+  ifcont#4:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r8, rax, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

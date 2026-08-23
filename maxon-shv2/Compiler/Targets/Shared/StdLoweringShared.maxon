@@ -650,6 +650,9 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osSocketSend(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osSocketRecv(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osSocketClose then break 'result'
+		// The machine query defines the processor count `GetActiveProcessorCount` answers in EAX — an
+		// integer, so a GPR, exactly as `osGetPid` classes `GetCurrentProcessId`'s DWORD.
+		osCpuCount(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 

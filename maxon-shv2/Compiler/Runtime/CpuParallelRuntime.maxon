@@ -1,0 +1,177 @@
+// Runtime/CpuParallelRuntime.maxon — the two CPU-parallel QUERIES: `__Builtins.cpuCount()` and
+// `__Builtins.schedMaxActiveWorkers()`.
+//
+// ⭐ **WHAT THEY SERVE — THE MULTI-CORE VALIDATION HARNESS, AND NOTHING ELSE IN THE LANGUAGE.**
+// `maxon-shv2/track0/alloc-torture.maxon` prints both so `validate.sh` can sweep the scheduler's core-count
+// clamp (`cpucount=` gives it ncpu) and see that more than one core actually ran the work (`workers=`).
+// Neither has a `stdlib/` wrapper, for `__Builtins.currentProcessId`'s reason: a declaration whose whole
+// body is one intrinsic call is the thin wrapper the house rules forbid, and neither reference compiler
+// declares one. The bootstrap declares both names with these arities and result types
+// (`2-Parser.cs:12281-12296`), so the SURFACE here is the reference's; only the implementation differs.
+//
+// ⭐⭐ **THEY ARE A PAIR OF QUESTIONS AND A PAIR OF BANDS, AND THE SPLIT IS THE FILE'S THESIS.** One asks
+// the MACHINE how parallel a run COULD be; the other asks THIS COMPILER'S SCHEDULER how parallel it WAS.
+// That difference decides the only thing a `__` band actually decides — *may this target run it* —
+// and the two answers are opposite:
+//
+//   • `__cpu_count` is an OS call. It lowers on x64-windows and NOWHERE else, so it must be refused at the
+//     call's own span on every other target (E3104, `SemanticCheck.calleeNeedsWin32Substrate`, by the
+//     `__cpu_` PREFIX — so an entry point added to this band later is gated by construction rather than by
+//     memory).
+//   • `__sched_max_active_workers` reaches no OS at all: its whole body is a constant return, which lowers
+//     on every target shv2 emits. Refusing it would be refusing a `ret`.
+//
+// ⇒ **ONE PREFIX CANNOT CARRY BOTH ANSWERS**, because the gate is a prefix test — which is exactly why
+// this file wears two `__` bands rather than the one its single subject would suggest. `ProcessRuntime`'s
+// two entries share a prefix precisely because they agree on that question and differ only in COST (which
+// is what its two `RuntimeUsage` bits are for); these two are alike in cost — a handful of instructions
+// apiece, no buffer, no allocation, no scheduler — and differ on the target answer. Same file, opposite
+// reason.
+//
+// ⭐ **WHY NOT `GtRuntime`, WHICH OWNS THE SCHEDULER THE SECOND ONE IS ABOUT.** `ClockRuntime`'s argument,
+// verbatim: `isGtRuntimeCallee` is a `__gt_` PREFIX test and it sets `usesGt`, so filing
+// `__sched_max_active_workers` there would install the entire green-thread scheduler, the timer store and
+// the netpoll for a program whose only question about concurrency is how much of it happened. A program
+// may legitimately ask that having spawned nothing — the bootstrap answers 1 for exactly such a program
+// (MEASURED) — so the query must not cost a scheduler.
+
+// The `__cpu_` prefix — the "does this program ask the MACHINE about itself?" test, and the one
+// `SemanticCheck.calleeNeedsWin32Substrate` reads for E3104. One entry point today; a prefix rather than a
+// name compare for `isProcessRuntimeCallee`'s stated reason, and that promise has already been tested once
+// in this tree: `__proc_pid` arrived after its predicate was written and needed no edit there.
+let CpuRuntimeCallPrefix = b"__cpu_"
+
+// The `__sched_` prefix — the "does this program ask the SCHEDULER about itself?" test. Deliberately NOT
+// `__gt_` (see the header) and deliberately its own band rather than a second name under `__cpu_`, because
+// the two bands answer the target question differently.
+//
+// ⚠ It is the BOOTSTRAP's spelling for this family (`__sched_active_workers`,
+// `__sched_max_active_workers`, `__sched_worker_loop`), taken so that the multi-M slice's port grafts onto
+// the name it already has rather than onto one invented here.
+let SchedRuntimeCallPrefix = b"__sched_"
+
+// ⭐ **THE TWO ENTRY POINTS.**
+export let CpuCountName = b"__cpu_count"
+export let SchedMaxActiveWorkersName = b"__sched_max_active_workers"
+
+// ⚠ **TWO CONSTANTS, BOTH `1`, AND DELIBERATELY NOT ONE** — `CurrentProcessIdArity`'s rule, which this file
+// has the sharper case for: these two numbers answer different questions and only happen to agree today.
+// The floor is a permanent fact about what a processor COUNT can be; the worker count is a reading of
+// THIS runtime and changes the day multi-M lands. Shared, one of them would silently move with the other.
+
+// The clamp floor `__cpu_count` never answers below. A real guard over a value that can be 0
+// (`GetActiveProcessorCount` on failure) or negative (`sysconf`), and the same guard both bootstrap
+// emitters spell in their own instruction set — a count is a divisor for callers, so a 0 must never escape.
+let MinimumProcessorCount = 1 as ParsedInt
+
+// How many green-thread worker Ms shv2's scheduler has ever had at once. ONE — see `buildSchedMaxActiveWorkers`,
+// which owns the argument for why that is a reading rather than a placeholder.
+let SingleThreadedWorkerCount = 1 as ParsedInt
+
+// ⭐ **DOES THIS CALLEE ASK THE MACHINE FOR ITS PROCESSOR COUNT?** The `__cpu_`-only test, the exact twin of
+// `isClockRuntimeCallee`. Deliberately NARROW in the same way: it implies no scheduler, no heap and no leak
+// gate, because the body it installs is one import call and a compare.
+export function isCpuCountRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: CpuRuntimeCallPrefix)
+end 'isCpuCountRuntimeCallee'
+
+// ⭐ **DOES THIS CALLEE ASK THE SCHEDULER HOW MANY WORKER Ms IT HAS RUN?** The `__sched_`-only test.
+// ⚠ It is NOT in `calleeNeedsWin32Substrate`, and that absence is the decision this file exists to make
+// rather than an omission — see the header.
+export function isSchedRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: SchedRuntimeCallPrefix)
+end 'isSchedRuntimeCallee'
+
+// ⚠ **ONE GUARD PER ENTRY, NOT ONE FOR THE FILE**, on `installProcessRuntime`'s terms: the two are
+// independent questions and a program almost always wants one of them. Here the saving is smaller than
+// that file's (neither entry drags in the heap), but the discipline is the same and the cost of getting it
+// wrong is an import a program never calls.
+export function installCpuParallelRuntime(module StdModule, usage RuntimeUsage)
+	if usage.usesCpuCount 'cpuCount'
+		buildCpuCount(module)
+	end 'cpuCount'
+
+	if usage.usesSchedMaxActiveWorkers 'schedMaxActiveWorkers'
+		buildSchedMaxActiveWorkers(module)
+	end 'schedMaxActiveWorkers'
+end 'installCpuParallelRuntime'
+
+// ⭐⭐ **`__cpu_count() -> i64`** — the number of logical processors the host reports, never below 1.
+//
+// The op asks the question and the CLAMP is done here, in builder-built Std, for the reason
+// `StdOp.osCpuCount`'s own comment states: the two platform answers fail differently (`0` from
+// `GetActiveProcessorCount`, `-1` from `sysconf`) and one SIGNED `< 1` test covers both, so a future POSIX
+// lane supplies only the read. Both bootstrap emitters spell the same guard in their own instruction set —
+// x86 `test`/`jnz` (`X86CodeEmitter.Runtime.cs:8076`) and arm64 `cmp #1`/`b.ge`
+// (`ARM64CodeEmitter.Runtime.cs:115`) — and both say why: the count is a divisor for callers, so a 0 must
+// never escape.
+//
+// ⚠ **THE GUARD IS NOT DEAD CODE, AND IT WAS MEASURED REACHED.** `GetActiveProcessorCount` returns 0 when the
+// group number is invalid, and `ALL_PROCESSOR_GROUPS` never is — so on x64-windows this arm is unreachable
+// through this call site, exactly as `__proc_exe_path`'s unavailable arm is. Sabotaged to an INVALID group
+// number, though, the API really does answer 0 and this arm really does convert it: the spec's bounds cases
+// stayed green under that sabotage and went red the moment the guard was also removed. It is here because
+// "the OS cannot fail" is not something a runtime gets to assume, and because it is the arm a POSIX read
+// WILL reach.
+function buildCpuCount(module StdModule)
+	var func = IrFunction.createFromStd(CpuCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var clamped = module.addBlock(func, label: b"cpufloor")
+	var reported = module.addBlock(func, label: b"cpuok")
+
+	let raw = ids.mint()
+	module.appendOp(entry, op: StdOp.osCpuCount(raw))
+
+	// ⚠ `clamped` and `reported` carry NO block args and take no edge arguments: `entry` dominates both, so
+	// `raw` is simply in scope in the arm that answers it — the dominance argument `__proc_exe_path`'s four exit
+	// blocks state for themselves.
+	let floor = emitConst(module, block: entry, value: MinimumProcessorCount, ids: ids)
+	let belowFloor = emitCmp(module, block: entry, a: raw, b: floor, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(belowFloor, thenBlockId: clamped.id, elseBlockId: reported.id))
+
+	emitConstReturn(module, block: clamped, value: MinimumProcessorCount, ids: ids)
+	module.setTerminator(reported, op: StdOp.ret(raw))
+
+	module.functions.push(func)
+end 'buildCpuCount'
+
+// ⭐⭐ **`__sched_max_active_workers() -> i64`** — the high-water mark of concurrently-active green-thread
+// worker Ms, and in shv2 that is the CONSTANT 1.
+//
+// ⭐⭐ **THAT CONSTANT IS A READING OF THIS RUNTIME, NOT A PLACEHOLDER FOR A COUNTER NOBODY WROTE.**
+// `GtRuntime.maxon`'s opening paragraph is the measurement: *"SINGLE-M COOPERATIVE. One OS thread runs
+// everything … There are NO worker threads, NO work-stealing, NO per-P sharding."* A high-water mark over a
+// population of exactly one is 1, at every observation point, in every program. The bootstrap answers the
+// same 1 for every program whose scheduler stays single-threaded (`MAXON_MAX_PROCS=1`, and any program
+// that spawns nothing — MEASURED at `workers=1`); it answers more only where it has spawned worker Ms,
+// which shv2 has none of.
+//
+// ⚠ **THE IOCP COMPLETION THREAD IS NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS LOOK
+// WRONG.** `__gt_init` does create an OS thread (`osThreadCreate`), but it drains completions and re-readies
+// parked green threads — it never RUNS one. The bootstrap draws the line in exactly the same place: its
+// `__sched_active_workers` is incremented in `__sched_worker_loop` and nowhere else, and its own completion
+// thread is not counted there either.
+//
+// ⛔ **IT IS DELIBERATELY NOT A `.data` GLOBAL SEEDED TO 1, WHICH WAS THE OBVIOUS PORT.** The bootstrap
+// keeps `__sched_max_active_workers` in `.data` because two sites maintain it — `__gt_init` seeds it and
+// `__sched_worker_loop` raises it on each worker entry (`X86CodeEmitter.Runtime.cs:3541` and `:4733-4736`;
+// the arm64 twin at `ARM64CodeEmitter.Runtime.cs:2915` and `:3180-3183`).
+// shv2 has neither site. A global with no writer is the constant below wearing a variable's clothes: it
+// costs a `.data` word and a load, it tells the next reader that something maintains it, and it reads 0
+// rather than 1 in any program whose scheduler never installs. The honest spelling of *"this runtime has
+// one M"* is a `ret 1`.
+//
+// ⇒ **WHEN MULTI-M LANDS (PLAN B1b) THIS BODY BECOMES THE GLOBAL LOAD**, and the two maintenance sites
+// named above are where the port reads its raise protocol from. `specs-shv2/builtins-cpu-parallel.md`'s
+// `sched-max-active-workers-is-one-under-async` is what goes red on that day, which is why it is pinned.
+function buildSchedMaxActiveWorkers(module StdModule)
+	var func = IrFunction.createFromStd(SchedMaxActiveWorkersName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitConstReturn(module, block: entry, value: SingleThreadedWorkerCount, ids: ids)
+
+	module.functions.push(func)
+end 'buildSchedMaxActiveWorkers'

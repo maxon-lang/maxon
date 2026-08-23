@@ -3774,6 +3774,10 @@ end 'functionTypeDoorSite'
 //     through `stdlib/Runtime.maxon`'s body). It is the same scheduler: a run-queue handoff through
 //     `__gt_context_switch`, falling back to `__gt_timer_check`/`__gt_proc_check`, none of which the other
 //     three backends provide.
+//   • `__cpu_*` — `osCpuCount`'s `GetActiveProcessorCount` (`__Builtins.cpuCount()`). The MACHINE query,
+//     and the one whose band-mate is deliberately NOT here: `__sched_max_active_workers` asks the
+//     SCHEDULER rather than the OS and its body is a constant return, so it lowers on every target. See
+//     `CpuParallelRuntime`'s header for why one file wears two prefixes.
 //
 // ⚠ `__gt_io_park` — the filesystem yield — is deliberately ABSENT, and by this set's own rule: SOURCE never
 // names it. It is reachable only from the `__mf_*`/`__md_*` bodies, and those are already refused below by
@@ -3850,7 +3854,18 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// turned a clean E3004 into a backend panic"*), and it is why this predicate is the FLOOR: every
 	// non-x64-windows backend panics on these ops BY DESIGN, so the refusal has to happen here, at the
 	// call's own span, or it does not happen at all.
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(IoReadName) or isSubprocessRuntimeCallee(callee) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isManagedSocketRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee)
+	// The MACHINE query (`__Builtins.cpuCount` ⇒ `__cpu_count`) joins on the same terms and by the same
+	// PREFIX test. Its own reason is the SHAPE argument again: `GetActiveProcessorCount` and
+	// `sysconf(_SC_NPROCESSORS_ONLN)` are two APIs with two return conventions, and WASI has no
+	// processor-count primitive AT ALL — a component has no OS-thread concept to count. So on that lane the
+	// refusal is stronger than "not yet": a lowering there could only fabricate a number, and a fabricated
+	// core count is a silent wrong answer rather than a missing feature.
+	// ⚠ **ITS BAND-MATE `__sched_max_active_workers` IS DELIBERATELY ABSENT**, which is why the two wear
+	// different prefixes at all: that entry reaches no OS — its whole body is a constant return, which
+	// lowers on every target shv2 emits — so gating it would refuse a `ret`.
+	// `specs-shv2/builtins-cpu-parallel.md` pins BOTH halves, because the refusal case alone cannot tell a
+	// live gate from a compiler that refuses the whole family.
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(IoReadName) or isSubprocessRuntimeCallee(callee) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isManagedSocketRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee) or isCpuCountRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote

@@ -4697,6 +4697,26 @@ let BuiltinsParallelBoundaryName = b"__Builtins.parallelBoundary"
 // contract, and the two only happen to agree.
 let ParallelBoundaryArity = 0 as ParamCount
 
+// ⭐⭐ **THE OTHER TWO MEMBERS OF THE CPU-PARALLEL FAMILY — THE QUERIES, WHERE THE MARKER ABOVE IS A
+// STATEMENT.** The bootstrap groups all three under one section header (`2-Parser.cs:12280`, *"CPU-parallel
+// intrinsics"*) and declares these two with exactly this shape: no arguments, an `int` answer. Their one
+// caller in this tree is `maxon-shv2/track0/alloc-torture.maxon`, which prints both so its driver can sweep
+// the core-count clamp and see that more than one core actually ran the work.
+//
+// ⚠ **THEY ANSWER TWO DIFFERENT KINDS OF QUESTION, AND THE DIFFERENCE DECIDES THEIR TARGETS.**
+// `cpuCount` asks the OS about the MACHINE and lowers on x64-windows alone (`__cpu_count`, refused
+// elsewhere with E3104); `schedMaxActiveWorkers` asks THIS COMPILER's scheduler about itself and lowers
+// everywhere, because shv2's scheduler is single-M and the answer is a constant. See
+// `CpuParallelRuntime`'s header, which owns that split — this file only routes the names.
+let BuiltinsCpuCountName = b"__Builtins.cpuCount"
+let BuiltinsSchedMaxActiveWorkersName = b"__Builtins.schedMaxActiveWorkers"
+
+// Both take NOTHING. Stated here beside the intrinsics for `SleepIntrinsicArity`'s reason, and as two
+// constants rather than one shared zero for `CurrentProcessIdArity`'s: the number is a fact about each
+// intrinsic's own contract, and these two only happen to agree.
+let CpuCountArity = 0 as ParamCount
+let SchedMaxActiveWorkersArity = 0 as ParamCount
+
 // **THE `spawnReadLine` BUILTIN** (P1.5 dogfood slice 1a-ii — the IOCP overlapped-read PROBE). A TEMPORARY probe
 // surface (not the final async-subprocess-stdio API, which arrives with the stdlib in slice 1b): like
 // `__Builtins.runProcess`,
@@ -69266,11 +69286,7 @@ export type Parser
 			end 'gtIsComplete'
 
 			if callee.equals(BuiltinsCommandLineCountName) 'commandLineCount'
-				if args.count() != CommandLineCountArity 'countArity'
-					throw ParseError.builtinArity(String.from(callee), expected: CommandLineCountArity, got: args.count(), line: anchor.line, column: anchor.column)
-				end 'countArity'
-
-				return self.emitRuntimeCall(CommandLineCountName, args: ValueIdArray.create(), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsCommandLineCountName, runtimeName: CommandLineCountName, arity: CommandLineCountArity, calleeTok: anchor)
 			end 'commandLineCount'
 
 			// ⭐ The result is an OWNED `__ManagedMemory` — the `Array with Byte` instance `String.init` reads,
@@ -69336,12 +69352,21 @@ export type Parser
 			// caller reads and drops. `emitOwnedManagedMemoryResult` here would enrol a `__ManagedMemory` drop
 			// against an integer and free the pid.
 			if callee.equals(BuiltinsCurrentProcessIdName) 'currentProcessId'
-				if args.count() != CurrentProcessIdArity 'currentProcessIdArity'
-					throw ParseError.builtinArity(String.from(callee), expected: CurrentProcessIdArity, got: args.count(), line: anchor.line, column: anchor.column)
-				end 'currentProcessIdArity'
-
-				return self.emitRuntimeCall(ProcessCurrentPidName, args: ValueIdArray.create(), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsCurrentProcessIdName, runtimeName: ProcessCurrentPidName, arity: CurrentProcessIdArity, calleeTok: anchor)
 			end 'currentProcessId'
+
+			// ⭐ **THE TWO CPU-PARALLEL QUERIES**, beside the checkpoint they share a family with. Both answer
+			// an `int` and take nothing, so both take the argumentless-integer emit above — the same door the
+			// pid takes, and the reason that door exists. What differs between them is not visible here and
+			// is not this file's: one lowers to an OS call gated to x64-windows and the other to a constant
+			// return that lowers everywhere. See `CpuParallelRuntime`'s header.
+			if callee.equals(BuiltinsCpuCountName) 'cpuCount'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsCpuCountName, runtimeName: CpuCountName, arity: CpuCountArity, calleeTok: anchor)
+			end 'cpuCount'
+
+			if callee.equals(BuiltinsSchedMaxActiveWorkersName) 'schedMaxActiveWorkers'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedMaxActiveWorkersName, runtimeName: SchedMaxActiveWorkersName, arity: SchedMaxActiveWorkersArity, calleeTok: anchor)
+			end 'schedMaxActiveWorkers'
 
 			// ⭐ W35. The two stream writers — one emit, parameterized by the stream's runtime entry point,
 			// because the argument rule and the result are identical and only the destination differs.
@@ -70038,6 +70063,33 @@ export type Parser
 
 		return self.emitRuntimeCall(runtimeName, args: ValueIdArray.create(), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitVoidZeroArgIntrinsic'
+
+	// ⭐⭐ **THE RULE EVERY ARGUMENTLESS *INTEGER* INTRINSIC IS CHECKED AGAINST, IN ONE PLACE** — the exact
+	// twin of `emitVoidZeroArgIntrinsic` above, and landed for its stated reason at twice the count: FOUR
+	// doors (`__Builtins.commandLineCount` ⇒ `__cl_count`, `currentProcessId` ⇒ `__proc_pid`, `cpuCount` ⇒
+	// `__cpu_count`, `schedMaxActiveWorkers` ⇒ `__sched_max_active_workers`) ask the IDENTICAL question of
+	// the identical argument shape — *were any arguments written?* — and answer with a machine word the
+	// caller reads and drops. Two of them had verbatim copies of the answer before the CPU-parallel queries
+	// arrived; four would have been four places for one rule to drift.
+	//
+	// ⚠ **IT DIFFERS FROM THE VOID TWIN IN EXACTLY ONE THING BEYOND THE RESULT TAG: there is no
+	// `resultUsed` gate.** A void intrinsic must refuse a value position because there is no value; these
+	// four ANSWER one, so reading it is the point and ignoring it is legal.
+	//
+	// ⚠ There is nothing to own, nothing to enrol as a temporary and no buffer surface to mark, which is
+	// what separates this door from `emitOwnedManagedMemoryResult`'s: that one hands back a
+	// `__ManagedMemory` the caller frees, and using it here would enrol a drop against an integer.
+	//
+	// ⚠ **THE ARITY IS A PARAMETER THOUGH ALL FOUR CALLERS PASS 0**, exactly as `emitVoidZeroArgIntrinsic`'s
+	// is: the constant is what says what a given intrinsic IS, and collapsing four documented constants into
+	// a literal here would put that fact in the wrong file.
+	function emitIntegerZeroArgIntrinsic(args ValueIdArray, builtinName ByteArray, runtimeName ByteArray, arity ParamCount, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != arity 'arity'
+			throw ParseError.builtinArity(String.from(builtinName), expected: arity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		return self.emitRuntimeCall(runtimeName, args: ValueIdArray.create(), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitIntegerZeroArgIntrinsic'
 
 	// ⭐⭐ **THE ARGUMENT RULE EVERY COMMAND-LINE BUILTIN IS CHECKED AGAINST, IN ONE PLACE** — the
 	// `requireHandleArg`/`requireSubprocessArgs` shape, one family over. Three doors spawn a child from a

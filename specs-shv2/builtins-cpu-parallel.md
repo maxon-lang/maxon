@@ -1,0 +1,399 @@
+---
+feature: builtins-cpu-parallel
+status: stable
+keywords: [builtins, __Builtins, cpuCount, schedMaxActiveWorkers, intrinsics, parallel, scheduler, green-threads]
+category: system
+---
+
+# `__Builtins.cpuCount()` and `__Builtins.schedMaxActiveWorkers()`
+
+## Documentation
+
+`__Builtins` is the compiler's builtin TYPE, whose static methods are INTRINSICS rather than
+functions any file declares. This spec pins the two QUERIES of the CPU-parallel family — the third
+member, `__Builtins.parallelBoundary()`, is a marker rather than a query and has its own spec:
+
+| Intrinsic | Meaning |
+|---|---|
+| `__Builtins.cpuCount()` | how many logical CPUs the OS reports for this MACHINE, as an `int`, never below 1 |
+| `__Builtins.schedMaxActiveWorkers()` | the high-water mark of concurrently-active green-thread worker Ms this PROCESS has had, as an `int`, never below 1 |
+
+Both take no arguments. Their one caller in this tree is `maxon-shv2/track0/alloc-torture.maxon`, the
+multi-core validation harness, which prints both so its driver can sweep the core-count clamp
+(`cpucount=`) and see that more than one core actually ran the work (`workers=`).
+
+They read as a pair and they are NOT the same kind of question, which is the whole reason this file
+documents them together:
+
+- `cpuCount` asks the MACHINE how parallel a run COULD be. It is an OS call.
+- `schedMaxActiveWorkers` asks this compiler's own SCHEDULER how parallel a run WAS. It is a
+  property of the emitted runtime and reaches no OS.
+
+### `schedMaxActiveWorkers` is exactly 1, because shv2's scheduler is SINGLE-M
+
+`GtRuntime.maxon`'s first paragraph states the runtime this answers for: *"SINGLE-M COOPERATIVE. One
+OS thread runs everything; a `.data` global holds the currently-running GT and a single global FIFO
+run queue holds the ready ones. There are NO worker threads, NO work-stealing, NO per-P sharding."*
+The high-water mark of concurrently-active worker Ms in a runtime with exactly one M is therefore 1
+— at every observation point, in every program, whether or not it ever spawns an `async`.
+
+⚠ **THAT IS A READING, NOT A PLACEHOLDER.** The one OS thread shv2's `__gt_init` does create is the
+IOCP completion thread, and it is not a worker M: it drains completions and re-readies parked green
+threads, it never runs one. The bootstrap counts the same way — its `__sched_active_workers` is
+incremented in `__sched_worker_loop` and nowhere else, and its own IOCP thread is not counted.
+
+⚠ **IT MOVES WHEN MULTI-M LANDS (PLAN's B1b), AND THE CASE BELOW IS WHAT WILL SAY SO.** At that
+point the answer becomes a read of a high-water counter the worker loop raises, and
+`sched-max-active-workers.is-one-under-async` goes red on purpose — a spec that pins today's runtime
+is how the day it stops being true gets noticed.
+
+### What the two compilers answer for the SAME program — the differential
+
+`maxon-shv2/track0/alloc-torture.maxon` is the one program in this tree that calls both intrinsics,
+and it compiles and runs under either compiler. MEASURED on a 12-logical-CPU Windows host:
+
+| | shv2 | bootstrap | bootstrap, `MAXON_MAX_PROCS=1` |
+|---|---|---|---|
+| `aggregate=` | 205500 | 205500 | 205500 |
+| `workers=` | 1 | 12 | 1 |
+| `cpucount=` | 12 | 12 | 12 |
+| exit code | 42 | 42 | 42 |
+
+`cpuCount` agrees EXACTLY, through a different Win32 entry point (see below). `schedMaxActiveWorkers`
+agrees exactly with the bootstrap PINNED TO ONE PROCESSOR — which is what shv2's scheduler is — and
+differs only where the bootstrap spawns worker Ms that shv2 has none of. The third row is the
+harness's own determinism signal, and it is byte-identical across the two compilers.
+
+⛔ **THAT DOES NOT MAKE `track0/validate.sh` AN shv2 GATE, AND POINTING IT AT shv2 WOULD READ AS A
+REGRESSION.** The harness validates the runtime the BOOTSTRAP emits (its default is
+`$REPO/bin/maxon.exe`), and its Check 2 asserts `schedMaxActiveWorkers >= 2` on an unclamped run
+plus `== 1` under `MAXON_MAX_PROCS=1` — a knob shv2's runtime does not read and a second worker M it
+does not have. shv2's obligation to that file is to COMPILE it, which it now does; the checks
+themselves become shv2's the rung multi-M lands.
+
+### The two land on OPPOSITE sides of the target line, and that is the pair's sharpest property
+
+`cpuCount` is an OS query with a different API on every platform — `GetActiveProcessorCount` on
+Windows, `sysconf(_SC_NPROCESSORS_ONLN)` under POSIX, and on WASI **nothing at all**: a component
+has no OS-thread concept and no primitive that reports one. shv2 lowers it on x64-windows only, and
+every other target refuses at the call's own span with **E3104**
+(`SemanticCheck.calleeNeedsWin32Substrate`, by the `__cpu_` PREFIX, so a second entry point in that
+band is gated by construction rather than by memory). A fabricated `1` on a lane that cannot ask the
+OS would be a silent wrong answer, which is strictly worse than a refusal.
+
+`schedMaxActiveWorkers` is refused NOWHERE, and for a reason of its own rather than by omission: its
+whole body is a constant return, which lowers on every target shv2 emits — the same argument
+`__parallel_boundary`'s empty body makes for its own `__parallel_` band. It therefore wears the
+`__sched_` band rather than `__cpu_`, because the two bands answer the question *"may this target
+run it"* differently and a prefix test can only give one answer per band.
+
+⇒ The two `on-wasm` cases below are a PAIR and are half the proof each: the refusal case alone
+cannot tell a live gate from a compiler that refuses everything, and the acceptance case alone
+cannot tell a live gate from one that has stopped refusing.
+
+### `cpuCount` returns the count of ACTIVE logical processors, ALL groups
+
+The bootstrap reads `GetSystemInfo().dwNumberOfProcessors`
+(`X86CodeEmitter.Runtime.cs:8076`); shv2 reads `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`.
+The two agree on every machine with a single processor group — i.e. every machine with at most 64
+logical processors, which is what the difference is about: `dwNumberOfProcessors` reports the
+CALLING THREAD's group, so on a 128-processor host it answers 64 while the count of the machine is
+128. shv2 takes the direct-return API because its Std tier has no way to hand a backend a 48-byte
+`SYSTEM_INFO` scratch buffer without either allocating on the heap for a 4-byte read or putting a
+Windows struct layout into the target-neutral tier; the more-correct answer on a multi-group host is
+the second reason, not the first.
+
+The clamp to at least 1 is the same guard the bootstrap emits, and it lives in builder-built Std
+rather than in the backend: `GetActiveProcessorCount` answers 0 on failure and `sysconf` answers -1,
+so one signed `< 1` test serves both and a future POSIX lane supplies only the read.
+
+⚠ **THE CLAMP IS REACHABLE AND WAS MEASURED THERE.** Pointed at an invalid processor group,
+`GetActiveProcessorCount` really does answer `0`, and the Std guard really does turn that into `1`:
+with the group number sabotaged, `cpu-count-is-at-least-one` and `cpu-count-is-in-range` stayed green
+(the clamp held) while `cpu-count-agrees-with-a-child-environment` went red; with the guard ALSO
+removed, the first two went red as well. The arm is not decoration.
+
+### The count is MACHINE-specific, so the cases assert PROPERTIES
+
+There is no literal to compare against — the answer differs on every host — so the cases below
+assert what cannot vary:
+
+- it is at least 1, which is the clamp's own contract;
+- it is at most 4096, the ceiling Windows can report at all (64 processor groups of 64), so a
+  captured wrong register, a sign-extension or a stale high half shows up as an out-of-range number
+  rather than as a plausible-looking count nobody would question;
+- it is STABLE across calls in one process — the machine does not grow cores mid-run;
+- and it AGREES WITH THE ENVIRONMENT a child process was started with.
+
+⚠ **THE LAST ONE IS THE ONLY DISCRIMINATOR AGAINST A CONSTANT, AND IT IS WHY IT SPAWNS A CHILD.**
+Bounds and stability are all satisfied by a lowering that returns a fixed `1` and never calls the OS
+at all — the failure mode a green suite would otherwise hide. Windows populates
+`NUMBER_OF_PROCESSORS` in a new process's environment block from the same fact the API reports, and
+that is a second reading through a mechanism that shares no code with the intrinsic. It is asserted
+as a DISCRIMINATION rather than an equality (*the child says "1" ⟺ we say 1*) so that it stays true
+on a multi-group host, where the environment reports one group's count and the intrinsic reports the
+machine's. `process-id.md` reaches for a child process for the identical reason and accepts the
+identical dependency.
+
+✅ **SABOTAGE-VERIFIED, and it is the only case that catches this one.** With `__cpu_count`'s body
+replaced by a bare `return 1` that never calls the OS, `cpu-count-is-at-least-one`,
+`cpu-count-is-in-range` and `cpu-count-is-stable-across-calls` all stayed GREEN and this case went
+RED (exit 2 against the pinned 7) — measured, on the 12-CPU host. A suite without it would have
+reported a compiler that had stopped asking the machine anything as fully passing.
+
+⚠ On a genuinely single-processor host with `NUMBER_OF_PROCESSORS` unset the child prints the
+literal `%NUMBER_OF_PROCESSORS%` and this case fails. Windows sets that variable for every process;
+the case is written to be honest about what it leans on rather than to be immune to a Windows that
+stops doing so.
+
+## Tests
+
+<!-- test: builtins-cpu-parallel.cpu-count-is-at-least-one -->
+<!-- targets: x64-windows -->
+The clamp's own contract, and the property a missing lowering fails first: the call answers a number
+at least 1 rather than whatever the result register happened to hold.
+```maxon
+function main() returns ExitCode
+	let cpus = __Builtins.cpuCount()
+	if cpus >= 1 'atLeastOne'
+		return 3
+	end 'atLeastOne'
+	return 1
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: builtins-cpu-parallel.cpu-count-is-in-range -->
+<!-- targets: x64-windows -->
+Windows can report at most 64 processor groups of 64 logical processors each, so `[1, 4096]` is the
+whole space of answers the API has. A capture of the wrong register, a sign-extension of a `DWORD`
+or a high half left over from an earlier call lands outside it; a real count cannot.
+```maxon
+function main() returns ExitCode
+	let cpus = __Builtins.cpuCount()
+	let windowsCeiling = 4096
+	var score = 0
+	if cpus >= 1 'atLeastOne'
+		score = score + 1
+	end 'atLeastOne'
+	if cpus <= windowsCeiling 'belowTheCeiling'
+		score = score + 2
+	end 'belowTheCeiling'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: builtins-cpu-parallel.cpu-count-is-stable-across-calls -->
+<!-- targets: x64-windows -->
+Three independent calls in one process agree. A machine does not grow cores mid-run, so this is what
+a lowering that read a fresh counter, or that captured a register the call had clobbered, would
+fail.
+```maxon
+function main() returns ExitCode
+	let first = __Builtins.cpuCount()
+	let second = __Builtins.cpuCount()
+	let third = __Builtins.cpuCount()
+	var score = 0
+	if first == second 'firstPair'
+		score = score + 1
+	end 'firstPair'
+	if second == third 'secondPair'
+		score = score + 3
+	end 'secondPair'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: builtins-cpu-parallel.cpu-count-agrees-with-a-child-environment -->
+<!-- targets: x64-windows -->
+**THE ONE DISCRIMINATOR AGAINST A CONSTANT.** Spawn `cmd /c echo %NUMBER_OF_PROCESSORS%` and read
+the environment Windows gave the child — a second reading of the same fact through a mechanism that
+shares no code with the intrinsic. `echo` appends `\r\n`, so a child that reports a single-digit `1`
+prints exactly three bytes; anything else is a count above 9, a multi-digit count, or (on a
+multi-group host) one group's share of a bigger machine. Either way the two readings must AGREE
+about whether this machine has one processor, which a fixed `1` cannot do on any host that has more.
+The child is waited on and both structs released, so the case is leak-clean.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "echo")
+	appendToken(argv, token: "%NUMBER_OF_PROCESSORS%")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	let one = "1"
+	let oneLineBytes = 3
+	let childSaysOne = out.byteLength() == oneLineBytes and out.startsWith(one)
+	let cpus = __Builtins.cpuCount()
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	var score = 0
+	if childSaysOne == (cpus == 1) 'readingsAgreeAboutOne'
+		score = score + 5
+	end 'readingsAgreeAboutOne'
+	if cpus >= 1 'clamped'
+		score = score + 2
+	end 'clamped'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: builtins-cpu-parallel.cpu-count-arity-checked -->
+`cpuCount` takes no arguments. An intrinsic has no signature for the ordinary arity check to read,
+so it is refused by the same `builtinArity` check `currentProcessId`/`commandLineCount` use. This
+case is front-end only and target-neutral, so it carries no marker.
+```maxon
+function main() returns ExitCode
+	return __Builtins.cpuCount(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.cpuCount' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: builtins-cpu-parallel.cpu-count-rejected-on-wasm -->
+<!-- targets: wasm32-wasi -->
+The machine query is x64-windows only at this rung. On any other target the call is refused at its
+source span with `E3104`, naming the runtime entry that has no lowering there — never a panic from
+inside the wasm backend, and never a fabricated count.
+```maxon
+function main() returns ExitCode
+	let cpus = __Builtins.cpuCount()
+	return cpus as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:24: this construct is x64-windows only at this rung: it lowers to the runtime entry '__cpu_count', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-cpu-parallel.cpu-count-rejected-on-wasm-when-unreached -->
+<!-- targets: wasm32-wasi -->
+The gate is REACHABILITY-BLIND for user code: `probe` is never called, yet its intrinsic is still
+refused. `SemanticCheck` visits every function and dead-function elimination runs two tiers later,
+so this is the same rule that reports a type error in an unreached function — the half
+`builtins-sleep.rejected-on-wasm-when-unreached` keeps for the sleep intrinsic.
+```maxon
+function probe() returns ExitCode
+	return __Builtins.cpuCount() as ExitCode
+end 'probe'
+
+function main() returns ExitCode
+	return 4
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: it lowers to the runtime entry '__cpu_count', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one -->
+<!-- targets: x64-windows -->
+shv2's scheduler is single-M, so the high-water mark of concurrently-active worker Ms is 1 — and it
+is 1 in a program that never spawns anything, exactly as the bootstrap answers 1 for the same
+program (MEASURED: `workers=1`). The `>= 1` half is the contract's floor; the `== 1` half is this
+runtime's reading of it.
+```maxon
+function main() returns ExitCode
+	let workers = __Builtins.schedMaxActiveWorkers()
+	var score = 0
+	if workers >= 1 'contractFloor'
+		score = score + 1
+	end 'contractFloor'
+	if workers == 1 'singleM'
+		score = score + 2
+	end 'singleM'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one-under-async -->
+<!-- targets: x64-windows -->
+**THE CASE THAT SAYS WHY 1 IS A READING RATHER THAN A DEFAULT.** A program that spawns green
+threads, runs them and awaits them still observes one worker M, because shv2 never starts a second
+one. This is the case the multi-M slice (PLAN B1b) turns red the day it lands, which is the point of
+pinning it. The bootstrap, whose scheduler DOES spawn workers, answers 12 for the same SHAPE on a
+12-CPU host and 1 under `MAXON_MAX_PROCS=1` (MEASURED — see the differential table above) — the two
+compilers agree on the contract and differ on the runtime, and this case records which runtime shv2
+has.
+```maxon
+function work(n ExitCode) returns ExitCode
+	__Builtins.parallelBoundary()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	let first = async work(1)
+	let second = async work(2)
+	let a = await first
+	let b = await second
+	let workers = __Builtins.schedMaxActiveWorkers()
+	var score = a + b
+	if workers == 1 'stillSingleM'
+		score = score + 2
+	end 'stillSingleM'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: builtins-cpu-parallel.sched-max-active-workers-arity-checked -->
+`schedMaxActiveWorkers` takes no arguments, and earns the same `builtinArity` refusal its sibling
+does. Front-end only and target-neutral, so it carries no marker.
+```maxon
+function main() returns ExitCode
+	return __Builtins.schedMaxActiveWorkers(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.schedMaxActiveWorkers' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: builtins-cpu-parallel.sched-max-active-workers-runs-on-wasm -->
+<!-- targets: wasm32-wasi -->
+**THE OTHER HALF OF THE TARGET PAIR, AND IT IS AN ACCEPTANCE.** The scheduler query reaches no OS —
+its whole body is a constant return — so it lowers on every target shv2 emits and is refused
+nowhere. Without this case, `cpu-count-rejected-on-wasm` would pass just as happily against a
+compiler that refused the entire family on wasm; with it, the gate has to be the narrow one.
+```maxon
+function main() returns ExitCode
+	let workers = __Builtins.schedMaxActiveWorkers()
+	if workers == 1 'singleM'
+		return 3
+	end 'singleM'
+	return 1
+end 'main'
+```
+```exitcode
+3
+```

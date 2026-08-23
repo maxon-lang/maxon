@@ -364,9 +364,24 @@ export type RuntimeUsage
 	// checkpoint would have carried the entire green-thread runtime to link against a `ret`. See
 	// `ParallelBoundaryRuntime`'s header for why the callee is not in the `__gt_` band either.
 	export var usesParallelBoundary as bool
+	// The program asks the MACHINE for its logical-processor count (`__Builtins.cpuCount` ⇒ `__cpu_count`).
+	// Like the checkpoint above it declares NO transitive dependency: the entry point is one import call, one
+	// compare and two constant returns — no buffer, no allocation, no scheduler.
+	//
+	// ⚠ **IT IS THE ONE BIT HERE THAT COSTS AN IMPORT**, and that is why it must not be shared with its
+	// band-mate below: it is the sole producer of `GetActiveProcessorCount`, whose whole OPTIONAL TRAILING
+	// BAND (`PeWriter.isOptionalTrailingImport`) is emitted when it is set. Folded into one CPU-parallel bit,
+	// a program whose only question was how many worker Ms had run would have laid out seven imports and a
+	// second entry point to link against nothing.
+	export var usesCpuCount as bool
+	// The program asks the SCHEDULER for its worker-M high-water mark (`__Builtins.schedMaxActiveWorkers` ⇒
+	// `__sched_max_active_workers`). Its own bit for the reason above, and the CHEAPEST here after the
+	// checkpoint's: the body is a constant return, so it declares nothing — emphatically not `usesGt`, since
+	// a program may ask the question having spawned nothing (see `CpuParallelRuntime`'s header).
+	export var usesSchedMaxActiveWorkers as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -591,6 +606,18 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isParallelBoundaryRuntimeCallee(callee) 'parallelBoundary'
 		usage.usesParallelBoundary = true
 	end 'parallelBoundary'
+	// The two CPU-parallel QUERIES. Both declare nothing beside themselves, for the arm above's reason one
+	// family over: `__cpu_count` is an import call and a compare, `__sched_max_active_workers` is a constant
+	// return, and neither touches the heap, the scheduler or the leak gate. They are asked by PREFIX rather
+	// than by name because each prefix names one band with one entry today and the family test is what the
+	// E3104 gate reads for `__cpu_` anyway — the opposite trade from `__proc_`, whose two entries cost
+	// wildly different amounts and so must be asked for individually.
+	if isCpuCountRuntimeCallee(callee) 'cpuCount'
+		usage.usesCpuCount = true
+	end 'cpuCount'
+	if isSchedRuntimeCallee(callee) 'schedMaxActiveWorkers'
+		usage.usesSchedMaxActiveWorkers = true
+	end 'schedMaxActiveWorkers'
 	if callee.equals(StreamWriteStdoutName) 'writestdout'
 		usage.usesWriteStdout = true
 	end 'writestdout'
