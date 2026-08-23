@@ -110,6 +110,29 @@
 #     a compiler defect.** The moment the store is asked to hold something richer, that stops being
 #     true, and this is the check that would see it.
 #
+#   ✅ **THE STORE *WAS* ASKED TO HOLD SOMETHING RICHER, AND THIS GATE CAUGHT BOTH POISONINGS — BUT
+#     THE PREDICTION THAT THEY WOULD BE *SILENT* WAS WRONG, AND THAT IS THE PART TO CARRY FORWARD**
+#     (G20 wave 9, against the per-file DECLARATION WALK on `slice/G20-wave9-b-mid-measured`; the
+#     mechanism was refused on cost, so the gate as it stands still guards only tokens and masks).
+#     Each of its two soundness conditions was sabotaged separately and watched RED:
+#       * ADMIT EVERY COMPILE (neuter the name-disjointness verdict, so a fragment that shadows a
+#         stdlib name is served a walk minted without it): **CHECK 4 red** — a worker DIED compiling
+#         `array-declared-record/error.a-string-marker-conformer-…` — and **CHECK 5 red** on
+#         `clock-shadow` with `E3018: type 'Clock' has no field named 'tick'`, the user's own type
+#         resolved to the stdlib's. CHECKS 1, 2 and 3 stayed green, correctly: the store fires and is
+#         still bounded, only its content is wrong for that compile.
+#       * PUBLISH A WALK THAT MOVED THE INDEX (neuter the write watch): **CHECKS 1, 2b, 4 and 5 red**,
+#         `69 passed, 534 failed`. Note CHECK 2b: the damage was bad enough that compiles stopped
+#         reaching the store at all, so the POSITIVE CONTROL went red too — a sabotage can knock out
+#         the check that proves the mechanism fires, and a green 2b beside a red 4 is not the only
+#         shape a real defect takes.
+#     ⇒ **CHECK 5's DRIFT arm is STILL unproved against a compiler defect, and now for a better
+#     reason than "there was nothing to exercise it with".** There was, and it did not drift: every
+#     poisoning of a served declaration walk announced itself as a hard compile failure or a panic,
+#     never as a program that compiled to different bytes and still ran. The wave-5 header calling
+#     that store "the first silent-poison surface" was a prediction, and the measurement contradicts
+#     it. Do not read the DRIFT arm as proven; do read the FAILURE arms as having real teeth.
+#
 #   Earlier, on the commit that added this file:
 #     * make `sharedActiveTokensOf` hand back the RAW stream instead of the `#if`-resolved one and
 #       CHECKS 1 and 4 go red — `12 passed, 591 failed`, most of them
