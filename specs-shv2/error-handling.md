@@ -1704,14 +1704,28 @@ end 'main'
 5
 ```
 
-<!-- test: error.throw-borrowed-union-unsupported -->
+<!-- test: throw-borrowed-union-co-owns -->
+### Throwing a BORROWED union CO-OWNS its box — it does not move it
+⛔⛔ **THIS CASE PINNED A REFUSAL, AND THE REFUSAL'S OWN STATED REASON HAD ALREADY BEEN RETIRED.** Its prose
+called it *"the throw twin of the borrowed-aggregate RETURN refusal"*, refused *"until cross-call consume"* —
+but S5 lifted exactly that on the RETURN door, and `Parser.valueIsNonTextAggregate`'s header says why in as many
+words: *"the two that did not were held back by a WRONG PREMISE … the callee increfs before the `ret`, the caller
+adopts and decrefs once, and the borrow's own owner never notices … **what genuinely needs the cross-call consume
+is a MOVE**, where the source must be poisoned so exactly one owner remains."*
+
+⭐ **A `throw` IS A HAND-OFF, NOT A MOVE.** Nothing is poisoned, so nothing needs the consume — the thrown
+reference is a SECOND owner, the catch consumes it, and the borrow's own owner drops its own. The mechanism was
+already there and already spent one bullet up, on a borrowed union FIELD: `retainThrownValue` is two lines, an
+incref and a co-own mark, and **neither is about a field** — it was called `retainThrownField` while it served
+every borrowed box, which is why the non-field case looked like it needed a mechanism it did not.
+
+⚠ **THE ASSERTION IS THE SURVIVAL OF THE ORIGINAL, NOT MERELY THAT IT COMPILES.** The caught throw is followed by
+a READ of the very binding that was thrown, and `useAfterRethrow` is called TWICE on ONE box: a move would leave
+the second call reading a freed box, and a missing incref would free it twice. A leak is exit 101. Only a balanced
+refcount prints `a=7 b=7` and exits 0.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-// Throwing a BORROWED union value (a union parameter) would hand its box to the caller while this
-// function's own caller — the box's owner — still frees it: a double free. A borrowed aggregate has no
-// clone to transfer, so it is refused until cross-call consume (Wave 2c+), the throw twin of the
-// borrowed-aggregate RETURN refusal.
 union Fault implements Error
 	bad(code Integer)
 end 'Fault'
@@ -1720,12 +1734,28 @@ function rethrow(e Fault) returns Integer throws Fault
 	throw e
 end 'rethrow'
 
+function useAfterRethrow(e Fault) returns Integer
+	let got = try rethrow(e) otherwise 'caught'
+		return match e 'stillLive'
+			bad(code) gives code
+		end 'stillLive'
+	end 'caught'
+	return got
+end 'useAfterRethrow'
+
 function main() returns ExitCode
+	let f = Fault.bad(7)
+	let a = useAfterRethrow(f)
+	let b = useAfterRethrow(f)
+	print("a={a} b={b}")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/fragments/error-handling/error.throw-borrowed-union-unsupported.test:13:2: Unsupported: throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)`, a caught `(e)` binding, or a boxed-union FIELD the throw moves out or retains); consuming a whole borrowed union to throw it arrives with cross-call consume
+```exitcode
+0
+```
+```stdout
+a=7 b=7
 ```
 
 <!-- test: error.throw-payload-expr-temp-decref -->

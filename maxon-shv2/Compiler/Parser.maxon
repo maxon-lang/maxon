@@ -30302,19 +30302,24 @@ export type Parser
 		//     sidestepping the cross-call move-tracking a null-move would have needed to tell a re-reading caller
 		//     from a tearing-down one.
 		//   • anything else NOT owned here — a `throw <union param>` (or a re-borrow of one), a WHOLE borrowed
-		//     union value with no owned home in this frame. Two owners would free one box (a double free); throw
-		//     an OWNED value instead. Refused until cross-call consume.
+		//     union value with no owned home in this frame. It takes the SAME RETAIN, for the same reason: the
+		//     thrown reference is a second owner, the catch consumes it, the borrow's own owner drops its own,
+		//     and the refcount balances at one free.
+		//     ⛔⛔ **IT USED TO BE REFUSED "until cross-call consume", AND THAT PREMISE WAS ALREADY RETIRED IN
+		//     THIS FILE.** See `valueIsNonTextAggregate`'s header (S5): the two HAND-OFF doors — `return
+		//     <borrowed aggregate>` and a borrowed arm merged into an owned phi — refused on exactly that
+		//     reasoning, and it is wrong. *"The callee increfs before the `ret`, the caller adopts and decrefs
+		//     once, and the borrow's own owner never notices … What genuinely needs the cross-call consume is a
+		//     MOVE, where the source must be poisoned so exactly one owner remains."* A `throw` is a HAND-OFF,
+		//     not a move: nothing is poisoned, so nothing needs the consume. The refusal outlived its reason,
+		//     and the retain it now takes is the two lines the field case beside it was already spending.
 		if errorIsBoxed and not self.valueIsOwnedHeap(errValue) 'borrowedThrow'
 			let thrownIsFieldRead = self.lastFieldReadValid and self.lastFieldReadValue == errValue
 			if thrownIsFieldRead and self.valueIsSoleHeapOwner(self.lastFieldReadBox) 'fieldThrow'
 				self.moveOutThrownField(errValue, anchor: anchor)
-			end 'fieldThrow' else 'borrowedFieldOrValue'
-				if thrownIsFieldRead 'borrowedField'
-					self.retainThrownField(errValue, anchor: anchor)
-				end 'borrowedField' else 'borrowedNonField'
-					throw ParseError.unsupported("throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)`, a caught `(e)` binding, or a boxed-union FIELD the throw moves out or retains); consuming a whole borrowed union to throw it arrives with cross-call consume", line: anchor.line, column: anchor.column)
-				end 'borrowedNonField'
-			end 'borrowedFieldOrValue'
+			end 'fieldThrow' else 'coOwnTheThrownBox'
+				self.retainThrownValue(errValue, anchor: anchor)
+			end 'coOwnTheThrownBox'
 		end 'borrowedThrow'
 
 		// ⭐ **THROW TRANSFERS THE BOX OUT OF THE LOCAL DROP SETS — BEFORE the scope drops.** The box is
@@ -30456,10 +30461,12 @@ export type Parser
 	// The thrown value is CO-OWNED, which is the whole content of the paragraph above said once in the type
 	// system: the container keeps its reference, so a callee that catches this box and matches it must retain its
 	// payload rather than null the slot the container still reads (`OwnedHeapExclusivity`).
-	function retainThrownField(value ValueId, anchor Token)
+	// ⭐ **CO-OWN THE THROWN BOX.** Two lines, and neither is about a field — the name said `Field` while it
+	// served every borrowed box, which is why the non-field case looked like it needed a mechanism it did not.
+	function retainThrownValue(value ValueId, anchor Token)
 		self.emitIncref(value, range: SourceRange.ofToken(anchor))
 		self.markValueOwnsHeap(value, exclusivity: OwnedHeapExclusivity.coOwned)
-	end 'retainThrownField'
+	end 'retainThrownValue'
 
 	// ⭐ **`panic("message")` — ABORT, PRINTING `panic at <file>:<line>: <message>` AND A BACKTRACE, EXIT 1.**
 	// Emits a `panicAbort`/`panicAbortValue` body op carrying the message, followed by a dead return
