@@ -1,0 +1,85 @@
+// Runtime/ParallelBoundaryRuntime.maxon — the CPU-parallel scheduling checkpoint, `__Builtins.parallelBoundary()`.
+//
+// ⭐⭐ **AN EMPTY FUNCTION IS THE WHOLE IMPLEMENTATION, AND THAT IS THE FEATURE RATHER THAN A STUB.** `async f()`
+// exists to overlap WAITING with other work, so a spawn of a function that can never suspend is refused
+// (E3073, `SemanticCheck.checkAsyncYielding`). A hand-written CPU-BOUND task legitimately never waits — it
+// computes — and under the plain rule the only way to spawn one was to fake I/O: a `sleep(0)`, a stat of a
+// file nobody reads. That buys a real syscall to satisfy a check. This intrinsic is the honest spelling of
+// the same intent, and its body does nothing because there is nothing it should do.
+//
+// ⭐ **WHY IT IS ITS OWN FILE AND ITS OWN `__` BAND — `ClockRuntime`'s reason, one family over.** The obvious
+// home is `GtRuntime`, since the thing it is ABOUT is the scheduler. But `isGtRuntimeCallee` is a `__gt_`
+// PREFIX test, and it sets `usesGt` — so filing this under that band would install the entire green-thread
+// scheduler, the timer store and the netpoll for a program whose only concession to concurrency is a marker
+// in a function nobody spawns (`specs-shv2/builtins-parallel-boundary.statement-position` is exactly that
+// program). A checkpoint that costs a scheduler is not a checkpoint.
+//
+// ⚠ **IT IS A MARKER, NOT A YIELD, AND THE DIFFERENCE IS NOT COSMETIC.** It does not reschedule, it does not
+// park, and it hands the processor to nobody — `Runtime.yield()` (`__Builtins.yield` ⇒ `__gt_resched`) is the
+// intrinsic that does. Both reference compilers say the same: the bootstrap's doc-comment is *"Performs no
+// work today"* and its emitter is a bare prologue/epilogue (`X86CodeEmitter.Runtime.cs:8062`,
+// `ARM64CodeEmitter.Runtime.cs:102`). A future scheduler could hang a cooperative-yield check in this body;
+// nothing may hang one at the CALL SITE, because a call site is where the marker's cost would stop being one
+// call.
+//
+// ⭐⭐ **SHV2 REACHES THE E3073 VERDICT BY THE WALK AND THE BOOTSTRAP BY A ROSTER, AND NEITHER FILE MAY CLAIM
+// THE OTHER'S DERIVATION.** `SemanticCheck.calleeYields` answers `true` for any callee the program does not
+// DECLARE, and a runtime entry point is declared in no source at all — so `__parallel_boundary` reaches the
+// yield closure by the identical route `__mm_alloc` and `__gt_sleep` take, and needs no entry in
+// `ioYieldingRuntimeCallee`. (That roster's own header records the sabotage measurement behind this: with
+// every listed name answering `false`, no program's verdict moved.) The bootstrap's walk does NOT fall open
+// on an unknown callee, so it must name `maxon_parallel_boundary` explicitly in
+// `SemanticCheckPass.YieldingRuntimeEntries`. Same answer for every program; opposite derivations.
+//
+// ⇒ **Which is why `specs-shv2/builtins-parallel-boundary.md` pins the marker case and its CONTROL as a
+// PAIR.** Under a walk that falls open, a marker case alone would pass against a compiler that had stopped
+// checking altogether. The control — the same program without the marker, still refused — is what says the
+// check is live, and it is the half that would go red if the fallback were ever tightened without this
+// intrinsic being taught to the roster.
+
+// The `__parallel_` prefix this family shares. One entry point today; the prefix exists so the "does this
+// program carry a checkpoint?" question is a family test from the start rather than a name compare that has
+// to be found and widened when a second entry arrives.
+//
+// ⚠ It is deliberately NOT `__gt_` and deliberately NOT `__proc_`: the first would install the scheduler
+// (see the header) and the second is `SemanticCheck.calleeNeedsWin32Substrate`'s host-only band, which this
+// entry emphatically is not — an empty function lowers on every target shv2 emits.
+let ParallelBoundaryCallPrefix = b"__parallel_"
+
+// ⭐ **THE ONE ENTRY POINT.** Named for what it marks rather than for what it does, because what it does is
+// nothing and what it marks is the contract.
+export let ParallelBoundaryName = b"__parallel_boundary"
+
+// ⭐ **DOES THIS CALLEE MARK A CPU-PARALLEL CHECKPOINT?** The `__parallel_`-only test, the exact twin of
+// `isClockRuntimeCallee`. Deliberately NARROW in the same way: it implies no scheduler, no heap and no leak
+// gate, because the body it installs is a `ret`.
+export function isParallelBoundaryRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ParallelBoundaryCallPrefix)
+end 'isParallelBoundaryRuntimeCallee'
+
+// Install the checkpoint into the lowered Std module, on its own `usesParallelBoundary` bit. Appended AFTER
+// the pipeline (like every other runtime install) so it is never re-optimized, and already-lowered Std so it
+// still flows through the whole backend.
+export function installParallelBoundaryRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesParallelBoundary 'noCheckpoint'
+		return
+	end 'noCheckpoint'
+	buildParallelBoundary(module)
+end 'installParallelBoundaryRuntime'
+
+// `__parallel_boundary()` — takes nothing, answers nothing, does nothing. An entry block whose only op is the
+// void return, which is what a target emits as a bare prologue and epilogue.
+//
+// ⚠ **IT IS A REAL FUNCTION AND NOT A LOWERING THAT VANISHES**, which was the alternative and is what the
+// bootstrap's own comment argues against. Deleting the call at the Maxon→Std seam would emit fewer
+// instructions and leave a source-written call with no trace of itself in the binary — so a profile, a
+// backtrace or a future hook would have nothing to attach to, and a reader of the disassembly would find the
+// checkpoint simply absent. One call and one return is what a checkpoint is worth.
+function buildParallelBoundary(module StdModule)
+	var func = IrFunction.createFromStd(ParallelBoundaryName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildParallelBoundary'

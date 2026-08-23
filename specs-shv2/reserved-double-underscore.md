@@ -451,6 +451,65 @@ end 'main'
 3
 ```
 
+<!-- test: reserved-space-functions-reach-a-user-program-through-their-primitive-static-spelling -->
+**THE POSITIVE CONTROL ON THE *CALL*-SIDE RULE, AND IT IS THE HALF THE FOUR REFUSALS ABOVE LEAVE
+UNSTATED.** `user-file-cannot-call-a-reserved-name` pins that `__int_fromString("42")` is refused from
+ordinary source. On its own that reads as *"the reserved free functions are unreachable"*, and they are
+not: `stdlib/Builtins.maxon` marks three of them `public` (`__float_bitsFromText`,
+`__float_textFromBits`, `__int_fromString`) precisely so that a program CAN reach them — through the
+PRIMITIVE-STATIC spelling, which is the surface, where `__` is the mangling.
+
+⇒ **The rule is about the NAME the author wrote, not about the function.** `float.textFromBits(bits)`
+mints exactly the callee `__float_textFromBits` that the reserved spelling would have named
+(`Parser.primitiveStaticCallee`), meets `requireCalleeIsNotReservedName`'s `primitiveStatic` mint
+exemption, and links to the same body. Two spellings, one function, opposite verdicts — because one of
+them is bytes the author typed into the reserved space and the other is not.
+
+⚠ **THE COMPILER ITSELF IS A CALLER, WHICH IS WHY THIS IS PINNED RATHER THAN MERELY TRUE.**
+`Compiler/IR/Maxon/TypeRules.formatBound` renders the f64 bounds of a ranged float alias into an E3005
+sentence, and `Compiler/Parser.floatLiteralBits` decodes every float literal — both through this
+surface. shv2 compiling its own source is an ordinary program calling ordinary stdlib functions, and it
+gets no exemption from this file's rule; it spells the surface instead.
+
+⚠ The rendered digits are the BOOTSTRAP's notation and not `float.toString`'s — `100` and not `100.0`,
+and `-0` keeping its sign. `stdlib/Builtins.maxon`'s FLOAT TEXT band states why the two spellings are
+deliberately different, and `ranged-typealias.md` pins the same digits as they reach an E3005 message.
+```maxon
+typealias FBits = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	print("{float.textFromBits(4636737291354636288 as FBits)} {float.textFromBits(4614253070214989087 as FBits)} {float.textFromBits(-9223372036854775808 as FBits)}")
+	match float.bitsFromText("3.14") 'decoded'
+		bits(value) then return 7 if value == 4614253070214989087 else 1
+		overflow then return 2
+		malformed then return 3
+	end 'decoded'
+end 'main'
+```
+```stdout
+100 3.14 -0
+```
+```exitcode
+7
+```
+
+<!-- test: error.the-reserved-spelling-of-a-primitive-static-stays-shut -->
+**THE NEGATIVE HALF OF THE CASE ABOVE, on the SAME function.** Reaching `__float_textFromBits` by the
+name `stdlib/Builtins.maxon` wrote is the author reaching into the reserved space, and it is refused —
+so the positive control cannot be read as "the door opened". It is `user-file-cannot-call-a-reserved-name`
+one function over, stated here because this is the pair that makes the mint exemption's shape legible.
+```maxon
+typealias FBits = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	print("{__float_textFromBits(4636737291354636288 as FBits)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:5:10: call to undefined function '__float_textFromBits': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
 ### The `// --- stdlib-overlay:` fixture — the four E4015 doors that used to be reachable only by hand
 
 ⭐⭐ **THREE OF THIS FILE'S OWN FINDINGS WERE RECORDED AS SHELL TRANSCRIPTS BECAUSE NOTHING IN THE SUITE

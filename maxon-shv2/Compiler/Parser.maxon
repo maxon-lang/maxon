@@ -4628,6 +4628,25 @@ let BuiltinsRunProcessName = b"__Builtins.runProcess"
 // child's exit code), so unlike `__Builtins.sleep` its result IS usable in value position.
 let RunProcessArity = 1 as ParamCount
 
+// ⭐⭐ **`__Builtins.parallelBoundary()` — THE CPU-PARALLEL CHECKPOINT, AND THE ONE INTRINSIC HERE WHOSE
+// RUNTIME ENTRY DOES NOTHING.** It marks a hand-written CPU-BOUND function as a deliberate `async` target,
+// satisfying E3073's *"this function legitimately yields"* contract without claiming I/O it does not do — the
+// alternative being a `sleep(0)` bought purely to pass a check. The bootstrap declares the identical name and
+// shape (`2-Parser.cs:12263-12271`, lowering to its own `maxon_parallel_boundary`) and its doc-comment says
+// the same thing this one does: *"Performs no work today."*
+//
+// It is `sleep`'s SHAPE — void, so it needs the statement door and refuses a value position — and NOT its
+// semantics: `sleep` and `yield` hand over the processor, this hands over nothing. See
+// `ParallelBoundaryRuntime` for why the entry point is a real (empty) function rather than a lowering that
+// vanishes, and for how shv2's E3073 walk reaches the verdict the bootstrap reaches through a roster.
+let BuiltinsParallelBoundaryName = b"__Builtins.parallelBoundary"
+
+// `__Builtins.parallelBoundary` takes NOTHING and returns void — there is no knob on a checkpoint. Stated
+// here beside the intrinsic for `SleepIntrinsicArity`'s reason, and as its own constant rather than a
+// borrowed `YieldIntrinsicArity` for `CurrentProcessIdArity`'s: the number is a fact about THIS intrinsic's
+// contract, and the two only happen to agree.
+let ParallelBoundaryArity = 0 as ParamCount
+
 // **THE `spawnReadLine` BUILTIN** (P1.5 dogfood slice 1a-ii — the IOCP overlapped-read PROBE). A TEMPORARY probe
 // surface (not the final async-subprocess-stdio API, which arrives with the stdlib in slice 1b): like
 // `__Builtins.runProcess`,
@@ -4901,6 +4920,23 @@ let BuiltinsFloatToBitsName = b"__Builtins.floatToBits"
 // separate rung, and it is not specific to these two intrinsics.
 let BuiltinsUcdByteAtName = b"__Builtins.ucdByteAt"
 let BuiltinsUcdI64AtName = b"__Builtins.ucdI64At"
+
+// ⭐⭐ **`__DebugStream.nameId("regalloc.functionAllocated")` — A COMPILE-TIME NAME, NOT A VALUE (Workstream
+// O3).** `__DebugStream` is the compiler's second builtin TYPE, static-only like `__Builtins`; `nameId` is
+// the member that turns a NAME into the u16 a structured trace event carries. Its argument is read off its
+// own token and interned, so the text exists only in the executable's `MXDS_STRS` blob and **no String is
+// ever built at run time** — which is the whole reason a pass may emit a trace event from inside the
+// register allocator without allocating into the very `mm` stream the trace exists to read.
+//
+// ⇒ It is the ONE `__DebugStream` member this compiler recognizes. The five that EMIT an event
+// (`enabled`, `phaseBegin`, `phaseEnd`, `event`, `text`) arrive with the producer that consumes a name id;
+// until then an unrecognized member takes the same reserved-callee refusal every other unknown `__` callee
+// gets (`requireCalleeIsNotReservedName`).
+//
+// ⚠ It is NOT in `isBuiltinsIntrinsicCallee`'s table: that arm is gated on the `__Builtins.` prefix and this
+// is a different type. It is intercepted at `parseCallNamed`, BEFORE the arguments are parsed, beside the
+// two UCD table loads and for their exact reason — the literal's token is only the cursor there.
+let DebugStreamNameIdCallee = b"__DebugStream.nameId"
 
 // ⭐⭐ **THE TWENTY `__Builtins` INTRINSICS `stdlib/Subprocess.maxon` BOTTOMS OUT IN — NINETEEN
 // `subprocess*` NAMES PLUS `managedIsNull`, WHICH IS NOT ONE OF THEM.** That module is the
@@ -7555,10 +7591,16 @@ function literalEscapeKindPhrase(kind LiteralEscapeKind) returns String
 	end 'kind'
 end 'literalEscapeKindPhrase'
 
-// What a `panic(…)` argument must be, as the diagnostic spells it. Deliberately narrower than
-// `typeTagName(ValueTypeTag.string)`: a `String` BINDING is refused too (see `parsePanicMessage`), so a
+// ⭐ **WHAT AN INTRINSIC THAT TAKES A COMPILE-TIME NAME REQUIRES, AS THE DIAGNOSTIC SPELLS IT.**
+// Deliberately narrower than `typeTagName(ValueTypeTag.string)`: a `String` BINDING is refused too, so a
 // message naming only the type would be a rule that does not match the one being enforced.
-let PanicMessageRequirement = "string literal"
+//
+// TWO askers, one sentence. `panic(…)` needs a literal so the abort line can live in `.rdata` and print
+// from a process whose heap may be the thing that failed (`parsePanicMessage`);
+// `__DebugStream.nameId(…)` needs one so the name never exists at run time at all
+// (`parseDebugStreamNameId`). It was `PanicMessageRequirement` while there was one asker; a second copy of
+// the wording would be a second thing that can come to describe the rule differently.
+let StringLiteralRequirement = "string literal"
 
 // ⭐ **THE `panic at <file>:<line>: <text>\n` LINE A `panic(…)` HANDS THE RUNTIME, IN THE ONE OF TWO FORMS
 // ITS ARGUMENT ADMITS.** `mrt_panic` reads a NUL-terminated cstr and does not care which; what differs is
@@ -20514,8 +20556,16 @@ export type Parser
 	// compiler's own vocabulary exactly once, HERE, and go on to the same `literalDecodeError` the
 	// integer path uses. Mapping them anywhere else would be a second opinion about which diagnostic a
 	// bad literal deserves.
+	//
+	// ⭐⭐ **SPELLED `float.bitsFromText`, BECAUSE THIS FILE MAY NOT WRITE THE RESERVED NAME.** To the
+	// compiler compiling it, `Compiler/Parser.maxon` is an ordinary user program, and
+	// `requireCalleeIsNotReservedName` — the rule this very file states — refuses a `__` callee written
+	// out in a file that does not DECLARE it. The primitive-static spelling mints exactly those bytes
+	// (`primitiveStaticCallee`), so it links to the same body through the door the rule leaves open.
+	// `TypeRules.formatBound` spells the printer the same way. See
+	// `specs-shv2/reserved-double-underscore.md`'s primitive-static pair.
 	function floatLiteralBits(tok Token) returns ParsedInt throws ParseError
-		match __float_bitsFromText(String.from(tok.value)) 'decoded'
+		match float.bitsFromText(String.from(tok.value)) 'decoded'
 			bits(value) then return value
 			overflow then throw self.literalDecodeError(ParserError.overflow, tok: tok, isFloat: true)
 			// Reachable from source — `1.5.3` is the shape. See `literalDecodeError`, which used to
@@ -30000,7 +30050,7 @@ export type Parser
 		if not self.at(TokenKind.stringLiteral) 'notALiteral'
 			let argTok = self.current()
 			let arg = try self.parseExpression(func, block: self.currentBlock)
-			throw ParseError.builtinOperandType("panic", required: PanicMessageRequirement, got: self.valueDisplayTypeName(arg), line: argTok.line, column: argTok.column)
+			throw ParseError.builtinOperandType("panic", required: StringLiteralRequirement, got: self.valueDisplayTypeName(arg), line: argTok.line, column: argTok.column)
 		end 'notALiteral'
 
 		if self.peekKind() == TokenKind.stringInterpStart 'interpolated'
@@ -67921,6 +67971,14 @@ export type Parser
 			return try self.parseUcdTableLoad(func, callee: callee, load: UcdTableStride.packedEntry, anchor: anchor)
 		end 'ucdI64At'
 
+		// ⭐ **THE THIRD INTRINSIC WHOSE ARGUMENT IS A NAME RATHER THAN A VALUE**, taken here for the two
+		// above's reason and one of its own: the name is not merely known at compile time, it must never
+		// become a value, because a `stringLiteral` op would mint the `.rdata` String record and the runtime
+		// allocation the zero-alloc trace tier exists to avoid. See `DebugStreamNameIdCallee`.
+		if callee.equals(DebugStreamNameIdCallee) 'debugStreamNameId'
+			return try self.parseDebugStreamNameId(func, anchor: anchor)
+		end 'debugStreamNameId'
+
 		var args = ValueIdArray.create()
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
@@ -68070,8 +68128,16 @@ export type Parser
 			// `Runtime.yield()`'s floor, on the same terms as `sleep` above: the surface is
 			// `stdlib/Runtime.maxon`'s declaration and this is the only spelling the parser knows.
 			if callee.equals(BuiltinsYieldName) 'yield'
-				return try self.emitYield(args, calleeTok: anchor, resultUsed: resultUsed)
+				return try self.emitVoidZeroArgIntrinsic(args, builtinName: BuiltinsYieldName, runtimeName: GtReschedName, arity: YieldIntrinsicArity, calleeTok: anchor, resultUsed: resultUsed)
 			end 'yield'
+
+			// ⭐ **THE CPU-PARALLEL CHECKPOINT — `yield`'s CALL CONTRACT AND THE OPPOSITE RUNTIME.** It marks
+			// a hand-written CPU-bound function as a deliberate `async` target (E3073) and hands the
+			// processor to nobody; `__parallel_boundary`'s body is a void return. See
+			// `BuiltinsParallelBoundaryName` and `ParallelBoundaryRuntime`.
+			if callee.equals(BuiltinsParallelBoundaryName) 'parallelBoundary'
+				return try self.emitVoidZeroArgIntrinsic(args, builtinName: BuiltinsParallelBoundaryName, runtimeName: ParallelBoundaryName, arity: ParallelBoundaryArity, calleeTok: anchor, resultUsed: resultUsed)
+			end 'parallelBoundary'
 
 			// ⭐ **THE THIRD ARM THAT HANDS OVER THE PROCESSOR, and the one with no declaration above it.**
 			// `sleep` and `yield` are stdlib's floor; this one is the whole surface, because
@@ -68711,6 +68777,46 @@ export type Parser
 		return self.emitRuntimeCall(ucdRuntimeNameOf(load), args: singletonArgs(index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
 	end 'parseUcdTableLoad'
 
+	// ⭐⭐ **`__DebugStream.nameId("…")` — THE NAME IS INTERNED, THE CALL IS A MARKER.** The literal is read
+	// off its token and recorded against the op this emits (`Project.debugStreamNameSites`); the op itself
+	// is a zero-argument `__ds_name_id` call that `LowerMaxonToStd` replaces WHOLE with the interned index.
+	// So nothing about the name survives as a value, which is the contract — see `DebugStreamNameIdCallee`.
+	//
+	// ⚠ **THE INDEX CANNOT BE MINTED HERE, AND THAT IS WHY THIS EMITS AN OP AT ALL RATHER THAN A CONSTANT.**
+	// The numbering is a property of the PROGRAM: two files naming `"parse"` must get one id. A parser holds
+	// one file's artifact and no whole-program registry it may write to (`ProgramSignatures` takes no
+	// `Project`, by design), and artifacts are cached and merged in a fixed order — so the first tier that
+	// can number them is the one that walks the merged module.
+	//
+	// ⚠ **THE LABEL RULE IS `consumeArgLabel`'s, NOT A SECOND COPY**, exactly as the UCD loads' is: the
+	// first argument of every call is positional, inherited rather than restated. Asked BEFORE the literal is
+	// consumed so a labelled one earns E2052 rather than "expected a string literal".
+	//
+	// ⚠ **AN INTERPOLATED LITERAL IS REFUSED BY THE `)` EXPECTATION AND NOT BY A RULE OF ITS OWN.** A hole
+	// cannot be known while the call is parsed; `self.at(stringLiteral)` is true for `"a{n}"` too, so the
+	// consume succeeds and the interpolation start is then what the `)` finds. That is the bootstrap's own
+	// answer (its `Expect(TokenType.RightParen)`) and `__Builtins.ucdByteAt`'s label's, so all three shapes
+	// of one mistake read the same.
+	function parseDebugStreamNameId(func IrFunction, anchor Token) returns ValueId throws ParseError
+		_ = try self.consumeArgLabel(0 as ParamCount, rule: ArgLabelRule.ordinary)
+
+		// A non-literal argument is refused with the sentence `parsePanicMessage` uses for the identical
+		// requirement, quoting the TYPE the author actually wrote — which means parsing the expression to
+		// have a type to name. It is never emitted: the throw is unconditional on this path.
+		if not self.at(TokenKind.stringLiteral) 'notALiteral'
+			let argTok = self.current()
+			let arg = try self.parseValueExpression(func)
+			throw ParseError.builtinOperandType(String.from(DebugStreamNameIdCallee), required: StringLiteralRequirement, got: self.valueDisplayTypeName(arg), line: argTok.line, column: argTok.column)
+		end 'notALiteral'
+
+		let nameTok = try self.consume(TokenKind.stringLiteral)
+		let name = try self.decodedStringLiteralBytes(nameTok)
+		try self.consume(TokenKind.rightParen)
+
+		self.artifact.recordDebugStreamNameSite(name)
+		return self.emitRuntimeCall(DebugStreamNameIdMarkerName, args: ValueIdArray.create(), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+	end 'parseDebugStreamNameId'
+
 	// ⭐⭐⭐ **`__Builtins.writeStdout(s.addressableBytes())` BECOMES `__write_stdout(s)` — ONE OP REWRITTEN, ONE
 	// FIELD CHANGED (W35, re-aimed at W49 wave 7).** The byte value exists to satisfy a TYPE, not a USE:
 	// `addressableBytes()` yields an `Array with Byte` so the value can be TYPED as one, and the write reads
@@ -68806,25 +68912,34 @@ export type Parser
 		return self.emitRuntimeCall(GtSleepName, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitSleep'
 
-	// `__Builtins.yield()` — **COOPERATIVELY RESCHEDULE THE CALLING GREEN THREAD** (`specs/runtime-yield.md`).
-	// It routes to the `__gt_resched` scheduler entry, which hands the CPU to the next runnable green thread
-	// (or, with nothing to hand off to, polls what is already due and returns). It takes no arguments and
-	// returns VOID, so a call in value position is rejected exactly as a void user-call is.
+	// ⭐⭐ **THE RULE EVERY ARGUMENTLESS VOID INTRINSIC IS CHECKED AGAINST, IN ONE PLACE** —
+	// `emitCommandLineRuntimeCall`'s shape one family over, and landed for its stated reason: two doors
+	// (`__Builtins.yield` ⇒ `__gt_resched`, `__Builtins.parallelBoundary` ⇒ `__parallel_boundary`) ask the
+	// IDENTICAL two questions of the identical argument shape — *were any arguments written?* and *is the
+	// nothing it returns being read?* — and a second verbatim copy of the answer is a second place for the
+	// rule to drift.
 	//
-	// There is no operand-type check to make — `emitSleep`'s integer gate exists because `sleep` HAS an
-	// argument, and this one does not; the arity check alone is the whole rule for an intrinsic no file
-	// declares.
-	function emitYield(args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
-		if args.count() != YieldIntrinsicArity 'arity'
-			throw ParseError.builtinArity(String.from(BuiltinsYieldName), expected: YieldIntrinsicArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+	// There is no operand-type check to make: `emitSleep`'s integer gate exists because `sleep` HAS an
+	// argument, and these do not; the arity check alone is the whole rule for an intrinsic no file declares.
+	//
+	// ⚠ **THE ARITY IS A PARAMETER THOUGH BOTH CALLERS PASS 0**, exactly as `emitCommandLineRuntimeCall`'s is
+	// though all three of ITS callers pass 1: the constant is what says what a given intrinsic IS, and
+	// collapsing two documented constants into a literal here would put that fact in the wrong file.
+	//
+	// ⚠ The two callers differ in EVERYTHING the runtime does — one hands the processor to the next green
+	// thread, the other returns immediately — and in nothing this function can see. That is the point: what is
+	// shared is the CALL CONTRACT, and the entry point is a parameter.
+	function emitVoidZeroArgIntrinsic(args ValueIdArray, builtinName ByteArray, runtimeName ByteArray, arity ParamCount, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
+		if args.count() != arity 'arity'
+			throw ParseError.builtinArity(String.from(builtinName), expected: arity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
 		end 'arity'
 
 		if resultUsed 'noValueToUse'
-			throw ParseError.voidCallResultUsed(String.from(BuiltinsYieldName), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.voidCallResultUsed(String.from(builtinName), line: calleeTok.line, column: calleeTok.column)
 		end 'noValueToUse'
 
-		return self.emitRuntimeCall(GtReschedName, args: ValueIdArray.create(), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-	end 'emitYield'
+		return self.emitRuntimeCall(runtimeName, args: ValueIdArray.create(), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitVoidZeroArgIntrinsic'
 
 	// ⭐⭐ **THE ARGUMENT RULE EVERY COMMAND-LINE BUILTIN IS CHECKED AGAINST, IN ONE PLACE** — the
 	// `requireHandleArg`/`requireSubprocessArgs` shape, one family over. Three doors spawn a child from a
