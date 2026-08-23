@@ -827,6 +827,11 @@ type MaxonToStdLowering
 	// `__mm_alloc` call's own op index (`project.allocTagSites`). Read by `allocTagIndexOf` and by nothing
 	// else — see `Project.allocTagSites` for why a trace label may not ride in the type slot.
 	let allocTagSites as AllocTagSiteMap
+	// ⭐ The compile-time NAME each `__ds_name_id` marker call interns, keyed by that call's own op index
+	// (`project.debugStreamNameSites`). Read by `lowerDebugStreamNameId` and by nothing else. This is the
+	// first tier that can NUMBER them: the interner is whole-program and this walk is the one pass that sees
+	// the whole merged module — see `Project.debugStreamNameSites`.
+	let debugStreamNameSites as DebugStreamNameSiteMap
 	// The whole-program Maxon op index of the op being lowered. Published by the block walk, exactly as
 	// `rangeSites` is and for the same reason: an op's SIDE TABLES are keyed by its index, and the walk is
 	// the only thing that knows it.
@@ -917,7 +922,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -2513,6 +2518,27 @@ type MaxonToStdLowering
 		return mmTagIndex(recorded)
 	end 'allocTagIndexOf'
 
+	// ⭐⭐ **`__DebugStream.nameId("…")` COLLAPSES TO ITS INDEX HERE, AND THE CALL DISAPPEARS ENTIRELY.** The
+	// parser could not number the name — the table is whole-program and it holds one file (see
+	// `Project.debugStreamNameSites`) — so it emitted a marker carrying nothing and put the bytes in a side
+	// table. This is the first tier that walks the merged module, so this is where a name becomes a number.
+	//
+	// ⚠ **INTERNED UNCONDITIONALLY, NOT UNDER `self.debugStream`, AND THE ASYMMETRY WITH THE `__mm_alloc`
+	// TAG ARM ABOVE IS DELIBERATE.** A tag index is the compiler's own bookkeeping about a box, so an
+	// untraced build may decline to mint one. A name id is a VALUE the program computes and may print, so it
+	// may not depend on a compiler flag — only the BLOB is gated. `GlobalDataTable.debugStreamNames` carries
+	// the same rule from the table's side, and it is the bootstrap's
+	// (`MaxonToStandardConversion.LowerDebugStreamNameId`).
+	//
+	// ⚠ **A MISSING SIDE-TABLE ENTRY PANICS RATHER THAN DEFAULTING TO 0.** Index 0 is the monitor's "no
+	// name", so a silent fallback would render every affected event as unnamed — a wrong ANSWER, in the
+	// instrument, with nothing to notice it. The only way to arrive without an entry is for the parser's
+	// record and its emit to have come apart, which `recordDebugStreamNameSite`'s contract exists to prevent.
+	function lowerDebugStreamNameId(result ValueId, dstBlock IrBlock)
+		let name = try self.debugStreamNameSites.get(self.currentMaxonOpIndex) otherwise panic("lowerDebugStreamNameId: the `__ds_name_id` marker at op {self.currentMaxonOpIndex} has no recorded name — `Parser.parseDebugStreamNameId` records one against the op it is about to emit, so the record and the emit have come apart")
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(result, value: self.globalData.debugStreamNames.intern(String.from(name)), valueType: StdType.i64))
+	end 'lowerDebugStreamNameId'
+
 	function allocTagFromResultType(result ValueId) returns ParsedInt
 		if self.valueTagOf(result) == ValueTypeTag.string 'stringRecord'
 			return mmTagIndex(MmTag.StringRecord)
@@ -2602,6 +2628,12 @@ type MaxonToStdLowering
 			self.appendMmAllocTag(result, args: args, dstBlock: dstBlock)
 			return
 		end 'allocTag'
+		// ⭐⭐ **THE ONE RUNTIME CALLEE THAT BECOMES A CONSTANT RATHER THAN A CALL** — the
+		// `__DebugStream.nameId("…")` marker. See `lowerDebugStreamNameId`.
+		if callee.equals(DebugStreamNameIdMarkerName) 'debugStreamNameId'
+			self.lowerDebugStreamNameId(result, dstBlock: dstBlock)
+			return
+		end 'debugStreamNameId'
 		if callee.equals(DropTypeParamName) or callee.equals(RetainTypeParamName) 'typeParamOwnership'
 			self.appendTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return

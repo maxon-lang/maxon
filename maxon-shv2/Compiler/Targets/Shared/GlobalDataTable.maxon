@@ -236,31 +236,23 @@ export type GlobalDataTable
 	// the seeding conditional would put a flag test into this constructor — which every compile runs — to
 	// save them. Nothing renders the blob unless the flag is on, and `userTagIndex` refuses to grow the
 	// table in an untraced build, so the cost stops here.
-	export var debugStreamTagNames as StringArray
-	var debugStreamTagIndex as MmTagIndexMap
+	export var debugStreamTags as DebugStreamNameTable
+	// ⭐⭐ **THE INTERNED-NAME TABLE — `names[i]` is what a Log event's u16 name field resolves to.** Its
+	// entries come from `__DebugStream.nameId("…")`, a compile-time NAME rather than a runtime value, which
+	// is what keeps the structured trace tier zero-alloc: the call becomes this index and the text exists
+	// only in `MXDS_STRS`.
+	//
+	// ⚠⚠ **IT IS GROWN UNCONDITIONALLY, WHERE THE TAG TABLE ABOVE IS NOT, AND THE ASYMMETRY IS THE WHOLE
+	// CONTRACT.** A tag index is chosen BY the compiler for a box the program never sees, so an untraced
+	// build can decline to mint one (`userTagIndex`). A name id is a VALUE the program computes and may
+	// print — so it may not depend on a compiler flag, or `--debugstream` would change what a program
+	// answers. Only the BLOB is gated; the numbering is not. This is the bootstrap's rule stated the same
+	// way (*"Interned unconditionally: the index must be stable whether or not the blob is emitted"*).
+	export var debugStreamNames as DebugStreamNameTable
 
 	export static function create() returns GlobalDataTable
-		let tagNames = mmTagRosterNames()
-		var tagIndex = MmTagIndexMap.create()
-		for name in tagNames 'seedTagIndex'
-			tagIndex.upsert(name, value: tagIndex.count())
-		end 'seedTagIndex'
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTagNames: tagNames, debugStreamTagIndex: tagIndex}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
 	end 'create'
-
-	// The wire tag index for `name`, minting one on first sight. Dedup is what keeps the blob proportional
-	// to the DISTINCT types a program allocates rather than to its allocation SITES.
-	//
-	// ⚠ Reached only through `userTagIndex`, which is what keeps an untraced build from growing a table
-	// it will not render. The 16-bit bound is checked once, where the blob is written.
-	export function internDebugStreamTag(name String) returns ParsedInt
-		return try self.debugStreamTagIndex.get(name) otherwise 'fresh'
-			let minted = self.debugStreamTagNames.count()
-			self.debugStreamTagIndex.upsert(name, value: minted)
-			self.debugStreamTagNames.push(name)
-			return minted as ParsedInt
-		end 'fresh'
-	end 'internDebugStreamTag'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
 	// twin of the `.data` half below, and the door P1.0d.4's float constants come through.

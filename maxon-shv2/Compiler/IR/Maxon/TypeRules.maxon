@@ -1866,6 +1866,16 @@ end 'quotedAliasName'
 // decimal that reads back as the same double, which is what the bootstrap prints. Printing the
 // pattern itself would name a number nobody wrote.
 //
+// ⭐⭐ **IT IS SPELLED `float.textFromBits`, AND THE RESERVED SPELLING IS NOT AVAILABLE HERE.** This file
+// is COMPILER source, and to the compiler compiling it that is an ordinary user program: a `__` callee
+// written out in a file that does not DECLARE the name is refused by
+// `Parser.requireCalleeIsNotReservedName` (E3004), which is the rule
+// `specs-shv2/reserved-double-underscore.md` pins as *"a `__` name may be REFERENCED from exactly one
+// file, not from user code generally"*. The PRIMITIVE-STATIC spelling is the surface over that reserved
+// name — `Parser.primitiveStaticCallee` mints exactly the `__float_textFromBits` bytes out of it — so
+// this reaches the identical stdlib body through the door the rule leaves open, and self-compilation
+// needs no exemption. `Parser.floatLiteralBits` spells its own reader the same way for the same reason.
+//
 // ⚠⚠ **THE `u64.max` SENTINEL IS DELIBERATELY NOT SPELLED HERE, AND MOVING IT OUT IS A FIX.** This used
 // to render ANY `-1` as `18446744073709551615`, which is the same one-shape fact
 // `rangeNeedsUpperCheck` got wrong: a stored `-1` means `u64.max` only in the
@@ -1877,7 +1887,7 @@ end 'quotedAliasName'
 // offending VALUE — which is a signed i64 the author wrote — never receives it.
 function formatBound(bound ParsedInt, isFloat bool) returns String
 	if isFloat 'float'
-		return __float_textFromBits(bound)
+		return float.textFromBits(bound)
 	end 'float'
 
 	return "{bound}"

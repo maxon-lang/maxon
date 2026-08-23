@@ -808,6 +808,10 @@ export typealias AsyncSpawnSiteMap = Map with (OpIndex, AsyncSpawnSite)
 // ⭐ `__mm_alloc` call op index ⇒ the mm-trace TAG that box carries. See `Project.allocTagSites`.
 export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
 
+// ⭐ `__ds_name_id` call op index ⇒ the compile-time NAME that call interns. See
+// `Project.debugStreamNameSites`.
+export typealias DebugStreamNameSiteMap = Map with (OpIndex, ByteArray)
+
 // A list of BINDINGS, held by reference (VarInfo is a heap `type`). Scope keeps the
 // bindings a frame displaced in one; the parser keeps its mutable bindings in one.
 // Both need the binding OBJECT rather than its name — see Scope's header for why a
@@ -6549,6 +6553,21 @@ export type Project
 	// traced would serve one build's artifact to the other. It costs one map entry per closure, per
 	// interpolated part and per promoted parameter, and is READ only by a traced build.
 	export var allocTagSites as AllocTagSiteMap
+	// ⭐⭐ **`__DebugStream.nameId("…")` call op index ⇒ the LITERAL that call names.** The parser reads the
+	// name off its own token and emits a `__ds_name_id` marker call carrying NO arguments, because the name
+	// is not a value: materializing it as one would mint the `.rdata` String record and the runtime
+	// allocation the whole zero-alloc trace tier exists to avoid. The bytes ride here instead, and
+	// `LowerMaxonToStd` — the first tier holding the whole-program interner — turns the marker into the
+	// constant index.
+	//
+	// ⚠ **A SIDE TABLE FOR `allocTagSites`' REASON, not for want of a place on the op.** A `MaxonOp.call`
+	// has no payload slot for a name that is not a callee, and widening the op — or minting a variant — for
+	// one intrinsic would put the cost on every call in every program. Its cost here is one map entry per
+	// `nameId` call, in the programs that write one.
+	//
+	// ⚠ **RECORDED UNCONDITIONALLY, never under `--debugstream`**, for the exact reason stated above it: a
+	// parser artifact is CACHED across builds and keyed on the file's content, not the build's flags.
+	export var debugStreamNameSites as DebugStreamNameSiteMap
 	// (funcIndex, ValueId) -> Maxon OpIndex for every op-defined value in the
 	// whole-program Maxon module (see ValueOrigin). Folded from the per-file artifact
 	// tables by `mergeArtifact`, in the same source-path order the module merges. A
@@ -6637,6 +6656,7 @@ export type Project
 			debugStream: false,
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
+			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			rootPath: rootPath,
 			target: target,

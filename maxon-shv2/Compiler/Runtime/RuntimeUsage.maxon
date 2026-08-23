@@ -357,9 +357,16 @@ export type RuntimeUsage
 	// have carried the doubling path walk, the heap runtime AND the whole managed-memory runtime (installed
 	// as one closure) to link against nothing.
 	export var usesProcessId as bool
+	// The program marks a CPU-PARALLEL CHECKPOINT (`__Builtins.parallelBoundary` ⇒ `__parallel_boundary`).
+	// Its own bit, and the CHEAPEST one here to justify: the entry point's whole body is a void return, so it
+	// declares no transitive dependency at all — not the heap, not the scheduler, not the leak gate. Folded
+	// into `usesGt` (the obvious home, since the marker is ABOUT `async`) a program that merely names a
+	// checkpoint would have carried the entire green-thread runtime to link against a `ret`. See
+	// `ParallelBoundaryRuntime`'s header for why the callee is not in the `__gt_` band either.
+	export var usesParallelBoundary as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -578,6 +585,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(ProcessCurrentPidName) 'processId'
 		usage.usesProcessId = true
 	end 'processId'
+	// The CPU-parallel checkpoint. It declares NOTHING beside itself — the entry point's body is a void
+	// return — which makes it the one arm here with no second line, and that is a fact about the code rather
+	// than an omission (`ParallelBoundaryRuntime`).
+	if isParallelBoundaryRuntimeCallee(callee) 'parallelBoundary'
+		usage.usesParallelBoundary = true
+	end 'parallelBoundary'
 	if callee.equals(StreamWriteStdoutName) 'writestdout'
 		usage.usesWriteStdout = true
 	end 'writestdout'

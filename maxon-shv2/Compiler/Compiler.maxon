@@ -828,6 +828,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// scheduler and `__Builtins.currentTimeNanos` to ONE function is what keeps them from disagreeing.
 	installClockRuntime(pipeline.stdModule, usage: usage)
 
+	// The CPU-parallel checkpoint (`__Builtins.parallelBoundary`), on its own bit for the reason every other
+	// install here has one — and here the reason is at its strongest, since the entry point's body is a void
+	// return and filing it under the scheduler's `__gt_` band would have installed the whole green-thread
+	// runtime to link against it. See `ParallelBoundaryRuntime`'s header.
+	installParallelBoundaryRuntime(pipeline.stdModule, usage: usage)
+
 	// The synthesized builtin-type conformance impls (P1.7a slices 2b/2b-ii/2b-iii + P1.7b) — installed the
 	// same already-lowered-Std way, but keyed on neither a `usage` bit nor a pre-pipeline scan: BOTH ways of
 	// naming one are created too late for either.
