@@ -1442,8 +1442,7 @@ error E3005: specs/fragments/constants/error.fromRawValue-type-mismatch.test:8:2
 
 ### fromName Tests
 
-<!-- disabled-test: fromName-simple-success -->
-<!-- `Enum.fromName(...)` — the reverse lookup from a case NAME to a case is not implemented (E3034 at the name) -->
+<!-- test: fromName-simple-success -->
 ```maxon
 enum Direction
 	north
@@ -1464,8 +1463,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: fromName-simple-failure -->
-<!-- `Enum.fromName(...)` — the reverse lookup from a case NAME to a case is not implemented (E3034 at the name) -->
+<!-- test: fromName-simple-failure -->
 ```maxon
 enum Direction
 	north
@@ -1489,8 +1487,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: fromName-int-backed -->
-<!-- `Enum.fromName(...)` — the reverse lookup from a case NAME to a case is not implemented (E3034 at the name) -->
+<!-- test: fromName-int-backed -->
 ```maxon
 enum HttpStatus
 	ok = 200
@@ -1512,8 +1509,7 @@ end 'main'
 404
 ```
 
-<!-- disabled-test: fromName-dynamic -->
-<!-- `Enum.fromName(...)` — the reverse lookup from a case NAME to a case is not implemented (E3034 at the name) -->
+<!-- test: fromName-dynamic -->
 ```maxon
 enum Color
 	red
@@ -1538,8 +1534,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: error.fromName-invalid-case -->
-<!-- `Enum.fromName(...)` — the reverse lookup from a case NAME to a case is not implemented (E3034 at the name) -->
+<!-- test: error.fromName-invalid-case -->
 ```maxon
 enum Direction
 	north

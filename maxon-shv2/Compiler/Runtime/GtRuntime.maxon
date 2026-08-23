@@ -1142,12 +1142,12 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return arrayErrorThrows()
 	end 'listFamily'
 
-	// ⭐ **THE ENUM-LOOKUP FAMILY** — `__enum_from_raw_<Enum>`, one case (`__EnumLookupError.noSuchRawValue`),
-	// and the arm is here from the family's first day for the map family's stated reason: a lookup that
-	// misses has nothing else to answer with, and without the arm `throwsOf` says `none`, the `(e)` binding
-	// types `integer`, and `match e` reports a missing feature for a feature that is present. The wide
-	// predicate IS the throwing one here — every member of this family throws, which is the whole reason it
-	// is a function at all.
+	// ⭐ **THE ENUM-LOOKUP FAMILY** — `__enum_from_raw_<Enum>` and `__enum_from_name_<Enum>`, throwing
+	// `__EnumLookupError` (`noSuchRawValue` / `noSuchCaseName`, one per member: a lookup that misses says
+	// WHICH lookup missed). The arm is here from the family's first day for the map family's stated reason:
+	// without it `throwsOf` says `none`, the `(e)` binding types `integer`, and `match e` reports a missing
+	// feature for a feature that is present. The wide predicate IS the throwing one here — every member of
+	// this family throws, which is the whole reason either is a function at all.
 	if isEnumLookupRuntimeCallee(callee) 'enumLookupFamily'
 		return enumLookupThrows()
 	end 'enumLookupFamily'
@@ -1299,6 +1299,13 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	if isThrowingListRuntimeCallee(callee) 'listFamily'
 		return RuntimeCalleeSourceMethod.found(listAccessorSourceMethodName(callee))
 	end 'listFamily'
+
+	// The enum-lookup family answers through a map: two members (`fromRawValue`, `fromName`) over any number
+	// of declarations, so the spelling has to be composed from the callee rather than looked up in a fixed
+	// table — which is what `enumLookupSourceMethodName` does, off the constants that built the symbol.
+	if isEnumLookupRuntimeCallee(callee) 'enumLookupFamily'
+		return RuntimeCalleeSourceMethod.found(enumLookupSourceMethodName(callee))
+	end 'enumLookupFamily'
 
 	// ⚠ **`notFound` IS NOW EXACTLY TWO FAMILIES, AND NEITHER NAMES A METHOD.** The subprocess family's
 	// `runProcess` is a free FUNCTION and the division family is an OPERATOR — there is no method spelling to

@@ -990,6 +990,33 @@ export union ParseError implements Error
 	// bad case of a `union` reads "unknown union case", matching the bootstrap and shv2's own
 	// E2026/E2046 rather than hardcoding "enum" (which disagreed with both).
 	enumUnknownCase(kindWord String, caseName String, line LineNumber, column ColumnNumber)
+	// ⭐ **`<Enum>.fromName("nope")` — A LITERAL NAME NAMING NO CASE, decided at COMPILE TIME.** Renders as
+	// **E3034**, the same code the arm above renders, positioned at the MEMBER token — but with its own
+	// sentence, and the difference is not cosmetic: `unknown enum case: 'nope'` describes a place in the
+	// program where a case NAME was written, and here what was written is a String ARGUMENT to a lookup. Both
+	// references word it apart for that reason and `/specs/constants.md`'s `error.fromName-invalid-case` pins
+	// this wording to the character, `typeName` included (the other arm names no type, because a bare case
+	// reference is already qualified by one the reader can see).
+	//
+	// ⚠ **`kindWord` FOLLOWS shv2's CONVENTION AND BOTH REFERENCES HARDCODE `"enum"` HERE** — literally, even
+	// for a union (`maxon-sharp/Compiler/2-Parser.cs:7747` writes the interpolation `{"enum"}`;
+	// `maxon-selfhosted/Compiler/Parser.maxon:19027` the same). No spec exercises a union with an unknown
+	// literal name, so nothing pins their choice; shv2 says `union` there because every OTHER E3034 it emits
+	// does (`unknown union case: 'fromRawValue'` is itself pinned by `specs-shv2/enum-full.md`), and one
+	// compiler contradicting itself about what a union is called is worse than diverging from a reference
+	// whose own spelling is an artifact of an interpolated literal.
+	enumNoCaseNamed(kindWord String, caseName String, typeName String, line LineNumber, column ColumnNumber)
+	// ⭐ **`<Union>.fromName("value")` — a literal name naming a case whose PAYLOAD ARITY the call does not
+	// supply.** Renders as **E3036** at the MEMBER token, with the sentence
+	// `/specs/enum-full.md`'s `error.fromName-wrong-arg-count` pins.
+	//
+	// ⚠ **IT COVERS TOO MANY ARGUMENTS AS WELL AS TOO FEW, WHERE THE BOOTSTRAP COVERS ONLY TOO FEW.** Its
+	// payload block is entered only for a case that HAS payloads, so `Container.fromName("empty", 1)` falls
+	// out of it into `Expect(RightParen)` and earns an unexpected-token parse error instead
+	// (`2-Parser.cs:7752-7772`). One rule, stated once, is the shv2 answer: the arity a case declares is what
+	// the call must supply, and `requires 0 associated value(s)` is exactly true of the program in front of
+	// the reader. Nothing in `/specs` pins the over-supplied spelling.
+	enumFromNamePayloadArity(caseName String, expected CaseIndex, line LineNumber, column ColumnNumber)
 	// ⭐ **`<Union>.allCases` — THE ENUM-ONLY STATIC THAT A UNION IS REFUSED BY NAME, NOT BY THE CASE
 	// LOOKUP.** Renders as **E4006**, positioned at the TYPE name, with the sentence both references emit
 	// verbatim (`maxon-sharp/Compiler/2-Parser.cs:19089-19091`, `maxon-selfhosted/Compiler/Parser.maxon:14850-14851`).
@@ -33374,12 +33401,26 @@ export type Parser
 	// column, so a positional call must still hand it a real per-argument one (`emptyArgLabels`'s own
 	// header). The two cases cannot be confused: a call with no arguments has nothing to slot either way.
 	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange, argLabels ByteArrayArray = NoRuntimeCallLabels) returns ValueId
+		return self.emitRuntimeCallInto(self.mintValue(resultTag, nameId: resultNameId), callee: callee, args: args, range: range, argLabels: argLabels)
+	end 'emitRuntimeCall'
+
+	// ⭐⭐ **THE SAME EMISSION, ONTO A RESULT THE CALLER ALREADY MINTED — for the one construct whose
+	// ARGUMENTS have to name the record the call will hand back.** `<Union>.fromName("case", payload…)` moves
+	// its payload arguments in at the parser (`parseEnumFromNameCase`), and a move-in into a slot declared at
+	// an opaque type parameter MARKS the record that owes the slot's release (`moveOpaqueValueInto` →
+	// `markRecordOwningOpaqueSlots`). That record is this call's result, and the call cannot be emitted first:
+	// `try` binds to the LAST op the target emitted (`rewriteLastCallToTryCall`), so the move-in ops must
+	// precede it. Minting the result up front is what lets both facts hold at once.
+	//
+	// ⚠ **THE SPLIT IS THE MINT, WHICH IS WHY THE FRONT DOOR IS NOT A THIN WRAPPER.** Every other runtime call
+	// wants its result minted from the tag and the type name, and must not be free to mint it twice or from a
+	// different tag than the one the op is emitted under.
+	function emitRuntimeCallInto(result ValueId, callee ByteArray, args ValueIdArray, range SourceRange, argLabels ByteArrayArray) returns ValueId
 		var labels = argLabels
 		if labels.count() == 0 'allPositional'
 			labels = emptyArgLabels(args)
 		end 'allPositional'
 
-		let result = self.mintValue(resultTag, nameId: resultNameId)
 		// The index the op below will occupy — read before the append, so the ROUTING hook after it names an
 		// op rather than re-deriving "the last one" from a block whose contents it does not own.
 		let opIdx = self.artifact.module.ops.count()
@@ -33400,7 +33441,7 @@ export type Parser
 		// that enrols before emitting is already correct.
 		self.routeBareThrowingCallToTryBlock(callee, opIdx: opIdx, result: result)
 		return result
-	end 'emitRuntimeCall'
+	end 'emitRuntimeCallInto'
 
 	// ⭐ **EMIT A VOID `__mm_incref` OF `value`** — the one spelling of "take a second owner of this box,
 	// discarding the returned nothing". Single-sources every site that increfs a managed box in place:
@@ -49860,6 +49901,28 @@ export type Parser
 			return try self.parseEnumFromRawValue(func, layout: layout, memberTok: memberTok, range: SourceRange.ofToken(typeTok))
 		end 'fromRawValue'
 
+		// ⭐⭐ **`<Enum>.fromName(name)` — THE SIBLING LOOKUP, AND THE ONE MEMBER OF THIS SURFACE CLAIMED
+		// UNCONDITIONALLY.** Every arm above it carries a gate — `allCases` is refused on a union, `fromRawValue`
+		// declines the claim on a union and on a struct backing — and this one carries none, which is a fact
+		// about the QUESTION and not an oversight. Those two read the case TAG column, whose meaning depends on
+		// the declaration's keyword and backing; this reads the case NAME column, which every declaration has in
+		// full. See `EnumFromNameMemberName` for the derivation and for both references agreeing.
+		//
+		// ⚠ **IT IS ASKED BEFORE THE CASE LOOKUP, so a declaration that names a case `fromName` loses it to the
+		// member** — the member-name-first ordering `allCaseNames` records above as a divergence from the
+		// bootstrap (whose `GetCase` runs first), and this is the same divergence rather than a second decision.
+		// MEASURED on `enum Weird  fromName  other end` + `let w = Weird.fromName`: the bootstrap compiles it as
+		// the CASE and exits 0; shv2 reads the member and refuses with **E2010** *Expected '(' but got
+		// 'newline'*. shv2 therefore errs toward a REFUSAL where the reference errs toward silently picking one
+		// of two readings, which is the safe direction for a collision no `/specs` case and no corpus
+		// declaration contains — but the diagnostic is the parser's generic one and does not name the
+		// collision, so this is a recorded divergence and not a settled rule, exactly as its sibling's is.
+		if self.atStaticEnumMember(EnumFromNameMemberName) 'fromName'
+			let memberTok = self.current()
+			self.advance()
+			return try self.parseEnumFromName(func, layout: layout, memberTok: memberTok, range: SourceRange.ofToken(typeTok))
+		end 'fromName'
+
 		let caseTok = try self.consumeNameToken(NamePosition.enumCase)
 
 		let index = try self.enumCaseIndexOrThrow(layout, nameTok: caseTok, posTok: typeTok)
@@ -50131,6 +50194,187 @@ export type Parser
 			structRecord then panic("requireFromRawValueBacking: `{layout.kindWord()} {String.from(layout.name)}` is struct-backed and reached the `{String.from(EnumFromRawValueMemberName)}` guard — `parseEnumLiteral` does not CLAIM the member for that backing, so such a call is an unknown case (E3034) and never arrives here")
 		end 'backing'
 	end 'requireFromRawValueBacking'
+
+	// ⭐⭐ **`<Enum>.fromName(name)` / `<Union>.fromName("case", payload…)` — THE LOOKUP BY CASE NAME,
+	// EMITTED AS A CALL TO A PER-DECLARATION Std HELPER.** Its sibling `fromRawValue`'s shape exactly — the
+	// search is `Runtime/EnumLookupRuntime.maxon`'s and the reason it must be a call is written down there —
+	// with the whole of the difference in one place: the argument is a String, so no backing is refused and no
+	// keyword is excluded (see `EnumFromNameMemberName`).
+	//
+	// ⭐⭐ **A LITERAL NAME IS RESOLVED AT COMPILE TIME, AND STILL EMITS THE CALL.** Both references validate
+	// a literal against the case list and report an unknown one as E3034 rather than leaving it to a run-time
+	// throw (`maxon-sharp/Compiler/2-Parser.cs:7746-7748`,
+	// `maxon-selfhosted/Compiler/Parser.maxon:19026-19028`), and `/specs/constants.md`'s
+	// `error.fromName-invalid-case` pins that verdict. The CALL stays because `try` binds to one: a resolved
+	// literal simply makes the helper's throw unreachable, which costs the compare chain and nothing else.
+	//
+	// ⭐⭐ **THE ANCHOR FOR EVERY REFUSAL HERE IS THE MEMBER TOKEN, AND THE TWO REFERENCES DISAGREE ABOUT IT —
+	// the SPEC decides, and it decides for the bootstrap.** The bootstrap anchors all three of this member's
+	// refusals at `methodToken` (`2-Parser.cs:7726`, `:7747`, `:7755`); v1 anchors them at the ARGUMENT's range
+	// (`maxon-selfhosted/Compiler/Parser.maxon:19022-19035`, `argRange0`). `/specs/constants.md` pins column 25
+	// of `let _d = try Direction.fromName("…")` and `/specs/enum-full.md` column 25 of
+	// `let _c = try Container.fromName("value")` — both the `fromName` token, so v1 is simply wrong here, which
+	// is consistent with its own note that the `fromName-associated-*` fragments were never whitelisted.
+	//
+	// ⚠ It is deliberately NOT the TYPE token a bare `Color.green` case refusal uses: what the author got
+	// wrong is an argument to this member, not the enum they named.
+	function parseEnumFromName(func IrFunction, layout EnumLayout, memberTok Token, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+
+		if self.atLiteralCaseNameArgument() 'compileTimeName'
+			return try self.parseEnumFromNameLiteral(func, layout: layout, memberTok: memberTok, range: range)
+		end 'compileTimeName'
+
+		let name = try self.parseValueExpression(func)
+		// The argument's domain is `String`, whatever the declaration is — read through the shared renderer so
+		// this position and the literal one cannot come to word one rejection two ways. The sentence is the
+		// bootstrap's (`2-Parser.cs:7724-7726`).
+		if not tagIsText(self.tagOf(name)) 'notAString'
+			throw ParseError.typeMismatchExpectedGot(typeTagName(ValueTypeTag.string), got: self.valueDisplayTypeName(name), line: memberTok.line, column: memberTok.column)
+		end 'notAString'
+		try self.consume(TokenKind.rightParen)
+
+		return self.emitEnumFromNameCall(layout, args: singletonArgs(name), range: range)
+	end 'parseEnumFromName'
+
+	// ⭐ **IS THE ARGUMENT A BARE STRING LITERAL — the shape whose case is a COMPILE-TIME fact?** A
+	// `stringLiteral` token standing immediately before the `)` or the `,` IS the whole argument: there is no
+	// operator it could be the left side of (a following `stringInterpStart` would make it an interpolation,
+	// and an interpolation's first token cannot be followed by either of these). Asked at the CURSOR rather
+	// than off the emitted op, because the literal path must decide BEFORE it emits — an unknown name and a
+	// wrong arity are refusals that leave no code behind.
+	function atLiteralCaseNameArgument() returns bool
+		if not self.at(TokenKind.stringLiteral) 'notALiteral'
+			return false
+		end 'notALiteral'
+
+		let after = self.peekKind()
+		return after == TokenKind.rightParen or after == TokenKind.comma
+	end 'atLiteralCaseNameArgument'
+
+	// The compile-time half: resolve the literal to a case, check the payload arity the call supplies against
+	// the one that case declares, and emit the call the resolution earned — the general helper for a
+	// payload-free case, the per-case one for a payload-bearing case (see `synthesizeEnumFromNameCase`).
+	function parseEnumFromNameLiteral(func IrFunction, layout EnumLayout, memberTok Token, range SourceRange) returns ValueId throws ParseError
+		let nameTok = try self.consume(TokenKind.stringLiteral)
+		let wanted = try self.decodedStringLiteralBytes(nameTok)
+
+		let index = layout.indexOfCase(wanted)
+		if index >= layout.caseCount() 'noSuchCase'
+			throw ParseError.enumNoCaseNamed(layout.kindWord(), caseName: String.from(wanted), typeName: String.from(layout.name), line: memberTok.line, column: memberTok.column)
+		end 'noSuchCase'
+
+		if layout.payloadArityAt(index) == 0 'payloadFree'
+			// A payload-free case takes the name and nothing else; anything further is the arity refusal
+			// below's business, stated once for both directions.
+			try self.requireNoFurtherPayloadArgs(wanted, expected: 0 as CaseIndex, memberTok: memberTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitEnumFromNameCall(layout, args: singletonArgs(self.emitStringLiteral(wanted, range: SourceRange.ofToken(nameTok))), range: range)
+		end 'payloadFree'
+
+		return try self.parseEnumFromNameCase(func, layout: layout, caseIndex: index, nameTok: nameTok, memberTok: memberTok, range: range)
+	end 'parseEnumFromNameLiteral'
+
+	// ⭐⭐ **`<Union>.fromName("value", 42)` — A LITERAL NAME NAMING A PAYLOAD-BEARING CASE.** The payload
+	// arguments are read, TYPE-CHECKED and MOVED IN here, at the parser, through the very doors
+	// `Container.value(42)` goes through (`requirePayloadLowerable`, `requirePayloadArgType`,
+	// `moveInPayload`), and the synthesized helper receives values that are already owned and stores them
+	// verbatim. That split is deliberate: ownership is a fact about the CALLER's bindings — which local was
+	// poisoned, which temporary stopped owing a drop — and a Std-tier body can see none of it.
+	//
+	// ⚠ **THE ARGUMENTS ARE POSITIONAL, WHERE `Container.value(n: 42)`'s ARE NOT.** A construct's payload list
+	// follows the call-arg rule (first positional, the rest named, slotted by payload FIELD name); this list is
+	// `fromName`'s own, and the bootstrap reads it as a plain positional tail — one `Expect(Comma)` plus one
+	// `ParseExpression` per declared slot (`2-Parser.cs:7758-7760`). v1 states no rule of its own: it rewrites
+	// the CALLEE of an already-parsed call and inherits whatever that call's argument syntax allowed
+	// (`maxon-selfhosted/Compiler/Parser.maxon:19005`, whose `args` arrive from the caller). No spec exercises
+	// a labelled one, so shv2 takes the reference that HAS a rule; inventing a second slotting rule for a
+	// spelling nothing writes would be a divergence with no measurement behind it.
+	//
+	// ⭐ **THE RESULT IS MINTED BEFORE THE ARGUMENTS ARE MOVED IN**, because an opaque slot's move-in has to
+	// name the record that will own it and that record IS this call's result — see `emitRuntimeCallInto`.
+	function parseEnumFromNameCase(func IrFunction, layout EnumLayout, caseIndex CaseIndex, nameTok Token, memberTok Token, range SourceRange) returns ValueId throws ParseError
+		let payloads = layout.payloadsAt(caseIndex)
+		let arity = layout.payloadArityAt(caseIndex)
+		let caseName = layout.caseNameAt(caseIndex)
+
+		var slotValues = ValueIdArray.create()
+		var slotBareLocal = BoolArray.create()
+		var slotAnchors = TokenIndexArray.create()
+		for _ in 0 upto arity 'eachSlot'
+			if not self.at(TokenKind.comma) 'tooFew'
+				throw ParseError.enumFromNamePayloadArity(String.from(caseName), expected: arity, line: memberTok.line, column: memberTok.column)
+			end 'tooFew'
+			try self.consume(TokenKind.comma)
+
+			// The value's start is captured before it is parsed so `rhsWasBareLocalReference` can decide
+			// afterwards whether it was a bare local — what a managed payload's move-in poisons. The token AFTER
+			// the argument anchors that argument's own TYPE refusal, exactly as `parsePayloadArgs` does.
+			let valueStart = self.pos
+			slotValues.push(try self.parseValueExpression(func))
+			slotBareLocal.push(self.rhsWasBareLocalReference(valueStart))
+			slotAnchors.push(self.pos)
+		end 'eachSlot'
+
+		try self.requireNoFurtherPayloadArgs(caseName, expected: arity, memberTok: memberTok)
+		try self.consume(TokenKind.rightParen)
+
+		// Validate + classify every slot before emitting anything permanent — `emitEnumBox`'s discipline, for
+		// its reason: a refused payload leaves no code behind.
+		var classes = PayloadClassArray.create()
+		for i in 0 upto arity 'validate'
+			let field = try payloads.get(i) otherwise panic("parseEnumFromNameCase: payloadsAt returned fewer fields than its own count at {i}")
+			let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
+			let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: memberTok)
+			let arg = try slotValues.get(i) otherwise panic("parseEnumFromNameCase: slotValues.get OOB at {i} — the columns are filled one per declared slot")
+			let anchorIndex = try slotAnchors.get(i) otherwise panic("parseEnumFromNameCase: slotAnchors.get OOB at {i} — captured in lockstep with the values")
+			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: memberTok, argTok: self.tokenAt(anchorIndex))
+			classes.push(class)
+		end 'validate'
+
+		let result = self.mintValue(ValueTypeTag.named, nameId: self.artifact.typeNames.intern(layout.name))
+
+		var args = ValueIdArray.create()
+		args.push(self.emitStringLiteral(caseName, range: SourceRange.ofToken(nameTok)))
+		for i in 0 upto arity 'moveIn'
+			let class = try classes.get(i) otherwise panic("parseEnumFromNameCase: classes.get OOB at {i} — filled in lockstep with the fields")
+			let arg = try slotValues.get(i) otherwise panic("parseEnumFromNameCase: slotValues.get OOB at {i} after the validation pass")
+			let bareLocal = try slotBareLocal.get(i) otherwise panic("parseEnumFromNameCase: slotBareLocal.get OOB at {i} — captured in lockstep with the values")
+			args.push(try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, owner: result, anchor: memberTok, range: range))
+		end 'moveIn'
+
+		return self.trackEnumFromNameResult(layout, result: self.emitRuntimeCallInto(result, callee: enumFromNameCaseSymbol(layout.name, caseName: caseName), args: args, range: range, argLabels: NoRuntimeCallLabels))
+	end 'parseEnumFromNameCase'
+
+	// A literal name has consumed its argument; anything but the closing `)` is a payload list the case does
+	// not declare that many slots for. ONE refusal for both directions — see `enumFromNamePayloadArity` for
+	// why over-supply is E3036 here where the bootstrap lets it fall out as a parse error.
+	function requireNoFurtherPayloadArgs(caseName ByteArray, expected CaseIndex, memberTok Token) throws ParseError
+		if not self.at(TokenKind.comma) 'nothingFurther'
+			return
+		end 'nothingFurther'
+
+		throw ParseError.enumFromNamePayloadArity(String.from(caseName), expected: expected, line: memberTok.line, column: memberTok.column)
+	end 'requireNoFurtherPayloadArgs'
+
+	// Emit the GENERAL lookup call and give its result the type and the ownership the declaration says it
+	// has. Its per-case sibling reaches the same two facts through `emitRuntimeCallInto` and
+	// `trackEnumFromNameResult`, because it must mint the result before its arguments — which is exactly why
+	// the OWNERSHIP half is a function of its own rather than a line in this one.
+	function emitEnumFromNameCall(layout EnumLayout, args ValueIdArray, range SourceRange) returns ValueId
+		return self.trackEnumFromNameResult(layout, result: self.emitRuntimeCall(enumFromNameSymbol(layout.name), args: args, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range))
+	end 'emitEnumFromNameCall'
+
+	// ⭐ **A BOXED UNION'S LOOKUP HANDS BACK AN OWNED HEAP RECORD; A PAYLOAD-FREE DECLARATION'S HANDS BACK A
+	// BARE TAG.** The helper allocates the box (`EnumLookupRuntime.emitBoxWithTag`), so the result owes a drop
+	// exactly as a written `Container.empty` does — enrolled through the same door that construct uses, which
+	// is what makes the statement-end drop and the binding's ownership one rule rather than two.
+	function trackEnumFromNameResult(layout EnumLayout, result ValueId) returns ValueId
+		if layout.isBoxed() 'ownsARecord'
+			self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
+		end 'ownsARecord'
+		return result
+	end 'trackEnumFromNameResult'
 
 	// ⭐⭐ **MATERIALIZE `<Enum>.allCaseNames` — an OWNED `Array with String` of the case names, in
 	// declaration order.** It builds exactly what the source literal `["red", "green", "blue"]` builds, op

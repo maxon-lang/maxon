@@ -716,12 +716,17 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.neededDestructors.insert(callee)
 	end 'uniondtor'
-	// A `<Enum>.fromRawValue(raw)` lookup (`__enum_from_raw_<Enum>`). It declares NOTHING else — the
-	// synthesized body compares i64 constants and returns, allocating nothing and calling nothing — which puts
-	// it in the `__ucd_` table loads' company as a family whose body this scan need not see past.
-	if isEnumLookupRuntimeCallee(callee) 'enumfromraw'
+	// A `<Enum>.fromRawValue(raw)` or `<Enum>.fromName(name)` lookup (`__enum_from_raw_<Enum>`,
+	// `__enum_from_name_<Enum>`, `__enum_from_name_<Union>#<case>`). One symbol set, because one installer
+	// builds all three shapes and its `needed` test is by name.
+	//
+	// ⚠ **THE SYMBOL IS RECORDED HERE AND ITS TRANSITIVE NEEDS ARE NOT** — `fromRawValue` has none (its body
+	// compares i64 constants and calls nothing, the `__ucd_` table loads' company), while `fromName`'s depend
+	// on the DECLARATION's shape, which this scan holds no layout to ask. `EnumLookupRuntime.noteEnumLookupUsage`
+	// declares them, off the same layout walk the installer builds from.
+	if isEnumLookupRuntimeCallee(callee) 'enumlookup'
 		usage.neededEnumLookups.insert(callee)
-	end 'enumfromraw'
+	end 'enumlookup'
 	// A String DEEP-CLONE (`__str_clone`, P1.7 slice 3b-vi-b) — a managed array/struct copy cloning a String
 	// element/field. It `__mm_alloc`s a fresh fused record and `__str_copy`s the bytes in, inside its SYNTHESIZED
 	// body this scan cannot see, so those transitive bits are declared here (the `__str_decref` shape).

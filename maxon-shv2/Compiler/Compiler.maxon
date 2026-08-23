@@ -414,9 +414,9 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		// corpus `throw MapError.keyNotFound` resolves its ordinal from `stdlib/Map.maxon`'s own declaration and
 		// there is no second half to drift from. Re-adding a throwing `__map_` graph brings the claim back with it.
 		// `__EnumLookupError` is here for `__DivisionByZeroError`'s reason exactly: `EnumLookupRuntime`
-		// transcribes `noSuchRawValue`'s ordinal as the literal error flag every `__enum_from_raw_<Enum>`
-		// returns on a miss, while `Project.builtinEnumLookupErrorEnum` declares it by POSITION. ONE case is
-		// not an excuse to skip the claim — see `verifyEnumLookupErrorOrdinals`.
+		// transcribes `noSuchRawValue`'s and `noSuchCaseName`'s ordinals as the literal error flags
+		// `__enum_from_raw_<Enum>` and `__enum_from_name_<Enum>` return on a miss, while
+		// `Project.builtinEnumLookupErrorEnum` declares both by POSITION — see `verifyEnumLookupErrorOrdinals`.
 		verifyEnumLookupErrorOrdinals(project)
 		// ⛔ **`CharacterError` WAS THE ONE FAMILY THIS ROSTER'S OWN CRITERION SELECTS AND THIS ROSTER DID NOT
 		// LIST (W135 review).** The two paragraphs above retire `StringError` and `MapError` on a stated test —
@@ -570,6 +570,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// now — before `.data` layout reads `usesHeap` and `installStringRuntime` reads `usesStrClone` — exactly as
 	// `noteDestructorUsage` does for the drop cascades.
 	noteClonerUsage(usage, project: project, signatures: signatures)
+	// A `<Enum>.fromName(name)` helper calls `__str_eq` per case tested and, for a boxed union, `__mm_alloc`s
+	// the record it returns — all inside a body synthesized after the pipeline, which the scan above cannot
+	// see. Declared here for the two installers' reason and in their window: before `.data` layout reads
+	// `usesHeap` and before `installStringRuntime` reads `usesStrEq`.
+	noteEnumLookupUsage(usage, project: project)
 	// Every plain function used as a first-class value (`let f = triple`, `apply(triple, …)`) is called
 	// through the uniform `(userargs, env)` indirect ABI, whose signature its own `(userargs) -> R` shape does
 	// not match. Its `__fnref_` env-thunk targets are collected from the MAXON module — which the pipeline

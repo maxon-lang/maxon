@@ -1387,10 +1387,7 @@ type MaxonToStdLowering
 	// (`ripRelDisp32`). The two differ only in the section they measure from — which is exactly what
 	// the relocation kind discriminates.
 	function lowerStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
-		let blobLabel = registerStringBlob(self.globalData, bytes: bytes)
-		let recordLabel = registerStringRecord(self.globalData, blobLabel: blobLabel, byteLength: bytes.count(), singleByteGraphemes: bytesAreSingleByteGraphemes(bytes))
-		self.globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: recordLabel.toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: registerStringLiteralRecord(self.globalData, bytes: bytes).toByteArray()))
 	end 'lowerStringLiteral'
 
 	// ⭐ **A CONSTANT ARRAY LITERAL OVER AN IMMORTAL `.rdata` BLOB** — the Array analogue of

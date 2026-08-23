@@ -1,16 +1,18 @@
-// EnumLookupRuntime — the per-enum `<Enum>.fromRawValue(raw)` helper.
+// EnumLookupRuntime — the per-declaration `<Enum>.fromRawValue(raw)` and `<Enum>.fromName(name)` helpers.
 //
-// ⭐⭐ **THE ONE MEMBER OF THE ENUM REFLECTION SURFACE THAT IS A *FUNCTION*, AND WHY IT HAS TO BE.**
+// ⭐⭐ **THE TWO MEMBERS OF THE ENUM REFLECTION SURFACE THAT ARE *FUNCTIONS*, AND WHY THEY HAVE TO BE.**
 // `.ordinal`, `.name`, `.rawValue` and `.allCases` are all expanded IN PLACE by the parser
 // (`Parser.emitEnumCaseConstantSelect`, `Parser.emitEnumAllCases`) — each is a per-case CONSTANT selected by
 // a branchless sum, and nothing about them can fail. `fromRawValue` can: a raw value naming no case is a
 // RUNTIME failure, and shv2's `try` binds to a CALL — `Parser.rewriteLastCallToTryCall` converts the last
 // `call` op the target emitted into a `tryCall`, and a target that emitted no call is `rejectTryTarget`'s.
-// So this member is a call or it cannot be `try`ed at all, which is the only way a program uses it.
+// So these members are calls or they cannot be `try`ed at all, which is the only way a program uses them.
+// `fromName` is the same argument with the same failure: a NAME naming no case is decidable only at run time
+// whenever the name is not a literal, and even a literal one has to arrive as a call for `try` to bind.
 //
-// ⭐ **ONE HELPER PER ENUM, SYNTHESIZED ON DEMAND — `MmRuntime.installUnionDestructors`' shape exactly.** The
-// module's own `call` ops name the symbols it needs (`RuntimeUsage.scanRuntimeUsage`), and only those are
-// built. A program that never writes `fromRawValue` carries not one byte of this file.
+// ⭐ **ONE HELPER PER DECLARATION, SYNTHESIZED ON DEMAND — `MmRuntime.installUnionDestructors`' shape
+// exactly.** The module's own `call` ops name the symbols it needs (`RuntimeUsage.scanRuntimeUsage`), and only
+// those are built. A program that never writes either member carries not one byte of this file.
 //
 // ⭐ **IT AGREES WITH v1 ABOUT THE SHAPE AND DIVERGES ABOUT THE TIER.** v1 also synthesizes a per-enum
 // `__enum_<Name>_fromRawValue` (`maxon-selfhosted/Compiler/Parser.maxon:18717`), but builds it in the PARSER
@@ -22,6 +24,14 @@
 // family is recognized by its prefix exactly as `__destruct_` is — which is what lets `scanRuntimeUsage`
 // collect the needed set without knowing any enum's name.
 let EnumFromRawValuePrefix = b"__enum_from_raw_"
+let EnumFromNamePrefix = b"__enum_from_name_"
+
+// ⚠ **THE CASE SEPARATOR IS A `#`, AND IT IS CHOSEN BECAUSE A TYPE NAME CANNOT CONTAIN ONE.** A per-CASE
+// helper's symbol has to be distinguishable from the per-DECLARATION one of a differently-named union, and
+// `_` cannot do it: `__enum_from_name_A_b` is ambiguous between `union A` case `b` and a union named `A_b`.
+// `#` is already the compiler's synthesized-symbol separator (`__fieldDefault#JsonNode#stringValue`) and is
+// unspellable in source, so the two families cannot collide however a declaration is named.
+let EnumFromNameCaseSeparator = b"#"
 
 // `__enum_from_raw_<Enum>` — the helper's symbol. A dotted enum name (`Shape.unionCases`) rides through
 // unchanged: a `.` is already legal in an emitted symbol here (every method is `Type.method`).
@@ -29,12 +39,84 @@ export function enumFromRawValueSymbol(enumName ByteArray) returns ByteArray
 	return "{String.from(EnumFromRawValuePrefix)}{String.from(enumName)}".toByteArray()
 end 'enumFromRawValueSymbol'
 
+// `__enum_from_name_<Enum>` — the general name lookup: the whole case list for a payload-free declaration,
+// and the PAYLOAD-FREE cases only for a boxed union (see `synthesizeEnumFromName`).
+export function enumFromNameSymbol(enumName ByteArray) returns ByteArray
+	return "{String.from(EnumFromNamePrefix)}{String.from(enumName)}".toByteArray()
+end 'enumFromNameSymbol'
+
+// `__enum_from_name_<Union>#<case>` — the per-CASE lookup a LITERAL name naming a PAYLOAD-BEARING case is
+// rewritten to, so the payload arguments reach a fixed-arity constructor while `try` still sees a throwing
+// call. v1 splits the surface the same way and for the same reason
+// (`maxon-selfhosted/Compiler/Parser.maxon:19124-19126`); the general helper cannot serve this shape because
+// each case has its own arity, and a dynamic name cannot serve it because nothing would tell the caller how
+// many payload arguments to pass.
+export function enumFromNameCaseSymbol(enumName ByteArray, caseName ByteArray) returns ByteArray
+	return "{String.from(enumFromNameSymbol(enumName))}{String.from(EnumFromNameCaseSeparator)}{String.from(caseName)}".toByteArray()
+end 'enumFromNameCaseSymbol'
+
 // Is `callee` one of this family's entry points? Every member of the family throws, so this doubles as the
 // throwing test (`GtRuntime.isThrowingRuntimeCallee`) — the shape `isManagedMemoryMemberCallee` uses and
 // for the stated reason: a family all of whose members throw needs no second predicate.
 export function isEnumLookupRuntimeCallee(callee ByteArray) returns bool
-	return bytesStartWith(callee, prefix: EnumFromRawValuePrefix)
+	return bytesStartWith(callee, prefix: EnumFromRawValuePrefix) or isEnumFromNameCallee(callee)
 end 'isEnumLookupRuntimeCallee'
+
+// ⭐⭐ **WHAT THE AUTHOR ACTUALLY WROTE FOR ONE OF THIS FAMILY'S CALLEES — `Color.fromRawValue`,
+// `Container.fromName` — so a missing `try` quotes their program and not a symbol they have never seen.**
+// Without it E3057 read *"throwing function requires try: '__enum_from_raw_HttpStatus'"*, which is the exact
+// defect `specs-shv2/parsable-interface.md:650` records being cured for `__int_fromString`, and which
+// `SemanticCheck.throwingRuntimeCalleeMessage`'s own header calls the honest-but-last-resort fallback for a
+// family that brings no map. This family HAS a spelling to bring, so it brings one.
+//
+// ⚠ **BOTH MEMBERS, NOT JUST THE NEW ONE.** `fromRawValue` shipped with the same fallback; a map added for
+// one half of a two-member family is the asymmetry this file's own `verifyEnumLookupErrorOrdinals` header
+// argues against.
+export function enumLookupSourceMethodName(callee ByteArray) returns ByteArray
+	if bytesStartWith(callee, prefix: EnumFromRawValuePrefix) 'fromRawValue'
+		return qualifiedEnumMember(callee, prefixLength: EnumFromRawValuePrefix.count(), member: EnumFromRawValueMemberName)
+	end 'fromRawValue'
+
+	if isEnumFromNameCallee(callee) 'fromName'
+		return qualifiedEnumMember(callee, prefixLength: EnumFromNamePrefix.count(), member: EnumFromNameMemberName)
+	end 'fromName'
+
+	panic("enumLookupSourceMethodName: '{String.from(callee)}' is not an enum-lookup callee. This map is asked ONLY behind `isEnumLookupRuntimeCallee`, so nothing else can reach it — unless that predicate gained a prefix and this map did not, in which case add an arm answering the member the author writes")
+end 'enumLookupSourceMethodName'
+
+// `<prefix><Enum>` or `<prefix><Union>#<case>` → `<Enum>.<member>` — the SPLIT half of the two joins above
+// (`enumFromNameSymbol`, `enumFromNameCaseSymbol`), reading the very constants they build from so the two
+// halves cannot come to disagree about where the name starts or where the case tail begins.
+//
+// ⚠ A DOTTED declaration name rides through whole: `Shape.unionCases.fromName` is what the author wrote for
+// the companion, and the dots in it are the companion's own name, not a separator this scan may stop at.
+// The `#` is not spellable in a type name (see `EnumFromNameCaseSeparator`), so it is the one byte that can
+// only be the case tail's start.
+function qualifiedEnumMember(callee ByteArray, prefixLength ElementCount, member ByteArray) returns ByteArray
+	if EnumFromNameCaseSeparator.count() != 1 'separatorIsNotOneByte'
+		panic("qualifiedEnumMember: the case separator is {EnumFromNameCaseSeparator.count()} bytes, and this scan stops at ONE — the join and the split would name different boundaries")
+	end 'separatorIsNotOneByte'
+	let separator = try EnumFromNameCaseSeparator.get(0) otherwise panic("qualifiedEnumMember: get(0) failed on the one-byte separator the guard above just measured")
+
+	var declarationName = ByteArray.create()
+	for i in prefixLength upto callee.count() 'eachByte'
+		let b = try callee.get(i) otherwise panic("qualifiedEnumMember: callee.get OOB at {i} below its own count")
+		if b == separator 'caseTailBegins'
+			break
+		end 'caseTailBegins'
+		declarationName.push(b)
+	end 'eachByte'
+
+	return "{String.from(declarationName)}.{String.from(member)}".toByteArray()
+end 'qualifiedEnumMember'
+
+// ⭐ **THE `fromName` HALF ON ITS OWN — asked by `RuntimeUsage.recordCallUsage`, which owes this half a
+// TRANSITIVE dependency the other does not have.** A `fromName` body calls `__str_eq` and (for a boxed union)
+// `__mm_alloc`, neither of which the Maxon-module scan can see, while a `fromRawValue` body compares i64
+// constants and calls nothing. Both prefixes are covered by the one predicate above; only this half declares.
+export function isEnumFromNameCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: EnumFromNamePrefix)
+end 'isEnumFromNameCallee'
 
 // The `throws` clause every helper in this family is stamped with — the composed spelling `runtimeThrowsClause`
 // hands back, so an `otherwise (e)` binding at a call site is typed by the one fact rather than by a guess.
@@ -42,7 +124,8 @@ export function enumLookupThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(EnumLookupErrorTypeName))
 end 'enumLookupThrows'
 
-// `__EnumLookupError`'s one case, as an ORDINAL, and the error flag built from it.
+// `__EnumLookupError`'s two cases, as ORDINALS, and the error flags built from them — one per MEMBER of this
+// family, because the two lookups miss for different reasons and a handler may not be told the wrong one.
 //
 // ⛔ **THIS IS A TRANSCRIPTION AND IT HAS A SECOND HALF.** The paragraph that stood here claimed there was
 // *"no second declaration for this transcription to drift from and no `verify*Ordinals` guard to hold it
@@ -53,9 +136,12 @@ end 'enumLookupThrows'
 // holding them together. The twin this family was copied from pre-rejects the excuse verbatim
 // (`CheckedDivisionRuntime.verifyDivisionByZeroOrdinals`): *"ONE case is not an excuse to skip the claim; it
 // is the cheapest possible claim, and a family that does not make one reintroduces precisely the drift 7b
-// closed."*
+// closed."* — an argument this family has since outgrown in the direction that PROVES it, by growing a second
+// case whose ordinal is a second transcription of the same declaration order.
 let EnumLookupNoSuchRawValueOrdinal = 0 as ParsedInt
 let EnumLookupNoSuchRawValueFlag = EnumLookupNoSuchRawValueOrdinal + ErrorFlagOrdinalBias
+let EnumLookupNoSuchCaseNameOrdinal = 1 as ParsedInt
+let EnumLookupNoSuchCaseNameFlag = EnumLookupNoSuchCaseNameOrdinal + ErrorFlagOrdinalBias
 
 // ⭐ **THE ORDINAL DRIFT GUARD, FOR THIS FAMILY.** The enum's case ORDER is the wire format and
 // `EnumLookupNoSuchRawValueOrdinal` above is a transcription of it, so the two are asserted to agree on every
@@ -70,19 +156,91 @@ let EnumLookupNoSuchRawValueFlag = EnumLookupNoSuchRawValueOrdinal + ErrorFlagOr
 export function verifyEnumLookupErrorOrdinals(project Project)
 	var enumLookupErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinEnumLookupErrorEnum(), installer: b"installEnumLookupHelpers")
 	enumLookupErrors.claim(EnumLookupNoSuchRawValueCaseName, ordinal: EnumLookupNoSuchRawValueOrdinal)
-	// The twin's argument applies verbatim (`CheckedDivisionRuntime.verifyDivisionByZeroOrdinals`): one case
-	// is not an excuse to skip the totality arm either, and over a `synthesized` layout it PANICS.
+	enumLookupErrors.claim(EnumLookupNoSuchCaseNameCaseName, ordinal: EnumLookupNoSuchCaseNameOrdinal)
+	// The twin's argument applies verbatim (`CheckedDivisionRuntime.verifyDivisionByZeroOrdinals`): a small
+	// case list is not an excuse to skip the totality arm either, and over a `synthesized` layout it PANICS.
 	enumLookupErrors.requireTotal()
 end 'verifyEnumLookupErrorOrdinals'
 
-// ⭐ Synthesize `__enum_from_raw_<Enum>(raw)` for every enum whose helper the module CALLS. Appended
-// already-lowered after the pipeline (like `installUnionDestructors`), so it is never re-optimized.
-export function installEnumLookupHelpers(module StdModule, project Project, needed EnumLookupSet)
+// ⭐⭐ **DECLARE WHAT A `fromName` HELPER'S BODY WILL CALL, BEFORE ANY OF THEM EXISTS.** The helpers are
+// synthesized after the pipeline, so `scanRuntimeUsage` — a walk of the MAXON module — can never see the
+// `__str_eq` every name test calls or the `__mm_alloc` a boxed union's box comes from. This is
+// `noteClonerUsage`'s obligation and its position exactly: it runs before `globalData.layOut` reads
+// `usesHeap` and before `installStringRuntime` reads `usesStrEq`.
+//
+// ⚠ **IT WALKS THE LAYOUTS THROUGH THE SAME PREDICATE `installEnumLookupHelpers` BUILDS FROM**, rather than
+// parsing the declaration back out of the symbol. That is what keeps "which helpers will exist" and "what
+// those helpers need" from becoming two answers: a shape added to the installer and missed here would link
+// against an entry point nobody installed.
+//
+// ⚠ **THE HEAP BIT IS PER-DECLARATION AND NOT PER-FAMILY.** A payload-free enum's helper returns a bare
+// tag and allocates nothing, so `LogLevel.fromName(s)` must not drag the allocator — and the leak gate — into
+// a program that never allocates. Only a BOXED union's helper builds a record.
+export function noteEnumLookupUsage(usage RuntimeUsage, project Project)
+	if usage.neededEnumLookups.count() == 0 'noLookupInThisProgram'
+		return
+	end 'noLookupInThisProgram'
+
 	for (_, layout) in project.enumTypes 'each'
-		if not needed.contains(enumFromRawValueSymbol(layout.name)) 'notReferenced'
-			continue
-		end 'notReferenced'
-		synthesizeEnumFromRawValue(module, layout: layout)
+		var buildsABox = false
+		if usage.neededEnumLookups.contains(enumFromNameSymbol(layout.name)) 'generalReferenced'
+			usage.usesStrEq = true
+			buildsABox = layout.isBoxed()
+		end 'generalReferenced'
+
+		for i in 0 upto perCaseSymbolScanBound(layout) 'eachCase'
+			if not usage.neededEnumLookups.contains(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(i))) 'caseNotReferenced'
+				continue
+			end 'caseNotReferenced'
+			usage.usesStrEq = true
+			// A per-case helper exists only for a payload-bearing case, which is what makes its union boxed.
+			buildsABox = true
+		end 'eachCase'
+
+		if buildsABox 'allocatesARecord'
+			usage.usesHeap = true
+		end 'allocatesARecord'
+	end 'each'
+end 'noteEnumLookupUsage'
+
+// ⭐⭐ **HOW FAR THE PER-CASE SYMBOL SCAN HAS TO GO — the whole case list, or NOT AT ALL.** Both walkers below
+// ask a MEMBERSHIP question keyed by a symbol they have to BUILD, and building one allocates; a declaration
+// that cannot own a per-case helper must therefore not be asked about, case by case, on every compile.
+// `enumFromNameCaseSymbol` is minted at exactly one site (`Parser.parseEnumFromNameCase`), reached only when
+// the named case declares a payload — which is precisely what makes its declaration boxed. So this is an
+// EXACT bound and not a heuristic: a plain enum has no per-case symbol to find, and scanning it would build
+// one string per case of every enum in the program to learn that.
+function perCaseSymbolScanBound(layout EnumLayout) returns CaseIndex
+	return layout.caseCount() if layout.isBoxed() else 0 as CaseIndex
+end 'perCaseSymbolScanBound'
+
+// ⭐ Synthesize `__enum_from_raw_<Enum>(raw)`, `__enum_from_name_<Enum>(name)` and any
+// `__enum_from_name_<Union>#<case>(name, payload…)` whose helper the module CALLS. Appended already-lowered
+// after the pipeline (like `installUnionDestructors`), so none of them is ever re-optimized.
+//
+// ⚠ **THE PER-CASE HELPERS ARE ASKED FOR BY NAME, CASE BY CASE, NOT DERIVED FROM "the union is
+// referenced".** A program writing `Container.fromName("value", 42)` needs exactly that one case's helper;
+// building every case's would put a dead constructor per case into every such program.
+export function installEnumLookupHelpers(module StdModule, project Project, needed EnumLookupSet)
+	if needed.count() == 0 'noLookupInThisProgram'
+		return
+	end 'noLookupInThisProgram'
+
+	for (_, layout) in project.enumTypes 'each'
+		if needed.contains(enumFromRawValueSymbol(layout.name)) 'fromRawValueReferenced'
+			synthesizeEnumFromRawValue(module, layout: layout)
+		end 'fromRawValueReferenced'
+
+		if needed.contains(enumFromNameSymbol(layout.name)) 'fromNameReferenced'
+			synthesizeEnumFromName(module, layout: layout, project: project)
+		end 'fromNameReferenced'
+
+		for i in 0 upto perCaseSymbolScanBound(layout) 'eachCase'
+			if not needed.contains(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(i))) 'caseNotReferenced'
+				continue
+			end 'caseNotReferenced'
+			synthesizeEnumFromNameCase(module, layout: layout, caseIndex: i, project: project)
+		end 'eachCase'
 	end 'each'
 end 'installEnumLookupHelpers'
 
@@ -137,3 +295,159 @@ function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout)
 
 	module.functions.push(func)
 end 'synthesizeEnumFromRawValue'
+
+// ⭐⭐ **`__enum_from_name_<Enum>(name) -> (value, flag)` — THE LOOKUP BY CASE NAME.** One `__str_eq`
+// against each case's name, in declaration order; the first hit returns that case's VALUE, and falling off
+// the end is `noSuchCaseName`.
+//
+// ⭐ **IT IS BUILT FOR EVERY BACKING AND FOR EVERY KEYWORD, WHERE `fromRawValue` REFUSES FOUR BACKINGS AND
+// EVERY UNION — and that asymmetry is not an inconsistency, it is what the two members ASK.** `fromRawValue`
+// searches the case TAG column and needs it to carry the DECLARED RAW VALUES, which it does only for an
+// int-backed or unnumbered enum. This searches the case NAME column, which every declaration has in full,
+// whatever its backing: a string-backed enum's names are names, a float-backed one's are names, a union's are
+// names. And the VALUE it returns is the tag either way — `EnumLayout.tagOfIndex` IS the runtime
+// representation of a case for every backing (an int raw value, a float's IEEE-754 bit pattern, a declaration
+// index for the rest), which is exactly what `Parser.emitEnumTagLiteral` emits for a written `Color.red`. So
+// the ARGUMENT type is what makes its sibling refuse backings, and this member's argument is always a String.
+//
+// ⭐⭐ **A BOXED UNION RETURNS A FRESH BOX, AND ONLY ITS PAYLOAD-FREE CASES ARE IN THE CHAIN.** A name
+// alone cannot say what a payload-bearing case's slots hold, so a dynamic name matching one has nothing to
+// build — it falls through to the throw. BOTH references do exactly this
+// (`maxon-sharp/Compiler/MLIR/Conversion/MaxonToStandardConversion.Enums.cs:174` — "for associated-value
+// enums with dynamic name: only matches cases without associated values"; and
+// `maxon-selfhosted/Compiler/Parser.maxon:19048-19054`), and the LITERAL form that CAN supply payloads is
+// routed to `synthesizeEnumFromNameCase` instead. A union all of whose cases carry payloads therefore gets a
+// body that is one error return, which is the honest answer rather than an absent function.
+function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Project)
+	let func = IrFunction.createFromStd(enumFromNameSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let name = 0 as ValueId
+
+	var cur = entry
+	for i in 0 upto layout.caseCount() 'eachCase'
+		if layout.payloadArityAt(i) > 0 'carriesAPayload'
+			continue
+		end 'carriesAPayload'
+
+		var hit = module.addBlock(func, label: b"hit")
+		let nextTest = module.addBlock(func, label: b"casetest")
+		emitNameTestBranch(module, block: cur, name: name, caseName: layout.caseNameAt(i), globalData: project.globalData, hit: hit, miss: nextTest, ids: ids)
+		emitCaseValueReturn(module, block: hit, layout: layout, caseIndex: i, project: project, ids: ids)
+		cur = nextTest
+	end 'eachCase'
+
+	emitErrorReturn(module, block: cur, flag: EnumLookupNoSuchCaseNameFlag, ids: ids)
+
+	module.functions.push(func)
+end 'synthesizeEnumFromName'
+
+// ⭐⭐ **`__enum_from_name_<Union>#<case>(name, p0…pn) -> (box, flag)` — ONE PAYLOAD-BEARING CASE, whose
+// slots arrive as parameters.** The name test is kept even though a LITERAL name is the only thing that can
+// reach this symbol, so the helper is self-contained: its throwing signature is then a fact about its own
+// body rather than a promise the caller keeps on its behalf. v1 makes the same call and says so
+// (`maxon-selfhosted/Compiler/Parser.maxon:19124-19130`).
+//
+// ⭐⭐ **THE PAYLOAD PARAMETERS ARRIVE ALREADY OWNED, AND THAT IS WHY THIS BODY MAY STORE THEM VERBATIM.**
+// The move-in (a borrowed String promoted to an owned copy, a bare local poisoned, an owned temporary taken
+// off the statement's pending drops) is `Parser.moveInPayload`'s, done at the CALL SITE through the one door
+// `Container.value(42)` itself goes through. Re-deriving it here would put ownership decisions at a tier that
+// cannot see the caller's bindings — which is the BOOTSTRAP's shape (it borrows and retains-on-store) and
+// does not transliterate into the self-hosted tier's consuming discipline.
+//
+// ⚠ **AND THAT IS MEASURED, NOT ARGUED.** `union Box  empty  text(s String) end` +
+// `try Box.fromName("text", "hello") otherwise Box.empty`, then printing the bound payload: the BOOTSTRAP
+// builds a program that **panics at run time** — *"nil pointer or invalid memory access … in mm_incref"* —
+// because its lowering retains a String it stored without owning. shv2 prints `hello` and exits 0. No
+// committed case covers a MANAGED payload through this member on either compiler, which is exactly why the
+// oracle could stay broken; the divergence in tier is what keeps shv2 out of the same hole.
+function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseIndex CaseIndex, project Project)
+	let arity = layout.payloadArityAt(caseIndex)
+	let paramCount = (1 + arity) as ParamCount
+	var paramTypes = StdTypeArray.create()
+	for _ in 0 upto paramCount 'eachParam'
+		paramTypes.push(StdType.i64)
+	end 'eachParam'
+
+	let func = IrFunction.createFromStd(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(caseIndex)), returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: enumLookupThrows())
+	var ids = ValueMinter.create(paramCount)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: paramCount)
+	let name = 0 as ValueId
+
+	var build = module.addBlock(func, label: b"build")
+	var miss = module.addBlock(func, label: b"nocase")
+	emitNameTestBranch(module, block: entry, name: name, caseName: layout.caseNameAt(caseIndex), globalData: project.globalData, hit: build, miss: miss, ids: ids)
+
+	let box = emitBoxWithTag(module, block: build, layout: layout, caseIndex: caseIndex, project: project, ids: ids)
+	// Slot `j` takes parameter `j + 1` — the name is parameter 0. The zero-fill past this case's own arity is
+	// `Parser.emitEnumBox`'s, and for its stated reason: E3129 admits a binding read on the path of a case that
+	// declares no such slot precisely because that 0 is pinned by a STORE rather than by the allocator.
+	for j in 0 upto layout.maxPayloadArity() 'eachSlot'
+		// Written as an `if` and not a ternary because the else arm EMITS: a ternary would append the zero
+		// constant on the parameter path too, leaving one orphan op per filled slot in the goldens.
+		if j < arity 'ownSlot'
+			emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j), value: j + 1)
+		end 'ownSlot' else 'widerSiblingsSlot'
+			emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j), value: emitConst(module, block: build, value: 0, ids: ids))
+		end 'widerSiblingsSlot'
+	end 'eachSlot'
+	emitOkReturn(module, block: build, value: box, ids: ids)
+
+	emitErrorReturn(module, block: miss, flag: EnumLookupNoSuchCaseNameFlag, ids: ids)
+
+	module.functions.push(func)
+end 'synthesizeEnumFromNameCase'
+
+// Terminate `block` with "does `name` equal this case's name?" — a `__str_eq` against an immortal `.rdata`
+// String built from the case's own bytes. ONE emitter for the general chain and for the per-case helper, so
+// the two cannot come to compare a name two ways.
+//
+// ⚠ **IT IS `__str_eq` AND NOT AN INLINE BYTE LOOP, WHICH IS A CHOICE ABOUT WHO DECIDES STRING EQUALITY.**
+// The bootstrap inlines a length check plus a memcmp per case at every CALL SITE
+// (`MaxonToStandardConversion.Enums.cs`'s `LowerEnumFromNameSimple`); routing through the operator's own
+// equality instead means `Color.fromName(s)` and `s == "red"` cannot come to disagree about what two equal
+// Strings are, and costs a call frame per case tested — `__str_eq`'s first act IS the length check the inline
+// form would have done, so the comparison itself is not repeated. The constant comes from
+// `StringRuntime.registerStringLiteralRecord`, the same door a source literal comes through, so both operands
+// of the compare are records of one shaping.
+function emitNameTestBranch(module StdModule, block IrBlock, name ValueId, caseName ByteArray, globalData GlobalDataTable, hit IrBlock, miss IrBlock, ids ValueMinter)
+	let literal = ids.mint()
+	module.appendOp(block, op: StdOp.rdataAddr(literal, label: registerStringLiteralRecord(globalData, bytes: caseName).toByteArray()))
+	let isThisCase = ids.mint()
+	module.appendOp(block, op: StdOp.call(isThisCase, callee: StrEqName, args: twoArgs(name, second: literal)))
+	module.setTerminator(block, op: StdOp.condBranch(isThisCase, thenBlockId: hit.id, elseBlockId: miss.id))
+end 'emitNameTestBranch'
+
+// The ok return of a matched PAYLOAD-FREE case: its bare tag, or — when the declaration is a boxed union,
+// where even a payload-free case takes the boxed form (`EnumLayout.isBoxed`) — a fresh box carrying that tag
+// and nothing else.
+function emitCaseValueReturn(module StdModule, block IrBlock, layout EnumLayout, caseIndex CaseIndex, project Project, ids ValueMinter)
+	if not layout.isBoxed() 'bareTag'
+		emitOkReturn(module, block: block, value: emitConst(module, block: block, value: layout.tagOfIndex(caseIndex), ids: ids), ids: ids)
+		return
+	end 'bareTag'
+
+	let box = emitBoxWithTag(module, block: block, layout: layout, caseIndex: caseIndex, project: project, ids: ids)
+	for j in 0 upto layout.maxPayloadArity() 'zeroFill'
+		emitStoreField(module, block: block, record: box, offset: layout.payloadSlotOffset(j), value: emitConst(module, block: block, value: 0, ids: ids))
+	end 'zeroFill'
+	emitOkReturn(module, block: block, value: box, ids: ids)
+end 'emitCaseValueReturn'
+
+// Allocate a boxed union's record and stamp its tag — the Std-tier twin of `Parser.emitEnumBox`'s first two
+// steps, and it agrees with that door on all three constants that matter: the SIZE is the union-wide
+// `boxSizeBytes` (so every case shares one allocation size), the destructor slot is `TrivialElementDestroy`
+// (a union box is dropped through the `__destruct_<U>` cascade at scope exit, never through the mm header),
+// and the tag word sits at `UnionTagOffset`. The caller fills the payload slots.
+function emitBoxWithTag(module StdModule, block IrBlock, layout EnumLayout, caseIndex CaseIndex, project Project, ids ValueMinter) returns ValueId
+	let size = emitConst(module, block: block, value: layout.boxSizeBytes() as ParsedInt, ids: ids)
+	let destructor = emitConst(module, block: block, value: TrivialElementDestroy, ids: ids)
+	let box = ids.mint()
+	emitMmAllocCall(module, block: block, result: box, size: size, destructor: destructor, tag: userTagIndex(project.globalData, name: String.from(layout.name), debugStream: module.debugStream), ids: ids)
+	emitStoreField(module, block: block, record: box, offset: UnionTagOffset, value: emitConst(module, block: block, value: layout.tagOfIndex(caseIndex), ids: ids))
+	return box
+end 'emitBoxWithTag'

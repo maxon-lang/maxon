@@ -1208,8 +1208,7 @@ end 'main'
 error E3032: specs/fragments/enum-full/error.mixed-backing-types.test:4:2: raw value type mismatch: 'expected int, got String'
 ```
 
-<!-- disabled-test: fromName-associated-compile-time -->
-<!-- `Union.fromName("case")` — the compile-time case lookup by name. Not implemented; `E3034`. -->
+<!-- test: fromName-associated-compile-time -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1231,8 +1230,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: fromName-associated-empty-case -->
-<!-- `Union.fromName("case")` — the compile-time case lookup by name. Not implemented; `E3034`. -->
+<!-- test: fromName-associated-empty-case -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1254,8 +1252,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: error.fromName-invalid-case -->
-<!-- `Enum.fromName(...)` — the compile-time case lookup — is not implemented, so the member reads as an ordinary case reference and shv2 reports `E3034` "unknown enum case: 'fromName'". Blocked on the same `fromName` builtin as the three `fromName-associated-*` cases below. -->
+<!-- test: error.fromName-invalid-case -->
 ```maxon
 enum Direction
 	north
@@ -1271,8 +1268,7 @@ end 'main'
 error E3034: specs/fragments/enum-full/error.fromName-invalid-case.test:8:25: no enum case named 'invalid_case_name_that_does_not_exist': 'Direction'
 ```
 
-<!-- disabled-test: error.fromName-wrong-arg-count -->
-<!-- `Union.fromName(...)` is not implemented; shv2 reports `E3034` "unknown union case: 'fromName'" against the member name. Blocked on the `fromName` builtin. -->
+<!-- test: error.fromName-wrong-arg-count -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1290,8 +1286,7 @@ end 'main'
 error E3036: specs/fragments/enum-full/error.fromName-wrong-arg-count.test:10:25: wrong argument count: 'case 'value' requires 1 associated value(s)'
 ```
 
-<!-- disabled-test: fromName-associated-runtime-empty -->
-<!-- `Union.fromName(name)` with a RUNTIME name. Not implemented; `E3034`. -->
+<!-- test: fromName-associated-runtime-empty -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

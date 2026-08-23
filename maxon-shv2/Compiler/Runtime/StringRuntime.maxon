@@ -605,6 +605,24 @@ export function registerStringRecord(globalData GlobalDataTable, blobLabel Strin
 	return globalData.registerRdataConstant(StringRecordPrefix, bytes: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes))
 end 'registerStringRecord'
 
+// ⭐ **THE WHOLE OF "MAKE THESE BYTES AN IMMORTAL `.rdata` String", AS ONE CALL — blob, record, and the
+// fixup that points the record's `buffer@0` at the blob's final address.** The three steps are ONE act: a
+// record registered without the fixup carries the blob's rdata OFFSET where a pointer belongs
+// (`buildStringRecordBytes` seeds it deliberately, for dedup), so a caller that forgot the third line would
+// ship a String whose buffer address is a small integer.
+//
+// ⚠ **TWO CALLERS WITH NOTHING ELSE IN COMMON, WHICH IS WHY IT IS A DOOR AND NOT A LOCAL SEQUENCE**:
+// `LowerMaxonToStd.lowerStringLiteral`, which turns a source `"…"` into a value, and
+// `EnumLookupRuntime.synthesizeEnumFromName`, which needs one constant String per case NAME inside a body it
+// builds after the pipeline. The string a literal produces and the string that helper compares against are
+// then one shaping — which is the whole point, because they are compared with each other by `__str_eq`.
+export function registerStringLiteralRecord(globalData GlobalDataTable, bytes ByteArray) returns String
+	let blobLabel = registerStringBlob(globalData, bytes: bytes)
+	let recordLabel = registerStringRecord(globalData, blobLabel: blobLabel, byteLength: bytes.count(), singleByteGraphemes: bytesAreSingleByteGraphemes(bytes))
+	globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
+	return recordLabel
+end 'registerStringLiteralRecord'
+
 // ⚠⚠ **THE `RuntimeUsage` MACHINERY STOOD HERE — 760 LINES OF IT — AND IS `Runtime/RuntimeUsage.maxon`
 // NOW (W49 wave 9).** `RuntimeUsage` itself, `scanRuntimeUsage`, `recordCallUsage` and the four
 // `record*Usage`/`close*Needs` pairs decided the install of the green-thread scheduler, the IOCP

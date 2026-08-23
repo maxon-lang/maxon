@@ -6278,9 +6278,17 @@ export let DivisionByZeroCaseName = b"divisionByZero"
 // position exactly.
 export let EnumLookupErrorTypeName = b"__EnumLookupError"
 
-// The single case name. Its ordinal is 0 because it is the enum's first and only case, DERIVED from
-// declaration position by `addBuiltinEnumCase`.
+// The two case names, in the order `builtinEnumLookupErrorEnum` declares them — position IS the ordinal
+// (`addBuiltinEnumCase`), so `noSuchRawValue` is 0 and `noSuchCaseName` is 1.
+//
+// ⭐ **ONE ERROR TYPE, TWO CASES, BECAUSE THE FAMILY HAS TWO LOOKUPS AND THEY FAIL FOR DIFFERENT
+// REASONS.** `fromRawValue` fails when no case carries a raw value; `fromName` when no case bears a name.
+// Sharing one type is right — both are "this lookup found nothing", and a handler that wants to treat them
+// alike may — but sharing one CASE would make an `otherwise (e) match e … noSuchRawValue then …`
+// on a `fromName` call name a fact that is not true of the program. The case an author reads back is the
+// only externally visible thing this type has; it may not lie.
 export let EnumLookupNoSuchRawValueCaseName = b"noSuchRawValue"
+export let EnumLookupNoSuchCaseNameCaseName = b"noSuchCaseName"
 
 // ⭐ **THE ERROR `Character.asciiValue()` THROWS ON A CLUSTER THAT IS NOT ONE ASCII BYTE.** The CORPUS
 // declares it (`stdlib/Character.maxon:15-17`), so it cannot wear the `__` prefix — `ArrayError`'s position

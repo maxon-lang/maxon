@@ -4241,6 +4241,25 @@ export let EnumAllCasesMemberName = b"allCases"
 // is a per-enum Std helper the parser calls. See `Runtime/EnumLookupRuntime.maxon`.
 export let EnumFromRawValueMemberName = b"fromRawValue"
 
+// ⭐ **`<Enum>.fromName(name)` / `<Union>.fromName(name, payload…)` — THE LOOKUP BY CASE NAME, AND
+// `fromRawValue`'s TWIN IN SHAPE BUT NOT IN SCOPE.** A name naming no case is a runtime failure, so like its
+// sibling it is a per-declaration Std helper the parser CALLS rather than an expression the parser expands
+// — shv2's `try` binds to a call (`Parser.rewriteLastCallToTryCall`). See `Runtime/EnumLookupRuntime.maxon`.
+//
+// ⭐⭐ **IT IS ON EVERY DECLARATION, WHERE `fromRawValue` IS ENUM-ONLY AND REACHES ONLY TWO OF THE SEVEN
+// BACKINGS — and the asymmetry is not an inconsistency, it is what the two members ASK.** `fromRawValue`
+// searches the case TAG column, which carries the declared raw values only for an `integer`-backed or
+// unnumbered (`unresolved`) enum; the four in between (`float`, `character`, `string`, `functionRef`) are
+// refused by name (E2015, `Parser.requireFromRawValueBacking`), `structRecord` is an absence rather than a
+// refusal, and a union is never claimed at all. `fromName` searches the case NAME column, which EVERY
+// declaration has in full, whatever its keyword and whatever its backing — and hands back
+// `EnumLayout.tagOfIndex`, which IS a case's runtime representation for all seven. So there is no backing to
+// refuse and no union to exclude.
+// Both references agree (`maxon-sharp/Compiler/2-Parser.cs:19295` claims the member for either spelling;
+// `maxon-selfhosted/Compiler/Parser.maxon:19919-19949` keeps `.fromName` for every scalar backing and for
+// unions while `classifyEnumLookupForFromRawValue` strips the same declarations of the other member).
+export let EnumFromNameMemberName = b"fromName"
+
 // ⭐⭐ **`<Union>.unionCases` — THE COMPILER-SYNTHESIZED COMPANION ENUM OF A PAYLOAD-BEARING UNION**
 // (`/specs/union-cases.md`). One bare case per variant of the union, in declaration order, rawValue = index:
 // it exposes the union's DISCRIMINANT as a first-class enum value, so a decoder can write the variant's
@@ -4953,7 +4972,11 @@ end 'builtinDivisionByZeroErrorEnum'
 // payload-free so it stays golden-neutral (see `createEnumRegistry`).
 export function builtinEnumLookupErrorEnum() returns EnumLayout
 	var layout = EnumLayout.createCompilerOwned(EnumLookupErrorTypeName, conformsTo: builtinErrorConformance())
+	// ⚠ **DECLARATION ORDER IS THE WIRE FORMAT** — `addBuiltinEnumCase` derives each tag from its position,
+	// and `EnumLookupRuntime` transcribes both. Appending is safe; reordering silently renames every handler
+	// arm, which is what `verifyEnumLookupErrorOrdinals` exists to catch.
 	addBuiltinEnumCase(layout, caseName: EnumLookupNoSuchRawValueCaseName)
+	addBuiltinEnumCase(layout, caseName: EnumLookupNoSuchCaseNameCaseName)
 	return layout
 end 'builtinEnumLookupErrorEnum'
 
