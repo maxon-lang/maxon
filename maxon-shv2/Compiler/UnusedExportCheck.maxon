@@ -109,6 +109,22 @@ typealias TrackedDeclIndex = int(0 to u64.max)
 typealias TrackedDeclIndexArray = Array with TrackedDeclIndex
 typealias TrackedDeclIndexMap = Map with (ByteArray, TrackedDeclIndexArray)
 
+// ⭐⭐ **EVERY STORED GLOBAL'S `.data` LABEL, MAPPED TO THE DECLARATION THAT OWNS IT.** A `globalAddr`
+// op carries the LABEL and this seed is keyed by source NAME, so somewhere the two have to be joined —
+// `noteGlobalLabel` is the one place that asks.
+//
+// ⚠⚠ **IT IS A MAP BECAUSE THE JOIN WAS A SCAN OF THE WHOLE DECLARATION ARENA AT EVERY `globalAddr`
+// OP, AND THAT PRODUCT WAS THIS PASS'S SUPERLINEAR TERM.** Both of its factors DOUBLE per rung of the
+// scaling ladder — the top-level `let`/`var` COUNT and the number of sites that read one — so the scan
+// quadrupled while everything around it doubled. MEASURED, `phase:checkUnusedExports` CPU per doubling:
+// x1.43 x1.58 x1.86 x2.28 x2.74, monotonic, against x2.00 for linear.
+//
+// ⛔ **AND THE MEMORY COLUMNS READ IT AS PERFECTLY LINEAR — x1.90 allocations, x1.89 bytes — because a
+// scan step ALLOCATES NOTHING.** It copies a `TopLevelDecl`, which RETAINS six managed handles (its
+// whole `TokenArray` among them) and releases them again, so the entire quadratic was refcount traffic.
+// That is the class the CPU column was added to catch, and no other column of the instrument could see it.
+typealias GlobalLabelIndexMap = Map with (ByteArray, TopLevelDeclIndex)
+
 // The type names one transitive walk has already been through - what makes a self-referential type
 // terminate. Per walk, not per pass: the answer depends on the READER file, so a pass-wide memo would
 // credit the second reader with the first one's result.
@@ -145,9 +161,13 @@ type TrackedDecls
 	// threaded through every `note*` because it is a property of the PROGRAM and not of any one credit.
 	// Read by `noteRead` alone, which states the rule it serves.
 	export let libraryFiles as LibrarySourcePathSet
+	// The fourth index, and the only one keyed by something other than a source name — see
+	// `GlobalLabelIndexMap`. It rides here for `libraryFiles`' reason: it is a property of the PROGRAM
+	// rather than of any one credit, and threading it through every `note*` would say otherwise.
+	export let globalLabels as GlobalLabelIndexMap
 
-	export static function create(libraryFiles LibrarySourcePathSet) returns TrackedDecls
-		return Self{entries: TrackedDeclArray.create(), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), libraryFiles: libraryFiles}
+	export static function create(libraryFiles LibrarySourcePathSet, globalLabels GlobalLabelIndexMap) returns TrackedDecls
+		return Self{entries: TrackedDeclArray.create(), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), libraryFiles: libraryFiles, globalLabels: globalLabels}
 	end 'create'
 
 	export function add(decl TrackedDecl)
@@ -188,7 +208,7 @@ export function checkUnusedExports(project Project, module MaxonModule, signatur
 		return
 	end 'tooFewFilesToHaveAnOutside'
 
-	var tracked = TrackedDecls.create(sources.libraryFiles)
+	var tracked = TrackedDecls.create(sources.libraryFiles, globalLabels: indexGlobalLabels(signatures))
 	seedFunctions(module, signatures: signatures, tracked: tracked)
 	try seedTypes(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	seedBindings(signatures, tracked: tracked)
@@ -217,6 +237,28 @@ function splitSourcePaths(project Project) returns SourcePathSplit throws Compil
 
 	return SourcePathSplit.create(paths, libraryFiles: libraryFiles)
 end 'splitSourcePaths'
+
+// One pass over the declaration arena, so `noteGlobalLabel` is a lookup and not a scan of it.
+//
+// ⚠ **FIRST WINS, exactly as the scan's `return` did.** Two declarations cannot share a `.data` label
+// — it is minted from the storage key, which is what makes featA's `counter` and featB's `counter` two
+// slots — but the tie is broken here anyway, so the answer can never come to depend on which of two
+// claimants a map happened to keep.
+function indexGlobalLabels(signatures ProgramSignatures) returns GlobalLabelIndexMap
+	var labels = GlobalLabelIndexMap.create()
+	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
+		let decl = signatures.declAt(i)
+		// An immutable binding is INLINED at its use and has no slot to take the address of, so it has no
+		// label at all — see `TopLevelDecl.dataLabel`.
+		if not decl.hasStorage or labels.contains(decl.dataLabel) 'noSlotOrAlreadyClaimed'
+			continue
+		end 'noSlotOrAlreadyClaimed'
+
+		labels.upsert(decl.dataLabel, value: i)
+	end 'eachDecl'
+
+	return labels
+end 'indexGlobalLabels'
 
 // ── Seeding ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -677,15 +719,13 @@ end 'noteBindingName'
 // A stored global is reached by its `.data` LABEL, which is what the op carries; the seed is keyed by
 // source name. The arena holds both, so the label is translated here rather than the seed being keyed by
 // something a `let` does not have (an immutable binding has no label at all — see `TopLevelDecl.dataLabel`).
+// A label no declaration owns names nothing this pass tracks — the honest answer for a `.data` slot the
+// compiler minted for itself, and the same answer the scan's fall-through gave.
 function noteGlobalLabel(signatures ProgramSignatures, tracked TrackedDecls, label ByteArray, readerFilePath FilePath, readerModuleDirectory String)
-	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
-		let decl = signatures.declAt(i)
-		if decl.hasStorage and decl.dataLabel.equals(label) 'thisOne'
-			noteBindingName(signatures, tracked: tracked, name: decl.name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
-			noteSlotType(signatures, tracked: tracked, index: i, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
-			return
-		end 'thisOne'
-	end 'eachDecl'
+	let index = try tracked.globalLabels.get(label) otherwise return
+	let decl = signatures.declAt(index)
+	noteBindingName(signatures, tracked: tracked, name: decl.name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	noteSlotType(signatures, tracked: tracked, index: index, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 end 'noteGlobalLabel'
 
 // ⭐⭐ **THE CLASSIFICATION RULE, AND ITS ONE DELIBERATE DIVERGENCE FROM WHAT `module` MEANS.** A reader in
