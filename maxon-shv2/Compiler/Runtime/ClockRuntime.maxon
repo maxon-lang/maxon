@@ -1,4 +1,5 @@
-// Runtime/ClockRuntime.maxon — the WALL clock, the one host clock that is not the scheduler's.
+// Runtime/ClockRuntime.maxon — the two host clocks that are NOT the scheduler's: the CALENDAR
+// (`__clock_now_unix_s`) and this THREAD's own CPU consumption (`__thread_cpu_ticks`).
 //
 // ⭐ WHY THIS IS ITS OWN FILE AND NOT A FUNCTION IN `GtRuntime`. `__gt_now_ns` lives there because the
 // green-thread scheduler OWNS it: the timer heap, the sleep deadline and the netpoll wait are all
@@ -13,16 +14,61 @@
 // move here: it routes to the scheduler's existing `__gt_now_ns`, because that reading and the scheduler's
 // deadlines must come from ONE counter — two monotonic clocks that could disagree is the bug the split
 // identity in `buildGtNowNs` exists to avoid.
+//
+// ⭐⭐ **AND THE FOURTH CLOCK, WHICH IS THE ONLY ONE THAT IS NOT A CLOCK — `__thread_cpu_ticks`.** The three
+// above all measure WALL time, so a duration taken with any of them counts every OTHER process on the box:
+// a compiler phase timed on a busy machine reports the machine. This one advances only while the CALLING
+// THREAD is scheduled, so it cannot see preemption at all, and that is precisely what makes `PhaseProbe`'s
+// per-phase cost survive a loaded host — `docs/optimization-log.md`'s `## CPU` table is what it feeds.
+//
+// ⚠ **ITS UNIT IS PLATFORM-DEFINED AND THERE IS NO HONEST CONVERSION**: TSC ticks on Windows
+// (`QueryThreadCycleTime`), nanoseconds under POSIX (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`).
+// `QueryPerformanceFrequency` is the PERFORMANCE COUNTER's rate and not the TSC's, so a normalization here
+// would be a guess wearing a unit's name. The entry point says `ticks`; callers compare RATIOS, which are
+// unit-free, or absolutes within one platform.
+//
+// ⭐ **IT SHARES THIS FILE WITH THE WALL CLOCK AND WEARS A SECOND `__` BAND, WHICH IS `CpuParallelRuntime`'s
+// SHAPE FOR A DIFFERENT REASON.** There, one file wears two bands because its two entries answer *may this
+// target run it* differently. Here they answer it the SAME way — both are x64-windows-only Win32 reads,
+// both refused elsewhere by `calleeNeedsWin32Substrate` — and the split is about COST instead: they reach
+// two different imports, and the optional trailing import band is gated per producer. One shared bit would
+// make a program that reads the calendar import `QueryThreadCycleTime`, and a program that measures its own
+// cost import `GetSystemTimeAsFileTime`. Same file, because the two are the same MECHANISM: a host read
+// whose answer arrives through a `.data` scratch word.
 
 // The prefix every wall-clock runtime entry point shares — the "does this program read the CALENDAR?" test.
 let ClockRuntimeCallPrefix = b"__clock_"
 
 export let WallClockNowUnixSecondsName = b"__clock_now_unix_s"
 
+// The `__thread_` band — the "does this program ask how much CPU TIME its own thread has used?" test, and
+// the second thing `SemanticCheck.calleeNeedsWin32Substrate` reads out of this file for E3104. A PREFIX
+// rather than a name compare for `isProcessRuntimeCallee`'s reason: an entry point added to this band later
+// is gated by construction rather than by memory.
+//
+// ⚠ **DELIBERATELY NOT `__cpu_`.** That band is `isCpuCountRuntimeCallee`, and it drives `usesCpuCount` —
+// the sole producer of `GetActiveProcessorCount` and of the optional trailing import band it turns on.
+// Filing this entry there would make every program that times a phase import an API it never calls, and
+// install `__cpu_count`'s body beside it. The two questions are unrelated besides: one asks the MACHINE how
+// many processors exist, the other asks the host how long THIS thread has run.
+let ThreadCpuRuntimeCallPrefix = b"__thread_"
+
+export let ThreadCpuTicksName = b"__thread_cpu_ticks"
+
 // The 8-byte scratch word `GetSystemTimeAsFileTime`'s out-param writes to, read straight back by
 // `__clock_now_unix_s`. Safe as a shared global for the same reason `__gt_clock_ticks` is: the function is
 // straight-line with no yield point between the write and the read, so it cannot be re-entered mid-read.
 let ClockWallTicksLabel = b"__clock_wall_ticks"
+
+// The 8-byte scratch word `QueryThreadCycleTime`'s `PULONG64` out-param writes to, read straight back by
+// `__thread_cpu_ticks`. Safe as a shared global for the wall clock's reason one line up — the function is
+// straight-line with no yield point between the write and the read, so it cannot be re-entered mid-read.
+//
+// ⚠ **THAT ARGUMENT IS ABOUT GREEN THREADS, AND shv2's SCHEDULER IS WHAT MAKES IT HOLD.** `GtRuntime`'s
+// first paragraph: SINGLE-M COOPERATIVE — one OS thread runs every green thread, and a straight-line body
+// offers no yield point for another to be scheduled at. The day multi-M lands (PLAN B1b) this word becomes
+// per-M, exactly as `__clock_wall_ticks` does, and for the same reason.
+let ThreadCpuTicksLabel = b"__thread_cpu_ticks_out"
 
 // A FILETIME counts 100-NANOSECOND intervals since 1601-01-01 00:00:00 UTC. Two facts turn that into Unix
 // seconds, and both are named rather than spelled inline at the arithmetic:
@@ -40,23 +86,45 @@ export function isClockRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ClockRuntimeCallPrefix)
 end 'isClockRuntimeCallee'
 
+// ⭐ **DOES THIS CALLEE ASK HOW MUCH CPU TIME THIS THREAD HAS USED?** The `__thread_`-only test, the exact
+// twin of the wall clock's above and narrow in the same way: `__thread_cpu_ticks` is a leaf that calls one
+// Win32 import and loads a word, so a phase-timing program carries neither the allocator nor the scheduler.
+export function isThreadCpuRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ThreadCpuRuntimeCallPrefix)
+end 'isThreadCpuRuntimeCallee'
+
 // The wall clock's one `.data` slot, laid out only when the program reads the calendar (`usesWallClock`), so
 // every other program's `.data` image is unchanged. An ordinary i64 slot in every respect, exactly like
 // MmRuntime's `runtimeGlobals()` and GtRuntime's `gtRuntimeGlobals()`.
-export function clockRuntimeGlobals() returns DataSectionEntryArray
+export function clockRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-	out.push(DataSectionEntry.create(String.from(ClockWallTicksLabel), valueType: StdType.i64, value: 0))
+	if usage.usesWallClock 'wallClock'
+		out.push(DataSectionEntry.create(String.from(ClockWallTicksLabel), valueType: StdType.i64, value: 0))
+	end 'wallClock'
+
+	// The thread-CPU read's own scratch word, laid out on its OWN bit for the reason the two entry points
+	// wear two bands at all: a program that only reads the calendar must not carry a word it never writes.
+	if usage.usesThreadCpuTicks 'threadCpu'
+		out.push(DataSectionEntry.create(String.from(ThreadCpuTicksLabel), valueType: StdType.i64, value: 0))
+	end 'threadCpu'
+
 	return out
 end 'clockRuntimeGlobals'
 
-// Install the wall-clock runtime into the lowered Std module, on its own `usesWallClock` bit. Appended AFTER
-// the pipeline (like every other runtime install) so it is never re-optimized, and already-lowered Std so it
-// still flows through the whole backend.
+// Install the host-clock runtime into the lowered Std module, each entry point on its OWN bit —
+// `installProcessRuntime`'s discipline, and here it earns exactly what that file's does: the two entries
+// reach two different Win32 imports, and a program almost always wants one of them.
+//
+// Appended AFTER the pipeline (like every other runtime install) so it is never re-optimized, and
+// already-lowered Std so it still flows through the whole backend.
 export function installClockRuntime(module StdModule, usage RuntimeUsage)
-	if not usage.usesWallClock 'noWallClock'
-		return
-	end 'noWallClock'
-	buildWallClockNowUnixSeconds(module)
+	if usage.usesWallClock 'wallClock'
+		buildWallClockNowUnixSeconds(module)
+	end 'wallClock'
+
+	if usage.usesThreadCpuTicks 'threadCpu'
+		buildThreadCpuTicks(module)
+	end 'threadCpu'
 end 'installClockRuntime'
 
 // `__clock_now_unix_s() -> i64` — whole seconds since 1970-01-01 UTC. `osReadWallClock` writes
@@ -88,3 +156,31 @@ function buildWallClockNowUnixSeconds(module StdModule)
 
 	module.functions.push(func)
 end 'buildWallClockNowUnixSeconds'
+
+// ⭐⭐ **`__thread_cpu_ticks() -> i64`** — the CPU time this thread has consumed, in the host's own unit.
+//
+// `osThreadCpuTicks` writes `QueryThreadCycleTime`'s tick count into a `.data` scratch word and this loads
+// it straight back — `__clock_now_unix_s`'s shape with the arithmetic removed, because there is none to do.
+// That absence is the contract rather than an omission: the two platforms answer in units that do not
+// convert (TSC ticks vs nanoseconds), so any scaling written here would be the dishonest normalization the
+// header refuses. What a caller may do with two readings is SUBTRACT them, and a difference is meaningful
+// in either unit.
+//
+// ⚠ **THE RESULT IS NOT CLAMPED AND MUST NOT BE.** `__cpu_count` clamps because a processor count is a
+// DIVISOR for its callers, so a 0 escaping would be a division by zero; a tick count is only ever
+// subtracted from a later one. A thread that has just started legitimately reads a very small number, and a
+// floor imposed here would make the first bracket of a phase report a cost it did not have.
+function buildThreadCpuTicks(module StdModule)
+	var func = IrFunction.createFromStd(ThreadCpuTicksName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	let ticksAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(ticksAddr, label: ThreadCpuTicksLabel))
+	module.appendOp(entry, op: StdOp.osThreadCpuTicks(ticksAddr))
+	let ticks = emitLoadField(module, block: entry, record: ticksAddr, offset: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(ticks))
+
+	module.functions.push(func)
+end 'buildThreadCpuTicks'

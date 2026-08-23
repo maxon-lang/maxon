@@ -243,6 +243,15 @@ let ThreadRunImmediately = 0x0  // CreateThread dwCreationFlags = 0 (not CREATE_
 // difference between reporting the machine and reporting 64 of its 128 processors (see `lowerOsCpuCount`).
 let AllProcessorGroups = 0xFFFF
 
+// ⭐ **`GetCurrentThread()`'s PSEUDO-HANDLE, `(HANDLE)-2`, AS AN UNSIGNED MACHINE WORD.** It is a
+// compile-time CONSTANT that always names the calling thread, not a handle to open or close, so
+// `QueryThreadCycleTime`'s first argument costs neither an import nor a call — the bootstrap's Windows
+// emitter materializes the identical value for the identical reason (`X86CodeEmitter.Backend.cs`'s
+// `CurrentThreadPseudoHandle`). Spelled as an arithmetic negation rather than as a transcribed
+// two's-complement pattern, which is `IocpInvalidHandleValue`'s idiom in this same band and for its reason:
+// a hand-written 0xFFFFFFFFFFFFFFFE is sixteen digits nothing checks.
+let CurrentThreadPseudoHandle = 0 - 2
+
 // The two WriteFile outgoing stack SLOTS `__print_string`'s frame reserves, past the shadow space:
 // slot 0 = the 5th argument `lpOverlapped` (NULL), slot 1 = a scratch DWORD `lpNumberOfBytesWritten`
 // points at (WriteFile writes the count there; it must be a valid pointer, not NULL). These are SLOT
@@ -882,14 +891,15 @@ type StdToX64Lowering
 			// not the only stack-arg subprocess op, and this comment used to claim it was.
 			osPipePeek gives win64OutgoingArgBytes(PeekPipeStackArgWords)
 			osHandleSetInherit gives 0
-			// ⚠ **THIS ARM NOW COVERS ELEVEN OPS, AND ITS COMMENT ONCE SAID "the other three appended ops".**
+			// ⚠ **THIS ARM NOW COVERS TWELVE OPS, AND ITS COMMENT ONCE SAID "the other three appended ops".**
 			// `osEnvRead` and `osProcessTerminate` finish the attached-subprocess band, then the eight
-			// `ws2_32` socket ops follow, and `osCpuCount` closes it. All eleven are register-only because the
-			// widest Win64 call any of them marshals takes FOUR arguments — `getaddrinfo`, `send` and `recv`
+			// `ws2_32` socket ops follow, then `osCpuCount` and `osThreadCpuTicks` close it. All twelve are
+			// register-only because the widest Win64 call any of them marshals takes FOUR arguments —
+			// `getaddrinfo`, `send` and `recv`
 			// — which is exactly the register file's capacity, so nothing overflows onto the stack.
 			// ⛔ A ws2_32 call with a fifth argument (`WSARecv`, `WSASend`) would belong on its OWN arm with
 			// a reserved slot count, never in here.
-			osEnvRead to osCpuCount gives 0
+			osEnvRead to osThreadCpuTicks gives 0
 			const to param gives 0
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
@@ -1128,7 +1138,7 @@ type StdToX64Lowering
 				// A frame address is a value-producing body op, never a terminator.
 				stackRecordAddr then break 'term'
 				osOpenNamedSegment to osTickCountMs then break 'term'
-				osHandleSetInherit to osCpuCount then break 'term'
+				osHandleSetInherit to osThreadCpuTicks then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1209,7 +1219,7 @@ type StdToX64Lowering
 				// A frame address, not the compare — the scan stops.
 				stackRecordAddr then break 'isTheCompare'
 				osOpenNamedSegment to osTickCountMs then break 'isTheCompare'
-				osHandleSetInherit to osCpuCount then break 'isTheCompare'
+				osHandleSetInherit to osThreadCpuTicks then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1332,6 +1342,7 @@ type StdToX64Lowering
 			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
 			// The MACHINE query behind `__Builtins.cpuCount()`; the clamp is builder-built Std, not here.
 			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstBlock: dstBlock)
+			osThreadCpuTicks(outPtrId) then self.lowerOsThreadCpuTicks(outPtrId, dstBlock: dstBlock)
 			osProcessExitCode(handleId, codePtrId) then self.lowerOsProcessExitCode(handleId, codePtrId: codePtrId, dstBlock: dstBlock)
 			osWaitHandles(handleArrayPtrId, countId, timeoutMsId) then self.lowerOsWaitHandles(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstBlock: dstBlock)
@@ -1449,6 +1460,7 @@ type StdToX64Lowering
 			stackRecordAddr then panic("lowerStdToX64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
 			osOpenNamedSegment to osTickCountMs then panic("lowerStdToX64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 			osCpuCount then panic("lowerStdToX64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
+			osThreadCpuTicks then panic("lowerStdToX64: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2691,6 +2703,19 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsCpuCount'
 
+	// ⭐⭐ **`osThreadCpuTicks(outPtr)` ⇒ `QueryThreadCycleTime((HANDLE)-2, outPtr)`** — one immediate into
+	// rcx, the caller's `.data` scratch address into rdx, one `iatCall`. Nothing is captured from RAX: the
+	// API answers through the out-param, and the `BOOL` it returns is DISCARDED for `osFileClose`'s reason
+	// one shape over — its only documented failure is an invalid handle, and this handle is a compile-time
+	// constant naming the running thread, so there is no runtime condition under which it can fail and
+	// nothing a caller measuring its own cost could do if it somehow did.
+	function lowerOsThreadCpuTicks(outPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64Import("osThreadCpuTicks")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: CurrentThreadPseudoHandle))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(outPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.QueryThreadCycleTime)))
+	end 'lowerOsThreadCpuTicks'
+
 	// ⭐ **THE x64-WINDOWS GATE FOR EVERY OP THAT LOWERS TO A WIN32 IMPORT, ASKED ONCE.** All of them are
 	// x64-windows only, and `SemanticCheck.requireTargetSupportsCallee` refuses such a program at its own
 	// source span (E3104) long before lowering — so this is the backstop for a compiler bug that got one
@@ -3459,7 +3484,7 @@ type StdToX64Lowering
 			// Nor is a frame address.
 			stackRecordAddr gives false
 			osOpenNamedSegment to osTickCountMs gives false
-			osHandleSetInherit to osCpuCount gives false
+			osHandleSetInherit to osThreadCpuTicks gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3612,6 +3637,7 @@ type StdToX64Lowering
 			osHandleSetInherit to osProcessTerminate panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an attached-subprocess host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osSocketStartup to osSocketClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a socket host primitive, not a condBranch")
 			osCpuCount panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCpuCount`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osThreadCpuTicks panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osThreadCpuTicks`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

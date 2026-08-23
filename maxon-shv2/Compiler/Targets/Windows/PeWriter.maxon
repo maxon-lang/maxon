@@ -341,6 +341,22 @@ export enum IatSlot
 	// still costs its IAT thunk, its import-lookup entry and its Hint/Name record, and a program that never
 	// asks how many cores the machine has should not pay for one.
 	GetActiveProcessorCount
+	// ⭐ **THE THREAD-CPU-TIME IMPORT.** APPENDED AFTER `GetActiveProcessorCount` for the reason every entry
+	// above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
+	// kernel32 again, so it adds no import DIRECTORY entry (see `ImportDll`), and it is the LAST kernel32
+	// slot — see the `ws2_32` note below, which this append is bounded by.
+	//
+	// ⭐⭐ **`QueryThreadCycleTime`, AND THE HANDLE IT TAKES COSTS NO SECOND IMPORT.** It wants a thread
+	// HANDLE, and `GetCurrentThread()` answers the pseudo-handle `(HANDLE)-2` — a compile-time constant, not
+	// something to open or close — so the lowering materializes it inline and never calls that API. The
+	// bootstrap's Windows emitter does exactly the same (`X86CodeEmitter.Backend.cs`'s
+	// `CurrentThreadPseudoHandle`).
+	//
+	// ⚠ It joins the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as the DebugStream
+	// four, the attached-subprocess two and the machine query do, and for the identical reason: an import
+	// nothing references still costs its IAT thunk, its import-lookup entry and its Hint/Name record, and a
+	// program that never measures its own CPU time should not pay for one.
+	QueryThreadCycleTime
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -367,7 +383,7 @@ end 'IatSlot'
 // which would point its thunk at another library's Hint/Name entry.
 function slotDll(slot IatSlot) returns ImportDll
 	return match slot 'dll'
-		ExitProcess to GetActiveProcessorCount gives ImportDll.kernel32
+		ExitProcess to QueryThreadCycleTime gives ImportDll.kernel32
 		WSAStartup to closesocket gives ImportDll.ws2_32
 	end 'dll'
 end 'slotDll'
@@ -402,12 +418,12 @@ export function iatSlotIndex(slot IatSlot) returns RelocSlotIndex
 end 'iatSlotIndex'
 
 // ⭐ **DOES THIS SLOT BELONG TO THE OPTIONAL TRAILING BAND?** The four O3 DebugStream imports, the two
-// attached-subprocess ones and the machine query are emitted ONLY into a build that has a producer for them
-// — an import nothing references still costs its IAT thunk, its import-lookup entry and its Hint/Name
-// record, and seven of those in EVERY binary in the language is not a price a debug instrument, a
-// child-process runtime or a core-count query may charge a program that uses none of them. That is the same
-// rule the `.data` slots, the box header and the event sites follow (`DebugStreamRuntime`'s header states
-// it once).
+// attached-subprocess ones, the machine query and the thread-CPU read are emitted ONLY into a build that has
+// a producer for them — an import nothing references still costs its IAT thunk, its import-lookup entry and
+// its Hint/Name record, and eight of those in EVERY binary in the language is not a price a debug
+// instrument, a child-process runtime, a core-count query or a phase timer may charge a program that uses
+// none of them. That is the same rule the `.data` slots, the box header and the event sites follow
+// (`DebugStreamRuntime`'s header states it once).
 //
 // ⚠ **THEY ARE THE TRAILING BAND, AND THAT IS WHAT MAKES OMITTING THEM SAFE.** An `iatCall` records a
 // slot INDEX; dropping entries off the END leaves every earlier index exactly where it was, while dropping
@@ -415,20 +431,20 @@ end 'iatSlotIndex'
 // `ordinal >=` test precisely so that a future import appended past this band fails to compile here
 // instead of quietly joining it.
 //
-// ⚠⚠ **IT IS ONE BAND WITH THREE PRODUCERS, NOT THREE BANDS, AND THAT IS FORCED BY THE INDEXING ABOVE.**
+// ⚠⚠ **IT IS ONE BAND WITH FOUR PRODUCERS, NOT FOUR BANDS, AND THAT IS FORCED BY THE INDEXING ABOVE.**
 // Independently-gated bands would leave a HOLE in the emitted table whenever an earlier one was absent and
 // a later one present, and every slot after the hole would resolve to the wrong import. So the whole band is
-// emitted whenever ANY producer is present: a traced build pays for two subprocess imports and one machine
-// query it does not call, and a spawning build pays for four DebugStream ones and the machine query.
-// At most six unreferenced imports in the rare build that wants one of the three, against a
+// emitted whenever ANY producer is present: a traced build pays for two subprocess imports, the machine
+// query and the thread-CPU read it does not call, and a spawning build pays for four DebugStream ones and
+// those same two. At most seven unreferenced imports in the rare build that wants one of the four, against a
 // silently-repointed import table — the trade is not close.
 //
 // ⚠ **THE COUNT IN THAT PARAGRAPH IS DERIVED FROM THE ENUM, NOT FROM THIS SENTENCE.** Count the band off
-// the `GetEnvironmentVariableA to GetActiveProcessorCount` range below rather than off the prose; a
+// the `GetEnvironmentVariableA to QueryThreadCycleTime` range below rather than off the prose; a
 // producer added later must extend the range (or fail this total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
-		GetEnvironmentVariableA to GetActiveProcessorCount gives true
+		GetEnvironmentVariableA to QueryThreadCycleTime gives true
 		ExitProcess to GetModuleFileNameA gives false
 		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
 		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
@@ -1058,7 +1074,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// Both the table builder and the relocation patcher must answer these two questions the SAME way — the
 	// builder decides where each thunk lands and the patcher points call sites at it, so a disagreement
 	// would aim every call at the wrong import. Read once, passed to both.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks
 	let sockets = codeResult.stdModule.usesSockets
 	let idata = buildImportSection(idataRva, optionalImports: optionalImports, sockets: sockets)
 	let idataSize = idata.data.count()

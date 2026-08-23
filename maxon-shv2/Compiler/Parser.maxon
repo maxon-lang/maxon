@@ -4714,6 +4714,44 @@ let BuiltinsSchedMaxActiveWorkersName = b"__Builtins.schedMaxActiveWorkers"
 let CpuCountArity = 0 as ParamCount
 let SchedMaxActiveWorkersArity = 0 as ParamCount
 
+// ⭐⭐ **THE SIX MEMORY-TRAFFIC COUNTERS — THE FLOOR OF THE INSTRUMENT THIS COMPILER MEASURES ITSELF WITH.**
+// `Compiler/PhaseProbe.maxon` reads all six to answer what one compile phase cost in allocations and bytes,
+// and `docs/optimization-log.md` is the trend those answers feed — so `scale-test` bottoms out here. The
+// bootstrap declares the same six names with the same shape (no arguments, an `int` answer,
+// `2-Parser.cs:12220-12272`), lowering each to its own `maxon_mm_*` reader; only the implementation differs.
+//
+// ⭐ **TWO LAYERS × (cumulative, live) PLUS TWO BYTE VOLUMES, AND `frees` IS NOT AMONG THEM** because it is
+// DERIVED: `freed = Δtotal − Δlive`, which needs a cumulative AND a live counter in each layer. What the two
+// layers ARE differs between the compilers — see `MmRuntime.MmAllocTotalLabel`, which owns that difference —
+// but the SURFACE is identical, and a caller sums them (`PhaseProbe.totalAllocs`).
+//
+// ⚠ They are refused NOWHERE: each lowers to a `.data` load, which every target shv2 emits can do. That is
+// the acceptance half of the target pair whose refusal half is `threadCpuTicks` just below — without it, a
+// compiler that had stopped serving this whole family on wasm would look exactly like a live gate.
+let BuiltinsMmAllocTotalName = b"__Builtins.mmAllocTotal"
+let BuiltinsMmAllocLiveName = b"__Builtins.mmAllocLive"
+let BuiltinsMmAllocBytesName = b"__Builtins.mmAllocBytes"
+let BuiltinsMmRawAllocTotalName = b"__Builtins.mmRawAllocTotal"
+let BuiltinsMmRawAllocLiveName = b"__Builtins.mmRawAllocLive"
+let BuiltinsMmRawAllocBytesName = b"__Builtins.mmRawAllocBytes"
+
+// ⭐⭐ **`__Builtins.threadCpuTicks()` — THE FOURTH CLOCK, AND THE ONLY ONE THAT IS NOT A CLOCK.** The three
+// in `builtins-clock.md` measure WALL time, so a phase timed with any of them reports the machine it ran on;
+// this one advances only while the CALLING THREAD is scheduled. `PhaseProbe` brackets it beside the wall
+// clock for exactly that reason. The bootstrap declares the identical name and shape
+// (`2-Parser.cs:12213-12219`), lowering to its own `maxon_thread_cpu_ticks`.
+//
+// ⚠ **ITS UNIT IS PLATFORM-DEFINED AND NOTHING CONVERTS IT** — TSC ticks on Windows, nanoseconds under
+// POSIX. See `ClockRuntime`'s header, which owns that fact; this file only routes the name.
+let BuiltinsThreadCpuTicksName = b"__Builtins.threadCpuTicks"
+
+// All seven take NOTHING. ONE constant for the six counters, because there the shape IS the fact — they are
+// six spellings of one question asked of six slots, exactly as `SubprocessOneArgArity`'s family is one shape
+// shared by many names — and its own for the clock, whose contract is unrelated to theirs
+// (`CurrentProcessIdArity`'s rule, which is why these are two constants and not one).
+let MmCounterArity = 0 as ParamCount
+let ThreadCpuTicksArity = 0 as ParamCount
+
 // **THE `spawnReadLine` BUILTIN** (P1.5 dogfood slice 1a-ii — the IOCP overlapped-read PROBE). A TEMPORARY probe
 // surface (not the final async-subprocess-stdio API, which arrives with the stdlib in slice 1b): like
 // `__Builtins.runProcess`,
@@ -69474,6 +69512,43 @@ export type Parser
 			if callee.equals(BuiltinsSchedMaxActiveWorkersName) 'schedMaxActiveWorkers'
 				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedMaxActiveWorkersName, runtimeName: SchedMaxActiveWorkersName, arity: SchedMaxActiveWorkersArity, calleeTok: anchor)
 			end 'schedMaxActiveWorkers'
+
+			// ⭐ **THE SIX MEMORY-TRAFFIC COUNTERS.** Every one answers an `int` and takes nothing, so every one
+			// takes the argumentless-integer emit — the same door the pid and the two CPU-parallel queries take,
+			// and the reason that door exists. Six arms rather than a table for the band's reason: the
+			// builtin name and the runtime entry it lowers to are the only things that differ, and a table
+			// keyed on one of them would be a second place for the pairing to be got wrong.
+			if callee.equals(BuiltinsMmAllocTotalName) 'mmAllocTotal'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmAllocTotalName, runtimeName: MmCounterAllocTotalName, arity: MmCounterArity, calleeTok: anchor)
+			end 'mmAllocTotal'
+
+			if callee.equals(BuiltinsMmAllocLiveName) 'mmAllocLive'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmAllocLiveName, runtimeName: MmCounterAllocLiveName, arity: MmCounterArity, calleeTok: anchor)
+			end 'mmAllocLive'
+
+			if callee.equals(BuiltinsMmAllocBytesName) 'mmAllocBytes'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmAllocBytesName, runtimeName: MmCounterAllocBytesName, arity: MmCounterArity, calleeTok: anchor)
+			end 'mmAllocBytes'
+
+			if callee.equals(BuiltinsMmRawAllocTotalName) 'mmRawAllocTotal'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocTotalName, runtimeName: MmCounterRawAllocTotalName, arity: MmCounterArity, calleeTok: anchor)
+			end 'mmRawAllocTotal'
+
+			if callee.equals(BuiltinsMmRawAllocLiveName) 'mmRawAllocLive'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocLiveName, runtimeName: MmCounterRawAllocLiveName, arity: MmCounterArity, calleeTok: anchor)
+			end 'mmRawAllocLive'
+
+			if callee.equals(BuiltinsMmRawAllocBytesName) 'mmRawAllocBytes'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocBytesName, runtimeName: MmCounterRawAllocBytesName, arity: MmCounterArity, calleeTok: anchor)
+			end 'mmRawAllocBytes'
+
+			// ⭐ **THE THREAD-COST CLOCK**, beside the counters `PhaseProbe` reads it with. Same door again — an
+			// `int` answer, no arguments, nothing to own. What differs from the six above is not visible here
+			// and is not this file's: they lower to `.data` loads that run everywhere, this to a Win32 import
+			// gated to x64-windows. See `ClockRuntime`'s header.
+			if callee.equals(BuiltinsThreadCpuTicksName) 'threadCpuTicks'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsThreadCpuTicksName, runtimeName: ThreadCpuTicksName, arity: ThreadCpuTicksArity, calleeTok: anchor)
+			end 'threadCpuTicks'
 
 			// ⭐ W35. The two stream writers — one emit, parameterized by the stream's runtime entry point,
 			// because the argument rule and the result are identical and only the destination differs.

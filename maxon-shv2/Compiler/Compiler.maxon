@@ -610,7 +610,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
 	var declaredGlobals = signatures.declaredGlobals(liveGlobals)
 	if usage.usesHeap 'heapGlobals'
-		for entry in runtimeGlobals() 'each'
+		for entry in runtimeGlobals(usage) 'each'
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'heapGlobals'
@@ -637,13 +637,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'subpGlobals'
-	// The wall clock's one out-param scratch word rides its OWN bit, so only a program that reads the
-	// CALENDAR lays it out — a monotonic-clock or scheduler program's `.data` image is unchanged.
-	if usage.usesWallClock 'clockGlobals'
-		for entry in clockRuntimeGlobals() 'each'
-			declaredGlobals.push(entry)
-		end 'each'
-	end 'clockGlobals'
+	// The two host clocks' out-param scratch words. Unlike every neighbour here this call carries NO outer
+	// bit test, because the file it comes from now has TWO entries on two bits and asks them itself
+	// (`clockRuntimeGlobals`) — a gate spelled here as well would be a second copy of that condition, and
+	// the loop over an empty array is exactly the no-op the absent `if` would have produced.
+	for entry in clockRuntimeGlobals(usage) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
 	// The DebugStream producer's six `.data` slots ride the FLAG rather than a usage bit — nothing in a
 	// program can ask for a trace, so `--debugstream` is the only thing that can. The condition is asked of
 	// `buildCarriesDebugStream`, which is where the four parts that must agree about it read it from.
@@ -726,6 +726,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// the end of the table that was actually emitted. `__cpu_count` needs `GetActiveProcessorCount`, which
 	// lives at the end of kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesCpuCount = usage.usesCpuCount
+	// ⭐ **AND THE FOURTH PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
+	// three neighbours. `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of
+	// kernel32's run (see `isOptionalTrailingImport`).
+	pipeline.stdModule.usesThreadCpuTicks = usage.usesThreadCpuTicks
 
 	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
 
@@ -855,10 +859,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// Its co-ownership twin (`__retain_existential`), on its own bit for the same reason.
 	installRetainExistentialRuntime(pipeline.stdModule, usage: usage)
 
-	// The WALL clock (`__clock_now_unix_s`) — installed the same already-lowered way, on its own
-	// `usesWallClock` bit. Its monotonic sibling (`__gt_now_ns`) comes from `installGtRuntime` above instead,
-	// because the SCHEDULER owns that counter: its timer deadlines are expressed in it, and routing both the
-	// scheduler and `__Builtins.currentTimeNanos` to ONE function is what keeps them from disagreeing.
+	// The two host clocks that are not the scheduler's — the WALL clock (`__clock_now_unix_s`) and this
+	// THREAD's CPU consumption (`__thread_cpu_ticks`) — installed the same already-lowered way, each on its
+	// OWN bit. The monotonic sibling (`__gt_now_ns`) comes from `installGtRuntime` above instead, because the
+	// SCHEDULER owns that counter: its timer deadlines are expressed in it, and routing both the scheduler
+	// and `__Builtins.currentTimeNanos` to ONE function is what keeps them from disagreeing.
 	installClockRuntime(pipeline.stdModule, usage: usage)
 
 	// The CPU-parallel checkpoint (`__Builtins.parallelBoundary`), on its own bit for the reason every other

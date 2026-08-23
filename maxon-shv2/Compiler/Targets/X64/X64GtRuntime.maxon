@@ -422,6 +422,11 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		recv gives 0  // 4: s, buf, len, flags
 		closesocket gives 0  // 1: s
 		GetActiveProcessorCount gives 0  // 1: GroupNumber
+		// ⚠ **THE SHIM SWITCHES STACKS, NOT THREADS**, which is the one thing that could have made this
+		// import wrong here: `QueryThreadCycleTime` reports the CALLING THREAD's CPU time, and a green thread
+		// runs on the same M whichever stack its frame sits on. Its out-param is a `.data` word rather than a
+		// stack slot besides, so the switch cannot move the buffer under it either.
+		QueryThreadCycleTime gives 0  // 2: ThreadHandle, CycleTime
 	end 'k'
 end 'gtShimStackArgWordsOf'
 

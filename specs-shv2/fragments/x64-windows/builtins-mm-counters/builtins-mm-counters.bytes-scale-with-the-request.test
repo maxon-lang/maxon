@@ -1,0 +1,182 @@
+// Test: builtins-mm-counters.bytes-scale-with-the-request
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias PushCount = int(0 to 65536)
+
+function volume() returns ByteCount
+	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as ByteCount
+end 'volume'
+
+function fill(n PushCount)
+	var buf = ByteArray.create()
+	for _ in 0 upto n 'push'
+		buf.push(3)
+	end 'push'
+end 'fill'
+
+function main() returns ExitCode
+	let before = volume()
+	fill(16)
+	let afterSmall = volume()
+	fill(1024)
+	let afterLarge = volume()
+	let small = afterSmall - before
+	let large = afterLarge - afterSmall
+	var score = 0
+	if large > small 'bytesScaleWithTheRequest'
+		score = score + 2
+	end 'bytesScaleWithTheRequest'
+	if large >= 1024 'atLeastThePayloadAsked'
+		score = score + 3
+	end 'atLeastThePayloadAsked'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __mm_alloc_total@24 = i64 0
+  __mm_alloc_bytes@32 = i64 0
+  __mm_raw_alloc_count@40 = i64 0
+  __mm_raw_alloc_bytes@48 = i64 0
+}
+
+func @volume {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __mm_counter_alloc_bytes
+    x64.movRegReg rbx, r8
+    x64.callDirect __mm_counter_raw_alloc_bytes
+    x64.leaRegRegReg rax, rbx, r8
+    x64.leaRegRegImm32 r8, rax, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @fill {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 65536
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegReg r13, rbx
+    x64.jcc less, push
+    x64.jmp forexit
+  push:
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect volume
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 16
+    x64.callDirect fill
+    x64.callDirect volume
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 1024
+    x64.callDirect fill
+    x64.callDirect volume
+    x64.movRegReg rax, r12
+    x64.subRegReg rax, r12, rbx
+    x64.subRegReg r8, r8, r12
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, bytesScaleWithTheRequest
+    x64.jmp critsplit#8
+  bytesScaleWithTheRequest:
+    x64.leaRegRegImm32 rax, rcx, 2
+    x64.jmp ifcont#2
+  critsplit#8:
+    x64.movRegReg rax, rcx
+    x64.jmp ifcont#2
+  ifcont#2:
+    x64.cmpRegImm32 r8, 1024
+    x64.jcc greaterEqual, atLeastThePayloadAsked
+    x64.jmp critsplit#9
+  atLeastThePayloadAsked:
+    x64.leaRegRegImm32 rax, rax, 3
+    x64.jmp ifcont#4
+  critsplit#9:
+    x64.jmp ifcont#4
+  ifcont#4:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r8, rax, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

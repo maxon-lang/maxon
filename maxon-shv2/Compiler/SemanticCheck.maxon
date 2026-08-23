@@ -3778,6 +3778,9 @@ end 'functionTypeDoorSite'
 //     and the one whose band-mate is deliberately NOT here: `__sched_max_active_workers` asks the
 //     SCHEDULER rather than the OS and its body is a constant return, so it lowers on every target. See
 //     `CpuParallelRuntime`'s header for why one file wears two prefixes.
+//   • `__thread_*` — `osThreadCpuTicks`'s `QueryThreadCycleTime` (`__Builtins.threadCpuTicks()`). The
+//     THREAD-COST query, and `ClockRuntime`'s second band. Its own band-mate `__clock_*` is already here,
+//     one bullet up; the two are split by which IMPORT they reach, not by whether they lower.
 //
 // ⚠ `__gt_io_park` — the filesystem yield — is deliberately ABSENT, and by this set's own rule: SOURCE never
 // names it. It is reachable only from the `__mf_*`/`__md_*` bodies, and those are already refused below by
@@ -3865,7 +3868,18 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// lowers on every target shv2 emits — so gating it would refuse a `ret`.
 	// `specs-shv2/builtins-cpu-parallel.md` pins BOTH halves, because the refusal case alone cannot tell a
 	// live gate from a compiler that refuses the whole family.
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(IoReadName) or isSubprocessRuntimeCallee(callee) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isManagedSocketRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee) or isCpuCountRuntimeCallee(callee)
+	// The THREAD-COST query (`__Builtins.threadCpuTicks` ⇒ `__thread_cpu_ticks`) joins on the same terms and
+	// by the same PREFIX test. Its own reason is the SHAPE argument once more: `QueryThreadCycleTime` answers
+	// TSC ticks through a `ULONG64*` while `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` answers NANOSECONDS
+	// through a `timespec`, so a POSIX lane is a rung rather than a lowering — and WASI has no per-thread CPU
+	// clock at all. A lowering there could only fabricate a cost, which is the silent wrong answer the
+	// machine query's paragraph refuses one clause up.
+	// ⚠ **ITS BAND-MATE, THE SIX `__mm_counter_*` READERS, IS DELIBERATELY ABSENT** for
+	// `__sched_max_active_workers`'s reason: each is a `.data` load and a `ret`, which lowers on every target
+	// shv2 emits, and the counters they read are maintained by an allocator that runs on all of them.
+	// `specs-shv2/builtins-mm-counters.md` pins that acceptance, which is what makes the refusal below a
+	// NARROW gate rather than a family-wide one.
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(IoReadName) or isSubprocessRuntimeCallee(callee) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isManagedSocketRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee) or isCpuCountRuntimeCallee(callee) or isThreadCpuRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote

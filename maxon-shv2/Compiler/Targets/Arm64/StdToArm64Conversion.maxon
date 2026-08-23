@@ -480,10 +480,9 @@ type StdToArm64Lowering
 			stackRecordAddr gives 0
 			osOpenNamedSegment to osTickCountMs gives 0
 			// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-			// band AND the machine query — is x64-windows
-			// only and never reaches an arm64 frame; it reserves nothing here for the same reason every other
-			// refused op does.
-			osHandleSetInherit to osCpuCount gives 0
+			// band, the machine query AND the thread-CPU read — is x64-windows only and never reaches an arm64
+			// frame; it reserves nothing here for the same reason every other refused op does.
+			osHandleSetInherit to osThreadCpuTicks gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -653,6 +652,10 @@ type StdToArm64Lowering
 			// `SemanticCheck.calleeNeedsWin32Substrate` refuses such a program at its own source span (E3104).
 			// A fabricated count here would be a silent wrong answer about the machine.
 			osCpuCount then panic("lowerStdToArm64: `osCpuCount` is x64-windows only — the machine query is x64-windows-gated at this rung, and SemanticCheck refuses it on every other target")
+			// ⛔ The thread-CPU read is x64-windows only on the same terms: `QueryThreadCycleTime` is a Win32
+			// import, and the POSIX answer (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`) is a different API in a
+			// different unit — a rung rather than a lowering. A stub here would fabricate a cost.
+			osThreadCpuTicks then panic("lowerStdToArm64: `osThreadCpuTicks` is x64-windows only — the thread-CPU clock is x64-windows-gated at this rung, and SemanticCheck refuses it on every other target")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -705,6 +708,7 @@ type StdToArm64Lowering
 			osHandleSetInherit to osProcessTerminate then panic("lowerStdToArm64: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops; they are also x64-windows only)")
 			osSocketStartup to osSocketClose then panic("lowerStdToArm64: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
 			osCpuCount then panic("lowerStdToArm64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op; it is also x64-windows only)")
+			osThreadCpuTicks then panic("lowerStdToArm64: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param; it is also x64-windows only)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

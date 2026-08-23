@@ -108,6 +108,61 @@ let SlabCursorLabel = b"__slab_cursor"
 let SlabEndLabel = b"__slab_end"
 let MmAllocCountLabel = b"__mm_alloc_count"
 
+// ⭐⭐ **THE FOUR MEMORY-TRAFFIC COUNTERS — THE `.data` STATE `__Builtins.mm*()` READS, AND THE ONLY
+// ALLOCATOR STATE THAT EXISTS FOR A READER RATHER THAN FOR THE ALLOCATOR.** `__mm_alloc_count` above is
+// maintained because the LEAK GATE needs it; these four are maintained because `Compiler/PhaseProbe.maxon`
+// asks how much a compile phase cost, and `docs/optimization-log.md` is the trend that answer feeds.
+//
+// ⚠⚠ **THEY EXIST ONLY IN A BUILD THAT READS THEM (`RuntimeUsage.usesMmCounters`), AND THAT GATE IS THE
+// WHOLE REASON THIS FAMILY IS AFFORDABLE.** Their maintenance is not a `.data` word — it is two loads, two
+// adds and two stores on the path EVERY allocation in the language takes. The bootstrap pays that price
+// unconditionally and had to shard the counters per-P to afford it (`RuntimeEmitter.EmitMmGlobals`:
+// a shared locked add measured +3%, and a first cut that also touched the free path +9%). shv2 pays it only
+// where somebody reads the answer, so a program that never asks carries no counter word, no `.data` slot and
+// not one extra instruction on the allocation path — the same rule `--debugstream`'s box prefix follows, for
+// the same reason.
+//
+// ⚠⚠ **AND "BYTE-IDENTICAL" IS NOT THE CLAIM — THE MEASURED ONE IS BETTER STATED AND SMALLER.** Built
+// against a control from the parent commit, an ordinary heap program that reads no counter gets the SAME
+// 13,163-byte image, an identical `.data` image and an identical import table, and **35 differing bytes**:
+// one `mov eax, 1` moved ahead of a `lea` inside `__mm_alloc` and one inside `__mm_free`. That is this
+// rung's DE-DUPLICATION of the counter-update sequence (`emitGlobalAccumulate`), not the counters, and it
+// is behaviour-identical. No golden moves either way: `TargetPrinter.isRuntimeFunction` keeps both bodies
+// out of every fragment.
+//
+// ⭐⭐ **TWO LAYERS, AND THEY ARE NOT THE BOOTSTRAP'S TWO LAYERS.** The bootstrap splits TRACKED
+// (`mm_alloc`, header-carrying) from RAW (`mm_raw_alloc`, the header-free buffers behind arrays and
+// strings), and the two are SIBLINGS. shv2 has no such split: an element buffer here is an ordinary
+// `__mm_alloc` box with a header and a destructor (`MmTag.ElementBuffer`), so the tracked layer already
+// covers everything the bootstrap's two do between them. What shv2 has instead is a layer BENEATH the
+// boxes — `__slab_alloc`, whose direct callers are the green-thread stacks and tables, the subprocess
+// scratch buffers and the DebugStream ring. Those are genuinely header-free and no `__mm_alloc` counter can
+// see them, so they are what this compiler's RAW columns report.
+//
+// ⚠⚠ **THE TWO LAYERS MUST BE DISJOINT, BECAUSE `PhaseProbe` SUMS THEM**, and `__mm_alloc` is itself a
+// `__slab_alloc` caller. Counted naively, every box would be reported twice and `totalAllocs()` would read
+// exactly double. `buildSlabAlloc` therefore builds an UNCOUNTED twin for `__mm_alloc` to call in a counted
+// build — see `SlabAllocBoxName`.
+//
+// ⚠ **`__mm_alloc_bytes` COUNTS THE PAYLOAD THE CALLER ASKED FOR, NOT THE BOX.** It excludes the header
+// and the `--debugstream` prefix word, so the figure is identical across a traced and an untraced build —
+// the bootstrap's rule verbatim, and what makes the column comparable between them.
+let MmAllocTotalLabel = b"__mm_alloc_total"
+let MmAllocBytesLabel = b"__mm_alloc_bytes"
+let MmRawAllocBytesLabel = b"__mm_raw_alloc_bytes"
+
+// ⭐ **ONE SLOT ANSWERS BOTH RAW COLUMNS, BECAUSE shv2's SLAB NEVER RECLAIMS.** `__mm_free` reclaims
+// nothing (this file's header says so: no free list, no size classes), and NOTHING anywhere returns a slab
+// span. A live count over a population that is never reduced IS the cumulative count, at every observation
+// point, in every program — so a second slot would be a second name for one number, and the two would
+// differ only by a bug.
+//
+// ⚠ **THAT IS A READING OF THIS RUNTIME, NOT A SHORTCUT**, and it is where it stops being true: the day a
+// free list lands, the reclaim path decrements a LIVE slot and this splits into the two the bootstrap has.
+// `builtins-mm-counters.md`'s `raw-live-equals-raw-total` is what goes red that day, which is why it is
+// pinned.
+let MmRawAllocCountLabel = b"__mm_raw_alloc_count"
+
 export let SlabAllocName = b"__slab_alloc"
 export let MmIncrefName = b"__mm_incref"
 export let MmRetainName = b"__mm_retain"
@@ -115,6 +170,56 @@ export let MmAllocName = b"__mm_alloc"
 export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
 export let MmLeakCheckName = b"__mm_leak_check"
+
+// ⭐ **THE UNCOUNTED TWIN OF THE BUMP ALLOCATOR, BUILT ONLY IN A COUNTED BUILD, AND CALLED ONLY BY
+// `__mm_alloc`.** Same body, same builder, one difference: it does not touch the RAW columns, because the
+// bytes it hands back are about to be reported as a TRACKED box and the two layers must not overlap (see
+// `MmRawAllocCountLabel`). An UNCOUNTED build never emits it and `__mm_alloc` calls `__slab_alloc` exactly
+// as it always has, so such a build carries exactly one bump allocator, as it always has.
+//
+// ⚠ **A SECOND BODY RATHER THAN A DISCRIMINATOR ARGUMENT, AND THE TRADE IS NOT CLOSE.** A flag parameter
+// would put a branch on the hot path of every allocation in the language; a compensating subtraction inside
+// `__mm_alloc` would put six more ops there. This costs ~25 ops of CODE SIZE in the one build that reads
+// the counters, nothing at runtime, and the two bodies cannot drift because there is one builder.
+//
+// ⚠ It is NOT `export`ed: nothing outside this file may call it, because calling it is exactly the
+// decision this file makes on `__mm_alloc`'s behalf.
+let SlabAllocBoxName = b"__slab_alloc_box"
+
+// ⭐⭐ **THE SIX MEMORY-TRAFFIC COUNTER ACCESSORS — the floor of `__Builtins.mmAllocTotal()` and its five
+// siblings, and so of `PhaseProbe`'s `totalAllocs`/`liveAllocs`/`totalAllocBytes`.** Each is a bare load of
+// one `.data` word; the SUMMING of the two layers is the caller's job, exactly as it is under the
+// bootstrap, because only the raw live count can say whether a header-free BUFFER leaked.
+//
+// ⭐ **WHY SIX AND NOT FOUR: `frees` IS DERIVED, NOT COUNTED** — `freed = Δtotal − Δlive`, which needs a
+// cumulative AND a live counter IN EACH LAYER. `PhaseProbe.elapsed` computes exactly that.
+//
+// ⚠ Two of the six read ONE slot (`MmRawAllocCountLabel`), because in this runtime the raw live count and
+// the raw cumulative count are the same number — see that label for why, and for the day it stops being
+// true. They are still two entry points: the SURFACE is the bootstrap's, and a caller asking a different
+// question must be able to spell it even where today's answers coincide.
+//
+// ⭐ **THEY WEAR THE `__mm_` PREFIX ON PURPOSE, WHICH IS WHAT DECLARES THE HEAP DEPENDENCY.**
+// `isRuntimeCallee` matches them, so a program that reads a counter carries the allocator whose state that
+// counter IS — without it the slots below are never laid out and the read would be a `globalAddr` at an
+// address the image does not have. The NARROWER `__mm_counter_` test beside it is what additionally turns on
+// the MAINTENANCE; the two tests are a wide/narrow pair, exactly like `__gt_`/`__gt_io_read`.
+let MmCounterCallPrefix = b"__mm_counter_"
+
+export let MmCounterAllocTotalName = b"__mm_counter_alloc_total"
+export let MmCounterAllocLiveName = b"__mm_counter_alloc_live"
+export let MmCounterAllocBytesName = b"__mm_counter_alloc_bytes"
+export let MmCounterRawAllocTotalName = b"__mm_counter_raw_alloc_total"
+export let MmCounterRawAllocLiveName = b"__mm_counter_raw_alloc_live"
+export let MmCounterRawAllocBytesName = b"__mm_counter_raw_alloc_bytes"
+
+// ⭐ **DOES THIS CALLEE READ THE ALLOCATOR'S TRAFFIC COUNTERS?** The `__mm_counter_`-only test — a strict
+// refinement of `isRuntimeCallee` above it, and the thing `RuntimeUsage.usesMmCounters` reads. A PREFIX
+// rather than six name compares for `isProcessRuntimeCallee`'s reason: a seventh column added later is
+// gated by construction rather than by memory.
+export function isMmCounterCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: MmCounterCallPrefix)
+end 'isMmCounterCallee'
 
 // ⭐ **`__mm_is_null(ptr)` — IS THIS `__ManagedMemory` THE NULL SENTINEL?** The floor of
 // `__Builtins.managedIsNull(mm)`, whose only corpus caller is `stdlib/Subprocess.maxon:487` testing the
@@ -366,11 +471,24 @@ end 'isSignaturelessCompilerCallee'
 // The runtime's `.data` slots, appended to the user's declared globals before `layOut` orders them.
 // They are ordinary slots in every respect — `layOut` sorts and offsets them exactly as it does a
 // user's `var`, and the image writer renders them the same way. Nothing here is special-cased.
-export function runtimeGlobals() returns DataSectionEntryArray
+export function runtimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 	out.push(DataSectionEntry.create(String.from(SlabCursorLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(SlabEndLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(MmAllocCountLabel), valueType: StdType.i64, value: 0))
+
+	// The four traffic counters ride their OWN bit, so a program that never asks how much it allocated has
+	// the `.data` image it has always had — the same discipline every other runtime family's slots follow,
+	// and here it also gates the MAINTENANCE those slots would otherwise oblige (see `MmAllocTotalLabel`).
+	// Their zero initializer is the honest starting state for a cumulative counter, exactly as the slab
+	// cursor's is for an unopened arena.
+	if usage.usesMmCounters 'trafficCounters'
+		out.push(DataSectionEntry.create(String.from(MmAllocTotalLabel), valueType: StdType.i64, value: 0))
+		out.push(DataSectionEntry.create(String.from(MmAllocBytesLabel), valueType: StdType.i64, value: 0))
+		out.push(DataSectionEntry.create(String.from(MmRawAllocCountLabel), valueType: StdType.i64, value: 0))
+		out.push(DataSectionEntry.create(String.from(MmRawAllocBytesLabel), valueType: StdType.i64, value: 0))
+	end 'trafficCounters'
+
 	return out
 end 'runtimeGlobals'
 
@@ -416,8 +534,13 @@ end 'ValueMinter'
 // references `__mm_incref` but never `__mm_retain`, and vice versa), so folding either bit into the
 // other would install an unreachable copy of the unused one in the program that references only the other.
 export function installMmRuntime(module StdModule, usage RuntimeUsage)
-	buildSlabAlloc(module)
-	buildMmAlloc(module)
+	buildSlabAlloc(module, name: SlabAllocName, countRaw: usage.usesMmCounters)
+	// The uncounted twin, in a counted build only — the one `__slab_alloc` caller whose bytes are already
+	// reported as a TRACKED box. See `SlabAllocBoxName`.
+	if usage.usesMmCounters 'boxSlab'
+		buildSlabAlloc(module, name: SlabAllocBoxName, countRaw: false)
+	end 'boxSlab'
+	buildMmAlloc(module, usage: usage)
 	buildMmDecref(module)
 	buildMmFree(module)
 	buildMmLeakCheck(module, usage: usage)
@@ -444,6 +567,13 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesManagedMemory 'cowDetach'
 		buildMmCowDetach(module)
 	end 'cowDetach'
+
+	// The six traffic-counter readers, on the bit that also turns on the writers above. Installing them
+	// without the maintenance would be the silent-wrong-answer shape this project keeps naming — six
+	// functions faithfully reporting slots nothing had written.
+	if usage.usesMmCounters 'trafficCounters'
+		buildMmCounterAccessors(module)
+	end 'trafficCounters'
 end 'installMmRuntime'
 
 // One i64 parameter — the shape five of the six runtime functions share. Exported: the String
@@ -672,6 +802,24 @@ export function emitUnary(module StdModule, block IrBlock, operand ValueId, opco
 	module.appendOp(block, op: StdOp.unaryOp(v, operand: operand, opcode: opcode, operandType: operandType))
 	return v
 end 'emitUnary'
+
+// ⭐⭐ **`[label] = [label] <opcode> operand`, AND THE UPDATED VALUE — THE ONE SPELLING OF A `.data`
+// COUNTER UPDATE.** Six sites in this file maintain a counter word: the live allocation count on the alloc
+// and free paths, the four traffic columns, and the `--debugstream` allocation-id mint. Every one of them
+// was the identical five-op sequence, and six copies of `load / combine / store` is six chances to read one
+// slot and store another.
+//
+// ⚠ **IT ANSWERS THE UPDATED VALUE FOR THE ONE CALLER THAT NEEDS IT** — the allocation-id mint, whose
+// whole purpose is the number it just stored. The six counter updates are STATEMENTS and say so with `_ =`,
+// which is cheaper than a second entry point differing from this one only in having no `return`.
+function emitGlobalAccumulate(module StdModule, block IrBlock, label ByteArray, operand ValueId, opcode StdBinOpcode, ids ValueMinter) returns ValueId
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
+	let current = emitLoadField(module, block: block, record: addr, offset: 0, ids: ids)
+	let updated = emitBin(module, block: block, a: current, b: operand, opcode: opcode, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0, valueId: updated, valueType: StdType.i64))
+	return updated
+end 'emitGlobalAccumulate'
 
 // A fresh i64 constant.
 export function emitConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter) returns ValueId
@@ -904,8 +1052,12 @@ end 'emitFillRange'
 // recycling must memzero on the free-list path, or `Point.create` starts reading a dead object's
 // bytes. Non-zeroing alloc cost v1 three separately root-caused bugs, each "fixed" by bolting a
 // zeroing loop onto the caller. See ARCHITECTURE.md → "Allocator: the zeroing contract".
-function buildSlabAlloc(module StdModule)
-	var func = IrFunction.createFromStd(SlabAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+//
+// ⭐ **`countRaw` DECIDES WHETHER THIS BODY MAINTAINS THE RAW TRAFFIC COLUMNS**, which is what makes this
+// one builder serve both `__slab_alloc` and its uncounted twin `__slab_alloc_box`. An UNCOUNTED build never
+// asks for the twin and never sets the flag, so its `__slab_alloc` is the function it has always been.
+function buildSlabAlloc(module StdModule, name ByteArray, countRaw bool)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -914,6 +1066,15 @@ function buildSlabAlloc(module StdModule)
 
 	emitParams(module, block: entry, count: 1)
 	let size = 0 as ValueId
+
+	// The RAW columns, credited in the ENTRY block — before the arena test, because the request is counted
+	// whichever path serves it and `size` is the number either way. A grow serves the same request from a
+	// fresh arena; it is one allocation, not two.
+	if countRaw 'rawColumns'
+		let one = emitConst(module, block: entry, value: 1, ids: ids)
+		_ = emitGlobalAccumulate(module, block: entry, label: MmRawAllocCountLabel, operand: one, opcode: StdBinOpcode.add, ids: ids)
+		_ = emitGlobalAccumulate(module, block: entry, label: MmRawAllocBytesLabel, operand: size, opcode: StdBinOpcode.add, ids: ids)
+	end 'rawColumns'
 
 	// `cursorAddr` and `endAddr` are computed once in the entry block and read in BOTH successors —
 	// ordinary SSA, since entry dominates them. `globalAddr` is `isPure: true` and freely
@@ -974,7 +1135,7 @@ end 'buildSlabAlloc'
 // TAKES a function's address and CALLS one through a register — `funcAddr`/`callIndirect` — is
 // therefore deferred to P1.2, where `__destruct_String` is a real consumer with a real reason to
 // be right: a String that does not free its buffer leaks, and the leak gate below says so.
-function buildMmAlloc(module StdModule)
+function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	// ⚠ **THE ARITY IS THE FLAG'S, AND THAT IS WHY EVERY CALL SITE GOES THROUGH `emitMmAllocCall`.** A
 	// `--debugstream` build takes a THIRD argument — the allocation's tag index — because a tag cannot be
 	// recovered from a pointer later and this is the only moment it is known. A normal build takes two, as
@@ -995,7 +1156,10 @@ function buildMmAlloc(module StdModule)
 	let total = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(total, lhs: size, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let allocation = ids.mint()
-	module.appendOp(entry, op: StdOp.call(allocation, callee: SlabAllocName, args: argsOf(total)))
+	// ⚠ **THE UNCOUNTED SLAB ENTRY IN A COUNTED BUILD.** These bytes are about to be reported as a TRACKED
+	// box, and the two layers `PhaseProbe` sums must be disjoint — see `SlabAllocBoxName`.
+	let slabCallee = SlabAllocBoxName if usage.usesMmCounters else SlabAllocName
+	module.appendOp(entry, op: StdOp.call(allocation, callee: slabCallee, args: argsOf(total)))
 
 	// The DebugStream prefix word, when this build has one: `(alloc_id << 16) | tag_index`, stamped once
 	// here and read back by every later event on this box. `alloc_id` PRE-increments a monotonic counter,
@@ -1012,13 +1176,8 @@ function buildMmAlloc(module StdModule)
 	var base = allocation
 	var packedId = 0 as ValueId
 	if module.debugStream 'stampPackedId'
-		let counterAddr = ids.mint()
-		module.appendOp(entry, op: StdOp.globalAddr(counterAddr, label: DsAllocIdLabel))
-		let previous = ids.mint()
-		module.appendOp(entry, op: StdOp.loadIndirect(previous, addrId: counterAddr, offset: 0, valueType: StdType.i64))
 		let one = emitConst(module, block: entry, value: 1, ids: ids)
-		let allocId = emitBin(module, block: entry, a: previous, b: one, opcode: StdBinOpcode.add, ids: ids)
-		module.appendOp(entry, op: StdOp.storeIndirect(counterAddr, offset: 0, valueId: allocId, valueType: StdType.i64))
+		let allocId = emitGlobalAccumulate(module, block: entry, label: DsAllocIdLabel, operand: one, opcode: StdBinOpcode.add, ids: ids)
 		let shift = emitConst(module, block: entry, value: DsMmPackedIdShift, ids: ids)
 		let shifted = emitBin(module, block: entry, a: allocId, b: shift, opcode: StdBinOpcode.shl, ids: ids)
 		packedId = emitBin(module, block: entry, a: shifted, b: tagIndex, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -1038,15 +1197,16 @@ function buildMmAlloc(module StdModule)
 	// slab survive three bugs: every call site "handled" it locally, so nobody fixed the allocator.
 	// If this line ever becomes necessary, the allocator is broken, not this function.
 
-	let countAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: MmAllocCountLabel))
-	let count = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
-	let oneConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	let raised = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(raised, lhs: count, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: raised, valueType: StdType.i64))
+	let oneConst = emitConst(module, block: entry, value: 1, ids: ids)
+	_ = emitGlobalAccumulate(module, block: entry, label: MmAllocCountLabel, operand: oneConst, opcode: StdBinOpcode.add, ids: ids)
+
+	// The TRACKED traffic columns, in a build that reads them. `size` and not `total`: the figure is the
+	// payload the caller asked for, so it does not move when the header does and is identical across a
+	// traced and an untraced build (see `MmAllocTotalLabel`).
+	if usage.usesMmCounters 'trackedColumns'
+		_ = emitGlobalAccumulate(module, block: entry, label: MmAllocTotalLabel, operand: oneConst, opcode: StdBinOpcode.add, ids: ids)
+		_ = emitGlobalAccumulate(module, block: entry, label: MmAllocBytesLabel, operand: size, opcode: StdBinOpcode.add, ids: ids)
+	end 'trackedColumns'
 
 	let payload = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(payload, lhs: base, rhs: payloadOffset, opcode: StdBinOpcode.add, operandType: StdType.i64))
@@ -1421,15 +1581,14 @@ function buildMmFree(module StdModule)
 	var entry = emitMmFreeEvent(module, func: func, block: start, ptr: ptr, ids: ids)
 
 	// Drop the live count — the one number the leak gate reads.
-	let countAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: MmAllocCountLabel))
-	let count = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
-	let oneConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	let lowered = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(lowered, lhs: count, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: lowered, valueType: StdType.i64))
+	//
+	// ⚠ **THE CUMULATIVE COLUMNS ARE DELIBERATELY NOT TOUCHED HERE**, and their absence is what makes them
+	// mean anything: `__mm_alloc_total` and `__mm_alloc_bytes` are MONOTONIC by construction, so they delta
+	// exactly across a phase boundary and `PhaseProbe` can derive frees as `Δtotal − Δlive`. A free path that
+	// walked them back would report a phase that allocated and released a million boxes as having done
+	// nothing.
+	let oneConst = emitConst(module, block: entry, value: 1, ids: ids)
+	_ = emitGlobalAccumulate(module, block: entry, label: MmAllocCountLabel, operand: oneConst, opcode: StdBinOpcode.sub, ids: ids)
 
 	// The payload size the alloc recorded in the header; the range to poison is exactly `[ptr, ptr + size)`.
 	// The fill itself is the shared `emitFillRange` (the array capacity-slot zeroer is its other caller) — a
@@ -1442,6 +1601,53 @@ function buildMmFree(module StdModule)
 
 	module.functions.push(func)
 end 'buildMmFree'
+
+// ⭐⭐ **THE SIX TRAFFIC-COUNTER READERS.** Each is one `globalAddr`, one load and a `ret` — the whole of
+// what `__Builtins.mmAllocTotal()` and its five siblings do. They are FUNCTIONS rather than an inline load
+// at the call site because that is the door every argumentless integer intrinsic in this compiler takes
+// (`Parser.emitIntegerZeroArgIntrinsic`), and because it keeps the slot geometry private to this file: the
+// four labels are `let`, not `export let`, exactly as the slab cursor is.
+//
+// ⚠ **THE RAW PAIR READS ONE SLOT.** `raw live` and `raw total` are the same number in this runtime, and
+// `MmRawAllocCountLabel` owns the argument for why — including where it stops holding.
+//
+// One builder over a name/label table rather than six near-identical bodies: the only thing that differs
+// between them is which word to load, so that is the only thing passed in.
+//
+// ⚠ **ONE BIT INSTALLS ALL SIX, WHICH IS THE OPPOSITE OF `installProcessRuntime`'s AND
+// `installCpuParallelRuntime`'s ONE-GUARD-PER-ENTRY RULE — and the difference is the same difference those
+// files' own headers turn on.** There, the entries cost wildly different amounts and a program wants ONE of
+// them (a pid is a call op; an executable path is a doubling retry loop that installs the whole
+// managed-memory runtime). Here all six are a `globalAddr`, a load and a `ret`, and the one caller that
+// exists reads ALL SIX together — `PhaseProbe` sums the layers, so a `total` without its `live` cannot
+// answer anything. Six bits would be six declarations to save about thirty instructions in the one build
+// that already asked for the counters, while the cost this family actually has — the MAINTENANCE on the
+// allocation path — is gated by the bit that is here.
+function buildMmCounterAccessors(module StdModule)
+	buildGlobalReader(module, name: MmCounterAllocTotalName, label: MmAllocTotalLabel)
+	buildGlobalReader(module, name: MmCounterAllocLiveName, label: MmAllocCountLabel)
+	buildGlobalReader(module, name: MmCounterAllocBytesName, label: MmAllocBytesLabel)
+	buildGlobalReader(module, name: MmCounterRawAllocTotalName, label: MmRawAllocCountLabel)
+	buildGlobalReader(module, name: MmCounterRawAllocLiveName, label: MmRawAllocCountLabel)
+	buildGlobalReader(module, name: MmCounterRawAllocBytesName, label: MmRawAllocBytesLabel)
+end 'buildMmCounterAccessors'
+
+// `name() -> i64` — the i64 held in one `.data` word. The read is deliberately RACY against a concurrently
+// allocating thread, exactly as asking a running program how much memory it has allocated is: a caller that
+// needs an exact answer reads it at a point where it owns every thread that allocates, which is what
+// `PhaseProbe`'s phase brackets are.
+function buildGlobalReader(module StdModule, name ByteArray, label ByteArray)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	let addr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(addr, label: label))
+	let value = emitLoadField(module, block: entry, record: addr, offset: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(value))
+
+	module.functions.push(func)
+end 'buildGlobalReader'
 
 // ⭐⭐ **THE PER-UNION DESTRUCTOR CASCADE (P1.3 slice 2).** Synthesize `__destruct_<U>(box)` for every
 // managed-payload union whose destructor is REFERENCED (`needed`, collected from the module's

@@ -1,0 +1,92 @@
+// Test: builtins-clock.thread-cpu-ticks-advances-under-work
+function main() returns ExitCode
+	let before = __Builtins.threadCpuTicks()
+	var sum = 0
+	for i in 0 upto 2000000 'spin'
+		sum = sum + i
+	end 'spin'
+	let after = __Builtins.threadCpuTicks()
+	var score = 0
+	if sum > 0 'workHappened'
+		score = score + 1
+	end 'workHappened'
+	if after > before 'cpuAdvanced'
+		score = score + 3
+	end 'cpuAdvanced'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __thread_cpu_ticks_out@0 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __thread_cpu_ticks
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 2000000
+    x64.jcc less, spin
+    x64.jmp forexit
+  spin:
+    x64.leaRegRegReg r12, r12, rax
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.callDirect __thread_cpu_ticks
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greater, workHappened
+    x64.jmp critsplit#12
+  workHappened:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#6
+  critsplit#12:
+    x64.jmp ifcont#6
+  ifcont#6:
+    x64.cmpRegReg r8, rbx
+    x64.jcc greater, cpuAdvanced
+    x64.jmp critsplit#13
+  cpuAdvanced:
+    x64.leaRegRegImm32 rax, rax, 3
+    x64.jmp ifcont#8
+  critsplit#13:
+    x64.jmp ifcont#8
+  ifcont#8:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r8, rax, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
