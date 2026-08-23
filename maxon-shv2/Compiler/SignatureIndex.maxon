@@ -331,6 +331,20 @@ let ConstShapeContainerValue = 70 as ContentHash
 // the reason stated above — and deliberately not the arguments, which reach only `__module_init`.
 let ConstShapeFactoryValue = 71 as ContentHash
 
+// A top-level binding that folded to a BOXED UNION'S PAYLOAD-FREE CASE. Its own discriminator for
+// `ConstShapeContainerValue`'s reason: `let t = MaxonType.unresolved` becoming `let t = SomeOther.case`
+// keeps the label and the load and changes the slot's TYPE, so every reader's `match` is built over a
+// different union.
+//
+// ⚠ What rides beside it is the UNION's NAME and deliberately NOT the case, which is the array arm's rule:
+// every reader emits `globalAddr <label>` + `loadIndirect` byte-identically whichever case was named, and
+// the case reaches only `__module_init`, which is rebuilt from this arena whenever this query misses.
+//
+// ⚠ **108 BECAUSE IT IS PAST THE MAXIMUM, not because a gap was picked.** The header above records three
+// duplicate claims in this space and predicts a fourth that nothing can refuse; taking a number above every
+// existing one is the only choice a reader can verify without trusting a census.
+let ConstShapeBoxedUnionValue = 108 as ContentHash
+
 // ⛔⛔ **`ConstShapeCharacterSetValue` HELD 103 AND WENT AT W129 WITH THE OUTCOME IT DISCRIMINATED, BUT ITS
 // LESSON IS THE NUMBER SPACE AND THAT DOES NOT GO WITH IT.** It held **72** — `DeclShapeConformanceBinding`'s
 // number — for eight days, the THIRD time this space has had two claimants for one number (W81 review):
@@ -823,6 +837,18 @@ export union TopLevelConstant
 	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
 	// and fails to compile until it has been visited and decided.
 	factoryValue(calls ConstFactoryCallArray, root InitializerCallId, returnType MaxonType)
+	// ⭐⭐ **IT EVALUATED TO A BOXED UNION'S PAYLOAD-FREE CASE** — `let NoPayloadStorage =
+	// MaxonType.unresolved`, the shape the compiler's own source uses to keep ONE sentinel box for a whole
+	// compile. Its own arm for `arrayValue`'s reason: the value is a HEAP record needing a `.data` slot, not a
+	// number a reader inlines nor bytes a reader re-materializes.
+	//
+	// It carries the two SPELLINGS that identify the case and nothing derived from them — bytes and not ids,
+	// for `value`'s reason. Every layout fact (the tag's number, the box's size, which slots to zero) is
+	// resolved where the registry lives, so a fold cannot hand the synthesis a stale box shape.
+	//
+	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
+	// and fails to compile until it has been visited and decided.
+	boxedUnionValue(typeName ByteArray, caseName ByteArray)
 	// ⚠ **A `characterSetValue` ARM WAS APPENDED PAST THIS ONE AND WENT AT W129**, with the compiler-owned
 	// `CharacterSet` record a global could hold. What it demonstrated is this union's own rule and is why the
 	// rule is written here: appended at the END, it fell OUTSIDE six existing range arms — `managedValue to
@@ -1148,6 +1174,20 @@ export union ManagedGlobalRecord
 	// elements — and it is what made the ADD callee ride `create` rather than being `__managed_push` written
 	// into the emitter (a `Set` inserts).
 	containerRecord(create ContainerCreateCall, elements ConstArrayElementArray)
+	// ⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE HAS NO LITERAL IMAGE EITHER — the record IS the box.**
+	// `boxSize` bytes from `__mm_alloc`, the case's `tag` at offset 0, every payload slot ZEROED. It is the
+	// fourth point on the line the container arm draws: a record with no constant image, built rather than
+	// blitted — and the narrowest of them, since nothing is stored into it that a fold did not already know.
+	//
+	// ⚠ **THE ZERO-FILL IS PART OF THE RECORD FORMAT, NOT HOUSEKEEPING OVER ALREADY-ZEROED SLAB MEMORY.**
+	// `Parser.emitEnumBox` pins the same deterministic 0 in the unused slots and says why: a NULL slot is
+	// exactly what the destructor cascade's null-guard skips, so a zeroed managed slot is never decref'd as a
+	// bogus pointer. A global's box and a body's box of the same case must be the same bytes, or the one
+	// `__destruct_<U>` that drops both would be right about only one of them.
+	//
+	// The offsets and the size are the LAYOUT's, resolved where the layout registry lives
+	// (`boxedUnionRecordOf`) — `builtStructBox`'s discipline, and the reason nothing here reads a registry.
+	boxedUnionCaseRecord(tag ParsedInt, payloadSlotOffsets ByteOffsetArray, boxSize ByteOffset)
 	// ⚠ **A `characterSetRecord` ARM STOOD HERE AND WENT AT W129.** It was the ONE compiler-owned record a
 	// global could hold — a member set plus the mask `__cs_make` sealed it into a box with — and it was here
 	// rather than in the factory arena because it was not a CALL the author wrote: shv2 had no
@@ -1726,6 +1766,14 @@ export union ConstFoldedValue
 	// resolved to. That difference is exactly why the `from` form exists at all: a bare `['a', 'e']` is an
 	// array of characters, and only the alias can say the container is a `Set` over them.
 	containerCreate(giid GenericInstanceId, elements ConstArrayElementArray)
+	// ⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE — `MaxonType.unresolved`, `Boxed.plain`.** Its own arm because
+	// its value is none of the three above: not a number, not a literal's bytes, not a list — a BOX, whose
+	// entire content is a tag word beside some zeroed slots. Nothing about it is folded in the sense the other
+	// arms are; what this answer carries is WHICH case, and the box is built before `main` by `__module_init`.
+	//
+	// ⚠ **BYTES, NOT INTERNED IDS**, for `ConstValue.typeName`'s reason: the evaluator is a throwaway parser
+	// built per declaration, so an id minted during the fold names nothing in the index that reads it.
+	boxedUnionCase(typeName ByteArray, caseName ByteArray)
 	// ⚠ **A `characterSet` ARM STOOD HERE AND WENT AT W129** — `containerCreate` plus the mask `__cs_make`
 	// sealed the member set into a box with. It is `ManagedGlobalRecord`'s deleted `characterSetRecord` at
 	// this tier, and the two went together because the pair is the same fact stated on each side of the fold.
@@ -1784,7 +1832,7 @@ end 'constScalarOf'
 function foldedConstScalarOf(folded ConstFoldedValue) returns ConstScalarLookup
 	match folded 'folded'
 		scalar(constant) then return ConstScalarLookup.scalar(constant)
-		managed to containerCreate then return ConstScalarLookup.notAScalar
+		managed to boxedUnionCase then return ConstScalarLookup.notAScalar
 	end 'folded'
 end 'foldedConstScalarOf'
 
@@ -13074,7 +13122,7 @@ export type ProgramSignatures
 				// Already settled by an earlier decl's DFS — it referenced this one. A managed constant is
 				// settled too; it is simply not reachable BY a reference (see `evaluateDecl`).
 				value to poisoned then break 'state'
-				managedValue to factoryValue then break 'state'
+				managedValue to boxedUnionValue then break 'state'
 				evaluating then panic("ProgramSignatures.evaluateInitializers: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
 				pending then self.startDecl(i)
 			end 'state'
@@ -13190,7 +13238,11 @@ export type ProgramSignatures
 			// `let N = db` is `Undefined constant 'db'`, in both declaration orders, exactly as the other
 			// record kinds already are — which is what keeps the arena free of any initialization ORDER to
 			// get wrong: no admitted initializer can name another global.
-			managedValue to factoryValue then return ConstEvalOutcome.notFound
+			// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE joins them and widens the boundary by nothing either: its
+			// value is a heap box, so there is no more for an arithmetic fold to do with it than with an
+			// array's record. `let A = MaxonType.unresolved` / `let B = A` is `Undefined constant 'A'`, in both
+			// declaration orders, exactly as every other record kind already is.
+			managedValue to boxedUnionValue then return ConstEvalOutcome.notFound
 			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
 			evaluating then return self.recordCycle(index, stack: stack)
 			pending then break 'state'
@@ -13299,6 +13351,7 @@ export type ProgramSignatures
 			managed(bytes, managedKind) then return self.settleManagedValue(decl, bytes: bytes, kind: managedKind)
 			arrayLiteral(elements, element) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.arrayValue(elements, element: element))
 			containerCreate(giid, elements) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.containerValue(giid, elements: elements))
+			boxedUnionCase(typeName, caseName) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.boxedUnionValue(typeName, caseName: caseName))
 		end 'kind'
 	end 'settleFoldedValue'
 
@@ -13356,7 +13409,7 @@ export type ProgramSignatures
 			failed to poisoned then break 'state'
 			evaluating then decl.outcome = TopLevelConstant.poisoned
 			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a scalar value AND failed to evaluate — an initializer produces one or the other")
-			managedValue to factoryValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
+			managedValue to boxedUnionValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
 			pending then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' is `pending` while unwinding its own evaluation — `evaluateDecl` marks it `evaluating` before the walk")
 		end 'state'
 	end 'poisonIfUndecided'
@@ -13585,6 +13638,16 @@ export type ProgramSignatures
 			// ⭐ A CONTAINER FACTORY reads as an array literal does — a POINTER slot holding the record
 			// `__module_init` built — and its type needs no inference at all: the alias named the instance.
 			containerValue(giid, _) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.genericInstance(giid), mutable: decl.mutable)
+			// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE reads as a container factory does — a POINTER slot holding
+			// the box `__module_init` built — and its type needs no inference either: the initializer named the
+			// union outright. It is tagged `named(<union>)`, the tag `Parser.emitEnumBox` mints a body's box
+			// at, so a `match` on the global recognizes it through the one `enumMatchFor` door.
+			//
+			// ⚠ **INTERNED INTO THE READER'S TABLE (`into`), WHICH IS WHY THE OUTCOME CARRIES BYTES.** This is
+			// the adoption trap the note below records, avoided at the source rather than repaired after: a
+			// `named` id minted in the INDEX's interner is meaningless in a file's parse, so nothing here has
+			// an id to hand over wrongly.
+			boxedUnionValue(typeName, _) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.named(into.intern(typeName)), mutable: decl.mutable)
 			// ⚠ A `CharacterSet` PRESET was a sixth arm until W129. Its ONE surviving lesson is the ADOPTION the
 			// factory arm below still performs: a `structRef` id is meaningless outside the table that minted it,
 			// and that one was minted in the INDEX's — so handing it to a file's parse unadopted panicked in
@@ -13745,7 +13808,7 @@ export type ProgramSignatures
 			// Everything that is not a stored RECORD: unevaluated, a folded scalar, or a failure. None has a
 			// slot that can be null, so none can be lazy.
 			pending to poisoned then return false
-			managedValue to factoryValue then return true
+			managedValue to boxedUnionValue then return true
 		end 'state'
 	end 'declSlotIsLazy'
 
@@ -13760,6 +13823,10 @@ export type ProgramSignatures
 			pending to arrayValue then return TopLevelInitializerCall.none
 			containerValue(giid, _) then return self.containerInitializerCall(giid)
 			factoryValue(calls, _, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(calls))
+			// A BOXED UNION'S PAYLOAD-FREE CASE calls nothing: `__module_init` allocates the box and stores a
+			// tag it already knows, so there is no callee to root and nothing that can print, throw or mutate.
+			// It cannot join the range above, which ends before the two arms that DO call.
+			boxedUnionValue then return TopLevelInitializerCall.none
 		end 'state'
 	end 'declInitializerCall'
 
@@ -13792,6 +13859,11 @@ export type ProgramSignatures
 			// deleted it). The arena arm is the only thing this question parts on.
 			pending to containerValue then return ConstConstructionFieldLookup.none
 			factoryValue(calls, _, _) then return self.existentialFieldOfArena(calls)
+			// ⚠ **AND IT IS THREE ARMS AGAIN, for exactly the reason the note above records.** A boxed union's
+			// payload-free case builds a box from a layout and yet has NO field to be existential — a
+			// payload-free case has no slot a value could be stored in — so it answers `none` with the range
+			// above and cannot join it, being appended past the arena arm that splits them.
+			boxedUnionValue then return ConstConstructionFieldLookup.none
 		end 'state'
 	end 'existentialFieldOfConstConstruction'
 
@@ -13885,12 +13957,17 @@ export type ProgramSignatures
 
 	// The callee a FOLDED argument contributes, which is one only for a declared generic's empty container.
 	//
-	// A range arm over every non-container folded kind, ending at the current last variant, so an arm
-	// appended past `containerCreate` FAILS TO COMPILE here rather than being silently filed as "calls nothing".
+	// A range arm over every non-container folded kind, so an arm appended past `containerCreate` FAILS TO
+	// COMPILE here rather than being silently filed as "calls nothing" — which is exactly what it did when
+	// `boxedUnionCase` arrived, and why that one is spelled out below instead of joining a range it sits past.
 	function appendFoldedArgumentCallee(callees ByteArrayArray, folded ConstFoldedValue)
 		match folded 'value'
 			scalar to arrayLiteral then return
 			containerCreate(giid, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+			// A BOXED UNION'S PAYLOAD-FREE CASE contributes no callee: `__module_init` allocates its box and
+			// stores a tag the fold already knew, so there is no declared body for the reachability walk to
+			// root. It answers with the range above and cannot join it, being appended past the container arm.
+			boxedUnionCase then return
 		end 'value'
 	end 'appendFoldedArgumentCallee'
 
@@ -14010,11 +14087,16 @@ export type ProgramSignatures
 				// record it will point at cannot be baked into a constant image — a data→data pointer has no
 				// compile-time VA under ASLR (`specs/static-variables.md:729-730`) — so the bytes are zero
 				// here and `__module_init` writes the address before `main` runs.
-				managedValue to containerValue then entries.push(self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
+				managedValue to containerValue then entries.push(self.materializedRecordSlot(decl))
 				// ⭐ A FACTORY-CALL GLOBAL reserves the SAME null POINTER slot, for the same reason and one
 				// more: the record does not exist until the callee has RUN, which is strictly later than the
 				// image is written.
 				factoryValue(_, _, returnType) then entries.push(self.nullPointerSlot(decl, valueType: returnType))
+				// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE reserves the same null POINTER slot as every other
+				// MATERIALIZED record, and would be inside the range above but for the factory arm between
+				// them — the band rule that makes a new outcome visible here is also what splits one answer in
+				// two, so the answer itself is written once (`materializedRecordSlot`) rather than twice.
+				boxedUnionValue then entries.push(self.materializedRecordSlot(decl))
 				pending to evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
@@ -14059,12 +14141,22 @@ export type ProgramSignatures
 		if tag == ValueTypeTag.interfaceRef 'fatPointer'
 			panic("recordPointerSlotType: top-level var '{String.from(name)}' is built by a factory returning an interface-typed value, which is the two-word fat pointer (value, witness) — a `.data` slot for one is TWO words, which this single-pointer door cannot express")
 		end 'fatPointer'
-		// A record still spelling a bare `named` — a boxed union, a tuple alias, a generic alias — is
-		// REFUSED at the declaration (`GlobalFactoryReturn.unbridgedRecord`), because the synthesized init
-		// and cleanup have no width to access its slot through. Typing the slot anyway would be right about
-		// the eight bytes and would leave that refusal to a panic three passes later, which is the shape
-		// this whole door exists to end.
-		if tag == ValueTypeTag.named 'noConcreteSlotAccess'
+		// A record still spelling a bare `named` — a tuple alias, a generic alias — is REFUSED at the
+		// declaration (`GlobalFactoryReturn.unbridgedRecord`), because the synthesized init and cleanup have
+		// no width to access its slot through. Typing the slot anyway would be right about the eight bytes
+		// and would leave that refusal to a panic three passes later, which is the shape this whole door
+		// exists to end.
+		//
+		// ⭐⭐ **A BOXED UNION IS THE ONE `named` THAT IS ALREADY CONCRETE, AND IT REACHES HERE BY A ROUTE THAT
+		// REFUSAL DOES NOT GUARD.** A payload-free case written at file scope is MATERIALIZED by the compiler
+		// (`ConstFoldedValue.boxedUnionCase`) rather than returned by a factory, so
+		// `requireFactoryReturnsARecord` never sees it — and nothing about its slot is in doubt: every case of
+		// a boxed union is ONE heap pointer, the machine word `valueTagToStdType` returns below, already
+		// dropped by `managedFieldDropCallee`'s `named` arm through `__destruct_<U>`. The paragraph above says
+		// exactly this about a factory's return type (*"a boxed union … held by one pointer … only the width
+		// was refusing them"*); this is that same fact arriving without a factory, so it is admitted rather
+		// than restated.
+		if tag == ValueTypeTag.named and not self.namedTypeIsBoxedUnion(valueType) 'noConcreteSlotAccess'
 			panic("recordPointerSlotType: top-level var '{String.from(name)}' is built by a factory whose return type is still the bare name '{maxonTypeName(valueType, typeNames: self.typeNames)}' — `Parser.requireFactoryReturnsARecord` refuses that at the declaration, so reaching here means a record was admitted without a concrete slot type")
 		end 'noConcreteSlotAccess'
 		// Asked through the very predicate that ADMITTED the declaration, so the slot cannot be typed for a
@@ -14129,11 +14221,24 @@ export type ProgramSignatures
 				// ⭐ A FACTORY-CALL GLOBAL's slot holds whatever the callee returns, so its construction is the
 				// CALL and its type is the callee's declared return type — settled when the outcome was.
 				factoryValue(calls, root, returnType) then entries.push(self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.factoryCall(self.globalInitCalls(calls, declName: decl.name, elementFilePath: decl.declFilePath), root: root), valueType: returnType))
+				// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE is a managed global for the same reason the three above
+				// are — its record is built before `main` and released after — and routes through the same
+				// `globalRecordOf`. It repeats their one call rather than joining their range because it is
+				// appended past the factory arm that stands between them.
+				boxedUnionValue then entries.push(self.recordGlobalOf(decl))
 				pending to evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
 		return entries
 	end 'managedGlobals'
+
+	// The `.data` slot a MATERIALIZED record binding reserves — a null pointer word typed by the record the
+	// outcome already carries. Split out because the two arms that need it CANNOT be one range: the band rule
+	// appends a new outcome past `factoryValue`, which has an arm of its own between them, so one answer is
+	// asked at two sites and is written here once so they cannot drift.
+	function materializedRecordSlot(decl TopLevelDecl) returns DataSectionEntry
+		return self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath))
+	end 'materializedRecordSlot'
 
 	// One managed global's full description. Split out so each `match` arm above stays one line, and it takes
 	// the TYPE its arm already built rather than re-deriving one: the drop callee is routed off that same
@@ -14237,7 +14342,7 @@ export type ProgramSignatures
 	function foldedInitValue(folded ConstFoldedValue, elementFilePath FilePath) returns GlobalInitValueAndType
 		match folded 'kind'
 			scalar(value) then return GlobalInitValueAndType.create(GlobalInitArgumentValue.scalar(value.payload), valueType: self.foldedMintType(folded, elementFilePath: elementFilePath))
-			managed to containerCreate then break 'kind'
+			managed to boxedUnionCase then break 'kind'
 		end 'kind'
 
 		let record = self.globalRecordOf(folded, elementFilePath: elementFilePath)
@@ -14398,7 +14503,7 @@ export type ProgramSignatures
 	function foldedMintType(folded ConstFoldedValue, elementFilePath FilePath) returns MaxonType
 		match folded 'kind'
 			scalar(value) then return maxonTypeOfTag(value.tag, nameId: UnnamedTypeId)
-			managed to containerCreate then break 'kind'
+			managed to boxedUnionCase then break 'kind'
 		end 'kind'
 
 		return self.foldedValueType(folded, elementFilePath: elementFilePath)
@@ -14494,6 +14599,10 @@ export type ProgramSignatures
 			managed(_, kind) then return self.managedConstValueType(kind, elementFilePath: elementFilePath)
 			arrayLiteral(elements, element) then return self.constArrayValueType(element, elements: elements)
 			containerCreate(giid, _) then return MaxonType.genericInstance(giid)
+			// A boxed union value IS its box pointer, tagged `named(<union>)` — the same tag
+			// `Parser.emitEnumBox` mints a body's box at, which is what lets `match` recognize this one through
+			// the one `enumMatchFor` door and routes its drop to `__destruct_<U>`.
+			boxedUnionCase(typeName, _) then return MaxonType.named(self.typeNames.intern(typeName))
 		end 'folded'
 	end 'foldedValueType'
 
@@ -14514,8 +14623,45 @@ export type ProgramSignatures
 			// stamps and the slot's type cannot come from two answers to one question.
 			arrayLiteral(elements, _) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: typeNameIdOf(valueType)), valueType: valueType)
 			containerCreate(giid, elements) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: giid), valueType: valueType)
+			boxedUnionCase(typeName, caseName) then return GlobalRecordAndType.create(self.boxedUnionRecordOf(typeName, caseName: caseName), valueType: valueType)
 		end 'folded'
 	end 'globalRecordOf'
+
+	// ⭐ **THE BOX SHAPE FOR ONE PAYLOAD-FREE CASE, READ OFF THE LAYOUT — the only place it is read.** The
+	// evaluator carried the two spellings and deliberately derived none of this, so the size the record is born
+	// with, the tag stored in it and the slots zeroed in it all come from ONE reading of the declaration. That
+	// is `globalStructConstruct`'s discipline and it is what keeps `__module_init`'s box byte-identical to the
+	// one `Parser.emitEnumBox` emits for the same case inside a function body.
+	//
+	// Both refusals are invariant breaks rather than reachable cases: the evaluator admits this form only
+	// after establishing that the name is a declared BOXED union and that it HAS this case
+	// (`Parser.constBoxedUnionCase`).
+	function boxedUnionRecordOf(typeName ByteArray, caseName ByteArray) returns ManagedGlobalRecord
+		match self.enumOf(typeName) 'declared'
+			declared(layout) then return boxedUnionCaseBoxOf(layout, typeName: typeName, caseName: caseName)
+			undeclared then panic("ProgramSignatures.boxedUnionRecordOf: '{String.from(typeName)}' names no declared enum or union, and yet a constant initializer folded '{String.from(caseName)}' as one of its cases — the evaluator admits the form only after `signatures.enumOf` has answered `declared` for that very name")
+		end 'declared'
+	end 'boxedUnionRecordOf'
+
+	// The walk of the question above, split out because a `match` arm may not open one — `existentialFieldOfArena`'s
+	// arrangement, for its reason.
+	//
+	// The refusal is an invariant break rather than a reachable case: `Parser.atConstBoxedUnionCase` claims the
+	// form only for a layout that `isBoxed`, and an UNBOXED case's tag IS its value and folds to a number one
+	// tier down. Reaching here with one would allocate a box for a value that is not a box, and every read of
+	// the global would then load a tag where a pointer was promised.
+	function boxedUnionCaseBoxOf(layout EnumLayout, typeName ByteArray, caseName ByteArray) returns ManagedGlobalRecord
+		if not layout.isBoxed() 'aBareTag'
+			panic("ProgramSignatures.boxedUnionCaseBoxOf: '{String.from(typeName)}' declares no payload-carrying case, so its case '{String.from(caseName)}' is a bare TAG rather than a box — the scalar fold owns that shape, and building a record for it would give every reader a pointer load over a number")
+		end 'aBareTag'
+
+		var payloadSlotOffsets = ByteOffsetArray.create()
+		for slot in 0 upto layout.maxPayloadArity() 'eachSlot'
+			payloadSlotOffsets.push(layout.payloadSlotOffset(slot))
+		end 'eachSlot'
+
+		return ManagedGlobalRecord.boxedUnionCaseRecord(layout.tagOfCase(caseName), payloadSlotOffsets: payloadSlotOffsets, boxSize: layout.boxSizeBytes())
+	end 'boxedUnionCaseBoxOf'
 
 	// The folded value the three STORED-RECORD outcomes came from. It exists so ONE resolver serves a global's
 	// own slot and a factory ARGUMENT: the outcome union records what a declaration SETTLED to (and carries
@@ -14527,6 +14673,7 @@ export type ProgramSignatures
 			managedValue(bytes, kind) then return ConstFoldedValue.managed(bytes, kind: kind)
 			arrayValue(elements, element) then return ConstFoldedValue.arrayLiteral(elements, element: element)
 			containerValue(giid, elements) then return ConstFoldedValue.containerCreate(giid, elements: elements)
+			boxedUnionValue(typeName, caseName) then return ConstFoldedValue.boxedUnionCase(typeName, caseName: caseName)
 			factoryValue then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to a factory CALL, which is not a folded value — its record is built by calling user code, not by materializing a constant")
 		end 'o'
 	end 'foldedValueOf'
@@ -14621,7 +14768,7 @@ export type ProgramSignatures
 			// record with a `.data` slot, so a read is a LOAD and the caller's NEXT probe (`globalDeclFor`)
 			// is the one that answers. That makes `notFound` the right answer here rather than merely a
 			// defensive one — it is the same "no CONSTANT of that name is visible" a `var` has always given.
-			arrayValue to factoryValue then return TopLevelConstantLookup.notFound
+			arrayValue to boxedUnionValue then return TopLevelConstantLookup.notFound
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
@@ -14747,6 +14894,12 @@ export type ProgramSignatures
 			// the arguments' — i.e. not at all — because the two facts a reader depends on are the same two:
 			// the name fixes the slot's type, and `Pair{a: 1}` becoming `Pair{a: 2}` moves no reader's bytes.
 			factoryValue(calls, root, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeFactoryValue), bytes: constFactoryCallHashName(factoryCallAt(calls, id: root))), bytes: decl.dataLabel)
+			// ⭐ **A BOXED UNION'S PAYLOAD-FREE CASE MIXES ITS UNION AND ITS LABEL, AND NOT ITS CASE** — the
+			// array-literal arm's rule again. The union NAME fixes the slot's type and so every reader's
+			// `match`; the LABEL is the slot the emitted `globalAddr` names. The CASE reaches only
+			// `__module_init`, which is rebuilt from this arena whenever this query misses, so mixing it would
+			// re-parse every reader of a global whose emitted bytes did not move.
+			boxedUnionValue(typeName, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeBoxedUnionValue), bytes: typeName), bytes: decl.dataLabel)
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
 			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
 			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not
@@ -17863,6 +18016,18 @@ export type ProgramSignatures
 	export function slotTypeDropCallee(slotType MaxonType) returns ByteArray
 		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: slotType)
 	end 'slotTypeDropCallee'
+
+	// ⭐ **IS THIS `named` TYPE A DECLARED BOXED UNION — the one `named` whose storage is not in doubt?** Every
+	// case of such a union is a single heap pointer, which is what lets it occupy a one-word record slot while
+	// the other `named` records (a tuple alias, a generic alias) may not until something re-tags them.
+	// `denotedSlotType` deliberately re-tags neither enum nor union, and says why: a `named` IS their type.
+	//
+	// ⚠ Gated on the NON-ALLOCATING `containsEnum` twin, for `undeclaredNamedElementSlot`'s measured reason —
+	// `enumOf` boxes a `DeclaredEnum` even to answer `undeclared`.
+	function namedTypeIsBoxedUnion(valueType MaxonType) returns bool
+		let name = try self.typeNames.nameOf(typeNameIdOf(valueType)) otherwise return false
+		return self.containsEnum(name) and self.declaredEnumIsBoxed(name)
+	end 'namedTypeIsBoxedUnion'
 
 	// ⭐⭐ **DOES A SLOT THAT IS EXACTLY ONE MACHINE WORD WIDE HOLD THIS TYPE? — the admission rule a
 	// `List`/`__ManagedList` ELEMENT and a `Map`'s VALUE column both ask, stated once.** Both slots are one

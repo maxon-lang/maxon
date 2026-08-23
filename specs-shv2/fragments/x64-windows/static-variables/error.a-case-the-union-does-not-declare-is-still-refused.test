@@ -1,0 +1,19 @@
+// Test: error.a-case-the-union-does-not-declare-is-still-refused
+typealias Integer = int(i64.min to i64.max)
+
+union Boxed
+	plain
+	withPayload(n Integer)
+end 'Boxed'
+
+let stillRefused = Boxed.noSuchCase
+
+function main() returns ExitCode
+	return match stillRefused 'k'
+		plain gives 0
+		withPayload(n) gives n as ExitCode
+	end 'k'
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:20: Unsupported: `Boxed.noSuchCase` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, a payload-free enum or union case, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else

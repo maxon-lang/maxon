@@ -18951,7 +18951,7 @@ export type Parser
 			// the same enumeration and is now the only one.
 			value then break 'outcome'
 			failed(error) then try self.throwRecordedConstantError(error)
-			poisoned to factoryValue then break 'outcome'
+			poisoned to boxedUnionValue then break 'outcome'
 			pending to evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
@@ -65721,26 +65721,37 @@ export type Parser
 	// drops it. That is not an omission — a scope-exit drop of a borrowed global would free the program's
 	// only copy while the slot still points at it, and the cleanup after `main` would then double-free.
 	//
-	// ⚠ **THE SLOT'S DECLARED AND STORAGE TYPES COINCIDE — BUT NOT FOR THE REASON THIS HEADER USED TO GIVE
-	// (S2j).** It said a global's type is INFERRED FROM ITS INITIALIZER and so is never `named`. That was
-	// true while every initializer was a folded constant, and it expired the moment a top-level FACTORY
-	// CALL landed: such a global's type is the callee's DECLARED return type, which is a bare `named` for
-	// every boxed union, tuple alias and generic alias. What keeps this line correct today is a REFUSAL,
-	// not an inference — `Parser.requireFactoryReturnsARecord` rejects exactly those return types
-	// (`GlobalFactoryReturn.unbridgedRecord`), so every type that reaches here is concrete and needs no
-	// bridge. ⇒ **If that refusal is ever lifted, this pair is one of the doors that must start asking
-	// `fieldStorageType`** — the split every other slot in the language already makes — alongside
-	// `ModuleInit`'s synthesized store and the cleanup's load, which are the two that cannot ask it today.
+	// ⚠⚠ **THE SLOT'S DECLARED AND STORAGE TYPES DO *NOT* COINCIDE, AND THIS PAIR NOW ASKS FOR BOTH — the
+	// moment S2j's header predicted, arrived.** That note recorded the history: it once claimed a global's
+	// type is INFERRED FROM ITS INITIALIZER and so is never `named`, which expired when a top-level FACTORY
+	// CALL landed; what kept the single type correct after that was a REFUSAL rather than an inference
+	// (`requireFactoryReturnsARecord` rejects exactly the `named` return types,
+	// `GlobalFactoryReturn.unbridgedRecord`), and it closed: *"If that refusal is ever lifted, this pair is
+	// one of the doors that must start asking `fieldStorageType`."*
+	//
+	// ⇒ **The refusal was not lifted — a SECOND ROUTE opened past it.** A boxed union's payload-free case
+	// written at file scope is MATERIALIZED by the compiler (`ConstFoldedValue.boxedUnionCase`), never
+	// returned by a factory, so that refusal never sees it and its `named(<union>)` arrives here regardless.
+	// The consequence was the one the note names: `maxonTypeToStdType` panics on a `named` outright, because
+	// the tag is the value's IDENTITY and its storage is a machine word. So the ACCESS width is now asked of
+	// `fieldStorageType` — the split every other slot in the language already makes — while the VALUE stays
+	// minted at its declared type, which is what lets a `match` on the loaded global recognize its union.
+	//
+	// It is byte-neutral for every type that reached here before: `slotStorageType` answers `declared` for a
+	// String, a struct, an instance and every scalar, so only the arm that used to panic moves. The other two
+	// doors the note lists — `ModuleInit`'s synthesized store and the cleanup's load — take
+	// `declaredAggregateSlotWidth()` directly, which is the same answer reached from a stronger fact: a
+	// MANAGED global's slot is a pointer whatever it points at.
 	function emitGlobalLoad(label ByteArray, valueType MaxonType, range SourceRange) returns ValueId
 		let addr = self.emitGlobalAddr(label, range: range)
-		return self.emitIndirectLoad(valueType, box: addr, offset: GlobalSlotOffset, storageType: valueType, range: range)
+		return self.emitIndirectLoad(valueType, box: addr, offset: GlobalSlotOffset, storageType: self.fieldStorageType(valueType), range: range)
 	end 'emitGlobalLoad'
 
 	// `globalAddr <label>` then `storeIndirect <addr> 0 <value>` — a global's write, the mirror of
 	// `emitGlobalLoad`. It defines no value: a store is a statement.
 	function emitGlobalStore(label ByteArray, valueType MaxonType, value ValueId, range SourceRange)
 		let addr = self.emitGlobalAddr(label, range: range)
-		self.emitIndirectStore(addr, offset: GlobalSlotOffset, value: value, storageType: valueType, range: range)
+		self.emitIndirectStore(addr, offset: GlobalSlotOffset, value: value, storageType: self.fieldStorageType(valueType), range: range)
 	end 'emitGlobalStore'
 
 	// The `globalAddr` half both a read and a write open with. A POINTER, so its value is typed
@@ -65956,6 +65967,24 @@ export type Parser
 		if self.atSetFromConstruction() 'setLiteralInitializer'
 			return try self.evalConstSetFrom(stack)
 		end 'setLiteralInitializer'
+
+		// ⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE IS THE SIXTH ANSWER** — `let NoPayloadStorage =
+		// MaxonType.unresolved`, `let sharedUnreadParamType = MaxonType.unresolved`, the shape the compiler's
+		// own source uses to keep ONE sentinel box for a whole compile instead of one allocation per site.
+		//
+		// ⭐ **IT IS CLAIMED HERE AND NOT BESIDE THE PAYLOAD-FREE ENUM FOLD, because the two produce different
+		// KINDS of value.** An unboxed case's tag IS its value, so it folds into a `ConstValue` down in the
+		// scalar walk; every case of a payload-bearing union is a heap BOX, and only this tier can answer with
+		// a record. Left to the scalar walk it fell to that walk's dotted refusal, which read `<identifier> .`
+		// as a ranged-type bound and then explained that a heap object cannot be a constant — a rule the
+		// runnable oracle has never had (it builds the box in its own `__module_init`).
+		//
+		// ⚠ Disjoint from every arm above by construction: a union is not a generic-instance alias
+		// (`isGenericAlias`), declares no `Type.method` for `atConstInitializerCall` to claim, and is not a
+		// `<alias> from [` head — so no spelling can satisfy two of these, whichever order they are asked in.
+		if self.atConstBoxedUnionCase() 'boxedUnionCaseInitializer'
+			return self.evalConstBoxedUnionCase()
+		end 'boxedUnionCaseInitializer'
 
 		// ⚠⚠ **`CharacterSet.whitespacesAndNewlines()` WAS A SIXTH ARM HERE, AND W115'S REVIEW DELETED IT.** It
 		// existed because *"shv2 has no `stdlib/CharacterSet.maxon` to declare the eleven accessors, so
@@ -67463,12 +67492,19 @@ export type Parser
 			// for 'r': expected 'Reg', got 'int'` — so the fold is tagged `named` and `ConstValue.typeName`
 			// carries the spelling for the use site to intern (see that field for why bytes and not an id).
 			//
-			// ⛔ **A BOXED UNION'S CASE IS EXCLUDED, AND THAT IS THE RULE RATHER THAN A LIMIT OF THIS ARM.**
-			// `isBoxed` means SOME case carries a payload, and then EVERY case — payload-free ones included —
-			// is a heap box rather than a bare tag (`EnumLayout`'s own header). A heap object is not something
-			// a constant can be folded to, so `MaxonType.unresolved` keeps the refusal below and keeps it for
-			// the right reason: not "an enum member is unsupported" but "this one's value is a record".
-			if self.constFoldableEnumCase(tok, memberTok: memberTok) 'payloadFreeEnumCase'
+			// ⛔⛔ **A BOXED UNION'S CASE IS NOT THIS ARM'S BUSINESS, AND THAT IS A TIER BOUNDARY RATHER THAN A
+			// REFUSAL.** `isBoxed` means SOME case carries a payload, and then EVERY case — payload-free ones
+			// included — is a heap box rather than a bare tag (`EnumLayout`'s own header), so its value is a
+			// RECORD and this walk, which answers with a `ConstValue`, has no way to spell it. It is claimed one
+			// tier up instead, by `evalConstFoldedValue`'s `atConstBoxedUnionCase` arm.
+			//
+			// ⚠ **THIS COMMENT USED TO SAY THE EXCLUSION WAS "THE RULE RATHER THAN A LIMIT OF THIS ARM" — that
+			// a heap object cannot be a constant at all — and it was MEASURED FALSE.** The runnable oracle
+			// compiles `let x = Boxed.plain` and runs it, building the box in its own `__module_init`; shv2's
+			// own `Parser.sharedUnreadParamType` and `Project.NoPayloadStorage` are that shape. The claim was
+			// false of shv2 too the moment an empty container and a `create()` factory were admitted — both are
+			// heap objects — which is the tell that it described a tier, not a rule.
+			if self.constEnumCaseOfLayout(tok, memberTok: memberTok, boxed: false) 'payloadFreeEnumCase'
 				let layout = requireEnumLayout(self.signatures.enumOf(tok.value))
 				self.advance()
 				try self.consumeConstToken(TokenKind.dot)
@@ -67476,32 +67512,74 @@ export type Parser
 
 				return ConstValue.create(layout.tagOfCase(memberTok.value), tag: ValueTypeTag.named, typeName: tok.value)
 			end 'payloadFreeEnumCase'
-			throw ConstEvalError.defective(ParseError.unsupported("`{String.from(tok.value)}.{tokenDisplayText(memberTok)}` in a constant initializer — a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `{String.from(CreateMethod)}()`-style factory at the TOP of an initializer, or a sized type's `.{String.from(MinBoundField)}`/`.{String.from(MaxBoundField)}`, and nothing else", line: tok.line, column: tok.column))
+			// ⚠ **"FOLDED BEFORE ANY CODE RUNS" WAS THE OLD WORDING AND IT CONTRADICTED ITS OWN ADMITTED LIST.**
+			// An empty container and a `create()`-style factory are HEAP RECORDS built by `__module_init`, so
+			// nothing about them is folded and code does run — and the sentence was then used to justify
+			// refusing a boxed union's case for being a heap object, which the oracle had compiled all along.
+			// What a constant actually is, is SETTLED BEFORE `main`: folded to a number, or materialized by the
+			// module initializer. The boundary this now describes is the real one.
+			throw ConstEvalError.defective(ParseError.unsupported("`{String.from(tok.value)}.{tokenDisplayText(memberTok)}` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, a payload-free enum or union case, a `{String.from(CreateMethod)}()`-style factory at the TOP of an initializer, or a sized type's `.{String.from(MinBoundField)}`/`.{String.from(MaxBoundField)}`, and nothing else", line: tok.line, column: tok.column))
 		end 'dottedNonBound'
 
 		self.advance()
 		return try self.evalConstNameRef(tok, stack: stack)
 	end 'evalConstNamed'
 
-	// ⭐ **DOES `<tok>.<memberTok>` NAME A CASE OF A DECLARED, UNBOXED ENUM?** The arm's admission rule, split
-	// out so the test and the fold cannot come to disagree about which members are foldable — the shape
-	// `enumAccessorFieldAt` and its dispatch already use one construct over.
+	// ⭐ **DOES `<tok>.<memberTok>` NAME A CASE OF A DECLARED ENUM OR UNION WHOSE LAYOUT MATCHES `boxed`?**
+	// The admission rule BOTH constant-initializer readers share, split out so a test and its fold cannot come
+	// to disagree about which members exist — the shape `enumAccessorFieldAt` and its dispatch already use one
+	// construct over.
+	//
+	// ⭐⭐ **THE TWO READERS DIFFER IN EXACTLY THIS BIT, WHICH IS WHY IT IS A PARAMETER AND NOT A SECOND COPY.**
+	// The scalar walk (`evalConstNamed`) asks `boxed: false` — an unboxed case's TAG *is* its value, so it
+	// folds to a number. The record arm (`evalConstFoldedValue`) asks `boxed: true` — every case of a
+	// payload-bearing union is a heap BOX, so its value is built by `__module_init` instead. Everything else
+	// about the question is identical, and two near-copies of this lookup are precisely how the two would come
+	// to admit different member sets.
 	//
 	// It asks the SWEEP's registry (`signatures.enumOf`), which is the only store that exists this early and
 	// is the same one every other constant-time enum question in this evaluator would ask.
-	function constFoldableEnumCase(tok Token, memberTok Token) returns bool
+	function constEnumCaseOfLayout(tok Token, memberTok Token, boxed bool) returns bool
 		let namedEnum = self.signatures.enumOf(tok.value)
 		if not enumMatchIsDeclared(namedEnum) 'notAnEnum'
 			return false
 		end 'notAnEnum'
 
 		let layout = requireEnumLayout(namedEnum)
-		if layout.isBoxed() 'aHeapBox'
+		if layout.isBoxed() != boxed 'theOtherReadersBusiness'
 			return false
-		end 'aHeapBox'
+		end 'theOtherReadersBusiness'
 
 		return layout.hasCase(memberTok.value)
-	end 'constFoldableEnumCase'
+	end 'constEnumCaseOfLayout'
+
+	// Does the cursor sit on `<BoxedUnion>.<case>`? The token shape AND the layout question, asked together so
+	// the arm that claims the form and the walk that consumes it cannot part company about what was claimed.
+	function atConstBoxedUnionCase() returns bool
+		if not self.at(TokenKind.identifier) or self.peekKind() != TokenKind.dot or self.kindAt(self.pos + 2) != TokenKind.identifier 'notAQualifiedName'
+			return false
+		end 'notAQualifiedName'
+
+		return self.constEnumCaseOfLayout(self.current(), memberTok: self.tokenAt(self.pos + 2), boxed: true)
+	end 'atConstBoxedUnionCase'
+
+	// Walk `<BoxedUnion>.<case>`, already claimed by the test above — which is why the three tokens are simply
+	// stepped over rather than re-checked, and why this cannot fail.
+	//
+	// ⚠ **IT CARRIES THE TWO SPELLINGS AND DERIVES NOTHING FROM THEM.** The tag's number, the box's size and
+	// the slots to zero are read off the layout where the registry lives
+	// (`ProgramSignatures.boxedUnionRecordOf`), so one declaration is read ONCE and a fold cannot hand the
+	// synthesis a stale box shape. Bytes rather than interned ids, for `ConstValue.typeName`'s reason: this
+	// evaluator is a throwaway parser built per declaration.
+	function evalConstBoxedUnionCase() returns ConstFoldedValue
+		let typeTok = self.current()
+		let caseTok = self.tokenAt(self.pos + 2)
+		self.advance()
+		self.advance()
+		self.advance()
+
+		return ConstFoldedValue.boxedUnionCase(typeTok.value, caseName: caseTok.value)
+	end 'evalConstBoxedUnionCase'
 
 	// **THE FORWARD REFERENCE, AND THE CROSS-FILE ONE.** A name in an initializer resolves through the
 	// whole-program arena, which recursively evaluates whatever it finds — so declaration ORDER does
