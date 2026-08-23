@@ -10467,6 +10467,27 @@ function callAlignedFrom(sourceNames ByteArrayArray) returns ByteArrayArray
 	return paramNames
 end 'callAlignedFrom'
 
+// ⭐⭐ **WHERE THE VALUE `noteReturnedGlobalOrForward` IS READING ENDS — THE ONLY THING ITS TWO DOORS DIFFER
+// IN.** The recogniser's whole rule is "the statement must be NOTHING BUT the shape", so every arm of it asks
+// *"and does the region stop right here?"*; a `return` statement's value stops at the end of its LINE, and a
+// captured PARAMETER DEFAULT's stops at the `,`/`)` the sweep has already walked to (`paramItemEndFrom`).
+//
+// ⚠ **THE DEFAULT DOOR HANDS ITS END OVER RATHER THAN LETTING THE RECOGNISER RE-DERIVE ONE.** "A `,` or a
+// `)` ends it" is very nearly right and is not exactly right — `= f(a, b)` holds both inside its own parens —
+// and the capture has ALREADY decided where the author's default ends. A second walk is a second answer; this
+// file has paid for that twice (see `sweptParamDefaultHelperName`, and `PendingDefaultHelper.exprEnd`).
+union SweptValueRegionEnd
+	// A `return` statement: the value runs to the end of the line, which the body walk never has to compute.
+	atLineEnd
+	// A captured parameter default: the value runs to exactly this token, which is the `,` or `)` the
+	// parameter-list walk stopped at.
+	atToken(index TokenIndex)
+end 'SweptValueRegionEnd'
+
+// The `atLineEnd` answer, shared: a payload-free union case is still a heap object in Maxon, and the return
+// door asks this question at every `return` statement in the program.
+let sharedSweptValueLineEnd = SweptValueRegionEnd.atLineEnd
+
 // ⭐ **DOES A TOKEN OF THIS KIND BIND THE NAME THAT FOLLOWS IT? (W117)** — the generous binder test
 // `Parser.returnedNamesNotBoundHere` filters a swept return candidate through; see there for the full
 // argument, including why `(` and `,` are in the list although a call argument is no binder at all. It is a
@@ -10476,14 +10497,22 @@ function kindBindsTheNameAfterIt(kind TokenKind) returns bool
 end 'kindBindsTheNameAfterIt'
 
 // Record one seed candidate on the three parallel columns AT ONCE — the name as it is looked up, the HEAD
-// segment the shadowing filter matches on, and the token index of the `return` it was read off. One door
+// segment the shadowing filter matches on, and the token index the returned VALUE starts at. One door
 // rather than three pushes at each of the four recording sites: the columns are parallel by construction and
 // every reader's panic says so, and a site that pushed two of the three would desynchronize the third
 // silently.
-function noteReturnedCandidate(returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, name ByteArray, head ByteArray, returnIndex TokenIndex)
+//
+// ⚠ **THE POSITION IS THE VALUE'S FIRST TOKEN, WHERE IT USED TO BE THE `return` KEYWORD'S, AND THE
+// SHADOWING FILTER CANNOT TELL THE TWO APART.** `markBoundHead` shadows a candidate when the binder sits at
+// or before this index, so moving it one token later could only newly admit a binder recorded AT the value's
+// own first token — and none ever is: a binder is recorded where `kindBindsTheNameAfterIt` holds of the
+// PRECEDING token, which for a returned value is `return`, a keyword that binds nothing. What the move buys
+// is that the recogniser needs no anchor beside the region it is already given, which is what lets a
+// captured parameter default — where there is no `return` keyword at all — go through the same door.
+function noteReturnedCandidate(returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, name ByteArray, head ByteArray, valueStart TokenIndex)
 	returnedNames.push(name)
 	returnedHeads.push(head)
-	returnedAt.push(returnIndex)
+	returnedAt.push(valueStart)
 end 'noteReturnedCandidate'
 
 // ⭐⭐ **MARK EVERY RETURNED CANDIDATE THIS BINDER SHADOWS — and a binder shadows only what comes AFTER it.**
@@ -13214,8 +13243,9 @@ export type Parser
 		// ⭐ **PARAMETER DEFAULTS (BATCH2 slice 4)** — recorded from the SAME token walk, and the ONLY place
 		// the whole program learns that a call may legally omit an argument. It also publishes each
 		// synthesized helper's RETURN TYPE into `entries`, which is what lets a call site in another file
-		// type the call it emits to that helper (`mintCallResult`).
-		self.recordScannedParamDefaults(funcName, paramsStart: paramsStart, takesReceiver: takesReceiver, visibility: visibility, entries: entries, paramDefaults: paramDefaults)
+		// type the call it emits to that helper (`mintCallResult`) — and, since a default expression is a
+		// `return` in every respect that matters here, its W117 shape into `globalAliasReturns`.
+		self.recordScannedParamDefaults(funcName, paramsStart: paramsStart, takesReceiver: takesReceiver, visibility: visibility, entries: entries, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults)
 		// The `throws E` clause follows the return type; parsed BEFORE the consume-scan so the cursor lands
 		// past it. Only a THROWING function gets an entry (its absence is "does not throw"), mirroring
 		// `paramConsumes` recording only consuming functions. Gated on the `throws` KEYWORD being present so
@@ -13349,7 +13379,7 @@ export type Parser
 	//
 	// A helper is published at the DECLARING function's own tier, which is the only true statement about it:
 	// nobody writes its name, so no file can be refused it, and every call to it is the compiler's own mint.
-	function recordScannedParamDefaults(funcName ByteArray, paramsStart TokenIndex, takesReceiver bool, visibility Visibility, entries FuncReturnTypeEntryArray, paramDefaults ParamDefaultEntryArray)
+	function recordScannedParamDefaults(funcName ByteArray, paramsStart TokenIndex, takesReceiver bool, visibility Visibility, entries FuncReturnTypeEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray)
 		if not self.paramListDeclaresDefault(paramsStart) 'noDefaults'
 			return
 		end 'noDefaults'
@@ -13408,6 +13438,7 @@ export type Parser
 					// reason: this helper is published by the SWEEP, whose copy is the one the whole-program index
 					// stores, so a SLOT's element bit read here would be how far the sweep had got.
 					entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false), visibility: visibility))
+					self.recordDefaultHelperGlobalAliasReturn(helperName, valueStart: (typeEnd + 1) as TokenIndex, exprEnd: itemEnd, globalAliasReturns: globalAliasReturns)
 				end 'synthesizedHelper'
 			end 'hasDefault'
 
@@ -13420,6 +13451,56 @@ export type Parser
 
 		paramDefaults.push(ParamDefaultEntry.create(funcName, info: ParamDefaultInfo.create(names, producers: producers), takesReceiver: takesReceiver))
 	end 'recordScannedParamDefaults'
+
+	// ⭐⭐ **W117 FOR THE OTHER `return` IN THE LANGUAGE: A PARAMETER DEFAULT.** The captured expression becomes
+	// the whole body of a synthesized nullary helper (`parseDefaultHelperBody`), so `f(p T = A)` hands its
+	// caller precisely what `f(A)` hands it — and until this rung the two spellings had DIFFERENT answers to
+	// "may this argument alias a `let` global's record?", which is the one thing a default may never differ from
+	// the written-out argument in. Both halves of that were measured on the tip:
+	//
+	//   • `f(p T = A)` naming the global BARE was refused outright — `ownedFormOfBorrowedValue` keeps its E2015
+	//     for a helper the sweep never published, and the sweep read `return` statements only. That refusal is
+	//     `ParseStaging.maxon:129` and `Project.maxon:682` in shv2's own source, on a shape the bootstrap
+	//     compiles and runs.
+	//   • `f(p T = accessor())` naming one THROUGH A CALL was silently ACCEPTED and mutated the global, where
+	//     the written-out `f(accessor())` beside it is E3019. A missed EDGE costs no refusal here, because the
+	//     helper returns an already-owned call result and never reaches the promotion — so this door had to be
+	//     opened for soundness and not only to lift a refusal.
+	//
+	// ⚠ **KEYED BY THE HELPER NAME THE SWEEP ITSELF MINTS, WHICH IS AN OVERLOAD SET'S FIRST MEMBER'S (W74).**
+	// A later member re-points its own helper to a name derived from its REGISTRATION name
+	// (`declaredParamDefaultHelperName`), which no entry here is filed under — so that member's default is
+	// refused E2015 rather than admitted unmarked. That is the family rule holding in the one place a key can
+	// be wrong: the sweep publishes ONE entry per bare name, and the direction it errs in is a REFUSAL.
+	//
+	// ⚡ Four columns per default expression, unconditionally. The per-BODY twin had to be gated behind a
+	// `sawAReturn` flag because every function in the program walks it; this one is reached only for a
+	// parameter that declares an expression default, of which a program has tens.
+	function recordDefaultHelperGlobalAliasReturn(helperName ByteArray, valueStart TokenIndex, exprEnd TokenIndex, globalAliasReturns GlobalAliasReturnEntryArray)
+		var returnedNames = ByteArrayArray.create()
+		var returnedHeads = ByteArrayArray.create()
+		var returnedAt = TokenIndexColumn.create()
+		var returnCalls = ForwardCallArray.create()
+		self.noteReturnedGlobalOrForward(valueStart, regionEnd: SweptValueRegionEnd.atToken(exprEnd), returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls)
+
+		// The same "states nothing, records nothing" gate `scanBodyFacts` raises, and it is nearly every
+		// default: `= 0`, `= false`, `= ""`, `= Colour.red` all leave both columns empty.
+		//
+		// ⚠ **AND NO SHADOWING FILTER, WHICH IS A PROPERTY OF THE HELPER RATHER THAN AN OMISSION.**
+		// `returnedNamesNotBoundHere` exists because a BODY may bind the name it returns; a default expression
+		// is one expression parsed into a helper whose scope is created empty and whose parameter list is
+		// empty (`parseDefaultHelperBody`), so there is nothing it could bind and no local for a name to
+		// resolve to ahead of the global.
+		if not GlobalAliasReturnInfo.statesAnything(returnedNames, returnCalls: returnCalls) 'statesNothing'
+			return
+		end 'statesNothing'
+
+		// `bareCallOnly` and no receiver: the helper is a free function whose name is in the reserved `__`
+		// space with a `#` in it (`Project.paramDefaultHelperName`), so it wears its own node in the closure's
+		// graph and no call any source can write reaches it. Its own forwarding EDGES are ordinary and are
+		// what carries the mark up from a default that calls an accessor.
+		globalAliasReturns.push(GlobalAliasReturnEntry.create(helperName, info: GlobalAliasReturnInfo.create(returnedNames, returnCalls: returnCalls, bareName: helperName, callability: DeclCallability.bareCallOnly, declFilePath: self.filePath), takesReceiver: false))
+	end 'recordDefaultHelperGlobalAliasReturn'
 
 	// Does the parameter list at `parenPos` declare a default on ANY parameter? A peek-only, allocation-free
 	// walk asked once per declared function.
@@ -13641,7 +13722,7 @@ export type Parser
 					returnColumnsArePrivate = true
 				end 'firstReturnInThisBody'
 
-				self.noteReturnedGlobalOrForward(q, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls)
+				self.noteReturnedGlobalOrForward((q + 1) as TokenIndex, regionEnd: sharedSweptValueLineEnd, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls)
 			end 'returnStatement'
 
 			if scansParams 'aBodyWithParametersToWatch'
@@ -13823,16 +13904,25 @@ export type Parser
 		end 'returnedANameOrACall'
 	end 'scanBodyFacts'
 
-	// ⭐⭐ **W117's SEED AND EDGE, READ OFF ONE `return` STATEMENT.** Exactly four shapes are recognised, and
-	// the statement must be nothing BUT the shape — a trailing `newline` for a name, an opening `(` for a call:
+	// ⭐⭐ **W117's SEED AND EDGE, READ OFF ONE VALUE EXPRESSION.** Exactly four shapes are recognised, and
+	// the region must hold nothing BUT the shape — its own end after a name, an opening `(` for a call:
 	//
-	//   • `return <name>`            — a seed candidate, the name as written;
-	//   • `return <Type>.<member>`   — a seed candidate under the JOINED spelling, which is the key a static
-	//                                  member is looked up under (`parseStaticMemberAccess`);
-	//   • `return <name>(…)`         — a forwarding edge, bare;
-	//   • `return <recv>.<name>(…)`  — a forwarding edge through a receiver, or through `self` inside a type.
-	//   • `return <name> if <cond> else <arm>` — the INLINE CONDITIONAL, whose BOTH arms are candidates
-	//                                  because either may be the value. See below.
+	//   • `<name>`            — a seed candidate, the name as written;
+	//   • `<Type>.<member>`   — a seed candidate under the JOINED spelling, which is the key a static
+	//                           member is looked up under (`parseStaticMemberAccess`);
+	//   • `<name>(…)`         — a forwarding edge, bare;
+	//   • `<recv>.<name>(…)`  — a forwarding edge through a receiver, or through `self` inside a type.
+	//   • `<name> if <cond> else <arm>` — the INLINE CONDITIONAL, whose BOTH arms are candidates
+	//                           because either may be the value. See below.
+	//
+	// ⭐⭐ **TWO DOORS ASK IT, AND THE ONLY THING THEY DIFFER IN IS WHERE THE REGION ENDS (`SweptValueRegionEnd`).**
+	// A `return` statement is the obvious one. The other is a captured PARAMETER DEFAULT, which is a value
+	// expression the compiler turns into a nullary helper whose entire body is `return <that expression>`
+	// (`parseDefaultHelperBody`) — so `f(p T = A)` hands its caller exactly what `f(A)` hands it, and the
+	// question "may this call's argument alias a `let` global's record?" has to have the same answer for both
+	// spellings or a default stops being sugar for writing the argument out. It did not: MEASURED before this
+	// rung, a `grow(names Names = shared())` whose body pushes silently mutated the global while the written-out
+	// `grow(shared())` beside it was refused E3019.
 	//
 	// ⭐⭐ **THE CONDITIONAL ARM WAS ADDED BECAUSE IT WAS REACHED — by shv2's own source, in a shape this
 	// list's own tail predicted.** `return sharedEmptyDeclaredConformances if boundTypeNames.count() <
@@ -13843,57 +13933,67 @@ export type Parser
 	// half it happened to read first would be a fact about the parser rather than about the program.
 	//
 	// ⚠⚠ **ANYTHING ELSE RECORDS NOTHING, AND THAT IS SOUND BECAUSE OF THE FALLBACK RATHER THAN BECAUSE THE
-	// LIST IS COMPLETE.** A `return` this does not recognise leaves the function's bit clear, and a clear bit
+	// LIST IS COMPLETE.** A value this does not recognise leaves the function's bit clear, and a clear bit
 	// is precisely the condition under which `ownedFormOfBorrowedValue` keeps the ORIGINAL E2015 refusal at the
 	// return — so a missed shape costs a REFUSAL, never a silent acceptance. The hazard runs the other way:
 	// recording a shape whose value is not really the global's record would taint a caller's value and refuse a
 	// write on a legal program. ⇒ **Every ambiguity resolves toward recording NOTHING**, which is why the
-	// statement-shape test is exact rather than "a `return` mentioning a name somewhere".
+	// shape test is exact rather than "a value mentioning a name somewhere".
 	//
 	// The edge reuses `forwardCallOpeningAt` — the one place a call's tokens are turned into a `ForwardCall` —
 	// so a return-forward and a parameter-forward cannot come to disagree about which declarations a spelling
 	// can name.
-	function noteReturnedGlobalOrForward(returnIndex TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray)
-		let head = (returnIndex + 1) as TokenIndex
-		if not tokenCanBeAName(self.tokenAt(head)) 'notANameAtAll'
+	function noteReturnedGlobalOrForward(valueStart TokenIndex, regionEnd SweptValueRegionEnd, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray)
+		if not tokenCanBeAName(self.tokenAt(valueStart)) 'notANameAtAll'
 			return
 		end 'notANameAtAll'
 
-		if self.kindAt((head + 1) as TokenIndex) == TokenKind.leftParen 'returnsABareCall'
-			noteForwardCall(returnCalls, call: self.forwardCallOpeningAt((head + 1) as TokenIndex))
+		if self.kindAt((valueStart + 1) as TokenIndex) == TokenKind.leftParen 'returnsABareCall'
+			noteForwardCall(returnCalls, call: self.forwardCallOpeningAt((valueStart + 1) as TokenIndex))
 			return
 		end 'returnsABareCall'
 
-		if self.kindAt((head + 1) as TokenIndex) == TokenKind.newline 'returnsABareName'
-			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(head).value, head: self.tokenAt(head).value, returnIndex: returnIndex)
+		if self.sweptValueRegionEndsAt((valueStart + 1) as TokenIndex, regionEnd: regionEnd) 'returnsABareName'
+			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(valueStart).value, head: self.tokenAt(valueStart).value, valueStart: valueStart)
 			return
 		end 'returnsABareName'
 
-		// The INLINE CONDITIONAL. `head + 1` being `if` fixes the THEN arm at exactly the one token `head`,
-		// which the two tests above have already established is a name — so it is seeded here on the same
-		// terms `returnsABareName` seeds its own, and the ELSE arm is then read on those terms too.
-		if self.kindAt((head + 1) as TokenIndex) == TokenKind.if 'returnsAConditional'
-			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(head).value, head: self.tokenAt(head).value, returnIndex: returnIndex)
-			self.noteConditionalElseArm((head + 2) as TokenIndex, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls, returnIndex: returnIndex)
+		// The INLINE CONDITIONAL. `valueStart + 1` being `if` fixes the THEN arm at exactly the one token the
+		// region opens with, which the two tests above have already established is a name — so it is seeded
+		// here on the same terms `returnsABareName` seeds its own, and the ELSE arm is read on those terms too.
+		if self.kindAt((valueStart + 1) as TokenIndex) == TokenKind.if 'returnsAConditional'
+			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(valueStart).value, head: self.tokenAt(valueStart).value, valueStart: valueStart)
+			self.noteConditionalElseArm((valueStart + 2) as TokenIndex, regionEnd: regionEnd, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls, valueStart: valueStart)
 			return
 		end 'returnsAConditional'
 
-		if self.kindAt((head + 1) as TokenIndex) != TokenKind.dot or not tokenCanBeAName(self.tokenAt((head + 2) as TokenIndex)) 'notADottedShape'
+		if self.kindAt((valueStart + 1) as TokenIndex) != TokenKind.dot or not tokenCanBeAName(self.tokenAt((valueStart + 2) as TokenIndex)) 'notADottedShape'
 			return
 		end 'notADottedShape'
 
-		if self.kindAt((head + 3) as TokenIndex) == TokenKind.leftParen 'returnsADottedCall'
-			noteForwardCall(returnCalls, call: self.forwardCallOpeningAt((head + 3) as TokenIndex))
+		if self.kindAt((valueStart + 3) as TokenIndex) == TokenKind.leftParen 'returnsADottedCall'
+			noteForwardCall(returnCalls, call: self.forwardCallOpeningAt((valueStart + 3) as TokenIndex))
 			return
 		end 'returnsADottedCall'
 
-		if self.kindAt((head + 3) as TokenIndex) == TokenKind.newline 'returnsAStaticMember'
-			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: qualifiedMethodName(self.tokenAt(head).value, methodName: self.tokenAt((head + 2) as TokenIndex).value), head: self.tokenAt(head).value, returnIndex: returnIndex)
+		if self.sweptValueRegionEndsAt((valueStart + 3) as TokenIndex, regionEnd: regionEnd) 'returnsAStaticMember'
+			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: qualifiedMethodName(self.tokenAt(valueStart).value, methodName: self.tokenAt((valueStart + 2) as TokenIndex).value), head: self.tokenAt(valueStart).value, valueStart: valueStart)
 		end 'returnsAStaticMember'
 	end 'noteReturnedGlobalOrForward'
 
+	// ⭐ **HAS THE VALUE THE SWEEP IS READING RUN OUT AT `index`?** — the one place `SweptValueRegionEnd`'s two
+	// answers are spent, so the recogniser's three "and nothing follows it" tests cannot come to mean different
+	// things at the two doors. See the union for why the default door states a TOKEN where the return door
+	// states a line.
+	function sweptValueRegionEndsAt(index TokenIndex, regionEnd SweptValueRegionEnd) returns bool
+		return match regionEnd 'ends'
+			atLineEnd gives self.kindAt(index) == TokenKind.newline
+			atToken(stop) gives index == stop
+		end 'ends'
+	end 'sweptValueRegionEndsAt'
+
 	// ⭐ **THE ELSE ARM OF A RETURNED INLINE CONDITIONAL**, read on the SAME two terms the statement-level
-	// shapes are read on — a bare name to the end of the line, or a bare call — so an arm this admits is an
+	// shapes are read on — a bare name to the region's end, or a bare call — so an arm this admits is an
 	// arm `noteReturnedGlobalOrForward` would have admitted had it stood alone.
 	//
 	// ⚠ **THE `else` IT LOOKS FOR IS AT BRACKET DEPTH ZERO, and everything else records NOTHING.** A
@@ -13902,10 +14002,10 @@ export type Parser
 	// bare name — both fall through recording nothing, which is this function's family rule: an unrecognised
 	// shape costs a REFUSAL at the return, never a silent acceptance. The THEN arm is already seeded by the
 	// caller either way, so a missed else arm cannot make the function's bit WRONG, only incomplete.
-	function noteConditionalElseArm(condStart TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray, returnIndex TokenIndex)
+	function noteConditionalElseArm(condStart TokenIndex, regionEnd SweptValueRegionEnd, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray, valueStart TokenIndex)
 		var depth = 0
 		var q = condStart
-		while self.kindAt(q) != TokenKind.newline and self.kindAt(q) != TokenKind.eof 'scanForElse'
+		while not self.sweptValueRegionEndsAt(q, regionEnd: regionEnd) and self.kindAt(q) != TokenKind.eof 'scanForElse'
 			let kind = self.kindAt(q)
 			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'opensGroup'
 				depth = depth + 1
@@ -13914,7 +14014,7 @@ export type Parser
 				depth = depth - 1
 			end 'closesGroup'
 			if depth == 0 and kind == TokenKind.else 'foundTheElse'
-				self.noteConditionalArmValue((q + 1) as TokenIndex, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls, returnIndex: returnIndex)
+				self.noteConditionalArmValue((q + 1) as TokenIndex, regionEnd: regionEnd, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls, valueStart: valueStart)
 				return
 			end 'foundTheElse'
 
@@ -13924,7 +14024,7 @@ export type Parser
 
 	// One arm's VALUE, on the two terms above. Split from the scan so the admission rule is written once and
 	// reads the same as the statement-level one it mirrors.
-	function noteConditionalArmValue(armStart TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray, returnIndex TokenIndex)
+	function noteConditionalArmValue(armStart TokenIndex, regionEnd SweptValueRegionEnd, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray, valueStart TokenIndex)
 		if not tokenCanBeAName(self.tokenAt(armStart)) 'notANameAtAll'
 			return
 		end 'notANameAtAll'
@@ -13934,8 +14034,8 @@ export type Parser
 			return
 		end 'aBareCall'
 
-		if self.kindAt((armStart + 1) as TokenIndex) == TokenKind.newline 'aBareName'
-			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(armStart).value, head: self.tokenAt(armStart).value, returnIndex: returnIndex)
+		if self.sweptValueRegionEndsAt((armStart + 1) as TokenIndex, regionEnd: regionEnd) 'aBareName'
+			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(armStart).value, head: self.tokenAt(armStart).value, valueStart: valueStart)
 		end 'aBareName'
 	end 'noteConditionalArmValue'
 
@@ -23313,9 +23413,8 @@ export type Parser
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		// ⭐ **W117: WHAT THE SWEEP PUBLISHED ABOUT *THIS* DECLARATION**, read once here rather than at each
 		// `return` — the answer cannot change while one body is parsed, and the door that reads it sits on the
-		// promotion path of every returned aggregate. Gated on the whole-program flag so a program with no
-		// such function pays one bool instead of a hash per declaration.
-		self.enclosingFunctionMayReturnAGlobalAlias = self.signatures.programReturnsAnImmutableGlobalAlias() and self.signatures.returnsImmutableGlobalAlias(name)
+		// promotion path of every returned aggregate.
+		self.enclosingFunctionMayReturnAGlobalAlias = self.functionMayReturnAGlobalAlias(name)
 		// A DECLARED function captures nothing — only a closure body has an enclosing frame to inherit a mark
 		// from — so the capture view is empty here and is filled only by `parseClosureExpression`'s triple.
 		self.capturedImmutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -24749,7 +24848,27 @@ export type Parser
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
-		self.enclosingFunctionMayReturnAGlobalAlias = false
+		// ⭐⭐ **W117, ASKED OF THE HELPER'S OWN MINTED NAME — WHICH IS WHAT SEPARATES THE LANGUAGE'S TWO
+		// DEFAULT DOORS HERE, AND THE SEPARATION IS THE KEY RATHER THAN A CASE.** A PARAMETER default's helper
+		// is published by the sweep (`recordDefaultHelperGlobalAliasReturn`), so `f(p T = A)` is admitted and
+		// its call site marks the argument exactly as the written-out `f(A)` is marked. A FIELD default's is
+		// NOT published, so this answers false and `ownedFormOfBorrowedValue` keeps the E2015 at its return.
+		//
+		// ⛔ **THAT ASYMMETRY IS DELIBERATE AND IS NOT AN OVERSIGHT TO TIDY UP.** The parameter door hands the
+		// record to a CALL ARGUMENT, which is where the mark is READ
+		// (`SemanticCheck.checkImmutableArgToMutatingParam`) and where a mutating callee is refused. A field
+		// default hands it to a struct SLOT, and the mark does not survive a field store: MEASURED on the tip,
+		// `var h = Holder.make(G)` storing a global's record and then `h.names.push(1)` compiles clean on shv2
+		// and mutates `G`.
+		//
+		// ⚠ **AND THE ORACLE IS NOT STRICTER HERE — it prints the same `g=1`**, so this is a hole in W117 as a
+		// whole rather than an shv2-only defect. That is exactly why the door stays shut rather than being
+		// opened to match the oracle: W117 is DELIBERATELY stricter than the bootstrap about a global's record
+		// reaching a mutating position (`grow(shared())` is E3019 here and legal there), and publishing the
+		// field helper would open a route into the one part of that rule which cannot yet follow the record.
+		// A refusal is the direction this rule may err in; a silent acceptance is not. It comes off the day a
+		// field store carries the mark.
+		self.enclosingFunctionMayReturnAGlobalAlias = self.functionMayReturnAGlobalAlias(helperName)
 		self.capturedImmutableGlobalReads = sharedEmptyImmutableGlobalReads
 		// W41's mark crosses the same boundary and for the same reason — see `rebindableSlotReads`.
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
@@ -64826,6 +64945,23 @@ export type Parser
 		self.immutableGlobalReads.insert(value)
 	end 'markImmutableGlobalRead'
 
+	// ⭐⭐ **DID THE WHOLE-PROGRAM SWEEP PUBLISH THIS NAME AS ONE WHOSE RESULT MAY ALIAS A `let`-DECLARED
+	// GLOBAL'S RECORD? (W117)** — THE one composition, spent at three doors: the declaration being entered
+	// (`beginFunction`), the synthesized default helper being drained (`parseDefaultHelperBody`), and the
+	// CALLEE at the one line every direct, method and static call passes (`emitCall`).
+	//
+	// ⛔ **THE THREE MUST AGREE, BECAUSE THEY ARE TWO HALVES OF ONE RULE.** The entry doors decide whether
+	// `ownedFormOfBorrowedValue` REFUSES a returned global's record, and the call door decides whether the
+	// result that return produced is MARKED. A spelling that drifted between them would either refuse a
+	// function whose callers already mark its result, or — the costly direction — admit one whose callers do
+	// not, which is a global mutated silently.
+	//
+	// ⚡ The whole-program flag is asked FIRST and is false for every program that declares no such function,
+	// which is nearly all of them: one bool where the second half costs a hash.
+	function functionMayReturnAGlobalAlias(name ByteArray) returns bool
+		return self.signatures.programReturnsAnImmutableGlobalAlias() and self.signatures.returnsImmutableGlobalAlias(name)
+	end 'functionMayReturnAGlobalAlias'
+
 	// ⭐ **THE ONE WRITER OF `mergeImmutableBlame`** — `markImmutableGlobalRead`'s twin, for the identical
 	// copy-on-write reason and through the same one home for it. An EMPTY name is not recorded: absence is
 	// what "this merge blames nothing" means, and a stored empty would make the reader answer the same
@@ -70091,9 +70227,10 @@ export type Parser
 		// indistinguishable from a global read taken in this very function — the same mark, so the same write
 		// doors refuse it and the same merge propagation carries it.
 		//
-		// ⚡ Gated on the whole-program flag first: it is false for every program that declares no such
-		// accessor, which is nearly all of them, and it costs one bool where the second half costs a hash.
-		if self.signatures.programReturnsAnImmutableGlobalAlias() and self.signatures.returnsImmutableGlobalAlias(callee) 'mayAliasAnImmutableGlobal'
+		// ⭐ **AND A SYNTHESIZED DEFAULT HELPER IS A CALLEE LIKE ANY OTHER HERE**, which is what makes `f()`
+		// carry the same mark `f(A)` carries: `emitDefaultArgValue` fills the omitted argument through this
+		// very door with the helper's name in hand.
+		if self.functionMayReturnAGlobalAlias(callee) 'mayAliasAnImmutableGlobal'
 			self.markImmutableGlobalRead(result)
 		end 'mayAliasAnImmutableGlobal'
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee

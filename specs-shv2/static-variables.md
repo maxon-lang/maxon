@@ -2313,6 +2313,185 @@ end 'main'
 global=0 local=3
 ```
 
+### W117's returned-shape sweep — A PARAMETER DEFAULT IS THE LANGUAGE'S OTHER `return`
+
+⭐⭐ **A DEFAULT VALUE IS A SYNTHESIZED NULLARY FUNCTION WHOSE ENTIRE BODY IS `return <the expression>`**
+(`Parser.parseDefaultHelperBody`), so `f(p T = A)` hands its caller exactly what `f(A)` hands it. Until
+this rung the sweep read `return` STATEMENTS only, and the two spellings therefore had different answers
+to the one question W117 exists to answer — *may this argument alias a `let`-declared global's record?* —
+which is the one thing a default may never differ from the written-out argument in. Both halves were
+measured on the tip, and they failed in OPPOSITE directions:
+
+⛔ **THE BARE NAME WAS REFUSED, ON SHV2'S OWN SOURCE.** `ParseStaging.maxon:129` declares `opaqueParams
+OpaqueParamInfo = sharedNoOpaqueParams` and `Project.maxon:682` declares `payloadStorage MaxonType =
+NoPayloadStorage`; both are E2015 at the helper's return, because the sweep published no bit for a
+function it never read. The bootstrap compiles and runs both.
+
+⛔⛔ **AND THE CALL EDGE WAS SILENTLY ACCEPTED, WHICH IS THE HALF A REFUSAL DOES NOT COVER.** A default
+that names the global THROUGH AN ACCESSOR (`= shared()`) reaches the helper's return as an already-OWNED
+call result, so it never touches the promotion and there was no refusal to fall back on — the mark simply
+stopped at the helper and the caller got an untainted value. MEASURED: a `grow(names Names = shared())`
+whose body pushes printed `a=1 b=2 g=2`, mutating a `let` global, while the written-out `grow(shared())`
+one line over is E3019. So this door had to be opened for SOUNDNESS and not only to lift a refusal.
+
+<!-- test: a-parameter-default-may-name-a-let-global -->
+The `sharedNoOpaqueParams` shape, and all three spellings of the same argument are exercised side by
+side — omitted, written out, and a value of the caller's own — because "the default agrees with the
+written-out argument" is the property, not "the default compiles".
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Names = Array with Integer
+
+let sharedEmptyNames = Names.create()
+
+function describe(names Names = sharedEmptyNames) returns Integer
+	return names.count()
+end 'describe'
+
+function main() returns ExitCode
+	var given = Names.create()
+	given.push(7)
+	given.push(9)
+	print("omitted={describe()} written={describe(sharedEmptyNames)} given={describe(given)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+omitted=0 written=0 given=2
+```
+
+<!-- test: a-parameter-default-may-call-an-accessor-that-returns-a-global -->
+The transitive half: the default is a CALL, and the mark reaches the helper through the sweep's ordinary
+forwarding edge rather than through a seed of its own.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Names = Array with Integer
+
+let sharedEmptyNames = Names.create()
+
+function shared() returns Names
+	return sharedEmptyNames
+end 'shared'
+
+function describe(names Names = shared()) returns Integer
+	return names.count()
+end 'describe'
+
+function main() returns ExitCode
+	print("omitted={describe()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+omitted=0
+```
+
+<!-- test: a-defaulted-global-may-not-reach-a-mutating-parameter -->
+⭐ **THE CONTROL FOR THE NAME, AND IT IS THE HALF THAT MUST NOT BREAK.** Admitting the return is only
+half of W117; the other half is that the refusal MOVED to the write rather than being dropped. The
+callee pushes, so the omitted argument is refused at the CALL — the same E3019, from the same one
+reporter, that the written-out `grow(sharedEmptyNames)` earns. **The blame is the shared noun and not a
+binding name**, because a filled default names nothing the author wrote.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Names = Array with Integer
+
+let sharedEmptyNames = Names.create()
+
+function grow(names Names = sharedEmptyNames) returns Integer
+	names.push(1)
+	return names.count()
+end 'grow'
+
+function main() returns ExitCode
+	print("a={grow()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:13:12: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'names' (in main)
+```
+
+<!-- test: a-defaulted-accessor-call-may-not-reach-a-mutating-parameter -->
+⭐⭐ **THE CONTROL FOR THE EDGE — AND THIS ONE WAS A WRONG ANSWER, NOT A REFUSAL.** Identical to the case
+above but for the default naming the global through `shared()`, which is the spelling that compiled clean
+and mutated the global. It is refused now for the reason the written-out `grow(shared())` has always been.
+
+⚠ **shv2 IS STRICTER THAN THE RUNNABLE ORACLE HERE, DELIBERATELY AND ALREADY.** The bootstrap catches
+only a `let` handed over BY NAME, so it accepts both this program and the written-out `grow(shared())`;
+shv2 refuses both, which is W117's whole stance — the subject is the RECORD, not the spelling that
+reached it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Names = Array with Integer
+
+let sharedEmptyNames = Names.create()
+
+function shared() returns Names
+	return sharedEmptyNames
+end 'shared'
+
+function grow(names Names = shared()) returns Integer
+	names.push(1)
+	return names.count()
+end 'grow'
+
+function main() returns ExitCode
+	print("a={grow()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:17:12: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'names' (in main)
+```
+
+<!-- test: a-field-default-naming-a-let-global-is-still-refused -->
+⛔⛔ **THE FIELD DEFAULT IS THE SAME HELPER MECHANISM AND IS DELIBERATELY *NOT* ADMITTED, WHICH IS A
+DECISION AND NOT AN OVERSIGHT.** Both doors drain through one `parseDefaultHelperBody`, and what separates
+them is the KEY it asks under: the sweep publishes a PARAMETER default's helper and not a FIELD's, so this
+answers false and the E2015 stands.
+
+⭐ **THE REASON IS WHERE THE RECORD LANDS.** A parameter default hands it to a call ARGUMENT, which is
+where the mark is read and where a mutating callee is refused. A field default hands it to a struct SLOT,
+and the mark does not survive a field store — MEASURED, `var h = Holder.make(sharedEmptyNames)` storing a
+global's record and then `h.names.push(1)` compiles clean and prints `g=1`.
+
+⚠ **THE ORACLE PRINTS `g=1` TOO, SO THIS IS A HOLE IN W117 AS A WHOLE AND NOT AN SHV2-ONLY DEFECT** — and
+that is precisely why the door stays shut rather than being opened to match the bootstrap. W117 is
+deliberately STRICTER than the oracle about a global's record reaching a mutating position (the case
+above is one), so publishing the field helper would open a route into the one part of the rule that
+cannot yet follow the record. A refusal is the direction this rule may err in; a silent acceptance is
+not. It is pinned here so the gap is visible rather than assumed, and it comes off the day a field store
+carries the mark.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Names = Array with Integer
+
+let sharedEmptyNames = Names.create()
+
+type Holder
+	export var names as Names = sharedEmptyNames
+
+	export static function make() returns Holder
+		return Self{}
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	print("n={Holder.make().names.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:30: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+```
+
 ### `<Type> from "…"` AS A TOP-LEVEL INITIALIZER
 
 ⛔⛔ **THE CONST EVALUATOR HAD NO READING OF THIS SHAPE, AND ANSWERED ABOUT A CONSTANT NOBODY WROTE.**
