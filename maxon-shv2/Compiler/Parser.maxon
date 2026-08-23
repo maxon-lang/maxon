@@ -18239,16 +18239,34 @@ export type Parser
 		self.innerAliasesFromIndex = true
 
 		match header.target 'target'
-			interfaceExtension then break 'target'
+			interfaceExtension then self.openInterfaceExtensionBodyScope(header, conformer: conformer, index: index)
 			undeclaredTarget then return
 			// A TYPE extension's body IS inside the extended type's own parameter scope: `function matches(other
 			// Item)` names the type's `uses` parameter, and `item == other` dispatches `Equatable.equals` through
 			// the hidden witness the constraint reserves — the same two mechanisms a `where` clause written on
 			// the `type` itself drives, reached through the same two fields. It installs NO substitution: its
 			// parameters are bound per INSTANTIATION, so there is no single binding to substitute.
-			typeExtension then return self.openTypeExtensionBodyScope(header, index: index)
+			typeExtension then self.openTypeExtensionBodyScope(header, index: index)
 		end 'target'
+	end 'openExtensionBodyScope'
 
+	// ⭐ **THE INTERFACE-EXTENSION ARM'S BODY, WHICH USED TO BE THE TAIL THIS FUNCTION FELL OUT INTO.**
+	//
+	// ⛔⛔ **RETURNING A VOID CALL IS NOT VALID (user ruling, 2026-08-23), AND THE `typeExtension` ARM WAS
+	// DOING IT.** `return self.openTypeExtensionBodyScope(…)` hands back a callee that declares no return
+	// type — `specs-shv2/void-call-result.md` makes a void call's result unusable in every expression
+	// position, `return <expr>` included. It was written that way because a `match` arm is exactly ONE
+	// statement (`specs/match-statements.md`), so an arm could not both do its work AND leave the function
+	// ahead of the tail below.
+	//
+	// ⭐ **THE CURE IS TO MAKE THE CLASSIFICATION TERMINAL** — every arm now CALLS and none falls out, so the
+	// tail needs a name instead of a fallthrough. It is the same cure `LowerMaxonToStd`'s four residues took
+	// (`appendRuntimeCall` / `appendThrowingCall` / `appendStdUnaryOp`), and for the same reason.
+	//
+	// ⚠ The bootstrap ACCEPTS the old spelling, and that is a hole in it rather than a rule: it refuses a
+	// plain `return voidFn()` with E2004 and admits this one only because the `self.method()` route hands
+	// back the RECEIVER as the call's value, after which `CheckReturnType` bails on a null return type.
+	function openInterfaceExtensionBodyScope(header ExtensionHeader, conformer ByteArray, index ProgramSignatures)
 		// ⭐⭐ **A GENERIC CONFORMER'S OWN `uses` PARAMETERS ARE INSTALLED, AND THAT IS NOT THE THING THE ⚠ ABOVE
 		// FORBIDS.** What must never be installed is the INTERFACE's associated names — that would make a
 		// written `Element` resolve to a parameter of the CONFORMER, a different type. These are the
@@ -18292,7 +18310,7 @@ export type Parser
 
 		self.extensionAssociatedTypeNames = associated
 		self.extensionAssociatedTypeBindings = bindings
-	end 'openExtensionBodyScope'
+	end 'openInterfaceExtensionBodyScope'
 
 	// The TYPE-extension half of the door above, split out so the interface half reads as one path rather than
 	// as an early return threaded through a `match` arm.
@@ -20674,15 +20692,24 @@ export type Parser
 		// the user-declared ones. The arity is the interface's OWN `uses` list; an inherited `extends` parent
 		// contributes none, because a parent's associated types are bound by the child's own declaration.
 		match lookupInterface(self.signatures.interfaceMap(), name: baseName) 'interfaceBase'
-			found(iface) then return self.checkInterfaceGenericArity(iface, baseTok: baseTok, argCount: argCount)
-			notFound then break 'interfaceBase'
+			found(iface) then self.checkInterfaceGenericArity(iface, baseTok: baseTok, argCount: argCount)
+			notFound then self.checkStructGenericInstance(baseName, baseTok: baseTok, argCount: argCount)
 		end 'interfaceBase'
+	end 'checkGenericInstance'
 
+	// ⭐ **THE NON-INTERFACE BASE'S CHECK, WHICH USED TO BE THE TAIL `checkGenericInstance` FELL OUT INTO.**
+	//
+	// ⛔ **RETURNING A VOID CALL IS NOT VALID (user ruling, 2026-08-23)**, and the `found` arm above was doing
+	// it — `checkInterfaceGenericArity` declares no return type. The arm was written that way because a
+	// `match` arm is exactly ONE statement, so it could not both check the arity AND leave the function ahead
+	// of this tail. Making the classification TERMINAL is the cure: every arm calls, none falls out, and the
+	// tail takes a name. Second instance of the shape `LowerMaxonToStd`'s residues took, one file over.
+	function checkStructGenericInstance(baseName ByteArray, baseTok Token, argCount FieldIndex)
 		match self.signatures.structOf(baseName) 'base'
 			undeclared then self.recordBaseNotGeneric(baseTok)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, argCount: argCount)
 		end 'base'
-	end 'checkGenericInstance'
+	end 'checkStructGenericInstance'
 
 	// The interface half of `checkGenericInstance` — associated-types-at-all, then arity. It mirrors
 	// `checkGenericInstanceAgainst` rather than sharing it because the two read the count off different
