@@ -7468,7 +7468,7 @@ end 'referenceIdentityOpSpelling'
 // `CharacterSet`/`CharSet` and went the identical way once `stdlib/CharacterSet.maxon` was listed (W115) and
 // its compiler-owned layout deleted (W129). The remaining LAYOUT bits name types the compiler still owns
 // outright — `__ManagedFile`, `__ManagedDirectory` and `__ManagedSocket`.
-typealias ProducerMask = int(0 to 31)
+export typealias ProducerMask = int(0 to 31)
 
 let ManagedFileProducerBit = 1 as ProducerMask
 let ManagedDirectoryProducerBit = 2 as ProducerMask
@@ -12617,7 +12617,7 @@ export type Parser
 	// one: a sweep that could VETO a call would reject a correct program the moment it failed to
 	// recognize a declaration the parser accepts (see `CalleeReturn.undeclared`). It restores the
 	// cursor, so it is invisible to everything downstream.
-	export function foldDeclaredSignaturesInto(index ProgramSignatures)
+	export function foldDeclaredSignaturesInto(index ProgramSignatures, producers ProducerMask)
 		var entries = FuncReturnTypeEntryArray.create()
 		var aliases = RangedTypeAliasArray.create()
 		// ⭐ FUNCTION typealiases (P1.5-A1) — recorded from the SAME token walk as the ranged ones, into
@@ -12755,12 +12755,18 @@ export type Parser
 		// ⇒ ONE such walk answers all of them (`fileNamesProducerMask`, R4.1). The completeness the paragraph
 		// above demands is a property of what the walk VISITS, not of how many walks there are.
 		//
+		// ⭐ **THE WALK'S ANSWER ARRIVES AS A PARAMETER SINCE G20, AND NOTHING ABOVE CHANGES.** It is still
+		// this file's own complete pass — `fileNamesProducerMask` is unmoved and is still the only thing
+		// that computes it — but the mask is a pure function of the token stream and an INTEGER, which
+		// makes it the one thing this sweep produces that a memo can outlive a `Project` with. The caller
+		// owns that memo because the caller is the one holding the file's content hash; see
+		// `Queries.producerMaskFor`, which also states the one case it must not answer from.
+		//
 		// ⭐ **AND NEITHER `StringIndex` NOR `CharacterSet` IS AMONG THEM ANY MORE (W49 wave 3, W129).** Each
 		// one's producers retired onto a stdlib module that also DECLARES the type — so the layout arrives
 		// through the ordinary declaration fold, in every program, and the question the probe existed to answer
 		// is gone rather than moved. The crash they were written against cannot recur for those types: there is
 		// no per-file decision left to get wrong. The three below still name types the compiler owns outright.
-		let producers = self.fileNamesProducerMask()
 		let hasManagedFileProducer = (producers and ManagedFileProducerBit) != 0
 		let hasManagedDirectoryProducer = (producers and ManagedDirectoryProducerBit) != 0
 		let hasManagedSocketProducer = (producers and ManagedSocketProducerBit) != 0
@@ -13087,7 +13093,7 @@ export type Parser
 	//
 	// Returns a bitmask rather than a struct because a struct literal is constructible only inside its own
 	// type (E3076) and this needs no identity — the same reason `ParamPositionMask`/`ArgFloatMask` are masks.
-	function fileNamesProducerMask() returns ProducerMask
+	export function fileNamesProducerMask() returns ProducerMask
 		let resume = self.pos
 		self.pos = 0
 		var mask = 0 as ProducerMask

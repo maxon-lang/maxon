@@ -38,6 +38,170 @@ export function fileChanged(project Project, path FilePath, content String)
 	project.db.compositeHashValid = false
 end 'fileChanged'
 
+// --- The memo that outlives a `Project` ---
+//
+// ⭐⭐ **ONE STORE, HELD FOR THE LIFE OF THE PROCESS, AND THE ADMISSION TEST IS "IS THIS A PURE
+// FUNCTION OF THE FILE'S BYTES".** Since G20 a single process compiles thousands of programs —
+// `spec-test` runs every case in the worker rather than in a `build` subprocess — and every one of
+// them re-lexed the same fifty-odd `stdlib/` files from scratch. MEASURED on a seven-line fragment
+// before this store existed: `lex` 33.9 ms of a 227.8 ms compile (14.8%) and 140,684 of its 574,447
+// allocations (24.5%), essentially all of it the stdlib.
+//
+// ⚠ **THIS IS NOT A SECOND CACHE BESIDE THE QUERY SPINE'S — IT IS THE SAME MEMO WITH A LONGER
+// LIFE.** `StdlibLoader`'s header argues against storing the stdlib twice, and that argument stands
+// and is untouched: nothing here is derived a second way. What changes is the SCOPE of one memo,
+// from one compile to one process, and the per-`Project` caches remain the only thing any query
+// reads directly — a shared hit is served THROUGH them (see `Queries.queryTokens`).
+//
+// ⛔⛔ **WHAT MAY NOT GO IN HERE, AND WHY THE LINE IS EXACTLY THERE.** A `FileParseArtifact` and a
+// swept declaration are NOT pure functions of the bytes: both carry INTERNED TYPE IDS, and
+// `ParseStaging.mergeArtifact` rewrites an artifact's ids IN PLACE on its first fold and then
+// latches `typeIdsAreProjectGlobal`, an invariant that holds only while "the interner they were
+// folded into is the one still in hand". Sharing one across two `Project`s makes the second skip
+// the remap and read ids stamped for the first — so caching either needs v1's re-intern-on-use
+// (`maxon-selfhosted/Compiler/Passes/StdlibIrTranslation.maxon:38-53`) or the bootstrap's
+// clone-on-every-use (`maxon-sharp/Compiler/0-Compiler.cs:1298-1341`), and neither is in this file.
+//
+// A TOKEN has neither problem. `Token`'s every field is a `let` (Lexer.maxon:279-301), no consumer
+// mutates a token array (`filterConditionalTokens` returns its input or builds a fresh array, and
+// `Parser.shadowRenamedTokens` likewise), and a token carries no id of any kind. It is a VALUE, and
+// that is the whole safety argument.
+//
+// ⚠ **THE KEY IS THE CONTENT HASH AND NOT THE PATH, WHICH IS BOTH CORRECT AND THE OVERLAY FIX.**
+// `tokenize` reads the bytes and nothing else, so two files with the same bytes have the same
+// tokens whatever they are called — and a `// --- stdlib-overlay:` case, which stages a private
+// stdlib under a temp directory, therefore SHARES an entry for exactly the files it did not change
+// and gets its own for the one it did. A path key would have missed on all of them, and a path key
+// that normalized would have had to decide what "the same file" means.
+//
+// ⚠ **IT EXTENDS THE TRUST ALREADY PLACED IN `ContentHash` FROM ONE FILE TO ALL OF THEM.** Every
+// per-file memo in `QueryDatabase` already treats a 64-bit FNV-1a match as "these are the same
+// bytes" — but under a PATH key, so a collision had to be between two versions of one file. Here it
+// would be between any two admitted files. The admission list is `stdlib/`'s fifty-odd files (see
+// `ContentHashSet`), which bounds the exposure to a set that is small, fixed and not chosen by user
+// input.
+//
+// ⚠⚠ **IT IS SOUND ONLY WHILE COMPILES IN A PROCESS ARE STRICTLY SERIAL, exactly as
+// `PhaseProbe.openPhaseSpans` and `Diagnostics`' capture latch are** — shv2's scheduler is single-M
+// and the pipeline holds no yield point, so two compiles cannot interleave. **A shared memo must not
+// become the reason to parallelise compiles inside one process**; that would invalidate all three at
+// once, and this one would then need a lock rather than a rewrite.
+var sharedFileMemos = SharedFileMemoMap.create()
+
+// How many distinct byte-contents this process is holding. Reported beside the per-compile hit
+// counts (see `Queries.queryProgramSignatures`) because it is the one number that says the store is
+// BOUNDED: a store that grows with the corpus rather than with `stdlib/` is a worker leaking one
+// token array per spec fragment, and no hit count can see that.
+export function sharedMemoEntryCount() returns QueryCount
+	return sharedFileMemos.count()
+end 'sharedMemoEntryCount'
+
+// A `Target` as one integer. `Os` is the inner digit and its own case count is the radix, so the
+// packing stays correct when either enum gains a case — the number nobody has to remember.
+export function targetKeyOf(target Target) returns TargetKey
+	return (target.cpu.ordinal * Os.allCases.count()) + target.os.ordinal
+end 'targetKeyOf'
+
+// ⭐ **MARK THIS FILE'S BYTES AS WORTH KEEPING FOR THE WHOLE PROCESS.** Called by
+// `StdlibLoader.loadStdlibSources` for each file it registered, because that loop is the one place
+// that knows a path came out of an enumeration of `stdlib/` without paying the four String
+// allocations `isStdlibSourceFile` costs a question (see `StdlibSource`'s header).
+export function markSharedTokenSource(project Project, path FilePath) throws CompileError
+	project.db.shareableTokenHashes.insert((try sourceEntryOf(project, path: path)).contentHash)
+end 'markSharedTokenSource'
+
+// The store's entry for these bytes. The ONE place a `MapError` becomes a `SharedMemoMiss`, so the
+// five doors below cannot come to disagree about what "not held" is — and so an absent entry has one
+// meaning everywhere: nothing in this process has lexed these bytes, whether because no compile has
+// reached them yet, because no compile ADMITTED them, or because the one that did failed to lex.
+function heldMemoFor(contentHash ContentHash) returns SharedFileMemo throws SharedMemoMiss
+	return try sharedFileMemos.get(contentHash) otherwise throw SharedMemoMiss.notHeld
+end 'heldMemoFor'
+
+// The store's view for these bytes AND this target — `heldMemoFor` composed with `viewOf`, once,
+// because all three doors below want exactly that pair and a composition spelled three times is
+// three places for the two halves to come apart.
+function heldViewFor(contentHash ContentHash, targetKey TargetKey) returns SharedTargetView throws SharedMemoMiss
+	return try (try heldMemoFor(contentHash)).viewOf(targetKey)
+end 'heldViewFor'
+
+// The tokens some earlier compile in this process already lexed from these exact bytes. Throws on a
+// miss, `TypeNameInterner.idOf`'s shape — "nothing has lexed these bytes yet" is an answer.
+//
+// It does NOT re-ask the admission list, and that is deliberate rather than an omission: admission
+// decides what is worth KEEPING, and a file whose bytes are already held is worth reading whoever
+// asks. A user fragment byte-identical to an admitted file gets the same tokens because it has the
+// same bytes, which is the only claim this store ever makes.
+export function sharedTokensOf(project Project, contentHash ContentHash) returns TokenArray throws SharedMemoMiss
+	let memo = try heldMemoFor(contentHash)
+	project.db.sharedTokenHits = project.db.sharedTokenHits + 1
+	return memo.tokens
+end 'sharedTokensOf'
+
+// ⭐⭐ **THE ONE PLACE THE ADMISSION LIST IS CONSULTED, AND THE ONLY PLACE AN ENTRY IS CREATED.**
+// Every publish below reads admission off the ENTRY instead of asking again — an absent entry means
+// the bytes were never admitted, which is the same "nothing to hang a view on" as a failed lex. One
+// fact, one reader; three copies of `contains` would be three places to forget it.
+//
+// ⚠ **THE UPSERT CANNOT OVERWRITE AN ENTRY THAT HAS ACQUIRED VIEWS, AND THAT IS A REACHABILITY
+// ARGUMENT RATHER THAN A GUARD.** `queryTokens` publishes only after asking `sharedTokensOf` and
+// being told no — so an entry already in the store returns through the hit path and never reaches
+// here. A defensive `already held?` test would be code no input can run, which is the shape this
+// project refuses; if a second publisher is ever added, it is THIS paragraph that stops holding.
+export function shareTokens(project Project, contentHash ContentHash, tokens TokenArray)
+	if not project.db.shareableTokenHashes.contains(contentHash) 'notAdmitted'
+		return
+	end 'notAdmitted'
+
+	sharedFileMemos.upsert(contentHash, value: SharedFileMemo.create(tokens))
+end 'shareTokens'
+
+// The `#if`-resolved stream for these bytes AND this target, if this process has one.
+export function sharedActiveTokensOf(project Project, contentHash ContentHash, targetKey TargetKey) returns TokenArray throws SharedMemoMiss
+	let view = try heldViewFor(contentHash, targetKey: targetKey)
+	project.db.sharedActiveTokenHits = project.db.sharedActiveTokenHits + 1
+	return view.activeTokens
+end 'sharedActiveTokensOf'
+
+// Publish a SUCCEEDING filter's stream.
+//
+// ⛔ **ONLY A SUCCEEDING FILTER REACHES HERE, AND THE ASYMMETRY WITH THE PER-`Project` MEMO IS
+// DELIBERATE.** `queryActiveTokens` caches a FAILED filter as an empty stream on purpose — that is
+// what makes its diagnostic appear once instead of twice — and it is sound there because the
+// diagnostic is already on THAT compile's `project.diagnostics` and that build is already failing.
+// A later compile of a program that merely shares the bytes has neither, so serving it the empty
+// stream would be a file silently compiling as though it were blank.
+export function shareActiveTokens(contentHash ContentHash, targetKey TargetKey, activeTokens TokenArray)
+	// No entry means the bytes were never admitted — see `shareTokens`, which owns that decision. A
+	// view is only ever ADDED here, never replaced: `queryActiveTokens` reaches this line only after
+	// `sharedActiveTokensOf` answered no for this target.
+	var memo = try heldMemoFor(contentHash) otherwise return
+	memo.addView(SharedTargetView.create(targetKey, activeTokens: activeTokens))
+end 'shareActiveTokens'
+
+// The producer mask an earlier compile derived from this file's active stream, if any. Its own pair
+// of doors rather than a field the two above fill, because it is derived on FIRST DEMAND: only the
+// declaration sweep asks for it, and a compile that never reaches the sweep must not pay a token
+// walk for it.
+export function sharedProducerMaskOf(project Project, contentHash ContentHash, targetKey TargetKey) returns ProducerMask throws SharedMemoMiss
+	let view = try heldViewFor(contentHash, targetKey: targetKey)
+	if not view.producerMaskComputed 'notYetDerived'
+		throw SharedMemoMiss.notHeld
+	end 'notYetDerived'
+
+	project.db.sharedProducerMaskHits = project.db.sharedProducerMaskHits + 1
+	return view.producerMask
+end 'sharedProducerMaskOf'
+
+export function shareProducerMask(contentHash ContentHash, targetKey TargetKey, mask ProducerMask)
+	// Two ways there is nothing to write to, and both are ordinary: the bytes were never admitted (no
+	// entry — see `shareTokens`), or this target has no view because the file's `#if` filter FAILED and
+	// a failure is deliberately not published (see `shareActiveTokens`). The sweep still walks the empty
+	// stream that failure produced, so it still arrives here with a mask.
+	var view = try heldViewFor(contentHash, targetKey: targetKey) otherwise return
+	view.rememberProducerMask(mask)
+end 'shareProducerMask'
+
 // --- Source entries and content-hash memo keys ---
 
 // The registered source entry for `path` — its bytes AND the hash of those bytes, which is the key

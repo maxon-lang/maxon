@@ -70,6 +70,13 @@
 //   • It CACHES the parsed stdlib module process-wide. shv2's caching is the query spine's
 //     content-hash memo, which already covers these files because they are registered as ordinary
 //     sources; a second cache would be the same fact stored twice.
+//     ⚠ **THAT IS AN ARGUMENT ABOUT A SECOND CACHE, AND IT STILL HOLDS. IT SAYS NOTHING ABOUT THE
+//     ONE CACHE'S LIFETIME, WHICH IS WHAT G20 CHANGED.** A worker now compiles thousands of programs
+//     in one process, so that same content-hash memo keeps a stdlib file's TOKENS for the life of the
+//     PROCESS rather than of a `Project` (`QueryEngine.sharedFileMemos`), and the loop below is what
+//     admits them. Nothing is stored twice — the shared store sits BEHIND the per-`Project` cache and
+//     is read only on its miss — and it holds only what is a pure function of the file's BYTES, never
+//     the PARSED module the bootstrap caches, which carries interned ids a fold rewrites in place.
 //
 // ⭐ THE ONE INVARIANT WHILE THE FILTER STANDS: adding a module changes NOTHING for a program that does
 // not use it. A program that never calls Clock must compile to the exact bytes it did before Clock was
@@ -276,6 +283,12 @@ export function loadStdlibSources(project Project) throws CompileError
 		// of `stdlib/`. Re-deriving it later by testing each source path against that directory costs
 		// four String allocations a question (see StdlibSource's header).
 		project.stdlibSourcePaths.push(path)
+		// AND ADMITTED to the process-wide token memo, from the same loop and for the same reason: this
+		// is the one place that knows a file came out of an enumeration of `stdlib/`, and a memo that
+		// outlives the `Project` has to be told which files are worth the memory. See
+		// `QueryEngine.sharedFileMemos`, and the header bullet above on why this is that memo's SCOPE
+		// widening rather than a second cache beside it.
+		try markSharedTokenSource(project, path: path)
 	end 'each'
 end 'loadStdlibSources'
 

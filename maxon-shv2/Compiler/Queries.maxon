@@ -43,6 +43,19 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	end 'memoized'
 	project.db.tokenMisses = project.db.tokenMisses + 1
 
+	// ⭐⭐ **THE PROCESS-WIDE STORE, ASKED ONLY ON A PER-`Project` MISS — so a warm project never
+	// touches it and a cold one pays one integer-keyed probe in place of a whole lex.** The answer is
+	// written back into this project's own cache before it is returned, which is what keeps that cache
+	// the only thing the hit path above reads: the store is a longer-lived memo BEHIND the query, not a
+	// second one beside it. See `QueryEngine.sharedFileMemos` for why a token may live there.
+	//
+	// A shared hit is counted as a per-`Project` MISS (above) and separately as a shared HIT, and the
+	// two are deliberately not folded — see `QueryDatabase.sharedTokenHits`.
+	if let shared = try sharedTokensOf(project, contentHash: entry.contentHash) 'sharedHit'
+		project.db.tokenCache.upsert(path, value: TokenMemo.create(shared, keyHash: entry.contentHash))
+		return shared
+	end 'sharedHit'
+
 	// The `lex` phase is probed HERE, around `tokenize` alone — the leaf. `queryParseOps`
 	// calls this query BEFORE it opens its own `parse` probe, so the two phases are
 	// disjoint by construction and neither has to subtract the other out. A cache hit
@@ -57,6 +70,10 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	recordPhase(project, phase: CompilePhase.lex, probe: lexProbe)
 
 	project.db.tokenCache.upsert(path, value: TokenMemo.create(tokens, keyHash: entry.contentHash))
+	// Published AFTER the project's own cache is written and only on the success path — a failed
+	// tokenize returned above without caching anywhere, which is what keeps the store free of streams
+	// whose diagnostic belongs to one compile.
+	shareTokens(project, contentHash: entry.contentHash, tokens: tokens)
 	return tokens
 end 'queryTokens'
 
@@ -85,6 +102,10 @@ end 'queryTokens'
 // so two targets are two `Project`s and two databases, and one cache can never be asked a question
 // about a target it was not filled for. Should a `Project` ever need re-aiming, THIS memo's key is
 // what becomes wrong: mix the target into it, do not simply invalidate.
+//
+// ⚠ **THE PROCESS-WIDE STORE BELOW HAS NO SUCH GUARANTEE AND SO ALREADY CARRIES THE TARGET IN ITS
+// KEY** — it outlives every `Project`, which is exactly the premise this paragraph rests on. See the
+// second store lookup in the body.
 function queryActiveTokens(project Project, path FilePath) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe, validating and stamping from the same hash — see `sourceEntryOf`.
 	let entry = try sourceEntryOf(project, path: path)
@@ -102,6 +123,26 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 	// CompileTimings' header is about.
 	let tokens = try queryTokens(project, path: path)
 
+	// ⭐⭐ **THE PROCESS-WIDE STORE AGAIN, AND HERE THE KEY CARRIES THE TARGET.** The paragraph in this
+	// function's header is why this memo's own key does not have to: a `Project` is aimed at one target
+	// for its whole life, so a per-`Project` cache cannot be asked about a target it was not filled for.
+	// **A memo that outlives the `Project` has no such guarantee**, so `targetKeyOf` rides its key — the
+	// same reason the bootstrap keys its stdlib cache per target (`0-Compiler.cs:1255-1260`).
+	//
+	// ⛔⛔ **IT IS ASKED *BELOW* THE TOKENS QUERY, NOT ABOVE IT, AND THAT ORDER IS THE WHOLE
+	// INCREMENTALITY PROPERTY.** Short-circuiting here — answering the filtered stream without ever
+	// asking for the raw one — leaves THIS project's `tokenCache` empty for every file the store
+	// answered for, so the next re-query of an unchanged file lands as a MISS. MEASURED, and it is the
+	// gate that caught it: `verify-warm-rebuild` reported
+	// `rebuild token re-query hits (tokenHits): expected 52, got 1` and
+	// `rebuild does not recompute tokens (tokenMisses): expected 0, got 52`. Nothing is re-LEXED either
+	// way; what moves is whether the per-`Project` spine stays whole, and it must.
+	let targetKey = targetKeyOf(project.target)
+	if let shared = try sharedActiveTokensOf(project, contentHash: entry.contentHash, targetKey: targetKey) 'sharedHit'
+		project.db.activeTokenCache.upsert(path, value: TokenMemo.create(shared, keyHash: entry.contentHash))
+		return shared
+	end 'sharedHit'
+
 	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.directives)
 	// ⚠ **THE FAILURE IS MEMOIZED TOO, AND THAT IS WHAT MAKES THE DIAGNOSTIC APPEAR ONCE.** This query
 	// has TWO callers per file — the declaration sweep and the real parse — with no error gate between
@@ -114,23 +155,47 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 	// invalidates the entry, and the diagnostic is already on `project.diagnostics` — which is
 	// cumulative for the whole compile, so the build still fails, once. (This is also exactly what
 	// already happens to a failed TOKENIZE, whose empty array reaches the same cache write below.)
-	let active = activeTokensOrReported(project, path: path, tokens: tokens)
+	let filtered = activeTokensOrReported(project, path: path, tokens: tokens)
 	recordPhase(project, phase: CompilePhase.directives, probe: probe)
 
 	// ⚠ The stamp that carries this query's soundness argument: a TARGET-DEPENDENT value under a key
 	// that names only the file. Read the target note in this function's header before changing it.
-	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(active, keyHash: entry.contentHash))
-	return active
+	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(filtered.value, keyHash: entry.contentHash))
+	// ⛔ **THE PROCESS-WIDE STORE TAKES THE SUCCESSES ONLY, WHERE THE LINE ABOVE TAKES THE FAILURES
+	// TOO.** That asymmetry is the whole reason `activeTokensOrReported` reports whether it filtered:
+	// the empty stream a directive fault produces is paired with a diagnostic on THIS compile's
+	// `project.diagnostics`, and a later compile that merely shares the bytes would have neither. See
+	// `QueryEngine.shareActiveTokens`.
+	if filtered.filtered 'theFilterSucceeded'
+		shareActiveTokens(entry.contentHash, targetKey: targetKey, activeTokens: filtered.value)
+	end 'theFilterSucceeded'
+	return filtered.value
 end 'queryActiveTokens'
+
+// The filtered stream, AND whether the filter actually ran to completion.
+//
+// The bit is not a convenience: the two memos this feeds disagree about what to do with a FAILURE,
+// and the disagreement is deliberate (see `queryActiveTokens`' publish site). An empty stream is a
+// legitimate value for a file that is genuinely empty, so a caller cannot tell the two apart by
+// looking — which is exactly the sentinel-return this project refuses.
+type FilteredTokens
+	export let value as TokenArray
+	export let filtered as bool
+
+	static function create(value TokenArray, filtered bool) returns FilteredTokens
+		return Self{value: value, filtered: filtered}
+	end 'create'
+end 'FilteredTokens'
 
 // The filtered stream, or an EMPTY one with the fault reported. Its own function purely so the
 // caller has a single success path to memoize through — see the cache-the-failure note there for
 // why returning early instead reported every directive fault twice.
-function activeTokensOrReported(project Project, path FilePath, tokens TokenArray) returns TokenArray
-	return try filterConditionalTokens(tokens, target: project.target) otherwise (directiveErr) 'directiveFail'
+function activeTokensOrReported(project Project, path FilePath, tokens TokenArray) returns FilteredTokens
+	let active = try filterConditionalTokens(tokens, target: project.target) otherwise (directiveErr) 'directiveFail'
 		reportDirectiveError(project, path: path, error: directiveErr)
-		return TokenArray.create()
+		return FilteredTokens.create(TokenArray.create(), filtered: false)
 	end 'directiveFail'
+	return FilteredTokens.create(active, filtered: true)
 end 'activeTokensOrReported'
 
 // --- Whole-program query: the DECLARED SIGNATURE of every function, from TOKENS ---
@@ -366,6 +431,18 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	signatures.deriveInstanceNames()
 	recordPhase(project, phase: CompilePhase.signatures, probe: constProbe)
 
+	// ⭐ **WHAT THE PROCESS-WIDE STORE ACTUALLY SAVED THIS COMPILE — REPORTED, BECAUSE A CACHE NOBODY
+	// CAN SEE FIRE IS A CACHE NOBODY CAN PROVE FIRED.** Every one of these counters is at its final
+	// value by this line: the store answers only `queryTokens`, `queryActiveTokens` and the sweep's
+	// producer walk, and this query is what drives all three. A first compile in a process reads zero
+	// across the board, which is the reading that says the store is empty rather than broken.
+	//
+	// ⚠ **THE LAST TWO NUMBERS ARE DIFFERENT FACTS AND THE GATE COMPARES THEM.** `admitted` is what
+	// THIS compile offered (`stdlib/`'s files); `holding` is what the PROCESS has kept. They are equal
+	// while the store is bounded, and only the second one moves if it ever stops being — which is why
+	// reporting the admission count alone was measured to be an instrument that could not fail.
+	logDebug(LogCategory.compiler, message: function() gives "shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {sharedMemoEntryCount()} holding")
+
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: compositeSourceHash(project), computed: true)
 	return signatures
 end 'queryProgramSignatures'
@@ -396,9 +473,48 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	// other pass's — including its namespace, which is why the module directory is FILED just above and
 	// read back rather than handed straight over: one derivation, one reader.
 	var scanner = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSource, buildsBodies: true)
-	scanner.foldDeclaredSignaturesInto(signatures)
+	let producers = try producerMaskFor(project, signatures: signatures, path: path, scanner: scanner)
+	scanner.foldDeclaredSignaturesInto(signatures, producers: producers)
 	recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 end 'foldOneFileInto'
+
+// ⭐⭐ **THE ONE PROBE WALK THAT CAN BE MEMOIZED ACROSS COMPILES, AND IT IS THE ONLY PART OF THE
+// SWEEP THAT CAN.** `fileNamesProducerMask` is a COMPLETE walk of the file's tokens — it has to be,
+// because the declaration walk beside it skips a `type`'s method bodies wholesale (see its header,
+// and the crash that fact was measured on) — and it returns a BITMASK. MEASURED on a seven-line
+// fragment: 10.8 ms of a 227.8 ms compile (4.7%) and **52 allocations**, i.e. pure token walking,
+// repeated for every one of the thousands of compiles a worker now performs.
+//
+// It is the only piece of the sweep that is shareable, and the reason is worth stating because the
+// rest looks similar and is not: the mask is an INTEGER. Every other thing the sweep produces is a
+// heap record the whole-program fold RETAINS and later passes MUTATE (`remapStructLayoutFieldTypes`
+// rewrites a `StructLayout`'s field types in place; `evaluateInitializers` writes outcomes onto a
+// recorded `TopLevelDecl`), so sharing one would hand two compiles the same mutable object.
+//
+// ⛔ **BYPASSED ENTIRELY WHEN A STDLIB NAME IS CONTESTED, AND THAT GATE IS MEASURED, NOT ARGUED.**
+// The mask is read off `Parser.tokens`, which for a stdlib file is the SHADOW-RENAMED stream — so it
+// is a function of the file's bytes only while nothing has been renamed. Compiling a fragment that
+// declares `type Clock` against this same checkout moves `stdlib/Clock.maxon`'s swept output while
+// every other stdlib file's stays identical, which is exactly the dependence this gate excludes. It
+// costs nothing for the whole existing corpus, where `hasStdlibShadowRenames` is false.
+function producerMaskFor(project Project, signatures ProgramSignatures, path FilePath, scanner Parser) returns ProducerMask throws CompileError
+	if signatures.hasStdlibShadowRenames() 'aNameIsContested'
+		return scanner.fileNamesProducerMask()
+	end 'aNameIsContested'
+
+	// One `sourceFiles` probe per swept file, for the hash the store is keyed by. It is a `FilePath`
+	// map probe, which is not free on Windows (see `sourceEntryOf`) — fifty-odd of them against a
+	// walk of every token in `stdlib/`.
+	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
+	let targetKey = targetKeyOf(project.target)
+	if let shared = try sharedProducerMaskOf(project, contentHash: contentHash, targetKey: targetKey) 'sharedHit'
+		return shared
+	end 'sharedHit'
+
+	let mask = scanner.fileNamesProducerMask()
+	shareProducerMask(contentHash, targetKey: targetKey, mask: mask)
+	return mask
+end 'producerMaskFor'
 
 // ⭐⭐ **THE ANCHOR A FILE'S MODULE DIRECTORY IS MEASURED FROM — THREE OF THEM, AND PICKING THE WRONG ONE
 // IS SILENT** (N1a). v1 threads three roots by hand from three different callers

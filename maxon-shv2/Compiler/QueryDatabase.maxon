@@ -104,6 +104,105 @@ export type ModuleMemo
 	end 'empty'
 end 'ModuleMemo'
 
+// --- The memo that outlives a `Project` ---
+//
+// ⭐⭐ **EVERYTHING BELOW IS A PURE FUNCTION OF A FILE'S BYTES, AND THAT IS THE WHOLE ADMISSION
+// TEST.** A `Project`-scoped memo may hold anything, because it dies with the ids and the module it
+// was derived against. A PROCESS-scoped one may hold only what carries no identity — see
+// `QueryEngine.sharedFileMemos` for the argument, and for the two things that are deliberately NOT
+// here (a parse artifact, a swept declaration).
+//
+// The unit is the file's CONTENT HASH rather than its path: `tokenize` reads the bytes and nothing
+// else, so two files with the same bytes have the same tokens whatever they are called, and an
+// overlay stdlib staged at another path shares an entry exactly when it deserves to.
+
+// A build target reduced to ONE integer, so a memo shared across `Project`s can key on the target
+// without a second spelling of `Target`'s identity. See `QueryEngine.targetKeyOf`.
+export typealias TargetKey = int(0 to u64.max)
+
+// ⭐⭐ **ONE TARGET'S VIEW OF ONE FILE — AND IT IS PER TARGET BECAUSE THE `#if` FILTER IS.**
+// `queryActiveTokens`' per-`Project` memo gets that for free from "a `Project` has exactly one
+// target for its whole life"; a process-wide memo does not, and the bootstrap keys its own stdlib
+// cache per target for exactly this reason (`0-Compiler.cs:1255-1260` — otherwise you bake the
+// build machine's OS into a cross-compiled binary's stdlib). Both fields below are functions of
+// (these bytes, this target) and of nothing else.
+export type SharedTargetView
+	export let targetKey as TargetKey
+	// The `#if`-resolved stream. Only a SUCCEEDING filter is ever published here — see
+	// `Queries.queryActiveTokens`, whose per-`Project` memo may hold a failure (its diagnostic is
+	// already on that compile's `project.diagnostics`) and whose shared one may not.
+	export let activeTokens as TokenArray
+	// `Parser.fileNamesProducerMask` over that stream — a bitmask, so a memo of it is one integer
+	// and there is nothing to alias. Filled on FIRST DEMAND rather than beside the tokens, because
+	// the two have different consumers: every token reader wants the stream, only the declaration
+	// sweep wants the mask.
+	export var producerMask as ProducerMask
+	export var producerMaskComputed as bool
+
+	export static function create(targetKey TargetKey, activeTokens TokenArray) returns SharedTargetView
+		return Self{targetKey: targetKey, activeTokens: activeTokens, producerMask: 0, producerMaskComputed: false}
+	end 'create'
+
+	// ONE writer for the mask and the bit that says it is there, so a filled mask can never be
+	// read as absent nor an absent one as zero — a producer mask of 0 is a legitimate answer (a
+	// file that names none of the five producers), which is why the bit exists at all.
+	export function rememberProducerMask(mask ProducerMask)
+		self.producerMask = mask
+		self.producerMaskComputed = true
+	end 'rememberProducerMask'
+end 'SharedTargetView'
+
+export typealias SharedTargetViewArray = Array with SharedTargetView
+
+// What one file's BYTES lex to, plus one view per target this process has been asked about.
+//
+// The views are an ARRAY walked linearly, not a map: a process compiles for ONE target in every
+// driver that exists today (`build` and `spec-test` both take a single `--target`), so the walk is
+// over one element and a `Map` would cost a hash to answer a question a compare answers.
+export type SharedFileMemo
+	// The RAW stream, target-independent: `tokenize` never sees a target.
+	export let tokens as TokenArray
+	export var views as SharedTargetViewArray
+
+	export static function create(tokens TokenArray) returns SharedFileMemo
+		return Self{tokens: tokens, views: SharedTargetViewArray.create()}
+	end 'create'
+
+	// This target's view, or nothing yet. A linear walk for the reason the field's comment gives:
+	// the array holds one element in every driver that exists.
+	export function viewOf(targetKey TargetKey) returns SharedTargetView throws SharedMemoMiss
+		for view in self.views 'eachView'
+			if view.targetKey == targetKey 'thisTarget'
+				return view
+			end 'thisTarget'
+		end 'eachView'
+		throw SharedMemoMiss.notHeld
+	end 'viewOf'
+
+	export function addView(view SharedTargetView)
+		self.views.push(view)
+	end 'addView'
+end 'SharedFileMemo'
+
+// Raised when the process-wide memo is not holding what it was asked for. An ANSWER — "nothing in
+// this process has lexed these bytes yet", or "not for this target" — never a compiler bug, exactly
+// as `TypeNameInterner.idOf`'s `unknownName` is and unlike its `unknownId`.
+export union SharedMemoMiss implements Error
+	notHeld
+end 'SharedMemoMiss'
+
+export typealias SharedFileMemoMap = Map with (ContentHash, SharedFileMemo)
+
+// The byte-contents this compile is willing to hand to the process-wide memo — filled by
+// `StdlibLoader.loadStdlibSources`, which is the one place that knows a file came out of an
+// enumeration of `stdlib/`.
+//
+// ⚠ **IT IS AN ADMISSION LIST, NOT A CACHE, AND ITS ONLY JOB IS TO BOUND MEMORY.** A shared entry
+// lives for the life of the WORKER, so admitting every file would grow the store by one entry per
+// spec fragment — thousands of arrays nothing will ever read again. The stdlib's fifty-odd files
+// are re-lexed by every compile, so they are exactly the set worth keeping.
+export typealias ContentHashSet = Set with ContentHash
+
 // A source file input: its content plus the content hash all per-file memos key
 // against. The hash is computed once, at `fileChanged` time.
 export type SourceFileEntry
@@ -134,6 +233,11 @@ export type QueryDatabase
 	// `fileChanged` is its only invalidator (see QueryEngine.compositeSourceHash).
 	export var compositeHash as ContentHash
 	export var compositeHashValid as bool
+
+	// The byte-contents `StdlibLoader` marked worth sharing process-wide (see `ContentHashSet`).
+	// Per-`Project` because the answer is "did THIS compile load the file from `stdlib/`"; the store
+	// it admits into is the process's (`QueryEngine.sharedFileMemos`).
+	export var shareableTokenHashes as ContentHashSet
 
 	// Per-file memo caches (absence = not cached; validity via keyHash compare).
 	export var tokenCache as TokenCacheMap
@@ -175,6 +279,16 @@ export type QueryDatabase
 	export var allModuleHits as QueryCount
 	export var allModuleMisses as QueryCount
 
+	// ⭐ **WHAT THIS COMPILE TOOK OUT OF THE PROCESS-WIDE MEMO.** Counted separately from
+	// `tokenHits`/`tokenMisses` and never folded into them, because the two answer different
+	// questions and one of them is already gated: `tokenHits` is the WARM-REBUILD property
+	// (`VerifyWarmRebuild` asserts exact deltas on it), and a shared hit is a per-`Project` MISS by
+	// construction — it is the miss that the store answered instead of the lexer. Folding them
+	// would move that gate's numbers while proving nothing about incrementality.
+	export var sharedTokenHits as QueryCount
+	export var sharedActiveTokenHits as QueryCount
+	export var sharedProducerMaskHits as QueryCount
+
 	// `os` is the TARGET's, and it reaches only the empty signature sentinel below — see
 	// `SignatureMemo.empty`. A database is filled for one target, exactly as the `Project` that owns it is
 	// aimed at one (`Project.target`'s header), so taking it here states that rather than assuming it.
@@ -183,6 +297,7 @@ export type QueryDatabase
 			sourceFiles: SourceFileMap.create(),
 			sourcePaths: FilePathArray.create(),
 			compositeHash: 0, compositeHashValid: false,
+			shareableTokenHashes: ContentHashSet.create(),
 			tokenCache: TokenCacheMap.create(),
 			activeTokenCache: TokenCacheMap.create(),
 			parseCache: ParseCacheMap.create(),
@@ -190,6 +305,7 @@ export type QueryDatabase
 			signatureCache: SignatureMemo.empty(os),
 			allModuleCache: ModuleMemo.empty(),
 			tokenHits: 0, tokenMisses: 0,
+			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0,
 			activeTokenHits: 0, activeTokenMisses: 0,
 			parseHits: 0, parseMisses: 0,
 			signatureHits: 0, signatureMisses: 0,
