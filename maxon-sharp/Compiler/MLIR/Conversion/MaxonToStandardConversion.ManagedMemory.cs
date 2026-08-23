@@ -1290,12 +1290,6 @@ public static partial class MaxonToStandardConversion {
     var parentPtr = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
     var zeroPtr = new StdConstI64Op(0);
     block.AddOp(zeroPtr);
-    var parentOrNull = new StdSelectI64Op(wasSliceAndCopied.Result, parentPtr, zeroPtr.Result);
-    block.AddOp(parentOrNull);
-    EmitDecrefValueIfNonnull(block, parentOrNull.Result, scopeName: _currentFuncName);
-    var parentAfter = new StdSelectI64Op(wasSliceAndCopied.Result, zeroPtr.Result, parentPtr);
-    block.AddOp(parentAfter);
-    EmitStructFieldStore(block, parentAfter.Result, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
 
     // A COW of a MANAGED-element buffer memcpy'd 8-byte element POINTERS, and a raw copy of a
     // pointer carries no claim on what it points at. Both buffers are now walked by a teardown
@@ -1307,12 +1301,27 @@ public static partial class MaxonToStandardConversion {
     // exists (a view and its parent are two buffers holding one array), so the elements are the
     // same elements. Only a copy that mints a NEW array value deep-clones — see
     // ManagedElementCopy.
+    //
+    // ⚠ **IT HAS TO CLAIM THE ELEMENTS BEFORE THE PARENT IS RELEASED**, which is the whole of why it
+    // sits above the decref rather than at the end of this function. The release below can take the
+    // parent to zero, and the parent's own teardown decrefs every element of the buffer this copy
+    // was made FROM — so an incref after it runs on records that have already been freed. Measured
+    // with `--mm-trace`, in this order: `mm_decref String #4 rc=0 [~ManagedElements]`,
+    // `mm_free String #4`, then `mm_incref String #4 rc=1 [~ManagedElements]` resurrecting it, then
+    // `refcount underflow (already zero)` on the next teardown.
     if (isStructElement) {
       var increfManagedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
       var cowIncrefArg = new StdSelectI64Op(cowDidCopy.Result, increfManagedPtr, zeroPtr.Result);
       block.AddOp(cowIncrefArg);
       block.AddOp(new StdCallRuntimeIfNonnullOp("mm_incref_managed_elements", [cowIncrefArg.Result], null));
     }
+
+    var parentOrNull = new StdSelectI64Op(wasSliceAndCopied.Result, parentPtr, zeroPtr.Result);
+    block.AddOp(parentOrNull);
+    EmitDecrefValueIfNonnull(block, parentOrNull.Result, scopeName: _currentFuncName);
+    var parentAfter = new StdSelectI64Op(wasSliceAndCopied.Result, zeroPtr.Result, parentPtr);
+    block.AddOp(parentAfter);
+    EmitStructFieldStore(block, parentAfter.Result, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
   }
 
   /// <summary>
@@ -1846,14 +1855,24 @@ public static partial class MaxonToStandardConversion {
     var otherLenVar = $"__append_otherlen_{uid}";
     EmitStore(block, otherLen, otherLenVar, varTypes);
 
-    // Skip append if other is empty
+    // Skip append if other is empty.
+    //
+    // ⚠ TESTED THE OTHER WAY ROUND — `Then` IS THE FALLTHROUGH EDGE, so it has to be the block added
+    // next, and here that is `doAppendLabel` (`skipLabel`'s block is not created until the end of the
+    // append body). Written `StdCondBrOp(isEmpty, skipLabel, doAppendLabel)` the emitted x64 read
+    // `jne …__append_do_0` immediately followed by `__append_do_0:` — BOTH edges entering the append
+    // body, so the skip was dead code and an empty operand ran the whole thing: `maxon_string_ensure_cap`,
+    // the parent detach and the capacity rewrite. On an rdata- or slice-backed receiver that is a real
+    // COW allocation where the guard promised a no-op. arm64 emits both branches and honoured the skip,
+    // so the two targets disagreed. See `EmitDeepCloneManagedElements` for the same defect and
+    // `StandardToX86Conversion`'s `case StdCondBrOp` for the rule.
     var zeroConst = new StdConstI64Op(0);
     block.AddOp(zeroConst);
-    var isEmpty = new StdCmpI64Op("eq", otherLen, zeroConst.Result);
-    block.AddOp(isEmpty);
+    var hasSomethingToAppend = new StdCmpI64Op("ne", otherLen, zeroConst.Result);
+    block.AddOp(hasSomethingToAppend);
     var skipLabel = $"__append_skip_{uid}";
     var doAppendLabel = $"__append_do_{uid}";
-    block.AddOp(new StdCondBrOp(isEmpty.Result, skipLabel, doAppendLabel));
+    block.AddOp(new StdCondBrOp(hasSomethingToAppend.Result, doAppendLabel, skipLabel));
 
     var appendBlock = func.Body.AddBlock(doAppendLabel);
 

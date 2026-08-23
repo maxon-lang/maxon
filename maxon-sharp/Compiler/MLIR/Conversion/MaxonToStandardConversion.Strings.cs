@@ -1548,9 +1548,17 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(bodyBlock, (StdI64)slotValue.Result, sourceVar, varTypes);
 		var emptySlot = new StdConstI64Op(0);
 		bodyBlock.AddOp(emptySlot);
-		var slotIsEmpty = new StdCmpI64Op("eq", (StdI64)slotValue.Result, emptySlot.Result);
-		bodyBlock.AddOp(slotIsEmpty);
-		bodyBlock.AddOp(new StdCondBrOp(slotIsEmpty.Result, stepLabel, cloneLabel));
+		// ⚠ THE `Then` TARGET IS THE ONE THAT FALLS THROUGH, so it has to be the block added NEXT.
+		// StdCondBrOp lowers to a SINGLE `jcc` to `Else` and nothing at all for `Then`
+		// (StandardToX86Conversion, `case StdCondBrOp`), so a `Then` that is not the physically next
+		// block is not jumped to — control walks into whatever was added instead. Written the other
+		// way round (`eq 0` -> step), a ZERO slot fell straight into the clone block and called
+		// `<Element>.clone(null)`: measured as `panic: nil pointer` in `ByteArray.clone` for any
+		// `.clone()` reaching a `Map` with a managed key, whose empty buckets are zero slots INSIDE
+		// `length`.
+		var slotIsFilled = new StdCmpI64Op("ne", (StdI64)slotValue.Result, emptySlot.Result);
+		bodyBlock.AddOp(slotIsFilled);
+		bodyBlock.AddOp(new StdCondBrOp(slotIsFilled.Result, cloneLabel, stepLabel));
 
 		var cloneBlock = func.Body.AddBlock(cloneLabel);
 		var sourceElement = (StdI64)EmitLoad(cloneBlock, sourceVar, varTypes);
