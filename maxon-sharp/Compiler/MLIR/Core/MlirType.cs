@@ -626,6 +626,22 @@ public class IrInterfaceType(string name, List<IrInterfaceMethodSignature> metho
   public override bool IsHeapAllocated => true;
 }
 
+/// The declared NAME of a type whose value KIND alone does not identify it — a struct, an
+/// enum/union, or an interface — and null for a primitive, which needs none.
+///
+/// ⭐ ONE PLACE, because two readers ask it about the same thing: the parser stamps it on every op
+/// that carries a struct/enum/interface value (`MaxonFieldAccessOp` and friends), and
+/// `CloneBodySynthesis` stamps it on the field accesses it synthesizes. A second copy of the arm
+/// list is how one of them comes to answer null for a kind the other names.
+public static class NamedIrType {
+  public static string? NameOf(IrType type) => type switch {
+    IrStructType structType => structType.Name,
+    IrEnumType enumType => enumType.Name,
+    IrInterfaceType interfaceType => interfaceType.Name,
+    _ => null
+  };
+}
+
 public class IrEnumCase(string name, int ordinal, object? rawValue = null,
     List<(string Name, IrType Type)>? associatedValues = null) {
   public string Name { get; } = name;

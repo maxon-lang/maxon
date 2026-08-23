@@ -4,15 +4,18 @@ using MaxonSharp.Compiler.Ir.Dialects;
 namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
-/// Synthesizes missing clone() methods for struct types that appear as array elements
+/// Synthesizes missing clone() methods for types that appear as array elements
 /// but whose clone() wasn't generated during parsing (e.g., compiler-generated tuple types
 /// created during monomorphization). Runs after monomorphization.
+///
+/// The BODY it builds is <see cref="CloneBodySynthesis"/>'s, shared with the parser's own
+/// synthesis for declared types — the two used to hold separate copies of the field walk.
 /// </summary>
 public static class CloneSynthesisPass {
   public static void Run(IrModule<MaxonOp> module) {
     var funcByName = module.Functions.ToDictionary(f => f.Name);
 
-    // Collect struct type names that need clone() (from MaxonManagedMemGetOp), plus the ELEMENT
+    // Collect type names that need clone() (from MaxonManagedMemGetOp), plus the ELEMENT
     // types of every buffer copy: `ManagedElementCopy` deep-clones a Cloneable element through
     // that type's own clone, and this pass is the only thing that can make one exist for a type
     // minted after parsing.
@@ -25,8 +28,11 @@ public static class CloneSynthesisPass {
           if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemType })
             neededClones.Add(elemType);
 
-          if (ManagedElementCopy.SlicedElementTypeOf(module, op) is IrStructType sliceElem)
-            neededClones.Add(sliceElem.Name);
+          // Only a record has members to clone. A scalar element is copied by the buffer memcpy
+          // itself and never reaches a cloner.
+          var slicedElement = ManagedElementCopy.SlicedElementTypeOf(module, op);
+          if (slicedElement is IrStructType or IrEnumType)
+            neededClones.Add(slicedElement.Name);
         }
       }
     }
@@ -36,7 +42,7 @@ public static class CloneSynthesisPass {
     // since it doesn't know the concrete fields before monomorphization)
     foreach (var typeName in neededClones) {
       var resolvedName = module.ResolveConcreteAlias(typeName);
-      var cloneName = $"{resolvedName}.clone";
+      var cloneName = $"{resolvedName}.{ManagedElementCopy.CloneMethodName}";
 
       // Check if a non-empty clone already exists
       bool hasNonEmptyClone = false;
@@ -51,58 +57,44 @@ public static class CloneSynthesisPass {
       if (hasNonEmptyClone) continue;
 
       if (!module.TypeDefs.TryGetValue(resolvedName, out var typeDef)) continue;
-      if (typeDef is not IrStructType structType) continue;
-      if (structType.Fields.Any(f => f.Type is IrTypeParameterType)) continue;
+      if (typeDef is not IrStructType and not IrEnumType) continue;
+      // A member still spelled as a type parameter has no concrete type to clone through —
+      // monomorphization has not bound it, so there is no cloner to name.
+      if (HasUnboundTypeParameter(typeDef)) continue;
 
       // Remove empty stub if it exists before adding the synthesized version
       if (existingFunc != null) {
         module.RemoveFunction(existingFunc);
       }
 
-      var cloneFunc = SynthesizeClone(module, resolvedName, structType);
+      var cloneFunc = Synthesize(module, cloneName, resolvedName, typeDef);
       funcByName[cloneFunc.Name] = cloneFunc;
     }
   }
 
-  private static IrFunction<MaxonOp> SynthesizeClone(
-      IrModule<MaxonOp> module, string typeName, IrStructType structType) {
-    var cloneName = $"{typeName}.clone";
-    var cloneFunc = new IrFunction<MaxonOp>(
-      cloneName, ["self"], [(IrType)structType], (IrType)structType, null);
-    var block = cloneFunc.Body.AddBlock("entry");
+  private static bool HasUnboundTypeParameter(IrType typeDef) => typeDef switch {
+    IrStructType structType => structType.Fields.Any(f => f.Type is IrTypeParameterType),
+    IrEnumType enumType => enumType.Cases.Any(c =>
+      c.AssociatedValues?.Any(v => v.Type is IrTypeParameterType) == true),
+    _ => throw new InvalidOperationException(
+      $"CloneSynthesisPass: '{typeDef.Name}' is neither a struct nor an enum and has no members")
+  };
 
-    var selfParam = new MaxonStructParamOp(0, "self", typeName);
-    block.AddOp(selfParam);
-
-    var fieldValues = new List<(string FieldName, MaxonValue Value)>();
-    foreach (var field in structType.Fields) {
-      var fieldKind = field.Type.ToValueKind();
-      string? fieldStructTypeName = null;
-      if (field.Type is IrStructType fst) fieldStructTypeName = fst.Name;
-      else if (field.Type is IrEnumType fut) fieldStructTypeName = fut.Name;
-
-      var accessOp = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
-      block.AddOp(accessOp);
-
-      MaxonValue fieldValue = accessOp.Result;
-      if (field.Type is IrStructType nestedStruct) {
-        var nestedCloneName = $"{nestedStruct.Name}.clone";
-        var nestedCloneCall = new MaxonCallOp(nestedCloneName, [accessOp.Result], MaxonValueKind.Struct, nestedStruct.Name);
-        block.AddOp(nestedCloneCall);
-        fieldValue = nestedCloneCall.Result!;
-      }
-      fieldValues.Add((field.Name, fieldValue));
-    }
-
-    var structLit = new MaxonStructLiteralOp(typeName, fieldValues);
-    block.AddOp(structLit);
-
-    var retvalName = $"__retval_{IrContext.Current.NextId()}";
-    block.AddOp(new MaxonAssignOp(retvalName, structLit.Result, true, false, MaxonValueKind.Struct));
-    block.AddOp(new MaxonScopeEndOp([retvalName], keepVars: [retvalName]));
-    block.AddOp(new MaxonReturnOp(structLit.Result));
-
+  /// <summary>
+  /// Build and register `&lt;typeName&gt;.clone`.
+  ///
+  /// The nested-member cloner name is spelled bare rather than resolved through a namespace,
+  /// because this pass builds clones only for types minted AFTER parsing — tuples and generic
+  /// instances, whose mangled names carry no namespace. A member whose cloner is not found under
+  /// that name is copied by pointer, which <see cref="CloneBodySynthesis"/> documents.
+  /// </summary>
+  private static IrFunction<MaxonOp> Synthesize(
+      IrModule<MaxonOp> module, string cloneName, string typeName, IrType typeDef) {
+    var cloneFunc = new IrFunction<MaxonOp>(cloneName, [CloneBodySynthesis.SelfParamName], [typeDef], typeDef, null);
     module.AddFunction(cloneFunc);
+
+    CloneBodySynthesis.EmitCloneBody(module, cloneFunc, typeName, typeDef,
+      memberTypeName => $"{memberTypeName}.{ManagedElementCopy.CloneMethodName}");
     return cloneFunc;
   }
 }

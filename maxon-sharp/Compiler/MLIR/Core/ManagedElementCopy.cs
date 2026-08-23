@@ -18,11 +18,11 @@ namespace MaxonSharp.Compiler.Ir.Core;
 ///     makes a write through the copy a write to the original.
 ///
 /// The element type decides which one a value copy gets, and the rule is the language's own
-/// Cloneable rule (`specs/memory-safety.md`: "all primitives, String, Array, and Cloneable structs
-/// qualify"): an element whose type conforms to `Cloneable` is deep-cloned through that type's
-/// `clone`, and an element whose type has no Cloneable conformance — a union, a `Vector`, a struct
-/// holding one of those — is retained, because the language never promised a copy of it and there
-/// is no cloner to call.
+/// Cloneable rule (`specs/memory-safety.md`: "all primitives, String, Array, Cloneable structs, and
+/// Cloneable unions qualify"): an element whose type conforms to `Cloneable` is deep-cloned through
+/// that type's `clone`, and an element whose type has no Cloneable conformance — a `Vector`, a
+/// union or struct holding one of those — is retained, because the language never promised a copy
+/// of it and there is no cloner to call.
 ///
 /// ⭐ THE PREDICATE LIVES HERE ONCE because THREE passes at three different points in the pipeline
 /// have to reach the same answer: <c>CloneSynthesisPass</c> (which must MAKE the cloner exist),
@@ -31,12 +31,16 @@ namespace MaxonSharp.Compiler.Ir.Core;
 /// silently degrades a deep clone into an alias, or emits a call to a symbol nothing kept.
 /// </summary>
 public static class ManagedElementCopy {
-  /// The interface whose conformance the language auto-generates for a struct whose fields are all
-  /// Cloneable, and which `.clone()` requires — `specs/memory-safety.md`.
-  private const string CloneableInterfaceName = "Cloneable";
+  /// The interface whose conformance the language auto-generates for a type whose members are all
+  /// Cloneable, and which `.clone()` requires — `specs/memory-safety.md`. Public for the same reason
+  /// as `CloneMethodName`: the parser DECIDES the conformance and this file READS it, and a second
+  /// spelling is how one of them comes to mean a different interface.
+  public const string CloneableInterfaceName = "Cloneable";
 
-  /// The method a Cloneable type is copied through.
-  private const string CloneMethodName = "clone";
+  /// The method a Cloneable type is copied through. Public because the SYNTHESIS of those bodies
+  /// (`CloneBodySynthesis`) and the parser's own dispatch spell the same name, and a second copy of
+  /// it is how a cloner gets built under one spelling and looked up under another.
+  public const string CloneMethodName = "clone";
 
   /// The `__ManagedMemory` builtin that COPIES a buffer, and therefore has to carry each managed
   /// element into the copy. Both `Array.clone` and `Array.slice` reach it.
@@ -74,21 +78,22 @@ public static class ManagedElementCopy {
   /// when the element is copied by RETAIN instead.
   ///
   /// Returns null — i.e. retain — for each of these, and each for its own reason:
-  ///   - a non-struct element (a scalar, a simple enum): nothing refcounted to copy at all;
-  ///   - a UNION or any type with no `Cloneable` conformance (`Vector`, a struct holding one):
-  ///     the language auto-generates Cloneable only where every field qualifies, so there is no
-  ///     independent copy defined for it and no cloner to call;
+  ///   - an element that is not a heap record (a scalar, a simple enum, a PAYLOAD-FREE union whose
+  ///     values are i64 ordinals): nothing refcounted to copy at all;
+  ///   - any type with no `Cloneable` conformance (`Vector`, a union whose payload is one, a
+  ///     struct holding either): the language auto-generates Cloneable only where every member
+  ///     qualifies, so there is no independent copy defined for it and no cloner to call;
   ///   - a Cloneable type whose `clone` carries no BODY: the cloner could not be synthesized
-  ///     (`CloneSynthesisPass` declines a struct still holding a type parameter), and calling a
+  ///     (`CloneSynthesisPass` declines a type still holding a type parameter), and calling a
   ///     body-less function would emit a reference to a symbol the backend never defines;
   ///   - a Cloneable type whose `clone` THROWS: the copy loop runs inside a buffer duplication
   ///     with no error path of its own, so there is nowhere for a thrown error to go.
   /// </summary>
   public static string? ClonerNameFor(IrModule<MaxonOp> module, IrType? elementType) {
-    if (elementType is not IrStructType elementStruct) return null;
+    if (HeapElementIdentityOf(elementType) is not { } element) return null;
 
-    var resolvedName = module.ResolveConcreteAlias(elementStruct.Name);
-    if (!ConformsToCloneable(module, elementStruct, resolvedName)) return null;
+    var resolvedName = module.ResolveConcreteAlias(element.Name);
+    if (!ConformsToCloneable(module, element.ConformingInterfaces, resolvedName)) return null;
 
     var cloneName = $"{resolvedName}.{CloneMethodName}";
     if (module.FindFunctionByExactName(cloneName) is { } exact && IsCallableCloner(exact)) return exact.Name;
@@ -106,15 +111,33 @@ public static class ManagedElementCopy {
     cloner.Body.Blocks.Count > 0 && cloner.ThrowsType == null;
 
   /// <summary>
+  /// The NAME and declared conformances of an element that is a refcounted heap record, or null
+  /// for one a raw slot copy already duplicates.
+  ///
+  /// ⚠ A UNION IS ONE ONLY WHEN A CASE CARRIES A PAYLOAD. `IrEnumType.IsHeapAllocated` says the
+  /// same thing, and it is the same line `ManagedElementInfo.FromElementType` draws when it decides
+  /// the buffer holds pointers: a payload-free union is an i64 ordinal, and handing one a cloner
+  /// would force a value copy of a buffer that needs none.
+  /// </summary>
+  private static (string Name, HashSet<string> ConformingInterfaces)? HeapElementIdentityOf(IrType? elementType) =>
+    elementType switch {
+      IrStructType elementStruct => (elementStruct.Name, elementStruct.ConformingInterfaces),
+      IrEnumType { HasAssociatedValues: true } elementUnion =>
+        (elementUnion.Name, elementUnion.ConformingInterfaces),
+      _ => null
+    };
+
+  /// <summary>
   /// Cloneable conformance, read from the element type's own record and, failing that, from the
   /// module's canonical definition of it. A type carried in a type-parameter binding can be a
   /// partially-specialised copy whose conformance set was never filled in, and judging that copy
   /// would make `Array with String` deep-clone at one call site and alias at another.
   /// </summary>
-  private static bool ConformsToCloneable(IrModule<MaxonOp> module, IrStructType elementStruct, string resolvedName) {
-    if (elementStruct.ConformingInterfaces.Contains(CloneableInterfaceName)) return true;
+  private static bool ConformsToCloneable(IrModule<MaxonOp> module,
+      HashSet<string> declaredConformances, string resolvedName) {
+    if (declaredConformances.Contains(CloneableInterfaceName)) return true;
     return module.TypeDefs.TryGetValue(resolvedName, out var canonical)
-      && canonical is IrStructType canonicalStruct
-      && canonicalStruct.ConformingInterfaces.Contains(CloneableInterfaceName);
+      && HeapElementIdentityOf(canonical) is { } canonicalElement
+      && canonicalElement.ConformingInterfaces.Contains(CloneableInterfaceName);
   }
 }

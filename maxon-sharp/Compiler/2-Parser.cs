@@ -1,6 +1,7 @@
 using System.Globalization;
 using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
+using MaxonSharp.Compiler.Ir.Passes;
 
 namespace MaxonSharp.Compiler;
 
@@ -3753,102 +3754,140 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         || conformingInterfaces.Any(i => InterfaceExtendsInterface(i, requiredInterface));
   }
 
+  /// The interface whose conformance the language auto-generates for a struct whose fields are all
+  /// Equatable, and which `==` requires — `specs/memory-safety.md`. `Cloneable`'s twin, which lives
+  /// in `ManagedElementCopy` because the ELEMENT COPY reads it too; nothing outside the parser
+  /// reads this one.
+  private const string EquatableInterfaceName = "Equatable";
+
+  /// The method an Equatable type is compared through.
+  private const string EqualsMethodName = "equals";
+
   /// <summary>
   /// After all types are pre-scanned, auto-add Cloneable conformance to structs
-  /// whose fields are all Cloneable. Uses topological resolution to handle structs
-  /// that contain other structs.
+  /// whose fields are all Cloneable and to unions whose case payloads are all Cloneable.
+  /// Uses topological resolution to handle types that contain other types.
   /// </summary>
-  private void ResolveAutoCloneableConformance(IrModule<MaxonOp> module) {
-    ResolveAutoConformance(module, "Cloneable", PreRegisterSyntheticStructClone);
-  }
-
-  private void ResolveAutoEquatableConformance(IrModule<MaxonOp> module) {
-    ResolveAutoConformance(module, "Equatable", PreRegisterSyntheticStructEquals);
-  }
+  private void ResolveAutoCloneableConformance(IrModule<MaxonOp> module) =>
+    ResolveAutoConformance(module, ManagedElementCopy.CloneableInterfaceName,
+      PreRegisterSyntheticClone, admitUnions: true);
 
   /// <summary>
-  /// Auto-add interface conformance to locally-defined struct types whose fields all conform.
-  /// Uses iterative resolution to handle structs containing other structs (topological order).
+  /// ⚠ `admitUnions` IS FALSE, and that is the same exclusion `ParseEnumDecl` already makes for a
+  /// union's `hash`/`equals`: nothing synthesizes a per-case comparison, so admitting one would
+  /// promise an `==` that resolves to a body no pass builds. Cloneable admits them because
+  /// <see cref="Passes.CloneBodySynthesis"/> does build the per-case body.
+  /// </summary>
+  private void ResolveAutoEquatableConformance(IrModule<MaxonOp> module) =>
+    ResolveAutoConformance(module, EquatableInterfaceName, PreRegisterSyntheticEquals, admitUnions: false);
+
+  /// <summary>
+  /// Auto-add interface conformance to locally-defined types whose MEMBERS all conform — a
+  /// struct's fields, and (when `admitUnions`) a union's case payloads.
+  /// Uses iterative resolution to handle types containing other types (topological order).
   /// Only processes types defined in this parse session — stdlib types declare conformance explicitly.
+  ///
+  /// ⚠ A TYPE REACHABLE FROM ITS OWN MEMBERS NEVER ENTERS THE SET, and that is the answer to
+  /// recursion rather than a gap in it: the fixpoint only ever ADDS a type once every member
+  /// already conforms, so a cycle closes on nothing and stays out. A self-referential struct has
+  /// always been excluded this way; a self-referential union now is, for the identical reason, and
+  /// its element copy stays a retain.
   /// </summary>
   private void ResolveAutoConformance(
       IrModule<MaxonOp> module,
       string interfaceName,
-      Action<IrModule<MaxonOp>, string, IrStructType> preRegisterStub) {
-    var candidates = new Dictionary<string, IrStructType>();
+      Action<IrModule<MaxonOp>, string, IrType> preRegisterStub,
+      bool admitUnions) {
+    // Flattened at collection time so the fixpoint below is kind-free: a struct's FIELDS and a
+    // union's case PAYLOADS are the same question asked of different members.
+    var candidates = new List<AutoConformanceCandidate>();
     foreach (var (name, type) in _typeRegistry) {
       if (type is IrStructType st && !st.ConformingInterfaces.Contains(interfaceName)
           && (_locallyDefinedTypes.Contains(name) || st.IsTuple)) {
-        candidates[name] = st;
+        candidates.Add(new AutoConformanceCandidate(st.ConformingInterfaces,
+          [.. st.Fields.Select(f => f.Type)], () => preRegisterStub(module, name, st)));
+      }
+      // A union's locality is read off the type itself: `_locallyDefinedTypes` is filled by the
+      // STRUCT pre-scan only, and its other reader (`IsNonExportedCrossFileType`) answers a
+      // visibility question this one has no business moving.
+      if (admitUnions && type is IrEnumType { IsUnion: true } ut
+          && !ut.ConformingInterfaces.Contains(interfaceName)
+          && ut.SourceFilePath == _sourceFilePath) {
+        candidates.Add(new AutoConformanceCandidate(ut.ConformingInterfaces,
+          [.. ut.Cases.SelectMany(c => c.AssociatedValues ?? []).Select(v => v.Type)],
+          () => preRegisterStub(module, name, ut)));
       }
     }
 
     bool changed = true;
     while (changed) {
       changed = false;
-      foreach (var (name, st) in candidates) {
-        if (st.ConformingInterfaces.Contains(interfaceName)) continue;
+      foreach (var candidate in candidates) {
+        if (candidate.Conformances.Contains(interfaceName)) continue;
+        if (!candidate.MemberTypes.All(t => MemberConformsToInterface(t, interfaceName))) continue;
 
-        bool allFieldsConform = true;
-        foreach (var field in st.Fields) {
-          // Primitives, ranged primitives, and enums (not unions)
-          // inherently conform to Cloneable/Equatable (they are value types)
-          if (field.Type is IrRangedPrimitiveType
-              || (field.Type is IrEnumType ut && !ut.IsUnion)
-              || (field.Type is not IrStructType and not IrEnumType
-                  and not IrInterfaceType and not IrFunctionType and not IrTypeParameterType))
-            continue;
-          var fieldTypeName = IrType.FormatAsSourceName(field.Type);
-          if (field.Type is IrStructType fieldStruct) {
-            fieldTypeName = fieldStruct.Name;
-          }
-          if (!TypeConformsToInterface(fieldTypeName, interfaceName)) {
-            allFieldsConform = false;
-            break;
-          }
-        }
-
-        if (allFieldsConform) {
-          st.ConformingInterfaces.Add(interfaceName);
-          preRegisterStub(module, name, st);
-          changed = true;
-        }
+        candidate.Conformances.Add(interfaceName);
+        candidate.PreRegisterStub();
+        changed = true;
       }
     }
   }
 
-  /// <summary>
-  /// Pre-register a stub clone() method for auto-Cloneable struct types.
-  /// </summary>
-  private void PreRegisterSyntheticStructClone(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
-    var namespace_ = NamespaceOf();
-    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+  /// One type the auto-conformance fixpoint may admit: the interface set to add to, the member
+  /// types that all have to conform first, and the stub registration the admission owes.
+  private readonly record struct AutoConformanceCandidate(
+    HashSet<string> Conformances, List<IrType> MemberTypes, Action PreRegisterStub);
 
-    var cloneName = $"{qualifiedTypeName}.clone";
-    if (module.FindFunctionByExactName(cloneName) == null) {
-      var cloneFunc = new IrFunction<MaxonOp>(
-        cloneName, ["self"], [(IrType)structType], (IrType)structType, null) {
-        SourceFilePath = _sourceFilePath
-      };
-      module.AddFunction(cloneFunc);
-    }
+  /// Whether one member of a candidate type — a struct field or a union case payload — already
+  /// satisfies `interfaceName`. Primitives, ranged primitives, and payload-free enums inherently
+  /// conform (they are value types); everything else has to say so itself.
+  private bool MemberConformsToInterface(IrType memberType, string interfaceName) {
+    if (memberType is IrRangedPrimitiveType
+        || (memberType is IrEnumType ut && !ut.IsUnion)
+        || (memberType is not IrStructType and not IrEnumType
+            and not IrInterfaceType and not IrFunctionType and not IrTypeParameterType))
+      return true;
+
+    var memberTypeName = memberType is IrStructType memberStruct
+      ? memberStruct.Name
+      : IrType.FormatAsSourceName(memberType);
+    return TypeConformsToInterface(memberTypeName, interfaceName);
   }
 
   /// <summary>
-  /// Pre-register a stub equals() method for auto-Equatable struct types.
+  /// Pre-register a stub clone() method for an auto-Cloneable type. The BODY arrives later — in
+  /// <see cref="ParseTypeDecl"/> for a struct and <see cref="ParseEnumDecl"/> for a union — and a
+  /// stub without one would let `x.clone()` resolve to a symbol the backend never defines.
   /// </summary>
-  private void PreRegisterSyntheticStructEquals(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
-    var namespace_ = NamespaceOf();
-    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+  private void PreRegisterSyntheticClone(IrModule<MaxonOp> module, string typeName, IrType selfType) {
+    var cloneName = $"{QualifiedInNamespace(typeName)}.{ManagedElementCopy.CloneMethodName}";
+    if (module.FindFunctionByExactName(cloneName) != null) return;
 
-    var equalsName = $"{qualifiedTypeName}.equals";
-    if (module.FindFunctionByExactName(equalsName) == null) {
-      var equalsFunc = new IrFunction<MaxonOp>(
-        equalsName, ["self", "other"], [(IrType)structType, (IrType)structType], IrType.I1, null) {
-        SourceFilePath = _sourceFilePath
-      };
-      module.AddFunction(equalsFunc);
-    }
+    module.AddFunction(new IrFunction<MaxonOp>(
+      cloneName, [CloneBodySynthesis.SelfParamName], [selfType], selfType, null) {
+      SourceFilePath = _sourceFilePath
+    });
+  }
+
+  /// The name a type declared in this file is registered under — its own, or the enclosing
+  /// namespace's qualification of it.
+  private string QualifiedInNamespace(string typeName) {
+    var namespace_ = NamespaceOf();
+    return string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+  }
+
+  /// <summary>
+  /// Pre-register a stub equals() method for an auto-Equatable type. Only structs reach it — see
+  /// <see cref="ResolveAutoEquatableConformance"/> for why unions do not.
+  /// </summary>
+  private void PreRegisterSyntheticEquals(IrModule<MaxonOp> module, string typeName, IrType selfType) {
+    var equalsName = $"{QualifiedInNamespace(typeName)}.{EqualsMethodName}";
+    if (module.FindFunctionByExactName(equalsName) != null) return;
+
+    module.AddFunction(new IrFunction<MaxonOp>(
+      equalsName, ["self", "other"], [selfType, selfType], IrType.I1, null) {
+      SourceFilePath = _sourceFilePath
+    });
   }
 
   private void ValidateWhereConstraints(
@@ -4109,13 +4148,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// MaxonFieldAccessOp is emitted so the result value carries the right
   /// nominal name for downstream method-dispatch resolution.
   /// </summary>
-  private static string? GetFieldStructName(IrType fieldType) => fieldType switch {
-    IrStructType st => st.Name,
-    IrEnumType et => et.Name,
-    IrInterfaceType it => it.Name,
-    _ => null
-  };
-
   /// <summary>
   /// Maps a source-level type name (e.g., "int") to the corresponding IrType.Name (e.g., "i64").
   /// </summary>
@@ -4557,7 +4589,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Auto-add Hashable and Equatable for enums (not unions)
     if (!isUnion) {
       if (!finalInterfaces.Contains("Hashable")) finalInterfaces.Add("Hashable");
-      if (!finalInterfaces.Contains("Equatable")) finalInterfaces.Add("Equatable");
+      if (!finalInterfaces.Contains(EquatableInterfaceName)) finalInterfaces.Add(EquatableInterfaceName);
     }
 
     // If we're re-prescanning an enum whose function-backing was already
@@ -4623,7 +4655,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     for (int i = 0; i < union.Cases.Count; i++) {
       companionCases.Add(new IrEnumCase(union.Cases[i].Name, i, (long)i));
     }
-    var companionInterfaces = new List<string> { "Hashable", "Equatable" };
+    var companionInterfaces = new List<string> { "Hashable", EquatableInterfaceName };
     var companionType = new IrEnumType(companionName, companionCases, IrType.I64, companionInterfaces) {
       SourceFilePath = union.SourceFilePath,
       SourceLine = union.SourceLine,
@@ -7139,13 +7171,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Synthesize clone() body for auto-Cloneable structs
     if (_typeRegistry.TryGetValue(typeName, out var regType) && regType is IrStructType st
-        && st.ConformingInterfaces.Contains("Cloneable")) {
-      SynthesizeStructClone(module, typeName, st);
+        && st.ConformingInterfaces.Contains(ManagedElementCopy.CloneableInterfaceName)) {
+      SynthesizeDeclaredClone(module, typeName, st);
     }
 
     // Synthesize equals() body for auto-Equatable structs
     if (_typeRegistry.TryGetValue(typeName, out var regTypeEq) && regTypeEq is IrStructType stEq
-        && stEq.ConformingInterfaces.Contains("Equatable")) {
+        && stEq.ConformingInterfaces.Contains(EquatableInterfaceName)) {
       SynthesizeStructEquals(module, typeName, stEq);
     }
 
@@ -7186,6 +7218,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Synthesize hash() and equals() for enums (not unions)
     if (!enumType.IsUnion) {
       SynthesizeEnumHashAndEquals(module, enumName, enumType);
+    }
+
+    // Synthesize clone() for an auto-Cloneable union, the same place and on the same condition a
+    // struct's is synthesized (`ParseTypeDecl`).
+    if (enumType.IsUnion && enumType.ConformingInterfaces.Contains(ManagedElementCopy.CloneableInterfaceName)) {
+      SynthesizeDeclaredClone(module, enumName, enumType);
     }
 
     _currentTypeName = null;
@@ -7258,70 +7296,37 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// Synthesize clone() method body for an auto-Cloneable struct type.
-  /// Creates a new struct literal with each field cloned from self.
+  /// Replace the pre-registered `&lt;T&gt;.clone` stub with a synthesized body, for a struct or a
+  /// union declared in this file. A stub that already carries a body is a clone the USER wrote, and
+  /// it wins.
+  ///
+  /// ⭐ A UNION'S BODY IS BUILT HERE RATHER THAN IN `CloneSynthesisPass`, WHICH IS WHERE THE
+  /// CLONERS FOR POST-PARSE TYPES ARE BUILT, because that pass is seeded ONLY from element-copy
+  /// sites: a plain `u.clone()` in source — which the auto-conformance this rung adds is exactly
+  /// what makes RESOLVE — would never seed it, and would emit a call to a symbol nothing defines.
+  /// Building it beside the struct's also puts it ahead of `SemanticCheckPass`, which every struct
+  /// cloner already passes through.
   /// </summary>
-  private void SynthesizeStructClone(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
+  private void SynthesizeDeclaredClone(IrModule<MaxonOp> module, string typeName, IrType selfType) {
     var namespace_ = NamespaceOf();
-    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+    var cloneName = $"{QualifiedInNamespace(typeName)}.{ManagedElementCopy.CloneMethodName}";
+    var stub = module.FindFunctionByExactName(cloneName);
+    if (stub == null || stub.Body.Blocks.Count > 0) return;
 
-    var cloneName = $"{qualifiedTypeName}.clone";
-    var cloneFunc = module.FindFunctionByExactName(cloneName);
-    if (cloneFunc == null) return;
-
-    // Only synthesize if the stub has no body (user didn't provide their own)
-    if (cloneFunc.Body.Blocks.Count > 0) return;
-
-    module.RemoveFunction(cloneFunc);
-    cloneFunc = new IrFunction<MaxonOp>(
-      cloneName, ["self"], [(IrType)structType], (IrType)structType, null) {
+    module.RemoveFunction(stub);
+    var cloneFunc = new IrFunction<MaxonOp>(
+      cloneName, [CloneBodySynthesis.SelfParamName], [selfType], selfType, null) {
       SourceFilePath = _sourceFilePath
     };
     module.AddFunction(cloneFunc);
-    var block = cloneFunc.Body.AddBlock("entry");
 
-    // self param
-    var selfParam = new MaxonStructParamOp(0, "self", typeName);
-    block.AddOp(selfParam);
-
-    // Access each field and clone if needed
-    var fieldValues = new List<(string FieldName, MaxonValue Value)>();
-    var cloneTempNames = new List<string>();
-    foreach (var field in structType.Fields) {
-      var fieldKind = field.Type.ToValueKind();
-      var fieldStructTypeName = GetFieldStructName(field.Type);
-
-      var accessOp = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
-      block.AddOp(accessOp);
-
-      MaxonValue fieldValue = accessOp.Result;
-      if (field.Type is IrStructType nestedStruct) {
-        // Recursively clone nested struct fields. The nested type may live in
-        // a different namespace than the synthesizing type (e.g., a Testing/
-        // struct with a `String` field — String.clone is `stdlib.String.clone`,
-        // not `Testing.String.clone`). Resolve through the module's qualified-
-        // suffix index so the actual registered name is used.
-        var nestedCloneName = ResolveSynthesizedMethodName(module, nestedStruct.Name, "clone", namespace_);
-        var nestedCloneCall = new MaxonCallOp(nestedCloneName, [accessOp.Result], MaxonValueKind.Struct, nestedStruct.Name);
-        block.AddOp(nestedCloneCall);
-        fieldValue = nestedCloneCall.Result!;
-        // Track clone result so it can be cleaned up at scope end
-        var cloneTempName = $"__call_tmp_{nestedCloneCall.Result!.Id}";
-        block.AddOp(new MaxonAssignOp(cloneTempName, fieldValue, true, false, MaxonValueKind.Struct));
-        cloneTempNames.Add(cloneTempName);
-      }
-      // Primitives have value semantics — assignment is already a copy
-      fieldValues.Add((field.Name, fieldValue));
-    }
-
-    var structLit = new MaxonStructLiteralOp(typeName, fieldValues);
-    block.AddOp(structLit);
-
-    var retvalName = $"__retval_{IrContext.Current.NextId()}";
-    block.AddOp(new MaxonAssignOp(retvalName, structLit.Result, true, false, MaxonValueKind.Struct));
-    var scopeVars = new List<string>(cloneTempNames) { retvalName };
-    block.AddOp(new MaxonScopeEndOp(scopeVars, [retvalName]));
-    block.AddOp(new MaxonReturnOp(structLit.Result));
+    // A member type may live in a different namespace than the type being synthesized (a
+    // `Testing/` struct with a `String` field clones through `stdlib.String.clone`, not
+    // `Testing.String.clone`), so the registered name is resolved through the module's
+    // qualified-suffix index rather than spelled.
+    CloneBodySynthesis.EmitCloneBody(module, cloneFunc, typeName, selfType,
+      memberTypeName => ResolveSynthesizedMethodName(module, memberTypeName,
+        ManagedElementCopy.CloneMethodName, namespace_));
   }
 
   /// <summary>
@@ -7330,9 +7335,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private void SynthesizeStructEquals(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
     var namespace_ = NamespaceOf();
-    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
-
-    var equalsName = $"{qualifiedTypeName}.equals";
+    var equalsName = $"{QualifiedInNamespace(typeName)}.equals";
     var equalsFunc = module.FindFunctionByExactName(equalsName);
     if (equalsFunc == null) return;
 
@@ -7357,7 +7360,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     foreach (var field in structType.Fields) {
       var fieldKind = field.Type.ToValueKind();
-      var fieldStructTypeName = GetFieldStructName(field.Type);
+      var fieldStructTypeName = NamedIrType.NameOf(field.Type);
 
       var selfAccess = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
       block.AddOp(selfAccess);
@@ -7367,9 +7370,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       MaxonValue fieldEqual;
       if (field.Type is IrStructType nestedStruct) {
         // Nested struct: call .equals(). Same cross-namespace concern as
-        // SynthesizeStructClone — use the module's name indices instead of
+        // SynthesizeDeclaredClone — use the module's name indices instead of
         // assuming the nested type's namespace matches the enclosing type's.
-        var nestedEqualsName = ResolveSynthesizedMethodName(module, nestedStruct.Name, "equals", namespace_);
+        var nestedEqualsName = ResolveSynthesizedMethodName(module, nestedStruct.Name, EqualsMethodName, namespace_);
         var nestedEqualsCall = new MaxonCallOp(nestedEqualsName, [selfAccess.Result, otherAccess.Result], MaxonValueKind.Bool);
         block.AddOp(nestedEqualsCall);
         fieldEqual = nestedEqualsCall.Result!;
@@ -7991,7 +7994,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // Register all fields of 'self' as directly accessible variables
         foreach (var field in structType.Fields) {
           var fieldKind = field.Type.ToValueKind();
-          var fieldStructName = GetFieldStructName(field.Type);
+          var fieldStructName = NamedIrType.NameOf(field.Type);
           // Type parameter fields with where constraints: treat as struct with the param name
           // so method calls can be resolved through the interface during monomorphization
           if (fieldStructName == null && field.Type is IrTypeParameterType tp
@@ -9618,7 +9621,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     var rawFieldOp = new MaxonEnumStructRawFieldOp(
       enumValue, enumTypeName, structTypeName, fieldToken.Value,
-      fieldKind, GetFieldStructName(field.Type));
+      fieldKind, NamedIrType.NameOf(field.Type));
     _currentBlock!.AddOp(rawFieldOp);
     result = rawFieldOp.Result;
     return true;
@@ -9655,7 +9658,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         fieldToken.Line, fieldToken.Column);
 
     var fieldKind = field.Type.ToValueKind();
-    var fieldStructName = GetFieldStructName(field.Type);
+    var fieldStructName = NamedIrType.NameOf(field.Type);
     var accessOp = new MaxonFieldAccessOp(currentValue, currentStructTypeName, fieldToken.Value, fieldKind, fieldStructName);
     _currentBlock!.AddOp(accessOp);
     var newStructTypeName = fieldStructName
@@ -11620,7 +11623,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       var field = tupleType.Fields[i];
       var fieldKind = field.Type.ToValueKind();
-      var fieldStructName = GetFieldStructName(field.Type);
+      var fieldStructName = NamedIrType.NameOf(field.Type);
 
       var refOp = new MaxonStructVarRefOp(sourceName, tupleType.Name);
       _currentBlock!.AddOp(refOp);
@@ -18200,7 +18203,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // registry entry was simultaneously a struct and an enum. The live refusal is the one on the
         // ENUM-kinded operand path below, which is where a union value actually arrives — a union is a
         // `MaxonEnum`, never a `MaxonStruct`.
-        if (HeldType(lhsStruct.TypeName) is IrStructType structType && structType.ConformingInterfaces.Contains("Equatable")) {
+        if (HeldType(lhsStruct.TypeName) is IrStructType structType && structType.ConformingInterfaces.Contains(EquatableInterfaceName)) {
           // Resolve "?" placeholder to the concrete element type name when available
           var equalsTypeName = lhsStruct.TypeName;
           if (equalsTypeName == "?" && _currentTypeName != null
@@ -19866,7 +19869,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           var structField = sbtStruct.Fields.First(f => f.Name == fieldName);
           var backingFieldKind = structField.Type.ToValueKind();
           // ⛔ This was a hand-rolled `is IrStructType ? .Name : null`, i.e. a one-arm copy of
-          // GetFieldStructName, which answers for a STRUCT, an ENUM and an INTERFACE. An enum-typed
+          // NamedIrType.NameOf, which answers for a STRUCT, an ENUM and an INTERFACE. An enum-typed
           // backing field therefore reached MaxonFieldAccessOp with ResultKind=Enum and a NULL type
           // name, and that op mints `new MaxonEnum(id, resultStructTypeName!)` — a null-forgiving
           // assertion that was simply false. The next step of the chain read that null TypeName and
@@ -19876,7 +19879,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           //   => E9001 Value cannot be null. (Parameter 'key') in ParseFieldAccessChain
           // Only the SHORTHAND spelling was affected; `t.rawValue.size.ordinal` routes elsewhere and
           // is pinned by /specs/enum-struct-backing.md, which is why the suite never saw it.
-          var backingFieldStructName = GetFieldStructName(structField.Type);
+          var backingFieldStructName = NamedIrType.NameOf(structField.Type);
           var fieldAccessOp = new MaxonFieldAccessOp(structRawOp.Result, sbtDirect.StructTypeName, fieldName, backingFieldKind, backingFieldStructName);
           _currentBlock!.AddOp(fieldAccessOp);
           result = new ExprResult.Direct(fieldAccessOp.Result);
@@ -19995,7 +19998,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
 
       var fieldKind = field.Type.ToValueKind();
-      var fieldStructName = GetFieldStructName(field.Type);
+      var fieldStructName = NamedIrType.NameOf(field.Type);
       var structVal2 = ResolveExprValue(result);
       var accessOp = new MaxonFieldAccessOp(structVal2, userTypeName, fieldName, fieldKind, fieldStructName);
       _currentBlock!.AddOp(accessOp);
@@ -22251,7 +22254,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   private void ValidateTypeParameterConstraints(ExprResult lhs, ExprResult rhs, MaxonBinOperator op, Token opToken) {
     if (!IsComparisonOp(op)) return;
-    var requiredInterface = op is MaxonBinOperator.Eq or MaxonBinOperator.Ne ? "Equatable" : "Comparable";
+    var requiredInterface = op is MaxonBinOperator.Eq or MaxonBinOperator.Ne ? EquatableInterfaceName : "Comparable";
 
     foreach (var expr in new[] { lhs, rhs }) {
       if (expr is not ExprResult.VarRef v || v.Info.Kind != MaxonValueKind.TypeParameter) continue;
@@ -25706,7 +25709,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (field == null) return info;
 
     var fieldKind = field.Type.ToValueKind();
-    var fieldStructName = GetFieldStructName(field.Type);
+    var fieldStructName = NamedIrType.NameOf(field.Type);
     // Type parameter fields with where constraints: keep the same alias treatment
     // used at function entry (see ParseInstanceMethod) so method dispatch through
     // the interface continues to resolve through monomorphization.

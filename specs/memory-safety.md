@@ -39,7 +39,9 @@ var b = a.clone()   // b is a new, independent copy
 b.x = 99           // a.x is still 1
 ```
 
-This requires the type to implement the `Cloneable` interface. The compiler auto-generates `Cloneable` conformance for any struct whose fields are all Cloneable (all primitives, String, Array, and Cloneable structs qualify).
+This requires the type to implement the `Cloneable` interface. The compiler auto-generates `Cloneable` conformance for any struct whose fields are all Cloneable, and for any union whose case payloads are all Cloneable (all primitives, String, Array, Cloneable structs, and Cloneable unions qualify). A union's clone rebuilds the live case from independent copies of its payloads, so a case carrying nothing clones as itself.
+
+Conformance is resolved to a fixpoint over members that already conform, so a type reachable from its own members — a struct or a union that holds itself — never enters the set and is not auto-Cloneable.
 
 ### Equality
 
@@ -441,6 +443,359 @@ end 'main'
 ```stdout
 original word long enough for a heap record
 original word long enough for a heap record and a tail
+```
+
+<!-- test: clone-of-union-array-copies-the-payload -->
+### Cloning an Array of UNIONS copies each live case's payload
+A union with a payload is a heap box holding heap pointers, so a copied element slot is a second
+name for the SAME box and the same payload record. Writing through the clone's payload was a
+write to the original's.
+```maxon
+type Item
+	export var label as String
+
+	static function create(label String) returns Item
+		return Self{label: label}
+	end 'create'
+end 'Item'
+
+union Op
+	holds(item Item)
+	none
+end 'Op'
+
+typealias Ops = Array with Op
+
+function mutate(item Item)
+	item.label = "MUTATED"
+end 'mutate'
+
+function main() returns ExitCode
+	var a = Ops.create()
+	a.push(Op.holds(Item.create("original label long enough for a heap record")))
+
+	let b = a.clone()
+	let bOp = try b.get(0) otherwise Op.none
+	match bOp 'mut'
+		holds(it) then mutate(it)
+		none then return 3
+	end 'mut'
+
+	let aOp = try a.get(0) otherwise Op.none
+	match aOp 'read'
+		holds(it) then print("a holds: {it.label}\n")
+		none then return 4
+	end 'read'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a holds: original label long enough for a heap record
+```
+
+<!-- test: clone-of-union-array-with-string-payload -->
+### A union payload that is a String is copied too
+`String` is the payload a union carries most often. Reference identity is what the copy is
+ABOUT, so it is what the case asks: a retained element leaves both arrays' payloads as one heap
+record, and `is` says so without mutating anything.
+```maxon
+union Word
+	spelled(text String)
+	blank
+end 'Word'
+
+typealias Words = Array with Word
+
+function payloadOf(w Word) returns String
+	match w 'p'
+		spelled(text) then return text
+		blank then return "blank"
+	end 'p'
+end 'payloadOf'
+
+function main() returns ExitCode
+	var a = Words.create()
+	a.push(Word.spelled("original word long enough for a heap record"))
+
+	let b = a.clone()
+	let wa = try a.get(0) otherwise Word.blank
+	let wb = try b.get(0) otherwise Word.blank
+	if payloadOf(wa) is payloadOf(wb) 'shared'
+		print("shared\n")
+		return 0
+	end 'shared'
+	print("independent: {payloadOf(wb)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+independent: original word long enough for a heap record
+```
+
+<!-- test: clone-of-union-array-mixes-payload-and-payload-less-arms -->
+### A payload-less arm survives the copy as itself
+The cloner dispatches on the tag, so an arm carrying nothing has to rebuild as that arm rather
+than fall into a neighbour's payload rebuild. Both arms sit in one array here, so a single copy
+walks both paths — and the filled one still has to come out independent.
+```maxon
+union Slot
+	filled(text String)
+	empty
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+function textOf(s Slot) returns String
+	match s 'kind'
+		filled(text) then return text
+		empty then return "empty"
+	end 'kind'
+end 'textOf'
+
+function main() returns ExitCode
+	var a = Slots.create()
+	a.push(Slot.filled("filled with a heap record"))
+	a.push(Slot.empty)
+
+	let b = a.clone()
+	let a0 = try a.get(0) otherwise Slot.empty
+	let b0 = try b.get(0) otherwise Slot.empty
+	let b1 = try b.get(1) otherwise Slot.filled("wrong")
+	if textOf(a0) is textOf(b0) 'shared'
+		print("shared|{textOf(b1)}\n")
+		return 0
+	end 'shared'
+	print("{textOf(b0)}|{textOf(b1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+filled with a heap record|empty
+```
+
+<!-- test: clone-of-a-union-value-is-independent -->
+### `.clone()` on a union value hands back an independent box
+Auto-conformance is what makes `u.clone()` resolve at all, so the method it resolves TO has to
+exist and has to deep-copy: a clone sharing the payload would make the two boxes one value.
+```maxon
+type Item
+	export var label as String
+
+	static function create(label String) returns Item
+		return Self{label: label}
+	end 'create'
+end 'Item'
+
+union Op
+	holds(item Item)
+	none
+end 'Op'
+
+function mutate(item Item)
+	item.label = "MUTATED"
+end 'mutate'
+
+function main() returns ExitCode
+	let a = Op.holds(Item.create("original label long enough for a heap record"))
+	let b = a.clone()
+
+	match b 'mut'
+		holds(it) then mutate(it)
+		none then return 3
+	end 'mut'
+
+	match a 'read'
+		holds(it) then print("a holds: {it.label}\n")
+		none then return 4
+	end 'read'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a holds: original label long enough for a heap record
+```
+
+<!-- test: clone-of-struct-with-union-field-copies-the-payload -->
+### Cloning a struct whose FIELD is a union copies that union
+A struct auto-conforms once every field does, so a union field is what carries the conformance
+into the struct — and the struct's own cloner has to reach through it. Copying the field by
+pointer leaves the clone and the original sharing one box.
+```maxon
+type Item
+	export var label as String
+
+	static function create(label String) returns Item
+		return Self{label: label}
+	end 'create'
+end 'Item'
+
+union Op
+	holds(item Item)
+	none
+end 'Op'
+
+type Decl
+	export var op as Op
+
+	static function create(op Op) returns Decl
+		return Self{op: op}
+	end 'create'
+end 'Decl'
+
+function mutate(item Item)
+	item.label = "MUTATED"
+end 'mutate'
+
+function main() returns ExitCode
+	let a = Decl.create(Op.holds(Item.create("original label long enough for a heap record")))
+	let b = a.clone()
+
+	match b.op 'mut'
+		holds(it) then mutate(it)
+		none then return 3
+	end 'mut'
+
+	match a.op 'read'
+		holds(it) then print("a holds: {it.label}\n")
+		none then return 4
+	end 'read'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a holds: original label long enough for a heap record
+```
+
+<!-- test: clone-of-a-many-case-union-dispatches-every-tag -->
+### Every arm of a many-case union rebuilds as itself
+Enough cases to take the JUMP TABLE rather than a compare chain — the dispatch strategy is chosen by
+interval count (`MaxonToStandardConversion.SwitchDispatch`), so a union with two arms never reaches
+the one a union with five does. The arms here are deliberately unalike: a nested UNION payload, an
+ARRAY payload, a TWO-payload arm, a payload-less arm and a scalar arm, so a tag landing in the wrong
+block shows up as the wrong text rather than as a crash.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Words = Array with String
+
+union Inner
+	text(s String)
+	none
+end 'Inner'
+
+union Outer
+	wraps(i Inner)
+	holds(w Words)
+	pair(flag bool, n Integer)
+	blank
+	plain(n Integer)
+end 'Outer'
+
+typealias Outers = Array with Outer
+
+function innerTextOf(i Inner) returns String
+	match i 'j'
+		text(s) then return s
+		none then return "inner-none"
+	end 'j'
+end 'innerTextOf'
+
+function describe(o Outer) returns String
+	match o 'k'
+		wraps(i) then return "wraps:{innerTextOf(i)}"
+		holds(w) then return "holds:{w.count()}"
+		pair(flag, n) then return "pair:{flag}:{n}"
+		blank then return "blank"
+		plain(n) then return "plain:{n}"
+	end 'k'
+end 'describe'
+
+// Hands back the `wraps` payload's String ITSELF, so `is` asks about the copy rather than about a
+// freshly interpolated description.
+function nestedTextOf(o Outer) returns String
+	match o 'k'
+		wraps(i) then return innerTextOf(i)
+		holds(w) then return "holds:{w.count()}"
+		pair(flag, n) then return "pair:{flag}:{n}"
+		blank then return "blank"
+		plain(n) then return "plain:{n}"
+	end 'k'
+end 'nestedTextOf'
+
+function main() returns ExitCode
+	var w = Words.create()
+	w.push("inner element long enough for a heap record")
+
+	var a = Outers.create()
+	a.push(Outer.wraps(Inner.text("nested payload long enough for a heap record")))
+	a.push(Outer.holds(w))
+	a.push(Outer.pair(true, n: 3))
+	a.push(Outer.blank)
+	a.push(Outer.plain(7))
+
+	let b = a.clone()
+	var out = ""
+	for o in b 'each'
+		out.append(describe(o))
+		out.append("|")
+	end 'each'
+	print("{out}\n")
+
+	let a0 = try a.get(0) otherwise Outer.blank
+	let b0 = try b.get(0) otherwise Outer.blank
+	if nestedTextOf(a0) is nestedTextOf(b0) 'shared'
+		print("nested payload SHARED\n")
+		return 8
+	end 'shared'
+	print("nested payload independent\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+wraps:nested payload long enough for a heap record|holds:1|pair:true:3|blank|plain:7|
+nested payload independent
+```
+
+<!-- test: recursive-union-is-not-cloneable -->
+### A union that holds ITSELF does not auto-conform
+Auto-conformance closes over the payload types to a fixpoint, so a union reachable from its own
+payload never enters the set — exactly as a self-referential struct never does. That is the
+answer rather than a special case: nothing has to bound the recursion because no cyclic type is
+admitted in the first place, and the element copy of one stays a retain.
+```maxon
+union Chain
+	link(next Chain)
+	tip
+end 'Chain'
+
+function main() returns ExitCode
+	let a = Chain.tip
+	let b = a.clone()
+	match b 'read'
+		link(next) then return 1
+		tip then return 0
+	end 'read'
+end 'main'
+```
+```maxoncstderr
+error E4006: specs/fragments/memory-safety/recursive-union-is-not-cloneable.test:9:12: Union type 'Chain' has no property or method named 'clone'
 ```
 
 <!-- test: eq-requires-equatable -->
