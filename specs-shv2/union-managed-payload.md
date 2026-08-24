@@ -2180,15 +2180,29 @@ end 'main'
 43
 ```
 
-<!-- test: error.write-back-through-a-retained-nested-union-payload -->
-⭐ **THE EDGE OF THE CASE ABOVE, AND THE REFUSAL IS THE STANDING RULE RATHER THAN THIS PAYLOAD KIND'S.**
+<!-- test: write-back-through-a-loop-carried-nested-union-payload -->
+⭐⭐ **THE EDGE OF THE CASE ABOVE — A LOOP-CARRIED `var` — AND IT IS THE SAME ANSWER, WHICH IT WAS NOT.**
 Writability is decided from MEMBERSHIP (`scrutMutable` — is the scrutinee a `var`?) and the acquisition
-from PROVENANCE (`scrutOwned` — does the value carry an owned-heap bit?), and the two disagree on a
-loop-carried `var`: its current value inside the loop is a header phi, and a phi carries no provenance
-bit, so the payload is acquired by RETAIN and the slot is left occupied. A write-back into an occupied
-slot would strand the reference the box still holds, so `declarePayloadBindings` demotes such a binding
-to read-only and the assignment is E2013 — never the `writeBackPayload` panic that guards the same
-combination one level down.
+from PROVENANCE (`scrutOwned` — does the value carry an owned-heap bit?), and the two used to disagree
+here: the scrutinee's current value inside the loop is a header phi, and a phi carried no provenance bit,
+so the payload was acquired by RETAIN, the slot was left occupied, `declarePayloadBindings` demoted the
+binding to read-only, and the write-back was E2013.
+
+⛔⛔ **THAT REFUSAL WAS A COMPILER DEFECT WEARING A RULE'S CLOTHES, AND THIS FILE HAD WRITTEN IT DOWN AS
+THE RULE.** A phi is not a fresh value — it is the same allocation the merged binding already owned,
+renamed at a join — so `mintPhiForBinding` now carries the owned-heap bit onto it (and
+`pushMergedEdgeValue` checks every other incoming against it). Membership and provenance no longer
+disagree, the payload is CONSUMED exactly as it is outside a loop, and the write-back is the ordinary
+one the case above pins.
+
+⚠ **THE SAME MISSING BIT WAS A LEAK, WHICH IS HOW IT WAS FOUND** — not by this refusal, which read as
+deliberate. A merged name that reads as borrowed gets laundered by whatever it is handed to next, so a
+rebind both POISONED its source (a move: nothing drops it) and emitted an `__mm_retain` (a co-own:
+something must). One reference, no owner. In the compiler's own self-compile that leaked an `IrBlock` per
+`matchnext` block — every `match` of two or three intervals — and the leak gate reported exit 101.
+
+⭐ Both programs in this pair also stopped DIVERGING from the bootstrap, which accepts them and returns
+3. The divergence was never an ownership decision this tier had made; it was the bit that was missing.
 ```maxon
 union Ty
 	concrete(name String)
@@ -2216,18 +2230,24 @@ function main() returns ExitCode
 	return total
 end 'main'
 ```
-```maxoncstderr
-error E2013: <fragment>:19:20: cannot assign to immutable variable: 'ty'
+```exitcode
+3
 ```
 
-<!-- test: error.write-back-through-a-retained-string-payload-is-the-same-refusal -->
-⭐⭐ **THE CONTROL FOR THE CASE ABOVE, AND IT IS WHAT MAKES THAT REFUSAL ATTRIBUTABLE.** The identical
-shape over a `String` payload — a payload kind that has been writable since `mutable-enums.md` shipped —
-earns the identical E2013 at the identical position. So the refusal belongs to the retain acquisition and
-not to the nested-union payload kind, and the rung that made a nested boxed union writable neither
-introduced it nor is free to remove it. ⚠ Both programs are a DIVERGENCE the bootstrap does not share: it
-borrows-and-retains where this tier consumes, so it accepts both and returns 3. Pinned here as shv2's own
-ownership rule, which is what this file is for.
+<!-- test: write-back-through-a-loop-carried-string-payload-is-the-same-answer -->
+⭐⭐ **THE CONTROL FOR THE CASE ABOVE, AND IT IS WHAT MAKES THE ANSWER ATTRIBUTABLE.** The identical shape
+over a `String` payload — a payload kind writable since `mutable-enums.md` shipped — gets the identical
+answer. So neither the old refusal nor the current acceptance belongs to the nested-union payload kind:
+both belong to how a loop-carried scrutinee's provenance is read, and the rung that made a nested boxed
+union writable neither introduced the refusal nor removed it. ⚠ Keep BOTH halves of the pair — a
+single-payload-kind case cannot tell a payload-kind rule from an acquisition rule, which is exactly the
+attribution the retired E2013 got wrong.
+
+⚠ **THE EXIT CODE IS NOT THE SUBJECT — THE LEAK GATE IS.** `total` is 3 for a loop that runs twice
+whatever the payloads do, so a `3` here proves only that the program ran. What discriminates is that
+every string in both programs is a real heap record: a payload acquired by retain and then written back
+would strand the box's reference and exit 101, and a payload consumed twice would double-free. The
+answer being 3 AND the process exiting 3 is the pin.
 ```maxon
 union Expr
 	direct(s String)
@@ -2250,8 +2270,8 @@ function main() returns ExitCode
 	return total
 end 'main'
 ```
-```maxoncstderr
-error E2013: <fragment>:14:19: cannot assign to immutable variable: 's'
+```exitcode
+3
 ```
 
 <!-- test: co-owned-container-field-bind-then-the-field-is-read-again -->

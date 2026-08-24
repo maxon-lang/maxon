@@ -923,7 +923,10 @@ function renderOverloadCandidates(project Project, tied ByteArrayArray) returns 
 	var rendered = ""
 	for candidate in tied 'each'
 		let sig = try project.funcSignatures.get(candidate) otherwise panic("renderOverloadCandidates: candidate '{String.from(candidate)}' is not in funcSignatures — the tie was scored against that entry")
-		rendered = "{rendered}, " if not rendered.isEmpty() else rendered
+		if not rendered.isEmpty() 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+
 		rendered = "{rendered}({renderOverloadParams(project, sig: sig)})"
 	end 'each'
 	return rendered
@@ -932,7 +935,10 @@ end 'renderOverloadCandidates'
 function renderOverloadParams(project Project, sig FuncSignature) returns String
 	var rendered = ""
 	for i in firstUserParamIndex(sig.takesReceiver()) upto sig.paramNames.count() 'eachParam'
-		rendered = "{rendered}, " if not rendered.isEmpty() else rendered
+		if not rendered.isEmpty() 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+
 		let paramName = try sig.paramNames.get(i) otherwise panic("renderOverloadParams: paramNames.get OOB at {i} inside its own count()")
 		let paramType = try sig.paramTypes.get(i) otherwise panic("renderOverloadParams: paramTypes.get OOB at {i} — a signature's param columns are built in lockstep")
 		rendered = "{rendered}{String.from(paramName)} {maxonTypeName(paramType, typeNames: project.typeNames)}"

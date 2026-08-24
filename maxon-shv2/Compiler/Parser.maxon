@@ -39895,10 +39895,16 @@ export type Parser
 				// The default's body: for a PLANNED match its own block (the dispatch's miss edges branch
 				// here); for the linear chain the last real arm's `else` target (`currentTestBlock`), or the
 				// entry block when the match is default-only. `var` because `parseArmBody` mutates it.
-				var defaultBody = currentTestBlock
+				//
+				// ⚠ **SEATED FROM AN ID, BECAUSE `currentTestBlock` IS CARRIED BY THE ARM LOOP.** Binding it
+				// to a second name here would MOVE it out of the loop (a bare-local read is a move), which is
+				// E2015. `.id` is a field read off a borrowed receiver, and the block is re-fetched — the same
+				// id-threading the arm loop already uses for `prevTestBlockId`.
+				var defaultBodyId = currentTestBlock.id
 				if usePlan 'planDefaultBlock'
-					defaultBody = self.newBlock(func, label: b"matchdefault", line: defTok.line)
+					defaultBodyId = self.newBlock(func, label: b"matchdefault", line: defTok.line).id
 				end 'planDefaultBlock'
+				var defaultBody = try self.artifact.module.getBlockByIdIn(func, id: defaultBodyId) otherwise panic("parseMatchCommon: the default body block {defaultBodyId} is not in its own function")
 				if prevFallthrough 'defaultIsFtTarget'
 					let matchEdgeArgs = self.setupFallthroughTargetPhis(defaultBody, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
 					if usePlan 'planDefaultArgs'
@@ -40012,7 +40018,13 @@ export type Parser
 				// scrutinee's own, as it always was. For an ERROR UNION it is the arm's MEMBER: the synthesized
 				// table carries no payload slots (it is a dispatch table — see `ErrorUnionInfo`), and a payload
 				// diagnostic must name the enum the author actually wrote rather than `__ErrorUnion`.
-				var armPayloadEnum = enumMatch
+				//
+				// ⚠ **IT STARTS `undeclared` RATHER THAN AS A SECOND NAME FOR `enumMatch`** — that binding would
+				// MOVE the match's scrutinee enum out of the arm loop (E2015). Every branch that produces payload
+				// bindings records the layout it produced them from, so `undeclared` here can only survive to the
+				// use below on an arm with NO bindings, where nothing reads it; `requireEnumLayout` is what says
+				// so, and it panics rather than guessing if that ever stops holding.
+				var armPayloadEnum = DeclaredEnum.undeclared
 				// Does this arm's member deliver a heap BOX the ARM must release? Only an error union can, and
 				// `armMemberBoxType` is read only under this flag — the `hasBinding`/`bindingName` pairing this
 				// file uses wherever one fact governs the meaning of another.
@@ -40039,6 +40051,7 @@ export type Parser
 					if prevFallthrough 'ftTargetBinds'
 						try self.rejectFallthroughIntoBindingArm(payloadBindings, layout: armLayout, patternTok: patternTok)
 					end 'ftTargetBinds'
+					armPayloadEnum = DeclaredEnum.declared(armLayout)
 				end 'enumPattern' else if usePlan 'scalarPlanPattern'
 					try self.collectScalarPatternIntervals(scrutTag, seenValues: seenValues, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
 				end 'scalarPlanPattern' else 'scalarChainPattern'
@@ -40166,7 +40179,7 @@ export type Parser
 			// chain's final `else` target IS that block (`currentTestBlock`). Either way the miss is
 			// unreachable (every value matches some arm).
 			if usePlan 'planDeadMiss'
-				planMissBlockId = self.newDeadBlock(func, label: b"matchdead", line: matchTok.line).id
+			planMissBlockId = self.newDeadBlock(func, label: b"matchdead", line: matchTok.line).id
 			end 'planDeadMiss' else 'chainDeadMiss'
 				currentTestBlock.terminator = Terminator.dead
 			end 'chainDeadMiss'
@@ -43292,17 +43305,21 @@ export type Parser
 			let isLast = i == to - 1
 			var elseTarget = missTarget
 			var elseArgs = missArgs
-			var nextBlock = current
+			// ⚠ **THE CURSOR ADVANCES BY ID, NOT BY A SECOND NAME FOR `current`.** `var nextBlock = current`
+			// would MOVE the loop-carried block out of the loop (E2015); a `BlockId` is a scalar and carries
+			// no ownership, so the fetch below is what re-seats the cursor — and on the last test it re-seats
+			// it to the block it already names, which is what the chain's final `else` edge wants.
+			var nextId = current.id
 			if not isLast 'moreTests'
-				nextBlock = self.newBlock(func, label: b"matchnext", line: opTok.line)
-				elseTarget = nextBlock.id
+				nextId = self.newBlock(func, label: b"matchnext", line: opTok.line).id
+				elseTarget = nextId
 				elseArgs = ValueIdArray.create()
 			end 'moreTests'
 
 			self.recordBranchEdge(current, targetId: interval.targetBlockId, argIds: interval.edgeArgs)
 			self.recordBranchEdge(current, targetId: elseTarget, argIds: elseArgs)
 			self.emitCondBranch(current, cond: cond, thenId: interval.targetBlockId, elseId: elseTarget, ifTok: opTok)
-			current = nextBlock
+			current = try self.artifact.module.getBlockByIdIn(func, id: nextId) otherwise panic("emitDispatchChain: the chain's next test block {nextId} is not in its own function")
 		end 'each'
 	end 'emitDispatchChain'
 
@@ -43482,6 +43499,29 @@ export type Parser
 			self.markValuePromise(phiId)
 		end 'promisePhi'
 
+		// ⭐⭐ **A MERGED BINDING STILL OWNS ITS HEAP, AND THE PHI IS WHERE THAT FACT WAS DROPPED.** A phi is
+		// minted through `mintPhi`, which seeds `valueOwnsHeap` FALSE like every fresh value — but this phi is
+		// not a fresh value, it is the same allocation the binding already owned, renamed at a join. Left false,
+		// the merged name reads as BORROWED to every door that asks, and the next thing done with it mints a
+		// reference nothing owns.
+		//
+		// ⛔⛔ **MEASURED AS EXIT 101 IN THE COMPILER'S OWN SELF-COMPILE.** `emitDispatchChain`'s
+		// `var nextBlock = current` / `if not isLast  nextBlock = self.newBlock(…)  end` / `current = nextBlock`
+		// leaked one `IrBlock` — eight allocations — per `matchnext` block, so every `match` of 2 or 3 intervals
+		// (below `MinIntervalsForDispatch`, hence a compare chain) leaked and every larger one did not (a jump
+		// table mints no chain block). The rebind door read `valueIsOwnedHeap(phi)` as false, so it did BOTH
+		// halves of two different answers: `poisonMoveSource` marked the source moved-from (a MOVE, so nothing
+		// drops it) and `promoteBorrowed` then emitted an `__mm_retain` (a CO-OWN, so something must). One
+		// reference, no owner. The `if` alone does not leak and the assignment alone does not leak; it takes the
+		// join between them, which is why nothing smaller than a self-compile found it.
+		//
+		// ⚠ The bit is read off the incoming the mint can see — `binding.boundValue`, the path parsed last —
+		// and `pushMergedEdgeValue` checks every OTHER incoming against it, because a phi that owns on one edge
+		// and borrows on another is an ownership question with no answer, not a mark to join.
+		if self.valueIsOwnedHeap(binding.boundValue) 'ownedBinding'
+			self.markValueOwnsHeap(phiId, exclusivity: OwnedHeapExclusivity.sole if self.valueIsSoleHeapOwner(binding.boundValue) else OwnedHeapExclusivity.coOwned)
+		end 'ownedBinding'
+
 		// ⭐⭐ **W117's MARK CROSSES A BINDING MERGE (review), and this half alone is not enough — see
 		// `pushMergedEdgeValue`.** The value flowing IN here is only ONE of the phi's incomings (the path parsed
 		// last); the others arrive as edge args, which is why the twin below carries from each of them. Both are
@@ -43554,6 +43594,25 @@ export type Parser
 		// the same rebind outside a loop is refused. The value-producing merges were already covered
 		// (`propagateImmutableGlobalReadToPhi`); the merges that REBIND A NAME were not.
 		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: value, to: binding.boundValue)
+
+		// ⭐⭐ **THE OWNERSHIP HALF OF THE SAME TWINNING** (see `mintPhiForBinding`). The mint stamped the phi
+		// from ONE incoming; these are the others, and they must answer the same. They do, and the reason is
+		// structural rather than lucky: only an ASSIGNED binding is ever carried into a merge, every such
+		// binding is a `var`, and a `var`'s managed initializer is promoted to owned at its declaration
+		// (`promoteBorrowedBinding`) — so no path can hand a carried binding a borrowed managed value. A
+		// disagreement therefore means that promotion has a hole, which would leak or double-free with no
+		// diagnostic anywhere; it fails loudly here instead.
+		let phiOwns = self.valueIsOwnedHeap(binding.boundValue)
+		if phiOwns != self.valueIsOwnedHeap(value) 'edgeDisagrees'
+			panic("pushMergedEdgeValue: the merged binding's phi v{binding.boundValue} {"owns" if phiOwns else "does not own"} its heap but the incoming edge value v{value} {"does not" if phiOwns else "does"} — a carried binding is a `var` whose managed initializer is promoted to owned at declaration, so every incoming to its phi must agree; one edge minting a reference the merged name does not own is a leak, and the reverse is a double free")
+		end 'edgeDisagrees'
+
+		// A phi is the sole owner only if EVERY path made it one — one co-owning edge is enough to make the
+		// merged name share the box, and a stale `sole` there is a destructive-move licence on an allocation
+		// somebody else still holds.
+		if phiOwns and not self.valueIsSoleHeapOwner(value) 'edgeCoOwns'
+			self.markValueCoOwnsHeap(binding.boundValue)
+		end 'edgeCoOwns'
 	end 'pushMergedEdgeValue'
 
 	// ⭐⭐ **DOES THIS CARRIED BINDING CONTRIBUTE A WITNESS TO A MERGE? — THE ONE FACT BOTH HALVES READ
@@ -43875,7 +43934,9 @@ export type Parser
 	// parser's own file/position so the four `if` block-creation sites don't each
 	// respell it.
 	function newBlock(func IrFunction, label ByteArray, line LineNumber) returns IrBlock
-		return self.artifact.module.addBlockAt(func, label: label, filePath: self.filePath.toString(), firstLine: line)
+		let fp = self.filePath.toString()
+		let b = self.artifact.module.addBlockAt(func, label: label, filePath: fp, firstLine: line)
+		return b
 	end 'newBlock'
 
 	// ⭐⭐ **A FRESH BLOCK NOTHING REACHES.** Four constructs need one — the continuation of an `if` whose

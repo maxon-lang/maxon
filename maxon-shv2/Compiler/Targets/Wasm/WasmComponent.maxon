@@ -34,8 +34,14 @@ export function findFileUpward(candidateSegments StringArrayArray) returns FileP
 	var dir = Directory.currentPath()
 	for _ in 0 upto VendorSearchDepth 'search'
 		for segments in candidateSegments 'eachCandidate'
-			var candidate = dir
-			for segment in segments 'join'
+			// ⚠ `var candidate = dir` MOVES the search loop's directory out of it — a bare-local read is a
+			// move whether or not it is in a loop body, and moving a value declared outside the loop is
+			// E2015. The first segment is joined onto `dir` as a RECEIVER instead, which borrows it, and the
+			// owned path that join mints is what the rest of the segments extend.
+			let firstSegment = try segments.get(0) otherwise panic("findFileUpward: a candidate names no path segments — every candidate is at least one segment below the level's directory, and an empty one would test the directory itself")
+			var candidate = dir.join(firstSegment)
+			for i in 1 upto segments.count() 'join'
+				let segment = try segments.get(i) otherwise panic("findFileUpward: segments.get OOB at {i} inside its own count()")
 				candidate = candidate.join(segment)
 			end 'join'
 			if File.exists(candidate) 'found'

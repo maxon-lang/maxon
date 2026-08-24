@@ -2731,14 +2731,20 @@ export type SplitDriver
 			// the ranking discarded, and that one is always relievable by the bracket the ABI has already
 			// chosen (`confinedOverflowAtPeak`). Both peaks name the SAME op, so the anchor, the live row and
 			// the sequence number below are the same either way; only the placement and the witness differ.
-			var target = peak
-			var choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: target, pool: self.pool, scratch: work)
+			//
+			// ⚠ **THE CONFINED PEAK REPLACES `peak` RATHER THAN BEING ALIASED BESIDE IT.** A second name for
+			// the same peak (`var target = peak`) MOVES the loop-carried value out of the loop, which is
+			// E2015; and the alias bought nothing, because the full-pool peak is not read again on the path
+			// that takes the confined one. The path that does read it — the unrelievable retry below — keeps
+			// it by never reassigning. Discarding the ranked peak here is safe: `PressureAnchor.takePeak`
+			// copied the three scalars it needs out of it, so nothing holds its live row.
+			var choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: peak, pool: self.pool, scratch: work)
 			if (not choiceFound(choice)) and (not peak.clobberOnly) 'theAbiHasNotFinishedYet'
 				let confined = confinedOverflowAtPeak(funcLiveness, peak: peak, pool: self.pool, scratch: work)
 				if confined.found 'dischargeTheForcedWorkFirst'
 					let bracketed = chooseVictim(module, index: index, liveness: funcLiveness, peak: confined, pool: self.pool, scratch: work)
 					if choiceFound(bracketed) 'relievable'
-						target = confined
+						peak = confined
 						choice = bracketed
 					end 'relievable' else 'nothingThereEither'
 						// The confined retry re-pointed the function's one anchor; put it back on the peak the
@@ -2753,13 +2759,13 @@ export type SplitDriver
 
 			// A `none` choice does not come back: at a FULL-pool peak it is the E5001 this design exists to
 			// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
-			let victim = try victimAtPeak(choice, project: project, module: module, func: func, funcIndex: funcIndex, liveness: funcLiveness, peak: target, pool: self.pool, lineage: self.lineage)
+			let victim = try victimAtPeak(choice, project: project, module: module, func: func, funcIndex: funcIndex, liveness: funcLiveness, peak: peak, pool: self.pool, lineage: self.lineage)
 
 			// `chooseVictim` re-pointed the function's ONE anchor at this peak, and the mutation below cuts
 			// there. Asserted rather than assumed: the two are a few lines apart today, and a reorder that
 			// broke it would split at the PREVIOUS peak — a wrong cut in the right-looking place, not a crash.
-			if work.anchor.seq != target.peakSeq 'anchorIsNotThisPeaks'
-				panic("SplitDriver.relievePressure: the split anchor is at sequence {work.anchor.seq} but this iteration's peak is at {target.peakSeq} — `chooseVictim` re-points the function's one anchor and the mutation reads it back, so nothing may run between them that re-points it")
+			if work.anchor.seq != peak.peakSeq 'anchorIsNotThisPeaks'
+				panic("SplitDriver.relievePressure: the split anchor is at sequence {work.anchor.seq} but this iteration's peak is at {peak.peakSeq} — `chooseVictim` re-points the function's one anchor and the mutation reads it back, so nothing may run between them that re-points it")
 			end 'anchorIsNotThisPeaks'
 
 			// Only a SPILL of a value memory does not already hold consumes a slot: a value relieved again
@@ -2777,7 +2783,7 @@ export type SplitDriver
 			let freshFrom = self.nextValueId
 			match choice 'act'
 				none then panic("SplitDriver.relievePressure: `victimAtPeak` returned for a `none` choice — it must throw")
-				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, topo: self.cfg.topo, valueId: v, peakSeq: target.peakSeq, scope: scope, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
+				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, topo: self.cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
 				spill(v, scope) then self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
 			end 'act'
 
