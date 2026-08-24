@@ -2173,7 +2173,7 @@ function traceSliceOf(lines StringArray, testName String, fence String, specPath
 	while i < lines.count() 'scan'
 		let line = try lines.get(i) otherwise panic("traceSliceOf: index {i} past {lines.count()} lines")
 
-		if line.startsWith(SectionHeadingPrefix) or line.contains(TestMarker) or line.contains(DisabledTestMarker) 'endOfSlice'
+		if line.startsWith(SectionHeadingPrefix) or carriesMarker(line, marker: TestMarker) or carriesMarker(line, marker: DisabledTestMarker) 'endOfSlice'
 			return TraceSlice.create(lastContent, blockEnd: lastContent)
 		end 'endOfSlice'
 
@@ -2210,13 +2210,17 @@ end 'fenceCloseAfter'
 // parsed out of this very file moments ago: a marker that cannot be found again means the splice is about
 // to write a golden into some other case's slice, which is worse than not writing it at all.
 function traceMarkerLineOf(lines StringArray, testName String, specPath FilePath) returns LineIndex
-	let marker = "{TestMarker} {testName}{TestMarkerEnd}"
+	// Asked through the PARSER's own two questions rather than by rebuilding the canonical spelling and
+	// comparing strings. An exact compare is a THIRD opinion about what a marker line is, and it was wrong
+	// in the same two places the scanner was: a marker terminated with a tab, or opened with two spaces, is
+	// one the parse accepts and this splice could not find again — a panic on a file that is perfectly well
+	// formed by the reference's rules.
 	for (iter, line) in lines.withIterator() 'eachLine'
-		if line.trim() == marker 'found'
+		if carriesMarker(line, marker: TestMarker) and markerValue(line) == testName 'found'
 			return iter.index()
 		end 'found'
 	end 'eachLine'
-	panic("SpecTestRunner: re-minting the capture golden for '{testName}' but {specPath.toString()} has no line reading exactly '{marker}' — the case was parsed out of this file moments ago, so the marker's spelling and this one have drifted")
+	panic("SpecTestRunner: re-minting the capture golden for '{testName}' but {specPath.toString()} carries no `{TestMarker} {testName} -->` marker — the case was parsed out of this file moments ago, so the marker's spelling and this one have drifted")
 end 'traceMarkerLineOf'
 
 // ============================================================================

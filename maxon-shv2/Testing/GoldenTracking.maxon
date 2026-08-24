@@ -339,7 +339,11 @@ function reportUncomparedUnder(fragmentsRoot FilePath, specDir FilePath, effecti
 		declaredSpecs.insert(specName)
 
 		let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget)) otherwise panic("GoldenTracking.reportUncomparedUnder: a spec the parent already parsed to build this run's plan no longer parses.")
-		let roster = rosterOf(specFile)
+		// Every ACTIVE case this spec declares. A `<!-- disabled-test: … -->` case is deliberately NOT one:
+		// it is never compiled, never run and mints no golden (`SpecParser`'s header), so a `.test` bearing
+		// its name is a file nothing compares — which is precisely this census's finding, and an enabled
+		// case may never be re-disabled.
+		let roster = caseNameSetOf(specFile.tests)
 
 		for lane in lanes 'eachLane'
 			collectUncomparedIn(lane, specName: specName, specFile: specFile, roster: roster, entries: entries)
@@ -384,17 +388,18 @@ function goldenLanesIn(fragmentsRoot FilePath, entries StringArray) returns Gold
 	return lanes
 end 'goldenLanesIn'
 
-// Every ACTIVE case a spec declares. A `<!-- disabled-test: … -->` case is deliberately NOT one: it is
-// never compiled, never run and mints no golden (`SpecParser`'s header), so a `.test` bearing its name
-// is a file nothing compares — which is precisely this census's finding, and an enabled case may never
-// be re-disabled.
-function rosterOf(specFile SpecFile) returns SpecCaseNameSet
+// ⭐ **THE CASE NAMES OF A LIST OF CASES — the ONE loop that turns cases into a set.** Both sets this
+// census compares are built from one: the spec's whole ROSTER and the subset one lane can SELECT. They
+// were two identical four-line loops, and a rule about which cases count (a name normalization, say)
+// landing on one of them would have made the two sets answer different questions while still being
+// compared to each other.
+function caseNameSetOf(tests SpecTestArray) returns SpecCaseNameSet
 	var names = SpecCaseNameSet.create()
-	for test in specFile.tests 'eachTest'
+	for test in tests 'eachTest'
 		names.insert(test.name)
 	end 'eachTest'
 	return names
-end 'rosterOf'
+end 'caseNameSetOf'
 
 // The cases `lane` can ever compare a golden for — asked of `selectedTests`, the harness's ONE selection
 // door, rather than of a second copy of its rules. `filter` is empty because a filter is a property of
@@ -412,17 +417,12 @@ end 'pinnableOn'
 // The half of the answer that needs a real target — split out only because a `match` arm is one
 // expression and this one is a loop.
 function selectableCaseNamesOn(laneTarget Target, specFile SpecFile, specName String) returns SpecCaseNameSet
-	var names = SpecCaseNameSet.create()
 	let selection = selectedTests(specFile, specName: specName, filter: "", effectiveTarget: laneTarget, includeNetwork: true)
-	for test in selection.selected 'eachTest'
-		names.insert(test.name)
-	end 'eachTest'
-	return names
+	return caseNameSetOf(selection.selected)
 end 'selectableCaseNamesOn'
 
-// One spec's goldens on one lane, classified. THREE outcomes and no silent fourth: the file is pinnable
-// there (nothing to say), its case exists but that lane can never select it, or no case of that name
-// exists at all.
+// One spec's goldens on one lane, when a spec of that name still exists. The DIRECTORY guard and the
+// per-lane pinnable set are this arm's own; the walk itself is not — see `collectGoldensIn`.
 function collectUncomparedIn(lane GoldenLane, specName String, specFile SpecFile, roster SpecCaseNameSet, entries StringArray)
 	let specGoldens = lane.dir.join(specName)
 	if not Directory.isDirectory(specGoldens) 'laneHasNoneForThisSpec'
@@ -430,7 +430,19 @@ function collectUncomparedIn(lane GoldenLane, specName String, specFile SpecFile
 	end 'laneHasNoneForThisSpec'
 
 	let pinnable = pinnableOn(lane, specFile: specFile, specName: specName)
+	collectGoldensIn(lane, specName: specName, specGoldens: specGoldens, classify: UncomparedClassifier.againstRoster(pinnable, roster: roster), entries: entries)
+end 'collectUncomparedIn'
 
+// ⭐⭐ **THE ONE WALK OVER ONE SPEC DIRECTORY'S GOLDENS — and it is one walk because the difference
+// between a live spec and a vanished one is a CLASSIFICATION, nothing else.**
+//
+// ⛔ It was two, and they were identical line for line: where to look, what counts as a golden, how an
+// entry reads, and what to say when the directory will not list. The failure that shape invites is this
+// rung's own thesis pointed at the rung — a new rule about which files the census enumerates lands on
+// the live-spec copy, goldens under a live spec go on being censused, goldens under a VANISHED spec
+// quietly stop, and **absence is the one thing no gate in this tree can see.** The orphan gate catches a
+// census that has stopped working; it cannot catch one that has stopped working in half the tree.
+function collectGoldensIn(lane GoldenLane, specName String, specGoldens FilePath, classify UncomparedClassifier, entries StringArray)
 	let listed = try Directory.list(specGoldens) otherwise 'cannotList'
 		entries.push(uncheckedEntry("{specGoldens.toString()} could not be listed, so its goldens were not censused"))
 		return
@@ -441,14 +453,47 @@ function collectUncomparedIn(lane GoldenLane, specName String, specFile SpecFile
 			continue
 		end 'notAGolden'
 
-		let caseName = entry.stem()
-		if pinnable.contains(caseName) 'thisLaneComparesIt'
-			continue
-		end 'thisLaneComparesIt'
-
-		entries.push(uncomparedEntry("{lane.name}/{specName}/{entry.filename()}", reason: uncomparedReasonFor(lane, caseName: caseName, specName: specName, roster: roster)))
+		match goldenVerdictOf(entry.stem(), lane: lane, specName: specName, classify: classify) 'verdict'
+			compared then continue
+			uncompared(reason) then entries.push(uncomparedEntry("{lane.name}/{specName}/{entry.filename()}", reason: reason))
+		end 'verdict'
 	end 'eachEntry'
-end 'collectUncomparedIn'
+end 'collectGoldensIn'
+
+// How the walk above decides what one golden is. The ONLY thing that differs between the two callers,
+// which is why it is a parameter and not a second copy of the walk.
+union UncomparedClassifier
+	// A spec of this name exists: the file is fine when the lane can select its case, and otherwise
+	// carries one of the two reasons `uncomparedReasonFor` tells apart.
+	againstRoster(pinnable SpecCaseNameSet, roster SpecCaseNameSet)
+	// No spec of this name exists, so nothing under here can be compared by anything and no per-file
+	// question is worth asking.
+	everyFileOfAVanishedSpec
+end 'UncomparedClassifier'
+
+// What one golden IS. A union rather than an optional reason, so "this file is fine" carries no
+// vestigial text and there is no sentinel to re-derive.
+union GoldenVerdict
+	compared
+	uncompared(reason UncomparedReason)
+end 'GoldenVerdict'
+
+function goldenVerdictOf(caseName String, lane GoldenLane, specName String, classify UncomparedClassifier) returns GoldenVerdict
+	return match classify 'how'
+		everyFileOfAVanishedSpec gives GoldenVerdict.uncompared(UncomparedReason.noSuchSpec(specName))
+		againstRoster(pinnable, roster) gives rosterVerdictOf(caseName, lane: lane, specName: specName, pinnable: pinnable, roster: roster)
+	end 'how'
+end 'goldenVerdictOf'
+
+// The half of the answer that needs the two sets — split out only because a `match` arm is one
+// expression and this one is a guard plus a call.
+function rosterVerdictOf(caseName String, lane GoldenLane, specName String, pinnable SpecCaseNameSet, roster SpecCaseNameSet) returns GoldenVerdict
+	if pinnable.contains(caseName) 'thisLaneComparesIt'
+		return GoldenVerdict.compared
+	end 'thisLaneComparesIt'
+
+	return GoldenVerdict.uncompared(uncomparedReasonFor(lane, caseName: caseName, specName: specName, roster: roster))
+end 'rosterVerdictOf'
 
 // WHY a lane does not pin a golden it holds — and the answers need different fixes, which is why they
 // are not folded into one sentence. A case nobody declares wants the FILE changed; a case its lane
@@ -487,27 +532,10 @@ function collectGoldensOfVanishedSpecs(lanes GoldenLaneArray, declaredSpecs Spec
 				continue
 			end 'strayFile'
 
-			collectGoldensOfOneVanishedSpec(lane, specName: specName, specGoldens: entry, entries: entries)
+			collectGoldensIn(lane, specName: specName, specGoldens: entry, classify: UncomparedClassifier.everyFileOfAVanishedSpec, entries: entries)
 		end 'eachEntry'
 	end 'eachLane'
 end 'collectGoldensOfVanishedSpecs'
-
-// Every golden under one such directory, named individually rather than counted: the reader's next act
-// is on FILES, and a count sends them off to re-derive the list this already walked.
-function collectGoldensOfOneVanishedSpec(lane GoldenLane, specName String, specGoldens FilePath, entries StringArray)
-	let listed = try Directory.list(specGoldens) otherwise 'cannotList'
-		entries.push(uncheckedEntry("{specGoldens.toString()} could not be listed, so its goldens were not censused"))
-		return
-	end 'cannotList'
-
-	for entry in listed 'eachEntry'
-		if entry.fileExtension() != FragmentExtension 'notAGolden'
-			continue
-		end 'notAGolden'
-
-		entries.push(uncomparedEntry("{lane.name}/{specName}/{entry.filename()}", reason: UncomparedReason.noSuchSpec(specName)))
-	end 'eachEntry'
-end 'collectGoldensOfOneVanishedSpec'
 
 // ⭐ **ONE ENTRY OF THE CENSUS, AND THE ONE PLACE ITS TEXT IS SPELLED.** A path a reader can act on,
 // then why nothing reads it, at `ResultNoteIndent` — the depth every other trailer in this suite puts a

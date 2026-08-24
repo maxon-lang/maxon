@@ -341,13 +341,7 @@ export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 		return
 	end 'thisIsAFixtureSubRun'
 
-	let root = try FilePath.from(GatesRelativeDir) otherwise panic("HarnessSelfTest: '{GatesRelativeDir}' is not a valid path")
-	// Interpolated rather than passed as the bare constant: a top-level `let` String is ambiguous between
-	// `join`'s String and FilePath overloads (the same constraint `Main.resolveSpecDir` documents).
-	let caseDir = root.join("{NetworkGateCaseDir}")
-	if not Directory.isDirectory(caseDir) 'noFixture'
-		panic("HarnessSelfTest: the live-network gate fixture is not at {GatesRelativeDir}/{NetworkGateCaseDir}, so nothing proves that a `{NetworkMarker} {NetworkLiveValue} -->` case is kept out of a default run — or that `{NetworkFlag}` brings it back. Run the suite from the repo root.")
-	end 'noFixture'
+	let caseDir = gateFixtureDir(NetworkGateCaseDir, proves: "that a live-network case is kept out of a default run, and that the flag brings it back")
 
 	let label = "{NetworkGateSpecName}/{NetworkGateTestName}"
 
@@ -401,6 +395,96 @@ export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 	panic("HarnessSelfTest: the live-network gate FAILED {broken.count()} of its checks. It is what keeps a suite's verdict from depending on tcpbin.com and httpbin.org being up, and what keeps the cases it drops from vanishing silently.{report}")
 end 'requireNetworkGateHolds'
 
+// ⭐ **WHERE ONE GATE'S FIXTURE LIVES, refused loudly when it is not there.** THREE gates ask this now,
+// and each had written the same five lines with only the "what is missing" sentence differing — one
+// fact (a gate case is `<gates root>/<name>`) written three times, in a file whose whole subject is
+// checks that quietly stop checking.
+//
+// The name is INTERPOLATED rather than passed as the bare constant: a top-level `let` String is
+// ambiguous between `join`'s String and FilePath overloads (the constraint `Main.resolveSpecDir`
+// documents).
+function gateFixtureDir(caseDirName String, proves String) returns FilePath
+	let root = try FilePath.from(GatesRelativeDir) otherwise panic("HarnessSelfTest: '{GatesRelativeDir}' is not a valid path")
+	let caseDir = root.join("{caseDirName}")
+	if not Directory.isDirectory(caseDir) 'noFixture'
+		panic("HarnessSelfTest: a gate fixture is missing — there is no {GatesRelativeDir}/{caseDirName}, so nothing proves {proves}. Run the suite from the repo root.")
+	end 'noFixture'
+
+	return caseDir
+end 'gateFixtureDir'
+
+// ⭐⭐ **PROVE SHV2 STILL READS A MARKER LINE THE WAY THE REFERENCE DOES.** The oracle's grammar is
+// `<!--\s*test:\s*(\S+)\s*-->`; shv2 matched the literals `<!-- test:` and `" -->"`, which is narrower at
+// BOTH ends, and each end failed in its own direction:
+//
+//   • a TAB before the `-->` — the reference closes the marker, shv2 did not, and once the
+//     unterminated-marker refusal landed that PANICKED THE WHOLE SUITE on a well-formed file;
+//   • TWO SPACES after `<!--` — the reference reads an ordinary marker, shv2 saw no marker at all and
+//     walked the line over as prose, DROPPING the case and feeding its fences to the case above it.
+//
+// ⛔ **NEITHER SHAPE IS LIVE IN EITHER CORPUS, AND THAT IS THE POINT.** The one that WAS live
+// (`specs-shv2/unary-operators.md`'s `negate-float`, run by shv2 and declined by the bootstrap) got in
+// the same way: a shape nobody had written yet, in a grammar two parsers disagreed about. A corpus
+// census proves what is there TODAY; these fixtures are what keep the agreement from rotting tomorrow.
+//
+// Two case DIRECTORIES rather than two cases in one, for `requireHarnessRefusalsFire`'s reason: the tab
+// shape used to abort the whole sub-run, which would have masked the spaced one entirely — the second
+// case would have looked exactly like a case that passed.
+//
+// Called ONCE by the suite's parent beside the other tree-level gates, and PANICS naming every shape
+// that failed.
+export function requireReferenceMarkerShapesParse(harnessExe FilePath, specDir FilePath)
+	if isHarnessFixtureSubRun(specDir) 'thisIsAFixtureSubRun'
+		return
+	end 'thisIsAFixtureSubRun'
+
+	var broken = StringArray.create()
+	for shape in referenceMarkerShapes() 'eachShape'
+		let caseDir = gateFixtureDir(shape.caseDir, proves: shape.proves)
+		let said = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: shape.proves))
+
+		// ⭐ WHAT "THE CASE RAN" LOOKS LIKE, built from the report's OWN renderer rather than a second
+		// spelling of the verdict token — `requireNetworkGateHolds`' argument. An empty reason makes this a
+		// PREFIX of the real line, which is what `contains` needs; the fixture's stdout is deliberately
+		// wrong so the case FAILS and mints no golden, and the failure is not the point.
+		let ranVerdict = verdictLine(TestOutcome.fail(""), label: "{shape.specName}/{shape.testName}")
+		if not said.contains(ranVerdict) 'didNotRunIt'
+			broken.push("the fixture at {shape.caseDir} did NOT run '{shape.specName}/{shape.testName}'. It proves {shape.proves}, and shv2 has stopped agreeing with the reference about what a marker line is — in this direction the case is simply GONE, which reads exactly like a case nobody wrote. It said:\n{said}\n")
+		end 'didNotRunIt'
+	end 'eachShape'
+
+	if broken.isEmpty() 'everyShapeParsed'
+		return
+	end 'everyShapeParsed'
+
+	// ⚠ `panic` takes a STRING LITERAL — see `requireHarnessRefusalsFire` for the constraint.
+	let report = indentedList(broken, indent: BrokenHarnessFixtureIndent)
+	panic("HarnessSelfTest: {broken.count()} marker shape(s) the REFERENCE accepts are no longer read by shv2. One `.md`, two meanings, is what this pair of fixtures exists to keep from happening again.{report}")
+end 'requireReferenceMarkerShapesParse'
+
+// One marker shape a fixture pins. A ROSTER built here rather than six loose constants, because every
+// field of a row is about the same fixture and a row is what a reader checks against the directory.
+type MarkerShapeGate
+	export let caseDir as String
+	export let specName as String
+	export let testName as String
+	export let proves as String
+
+	export static function create(caseDir String, specName String, testName String, proves String) returns MarkerShapeGate
+		return Self{caseDir: caseDir, specName: specName, testName: testName, proves: proves}
+	end 'create'
+end 'MarkerShapeGate'
+
+typealias MarkerShapeGateArray = Array with MarkerShapeGate
+
+// The shapes under test. Adding one is a row here and a directory beside the others, and nothing else.
+function referenceMarkerShapes() returns MarkerShapeGateArray
+	var shapes = MarkerShapeGateArray.create()
+	shapes.push(MarkerShapeGate.create("marker-tab-terminated", specName: "marker-tab", testName: "marker-tab.closed-with-a-tab", proves: "that a TAB before the `-->` closes a marker, as the reference's `\\s*-->` says it does"))
+	shapes.push(MarkerShapeGate.create("marker-spaced-opener", specName: "marker-spaced", testName: "marker-spaced.opened-with-two-spaces", proves: "that any run of whitespace may sit between `<!--` and the keyword, as the reference's `<!--\\s*` says it may"))
+	return shapes
+end 'referenceMarkerShapes'
+
 // ⭐ **ONE RUN OF ANY GATE FIXTURE — shared by both gates, because they differ only in a flag and in
 // which gate a failure names.** A second copy is how the two would come to spawn the harness
 // differently, which is the drift `fixtureArgv` already exists to prevent one level down.
@@ -445,12 +529,7 @@ export function requireOrphanedGoldensAreReported(harnessExe FilePath, specDir F
 		return
 	end 'thisIsAFixtureSubRun'
 
-	let root = try FilePath.from(GatesRelativeDir) otherwise panic("HarnessSelfTest: '{GatesRelativeDir}' is not a valid path")
-	// Interpolated rather than passed as the bare constant, for `requireNetworkGateHolds`' reason.
-	let caseDir = root.join("{OrphanGateCaseDir}")
-	if not Directory.isDirectory(caseDir) 'noFixture'
-		panic("HarnessSelfTest: the orphaned-golden gate fixture is not at {GatesRelativeDir}/{OrphanGateCaseDir}, so nothing proves that a `.test` no case reads is still NAMED by a suite run. Run the suite from the repo root.")
-	end 'noFixture'
+	let caseDir = gateFixtureDir(OrphanGateCaseDir, proves: "that a `.test` no case reads is still NAMED by a suite run")
 
 	// Spelled once for this gate's two runs, beside the network gate's own.
 	let proves = "a golden nothing compares is still NAMED by a suite run"
