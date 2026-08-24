@@ -169,6 +169,12 @@ public static class CloneBodySynthesis {
         // A scalar payload slot is one machine word, and a clone copies it verbatim. Reading it
         // back as its DECLARED kind would round-trip a `bool` through the i1 the payload load
         // narrows it to, and hand `MaxonEnumConstructOp` an i1 to store into an i64 slot.
+        //
+        // ⭐ THAT IS ALSO WHY A FLOAT PAYLOAD IS MOVED AS `i64` HERE WHILE USER CODE READS IT AS
+        // `f64`, AND THE TWO DO NOT HAVE TO AGREE. `UnionPayloadSlotType` names the slot from the
+        // kind it is given, so this label makes the clone's load and store an eight-byte INTEGER
+        // move of the same eight bytes the extract later re-labels as a double. A clone copies
+        // BITS; only the reader has to know what they mean. Verified: 0.5 survives a clone.
         var payload = new MaxonEnumPayloadOp(selfRef.Result, typeName, slot,
           heap?.Kind ?? MaxonValueKind.Integer, heap?.TypeName);
         block.AddOp(payload);

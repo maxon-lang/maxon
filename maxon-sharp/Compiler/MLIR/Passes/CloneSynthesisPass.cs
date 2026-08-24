@@ -90,7 +90,16 @@ public static class CloneSynthesisPass {
   /// </summary>
   private static IrFunction<MaxonOp> Synthesize(
       IrModule<MaxonOp> module, string cloneName, string typeName, IrType typeDef) {
-    var cloneFunc = new IrFunction<MaxonOp>(cloneName, [CloneBodySynthesis.SelfParamName], [typeDef], typeDef, null);
+    // ⚠ THE ONE SYNTHESIZED MEMBER THAT DOES NOT INHERIT A TYPE'S VISIBILITY, because there is no
+    // declaration to inherit one from. `Parser.AddSynthesizedMember` is where every member the
+    // PARSER synthesizes gets its reach; this pass runs after parsing and builds cloners only for
+    // types minted after it — tuples and generic instances — which no file declares and which
+    // therefore reach wherever the instance does. Stated rather than left to
+    // `IsFunctionVisible`'s null-`SourceFilePath` short-circuit, so the decision is written down
+    // where it is made instead of being a side effect of a field nobody set.
+    var cloneFunc = new IrFunction<MaxonOp>(cloneName, [CloneBodySynthesis.SelfParamName], [typeDef], typeDef, null) {
+      IsExported = true
+    };
     module.AddFunction(cloneFunc);
 
     CloneBodySynthesis.EmitCloneBody(module, cloneFunc, typeName, typeDef,

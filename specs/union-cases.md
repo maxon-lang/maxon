@@ -326,8 +326,9 @@ end 'main'
 The flat payload slot is 8 bytes and every kind of payload shares it, so a `float` payload is a
 question about the slot's TYPE, not about its size.
 
-⚠ **THE FRONT END ACCEPTED THIS AND THE REGISTER ALLOCATOR DIED OF IT.** All three lowering
-sites — construct, extract and write-back — named the slot `i64` unconditionally, so a `float`
+⚠ **THE FRONT END ACCEPTED THIS AND THE REGISTER ALLOCATOR DIED OF IT.** The three lowering
+sites this section covers — construct, extract and write-back — named the slot `i64`
+unconditionally, so a `float`
 payload's bits, which live in an xmm register, were asked for a general-purpose home they never
 had: `error E9001: RegisterManager: value %N has no register and no stack home`, printed with a
 four-frame .NET stack trace, at the user. The slot's type is now taken from the value stored in it,
@@ -335,6 +336,11 @@ which is why the case below need not bind the payload to fail — `float-payload
 is the CONSTRUCT alone. `maxon-shv2` refuses the same program cleanly with `E2015`;
 `maxon-selfhosted` aborts with a `panic` (`IR/Maxon/LowerMaxonToStd.maxon:12528`). Of the three, only
 this compiler ever accepted it.
+
+⚠ **THERE IS A FOURTH CONSTRUCT SITE AND IT IS NOT ONE OF THESE THREE** — `U.fromName(…)`, which
+reaches the slot through a runtime SELECT rather than a store. It had the same defect for a wider
+set of payloads and is covered by its own section further down; the three named above are the ones
+`maxon-selfhosted` guards.
 
 <!-- test: union-payload.float-payload-constructed-without-binding -->
 The narrowest form: the payload is never bound, and the arms name no variable. Constructing the
@@ -451,4 +457,112 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+### `fromName` writes the same slot, and it is a FOURTH construct site
+
+`U.fromName("case", args…)` builds a union from a runtime string, and it reaches the payload slot
+by a different route from `U.case(args…)`: it selects between the current slot contents and the new
+value, so it writes through `StdSelectI64Op` rather than storing the argument directly.
+
+⚠ **IT CAST EVERY PAYLOAD TO `StdI64` AND WROTE AN `i64` SLOT UNCONDITIONALLY**, so any payload
+whose lowered value is not an `StdI64` died in the conversion with an unhandled .NET cast:
+`E9001 ... Unable to cast object of type 'StdF64' to type 'StdI64'` for a float and
+`... 'StdBool' to type 'StdI64'` for a bool, each with a four-frame stack trace at the user. It is
+not a float question — the slot is eight bytes and every scalar payload has to be WIDENED into it,
+which is what the direct construct has always done by storing at the value's own type. Both arms are
+pinned below because fixing only the one that was reported would leave the other exactly as it was.
+
+<!-- test: union-payload.from-name-writes-a-float-payload-slot -->
+```maxon
+typealias Fraction = float(0.0 to 1000.0)
+
+union Sample
+	blank
+	measured(d Fraction)
+end 'Sample'
+
+function main() returns ExitCode
+	let s = try Sample.fromName("measured", 0.5) otherwise Sample.blank
+	let d = match s 'm'
+		blank gives 0.0
+		measured(v) gives v
+	end 'm'
+	if d == 0.5 'exact'
+		return 7
+	end 'exact'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: union-payload.from-name-writes-a-bool-payload-slot -->
+The arm nobody reported. A `bool` payload is stored widened and read back with `!= 0`, so it needs
+the same widening into the slot that a float needs — for a different reason and through the same
+door.
+```maxon
+union Flagged
+	blank
+	set(b bool)
+end 'Flagged'
+
+function main() returns ExitCode
+	let s = try Flagged.fromName("set", true) otherwise Flagged.blank
+	let v = match s 'm'
+		blank gives false
+		set(b) gives b
+	end 'm'
+	if v 'yes'
+		return 7
+	end 'yes'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
+### A synthesized member of `.unionCases` is NOT reachable across a file boundary
+
+<!-- test: error.union-cases-companion-equals-is-not-callable-cross-file -->
+⛔ **A CARVE-OUT, AND IT IS DELIBERATE: YOU CANNOT EXPORT A MEMBER THAT DOES NOT EXIST.** Every
+other compiler-synthesized `clone`/`equals`/`hash` takes its declaring type's visibility — see
+`specs/export-keyword.md`'s *"A member the COMPILER wrote is as visible as the type it belongs to"*.
+The `.unionCases` companion is the one exception, because `EnsureUnionCasesCompanion` registers its
+`hash` and `equals` as STUBS and nothing ever builds their bodies: the emitted module contains
+`func @Shape.unionCases.equals(self: i64, other: i64) -> i1 { }`, and calling it panics with a nil
+dereference. Giving those stubs the union's visibility would turn this compile-time refusal into a
+runtime call into an empty function, which is strictly worse than refusing. The refusal stands until
+the companion has real bodies.
+```maxon
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+// --- file: b.maxon
+export function tagOf(s Shape) returns Shape.unionCases
+	return match s 'm'
+		circle gives Shape.unionCases.circle
+		square gives Shape.unionCases.square
+	end 'm'
+end 'tagOf'
+
+// --- file: c.maxon
+function main() returns ExitCode
+	let a = tagOf(Shape.circle(1))
+	let b = tagOf(Shape.square(2))
+	if a.equals(b) 'same'
+		return 1
+	end 'same'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/union-cases/error.union-cases-companion-equals-is-not-callable-cross-file.test:22:7: function 'Shape.unionCases.equals' is not exported
 ```

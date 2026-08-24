@@ -3885,26 +3885,48 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// registered for it is `feature.Crate.clone`.
   /// </summary>
   private AliasReach ReachOfLocalType(string typeName) {
-    if (_isStdlib || _exportedTypes.Contains(typeName) || _exportedTypeAliases.Contains(typeName))
-      return AliasReach.Program;
-    if (_moduleVisibleTypes.Contains(typeName)) return AliasReach.Subtree;
+    if (_isStdlib) return AliasReach.Program;
 
-    // `_locallyDefinedTypes` is NOT the test: it is filled by the STRUCT pre-scan only, so a union
-    // declared right here reads false in it. The registry entry's own source file covers both.
-    return _typeRegistry.TryGetValue(typeName, out var declared)
-        && declared.SourceFilePath == _sourceFilePath
+    bool isExported = _exportedTypes.Contains(typeName) || _exportedTypeAliases.Contains(typeName);
+    bool isModuleVisible = _moduleVisibleTypes.Contains(typeName)
+      || _moduleVisibleTypeAliases.Contains(typeName);
+    if (isExported || isModuleVisible) return AliasScope.ReachOf(isExported, isModuleVisible);
+
+    // ⚠ NO MODIFIER RECORDED HERE HAS TWO VERY DIFFERENT CAUSES AND THEY MUST NOT SHARE AN ANSWER.
+    // Either the name has no DECLARATION at all — a tuple, a generic instance, anything minted after
+    // parsing — in which case there is nothing to inherit and its members must stay reachable
+    // wherever the type is; or the name IS declared and this parser simply never read that
+    // declaration, which is the `.unionCases` companion, materialized on demand by whichever file
+    // mentions it first and carrying the UNION's source file. A parser that did not read the
+    // modifiers may not GUESS the wide one.
+    //
+    // ⛔ IT USED TO ASK `declared.SourceFilePath == _sourceFilePath` AND ANSWER `Program` OTHERWISE,
+    // WHICH MADE THE RESULT DEPEND ON WHO ASKED FIRST: for the companion, the declaring file got
+    // `File` and any other file got `Program` — one source, two answers, decided by parse order.
+    // The question is now about the DECLARATION rather than about the asker, so it cannot vary.
+    return _typeRegistry.TryGetValue(typeName, out var declared) && declared.SourceFilePath != null
       ? AliasReach.File
       : AliasReach.Program;
   }
 
   /// <summary>
-  /// Register a member NOBODY WROTE — `clone`, `equals`, `hash` — on behalf of the type declared as
-  /// <paramref name="typeName"/>, and give it that type's own visibility.
+  /// Register a member NOBODY WROTE — `clone`, `equals`, `hash` — under <paramref name="memberName"/>,
+  /// as far-reaching as <paramref name="reach"/> says.
   ///
-  /// ⭐ IT IS THE ONE PLACE THAT DECISION IS MADE, and it has to be, because a synthesized member is
-  /// registered TWICE: once as a body-less stub during pre-scan, so a call to it can resolve, and
-  /// again when its body is built, which REPLACES the stub with a fresh function. A flag set only on
-  /// the stub is dropped by the rebuild.
+  /// ⭐ IT IS THE ONE PLACE THE PARSER MAKES THAT DECISION, and it has to be, because a synthesized
+  /// member is registered TWICE: once as a body-less stub during pre-scan, so a call to it can
+  /// resolve, and again when its body is built, which REPLACES the stub with a fresh function. A
+  /// flag set only on the stub is dropped by the rebuild.
+  ///
+  /// ⚠ THE REACH IS A PARAMETER, NOT A LOOKUP, so a caller that must NOT inherit the type's
+  /// visibility says so in one word at its own call site instead of arranging for a table to answer
+  /// narrowly — see <see cref="EnsureUnionCasesCompanion"/>, whose stubs never get bodies.
+  ///
+  /// ⚠ THE THREE PRE-REGISTER CALLERS ARE NOT THE AUTHORITY WHERE A REBUILD RUNS, AND ARE WHERE IT
+  /// DOES NOT. `SynthesizeDeclaredClone`, `SynthesizeStructEquals` and `SynthesizeEnumHashAndEquals`
+  /// REPLACE the stub, so for every type whose body is built the rebuild's reach is the one that
+  /// survives and the stub's is dead. The companion is the live counter-example: nothing rebuilds it,
+  /// so its stub's reach is the only one there is. Both must therefore be right.
   ///
   /// ⚠ REGISTERED WITH NEITHER FLAG — which is what all six sites did — A SYNTHESIZED MEMBER IS
   /// FILE-PRIVATE, and <see cref="IsFunctionVisible"/> refused `h.clone()` one file over with
@@ -3915,10 +3937,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// with no field-wise fallback, so they are ONE call — and settles the visibility the same way,
   /// reading `let visibility = st.visibility` off the declaring struct
   /// (<c>Compiler/Parser.maxon:19735</c>).
+  ///
+  /// ⚠ ONE SYNTHESIZED CLONER DOES NOT COME THROUGH HERE AND IS NOT MEANT TO:
+  /// <see cref="Passes.CloneSynthesisPass"/> builds cloners for types minted AFTER parsing — a
+  /// tuple, a generic instance — which no file declares, so there is no declaration whose reach
+  /// they could take. It states `IsExported` itself, with its own reason beside it.
   /// </summary>
-  private IrFunction<MaxonOp> AddSynthesizedMember(IrModule<MaxonOp> module, string typeName,
+  private IrFunction<MaxonOp> AddSynthesizedMember(IrModule<MaxonOp> module, AliasReach reach,
       string memberName, List<string> paramNames, List<IrType> paramTypes, IrType returnType) {
-    var reach = ReachOfLocalType(typeName);
     var func = new IrFunction<MaxonOp>(memberName, paramNames, paramTypes, returnType, null) {
       SourceFilePath = _sourceFilePath,
       IsExported = reach == AliasReach.Program,
@@ -3937,7 +3963,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var cloneName = $"{QualifiedInNamespace(typeName)}.{ManagedElementCopy.CloneMethodName}";
     if (module.FindFunctionByExactName(cloneName) != null) return;
 
-    AddSynthesizedMember(module, typeName, cloneName,
+    AddSynthesizedMember(module, ReachOfLocalType(typeName), cloneName,
       [CloneBodySynthesis.SelfParamName], [selfType], selfType);
   }
 
@@ -3956,7 +3982,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var equalsName = $"{QualifiedInNamespace(typeName)}.{EqualsMethodName}";
     if (module.FindFunctionByExactName(equalsName) != null) return;
 
-    AddSynthesizedMember(module, typeName, equalsName,
+    AddSynthesizedMember(module, ReachOfLocalType(typeName), equalsName,
       ["self", "other"], [selfType, selfType], IrType.I1);
   }
 
@@ -4695,9 +4721,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     };
     _typeRegistry[enumName] = finalEnumType;
 
-    // Pre-register synthetic hash() and equals() methods for enums (not unions)
+    // Pre-register synthetic hash() and equals() methods for enums (not unions). The reach comes
+    // from the modifiers in hand, not from `_exportedTypes`/`_moduleVisibleTypes` — those are filled
+    // a few lines BELOW, so reading them here would call every `export enum` file-private.
     if (!isUnion) {
-      PreRegisterSyntheticEnumMethods(module, enumName, finalEnumType);
+      PreRegisterSyntheticEnumMethods(module, AliasScope.ReachOf(isExported, isModuleVisible),
+        enumName, finalEnumType);
     }
 
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
@@ -4733,7 +4762,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       IsUnion = false
     };
     _typeRegistry[companionName] = companionType;
-    PreRegisterSyntheticEnumMethods(module, companionName, companionType);
+
+    // ⛔ THE COMPANION'S SYNTHESIZED MEMBERS ARE FILE-PRIVATE ON PURPOSE: YOU CANNOT EXPORT A MEMBER
+    // THAT DOES NOT EXIST. Every other compiler-synthesized `clone`/`equals`/`hash` inherits its
+    // declaring type's visibility, and these deliberately do not, because the stubs registered on the
+    // next line are the ONLY thing that ever exists for them — `SynthesizeEnumHashAndEquals` is
+    // reached from `ParseEnumDecl` alone and the companion is never "declared", so the emitted module
+    // really does contain `func @U.unionCases.equals(self: i64, other: i64) -> i1 { }`. Giving them
+    // the union's reach turns a compile-time `E3008` into a runtime call into an empty body, which is
+    // strictly worse than refusing: measured, a cross-file `.equals()` on a companion value went from
+    // refused to a nil-dereference panic. `AliasReach.File` here keeps the refusal until the bodies
+    // exist, and the case that holds it is `specs/union-cases.md`'s
+    // `error.union-cases-companion-equals-is-not-callable-cross-file`.
+    PreRegisterSyntheticEnumMethods(module, AliasReach.File, companionName, companionType);
     if (_exportedTypes.Contains(union.Name)) _exportedTypes.Add(companionName);
     if (_moduleVisibleTypes.Contains(union.Name)) _moduleVisibleTypes.Add(companionName);
     return companionType;
@@ -4935,20 +4976,27 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// <summary>
   /// Pre-register synthetic hash() and equals() method signatures for enums.
   /// These are registered during pre-scan so monomorphization can find them.
+  ///
+  /// ⚠ <paramref name="reach"/> IS PASSED IN RATHER THAN LOOKED UP, because neither caller can be
+  /// served by a lookup at the moment it calls. `ParseEnumDecl` runs BEFORE `_exportedTypes.Add`, so
+  /// a table read here would call every `export enum` file-private and only the later rebuild would
+  /// mask it; it holds the modifiers itself and hands them over. `EnsureUnionCasesCompanion` needs
+  /// the opposite of what the tables would say, deliberately — see its own note.
   /// </summary>
-  private void PreRegisterSyntheticEnumMethods(IrModule<MaxonOp> module, string enumName, IrEnumType enumType) {
+  private void PreRegisterSyntheticEnumMethods(IrModule<MaxonOp> module, AliasReach reach,
+      string enumName, IrEnumType enumType) {
     var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? enumName : $"{namespace_}.{enumName}";
 
     // hash() -> int
     var hashName = $"{qualifiedTypeName}.{HashMethodName}";
     if (module.FindFunctionByExactName(hashName) == null)
-      AddSynthesizedMember(module, enumName, hashName, ["self"], [(IrType)enumType], IrType.I64);
+      AddSynthesizedMember(module, reach, hashName, ["self"], [(IrType)enumType], IrType.I64);
 
     // equals(other Self) -> bool
     var equalsName = $"{qualifiedTypeName}.{EqualsMethodName}";
     if (module.FindFunctionByExactName(equalsName) == null)
-      AddSynthesizedMember(module, enumName, equalsName,
+      AddSynthesizedMember(module, reach, equalsName,
         ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1);
   }
 
@@ -7375,7 +7423,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (stub == null || stub.Body.Blocks.Count > 0) return;
 
     module.RemoveFunction(stub);
-    var cloneFunc = AddSynthesizedMember(module, typeName, cloneName,
+    var cloneFunc = AddSynthesizedMember(module, ReachOfLocalType(typeName), cloneName,
       [CloneBodySynthesis.SelfParamName], [selfType], selfType);
 
     // A member type may live in a different namespace than the type being synthesized (a
@@ -7401,7 +7449,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (equalsFunc.Body.Blocks.Count > 0) return;
 
     module.RemoveFunction(equalsFunc);
-    equalsFunc = AddSynthesizedMember(module, typeName, equalsName,
+    equalsFunc = AddSynthesizedMember(module, ReachOfLocalType(typeName), equalsName,
       ["self", "other"], [(IrType)structType, (IrType)structType], IrType.I1);
     var block = equalsFunc.Body.AddBlock("entry");
 
@@ -7491,7 +7539,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var hashFunc = module.FindFunctionByExactName(hashName)
       ?? throw new InvalidOperationException($"Expected hash stub for {qualifiedTypeName}");
     module.RemoveFunction(hashFunc);
-    hashFunc = AddSynthesizedMember(module, enumName, hashName,
+    hashFunc = AddSynthesizedMember(module, ReachOfLocalType(enumName), hashName,
       ["self"], [(IrType)enumType], IrType.I64);
     var hashBlock = hashFunc.Body.AddBlock("entry");
 
@@ -7528,7 +7576,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var equalsFunc = module.FindFunctionByExactName(equalsName)
       ?? throw new InvalidOperationException($"Expected equals stub for {qualifiedTypeName}");
     module.RemoveFunction(equalsFunc);
-    equalsFunc = AddSynthesizedMember(module, enumName, equalsName,
+    equalsFunc = AddSynthesizedMember(module, ReachOfLocalType(enumName), equalsName,
       ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1);
     var equalsBlock = equalsFunc.Body.AddBlock("entry");
 

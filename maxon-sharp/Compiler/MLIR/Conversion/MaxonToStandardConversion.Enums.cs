@@ -325,11 +325,14 @@ public static partial class MaxonToStandardConversion {
       if (hasExtraArgs && caseHasAssocValues) {
         for (int ai = 0; ai < enumCase.AssociatedValues!.Count; ai++) {
           var avArg = tryCallOp.Args[1 + ai];
-          var avStdVal = valueMap[avArg];
+          // Branchless case selection makes this a SELECT rather than a store, and a select is an
+          // i64 operation — so the payload is widened into the slot's representation here instead of
+          // being stored at its own type the way the direct construct stores it.
+          var avStdVal = EmitPayloadAsSlotBits(block, valueMap[avArg]);
           int byteOffset = UnionPayloadOffset(ai);
           var currentPayload = new StdLoadIndirectOp(enumPtr, byteOffset, IrType.I64);
           block.AddOp(currentPayload);
-          var selectPayload = new StdSelectI64Op(isMatch, (StdI64)avStdVal, (StdI64)currentPayload.Result);
+          var selectPayload = new StdSelectI64Op(isMatch, avStdVal, (StdI64)currentPayload.Result);
           block.AddOp(selectPayload);
           block.AddOp(new StdStoreIndirectOp(selectPayload.Result, enumPtr, byteOffset, IrType.I64));
         }

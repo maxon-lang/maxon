@@ -625,7 +625,7 @@ public static partial class MaxonToStandardConversion {
   /// int, a heap pointer, and a narrowed scalar all occupy the whole slot, and a `bool` is stored
   /// widened and converted back with `!= 0` at the read. A float is the exception, and the only one.
   ///
-  /// ⚠ ALL THREE SITES — CONSTRUCT, EXTRACT AND WRITE-BACK — NAMED IT `i64` UNCONDITIONALLY, AND
+  /// ⚠ THREE SITES — CONSTRUCT, EXTRACT AND WRITE-BACK — NAMED IT `i64` UNCONDITIONALLY, AND
   /// THE FRONT END ACCEPTS A FLOAT PAYLOAD, so the refusal arrived from the far end of the pipeline
   /// or not at all: the construct asked the register allocator for a general-purpose home for a
   /// value that only ever had an xmm one (`E9001: RegisterManager: value %N has no register and no
@@ -637,17 +637,37 @@ public static partial class MaxonToStandardConversion {
   /// is not needed here: <c>StdStoreIndirectOp</c>/<c>StdLoadIndirectOp</c> already carry a field
   /// type and both targets already implement `f64` for it, so naming the type IS the lowering.
   ///
+  /// ⚠ THIS RULE COVERS THE THREE SITES THAT STORE AT THE VALUE'S OWN TYPE. THERE IS A FOURTH,
+  /// and it is not one of them: <c>LowerEnumFromNameAssociated</c> selects between the slot's current
+  /// contents and the new value at RUNTIME, which is an i64 operation, so it widens through
+  /// <see cref="EmitPayloadAsSlotBits"/> instead of naming a slot type. Counting three was how the
+  /// fourth stayed broken after the other three were fixed.
+  ///
   /// ⚠ A FLOAT PAYLOAD IS `f64` WHATEVER ITS DECLARED RANGE, INCLUDING AN <c>f32</c>-RANGED ONE.
   /// The slot is eight bytes, and `float(f32.min to f32.max)` — the only way to spell a 32-bit
-  /// float, since bare `float32` is not a type — is MEASURED to arrive here as an <c>StdF64</c>, so
-  /// naming the slot `f32` would be a four-byte answer to an eight-byte value that no program can
-  /// reach. It would also be a store x64 cannot emit: <c>RegisterManager.EmitStoreIndirect</c>
-  /// throws on `f32` where arm64's dispatch handles it, a cross-target gap this rule must not walk
-  /// into. Store and load therefore agree at `f64` for BOTH float kinds, which is what makes them
-  /// unable to disagree.
+  /// float, since bare `float32` is not a type — is MEASURED to arrive here as an <c>StdF64</c>.
+  /// <c>Float32</c> therefore THROWS rather than answering: `f32` would be a store x64 cannot encode
+  /// (<c>RegisterManager.EmitStoreIndirect</c> throws on it where arm64's dispatch handles it) and
+  /// `f64` would be an eight-byte move of a four-byte value, silently wrong. Neither is a default
+  /// worth having for an arm nothing can reach; whoever makes it reachable decides the width.
+  ///
+  /// ⚠ THE EXTRACT AND THE STORES ASK DIFFERENT SOURCES AND THEY DISAGREE ON PURPOSE, HARMLESSLY.
+  /// The extract reads the front end's <c>MaxonValueKind</c>; the stores read the lowered value. A
+  /// SYNTHESIZED clone takes neither route — <see cref="Passes.CloneBodySynthesis"/> deliberately
+  /// labels every scalar payload <c>Integer</c> — so a cloned float payload is moved as `i64` bits
+  /// and read back as `f64` by user code. Both are eight-byte moves of the same eight bytes, so the
+  /// value round-trips; see that file's own note for why the clone side does it that way.
   /// </summary>
-  private static IrType UnionPayloadSlotType(MaxonValueKind payloadKind) =>
-    payloadKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? IrType.F64 : IrType.I64;
+  private static IrType UnionPayloadSlotType(MaxonValueKind payloadKind) => payloadKind switch {
+    MaxonValueKind.Float => IrType.F64,
+    MaxonValueKind.Float32 => throw new InvalidOperationException(
+      "union payload slot: a 32-bit float reached a payload slot, which no program can currently "
+      + "produce - `float(f32.min to f32.max)` is lowered as an f64 and arrives as an StdF64. "
+      + "Answering f64 here would move 8 bytes of a 4-byte value and answering f32 would emit a "
+      + "store x64 cannot encode, so the slot's width has to be DECIDED before this arm is filled "
+      + "in rather than guessed here."),
+    _ => IrType.I64
+  };
 
   /// <summary>
   /// The same rule asked of an ALREADY-LOWERED payload, which is what the two STORE sites hold. A
@@ -657,7 +677,67 @@ public static partial class MaxonToStandardConversion {
   /// from that is the overload above's, once.
   /// </summary>
   private static IrType UnionPayloadSlotType(StdValue payload) =>
-    UnionPayloadSlotType(payload is StdF64 or StdF32 ? MaxonValueKind.Float : MaxonValueKind.Integer);
+    UnionPayloadSlotType(payload switch {
+      StdF64 => MaxonValueKind.Float,
+      StdF32 => MaxonValueKind.Float32,
+      _ => MaxonValueKind.Integer
+    });
+
+  /// <summary>
+  /// A scalar payload value in the slot's own <c>i64</c> REPRESENTATION, for the one construct site
+  /// that cannot store the value at its own type.
+  ///
+  /// ⭐ <c>U.fromName("case", args…)</c> picks the matching case at RUNTIME, so it writes every
+  /// slot branchlessly: load what is there, <c>arith.select</c> between that and the new value, store
+  /// the result. A select is an <c>i64</c> operation, so unlike the direct construct — which stores
+  /// the argument at whatever type it already has — this site has to bring the value INTO the slot's
+  /// representation first.
+  ///
+  /// ⚠ IT USED TO DO THAT WITH A HARD <c>(StdI64)</c> CAST, so every payload whose lowered value is
+  /// not already an <c>StdI64</c> died in the conversion with an unhandled .NET cast reported as
+  /// `E9001 ... Unable to cast object of type 'StdF64' to type 'StdI64'` — and `'StdBool'` for a
+  /// `bool`, which is the arm nobody reported. It is a WIDENING question, not a float question.
+  ///
+  /// A float is reinterpreted rather than converted, so the eight bytes the extract reads back as
+  /// `f64` are the ones the caller passed. A `bool` becomes 1 or 0, which is what the extract's
+  /// `!= 0` expects. A heap pointer is already an <c>StdI64</c> (<c>StdHeapPtr</c> derives from it)
+  /// and needs nothing.
+  /// </summary>
+  private static StdI64 EmitPayloadAsSlotBits(IrBlock<StandardOp> block, StdValue payload) {
+    switch (payload) {
+      case StdI64 alreadySlotWidth:
+        return alreadySlotWidth;
+
+      case StdF64 f: {
+        var bitcast = new StdBitcastF64ToI64Op(f);
+        block.AddOp(bitcast);
+        return bitcast.Result;
+      }
+
+      case StdBool b: {
+        var one = new StdConstI64Op(1);
+        block.AddOp(one);
+        var zero = new StdConstI64Op(0);
+        block.AddOp(zero);
+        var widened = new StdSelectI64Op(b, one.Result, zero.Result);
+        block.AddOp(widened);
+        return widened.Result;
+      }
+
+      case StdI32 i32: {
+        var ext = new StdExtI32ToI64Op(i32);
+        block.AddOp(ext);
+        return ext.Result;
+      }
+
+      default:
+        throw new InvalidOperationException(
+          $"union payload slot: no i64 representation for a payload lowered as "
+          + $"{payload.GetType().Name}. The slot is eight bytes and every scalar payload has to be "
+          + "widened into it; a new lowered value kind needs its widening written here rather than "
+          + "a cast that fails at the user.");
+    }
+  }
 
   /// True for a fused String type (conforms to BuiltinStringLiteral): a 48-byte record
   /// whose first 40 bytes are a __ManagedMemory, with singleByteGraphemesFlag at offset 40.
