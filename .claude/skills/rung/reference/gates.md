@@ -56,9 +56,27 @@ that emits them** — so they are minted at the periodic remote sync, **not at t
 merge for them, do not hand-edit them to look current, and **say in the rung report that the rung
 changed codegen and the arm64 goldens are therefore owed a mint.**
 
-⚠ **A FILTERED run's fragments are not authoritative:** the runner batches tests into a shared module
-and slices the IR per test, so literal-pool indices (`__str_N`, `__static_lit_N`) depend on *which*
-tests are in the batch. **Regenerate goldens only from an unfiltered run.**
+⚠ **A FILTERED run's fragments are not authoritative — IN THE BOOTSTRAP.** Its runner batches a
+spec's tests into a shared module and slices the IR per test, so literal-pool indices (`__str_N`,
+`__static_lit_N`) depend on *which* tests are in the batch. **Regenerate `specs/` goldens only from an
+unfiltered run.**
+
+⛔ **THAT IS FALSE OF shv2, AND THIS FILE ASSERTED IT OF BOTH — MEASURED AT `BATCH44`, 2026-08-23.**
+`maxon-shv2/Testing/SpecTestRunner.maxon:2904-2922` states the opposite invariant outright and names
+its other end: `runOneSpec` walks its selected tests ONE AT A TIME, `stageTest` puts that test's source
+on disk alone, and one `compileToProduct` compiles it — so **`--filter` cannot move a byte of any
+fragment it does not exclude, and a filtered `--update-required` regenerates exactly what an unfiltered
+one would.** `scripts/remote-mac.sh` RELIES on it to carry a filtered arm64 run's goldens home, and
+excludes the C# suite for precisely the reason shv2 needs no exclusion. Twice measured: `BATCH44`'s 8
+re-minted x64-windows goldens came back **byte-identical** after a full unfiltered re-mint, and `G20`
+had already shown `--filter=<spec>` and `--filter=<spec>.<one test>` produce byte-identical output.
+
+⭐ **The reason it is worth stating rather than deleting**: since `G20` that independence is a property
+of the compiler's PER-COMPILE STATE, not of process isolation. Every test used to get its own `build`
+subprocess, which made the claim free; now hundreds of compiles share one worker, and what carries it
+is that each builds a fresh `Project` with every memo, interner and counter hanging off it. **If shv2
+ever compiles several tests together, this paragraph and `remote-mac.sh`'s exclusion list are the two
+ends of one invariant and must change together.**
 
 ---
 
