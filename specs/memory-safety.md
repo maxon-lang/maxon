@@ -3343,3 +3343,87 @@ end 'main'
 ```stdout
 untouched=tag
 ```
+
+### A field's record is reachable by more than the field
+
+A struct field holding a managed value hands out the SAME record to everything that reads it, and that
+record keeps answering after a write through the field, whoever performed the write. Both cases below
+say so, from the two places a second handle can come from: a binding taken before the write, and a
+parameter of a function that performs the write by another route to the same object.
+
+They are language facts, not compiler bookkeeping, and they are pinned because they bound what an
+optimizer may do with such a field. A compiler that swapped the field's record at a write — the way a
+copy-on-write anchor does by hand — would have to prove neither handle exists, which means proving a
+handle is DEAD at the write, not merely that it is the only one visible from where the write is
+written. In the second case the handle is not even bound to a name: it is an argument.
+
+<!-- test: field-record-is-seen-through-a-binding-taken-before-the-write -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Holder
+	export var sites as IntArray
+
+	static function create() returns Self
+		return Self{sites: IntArray.create()}
+	end 'create'
+
+	public function add(x Integer)
+		sites.push(x)
+	end 'add'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	var borrowed = h.sites
+	h.add(1)
+	print("borrowed={borrowed.count()} field={h.sites.count()} same={borrowed is h.sites}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+borrowed=1 field=1 same=true
+```
+
+<!-- test: field-record-is-seen-through-a-parameter-across-the-write -->
+`through` is handed the column and the holder separately, and writes through the holder. The column it
+was given is the very record that write lands on, so it reads the new count — and nothing in `through`
+or in `add` names the column and the field together.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Holder
+	export var sites as IntArray
+
+	static function create() returns Self
+		return Self{sites: IntArray.create()}
+	end 'create'
+
+	public function add(x Integer)
+		sites.push(x)
+	end 'add'
+end 'Holder'
+
+function through(col IntArray, holder Holder) returns Integer
+	holder.add(1)
+	return col.count()
+end 'through'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	let seen = through(h.sites, holder: h)
+	print("param saw={seen} field={h.sites.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+param saw=1 field=1
+```
