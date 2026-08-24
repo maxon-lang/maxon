@@ -110,6 +110,26 @@ neither can you. `rung-finish.sh` refuses to close a rung that wrote no row (or 
 and the CPU column does not cure it — `regalloc:splitting`'s float-across-calls quadratic was hidden
 because the corpus's `floatSpill` knob was **4**, few enough that every float fit a register.
 
+### ⚖ A GOLDEN ON A LANE THAT CANNOT RUN ITS CASE: **DELETE THE GOLDEN, DO NOT WIDEN THE MARKER**
+
+**User ruling, 2026-08-24, taken at `BATCH44` over 25 such files** (`<!-- targets: x64-windows -->`
+async cases carrying goldens on three lanes that can never select them, plus one `mm-trace` case
+whose capture is x64-windows-only *by derivation* — there is no marker on that one to widen).
+
+**The `targets:` marker is the AUTHOR'S CLAIM about where a case runs. The golden is downstream of
+it.** Widening a marker so an orphaned golden acquires something to compare against is *asserting a
+case runs on a lane* in order to tidy bookkeeping — which is turning a gate green by changing what it
+tests, one level removed. **The marker is right; the golden is the error.**
+
+⚠ **A golden on a lane that can never compare it is worse than absent**: it is unmintable,
+uncomparable, and it pads every count that a real absence would otherwise show up in. It is the
+ORPHANED shape of the same family as ABSENT, STALE and UNCOMPARED — see the census in
+`Testing/GoldenTracking.maxon`, which now reports all four.
+
+⭐ **The converse still needs a reason, and stays available**: if a case genuinely *should* run on
+more lanes, widen the marker **as a coverage decision, argued on its merits**, and let the goldens
+follow. What is refused is widening it *because* a golden was sitting there.
+
 ---
 
 ## The CROSS-TARGET gate, and the arm64 trade
