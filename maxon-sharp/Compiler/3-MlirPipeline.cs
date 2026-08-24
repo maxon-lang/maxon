@@ -76,13 +76,11 @@ public class IrPipeline {
       module.StaticEligibleLiteralIds = LiteralCoverageAnalysisPass.Run(module, report: Compiler.LiteralCoverage);
     }
 
-    // Static-literal escape analysis (ALWAYS runs — it is the eligibility the lowering below
-    // consumes to emit shared immortal .data records for never-mutated string/byte/char
-    // literals). Runs after monomorphization + DFE so it sees the concrete, reachable literal
-    // set, and before lowering so literals are still MaxonStringLiteralOp etc. Under
-    // `--literal-coverage` it ALSO prints the coverage report to stderr (measurement only);
-    // the report flag changes nothing the lowering reads. The pass is a whole-program union
-    // find + call-graph fixpoint — linear in program size and cheap (see litStatic timing).
+    // Why LiteralCoverageAnalysisPass sits HERE (what it decides is stated in its own doc, once):
+    // after monomorphization + DFE so it sees the concrete, reachable site set, after
+    // ConstantArrayAnalysisPass so the empty-container factories it counts calls to are known, and
+    // before lowering so literals are still MaxonStringLiteralOp etc. It is a whole-program union
+    // find + call-graph fixpoint — linear in program size and cheap (see the litStatic timing).
 
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {

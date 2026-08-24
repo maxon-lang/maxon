@@ -5,11 +5,12 @@ using MaxonSharp.Compiler.Ir.Dialects;
 namespace MaxonSharp.Compiler.Ir.Passes;
 
 /// <summary>
-/// MEASUREMENT-ONLY pass (behind the `--literal-coverage` flag) that estimates what
-/// fraction of string / byte-string / character LITERAL sites are provably
-/// never-mutated, and could therefore be lowered to an immortal record in read-only
-/// data instead of a heap allocation. It prints a report to stderr and changes
-/// NOTHING about the emitted program — it sets no properties the lowering reads.
+/// Whole-program escape analysis deciding which managed sites — string, byte-string, character and
+/// constant-array LITERALS, and the CALL that returns a constant empty container — are provably
+/// never written through, and may therefore be lowered to ONE shared immortal record instead of a
+/// per-evaluation heap allocation. It ALWAYS runs: its result is `IrModule.StaticEligibleLiteralIds`,
+/// which the lowering reads. Only the coverage REPORT it prints to stderr is behind the
+/// `--literal-coverage` flag.
 ///
 /// A managed literal is "static-eligible" when its value never flows to an in-place
 /// mutation of its backing record. Mutation reaches a value through:
@@ -20,7 +21,10 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 ///     call-graph fixpoint);
 ///   - being returned from a function whose result some caller mutates;
 ///   - being captured by / passed to a closure, indirect, or async call
-///     (conservatively assumed to mutate — counts AGAINST static-eligibility).
+///     (conservatively assumed to mutate — counts AGAINST static-eligibility);
+///   - being STORED INTO A HEAP PLACE — a struct field, an array slot, an enum payload,
+///     a mutable global — from where anything can fetch it back out and write through it.
+///     See AddEscapeSink, which lists what every one of those doors was measured doing.
 ///
 /// Flow WITHIN a function is tracked by a Steensgaard-style union-find over both SSA
 /// values and named variables. Assignments, var loads, `.managed` field access, and
@@ -49,7 +53,21 @@ public static class LiteralCoverageAnalysisPass {
     "__managed_mem_append", "__managed_mem_clear",
   ];
 
-  private enum LitKind { String, ByteString, Char, Array }
+  // The one builtin in that set that STORES A VALUE into a container slot, and where that value sits.
+  // `set_byte` stores a primitive and `append` copies its source's bytes rather than storing it, so
+  // neither puts a record anywhere the value graph cannot follow.
+  private const string ElementStoreBuiltinCallee = "__managed_mem_set";
+  private const int ElementStoreValueArgIndex = 2;
+
+  // The field on a fused managed wrapper (String/Character/Array) that IS the record itself since the
+  // envelope collapse: reading or writing it is aliasing, not a store into a place.
+  private const string ManagedWrapperFieldName = "managed";
+
+  // The kinds of site whose record can be shared. EmptyContainer is a CALL rather than a literal
+  // op: `Array.create()` is the only way a program can spell an empty container (the language
+  // refuses `Array{}` outside the type), and the record such a factory returns is a compile-time
+  // constant.
+  private enum LitKind { String, ByteString, Char, Array, EmptyContainer }
 
   private enum Reason { Eligible, MutatingIntrinsicTarget, PassedToMutatingParam, ConservativeIndirect, Aliased }
 
@@ -94,14 +112,38 @@ public static class LiteralCoverageAnalysisPass {
     private readonly Dictionary<string, HashSet<int>> _mutatingParams = [];
     private readonly HashSet<string> _callerMutatesResult = [];
 
+    // Callee SPELLING -> the function name the lowering will actually call. MaxonToStandardConversion's
+    // ResolveCallee takes an exact function name, and failing that ANY function whose name ends in
+    // `.<callee>` — the cross-namespace call under directory-as-module, where `String.clone` reaches
+    // `stdlib.String.clone`. This analysis has to resolve a callee the same way or its facts land under
+    // a name nothing reads: a mutating parameter would go unrecorded and a value written through it
+    // would come out static-eligible. Every entry is seeded once, so a lookup stays O(1) — the walk
+    // ResolveCallee does per unresolved call would be a scan of every function at every call site.
+    private readonly Dictionary<string, string> _canonicalCallee = [];
+
     public Analysis(IrModule<MaxonOp> module) {
       _module = module;
       _funcByName = new Dictionary<string, IrFunction<MaxonOp>>(module.Functions.Count);
       foreach (var f in module.Functions) {
         _funcByName[f.Name] = f;
         _mutatingParams[f.Name] = [];
+        _canonicalCallee[f.Name] = f.Name;
+      }
+      // Suffixes second, and only where no function OWNS that spelling — an exact name always wins,
+      // exactly as ResolveCallee tries the dictionary before the suffix walk. TryAdd then keeps
+      // module order, which is the order ResolveCallee's FirstOrDefault picks from.
+      foreach (var f in module.Functions) {
+        for (int dot = f.Name.IndexOf('.'); dot >= 0; dot = f.Name.IndexOf('.', dot + 1)) {
+          _canonicalCallee.TryAdd(f.Name[(dot + 1)..], f.Name);
+        }
       }
     }
+
+    /// The function name <paramref name="callee"/> denotes, or the spelling itself when this module
+    /// has no such function — a managed-memory/socket/file builtin, which the lowering intercepts
+    /// before it ever resolves a callee, and which this pass classifies by name of its own.
+    private string CanonicalCallee(string callee) =>
+      _canonicalCallee.TryGetValue(callee, out var name) ? name : callee;
 
     // ---- union-find ----
     private int Find(int x) {
@@ -231,12 +273,11 @@ public static class LiteralCoverageAnalysisPass {
           // global is immutable, so its initializer stays eligible. Mirrors the IsMutable guard on
           // constant array literals.
           if (_module.GlobalVarInfos.TryGetValue(gs.GlobalName, out var gvi) && gvi.Mutable) {
-            ctx.IntrinsicSinks.Add(ValueNode(gs.Value.Id));
-            ctx.IntrinsicSinkValueIds.Add(gs.Value.Id);
+            AddSink(ctx, gs.Value.Id);
           }
           break;
         case MaxonFieldAccessOp fa when fa.Result != null:
-          if (fa.FieldName == "managed") {
+          if (fa.FieldName == ManagedWrapperFieldName) {
             // self.managed IS the record (post envelope-collapse).
             Union(ValueNode(fa.StructValue.Id), ValueNode(fa.Result.Id));
           }
@@ -245,31 +286,53 @@ public static class LiteralCoverageAnalysisPass {
           // self so a peer struct's `other.F` never merges into self's `F`.
           if (ctx.SelfParamNode >= 0 && Find(ValueNode(fa.StructValue.Id)) == Find(ctx.SelfParamNode)) {
             Union(ValueNode(fa.Result.Id), VarNode(f.Name, fa.FieldName));
+            // That destructured name IS the field, so it is a heap PLACE, and `F = v` inside the
+            // method stores into it — but it is spelled as a plain assign to a local (there is no
+            // MaxonFieldAssignOp to sink at; see the IR for `function reset() -> items = X`). The
+            // sink therefore goes on the binding, which is the only op that names the field at all.
+            // MEASURED: two `Holder`s whose `reset()` assigned `items = IntArray.create()` shared ONE
+            // immortal record, and pushing through one published the other's count as 1, and leaked.
+            // A method that never WRITES the field pays nothing for this, and needs no guard saying
+            // so: only an assign unions a value into the name's component, so with no assign there is
+            // no literal site in it to mark. (Guarding on it was tried and MEASURED to change nothing
+            // — 3295 golden `mm_alloc` sites either way.) `managed` is excluded above for the usual
+            // reason: a wrapper IS its record, so that access is aliasing rather than a place.
+            if (fa.FieldName != ManagedWrapperFieldName) AddSink(ctx, fa.Result.Id);
           }
           break;
+        // --- enum payload slots: a heap place, exactly like a struct field ---
+        case MaxonEnumConstructOp ec:
+          // MEASURED: `var a = Box.named("tag")` then `match a { named(n) then n.append("!") }` made an
+          // untouched `let t = "tag"` read "tag!", and the same shape holding an empty `Array.create()`
+          // published an untouched sibling's count as 1. Both leaked. See AddEscapeSink.
+          foreach (var payload in ec.Args) AddEscapeSink(ctx, payload);
+          break;
+        case MaxonEnumPayloadAssignOp epa:
+          AddEscapeSink(ctx, epa.NewValue);
+          break;
+
+        case MaxonFieldAssignOp fasgn:
+          // `h.field = v` is the same store the struct literal below performs, one syntax over — and
+          // it was the door the empty-container record walked through: `StringBuilder.build()` resets
+          // with `self.bytes = ByteArray.create()`. `managed` is the exception for the same reason it
+          // is there: post envelope-collapse a wrapper IS its record, so writing it is aliasing.
+          if (fasgn.FieldName == ManagedWrapperFieldName) {
+            Union(ValueNode(fasgn.StructValue.Id), ValueNode(fasgn.NewValue.Id));
+          } else {
+            AddEscapeSink(ctx, fasgn.NewValue);
+          }
+          break;
+
         case MaxonStructLiteralOp sl:
           foreach (var (fieldName, value) in sl.FieldValues) {
-            if (fieldName == "managed") {
+            if (fieldName == ManagedWrapperFieldName) {
               // String{managed: X} / ByteArray{managed: X} aliases X (zero-copy). The wrapper IS its
               // __ManagedMemory since the envelope collapse, so this is identity, not storage.
               Union(ValueNode(sl.Result.Id), ValueNode(value.Id));
             } else {
-              // ...but stored into ANY OTHER field, a literal escapes this per-function analysis, for
-              // exactly the reason a mutable global does (see the GlobalStore sink above): whoever
-              // holds the struct can mutate the field in place -- `h.name.append("!")` -- and the local
-              // var graph cannot see it. Left eligible, the literal stays a shared immortal record, and
-              // `append` grows it: `ensure_cap` sees capacity == -2, detaches, and writes the fresh
-              // buffer INTO THE SHARED STATIC RECORD. Every other occurrence of that literal in the
-              // program then reads the mutated bytes, and the buffer leaks because an immortal record's
-              // destructor is 0. Both were REAL: `var h = Holder.create("fld"); h.name.append("!")`
-              // corrupted an untouched `let x = "fld"` to "fld!" and exited 101.
-              //
-              // The .rodata safety net the plan specified does not exist to catch this -- static records
-              // live in WRITABLE .data, because a data->data pointer cannot be baked under ASLR
-              // (__module_init fills buffer@0 with a RIP-relative lea). So the write succeeds silently.
-              // This sink is the guard.
-              ctx.IntrinsicSinks.Add(ValueNode(value.Id));
-              ctx.IntrinsicSinkValueIds.Add(value.Id);
+              // ...but stored into ANY OTHER field, the value escapes into a heap place — see
+              // AddEscapeSink, which states the rule and what every door of it was measured doing.
+              AddEscapeSink(ctx, value);
             }
           }
           // An ARRAY literal is a literal site too: a never-mutated one can be a shared immortal
@@ -280,6 +343,15 @@ public static class LiteralCoverageAnalysisPass {
           // IsMutable guard). A managed array in a mutable global is instead caught by the
           // GlobalStore sink below, so it needs no special case here.
           if (sl.ArrayLiteralTag != null) {
+            // An array literal's ELEMENTS are stored into the array at construction, which is the same
+                  // escape a `set` is (see AddEscapeSink) — `["red","green"].get(0).append("!")`
+            // grew the shared literal and made an untouched `let r = "red"` read "red!". The elements
+            // reach the block as assigns to `<tag>.<i>` variables, so the SLOT is what gets sunk; a
+            // primitive element's slot costs nothing, since a primitive is never a literal site.
+            for (int slot = 0; slot < sl.ArrayLiteralCount; slot++) {
+              ctx.IntrinsicSinks.Add(VarNode(f.Name, $"{sl.ArrayLiteralTag}.{slot}"));
+            }
+
             bool constMutableGlobal =
               _module.ConstantArrayLiterals.TryGetValue(sl.Result.Id, out var cai) && cai.IsMutable;
             if (!constMutableGlobal)
@@ -293,7 +365,11 @@ public static class LiteralCoverageAnalysisPass {
           break;
 
         // --- dedicated mutating managed-mem ops: receiver is operand 0 ---
-        case MaxonManagedMemSetOp:
+        case MaxonManagedMemSetOp setOp:
+          AddSink(ctx, setOp.ManagedStruct.Id);
+          AddEscapeSink(ctx, setOp.Value);
+          break;
+
         case MaxonManagedMemGrowOp:
         case MaxonManagedMemSetLengthOp:
         case MaxonManagedMemClearOp:
@@ -301,11 +377,7 @@ public static class LiteralCoverageAnalysisPass {
         case MaxonManagedMemRemoveOp:
         case MaxonManagedMemByteSetOp:
         case MaxonManagedMemAppendOp:
-          if (op.Operands.Count > 0) {
-            var recv = op.Operands[0].Id;
-            ctx.IntrinsicSinks.Add(ValueNode(recv));
-            ctx.IntrinsicSinkValueIds.Add(recv);
-          }
+          if (op.Operands.Count > 0) AddSink(ctx, op.Operands[0].Id);
           break;
 
         // --- indirect / async: every arg conservatively mutated ---
@@ -338,13 +410,51 @@ public static class LiteralCoverageAnalysisPass {
           // Var loads (VarRef/StructVarRef/FunctionVarRef/EnumVarRef): the loaded
           // value flows out of the variable. Handled generically so a new loader op
           // participates without a code change here.
-          if (op is IReadsVarByName reader && op is not MaxonEnumPayloadAssignOp) {
+          if (op is IReadsVarByName reader) {
             foreach (var res in op.Results) {
               Union(VarNode(f.Name, reader.ReadVarName), ValueNode(res.Id));
             }
           }
           break;
       }
+    }
+
+    private void AddSink(FuncCtx ctx, int valueId) {
+      ctx.IntrinsicSinks.Add(ValueNode(valueId));
+      ctx.IntrinsicSinkValueIds.Add(valueId);
+    }
+
+    /// A managed value STORED INTO A HEAP PLACE — a struct field, a container slot, a mutable global —
+    /// escapes this per-function value graph. Whoever holds the place can fetch the value back out and
+    /// mutate it IN PLACE (`h.name.append("!")`, `arr.get(0).append("!")`), and the graph cannot follow
+    /// that: it models values and named bindings, not places, and it cannot even tell which slot came
+    /// back. Left eligible, such a value stays a shared immortal record and the write GROWS it:
+    /// `ensure_cap` sees a non-owning capacity, detaches, and writes the fresh buffer INTO THE SHARED
+    /// RECORD. Every other occurrence of that value then reads the mutated bytes, and the buffer leaks,
+    /// because an immortal record's destructor is 0.
+    ///
+    /// The .rodata safety net the plan specified does not exist to catch this — static records live in
+    /// WRITABLE .data, since a data->data pointer cannot be baked under ASLR (__module_init fills
+    /// buffer@0 with a RIP-relative lea). The write succeeds silently. These sinks are the guard, and
+    /// every one of them is a MEASURED corruption, not a precaution:
+    ///   struct-literal field  `var h = Holder.create("fld"); h.name.append("!")` made an untouched
+    ///                         `let x = "fld"` read "fld!" and exited 101;
+    ///   container slot        `arr.push("lit")` then `arr.get(0).append("!")` did the same to
+    ///                         `let t = "lit"`;
+    ///   array-literal slot    `["red","green"]`, `get(0).append("!")` did the same to `let r = "red"`;
+    ///   field assign          two `StringBuilder`s shared the empty buffer `build()` resets to, and
+    ///                         appending to ONE published the OTHER's `byteLength()` as 3.
+    ///
+    /// ⇒ AN OP THAT STORES A MANAGED VALUE INTO A HEAP PLACE MUST SINK IT HERE. The graph cannot
+    /// discover such a store by itself, and what a missed one produces is silent heap corruption
+    /// rather than a diagnostic.
+    ///
+    /// A primitive is never a record and never a literal site, so only record-kind values are taken —
+    /// which also keeps an index, a count and a byte out of the mutated components entirely. And note
+    /// what is NOT a store: `sb.append(other)` COPIES its source's bytes rather than putting the source
+    /// anywhere, so only `set` puts a value in a container slot.
+    private void AddEscapeSink(FuncCtx ctx, MaxonValue value) {
+      if (value is MaxonStruct or MaxonEnum) AddSink(ctx, value.Id);
     }
 
     private void BindParam(IrFunction<MaxonOp> f, FuncCtx ctx, int index, string name, int valueId) {
@@ -355,18 +465,27 @@ public static class LiteralCoverageAnalysisPass {
     }
 
     private void BuildDirectCall(FuncCtx ctx, MaxonCallOp call) {
-      // Known mutating builtins: arg 0 is the mutated receiver.
+      // A call to a constant empty-container factory is a literal SITE as well as a call: the record
+      // it returns is a compile-time constant (see ConstantArrayAnalysisPass), so a site whose result
+      // is never written through can share one immortal copy of it. The site is the CALL, not the
+      // `Self{}` inside the shared factory body — deciding it there would let one caller's `push`
+      // disqualify every other caller. The call still becomes a CallSite below, so a caller that DOES
+      // write through its result still disqualifies the factory's own literal.
+      if (call.Result != null && _module.ConstantEmptyContainerFactories.ContainsKey(call.Callee)) {
+        ctx.Literals.Add((LitKind.EmptyContainer, call.Result.Id, Preview(call.Callee)));
+      }
+
+      // Known mutating builtins: arg 0 is the mutated receiver, and `set`'s arg 2 is a value stored
+      // INTO the container, which escapes for the reason AddEscapeSink states.
       if (MutatingBuiltinCallees.Contains(call.Callee)) {
-        if (call.Args.Count > 0) {
-          var recv = call.Args[0].Id;
-          ctx.IntrinsicSinks.Add(ValueNode(recv));
-          ctx.IntrinsicSinkValueIds.Add(recv);
-        }
+        if (call.Args.Count > 0) AddSink(ctx, call.Args[0].Id);
+        if (call.Callee == ElementStoreBuiltinCallee && call.Args.Count > ElementStoreValueArgIndex)
+          AddEscapeSink(ctx, call.Args[ElementStoreValueArgIndex]);
         return;
       }
 
       var site = new CallSite {
-        Callee = call.Callee,
+        Callee = CanonicalCallee(call.Callee),
         ArgNodes = new int[call.Args.Count],
         ArgValueIds = new int[call.Args.Count],
       };
@@ -521,7 +640,8 @@ public static class LiteralCoverageAnalysisPass {
     private static void AppendScope(StringBuilder sb, string name, Tally t) {
       sb.AppendLine(
         $"literal-coverage [{name}]: {t.Static}/{t.Total} static-eligible " +
-        $"(strings {t.StrStatic}/{t.StrTotal}, bytestrings {t.ByteStatic}/{t.ByteTotal}, chars {t.CharStatic}/{t.CharTotal}, constarrays {t.ArrStatic}/{t.ArrTotal})");
+        $"(strings {t.StrStatic}/{t.StrTotal}, bytestrings {t.ByteStatic}/{t.ByteTotal}, chars {t.CharStatic}/{t.CharTotal}, " +
+        $"constarrays {t.ArrStatic}/{t.ArrTotal}, emptycontainers {t.EmptyStatic}/{t.EmptyTotal})");
       if (t.Total > t.Static) {
         sb.AppendLine(
           $"  rejected: mutating-intrinsic-target={t.RejIntrinsic} passed-to-mutating-param={t.RejParam} " +
@@ -531,7 +651,8 @@ public static class LiteralCoverageAnalysisPass {
 
     private sealed class Tally {
       public int Total, Static;
-      public int StrTotal, StrStatic, ByteTotal, ByteStatic, CharTotal, CharStatic, ArrTotal, ArrStatic;
+      public int StrTotal, StrStatic, ByteTotal, ByteStatic, CharTotal, CharStatic, ArrTotal, ArrStatic,
+                 EmptyTotal, EmptyStatic;
       public int RejIntrinsic, RejParam, RejAliased, RejIndirect;
 
       public void Add(LitKind kind, Reason reason) {
@@ -543,6 +664,7 @@ public static class LiteralCoverageAnalysisPass {
           case LitKind.ByteString: ByteTotal++; if (ok) ByteStatic++; break;
           case LitKind.Char: CharTotal++; if (ok) CharStatic++; break;
           case LitKind.Array: ArrTotal++; if (ok) ArrStatic++; break;
+          case LitKind.EmptyContainer: EmptyTotal++; if (ok) EmptyStatic++; break;
         }
         switch (reason) {
           case Reason.MutatingIntrinsicTarget: RejIntrinsic++; break;

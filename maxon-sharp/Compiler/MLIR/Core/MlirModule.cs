@@ -175,6 +175,13 @@ public record DeclaredAliasInstance(string Identity, string? SourceFilePath);
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize, bool IsBitPacked = false);
 
+// The record a CONSTANT EMPTY container factory builds — an array literal with zero elements, so
+// every field of it is a compile-time constant: no buffer, no length, no capacity, no parent. Only
+// the wrapper type (which fixes the record size and the type tag) and the element width vary, so
+// those are the whole of it. An empty `Array with Integer` and an empty `Array with String` are
+// DIFFERENT records: same width, different element release, different type tag.
+public record ConstantEmptyContainerInfo(string TypeName, int ElementSize);
+
 // Metadata for a module-level global variable (stored in IrModule.GlobalVarInfos for cross-file seeding).
 // IsExported and IsModuleVisible are mutually exclusive (enforced at the parser).
 public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null, bool IsLazy = false,
@@ -585,6 +592,14 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Populated by ConstantArrayAnalysisPass, consumed by MaxonToStandardConversion
   public Dictionary<int, ConstantArrayLiteralInfo> ConstantArrayLiterals { get; } = [];
 
+  // Functions that do nothing but build and return a constant EMPTY container (`Array.create()`):
+  // function name -> the record they return. Populated by ConstantArrayAnalysisPass; read by
+  // LiteralCoverageAnalysisPass (which counts each such CALL as a literal site) and by
+  // MaxonToStandardConversion (which replaces a never-written-through call with the shared record).
+  // Keyed by FUNCTION rather than by literal site because the factory body is shared by every
+  // caller: one caller pushing into its result must not cost every other caller its empty record.
+  public Dictionary<string, ConstantEmptyContainerInfo> ConstantEmptyContainerFactories { get; } = [];
+
   // Interface associated type names (interfaceName -> list of 'uses' type names)
   public Dictionary<string, List<string>> InterfaceAssociatedTypes { get; } = [];
 
@@ -898,6 +913,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in DeclaredGenericAliases) clone.DeclaredGenericAliases[k] = v;
     foreach (var (k, v) in DeclaredAliasInstances) clone.DeclaredAliasInstances[k] = v;
     foreach (var (k, v) in ConstantArrayLiterals) clone.ConstantArrayLiterals[k] = v;
+    foreach (var (k, v) in ConstantEmptyContainerFactories) clone.ConstantEmptyContainerFactories[k] = v;
     foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
     foreach (var (k, v) in PrimitiveConformances) clone.PrimitiveConformances[k] = [.. v];
     clone.ConditionalConformances.AddRange(ConditionalConformances);
@@ -1025,6 +1041,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in other.ModuleVisibleConstants) ModuleVisibleConstants.TryAdd(k, v);
     foreach (var (k, v) in other.ModuleConstantSourceFiles) ModuleConstantSourceFiles.TryAdd(k, v);
     foreach (var (k, v) in other.ConstantArrayLiterals) ConstantArrayLiterals.TryAdd(k, v);
+    foreach (var (k, v) in other.ConstantEmptyContainerFactories) ConstantEmptyContainerFactories.TryAdd(k, v);
     foreach (var (k, v) in other.InterfaceAssociatedTypes) InterfaceAssociatedTypes.TryAdd(k, v);
     foreach (var init in other.DeferredGlobalInits) {
       if (!DeferredGlobalInits.Any(d => d.Name == init.Name))

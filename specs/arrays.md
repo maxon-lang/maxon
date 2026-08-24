@@ -323,6 +323,325 @@ end 'main'
 99
 ```
 
+### An empty container never written through is ONE shared record
+
+`IntArray.create()` builds a record whose every field is a compile-time constant — no buffer, no
+length, no capacity, no parent — so two empty arrays of the same element type have nothing that
+could tell them apart. The compiler emits ONE immortal record in static data and hands every empty
+`create()` that is never written through a reference to it, exactly as it does for a never-mutated
+string literal. `is` therefore answers `true` for two such arrays, for the same reason `"" is ""`
+does, and the empty array costs no allocation at all.
+
+Sharing is decided per SITE by the same whole-program escape analysis that decides literal
+interning: an array the program ever writes through — `push`, `set`, `resize`, `reserve`, or a
+call that does any of those — gets its own heap record and is never shared. One `var` being
+pushed into therefore says nothing about another `create()` in the same function.
+
+<!-- test: empty-let-arrays-share-one-record -->
+Two empty arrays nothing writes through are the same record.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	let c = IntArray.create()
+	let d = IntArray.create()
+	if c is d 'shared'
+		return 1
+	end 'shared'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: empty-shared-array-reads-as-empty -->
+The shared record answers every read exactly as a freshly allocated empty array does: no
+elements, no capacity, and `get` is out of bounds at index 0.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	let c = IntArray.create()
+	if c.count() != 0 'count'
+		return 1
+	end 'count'
+	if c.capacity() != 0 'cap'
+		return 2
+	end 'cap'
+	return try c.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: empty-var-arrays-stay-independent -->
+The control: writing through one empty array must not reach another. `a` is pushed into, so it is
+never a shared record; `b` is untouched and still reports zero elements.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var b = IntArray.create()
+	a.push(1)
+	print("mutated a={a.count()} untouched b={b.count()}")
+	let c = IntArray.create()
+	let d = IntArray.create()
+	print(" two empty lets identical? {c is d}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+mutated a=1 untouched b=0 two empty lets identical? true
+```
+
+<!-- test: empty-array-mutated-in-another-function-stays-independent -->
+The write need not be in the same function as the `create()`. `fill` pushes through its parameter,
+so every array reaching it is written through and cannot be shared — including `a`, whose
+`create()` is in `main`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function fill(target IntArray)
+	target.push(7)
+end 'fill'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var b = IntArray.create()
+	fill(a)
+	if b.count() != 0 'untouched'
+		return 1
+	end 'untouched'
+	return a.count() + (try a.get(0) otherwise 0)
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: empty-array-returned-from-a-helper-shares-one-record -->
+A helper that only forwards `create()` returns the shared record too, and two calls to it are the
+same value — the analysis follows the return, not the call site's spelling.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function makeEmpty() returns IntArray
+	return IntArray.create()
+end 'makeEmpty'
+
+function main() returns ExitCode
+	let c = makeEmpty()
+	let d = makeEmpty()
+	if c is d 'shared'
+		return c.count() + 1
+	end 'shared'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: empty-managed-element-array-shares-its-own-record -->
+An `Array with String` and an `Array with Integer` are different records: their elements are
+different widths and are released differently. Both share within their own element type, and
+neither read reaches the other's.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	let si = IntArray.create()
+	let sj = IntArray.create()
+	let ss = StrArray.create()
+	let st = StrArray.create()
+	var owned = StrArray.create()
+	owned.push("x")
+	if si is not sj 'ints'
+		return 1
+	end 'ints'
+	if ss is not st 'strs'
+		return 2
+	end 'strs'
+	return 40 + ss.count() + si.count() + owned.count()
+end 'main'
+```
+```exitcode
+41
+```
+
+<!-- test: empty-array-dropped-without-leak -->
+The shared record is immortal: it is never freed, and going out of scope must not try to. A
+pushed-into array beside it is an ordinary heap record and IS freed. Both in one scope, so a
+double free or a leak in either shows up as a non-zero exit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function drops()
+	let shared = IntArray.create()
+	var owned = IntArray.create()
+	owned.push(1)
+	owned.push(2)
+	print("{shared.count()}{owned.count()}")
+end 'drops'
+
+function main() returns ExitCode
+	drops()
+	drops()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0202
+```
+
+#### A container that escapes into a PLACE is never shared
+
+Sharing is only sound while the compiler can see every write. A value stored into a heap place — an
+array slot, a struct field, a union payload — can be fetched back out and written through from
+anywhere, and the compiler cannot follow it there. Such a value always gets its own record. The rule
+is not about arrays: it is the same one that stops a never-mutated `String` literal being shared once
+it is stored somewhere, and the cases below pin both readings of it.
+
+<!-- test: empty-array-pushed-into-another-array-is-not-shared -->
+Two empty arrays pushed into a container, then one of them grown THROUGH the container. If they had
+been one shared record the untouched one would report the other's elements.
+```maxon
+typealias Score = int(-1000 to 1000)
+typealias Inner = Array with Score
+typealias Outer = Array with Inner
+
+function main() returns ExitCode
+	var outer = Outer.create()
+	outer.push(Inner.create())
+	outer.push(Inner.create())
+	var grown = try outer.get(0) otherwise Inner.create()
+	grown.push(7)
+	let untouched = try outer.get(1) otherwise Inner.create()
+	return grown.count() + untouched.count() * 10
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: empty-array-in-a-struct-field-is-not-shared -->
+The same rule at a field ASSIGN rather than at construction. Both holders are reset to an empty
+array, then one is grown; the other must still be empty.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Holder
+	export var items as IntArray
+
+	static function create() returns Self
+		return Self{items: IntArray.create()}
+	end 'create'
+
+	public function reset()
+		items = IntArray.create()
+	end 'reset'
+end 'Holder'
+
+function main() returns ExitCode
+	var a = Holder.create()
+	var b = Holder.create()
+	a.reset()
+	b.reset()
+	a.items.push(3)
+	return a.items.count() + b.items.count() * 10
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: empty-array-in-a-union-payload-is-not-shared -->
+A union payload is a place too. Both boxes carry an empty array; growing one must not grow the other.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+union Box
+	holder(items IntArray)
+end 'Box'
+
+function main() returns ExitCode
+	var first = Box.holder(IntArray.create())
+	var second = Box.holder(IntArray.create())
+	match first 'grow'
+		holder(items) then items.push(9)
+	end 'grow'
+	var untouched = 0
+	match second 'read'
+		holder(items) then untouched = items.count()
+	end 'read'
+	return 1 + untouched * 10
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: string-element-written-through-an-array-leaves-the-literal-alone -->
+The `String` reading of the same rule. `"lit"` is pushed into an array, fetched back out and grown;
+an untouched `"lit"` elsewhere in the program must still be `lit`, and nothing may leak.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var arr = StrArray.create()
+	arr.push("lit")
+	var taken = try arr.get(0) otherwise ""
+	taken.append("!")
+	let untouched = "lit"
+	print("taken={taken} untouched={untouched}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+taken=lit! untouched=lit
+```
+
+<!-- test: string-element-written-through-an-array-literal-leaves-the-literal-alone -->
+And through an array LITERAL's element slot, which is the same store written a different way.
+```maxon
+function main() returns ExitCode
+	let colors = ["red", "green"]
+	var taken = try colors.get(0) otherwise ""
+	taken.append("!")
+	let untouched = "red"
+	print("taken={taken} untouched={untouched} still={colors.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+taken=red! untouched=red still=2
+```
+
 ### Byte Array Push and Get
 
 <!-- test: byte-array-push-get -->

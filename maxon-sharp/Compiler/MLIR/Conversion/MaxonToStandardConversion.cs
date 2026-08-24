@@ -1358,7 +1358,7 @@ public static partial class MaxonToStandardConversion {
                 if (managedMemoryLayout) {
                   // buffer is directly on this record at offset 0 (bare __ManagedMemory or fused Array)
                   EmitStructFieldStore(newBlock, rdataPtr, tempName, ManagedFieldBuffer, IrType.I64, varTypes);
-                  var capOp = new StdConstI64Op(bufferIsWritable ? structLitOp.ArrayLiteralCount : -2);
+                  var capOp = new StdConstI64Op(bufferIsWritable ? structLitOp.ArrayLiteralCount : MmCapacityRdata);
                   newBlock.AddOp(capOp);
                   EmitStructFieldStore(newBlock, capOp.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
                   // A byte-fused array marks its inline buffer so the destructor skips the raw free
@@ -1376,7 +1376,7 @@ public static partial class MaxonToStandardConversion {
                   var managedType = (IrStructType)managedField.Type;
                   var bufferField = managedType.GetField("buffer")!;
                   newBlock.AddOp(new StdStoreIndirectOp(rdataPtr, managedHeapPtr, bufferField.Offset, IrType.I64));
-                  var capOp = new StdConstI64Op(bufferIsWritable ? structLitOp.ArrayLiteralCount : -2);
+                  var capOp = new StdConstI64Op(bufferIsWritable ? structLitOp.ArrayLiteralCount : MmCapacityRdata);
                   newBlock.AddOp(capOp);
                   var capField = managedType.GetField("capacity")!;
                   newBlock.AddOp(new StdStoreIndirectOp(capOp.Result, managedHeapPtr, capField.Offset, IrType.I64));
@@ -2437,6 +2437,17 @@ public static partial class MaxonToStandardConversion {
               LowerCancelPromise(cancelOp, newBlock, valueMap);
               break;
             case MaxonCallOp callOp:
+              // A call to a constant empty-container factory whose result is never written through
+              // needs neither the call nor an allocation: it IS the shared immortal record. Nothing
+              // else about the call has to happen — no argument to flatten (the factory takes none),
+              // and no self-field cache to invalidate below, because no call is made.
+              if (callOp.Result != null
+                  && module.ConstantEmptyContainerFactories.TryGetValue(callOp.Callee, out var emptyContainerInfo)
+                  && IsStaticEligibleLiteral(callOp.Result.Id)) {
+                valueMap[callOp.Result] = EmitStaticEmptyContainer(
+                  emptyContainerInfo, callOp.Result.Id, newBlock, varTypes, result, temps);
+                break;
+              }
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
               LowerCall(callOp, funcLookup, newFunc, ref newBlock, valueMap, varTypes, module.TypeDefs,
                 fnEnvVarNames: fnEnvVarNames, fnEnvDirectValues: fnEnvDirectValues, temps: temps);
@@ -3198,7 +3209,7 @@ public static partial class MaxonToStandardConversion {
             ownedEntry.AddOp(capReload);
             var capReloadVal = new StdLoadIndirectOp(capReload.Result, ManagedFieldCapacity, IrType.I64);
             ownedEntry.AddOp(capReloadVal);
-            var negTwo = new StdConstI64Op(-2);
+            var negTwo = new StdConstI64Op(MmCapacityRdata);
             ownedEntry.AddOp(negTwo);
             var capNeRdata = new StdCmpI64Op("ne", (StdI64)capReloadVal.Result, negTwo.Result);
             ownedEntry.AddOp(capNeRdata);

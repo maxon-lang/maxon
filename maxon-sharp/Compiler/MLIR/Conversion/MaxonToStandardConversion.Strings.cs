@@ -29,12 +29,14 @@ public static partial class MaxonToStandardConversion {
 
 	// One immortal literal record's compile-time-known contents. Written into its .data blob at
 	// __module_init (see EmitStaticRecordInit). ElementSize is 1 for a string/byte/char, the element
-	// width for a constant array (8/4/2/1, or 0 = bit-packed bool). When ElementLabels is non-null the
-	// record is a managed-element array whose buffer is an INLINE pointer table (in the same blob),
-	// each slot filled at init with an element static record's user pointer; RdataLabel is then unused.
+	// width for a constant array (8/4/2/1, or 0 = bit-packed bool). The BUFFER comes from one of three
+	// places, and RdataLabel/ElementLabels say which: interned .rdata bytes (RdataLabel), an INLINE
+	// pointer table in this same blob filled at init with the elements' own static records
+	// (ElementLabels, a managed-element array), or NOWHERE AT ALL — an empty container has no elements,
+	// so both are null and `buffer` stays 0, exactly as its factory would have left it.
 	private sealed record StaticLiteralRecord(
-		string GlobalLabel, string RdataLabel, int RecordSize, int AllocSize,
-		int TagIndex, int Length, int ElementSize, bool IsString, bool SingleByteGraphemes,
+		string GlobalLabel, string? RdataLabel, int RecordSize, int AllocSize,
+		int TagIndex, int Length, long Capacity, int ElementSize, bool IsString, bool SingleByteGraphemes,
 		string[]? ElementLabels = null);
 
 	/// Reset the static-literal state for a fresh module lowering, seeding the eligibility set
@@ -91,7 +93,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// Envelope collapse: build a fused managed-wrapper record (String/Character/ByteArray) directly
 	/// over an already-computed rdata buffer — ONE allocation, no separate __ManagedMemory. Writes
-	/// buffer/length/capacity(-2, the rdata sentinel: read-only, destructor frees nothing)/
+	/// buffer/length/capacity(MmCapacityRdata: read-only, destructor frees nothing)/
 	/// element_size(1, one byte per element)/parent(0) inline at offsets 0..32. The record's own
 	/// size follows its type (a String is 48 bytes for the trailing singleByteGraphemesFlag, others 40).
 	private static StdHeapPtr EmitFusedRdataRecord(
@@ -99,7 +101,7 @@ public static partial class MaxonToStandardConversion {
 	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes) {
 		var outerPtr = (StdHeapPtr)EmitAlloc(block, FusedManagedRecordSize(allocTag), allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
-		var capConst = new StdConstI64Op(-2);
+		var capConst = new StdConstI64Op(MmCapacityRdata);
 		block.AddOp(capConst);
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
@@ -150,7 +152,8 @@ public static partial class MaxonToStandardConversion {
 		result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
 
 		_staticLiteralRecords!.Add(new StaticLiteralRecord(
-			globalLabel, label, recordSize, allocSize, EnsureTagIndex(typeName), byteLen, 1, isString, singleByteGraphemes));
+			globalLabel, label, recordSize, allocSize, EnsureTagIndex(typeName), byteLen,
+			MmCapacityRdata, /*elementSize*/ 1, isString, singleByteGraphemes));
 		_staticRecordLabels[key] = globalLabel;
 		return globalLabel;
 	}
@@ -244,7 +247,7 @@ public static partial class MaxonToStandardConversion {
 			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
 			_staticLiteralRecords!.Add(new StaticLiteralRecord(
 				globalLabel, rdataLabel, recordSize, allocSize, EnsureTagIndex(typeName),
-				info.Values.Length, elementSize, /*isString*/ false, /*singleByteGraphemes*/ false));
+				info.Values.Length, MmCapacityRdata, elementSize, /*isString*/ false, /*singleByteGraphemes*/ false));
 			_staticRecordLabels[key] = globalLabel;
 		}
 
@@ -273,12 +276,52 @@ public static partial class MaxonToStandardConversion {
 			int allocSize = Rt.MmHeaderSize + recordSize + elementLabels.Length * StaticManagedElementSize;
 			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
 			_staticLiteralRecords!.Add(new StaticLiteralRecord(
-				globalLabel, "", recordSize, allocSize, EnsureTagIndex(typeName),
-				elementLabels.Length, StaticManagedElementSize, /*isString*/ false, /*singleByteGraphemes*/ false, elementLabels));
+				globalLabel, /*rdataLabel*/ null, recordSize, allocSize, EnsureTagIndex(typeName),
+				elementLabels.Length, /*capacity*/ elementLabels.Length, StaticManagedElementSize,
+				/*isString*/ false, /*singleByteGraphemes*/ false, elementLabels));
 			_staticRecordLabels[key] = globalLabel;
 		}
 		_staticLiteralLabelByResultId![resultId] = globalLabel;
 		return EmitStaticRecordUserPtr(globalLabel, typeName, resultId, "smarr", block, varTypes, temps, inlineTarget);
+	}
+
+	/// Lower a call to a CONSTANT EMPTY container factory (`IntArray.create()`) whose result the
+	/// escape analysis proved is never written through: no call, no allocation — just a reference to
+	/// the SHARED immortal record for that (type, element width). The record is byte-identical to
+	/// what the factory would have built (buffer 0, length 0, capacity 0, element_size, parent 0), so
+	/// every READ answers exactly as before; only a WRITE could tell the difference, and a site that
+	/// writes is absent from the eligible set and still calls the factory.
+	///
+	/// Interned by (element width, typeName) so two empty arrays of the same element type ARE the
+	/// same value — the reason `c is d` is true, exactly as `"" is ""` is. The `empty:` prefix cannot
+	/// collide with the other two intern keys at the same typeName: a string literal's key is its own
+	/// text (and its typeName is String/Character/a ByteArray, never an array type), and a constant
+	/// array's key is base64, which has no `:`.
+	private static StdHeapPtr EmitStaticEmptyContainer(
+	  ConstantEmptyContainerInfo info, int resultId,
+	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes,
+	  IrModule<StandardOp> result, VarRegistry temps) {
+
+		var key = ($"empty:{info.ElementSize}", info.TypeName);
+		if (!_staticRecordLabels!.TryGetValue(key, out var globalLabel)) {
+			globalLabel = $"__static_lit_{_nextStaticLiteralId++}";
+			int recordSize = FusedManagedRecordSize(info.TypeName);
+			int allocSize = Rt.MmHeaderSize + recordSize;
+			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
+			// Capacity 0, not MmCapacityRdata: `capacity()` is a READ a program can make, and an empty
+			// container built by the factory answers 0. The sentinel is for a record borrowing bytes it
+			// must not free — this one borrows nothing, and never reaches a free either way (immortal).
+			_staticLiteralRecords!.Add(new StaticLiteralRecord(
+				globalLabel, /*rdataLabel*/ null, recordSize, allocSize, EnsureTagIndex(info.TypeName),
+				/*length*/ 0, /*capacity*/ 0, info.ElementSize, /*isString*/ false, /*singleByteGraphemes*/ false));
+			_staticRecordLabels[key] = globalLabel;
+		}
+		// Deliberately NOT recorded in _staticLiteralLabelByResultId: that map exists so a
+		// managed-element array literal can point its inline table at its elements' static records,
+		// and an element written `[X.create(), X.create()]` reaches the block as a call result rather
+		// than a literal. Such an array falls back to the heap path, which is the correct answer for
+		// it today; enabling the table would be a separate site with its own cases to pin.
+		return EmitStaticRecordUserPtr(globalLabel, info.TypeName, resultId, "sempty", block, varTypes, temps, inlineTarget: null);
 	}
 
 	/// For a managed-element array literal, return its elements' static-record labels in order if
@@ -306,7 +349,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// Materialize every interned static literal record into __module_init: for each record,
 	/// write its MM header (alloc_size, packed_id, destructor=0, refcount=IMMORTAL) and its
-	/// record fields (buffer=&rdata, length, capacity=-2, element_size=1, parent=0, [flag])
+	/// record fields (buffer, length, capacity, element_size, parent=0, [flag])
 	/// into its .data blob. Only the buffer pointer genuinely REQUIRES runtime materialization
 	/// (a data->data pointer the loader relocates under ASLR); the constants are written the same
 	/// way for uniformity and are cheap (one-time, at startup). Prepended to __module_init so the
@@ -371,7 +414,7 @@ public static partial class MaxonToStandardConversion {
 			ops.Add(tableAddr);
 			ops.Add(new StdStoreIndirectOp(tableAddr.Result, baseI64.Result, rec0 + ManagedFieldBuffer, IrType.I64));
 			Store(rec.Length, rec0 + ManagedFieldLength);
-			Store(rec.Length, rec0 + ManagedFieldCapacity);          // owned element count (>= length)
+			Store(rec.Capacity, rec0 + ManagedFieldCapacity);        // owned element count (>= length)
 			Store(rec.ElementSize, rec0 + ManagedFieldElementSize);  // 8 — managed element pointers
 			Store(MmParentInline, rec0 + ManagedFieldParentPtr);     // inline-buffer sentinel
 			for (int i = 0; i < rec.ElementLabels.Length; i++) {
@@ -388,13 +431,19 @@ public static partial class MaxonToStandardConversion {
 			return;
 		}
 
-		var bufLea = new StdLeaRdataOp(rec.RdataLabel);
-		ops.Add(bufLea);
-		var bufI64 = new StdPtrToI64Op(bufLea.Result);
-		ops.Add(bufI64);
-		ops.Add(new StdStoreIndirectOp(bufI64.Result, baseI64.Result, rec0 + ManagedFieldBuffer, IrType.I64));
+		// An EMPTY container has no elements and therefore no bytes to point at: `buffer` stays 0,
+		// which is what its factory's own `Self{}` writes. Only a record WITH contents has an rdata blob.
+		if (rec.RdataLabel != null) {
+			var bufLea = new StdLeaRdataOp(rec.RdataLabel);
+			ops.Add(bufLea);
+			var bufI64 = new StdPtrToI64Op(bufLea.Result);
+			ops.Add(bufI64);
+			ops.Add(new StdStoreIndirectOp(bufI64.Result, baseI64.Result, rec0 + ManagedFieldBuffer, IrType.I64));
+		} else {
+			Store(0, rec0 + ManagedFieldBuffer);
+		}
 		Store(rec.Length, rec0 + ManagedFieldLength);
-		Store(-2, rec0 + ManagedFieldCapacity);          // rdata-backed sentinel: never freed/grown
+		Store(rec.Capacity, rec0 + ManagedFieldCapacity);
 		Store(rec.ElementSize, rec0 + ManagedFieldElementSize); // 1 for a string; the element width for an array (0 = bit-packed bool)
 		Store(0, rec0 + ManagedFieldParentPtr);
 		if (rec.IsString) {
@@ -1009,10 +1058,10 @@ public static partial class MaxonToStandardConversion {
 	  string? allocTag = null) {
 		int outerSize = isString ? StringStructSize : CharacterStructSize;
 		// Envelope collapse: ONE allocation. The (buffer, length) here always name rdata
-		// (enum case names / string-backed raw values), so capacity == -2 (static, never freed).
+		// (enum case names / string-backed raw values), so capacity is MmCapacityRdata (never freed).
 		var outerPtr = (StdHeapPtr)EmitAlloc(block, outerSize, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
-		var capConst = new StdConstI64Op(-2);
+		var capConst = new StdConstI64Op(MmCapacityRdata);
 		block.AddOp(capConst);
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
@@ -1373,7 +1422,7 @@ public static partial class MaxonToStandardConversion {
 			EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
 
 			// Determine parent and capacity based on source's mode:
-			//   source capacity == -2 (rdata): slice gets capacity=-2, parentPtr=0 (static data, no refcounting)
+			//   source capacity == MmCapacityRdata: slice takes it too, parentPtr=0 (static data, no refcounting)
 			//   source capacity == -1 (nested slice): slice gets capacity=-1, parentPtr=source.parentPtr
 			//   source capacity >= 0 (owned): copy data into new owned buffer
 			//
@@ -1400,15 +1449,15 @@ public static partial class MaxonToStandardConversion {
 				block.AddOp(new StdBrOp(ownedBlock));
 			} else {
 				var srcCapacity = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldCapacity, IrType.I64, varTypes);
-				var negTwoConst = new StdConstI64Op(-2);
+				var negTwoConst = new StdConstI64Op(MmCapacityRdata);
 				block.AddOp(negTwoConst);
 				var isRdata = new StdCmpI64Op("eq", srcCapacity, negTwoConst.Result);
 				block.AddOp(isRdata);
 				block.AddOp(new StdCondBrOp(isRdata.Result, rdataBlock, checkSliceBlock));
 
-				// --- rdata path: capacity=-2, parentPtr=0 ---
+				// --- rdata path: capacity=MmCapacityRdata, parentPtr=0 ---
 				var rdataBody = func.Body.AddBlock(rdataBlock);
-				var rdataNegTwo = new StdConstI64Op(-2);
+				var rdataNegTwo = new StdConstI64Op(MmCapacityRdata);
 				rdataBody.AddOp(rdataNegTwo);
 				var rdataZero = new StdConstI64Op(0);
 				rdataBody.AddOp(rdataZero);

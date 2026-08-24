@@ -579,6 +579,14 @@ public static partial class MaxonToStandardConversion {
   private const int MmParentInline = -3;
   private const int MmInlineCapBytes = 64;
 
+  // The capacity a record carries when its buffer is NOT owned heap memory it may grow or free:
+  // interned .rdata bytes, an immortal static-literal record, or stack scratch. It is a capacity
+  // SENTINEL rather than a count, so the COW check detaches on any write and the destructor frees
+  // nothing. Its sibling — capacity == -1, "borrowed from parent_ptr", the view sentinel — is still
+  // spelled as a bare -1 at the slice sites; naming that one belongs with a sweep of the emitters,
+  // which read both.
+  private const int MmCapacityRdata = -2;
+
   // __ManagedMemoryCursor struct field offsets (all fields are 8 bytes)
   private const int CursorFieldBuffer = 0;
   private const int CursorFieldPosition = 8;

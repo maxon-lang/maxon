@@ -215,10 +215,11 @@ public class Compiler {
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
 
-  // MEASUREMENT-ONLY: when set, the pipeline runs LiteralCoverageAnalysisPass, which
-  // reports (to stderr) what fraction of managed literal sites are provably
-  // never-mutated. Off by default; it sets no property the lowering reads, so a
-  // normal build is byte-identical whether or not the analysis ran.
+  // When set, LiteralCoverageAnalysisPass ALSO prints its coverage report to stderr. Only the
+  // REPORT is optional: the pass itself always runs, and the lowering reads its verdict (see that
+  // pass's own doc, which is where the rule is stated). So a build is byte-identical whether or not
+  // this flag is set — which is what "measurement only" means here, and it is a fact about the FLAG,
+  // never about the pass.
   [ThreadStatic] private static bool _literalCoverage;
   public static bool LiteralCoverage { get => _literalCoverage; set => _literalCoverage = value; }
 
