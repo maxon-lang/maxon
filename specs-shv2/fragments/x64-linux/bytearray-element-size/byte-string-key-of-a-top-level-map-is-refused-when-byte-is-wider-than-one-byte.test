@@ -1,0 +1,14 @@
+// Test: byte-string-key-of-a-top-level-map-is-refused-when-byte-is-wider-than-one-byte
+typealias Byte = int(0 to u64.max)
+typealias Bytes = Array with Byte
+
+var KEYWORDS = [b"hi": 1]
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(1)
+	return made.count() + KEYWORDS.count()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:5:17: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 8-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 8 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`

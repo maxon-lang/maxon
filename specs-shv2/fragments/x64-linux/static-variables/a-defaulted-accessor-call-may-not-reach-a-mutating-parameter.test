@@ -1,0 +1,22 @@
+// Test: a-defaulted-accessor-call-may-not-reach-a-mutating-parameter
+typealias Integer = int(i64.min to i64.max)
+typealias Names = Array with Integer
+
+let sharedEmptyNames = Names.create()
+
+function shared() returns Names
+	return sharedEmptyNames
+end 'shared'
+
+function grow(names Names = shared()) returns Integer
+	names.push(1)
+	return names.count()
+end 'grow'
+
+function main() returns ExitCode
+	print("a={grow()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:17:12: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'names' (in main)

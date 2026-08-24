@@ -1,0 +1,108 @@
+// Test: a-keyword-named-condition-BESIDE-keyword-named-match-arms
+typealias Integer = int(i64.min to i64.max)
+
+enum Kw
+	function
+	end
+	if
+	other
+end 'Kw'
+
+function score(k Kw) returns Integer
+	return match k 'classify'
+		function gives 1
+		end gives 4
+		if gives 8
+		other gives 16
+	end 'classify'
+end 'score'
+
+function gap(to Integer, from Integer) returns Integer
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+
+	return 0
+end 'gap'
+
+function main() returns ExitCode
+	return (score(Kw.end) + gap(46, from: 8)) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @score {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4] @__jumptable_1
+  matchdead:
+  matcharm#1:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matcharm#2:
+    x64.movRegImm32 r8, 4
+    x64.jmp matchcont
+  matcharm#3:
+    x64.movRegImm32 r8, 8
+    x64.jmp matchcont
+  matcharm#4:
+    x64.movRegImm32 r8, 16
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @gap {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, forward
+    x64.jmp ifcont
+  forward:
+    x64.movRegReg r8, rcx
+    x64.subRegReg r8, rcx, rdx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.callDirect score
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 46
+    x64.movRegImm32 rdx, 8
+    x64.callDirect gap
+    x64.leaRegRegReg r8, rbx, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

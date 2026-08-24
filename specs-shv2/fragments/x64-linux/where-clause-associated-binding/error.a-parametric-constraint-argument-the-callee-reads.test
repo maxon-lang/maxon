@@ -1,0 +1,70 @@
+// Test: error.a-parametric-constraint-argument-the-callee-reads
+typealias Integer = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Integer
+end 'Sized'
+
+type Leaf implements Sized
+	var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function size() returns Integer
+		return self.n
+	end 'size'
+end 'Leaf'
+
+type Box uses T implements Sized where T is Sized
+	var t as T
+
+	export static function create(t T) returns Self
+		return Self{t: t}
+	end 'create'
+
+	export function size() returns Integer
+		return self.t.size() + 1
+	end 'size'
+end 'Box'
+
+type Holder uses S where S is Sized
+	var s as S
+
+	export static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	export function twice() returns Integer
+		return self.s.size() * 2
+	end 'twice'
+
+	export function tag() returns Integer
+		return 5
+	end 'tag'
+end 'Holder'
+
+type Outer uses E where E is Sized
+	typealias BoxE = Box with E
+	typealias Inner = Holder with BoxE
+	var e as E
+
+	export static function create(e E) returns Self
+		return Self{e: e}
+	end 'create'
+
+	export function tally() returns Integer
+		return Inner.create(BoxE.create(self.e)).twice() + self.e.size()
+	end 'tally'
+end 'Outer'
+
+typealias LeafOuter = Outer with Leaf
+
+function main() returns ExitCode
+	print("{LeafOuter.create(Leaf.create(7)).tally()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3132: <fragment>:57:18: 'Outer.tally' calls 'Holder.twice', whose `where` constraint requires a witness table for `Box` conforming to `Sized` at a generic instance written over this body's OWN type parameters — and 'Holder.twice' READS that witness. A conformance whose impls carry a hidden dictionary is given a table PER INSTANCE, whose slots supply that instantiation's layout descriptor; an instance that is still parametric names a descriptor the enclosing frame only holds at run time, so no static table exists to pass. Reach the constrained method through a concrete instance, or make the conformance's impls independent of their type argument

@@ -1,0 +1,108 @@
+// Test: builtins-mm-counters.the-two-layers-are-disjoint
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var buf = ByteArray.create()
+	for _ in 0 upto 512 'push'
+		buf.push(3)
+	end 'push'
+	let tracked = __Builtins.mmAllocTotal()
+	let raw = __Builtins.mmRawAllocTotal()
+	var score = 0
+	if tracked > 0 'trackedMoved'
+		score = score + 2
+	end 'trackedMoved'
+	if raw == 0 'rawDidNot'
+		score = score + 5
+	end 'rawDidNot'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __mm_alloc_total@24 = i64 0
+  __mm_alloc_bytes@32 = i64 0
+  __mm_raw_alloc_count@40 = i64 0
+  __mm_raw_alloc_bytes@48 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 r12, 512
+    x64.jcc less, push
+    x64.jmp forexit
+  push:
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.callDirect __mm_counter_alloc_total
+    x64.movRegReg r12, r8
+    x64.callDirect __mm_counter_raw_alloc_total
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greater, trackedMoved
+    x64.jmp critsplit#12
+  trackedMoved:
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.jmp ifcont#6
+  critsplit#12:
+    x64.jmp ifcont#6
+  ifcont#6:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, rawDidNot
+    x64.jmp critsplit#13
+  rawDidNot:
+    x64.leaRegRegImm32 rax, rax, 5
+    x64.jmp ifcont#8
+  critsplit#13:
+    x64.jmp ifcont#8
+  ifcont#8:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r12, rax, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

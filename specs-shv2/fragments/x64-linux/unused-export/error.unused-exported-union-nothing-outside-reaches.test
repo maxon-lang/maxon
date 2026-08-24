@@ -1,0 +1,30 @@
+// Test: error.unused-exported-union-nothing-outside-reaches
+// --- file: api/answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+export function score(a Answer) returns Integer
+	return match a 'm'
+		small gives 1
+		big(n) gives n
+	end 'm'
+end 'score'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return score(classify(42))
+end 'main'
+---
+CompilerError:
+error E3092: api/<fragment>:5:14: exported type 'Answer' is never referenced outside its declaring file
