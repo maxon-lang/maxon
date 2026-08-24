@@ -29,7 +29,7 @@ let MainWrongReturnMessage = "Function 'main' must return ExitCode"
 // `name:` label names a distinct parameter, and every argument's TYPE agrees with its
 // parameter's) — the checks that need the callee's signature, which only the whole-program
 // `funcSignatures` registry carries.
-export function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
+module function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
 	// ⭐ **OVERLOAD RESOLUTION RUNS FIRST, BEFORE ANYTHING READS A CALLEE** (D7). Until it has run, a call to
 	// an overloaded name carries the BARE name the source wrote, which is the registration name of the FIRST
 	// declaration only — so `checkCalls` would validate every one of them against that member's signature and
@@ -168,10 +168,17 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 		defaultArgOrigins.beginFunction()
 		for opIdx in module.liveOpIndices(func) 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCalls: opIdx {opIdx} from liveOpIndices is not in module.ops")
+			// ⚠⚠ **THE `direct` ARM IS LAST, AND THE ORDER IS LOAD-BEARING — DO NOT SORT THESE.** An op
+			// read out of `module.ops` is a BORROW of `module`, and resolving a direct call REPLACES that
+			// element (`commitOverloadChoice`), which releases the very record `op` points into. A borrow's
+			// liveness is its last use in SOURCE order, so any arm reading `op` BELOW the resolving one leaves
+			// it live across that write — E3070, and a real use-after-free rather than a technicality. Putting
+			// the only writing arm last is what ends the borrow before the write; the resolver re-reads the op
+			// itself, which is why it is handed an INDEX and not the op.
 			match maxonOpCalleeKind(op) 'callee'
-				direct then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, op: op, callee: maxonOpCalleeName(op), defaultArgOrigins: defaultArgOrigins)
-				functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
 				noCallee then break 'callee'
+				functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
+				direct then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, defaultArgOrigins: defaultArgOrigins)
 			end 'callee'
 		end 'eachOp'
 	end 'eachFunc'
@@ -250,7 +257,14 @@ end 'DefaultArgOrigins'
 
 // One call. A callee that names no overload set is left exactly as the parser wrote it, which is every call
 // in the program but the handful this rung is about.
-function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray, defaultArgOrigins DefaultArgOrigins)
+// ⚠ **IT TAKES AN INDEX AND READS THE OP ITSELF, AND EVERY DOOR BELOW THAT WRITES `module.ops` DOES
+// THE SAME.** The rewrite this resolution ends in replaces the op at `opIndex`, releasing the record — so an
+// op handed IN would leave its caller holding a released pointer, and an op held ACROSS the rewrite here
+// would be read after free. The rule this pass now keeps, once: **no function both holds an op borrow and
+// replaces that op.** E3070 is what named it, on this compiler's own source.
+function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, defaultArgOrigins DefaultArgOrigins)
+	let op = try module.ops.get(opIndex) otherwise panic("resolveOneOverloadedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices")
+	let callee = maxonOpCalleeName(op)
 	let members = try project.overloadSets.get(callee) otherwise return
 	let candidates = overloadCandidates(project, members: members)
 	if candidates.count() > 1 and callPassesOpaqueArg(func, op: op) 'cannotDiscriminate'
@@ -259,7 +273,7 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFu
 	end 'cannotDiscriminate'
 
 	match selectOverload(project, func: func, op: op, candidates: candidates) 'pick'
-		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, callee: callee, member: member, defaultArgOrigins: defaultArgOrigins)
+		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, defaultArgOrigins: defaultArgOrigins)
 		// ⛔⛔ **AN AMBIGUOUS CALL IS *ALSO* LEFT ON A DECLARED MEMBER, AND UNTIL THIS RUNG IT WAS NOT —
 		// WHICH EARNED THE AUTHOR A SECOND, WRONG DIAGNOSTIC.** A CONTESTED set has no member under the bare
 		// name (`Parser.overloadRegistrationNameFor`), so an op left naming it reaches `validateCall` and is
@@ -267,10 +281,10 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFu
 		// E3007 that has just explained the real fault. MEASURED on two root-level files each declaring
 		// `f(a Integer = 1)` / `f(a Count = 1)`, two spellings of one underlying type: E3007 then E3004.
 		// It is the same premise `noMatch` needed made true, so it takes the same repair.
-		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied, module: module, candidates: candidates, op: op)
+		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied, module: module, candidates: candidates)
 		// Nothing the call could mean. Left on a DECLARED member deliberately — see this pass's header,
 		// step 5, and `leaveUnmatchedCallOnFirstCandidate` for the one set where "left alone" is not that.
-		noMatch then leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, op: op, callee: callee, candidates: candidates)
+		noMatch then leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: candidates)
 	end 'pick'
 end 'resolveOneOverloadedCall'
 
@@ -302,13 +316,17 @@ end 'resolveOneOverloadedCall'
 //
 // A set with NO live candidate is left alone, and there the bare name is the honest answer: nothing the
 // call could name survived to the registry.
-function leaveUnmatchedCallOnFirstCandidate(project Project, module MaxonModule, opIndex OpIndex, op MaxonOp, callee ByteArray, candidates ByteArrayArray)
+function leaveUnmatchedCallOnFirstCandidate(project Project, module MaxonModule, opIndex OpIndex, callee ByteArray, candidates ByteArrayArray)
 	if project.funcSignatures.contains(callee) 'theBareNameIsItselfAMember'
 		return
 	end 'theBareNameIsItselfAMember'
 
 	let first = try candidates.get(0) otherwise return
-	try module.ops.set(opIndex, value: withRewrittenCallee(op, callee: first)) otherwise panic("leaveUnmatchedCallOnFirstCandidate: ops.set({opIndex}) OOB — the index came from liveOpIndices")
+	// The replacement is BUILT before the store, so the op borrow is dead by the time the element it points
+	// into is released — see `resolveOneOverloadedCall`'s header for the rule.
+	let op = try module.ops.get(opIndex) otherwise panic("leaveUnmatchedCallOnFirstCandidate: ops.get({opIndex}) OOB — the index came from liveOpIndices")
+	let rewritten = withRewrittenCallee(op, callee: first)
+	try module.ops.set(opIndex, value: rewritten) otherwise panic("leaveUnmatchedCallOnFirstCandidate: ops.set({opIndex}) OOB — the index came from liveOpIndices")
 end 'leaveUnmatchedCallOnFirstCandidate'
 
 // ⭐⭐ **AN OPAQUE ARGUMENT CANNOT DISCRIMINATE, AND "CANNOT DISCRIMINATE" IS NOT "IS A SCALAR".**
@@ -592,11 +610,18 @@ end 'overloadArgTypeFit'
 // sites are then indistinguishable, so the second claim is refused rather than allowed to overwrite the
 // first. The cure for that residual is to key the site by its call's op index, which is a change to the P1.9
 // record and its pass, not to this one.
-function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray, member ByteArray, defaultArgOrigins DefaultArgOrigins)
-	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, member: member, disagreement: sharedCallResultSubject)
+function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, defaultArgOrigins DefaultArgOrigins)
+	// ⛔⛔ **THE ARGUMENT COLUMNS ARE READ OFF THE OP BEFORE THE COMMIT, AND THEY USED TO BE READ AFTER IT —
+	// A USE-AFTER-FREE.** `commitOverloadChoice` stores a rewritten op at this index, which RELEASES the
+	// record `overloadCallArgs` reads its `args`/`defaultSlots` columns out of. It survived because a freed
+	// box still holds its bytes; E3070 refused the shape when shv2 compiled itself, and reading the op first
+	// is the fix rather than a rearrangement. The commit is now the LAST thing this function does, which is
+	// also what keeps the borrow dead at the write.
+	let op = try module.ops.get(opIndex) otherwise panic("bindOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	match overloadCallArgs(op) 'args'
 		supplied(args, _, defaultSlots) then bindOverloadChoiceArguments(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: defaultArgOrigins)
 	end 'args'
+	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, member: member, disagreement: sharedCallResultSubject)
 end 'bindOverloadChoice'
 
 // The two obligations a resolved call's ARGUMENT LIST carries, off ONE destructure of the op — the
@@ -627,6 +652,14 @@ function retargetArgRangeSites(project Project, func IrFunction, opIndex OpIndex
 	// `for x in …` loop variable is immutable.
 	for i in 0 upto checks.argSites.count() 'eachSite'
 		var site = try checks.argSites.get(i) otherwise panic("retargetArgRangeSites: argSites.get OOB at {i} inside its own count()")
+		// ⭐ **A SITE OF A DIFFERENT CALL IS NOT THIS ONE'S TO CLAIM OR TO COMPLAIN ABOUT.** The match below
+		// is by argument VALUE, which a binding passed to two calls shares — so without this the second call
+		// reads the first's already-retargeted site as claimed by a foreign member. `bareCallee` is the name
+		// the source wrote and is never rewritten; see `RangeCheckArgSite` for the twenty refusals it fixes.
+		if not site.bareCallee.equals(callee) 'aSiteOfADifferentCall'
+			continue
+		end 'aSiteOfADifferentCall'
+
 		if not valueIdArrayContains(args, value: site.value) 'notThisCall'
 			continue
 		end 'notThisCall'
@@ -697,8 +730,7 @@ function repointDefaultedArgHelpers(project Project, module MaxonModule, func Ir
 
 		let argValue = try args.get(sourceCount + k) otherwise panic("repointDefaultedArgHelpers: args.get OOB at {sourceCount + k} — the synthesized defaults are the trailing run of args")
 		let helperOpIndex = origins.definingOp(module, func: func, value: argValue)
-		let helperOp = try module.ops.get(helperOpIndex) otherwise panic("repointDefaultedArgHelpers: ops.get OOB at {helperOpIndex} — the index came from this function's own live ops")
-		commitOverloadChoice(project, module: module, func: func, opIndex: helperOpIndex, op: helperOp, member: paramDefaultHelperName(member, paramIndex: slot), disagreement: OverloadDisagreementSubject.aDefaultedArgument(callee, slot: slot))
+		commitOverloadChoice(project, module: module, func: func, opIndex: helperOpIndex, member: paramDefaultHelperName(member, paramIndex: slot), disagreement: OverloadDisagreementSubject.aDefaultedArgument(callee, slot: slot))
 	end 'eachSuppliedDefault'
 end 'repointDefaultedArgHelpers'
 
@@ -709,9 +741,15 @@ end 'repointDefaultedArgHelpers'
 // `disagreement` names what the reconcile is ABOUT, because this routine now serves two ops of one call: the
 // call itself, and the synthesized helper behind an argument it omitted. The two need one rule and two
 // sentences — see `OverloadDisagreementSubject`.
-function commitOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray, disagreement OverloadDisagreementSubject)
-	try module.ops.set(opIndex, value: withRewrittenCallee(op, callee: member)) otherwise panic("commitOverloadChoice: ops.set({opIndex}) OOB — the index came from liveOpIndices")
+// ⛔⛔ **THE RECONCILE READS THE PRE-REWRITE OP AND USED TO RUN AFTER THE STORE THAT RELEASES IT.** Same
+// use-after-free as `bindOverloadChoice`'s, one frame down: `module.ops.set` drops the old element, and
+// `reconcileOverloadResultType`'s `overloadResultValue(op)` then read a released record. The op is read
+// here rather than handed in for the reason `resolveOneOverloadedCall`'s header states.
+function commitOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, member ByteArray, disagreement OverloadDisagreementSubject)
+	let op = try module.ops.get(opIndex) otherwise panic("commitOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
+	let rewritten = withRewrittenCallee(op, callee: member)
 	reconcileOverloadResultType(project, func: func, opIndex: opIndex, op: op, member: member, disagreement: disagreement)
+	try module.ops.set(opIndex, value: rewritten) otherwise panic("commitOverloadChoice: ops.set({opIndex}) OOB — the index came from liveOpIndices")
 end 'commitOverloadChoice'
 
 // ⭐ **WHICH VALUE OF A RESOLVED CALL THE RETURN-TYPE RECONCILE IS ABOUT** — the call's own result, or the
@@ -870,12 +908,12 @@ end 'overloadResultValue'
 // where the author must add a label), naming the callee as WRITTEN with its type qualifier stripped, and
 // listing the tied candidates' parameter lists in declaration order. The wording is the oracle's, verbatim,
 // because `specs-shv2/function-overloads.md` compares it byte for byte.
-function reportAmbiguousOverload(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, tied ByteArrayArray, module MaxonModule, candidates ByteArrayArray, op MaxonOp)
+function reportAmbiguousOverload(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, tied ByteArrayArray, module MaxonModule, candidates ByteArrayArray)
 	let range = project.opRanges.get(opIndex)
 	reportPositioned(project, code: ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{bareMethodName(callee)}': multiple overloads match. Candidates: {renderOverloadCandidates(project, tied: tied)}", line: range.line, column: range.column, filePath: func.sourceFilePath)
 	// The op still names a callee, and for a CONTESTED set that name belongs to no declaration — see the
 	// `ambiguous` arm above for the second diagnostic that earns.
-	leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, op: op, callee: callee, candidates: candidates)
+	leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: candidates)
 end 'reportAmbiguousOverload'
 
 // `(name String), (label String)` — each tied candidate's parameter list, receiver excluded. Post-resolution

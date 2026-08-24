@@ -202,7 +202,7 @@ end 'TrackedDecls'
 
 // ── The pass ─────────────────────────────────────────────────────────────────────────────────────
 
-export function checkUnusedExports(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
+module function checkUnusedExports(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
 	let sources = try splitSourcePaths(project)
 	if sources.userFiles.count() < MinimumUserFilesToAudit 'tooFewFilesToHaveAnOutside'
 		return
@@ -667,6 +667,21 @@ function noteEnumPayloadTypes(signatures ProgramSignatures, tracked TrackedDecls
 end 'noteEnumPayloadTypes'
 
 function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls, layout EnumLayout, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	// ⭐⭐ **A STRUCT-BACKED UNION'S BACKING IS A TYPE IT IS MADE OF, AND IT IS THE ONE A READER NEVER
+	// SPELLS.** `op.rawValue.isMemory` reaches `TargetOpMeta` through `TargetOp` and names it nowhere, so
+	// the reader file's `usedTypeNames` cannot carry it and this walk was the only route left. Exactly the
+	// argument the payload loop below makes — *"using a type uses the types it is made of"* — for the half
+	// of an enum layout that is not a payload.
+	//
+	// ⛔⛔ **MEASURED ON THIS COMPILER'S OWN SOURCE, WHERE IT WAS A WRONG ANSWER RATHER THAN A MISS.** shv2
+	// reported `TargetOpMeta`, `StdOpMeta` and `StdTypeInfo` as *"never referenced outside its declaring
+	// file"* (E3092) while six files read their fields through `.rawValue` — and the bootstrap, which
+	// resolves that chain, then refused the demoted source outright: `E4006 Unknown type 'TargetOpMeta' in
+	// field access chain`. Two compilers disagreeing about whether a name is used at all.
+	if not layout.backingStructName.isEmpty() 'structBacked'
+		noteTypeNameTransitively(signatures, tracked: tracked, name: layout.backingStructName, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+	end 'structBacked'
+
 	for payloadFields in layout.casePayloads 'eachCase'
 		for field in payloadFields 'eachField'
 			noteComponentType(signatures, tracked: tracked, type: field.declaredType, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)

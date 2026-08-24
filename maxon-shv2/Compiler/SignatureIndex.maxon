@@ -642,7 +642,7 @@ export type ConstantRead
 end 'ConstantRead'
 
 export typealias ConstantReadArray = Array with ConstantRead
-export typealias ConstantReadIndex = int(0 to u64.max)
+typealias ConstantReadIndex = int(0 to u64.max)
 typealias TopLevelDeclIndexMap = Map with (ByteArray, TopLevelDeclIndex)
 
 // How many of those declarations have a `.data` slot — a SUBSET of the arena, so the same wide range.
@@ -1009,7 +1009,7 @@ end 'constArrayElementsAgree'
 // The enum an element belongs to, or EMPTY for every element kind that names none. Empty is the truth about
 // them rather than a sentinel, and it is what lets the comparison above be one `equals` instead of a second
 // match on the kind.
-export function constArrayElementEnumName(element ConstArrayElement) returns ByteArray
+function constArrayElementEnumName(element ConstArrayElement) returns ByteArray
 	return match element 'e'
 		enumCase(_, typeName) gives typeName
 		integer to character gives EmptySourceText
@@ -1024,7 +1024,7 @@ end 'constArrayElementEnumName'
 // ⚠ **TWO READERS, AND THE SECOND IS THE ONE THAT MAKES THIS A FUNCTION RATHER THAN A LINE.** The instance
 // builder needs it to type the array, and the CONTENT HASH needs it to tell two enum arrays apart — see
 // `mixArrayElementKind`, where leaving it out is a stale-cache bug and not a coarse key.
-export function constArrayLiteralEnumName(elements ConstArrayElementArray) returns ByteArray
+function constArrayLiteralEnumName(elements ConstArrayElementArray) returns ByteArray
 	if elements.count() == 0 'noElements'
 		return EmptySourceText
 	end 'noElements'
@@ -1032,7 +1032,7 @@ export function constArrayLiteralEnumName(elements ConstArrayElementArray) retur
 	return constArrayElementEnumName(try elements.get(0) otherwise panic("constArrayLiteralEnumName: elements.get(0) OOB below a count just checked non-zero"))
 end 'constArrayLiteralEnumName'
 
-export function constArrayElementScalar(element ConstArrayElement) returns ParsedInt
+function constArrayElementScalar(element ConstArrayElement) returns ParsedInt
 	return match element 'e'
 		integer(payload) gives payload
 		// A String and a Character element alike hold a heap address, which is why `arrayElementMayBeConstantBlob`
@@ -1062,7 +1062,7 @@ end 'ManagedConstKind'
 //
 // `range` is the initializer's first token, so every op the synthesis emits carries a span pointing at the
 // declaration the user wrote — the ops exist because of that line and nothing else.
-export type ManagedGlobal
+module type ManagedGlobal
 	export let label as ByteArray
 	// ⭐ **THE RECORD `__module_init` BUILDS, AS A DESCRIPTION** — a union rather than a `kind` beside a
 	// `bytes` that only two of the three kinds have anything to put in (P1.7 slice 2b). Each arm carries
@@ -1119,7 +1119,7 @@ end 'ManagedGlobal'
 // for it made `FnRefThunk.isLiftedClosureName` — a bare search for `$` — answer TRUE for this routine, which
 // is the right answer (it needs no env thunk) for entirely the wrong reason. `#` is the character that
 // already means "the compiler joined two names here".
-export function lazyStaticInitCallee(label ByteArray) returns ByteArray
+function lazyStaticInitCallee(label ByteArray) returns ByteArray
 	var callee = b"__lazy_init#".clone()
 	callee.append(label)
 	return callee
@@ -1130,7 +1130,7 @@ export typealias ManagedGlobalArray = Array with ManagedGlobal
 // ⭐⭐ **HOW ONE MANAGED GLOBAL'S SLOT COMES TO HOLD A RECORD — TWO ARMS, AND THE SPLIT IS BETWEEN THE TWO
 // WAYS A RECORD CAN COME TO EXIST**: the compiler MATERIALIZES it from what the initializer folded to, or
 // the program's own code RETURNS it.
-export union ManagedGlobalInitializer
+module union ManagedGlobalInitializer
 	// A record `__module_init` builds itself, out of folded constants and nothing else.
 	record(build ManagedGlobalRecord)
 	// ⭐ **A USER STATIC FACTORY — `var db = Database.create(EntryMap.create(), sourcePaths: …)`** (spec-port
@@ -1156,7 +1156,7 @@ end 'ManagedGlobalInitializer'
 // or an argument comes to hold a record, and it is not an arm here — it is an entry in
 // `ManagedGlobalInitializer.factoryCall`'s flat arena, reached by an INDEX, which is the same E4014 breaking
 // the same cycle one tier up (spec-port `module-level-struct-var`).
-export union ManagedGlobalRecord
+module union ManagedGlobalRecord
 	// A `String` literal is a WHOLLY immortal `.rdata` record shared by every read of those bytes, so the
 	// slot's occupant is a CLONE of it — the `(box) -> newBox` dual of the `__str_decref` the cleanup drops
 	// it with, so the pair balances by construction.
@@ -1205,7 +1205,7 @@ end 'ManagedGlobalRecord'
 // argument, exactly the "no label" spelling `MaxonOp.call`'s `argLabels` uses), the value, the TYPE that
 // value is minted at — which the synthesis needs and cannot re-derive, an argument's type being a fact about
 // the initializer that produced it rather than about the global's own slot — and WHO FREES IT.
-export type GlobalInitArgument
+module type GlobalInitArgument
 	export let label as ByteArray
 	export let value as GlobalInitArgumentValue
 	export let valueType as MaxonType
@@ -1222,7 +1222,7 @@ export typealias GlobalInitArgumentArray = Array with GlobalInitArgument
 // `ConstFactoryCall` with every argument turned into a materialization instruction, arm for arm.
 //
 // It carries no return type for `ConstFactoryCall`'s reason: the receiver of the result already holds it.
-export union GlobalInitCall
+module union GlobalInitCall
 	// `callee` is the mangled `Type.method` name (`qualifiedMethodName`), which is the same key a body's call
 	// site emits and the signature registry files the declaration under — so the argument reordering
 	// `LowerMaxonToStd.lowerCall` does for a labelled call happens here for free.
@@ -1251,7 +1251,7 @@ export typealias GlobalInitCallArray = Array with GlobalInitCall
 // `GlobalInitArgument` — label, value, type and WHO FREES IT — because a map entry is passed to a declared
 // `Map.upsert` exactly as a factory's arguments are passed to a declared `create`, and the ownership question
 // is therefore the same one, asked through the same `recordArgumentCleanup`.
-export type GlobalInitMapEntry
+module type GlobalInitMapEntry
 	export let key as GlobalInitArgument
 	export let value as GlobalInitArgument
 
@@ -1271,7 +1271,7 @@ export typealias GlobalInitMapEntryArray = Array with GlobalInitMapEntry
 // slot — so there is no second answer for a per-field bit to carry. That is the same handoff
 // `Parser.moveInPayload` makes at a body's literal, expressed here by there being no drop rather than by a
 // de-listing, because `__module_init` has no statement whose pending temporaries a value could be on.
-export type GlobalStructField
+module type GlobalStructField
 	// The slot's byte offset — `StructLayout.offsetOfField`.
 	export let offset as ByteOffset
 	// The width the store moves — `Parser.fieldStorageType`'s answer for this slot, so a field written by
@@ -1291,7 +1291,7 @@ export typealias GlobalStructFieldArray = Array with GlobalStructField
 
 // `factoryCallAt`'s twin over the resolved arena, and the reason the two arenas are built entry-for-entry:
 // one id, one miss message, whichever tier is holding the array.
-export function globalInitCallAt(calls GlobalInitCallArray, id InitializerCallId) returns GlobalInitCall
+module function globalInitCallAt(calls GlobalInitCallArray, id InitializerCallId) returns GlobalInitCall
 	return try calls.get(id) otherwise panic("globalInitCallAt: no call {id} in a resolved arena of {calls.count()} — it is built entry-for-entry from the fold arena the ids were minted in")
 end 'globalInitCallAt'
 
@@ -1305,7 +1305,7 @@ end 'globalInitCallAt'
 // against a `create` that only READS its parameter allocated the array and freed nothing — exit 101. The
 // spec that landed this door consumes both of its parameters, which is exactly why the corpus could not see
 // it.
-export union GlobalInitArgumentCleanup
+module union GlobalInitArgumentCleanup
 	// Nothing to free: a scalar owns no heap, and a record the callee CONSUMES is the callee's to release.
 	none
 	// The callee only BORROWED this record, so `__module_init` is still its sole owner and drops it through
@@ -1317,7 +1317,7 @@ end 'GlobalInitArgumentCleanup'
 // What ONE factory argument evaluates to — a folded number, one of the records above, or another CALL.
 // The three are different instructions to the emitter (a `literal` op, a record construction, a `call`),
 // which is the whole of the distinction.
-export union GlobalInitArgumentValue
+module union GlobalInitArgumentValue
 	// A folded number: an integer, a bool's 0/1 (TypeRules' `BoolTrueValue`) or a float's IEEE bit pattern.
 	scalar(payload ParsedInt)
 	record(build ManagedGlobalRecord)
@@ -1332,7 +1332,7 @@ end 'GlobalInitArgumentValue'
 // settles together off ONE folded value. They travel as a pair because re-deriving the type from the
 // construction would mean asking a literal's element kind a second time, and the two answers must not be able
 // to disagree about what the slot holds.
-export type GlobalRecordAndType
+type GlobalRecordAndType
 	export let build as ManagedGlobalRecord
 	export let valueType as MaxonType
 
@@ -1345,7 +1345,7 @@ end 'GlobalRecordAndType'
 // `ProgramSignatures.globalInitValue` hands back, and the reason it is a pair: the two are read together at
 // every site and must not be able to disagree about what the value IS. `GlobalRecordAndType` above makes the
 // same argument one arm down; this is that arm plus the scalar and the nested-node ones.
-export type GlobalInitValueAndType
+type GlobalInitValueAndType
 	export let value as GlobalInitArgumentValue
 	export let valueType as MaxonType
 
@@ -1370,7 +1370,7 @@ end 'GlobalInitValueAndType'
 // the only container that could arrive holding elements; a `CharSet from ['a', 'e']` INSERTS. Routing it
 // through the same per-container answer `containerCreateCall` already gives keeps one router deciding what
 // a container is, rather than a second container test inside the synthesis.
-export type ContainerCreateCall
+module type ContainerCreateCall
 	export let callee as ByteArray
 	export let stamps as ContainerCreateStampArray
 	export let elementAdd as ContainerElementAdd
@@ -1396,7 +1396,7 @@ end 'ContainerCreateCall'
 // emitter would then have silently passed a key where a value belongs. The sentence *"a `Map` global is only
 // ever `MapAlias.create()` (there is no top-level map literal)"* stood in this header until the top-level map
 // literal arrived; it is what this arm replaces.
-export union ContainerElementAdd
+module union ContainerElementAdd
 	push(callee ByteArray)
 	unsupported
 	upsert(callee ByteArray)
@@ -1409,7 +1409,7 @@ end 'ContainerElementAdd'
 // A union rather than a callee name whose emptiness means "trivial": the two are different instructions to
 // the emitter (a `functionRef` op versus a `literal 0`), and a sentinel would let a genuinely missing name
 // read as a deliberate absence.
-export union ContainerCreateStamp
+module union ContainerCreateStamp
 	// A number the record is born holding — a stride, or the 0 that says a column owns nothing and its
 	// teardown walk is skipped.
 	inline(value ParsedInt)
@@ -1781,7 +1781,7 @@ export typealias InitializerCallId = int(0 to u64.max)
 // The one get-or-panic over a fold-tier call arena. An id is minted by the walk that pushed the call it
 // names (`Parser.evalConstFactoryCallInto`) and travels only inside the arena it was minted from, so a miss
 // is an arena the walk and its readers disagree about rather than anything a program can write.
-export function factoryCallAt(calls ConstFactoryCallArray, id InitializerCallId) returns ConstFactoryCall
+function factoryCallAt(calls ConstFactoryCallArray, id InitializerCallId) returns ConstFactoryCall
 	return try calls.get(id) otherwise panic("factoryCallAt: no call {id} in an initializer arena of {calls.count()} — every id is the index the evaluator pushed that call at")
 end 'factoryCallAt'
 
@@ -1789,7 +1789,7 @@ end 'factoryCallAt'
 // STRUCT for a construction (W116). One derivation, so the two spellings of "what fixes this slot's type"
 // cannot be mixed two ways; see `ProgramSignatures.mixConstant`'s `factoryValue` arm for why the arguments
 // and the fields are deliberately left out of the hash.
-export function constFactoryCallHashName(call ConstFactoryCall) returns ByteArray
+function constFactoryCallHashName(call ConstFactoryCall) returns ByteArray
 	return match call 'node'
 		call(callee, _) gives callee
 		construct(typeName, _) gives typeName
@@ -1932,7 +1932,7 @@ end 'ConstStructFieldCheck'
 // ⭐ **WHAT A STRUCT-LITERAL SLOT HOLDS, OR THE ADMISSION THAT THIS TIER CANNOT SAY (W116 review)** — see
 // `ProgramSignatures.constFieldSlotType`, and `ConstStructFieldCheck` for what the second arm buys: a door
 // that cannot resolve a name must DECLINE rather than name a type nobody wrote.
-export union ConstFieldSlotLookup
+union ConstFieldSlotLookup
 	holds(slot MaxonType)
 	unresolvableHere
 end 'ConstFieldSlotLookup'
@@ -1940,7 +1940,7 @@ end 'ConstFieldSlotLookup'
 // The slot a lookup resolved to, or `MapError.keyNotFound` for the tier that could not say — so the one
 // caller reads it with the `try … otherwise` its "then do not judge" answer already wants, rather than a
 // `match` whose second arm would have to invent a type to return.
-export function slotTypeHeld(lookup ConstFieldSlotLookup) returns MaxonType throws MapError
+function slotTypeHeld(lookup ConstFieldSlotLookup) returns MaxonType throws MapError
 	match lookup 'lookup'
 		holds(slot) then return slot
 		unresolvableHere then throw MapError.keyNotFound
@@ -2398,7 +2398,7 @@ end 'PayloadClass'
 // `IrInterface.WitnessRetainFuncOffset` for the measured access violation). It is the same split
 // `Parser.promoteBorrowedToOwned` makes for a CONCRETE String, reached here through a witness because the
 // conformer is a run-time fact.
-export union ExistentialOwnershipProtocol
+union ExistentialOwnershipProtocol
 	// The value half is not a pointer at all — an `int`/`bool` conforming intrinsically
 	// (`isIntrinsicBuiltinConformance`). BOTH words stay 0, and both runtime entries are inert on it.
 	none
@@ -2420,7 +2420,7 @@ end 'ExistentialOwnershipProtocol'
 //
 // EMPTY is the complete answer for a protocol that owns nothing, never a sentinel: both readers stamp nothing
 // for it, and the zero word left behind is the encoding both runtime entries treat as inert.
-export function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns ByteArray
+function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns ByteArray
 	match protocol 'protocol'
 		byteRecord then return StrCloneName
 		aggregate then return MmRetainName
@@ -2655,7 +2655,7 @@ end 'enumPayloadClass'
 // having since deleted that runtime — the DEFECT class is the point, not the type). That caller now derives its
 // bits from the drop CALLEE instead (`MmRuntime.declareUnionPayloadDropNeeds`), which cannot have a
 // favourite type, and the flag went with it.
-export function unionHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns bool
+module function unionHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns bool
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		if caseHasManagedField(signatures, typeNames: typeNames, layout: layout, ci: ci) 'found'
 			return true
@@ -2666,7 +2666,7 @@ end 'unionHasManagedField'
 
 // The per-CASE half — the destructor's tag switch emits a drop block only for a case this answers true
 // for, so the switch and the union-wide gate above read the exact same classification.
-export function caseHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, ci CaseIndex) returns bool
+module function caseHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, ci CaseIndex) returns bool
 	let payloads = layout.payloadsAt(ci)
 	for fi in 0 upto payloads.count() 'eachField'
 		let field = try payloads.get(fi) otherwise panic("caseHasManagedField: payloadsAt count disagrees with get at {fi}")
@@ -2853,7 +2853,7 @@ end 'payloadClassIsString'
 // ⚠ **IT IS A WIDTH AND NEVER AN IDENTITY.** `payloadValueTypeOf` answers the other half; handing this answer
 // to a reader that needed the identity loses the union's NAME, and handing the identity to an op PANICS
 // (`maxonTypeToStdType` has no `named` arm).
-export function declaredAggregateSlotWidth() returns MaxonType
+module function declaredAggregateSlotWidth() returns MaxonType
 	return MaxonType.integer
 end 'declaredAggregateSlotWidth'
 
@@ -4189,7 +4189,7 @@ end 'CalleeConsume'
 //
 // The two askers are `Parser.transferConsumedArgs`, which needs the position anyway to report a
 // double-consume against it, and `ProgramSignatures.recordArgumentCleanup`, which needs only the answer.
-export function calleeConsumesArgument(consume CalleeConsume, argIndex ParamCount, label ByteArray) returns bool
+function calleeConsumesArgument(consume CalleeConsume, argIndex ParamCount, label ByteArray) returns bool
 	return match consume 'c'
 		borrowsAll gives false
 		consumes(info) gives info.isConsumed(argSlotPosition(info.paramNames, argIndex: argIndex, label: label))
@@ -4214,7 +4214,7 @@ end 'calleeConsumesArgument'
 // A body's call site takes a real reference at the same position instead (`Parser.handleEscapingBorrowFeed`)
 // and drops the temp at statement end; `__module_init` has no statement, so the two net to the same one
 // reference by this frame taking none and releasing none.
-export function calleeKeepsArgumentAtAFeed(consume CalleeConsume, argIndex ParamCount, label ByteArray) returns bool
+function calleeKeepsArgumentAtAFeed(consume CalleeConsume, argIndex ParamCount, label ByteArray) returns bool
 	return match consume 'c'
 		borrowsAll gives false
 		consumes(info) gives info.typeParamFeedOf(argSlotPosition(info.paramNames, argIndex: argIndex, label: label)).isFeed()
@@ -4463,7 +4463,7 @@ end 'ManagedCloneStrategy'
 // dispatch exactly: `typeNames` resolves a `named`/`structRef` id to a NAME; pass the interner the field
 // type's ids live in (the file artifact interner at a call site, `project.typeNames` at the synthesis site).
 // The field is a precondition MANAGED one, so a scalar reaching here is a classification drift and panics.
-export function managedFieldCloneStrategy(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType, asElement bool) returns ManagedCloneStrategy
+module function managedFieldCloneStrategy(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType, asElement bool) returns ManagedCloneStrategy
 	let tag = maxonTypeTag(fieldType)
 	// `tagIsByteRecord`, mirroring `managedFieldDropCallee`: a Character clones by the same fused-record
 	// deep copy a String does, because it IS one.
@@ -4560,7 +4560,7 @@ end 'managedNameCloneStrategy'
 // `managedNameCloneStrategy` (none is deep-cloneable) and by `ProgramSignatures.typeSupportsDeepClone` (the
 // gate in front of that strategy). The drop door had the list; the other two did not, and the missing copy
 // was a backend panic.
-export enum CompilerOwnedAggregate
+enum CompilerOwnedAggregate
 	// ⚠ A `characterSet` case stood first and went at W129 with the compiler-owned `__CharacterSet` layout —
 	// once `stdlib/CharacterSet.maxon` declares the type, its box is an ordinary declared struct.
 	managedFile
@@ -4573,7 +4573,7 @@ export enum CompilerOwnedAggregate
 	userDeclared
 end 'CompilerOwnedAggregate'
 
-export function compilerOwnedAggregateOf(name ByteArray) returns CompilerOwnedAggregate
+function compilerOwnedAggregateOf(name ByteArray) returns CompilerOwnedAggregate
 	if name.equals(ManagedFileTypeName) 'managedFile'
 		return CompilerOwnedAggregate.managedFile
 	end 'managedFile'
@@ -4688,7 +4688,7 @@ end 'managedElementRecordCopy'
 // reaching here is an invariant break and panics. (The full-graph gate is the RIGHT precondition, not a mere
 // top-level `direct` check: a struct/union that is `direct` at the top but owns a non-clonable field must NOT
 // reach a stamp — see `genericInstanceOpaqueArrayElementIsCopyable`.)
-export function directCloneCalleeOf(strategy ManagedCloneStrategy) returns ByteArray
+function directCloneCalleeOf(strategy ManagedCloneStrategy) returns ByteArray
 	match strategy 'strategy'
 		direct(callee) then return callee
 		managedElements then panic("directCloneCalleeOf: a `managedElements` strategy has no single-function clone callee — the caller must gate on typeSupportsDeepClone")
@@ -4779,7 +4779,7 @@ let ReservedTypeNamePrefix = b"__"
 // replaced by a discovered-or-panic**: the compile it describes is the one with no corpus, which is the only
 // compile in which it is ever read at all. It is an INITIALIZER for a state that exists, not a fallback for a
 // state that does not.
-export let SynthesizedArrayRecordSeed = b"Array"
+let SynthesizedArrayRecordSeed = b"Array"
 
 // The name `stdlib/Array.maxon` gives the `Array`'s sole type parameter — `export type Array uses Element`.
 // shv2 declares no such type (the container is compiler-owned and synthesized, which is why
@@ -4801,7 +4801,7 @@ let ByteElementTypeName = b"Byte"
 
 // The single type parameter `Array` declares (`Array with Element`) — the arity `checkGenericInstance`
 // validates a `Array with …` against.
-export let ArrayTypeParamCount = 1 as FieldIndex
+let ArrayTypeParamCount = 1 as FieldIndex
 
 // The name of the builtin `Set` generic type (`Set with Element`, P1.7b slice A) — the hash-table twin of
 // `SynthesizedArrayRecordSeed`. `Set` has no `type Set uses Element` declaration (shv2 reads no stdlib; its
@@ -4830,7 +4830,7 @@ export let SetBuiltinBaseName = b"Set"
 // with no second predicate to keep in step. What each door then ANSWERS with differs — the mangled instance
 // name where there is no source spelling, the typealias's own name where there is — and folding those two
 // into one `String` return is what put a mangled `Array_Opaque` into a diagnostic that pins `OpaqueArr`.
-export union GenericInstanceConformer
+union GenericInstanceConformer
 	// A conforming `Array with E`: every one of them reduces to the ONE `Array` conformer, whose impls walk
 	// raw bytes and are element-independent.
 	arrayBuiltin
@@ -4885,7 +4885,7 @@ export let ListBuiltinBaseName = b"List"
 export let ManagedListBuiltinBaseName = b"__ManagedList"
 
 // The single type parameter `__ManagedList` declares — the `List` twin, and the same one-word element slot.
-export let ManagedListTypeParamCount = 1 as FieldIndex
+let ManagedListTypeParamCount = 1 as FieldIndex
 
 // ⭐⭐ **`__ManagedListNode with Element` — A HANDLE ON ONE NODE, AND THE ONE TYPE IN shv2 NO SOURCE CAN
 // CONSTRUCT.** Only an insertion mints a value of it (`__ManagedList.insertFirst`/`insertLast`).
@@ -4921,7 +4921,7 @@ export let ManagedListNodeBuiltinBaseName = b"__ManagedListNode"
 // every one-argument door (`containerElementType`, `containerElementIsManaged`, `elementAccessorResultType`)
 // serves a node handle unchanged — which is exactly how `value()` is emitted through the SAME element
 // accessor a `get` is.
-export let ManagedListNodeTypeParamCount = 1 as FieldIndex
+let ManagedListNodeTypeParamCount = 1 as FieldIndex
 
 // ⭐⭐ **`__ManagedMemoryCursor with Element` — A NAVIGABLE POSITION INSIDE A BUFFER, AND THE SECOND TYPE NO
 // SOURCE CAN CONSTRUCT.** Only `__ManagedMemory.createCursor()` mints one. `stdlib/Array.maxon:490-531`'s
@@ -4947,7 +4947,7 @@ export let ManagedMemoryCursorBuiltinBaseName = b"__ManagedMemoryCursor"
 // The single type parameter a cursor carries — the same one-element arity every other one-argument door
 // (`containerElementType`, `containerElementIsManaged`, `elementAccessorResultType`) already serves, which is
 // how `current()` is emitted through the SAME element accessor an `Array`'s `get` is.
-export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
+let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 
 // ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `Vector with <N> <Element>`, A FIXED-SIZE ARRAY.**
 // `stdlib/Vector.maxon` declares one, and shv2 synthesizes its own instead.
@@ -5111,7 +5111,7 @@ export let VectorBuiltinBaseName = b"Vector"
 // The single TYPE parameter `Vector` declares. Its SIZE is not a type argument (see above), so a
 // `Vector with 3 Int` has arity ONE here exactly as `Array with Int` does, and every one-argument container
 // door (`containerElementType`, `arrayElementSize`, `containerElementIsManaged`) serves it unchanged.
-export let VectorTypeParamCount = 1 as FieldIndex
+let VectorTypeParamCount = 1 as FieldIndex
 
 // ⭐⭐ **`MapError` — WHAT A MISSING-KEY `Map.get` THROWS, AND IT WEARS THE BARE NAME FOR `ArrayError`'S
 // EXACT REASON.** `stdlib/Map.maxon:6-9` declares it and that module is listed, so the DECLARATION is what a
@@ -5162,8 +5162,8 @@ export let IterationErrorTypeName = b"IterationError"
 // when the layout left, exactly as the `__Managed*Error` case names stayed at A1s: the compiler still has to
 // NAME the case a cursor protocol declaration must throw (`declaresCursorProtocol`), and it reads the
 // numbering off the declaration.
-export let IterationErrorExhaustedCaseName = b"exhausted"
-export let IterationErrorAtStartCaseName = b"atStart"
+let IterationErrorExhaustedCaseName = b"exhausted"
+let IterationErrorAtStartCaseName = b"atStart"
 
 // ⭐⭐ **DOES A DECLARED `throws` CLAUSE NAME `IterationError` — the ONE error type the traversal protocol's
 // two fallible declarations may carry?** The loop absorbs what `advance()` and `createIterator()` throw
@@ -5663,7 +5663,7 @@ export let SurfaceBitElementIsBuffer = 2 as DeclaredSurfaceNode
 // `Parser.emitContainerElementAccessor`, whose callers are `Array`, `List`, `Vector` and the array cursor —
 // containers whose argument 0 IS their element. A derivation that narrowed itself to `Array` would make the
 // derived answer disagree with the RECORDED one for the same declaration, which is worse than the overreach.
-export let BufferSurfaceArgPosition = 0 as TypeParamPosition
+let BufferSurfaceArgPosition = 0 as TypeParamPosition
 
 // Everything above the two flag bits is the node's SLOT COUNT. THE one speller of the shift, shared by the
 // builder (`Parser.declaredSurfaceAt`) and the readers below, so the two cannot come to disagree about where
@@ -5734,7 +5734,7 @@ end 'surfaceSlot'
 // same reason, off the same recorded name. A second function beside this one would have been a second copy
 // of the copy-the-tree-and-OR-the-root rule — free to disagree the day the node grows a third bit, which is
 // this project's own signature bug.
-export function surfaceWithRootBits(surface DeclaredSurface, bits DeclaredSurfaceNode) returns DeclaredSurface
+function surfaceWithRootBits(surface DeclaredSurface, bits DeclaredSurfaceNode) returns DeclaredSurface
 	var out = DeclaredSurface.create()
 	out.push(surfaceRootNode(surface) or bits)
 	for i in 1 upto surface.count() 'eachRemainingNode'
@@ -5791,7 +5791,7 @@ end 'surfaceSubtreeSize'
 // surface is the one declaration fact `mixType` structurally cannot carry: `__ManagedMemory` and `ByteArray`
 // fold to the identical `genericInstance`, so an edit between the two spellings would move no memo key while
 // changing which member roster every caller's calls reach.
-export function mixSurface(state ContentHash, surface DeclaredSurface) returns ContentHash
+function mixSurface(state ContentHash, surface DeclaredSurface) returns ContentHash
 	var h = state
 	for node in surface 'eachNode'
 		h = mix(h, value: node)
@@ -6026,7 +6026,7 @@ export let ByteAtMethod = b"byteAt"
 // unprefixed constant to serve yet. A second one that spelled it would take this constant rather than mint a
 // fifth, exactly as `ClearMethod` was un-prefixed the day the chain spelled it.
 export let ListPrependMethod = b"prepend"
-export let ListLastMethod = b"last"
+module let ListLastMethod = b"last"
 export let ListRemoveFirstMethod = b"removeFirst"
 export let ListRemoveLastMethod = b"removeLast"
 
@@ -6114,7 +6114,7 @@ let ManagedMemoryWordElementSize = 8 as ParsedInt
 // these cases are unreachable TODAY. They are declared anyway rather than added one per rung: the ordinals
 // are positional, so a later rung that appends `sliceOutOfBounds` between two of them would silently reroute
 // every handler already written against the others.
-export let ManagedMemoryErrorTypeName = b"__ManagedMemoryError"
+module let ManagedMemoryErrorTypeName = b"__ManagedMemoryError"
 
 // ⭐⭐ **`ArrayError` — WHAT EVERY THROWING `Array` ACCESSOR THROWS, AND WHY IT WEARS A RESERVED NAME (R4.4).**
 // `stdlib/Array.maxon:6-9` declares it with exactly two cases, and `specs-shv2/array-slots.md` discriminates
@@ -6172,14 +6172,14 @@ export let StringErrorTypeName = b"StringError"
 // REFERENCE'S OWN ARRANGEMENT** (`stdlib/Array.maxon:6-9` against `stdlib/Builtins.maxon:151-153`). So ONE pair
 // of name constants serves both enums: writing them twice would let the two orders drift apart while each file
 // still read "correct", and the ordinal IS the error flag a throwing runtime returns in both families.
-export let ManagedMemoryIndexOutOfBoundsCaseName = b"indexOutOfBounds"
-export let ManagedMemoryEmptySlotCaseName = b"emptySlot"
-export let ManagedMemorySliceOutOfBoundsCaseName = b"sliceOutOfBounds"
-export let ManagedMemoryInvalidLengthCaseName = b"invalidLength"
-export let ManagedMemoryInvalidCapacityCaseName = b"invalidCapacity"
-export let ManagedMemoryShiftOutOfBoundsCaseName = b"shiftOutOfBounds"
-export let ManagedMemoryInvalidByteRangeCaseName = b"invalidByteRange"
-export let ManagedMemoryInvalidAllocationCaseName = b"invalidAllocation"
+module let ManagedMemoryIndexOutOfBoundsCaseName = b"indexOutOfBounds"
+module let ManagedMemoryEmptySlotCaseName = b"emptySlot"
+module let ManagedMemorySliceOutOfBoundsCaseName = b"sliceOutOfBounds"
+module let ManagedMemoryInvalidLengthCaseName = b"invalidLength"
+module let ManagedMemoryInvalidCapacityCaseName = b"invalidCapacity"
+module let ManagedMemoryShiftOutOfBoundsCaseName = b"shiftOutOfBounds"
+module let ManagedMemoryInvalidByteRangeCaseName = b"invalidByteRange"
+module let ManagedMemoryInvalidAllocationCaseName = b"invalidAllocation"
 
 // `String.init(managed ByteMemory)` — `stdlib/String.maxon:114`, the corpus's way back from a
 // `__ManagedMemory` to a `String`. Its parameter name is the reference's.
@@ -6204,25 +6204,25 @@ export let CharacterAsciiValueMethod = b"asciiValue"
 // ⭐ **THE ERROR EVERY `__ManagedFile` OPERATION THROWS (R4.1)**, and the type a handler's `match e`
 // discriminates. It is DECLARED at `stdlib/Builtins.maxon:175` and read from there (A1s); the reason its
 // case ORDER is load-bearing is `Project.BuiltinErrorOrdinalCheck`'s, which holds this file's ordinals to it.
-export let ManagedFileErrorTypeName = b"__ManagedFileError"
+module let ManagedFileErrorTypeName = b"__ManagedFileError"
 
 // The three case names, in the order `specs/managed-file.md` states them — which IS their ordinal order,
 // and therefore the error flag the runtime returns. Not reorderable; see the layout's comment.
-export let ManagedFileNotFoundCaseName = b"notFound"
-export let ManagedFileAccessDeniedCaseName = b"accessDenied"
-export let ManagedFileOpenFailedCaseName = b"openFailed"
+module let ManagedFileNotFoundCaseName = b"notFound"
+module let ManagedFileAccessDeniedCaseName = b"accessDenied"
+module let ManagedFileOpenFailedCaseName = b"openFailed"
 
 // The eight R4.2 cases, APPENDED in v1's exact order (`LowerMaxonToStd.maxon:1781-1795`). Appending is not
 // a style choice: the ordinal IS the wire format the runtime returns as an error flag, so inserting or
 // reordering one silently reroutes every handler in the corpus.
-export let ManagedFileReadFailedCaseName = b"readFailed"
-export let ManagedFileWriteFailedCaseName = b"writeFailed"
-export let ManagedFileSizeFailedCaseName = b"sizeFailed"
-export let ManagedFileDeleteFailedCaseName = b"deleteFailed"
-export let ManagedFileStatFailedCaseName = b"statFailed"
-export let ManagedFileInvalidStatBufferCaseName = b"invalidStatBuffer"
-export let ManagedFileInvalidStatIndexCaseName = b"invalidStatIndex"
-export let ManagedFileClosedCaseName = b"closed"
+module let ManagedFileReadFailedCaseName = b"readFailed"
+module let ManagedFileWriteFailedCaseName = b"writeFailed"
+module let ManagedFileSizeFailedCaseName = b"sizeFailed"
+module let ManagedFileDeleteFailedCaseName = b"deleteFailed"
+module let ManagedFileStatFailedCaseName = b"statFailed"
+module let ManagedFileInvalidStatBufferCaseName = b"invalidStatBuffer"
+module let ManagedFileInvalidStatIndexCaseName = b"invalidStatIndex"
+module let ManagedFileClosedCaseName = b"closed"
 
 // The FIELD that yields it from a byte array — `stdlib/String.maxon:68`'s `var managed as ByteMemory`,
 // which the corpus reaches as `"…".toByteArray().managed`. An identity read; see the arm in
@@ -6257,8 +6257,8 @@ end 'isBuiltinManagedTypeName'
 // Its one field, per the spec's "Type Structure". Unexported and immutable: the corpus never reads or
 // writes it — `__ManagedFile{_handle: 0}` is E3072 (`managed-file.error-direct-construction`) precisely
 // so the handle cannot be forged — and the runtime reaches it through `ManagedFileHandleOffset`.
-export let ManagedFileHandleFieldName = b"_handle"
-export let ManagedFileHandleFieldIndex = 0 as FieldIndex
+let ManagedFileHandleFieldName = b"_handle"
+let ManagedFileHandleFieldIndex = 0 as FieldIndex
 
 // ⭐ **THE COMPILER-OWNED `__ManagedDirectory` TYPE (R4.3)** — an 8-byte box holding one pointer to a
 // separately allocated FIND BLOCK (the search handle, the `WIN32_FIND_DATAA` the OS refills, and the
@@ -6290,7 +6290,7 @@ export let ManagedDirectoryCloseMethod = b"close"
 // `match e` discriminates. It is DECLARED at `stdlib/Builtins.maxon:190` and read from there (A1s); the
 // reason its case ORDER is load-bearing is `Project.BuiltinErrorOrdinalCheck`'s, which holds this file's
 // ordinals to it.
-export let ManagedDirectoryErrorTypeName = b"__ManagedDirectoryError"
+module let ManagedDirectoryErrorTypeName = b"__ManagedDirectoryError"
 
 // The eight case names in `stdlib/Builtins.maxon:189-199`'s order — which IS their ordinal order, and
 // therefore the error flag the runtime returns. Not reorderable; see the layout's comment.
@@ -6298,14 +6298,14 @@ export let ManagedDirectoryErrorTypeName = b"__ManagedDirectoryError"
 // ⚠ **THE ORDER IS THE ENUM'S, NOT THE BOOTSTRAP COMMENT'S.** `2-Parser.cs:1442-1444` lists SEVEN and omits
 // `iteratorInvalid`, which would shift every later ordinal by one. It is the third reference comment found
 // stale about its own enum.
-export let ManagedDirectoryNotFoundCaseName = b"notFound"
-export let ManagedDirectoryAccessDeniedCaseName = b"accessDenied"
-export let ManagedDirectoryOpenSearchFailedCaseName = b"openSearchFailed"
-export let ManagedDirectoryNextFailedCaseName = b"nextFailed"
-export let ManagedDirectoryIteratorInvalidCaseName = b"iteratorInvalid"
-export let ManagedDirectoryCreateFailedCaseName = b"createFailed"
-export let ManagedDirectoryCurrentPathFailedCaseName = b"currentPathFailed"
-export let ManagedDirectoryClosedCaseName = b"closed"
+module let ManagedDirectoryNotFoundCaseName = b"notFound"
+module let ManagedDirectoryAccessDeniedCaseName = b"accessDenied"
+module let ManagedDirectoryOpenSearchFailedCaseName = b"openSearchFailed"
+module let ManagedDirectoryNextFailedCaseName = b"nextFailed"
+module let ManagedDirectoryIteratorInvalidCaseName = b"iteratorInvalid"
+module let ManagedDirectoryCreateFailedCaseName = b"createFailed"
+module let ManagedDirectoryCurrentPathFailedCaseName = b"currentPathFailed"
+module let ManagedDirectoryClosedCaseName = b"closed"
 
 // ⭐ **THE COMPILER-OWNED `__ManagedSocket` TYPE** — an 8-byte box holding one raw OS socket handle, with
 // a runtime-owned destructor that closes it on drop. `specs/managed-socket.md`’s "Type Structure" states the
@@ -6319,8 +6319,8 @@ export let ManagedSocketTypeName = b"__ManagedSocket"
 
 // Its one field, per the spec’s "Type Structure". No corpus file writes it — `__ManagedSocket{_handle: 0}`
 // is E3072 (`managed-socket.error-direct-construction`) precisely so the handle cannot be forged.
-export let ManagedSocketHandleFieldName = b"_handle"
-export let ManagedSocketHandleFieldIndex = 0 as FieldIndex
+let ManagedSocketHandleFieldName = b"_handle"
+let ManagedSocketHandleFieldIndex = 0 as FieldIndex
 
 // ⭐ **THE FOUR `__ManagedSocket` METHODS — the surface BOTH references declare** (`maxon-sharp/Compiler/
 // 2-Parser.cs:1576-1583`, `maxon-selfhosted/.../LowerMaxonToStd.maxon`). One static and three instance
@@ -6336,7 +6336,7 @@ export let ManagedSocketCloseMethod = b"close"
 // discriminates. DECLARED at `stdlib/Builtins.maxon:164` and read from there (A1s), exactly as the file and
 // directory families are; the reason its case ORDER is load-bearing is `Project.BuiltinErrorOrdinalCheck`’s,
 // which holds this file’s ordinals to it.
-export let ManagedSocketErrorTypeName = b"__ManagedSocketError"
+module let ManagedSocketErrorTypeName = b"__ManagedSocketError"
 
 // The seven case names in `stdlib/Builtins.maxon:165-171`’s order — which IS their ordinal order, and
 // therefore the error flag the runtime returns. Not reorderable.
@@ -6344,13 +6344,13 @@ export let ManagedSocketErrorTypeName = b"__ManagedSocketError"
 // ⚠ **`bufferOutOfBounds` IS ORDINAL 0, NOT A LATER ONE.** It reads like a rare edge case and sits first,
 // so a transcription that "tidied" the order would silently re-point every other flag by one. The
 // declaration is the authority; this list is checked against it by the ordinal guard.
-export let ManagedSocketBufferOutOfBoundsCaseName = b"bufferOutOfBounds"
-export let ManagedSocketResolveFailedCaseName = b"resolveFailed"
-export let ManagedSocketConnectFailedCaseName = b"connectFailed"
-export let ManagedSocketSendFailedCaseName = b"sendFailed"
-export let ManagedSocketRecvFailedCaseName = b"recvFailed"
-export let ManagedSocketConnectionClosedCaseName = b"connectionClosed"
-export let ManagedSocketClosedCaseName = b"closed"
+module let ManagedSocketBufferOutOfBoundsCaseName = b"bufferOutOfBounds"
+module let ManagedSocketResolveFailedCaseName = b"resolveFailed"
+module let ManagedSocketConnectFailedCaseName = b"connectFailed"
+module let ManagedSocketSendFailedCaseName = b"sendFailed"
+module let ManagedSocketRecvFailedCaseName = b"recvFailed"
+module let ManagedSocketConnectionClosedCaseName = b"connectionClosed"
+module let ManagedSocketClosedCaseName = b"closed"
 
 // ⭐ **THE PARAMETER NAMES A `__ManagedSocket` ARGUMENT MISMATCH QUOTES BACK.** They are the reference's own
 // (`maxon-sharp/Compiler/2-Parser.cs:1574-1583` registers `tcpConnect(host, port)` and
@@ -6424,13 +6424,13 @@ export let CharacterErrorTypeName = b"CharacterError"
 // The single case name. Its ordinal is 0 because it is the enum's first and only case — a fact about the
 // DECLARATION, which is the direction `verifyCharacterErrorOrdinals` reads it in: the corpus states the
 // order and the runtime's literal is held to it, never the reverse.
-export let CharacterNotAsciiCaseName = b"notAscii"
+module let CharacterNotAsciiCaseName = b"notAscii"
 
 // Its one field, per the spec's "Type Structure". Unexported and immutable: the corpus never reads or writes
 // it — `__ManagedDirectory{_block: 0}` is E3072 (`managed-directory.error-direct-construction`) precisely so
 // the block pointer cannot be forged — and the runtime reaches it through `ManagedDirectoryBlockOffset`.
-export let ManagedDirectoryBlockFieldName = b"_block"
-export let ManagedDirectoryBlockFieldIndex = 0 as FieldIndex
+let ManagedDirectoryBlockFieldName = b"_block"
+let ManagedDirectoryBlockFieldIndex = 0 as FieldIndex
 
 // The alias for a `CharacterSet`'s member set — `typealias CharSet = Set with Character`, which
 // `stdlib/CharacterSet.maxon:19` declares and the corpus spells (`specs/unicode-category.md:121`). The
@@ -6472,7 +6472,7 @@ end 'singletonInteger'
 // names one interned entry however deep it is — and that is exactly what the token below restores. The two
 // halves are independent: the LAYOUT stays monomorphic and name-keyed (both reasons above still hold), and
 // only the way one tuple's identity CITES another's changes.
-export let TupleTypeNamePrefix = b"__Tuple"
+let TupleTypeNamePrefix = b"__Tuple"
 
 // ⚠ **THE ARITY RIDES IN FRONT AND THE ELEMENTS JOIN WITH A CHARACTER NO ELEMENT NAME CAN HOLD** — the
 // injectivity rule the Architecture states for `witnessTableLabel`, spent here. An `_` join is NOT injective
@@ -6696,7 +6696,7 @@ end 'isTupleTypeName'
 // what settles a SWEEP-minted spelling, whose elements are still bare names), and `fieldTypeOf` scopes an
 // element read through it. Visibility is `global` exactly as before — a tuple is nameable wherever its
 // elements are, and the path is read for SCOPING, never for reach.
-export function tupleStructLayout(name ByteArray, elements MaxonTypeArray, declFilePath FilePath) returns StructLayout
+function tupleStructLayout(name ByteArray, elements MaxonTypeArray, declFilePath FilePath) returns StructLayout
 	var layout = StructLayout.create(name, visibility: Visibility.global, declFilePath: declFilePath)
 	for i in 0 upto elements.count() 'eachElement'
 		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, tier: Visibility.global, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
@@ -6827,7 +6827,7 @@ let sharedEmptyDisagreeingAliasNames = DisagreeingAliasNameSet.create()
 // contest's SECOND pass builds, and exactly what `ContestedGenericAliasMap` and `NameableGenericAliasMap`
 // want per name. It is built only for a name the first pass has already condemned, which is why it may
 // afford a map and a `FilePath.toString()` per declaration where that pass may not.
-export type GenericAliasDeclarationGroup
+type GenericAliasDeclarationGroup
 	// Declaring file path ⇒ the instance that file's declaration names — published verbatim as this name's
 	// entry in `ContestedGenericAliasMap`.
 	export var byDeclaringFile as GenericAliasByDeclaringFile
@@ -6913,7 +6913,7 @@ export typealias RangeIdentityNameMap = Map with (ByteArray, ByteArray)
 
 // How many ranged aliases a program declares over one range, while `rangeIdentityPairs` is deciding which
 // ranges have more than one claimant. The bound is the count of ranged typealiases in the program.
-export typealias RangeClaimantCount = int(0 to u32.max)
+module typealias RangeClaimantCount = int(0 to u32.max)
 export typealias RangeClaimantCountMap = Map with (ByteArray, RangeClaimantCount)
 
 // One merged instance ⇒ the instance it merged INTO. Only `rekeyForRangeIdentity` writes it, and only for a
@@ -7159,7 +7159,7 @@ export let MaxFixedElementCount = u32.max as FixedElementCount
 // the count from reading as a type argument's mangling, and it is v1's own spelling for the same symbol
 // (`__layout_Vector_N3_Int`, pinned in `/specs/vector.md`'s RequiredIR blocks), so the two compilers name one
 // type one way.
-export let FixedSizeNameTag = "N"
+let FixedSizeNameTag = "N"
 
 // ⭐ **THE GENERIC-INSTANCE INTERNER (P1.6-A)** — `Box with Integer` ⇒ a `GenericInstanceId`, with the
 // `(baseId, argTypes)` payload held OUT OF LINE (inlining args into `MaxonType` would make the union
@@ -7450,7 +7450,7 @@ export typealias GenericArgNodeArray = Array with GenericArgNode
 
 // A mutable read cursor over a flat `GenericArgNodeArray` — `resolveGenericArgs` walks the pre-order tree by
 // advancing it (Maxon lacks tuples, so the recursion threads position through this shared reference).
-export type ArgCursor
+type ArgCursor
 	export var pos as FieldIndex
 
 	export static function create() returns ArgCursor
@@ -8036,7 +8036,7 @@ export typealias AssociatedTypeHoldingMap = Map with (ByteArray, ByteArrayArray)
 // arms have; a DISPATCH through the held value wants that interface's own `with` arguments, which only the
 // instantiated arm carries. An argument denoting no interface at all is neither — it is `MapError.keyNotFound`
 // at that door, exactly as it was before the split.
-export union HeldAssociatedArg
+union HeldAssociatedArg
 	instantiated(gid GenericInstanceId)
 	bare(interfaceName ByteArray)
 end 'HeldAssociatedArg'
@@ -8332,7 +8332,7 @@ end 'namespaceQualifiedName'
 // The TYPE half of a `Type.method` callee, or the callee itself when it names a free function. Written
 // through `splitQualifiedName` rather than as a second scan for the separator, so the one inverse of
 // `joinQualifiedName` stays the only place the split is spelled.
-export function qualifiedCalleeHead(callee ByteArray) returns ByteArray
+function qualifiedCalleeHead(callee ByteArray) returns ByteArray
 	return match splitQualifiedName(callee) 'shape'
 		parts(prefix, _) gives prefix
 		notQualified gives callee
@@ -8505,7 +8505,7 @@ end 'rangedAliasUnderlyingName'
 // absolute path into a type-name key, where a spec fragment staged in a temp directory would spell one thing
 // here and another on the next host. `canonicalInstanceName` is structural over the base and the args, so it
 // is a fact about the program and about nothing else.
-export function instanceQualifiedAliasName(name ByteArray, canonicalInstance ByteArray) returns ByteArray
+function instanceQualifiedAliasName(name ByteArray, canonicalInstance ByteArray) returns ByteArray
 	return "{String.from(name)}{CompilerQualifiedAliasSeparator}{String.from(canonicalInstance)}".toByteArray()
 end 'instanceQualifiedAliasName'
 
@@ -8579,7 +8579,7 @@ typealias FuncReturnDeclFileMap = Map with (ByteArray, FilePath)
 // a `static` handed the enclosing `self` fails an arity check on a parameter its author never wrote, and an
 // instance method denied one is called on nothing. `Parser.ensureSiblingReceivers` reads the same fact off
 // a TOKEN walk for a declaration whose body it can see; this is the answer for one it cannot.
-export type FunctionDeclSite
+type FunctionDeclSite
 	export let visibility as Visibility
 	export let declFilePath as FilePath
 	export let takesReceiver as bool
@@ -8730,7 +8730,7 @@ let FirstLaterFileTupleOrdinal = 1
 // leading argument cannot be labelled (E2052), so a `bool` here reads `nameInstancesFromDeclarations(false)`
 // at the call site — a magic value whose meaning lives only in the callee's parameter list. It is the same
 // shape `RecordedReturnTypeRule` below takes for the same walk-with-two-rules problem.
-export enum DisplayNameRound
+enum DisplayNameRound
 	// A file-scope `typealias ByteArray = Array with Byte`. Claimed FIRST, so it wins every contest with a
 	// type-scoped spelling of the same instance whatever order the loader reached the files in.
 	unscoped
@@ -14834,7 +14834,7 @@ export type ProgramSignatures
 	// parser-intrinsic and never reach `validateCall` — see that arm.
 	function foldedMintType(folded ConstFoldedValue, elementFilePath FilePath) returns MaxonType
 		match folded 'kind'
-			scalar(value) then return maxonTypeOfTag(value.tag, nameId: UnnamedTypeId)
+			scalar(value) then return maxonTypeOfTag(value.tag, nameId: self.typeNames.intern(value.typeName))
 			managed to boxedUnionCase then break 'kind'
 		end 'kind'
 
@@ -20677,7 +20677,11 @@ export type ProgramSignatures
 	function settleGenericAliasContestRound() returns bool
 		let instancesBefore = self.genericInstances.count()
 		var firstInstance = GenericAliasMap.create()
-		var disagreeing = sharedEmptyDisagreeingAliasNames
+		// ⚠ **OWNED, for `RangedAliasRegistry.settleRangeContests`' reason** — it seeded this from the shared
+		// empty set and copy-on-wrote on the first disagreement, which is a mutable name reaching a
+		// module-level `let`'s record (E3019 at the `insert`). The round's own `count() == 0` early return is
+		// what keeps a program with no disagreement from paying anything beyond this empty set.
+		var disagreeing = DisagreeingAliasNameSet.create()
 		for entry in self.genericAliasDecls 'eachDeclaration'
 			// Only a name a SECOND declaration mentions can disagree with anything, so the walk narrows to
 			// those and the map it fills holds one entry per such name rather than one per alias in the
@@ -20689,9 +20693,6 @@ export type ProgramSignatures
 			let scoped = self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath)
 			if let first = try firstInstance.get(entry.aliasName) 'anotherDeclarationCameFirst'
 				if first != scoped 'theyNameTwoInstances'
-					if disagreeing is sharedEmptyDisagreeingAliasNames 'stillShared'
-						disagreeing = DisagreeingAliasNameSet.create()
-					end 'stillShared'
 					disagreeing.insert(entry.aliasName)
 				end 'theyNameTwoInstances'
 			end 'anotherDeclarationCameFirst' else 'theFirstDeclarationOfThisName'
@@ -21420,9 +21421,40 @@ export type ProgramSignatures
 	// `internAggregateElementInstances`, whose whole output is guesses.
 	export function builtinInstanceForElement(baseName ByteArray, element MaxonType, asSpeculative bool = false) returns GenericInstanceId
 		var args = MaxonTypeArray.create()
-		args.push(element)
+		args.push(self.canonicalInstanceArg(element))
 		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args, asSpeculative: asSpeculative)
 	end 'builtinInstanceForElement'
+
+	// ⭐⭐ **ONE DECLARED STRUCT MUST REACH THE INTERN KEY IN ONE SPELLING — `named`, WHICH IS
+	// `namedElementType`'s ANSWER AND THEREFORE THE CONVENTION.** `structRef` is the RESOLVED form of a
+	// `named` that turned out to name a declared `type` (`TypeResolution.resolveNamedType`), so the two
+	// DENOTE the same type while `GenericInstanceRegistry.instanceKey` — which compares the raw `(tag, id)`
+	// — reads them as two. Two instances, one `mangleGenericInstance` (it reads only the NAME) ⇒ the exact
+	// `E3006 duplicate definition of 'Array_<T>'` that `builtinInstanceForNamedElement`'s header measures for
+	// the tuple spelling, arrived at from the other side.
+	//
+	// ⛔ **MEASURED, and it is what stopped shv2 compiling its OWN LEXER.** `var keywordMap = [b"if":
+	// KeywordInfo.create(…), …]` is a TOP-LEVEL map literal, and the const tier types its value column from
+	// the factory's recorded return type — already `structRef` — where a body's `[…]` literal types the same
+	// struct through `namedElementType` and gets `named`. The map's key/value column arrays are then interned
+	// from those column types, so `Array with KeywordInfo` existed twice the moment any `[<identifier>…]`
+	// literal elsewhere in the program made the sweep over-intern the `named` one:
+	// `E3006 duplicate definition of 'Array_KeywordInfo'`, blaming a pair of instantiations the source never
+	// wrote. The two tiers are NOT asked to agree by convention; they are made to agree here, at the one door
+	// that builds a container's type arguments.
+	//
+	// ⚠ **A TUPLE'S `structRef` IS THE CANONICAL ONE AND IS LEFT ALONE** — `namedElementType`'s own split,
+	// read back through the same `isTupleTypeName` predicate so the two cannot drift. A synthesized tuple has
+	// no declaration to resolve `named` from, which is exactly why it is spelled `structRef` there.
+	function canonicalInstanceArg(arg MaxonType) returns MaxonType
+		if maxonTypeTag(arg) != ValueTypeTag.structRef 'notAResolvedStruct'
+			return arg
+		end 'notAResolvedStruct'
+
+		let nameId = typeNameIdOf(arg)
+		let name = try self.typeNames.nameOf(nameId) otherwise panic("ProgramSignatures.canonicalInstanceArg: structRef id {nameId} is not in this index's interner — a container's type argument is interned HERE, so an id that misses came from another table")
+		return arg if isTupleTypeName(name) else MaxonType.named(nameId)
+	end 'canonicalInstanceArg'
 
 	// ⭐ **THE TWO-TYPE-ARGUMENT CONTAINER INSTANCE — the `Map` twin of `builtinInstanceForElement`.** A
 	// `["a": 1]` literal fixes BOTH of its columns from its first pair, exactly as a `[…]` literal fixes its
@@ -21432,8 +21464,8 @@ export type ProgramSignatures
 	// rather than an array a caller could fill in the wrong order.
 	export function builtinInstanceForColumns(baseName ByteArray, key MaxonType, value MaxonType) returns GenericInstanceId
 		var args = MaxonTypeArray.create()
-		args.push(key)
-		args.push(value)
+		args.push(self.canonicalInstanceArg(key))
+		args.push(self.canonicalInstanceArg(value))
 		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args)
 	end 'builtinInstanceForColumns'
 
@@ -21535,6 +21567,26 @@ export type ProgramSignatures
 	//
 	// It is named for the SPACE and not for a caller ("container column" was its first name, and the second
 	// caller is not a column) because the space is the whole of what it settles.
+	// ⭐⭐ **THIS INDEX'S OWN NAME TABLE — for a caller holding a LAYOUT the index interned, whose field-type
+	// ids therefore index this table and not the project's.** The reader below answers for ONE type; a
+	// cascade walk resolves a whole layout's worth through a shared router that takes the interner as a
+	// parameter (`managedFieldDropCallee`, `managedFieldCloneStrategy`), and that parameter is the only
+	// honest way to say which space the caller is in.
+	//
+	// ⛔⛔ **IT EXISTS BECAUSE OPEN #56 CAME BACK THROUGH THE TUPLE WALK.**
+	// `MmRuntime.installStructRuntimeEntries` walks `project.structTypes` AND
+	// `ProgramSignatures.tupleLayouts()` into one installer, and the installer resolved every field type
+	// against `project.typeNames` — which is right for the first walk and a different table's number for
+	// the second. MEASURED on this compiler's own source: the tuple `__Tuple2.Array_Byte.GlobalAliasReturnInfo`
+	// has a `structRef` field at id 814, and id 814 in the PROJECT's table is `InstantNanos` — a ranged
+	// alias — so the destructor synthesis panicked *"'InstantNanos' is a ranged typealias, a scalar, which
+	// `typeIsManaged` never classifies managed"* on a field that is a struct. A misread that lands on a
+	// DECLARED type instead would have emitted the wrong destructor silently, which is the half of #56 the
+	// panic exists to keep unrepresentable.
+	export function indexTypeNames() returns TypeNameInterner
+		return self.typeNames
+	end 'indexTypeNames'
+
 	export function indexSpaceTypeName(indexSpaceType MaxonType) returns ByteArray
 		return try self.typeNames.nameOf(typeNameIdOf(indexSpaceType)) otherwise panic("ProgramSignatures.indexSpaceTypeName: type-name id {typeNameIdOf(indexSpaceType)} is not in this index's interner — a container column's type argument and an instance's substituted argument are both interned HERE, so an id that misses came from another table and every name it could answer would be the wrong one")
 	end 'indexSpaceTypeName'

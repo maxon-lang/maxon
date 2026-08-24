@@ -11,7 +11,7 @@
 export typealias OpCount = int(0 to u64.max)
 export typealias BlockCount = int(0 to u64.max)
 typealias FuncCount = int(0 to u64.max)
-export typealias BlockIndex = int(0 to u64.max)
+typealias BlockIndex = int(0 to u64.max)
 export typealias FuncIndex = int(0 to u64.max)
 export typealias BlockRefIndex = int(0 to u64.max)
 
@@ -542,7 +542,7 @@ end 'IrModule'
 // tier — including `TargetModule`, now just `IrModule with TargetOp` — shares
 // those two inherited methods. The array move + reference rewrite are
 // entry-typed and stay on the module; the index arithmetic is shared here.
-module type OpCompactionPlan
+type OpCompactionPlan
 	export var forward as OpIndexArray
 	export var liveCount as OpCount
 	export var deadMarker as OpIndex
@@ -585,7 +585,7 @@ end 'assignCompactionSlots'
 // walk is O(blocks + total opRefs); the two `opCount`-sized arrays (live flags +
 // forwarding) are the only allocations and are dwarfed by the orphan bytes
 // reclaimed.
-module function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opCount OpCount) returns OpCompactionPlan
+function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opCount OpCount) returns OpCompactionPlan
 	var live = BoolArray.create()
 	live.resize(opCount)
 
@@ -610,7 +610,7 @@ end 'computeOpCompaction'
 // forwarded index, so no second array is built and nothing is allocated. Shared by
 // both module compactors. Must run AFTER the op-array move + truncate so the
 // renumbered indices line up with the relocated ops.
-module function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArray, plan OpCompactionPlan)
+function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArray, plan OpCompactionPlan)
 	for func in functions 'rewriteFunc'
 		for blockRef in func.blockRefs 'rewriteBlock'
 			var block = try blocks.get(blockRef) otherwise panic("rewriteBlockOpRefs: blockRef from func.blockRefs not in blocks")

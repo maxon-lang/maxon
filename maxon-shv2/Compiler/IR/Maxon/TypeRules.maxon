@@ -538,7 +538,7 @@ end 'widensIntToFloat'
 // `f as Float` — the identity conversion — the lossy one, and as the VALUE it would hide a genuine
 // narrowing. The VALUE side is the parser invariant every float-alias producer obeys
 // (`Parser.resolveFloatAliasType`); the TARGET side of an `as` is `Parser.denotedCastTargetTag`'s job.
-export function isLossyFloatToInt(value ValueTypeTag, declared ValueTypeTag) returns bool
+function isLossyFloatToInt(value ValueTypeTag, declared ValueTypeTag) returns bool
 	return tagIsFloat(value) and tagIsIntegral(declared)
 end 'isLossyFloatToInt'
 
@@ -1061,7 +1061,7 @@ end 'tagRidesAsyncGprChannel'
 
 // The three operators whose MEANING follows their operands' type. `shl`/`shr` are absent: a
 // shift is integral by definition, on both sides.
-export function wordOperator(op MaxonBinOp) returns bool
+function wordOperator(op MaxonBinOp) returns bool
 	return match op 'k'
 		add to mod gives false
 		bitAnd to bitXor gives true
@@ -1117,7 +1117,7 @@ end 'divisionOperator'
 // quotients. The QUOTIENT/REMAINDER split and the SIGNED/UNSIGNED split are two independent questions
 // about one operator, and every reader wants exactly one of them; asking each through its own
 // predicate is what stops a four-way match being restated at each site with a chance to differ.
-export function divisionReadsRemainder(op MaxonBinOp) returns bool
+function divisionReadsRemainder(op MaxonBinOp) returns bool
 	return match op 'k'
 		add to div gives false
 		mod gives true
@@ -1131,7 +1131,7 @@ end 'divisionReadsRemainder'
 // and written into it by `divisionOpcodeFor` — so the fold, the `-1` overflow gate and the Std lowering
 // each read one fact rather than three re-derivations of one rule. `evalShift` reads `shr` vs
 // `shrLogical` the same way and says the same thing about why.
-export function divisionIsUnsigned(op MaxonBinOp) returns bool
+function divisionIsUnsigned(op MaxonBinOp) returns bool
 	return match op 'k'
 		add to max gives false
 		divUnsigned to modUnsigned gives true
@@ -1903,7 +1903,7 @@ end 'formatBound'
 // one place that shape is RECOGNIZED, because only a party holding both bounds can tell the sentinel
 // from a real `-1` (see `formatBound`). It applies to the UPPER alone: a negative low paired with a
 // `u64.max` upper is refused at declaration, so a low bound never carries the sentinel.
-export function formatRangeDisplay(low ParsedInt, high ParsedInt, isFloat bool) returns String
+function formatRangeDisplay(low ParsedInt, high ParsedInt, isFloat bool) returns String
 	let keyword = "float" if isFloat else "int"
 	let upper = UnsignedFullUpperDecimal if not isFloat and rangeIsUnsignedMaxUpper(low, high: high) else formatBound(high, isFloat: isFloat)
 
@@ -2240,7 +2240,7 @@ end 'foldIntUnaryOp'
 // unknown operand (see `notOperatorFor`), so `if not (ready and enabled())` — a CORRECT program —
 // would stop compiling. Trading a rejected correct program for an honest tag on a program that is
 // already rejected is a bad trade in both directions.
-export function wordOpResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
+function wordOpResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
 	if tagIsBool(left) or tagIsBool(right) 'logical'
 		return ValueTypeTag.boolean
 	end 'logical'
@@ -2474,20 +2474,20 @@ end 'tagIdentityIsNominal'
 //
 // Equality is the one operator BOTH byte records have, and it never reaches either rule —
 // `Parser.emitCompare` intercepts a matching byte-record pair at its top.
-export function operandsAreText(left ValueTypeTag, right ValueTypeTag) returns bool
+function operandsAreText(left ValueTypeTag, right ValueTypeTag) returns bool
 	return tagIsText(left) or tagIsText(right)
 end 'operandsAreText'
 
 // **DOES EITHER OPERAND NAME A STRUCT?** `operandsAreFloat`'s twin, and it exists for the same
 // reason: the operators that have no reading for one of them have no reading for the other, and
 // both `integralOperandsFor` and `comparableOperands` have to ask.
-export function operandsAreStructRef(left ValueTypeTag, right ValueTypeTag) returns bool
+function operandsAreStructRef(left ValueTypeTag, right ValueTypeTag) returns bool
 	return tagIsStructRef(left) or tagIsStructRef(right)
 end 'operandsAreStructRef'
 
 // True for the tag of a value held at an INTERFACE type — the same DEFINITELY question `tagIsStructRef`
 // asks, for the type that is a FAT POINTER rather than a plain one.
-export function tagIsInterfaceRef(tag ValueTypeTag) returns bool
+function tagIsInterfaceRef(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.interfaceRef
 end 'tagIsInterfaceRef'
 
@@ -2587,7 +2587,7 @@ end 'BinOpOperands'
 // This is not a statement about what shv2 has implemented yet; it is a statement about the
 // language, and every one of these is a permanent rejection rather than a gap waiting on an
 // instruction. Go draws the identical line, for the identical reasons.
-export function operatorIsIntegral(op MaxonBinOp) returns bool
+function operatorIsIntegral(op MaxonBinOp) returns bool
 	return match op 'k'
 		// `+` `-` `*` `/` all have a direct SSE form (`addsd`/`subsd`/`mulsd`/`divsd`), so a float
 		// is not merely allowed here — it is the whole point of the rung.
@@ -2856,7 +2856,7 @@ end 'notOperatorFor'
 // `Map`'s value is a bool — got a 'bool' value"*, a sentence that argues against itself on a program the
 // widened value column exists to admit. The two facts live in two files and nothing but this paragraph holds
 // them together; widen one and come here.
-export function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) returns bool
+function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) returns bool
 	// ⭐ **THE COLUMN TAGS THAT AGREE WITH THEMSELVES AND WITH NOTHING ELSE — one arm, because they differ in
 	// no other way.** A `Character`, a `bool` and a FUNCTION are each one machine word dropped by nothing,
 	// which is `slotTypeFitsOneWord`'s whole question — but each is its own TYPE, so the integral

@@ -69,7 +69,7 @@ typealias BracketDepth = int(0 to u64.max)
 // names this value, with nothing in front of it") and not an arithmetic accident — P1.1's `point.x`
 // goes through the very same `loadIndirect`/`storeIndirect` ops with a real field offset, and at
 // that point the two must be told apart by a reader.
-export let GlobalSlotOffset = 0 as ByteOffset
+module let GlobalSlotOffset = 0 as ByteOffset
 
 // One capture occupies one 8-byte slot in a closure's environment block — a scalar VALUE stored by-value
 // for A2b-1 (a pointer, in a later slice). The env block is `__mm_alloc(captureCount * EnvSlotBytes)`, and
@@ -1749,7 +1749,7 @@ end 'EnumCaseConstant'
 // (`setsFlags: true`) is matched by — a case may write both spellings, so neither alone answers — and the
 // OWNER is the struct that declares this hop, which the "case writes no value for it" diagnostic names and
 // which is not `EnumLayout.backingStructName` past the first hop.
-export type EnumBackingFieldStep
+module type EnumBackingFieldStep
 	export let field as FieldIndex
 	export let fieldName as ByteArray
 	export let ownerName as ByteArray
@@ -1975,6 +1975,71 @@ typealias MethodIndexMap = Map with (ByteArray, CsrIndex)
 // feeds was built to avoid. `recordScannedType` replaces it with a real array on the first generic type it
 // meets, so this instance is only ever an unread placeholder and is never mutated — safe to share across the
 // per-file sweep.
+// ⭐⭐ **`scanDescriptorSignalsIn`'s TWELVE ANSWERS, AS ONE MASK.** A bit position each, plus the two
+// accessors `ParamPositionMask` already models — one reader, one writer, so no site spells a shift.
+// ⭐⭐ **WHAT THE `for` HEADER'S SOURCE EXPRESSION TURNS OUT TO BE — ten facts settled once and read by
+// every phase after.** `parseForStatement` held them as ten separate `var`s and could not: they are live
+// from the header analysis to the merge, and the allocator refused the function outright (E5001, 25
+// values against 14 registers). A record's fields are memory, so they cost the loop nothing — see the
+// declaration inside the function for the measurement.
+//
+// ⚠ Every field is a `var`: the header settles them in stages (a range is recognised before a character
+// range is, a cursor surface after a String is ruled out), which is why this is a mutable working record
+// and not a value some analysis returns whole.
+type ForSourceFacts
+	// A counted `a to b` / `a upto b` header rather than a collection.
+	export var isRange as bool
+	// `to` (inclusive) rather than `upto`.
+	export var rangeInclusive as bool
+	// The value the index is tested against — the range's end, or the collection's length.
+	export var limit as ValueId
+	// The token the comparison is anchored on, for the diagnostic a bad bound earns.
+	export var testAnchorIndex as TokenIndex
+	// A `'a' to 'z'` header, whose element is a Character rather than an integer.
+	export var isCharacterRange as bool
+	// A String source, iterated by grapheme.
+	export var isString as bool
+	// The cursor protocol this source is walked through, when it is walked by one.
+	export var cursorSurface as MethodSurface
+	// Where the cursor starts — see `CursorEntrySeed`.
+	export var cursorEntrySeed as CursorEntrySeed
+	// Does the iterated storage need the E3019 write lock for the body's duration?
+	export var sourceLock as bool
+	// The storage name an element borrow is recorded against, or empty when the element is not borrowed.
+	export var elementBorrowSubject as ByteArray
+
+	export static function create(limit ValueId, testAnchorIndex TokenIndex) returns ForSourceFacts
+		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, sourceLock: false, elementBorrowSubject: EmptySourceText}
+	end 'create'
+end 'ForSourceFacts'
+
+typealias ScanSignalMask = int(0 to u64.max)
+typealias ScanSignal = int(0 to 11)
+
+let NoScanSignals = 0 as ScanSignalMask
+let ScanSignalDirect = 0 as ScanSignal
+let ScanSignalReadsFixedElementCount = 1 as ScanSignal
+let ScanSignalHasControlFlow = 2 as ScanSignal
+let ScanSignalHasContainerMoveOut = 3 as ScanSignal
+let ScanSignalReassignsOpaqueField = 4 as ScanSignal
+let ScanSignalHasArrayCopy = 5 as ScanSignal
+let ScanSignalConstructsSelfLiteral = 6 as ScanSignal
+let ScanSignalBuildsRecord = 7 as ScanSignal
+let ScanSignalAdoptsOpaqueCallResult = 8 as ScanSignal
+let ScanSignalForwardsToATypeParamFeed = 9 as ScanSignal
+let ScanSignalStoresContainerElement = 10 as ScanSignal
+let ScanSignalWalksReceiverAsACursor = 11 as ScanSignal
+
+// Is `signal`'s bit set? The read half of the pair.
+function maskHasSignal(mask ScanSignalMask, signal ScanSignal) returns bool
+	return ((mask shr signal) and 1) != 0
+end 'maskHasSignal'
+
+// `mask` with `signal`'s bit set — the ONE writer, paired with the reader above.
+function maskWithSignal(mask ScanSignalMask, signal ScanSignal) returns ScanSignalMask
+	return mask or (1 shl signal)
+end 'maskWithSignal'
+
 let sharedEmptyDescriptorScanSites = DescriptorScanSiteArray.create()
 
 // The INITIAL `Parser.enclosingWhereConstraints` (P1.7a slice 2a), held here (like
@@ -1989,7 +2054,7 @@ let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 // present), so it is safe across the per-file parse fan-out.
 let sharedEmptyInterfaceConformances = InterfaceConformanceArray.create()
 
-// The INITIAL `Parser.siblingReceivers`, held here (like `sharedEmptyBoolColumn`) so a parser
+// The INITIAL `Parser.siblingReceivers`, held here so a parser
 // allocates none of its own until a bare call inside a type body actually needs the map. The lazy builder
 // REPLACES the field with a fresh map — it never mutates in place — so this placeholder stays empty and is
 // safe to share across the per-file parse fan-out. A method-free file never touches the field at all.
@@ -2096,34 +2161,36 @@ let sharedOverloadUnscoreable = SweptOverloadFit.unscoreable
 // `ProgramSignatures.returnTypeOf`, whose one entry per key is written by whichever declaration was swept
 // last — visible from the reader or not.
 
-// The module-level shared EMPTY working columns `scanBodyFacts` starts from — one column each, for the two
-// shapes that walk a body and write none of them: a declaration with no parameters to watch (the brace stack,
-// the bracket openers and the forwarding edges) and a body with no `return` in it at all (the two return
-// columns). ONE allocation apiece for the whole compile; never mutated, because every writer of each is
-// reached only past the test that privatises it.
+// ⛔⛔ **`scanBodyFacts`' SEVEN WORKING COLUMNS WERE ANCHORED AT SHARED MODULE-LEVEL EMPTIES HERE, AND NONE
+// OF THEM MAY BE — the LAST of this file's laundering anchors, removed when shv2 first compiled itself.**
+// Five `let` globals stood here (`sharedEmptyBoolColumn`, `sharedEmptyBracketOpeners`,
+// `sharedEmptyForwardCalls`, `sharedEmptyReturnedNames`, `sharedEmptyReturnedAt`), seeding the brace stack,
+// the bracket openers, the forwarding edges and the four return columns for the two body shapes that write
+// none of them. The claim that made them safe — *"never mutated, because every writer of each is reached
+// only past the test that privatises it"* — was TRUE and is not the point: it is an invariant no analysis
+// can see, held by a `scansParams` flag and a `returnColumnsArePrivate` flag, and W117's rule is that a
+// value which MAY alias a `let` global's record may not be passed where it can be written.
 //
-// ⛔⛔ **THE THREE PER-PARAMETER BIT COLUMNS WERE ANCHORED HERE TOO AND ARE NOT ANY MORE** — they are the
-// ones this sweep WRITES, and an anchor a writer can reach launders a `let` global's record into a mutable
-// position. `setParamBit` carries the measurement; the anchors that remain are safe for the opposite reason,
-// which is that nothing writes them at all.
-let sharedEmptyBoolColumn = BoolArray.create()
-let sharedEmptyBracketOpeners = TokenIndexArray.create()
-let sharedEmptyForwardCalls = ForwardCallArray.create()
-let sharedEmptyReturnedNames = ByteArrayArray.create()
-
-// The FOURTH parallel column's shared empty — `returnedAt`, the token index of the `return` each candidate
-// was read off. It sits beside the three above and is privatised with them at the same one test, so a body
-// with no `return` still allocates nothing.
-let sharedEmptyReturnedAt = TokenIndexColumn.create()
+// ⇒ It is `setParamBit`'s finding, re-measured on four more columns: *"the laundering was real, and only
+// the gate made it harmless"*. shv2 refused its OWN source here — `E3019 cannot pass 'returnedNames' to
+// function that mutates parameter 'returnedNames'`, and the same for `braceStack` and `forwardCalls` — and
+// it was right to. A column that is always fresh can alias nothing. The cost is one EMPTY record per
+// column per scanned declaration, paid only by the shapes that used to share (a zero-parameter declaration,
+// and a body with no `return` in it); every other declaration already allocated all seven.
+//
+// ⚠ **THE CONDITIONAL SEED IS THE SAME DEFECT, NOT A MILDER ONE.** `X.create() if scansParams else
+// <shared>` binds a name that may hold either, so it is refused exactly as a bare shared seed is — there is
+// no "only on the safe path" spelling of this, which is why all seven went fresh together rather than the
+// three that happened to be reported.
 
 // The module-level shared EMPTY per-instance-alias placeholders (P1.6-C), held as the INITIAL value of the
 // `enclosingInnerAliases` / `valueInstanceAlias` working fields AND as the COW anchors the reset points at.
-// ONE allocation for the whole compile each (like `sharedEmptyBoolColumn`), so a generics-free program
+// ONE allocation for the whole compile each, so a generics-free program
 // — which never declares a nested typealias nor constructs a generic instance — pays NOTHING per parser: a
 // parser INCREFS these rather than allocating its own. They are never mutated: `readNestedRangedAlias` and
 // `recordValueInstanceAlias` copy-on-write a fresh collection the first time they must write, keyed on the
 // `is`-identity of these very instances, so the shared ones stay empty and safe to share across the per-file
-// parse fan-out — exactly the invariant `sharedEmptyBoolColumn` relies on.
+// parse fan-out.
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 
@@ -3508,7 +3575,7 @@ let PrimitiveStaticSeparatorBytes = b"_"
 // The reserved-space free function a `<primitive>.<method>(…)` call links to. ONE speller, for
 // `MethodNameSeparator`'s reason: the mint and the "is it declared?" probe that gates it must ask about the
 // same bytes, or the parser would rewrite to a name it never checked for.
-export function primitiveStaticCallee(typeName ByteArray, methodName ByteArray) returns ByteArray
+function primitiveStaticCallee(typeName ByteArray, methodName ByteArray) returns ByteArray
 	return "{String.from(ReservedNamePrefix)}{String.from(typeName)}{PrimitiveStaticNameSeparator}{String.from(methodName)}".toByteArray()
 end 'primitiveStaticCallee'
 
@@ -3887,7 +3954,7 @@ let sharedEmptySizedContainerSelfCallees = ByteArrayArray.create()
 // ⚠ **THE SEPARATOR TEST IS LOAD-BEARING, NOT TIDINESS.** Without it this is a bare `bytesStartWith`, and
 // a user function called `internNames` begins with `int` — it would be classified compiler-internal and
 // so skip arity validation and signature slotting. A miscompile, from a missing byte compare.
-export function isQualifiedUnderTypeName(name ByteArray, typeName ByteArray) returns bool
+function isQualifiedUnderTypeName(name ByteArray, typeName ByteArray) returns bool
 	if name.count() <= typeName.count() 'noRoomForAMethod'
 		return false
 	end 'noRoomForAMethod'
@@ -3925,7 +3992,7 @@ export let TrivialDestructor = 0 as ParsedInt
 // ⚠ The fifth is in ANOTHER FILE and arrived a rung later: `InsertRangeChecks.emitCellLoad` dereferences a
 // by-reference parameter for its entry range guard. The count is DERIVED by grepping `CellContentOffset`,
 // not remembered — a stale census is this project's own recurring defect.
-export let CellContentOffset = 0 as ByteOffset
+module let CellContentOffset = 0 as ByteOffset
 
 // The local NAMES of one function body that must live in a cell (PBR-2) — see
 // `Parser.collectCellLocalNames`. Keyed by name and not by binding, because it is decided from TOKENS
@@ -3947,7 +4014,7 @@ let NoCellArgumentRequest = 0 as TokenIndex
 // can hold is a word (a scalar, or the pointer a managed record IS). The same word an env slot occupies, and
 // it is stated separately for the reason `envSlotOffset`'s stride is: they are two slot kinds that happen to
 // agree, not one constant with two readers.
-export let CellPayloadBytes = 8 as ParsedInt
+let CellPayloadBytes = 8 as ParsedInt
 
 // An array literal's elements must all have the FIRST element's type — one rule, so one wording, read by
 // the two walks over that grammar: the emitting one in a function body (`requireArrayLiteralElementMatches`)
@@ -5686,7 +5753,7 @@ export let SingleByteGraphemesFieldName = b"singleByteGraphemesFlag"
 // corpus bodies, which is an ordinary edge — so the constants had no reader and the compiler cannot emit
 // those three names at all. This one survives because `parseForStatement` still emits it from USER code,
 // where the edge is ordinary and the reachability walk finds it.
-export let CorpusFindGraphemeEnd = b"findGraphemeEnd"
+let CorpusFindGraphemeEnd = b"findGraphemeEnd"
 
 // ⭐⭐ **`addressableBytes()` — THE ONE CORPUS MEMBER THE STREAM-WRITE FOLD MATCHES BY NAME (W49 wave 7).**
 // `stdlib/Print.maxon:10` is `__Builtins.writeStdout(value.addressableBytes())`, and that member retired
@@ -5702,7 +5769,7 @@ export let CorpusFindGraphemeEnd = b"findGraphemeEnd"
 // ⚠ It is the MEMBER's spelling, not the mangled `String.addressableBytes`: the qualified form is joined
 // where it is compared (`qualifiedMethodName`), so the type half is `StringConformerName`'s one spelling and
 // this constant stays the member's.
-export let CorpusAddressableBytes = b"addressableBytes"
+let CorpusAddressableBytes = b"addressableBytes"
 
 // `findGraphemeEnd(s, startPos: pos)` — the second parameter is LABELLED in the corpus declaration, and a
 // Maxon-tier call must present the label or `lowerCall` mis-slots it. Stated here beside the callee whose
@@ -5740,7 +5807,7 @@ end 'corpusFindGraphemeEndLabels'
 // ⚠ **`ContainsMethod` SURVIVED `contains`' RETIREMENT AND IS NOT A LEFTOVER**: `Set`, `Map` and
 // `CharacterSet` all dispatch a `contains` of their own through it, and those surfaces are shv2's. What
 // wave 4 retired is the `String` ARM, not the spelling.
-export let ContainsMethod = b"contains"
+let ContainsMethod = b"contains"
 
 // ⭐ **WHAT IS LEFT OF THE P1.8 SLICE B2 `StringIndex` FAMILY: THE INDEX'S OWN TWO ACCESSORS.**
 // `charIndex`/`bytePos` are the reference's own names (`stdlib/String.maxon:925-931`), and they are
@@ -5794,7 +5861,7 @@ export function singletonArgs(value ValueId) returns ValueIdArray
 end 'singletonArgs'
 
 // A two-element call argument list — `__managed_append(dest, src)`'s pair. `singletonArgs`' sibling.
-export function pairArgs(first ValueId, second ValueId) returns ValueIdArray
+module function pairArgs(first ValueId, second ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(first)
 	args.push(second)
@@ -5806,7 +5873,7 @@ end 'pairArgs'
 // interface formal `j` = `args[j+1]` convention after `slotCallArgs` — which knows only about the formals —
 // has done the reordering. `pairArgs`' variadic sibling, and the ONE place the receiver is put back —
 // `MaxonDialect.witnessDispatchReceiver` is the ONE place it is taken back off.
-export function withWitnessReceiver(receiver ValueId, ordered ValueIdArray) returns ValueIdArray
+function withWitnessReceiver(receiver ValueId, ordered ValueIdArray) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(receiver)
 	for id in ordered 'eachOrdered'
@@ -5820,7 +5887,7 @@ end 'withWitnessReceiver'
 // one range per argument in lockstep and `slotCallArgs` only ever names an index it was handed, so an
 // out-of-range index is a compiler defect and not a program's. It is a named lookup rather than a bare `get`
 // at the throw sites because a `match` arm is a single expression and cannot bind the result to a `let`.
-export function witnessArgAnchor(argRanges SourceRangeArray, argIndex ParamCount) returns SourceRange
+function witnessArgAnchor(argRanges SourceRangeArray, argIndex ParamCount) returns SourceRange
 	return try argRanges.get(argIndex) otherwise panic("witnessArgAnchor: argRanges.get OOB at {argIndex} below count {argRanges.count()} — the columns `parseCallArgs` fills are parallel by construction")
 end 'witnessArgAnchor'
 
@@ -5851,7 +5918,7 @@ end 'renderWitnessRequirements'
 // A three-element call argument list — `__managed_set(arr, index, value)`'s triple. `pairArgs`' sibling.
 // Exported for `pairArgs`' reason: `ModuleInit.emitMapEntryUpsert` builds the same `(receiver, key, value)`
 // triple for a FILE-SCOPE map literal that `emitMapLiteralUpsert` builds for a body's.
-export function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
+module function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(first)
 	args.push(second)
@@ -7591,7 +7658,7 @@ function charValueOf(buf ByteArray) returns CharLiteralValue
 		return CharLiteralValue.multiByte(buf)
 	end 'wide'
 	let b = try buf.get(0) otherwise panic("charValueOf: count()==1 but get(0) failed")
-	return CharLiteralValue.byte(b as ParsedInt)
+	return CharLiteralValue.byte(b)
 end 'charValueOf'
 
 // The result of decoding a quoted body's escape sequences.
@@ -8156,25 +8223,25 @@ end 'digitEscapeValue'
 // than desyncing. Ported from `maxon-selfhosted` Parser.maxon:11239-11264.
 function decodeUtf8Sequence(raw ByteArray, start ByteOffset) returns Utf8Sequence
 	let n = raw.count()
-	let b0 = (try raw.get(start) otherwise panic("decodeUtf8Sequence: start {start} out of bounds")) as ParsedInt
+	let b0 = try raw.get(start) otherwise panic("decodeUtf8Sequence: start {start} out of bounds")
 	if b0 < Utf8LeadTwoByteFloor or start + 1 >= n 'loneLead'
 		return Utf8Sequence.of(b0, byteLength: 1)
 	end 'loneLead'
-	let b1 = (try raw.get(start + 1) otherwise panic("decodeUtf8Sequence: continuation 1 out of bounds")) as ParsedInt
+	let b1 = try raw.get(start + 1) otherwise panic("decodeUtf8Sequence: continuation 1 out of bounds")
 	if b0 < Utf8LeadThreeByteFloor 'twoByte'
 		return Utf8Sequence.of(((b0 and Utf8LeadTwoByteMask) shl Utf8ContinuationBits) or (b1 and Utf8ContinuationMask), byteLength: 2)
 	end 'twoByte'
 	if start + 2 >= n 'truncated3'
 		return Utf8Sequence.of(b0, byteLength: 1)
 	end 'truncated3'
-	let b2 = (try raw.get(start + 2) otherwise panic("decodeUtf8Sequence: continuation 2 out of bounds")) as ParsedInt
+	let b2 = try raw.get(start + 2) otherwise panic("decodeUtf8Sequence: continuation 2 out of bounds")
 	if b0 < Utf8LeadFourByteFloor 'threeByte'
 		return Utf8Sequence.of(((b0 and Utf8LeadThreeByteMask) shl Utf8ThreeByteHighShift) or ((b1 and Utf8ContinuationMask) shl Utf8ContinuationBits) or (b2 and Utf8ContinuationMask), byteLength: 3)
 	end 'threeByte'
 	if start + 3 >= n 'truncated4'
 		return Utf8Sequence.of(b0, byteLength: 1)
 	end 'truncated4'
-	let b3 = (try raw.get(start + 3) otherwise panic("decodeUtf8Sequence: continuation 3 out of bounds")) as ParsedInt
+	let b3 = try raw.get(start + 3) otherwise panic("decodeUtf8Sequence: continuation 3 out of bounds")
 	return Utf8Sequence.of(((b0 and Utf8LeadFourByteMask) shl Utf8FourByteHighShift) or ((b1 and Utf8ContinuationMask) shl Utf8ThreeByteHighShift) or ((b2 and Utf8ContinuationMask) shl Utf8ContinuationBits) or (b3 and Utf8ContinuationMask), byteLength: 4)
 end 'decodeUtf8Sequence'
 
@@ -12004,7 +12071,7 @@ export type Parser
 	var emptyTypeParams as ByteArrayArray
 	// P1.6-C's shared-empty inner-alias / instance-alias placeholders are MODULE-LEVEL globals
 	// (`sharedEmptyInnerAliases`, `sharedEmptyInstanceAliasMap`, `sharedEmptyInstanceAliasNames`), not
-	// per-parser fields — one allocation for the whole compile, like `sharedEmptyBoolColumn`. The
+	// per-parser fields — one allocation for the whole compile. The
 	// working fields `enclosingInnerAliases` / `valueInstanceAlias` INCREF a global as their initial value.
 	// The struct-typed bindings currently IN SCOPE, in declaration order — the values a `return`
 	// must DROP (`emitScopeDrops`). Held as the `VarInfo` objects, exactly as `mutableVars` is, and
@@ -13816,23 +13883,21 @@ export type Parser
 		// sweep records them separately instead of combining them here.
 		var reassignedDirect = BoolArray.create()
 		var reassignedForwarded = BoolArray.create()
-		var forwardCalls = ForwardCallArray.create() if scansParams else sharedEmptyForwardCalls
+		var forwardCalls = ForwardCallArray.create()
 		var statesByRef = false
 		// ⭐ **W117's THREE COLUMNS: the names this body RETURNS as a whole statement, their first SEGMENTS, and
 		// the calls whose result it returns.** `returnedHeads` is the head of each name (`Box` of `Box.shared`),
 		// which is what the shadowing filter compares against — a body that binds `Box` returns its own local,
 		// not the global.
 		//
-		// ⚡ **COPY-ON-WRITTEN OFF THE SHARED EMPTIES AT THE FIRST `return` TOKEN**, which is the one privatise
-		// test that is NOT the shape test written twice: the shapes are decided in `noteReturnedGlobalOrForward`
-		// and this asks only whether the body has a `return` at all. A body with none — every procedure in the
-		// program — keeps all three shared and allocates nothing, and a body with one pays the three arrays it
-		// was always going to need.
-		var returnedNames = sharedEmptyReturnedNames
-		var returnedHeads = sharedEmptyReturnedNames
-		var returnedAt = sharedEmptyReturnedAt
-		var returnCalls = sharedEmptyForwardCalls
-		var returnColumnsArePrivate = false
+		// ⚡ These were COPY-ON-WRITTEN off shared module-level empties at the first `return` token, and are
+		// FRESH since shv2 compiled itself — see the deleted anchors' note above `sharedOverloadIncompatible`
+		// for why the privatise flag that made the sharing safe is not a thing an analysis can be asked to
+		// believe. A body with no `return` now pays four empty records; it used to pay none.
+		var returnedNames = ByteArrayArray.create()
+		var returnedHeads = ByteArrayArray.create()
+		var returnedAt = TokenIndexColumn.create()
+		var returnCalls = ForwardCallArray.create()
 		// The type-parameter FEED column, EMPTY until a feed is actually recorded (`setParamFeed`) — a feed
 		// requires a type-parameter-typed field, so a top-level function and a non-generic type's method (all of
 		// them on the generics-free corpus) never grow it past zero and `typeParamFeedOf` reads every one of their
@@ -13842,10 +13907,12 @@ export type Parser
 		var any = false
 		// The bracket stack: `true` for a `{` (struct literal), `false` for a `(`. A `[` is not pushed at all
 		// (`trackBracketAt`). The innermost open bracket being a `{` is what distinguishes a struct-field `:`
-		// from a labelled-call-argument one. ⚡ Both are SHARED EMPTIES for a body with no parameters to watch:
-		// `trackBracketAt` is the only writer and it runs under `scansParams`, as does every reader.
-		var braceStack = BoolArray.create() if scansParams else sharedEmptyBoolColumn
-		var openBrackets = TokenIndexArray.create() if scansParams else sharedEmptyBracketOpeners
+		// from a labelled-call-argument one. ⚡ Both were SHARED EMPTIES for a body with no parameters to watch
+		// — `trackBracketAt` is the only writer and it runs under `scansParams`, as does every reader — and
+		// both are FRESH now, for the reason the deleted anchors' note records: `scansParams` is a flag, and a
+		// name that may hold a `let` global's record may not be passed somewhere that writes it.
+		var braceStack = BoolArray.create()
+		var openBrackets = TokenIndexArray.create()
 		var blockDepth = 0 as BlockDepth
 		// ⭐⭐ **G17's COLUMNS — the whole of "can this body return?", read off the same walk.** There are exactly
 		// three ways out of a body that are not its tail: a `return`, a `throw`
@@ -13909,14 +13976,6 @@ export type Parser
 			// the block-depth state a second one would have to rebuild. AHEAD of the parameter probes because it
 			// is the one fact this walk collects for a body that has no parameters at all.
 			if kind == TokenKind.return 'returnStatement'
-				if not returnColumnsArePrivate 'firstReturnInThisBody'
-					returnedNames = ByteArrayArray.create()
-					returnedHeads = ByteArrayArray.create()
-					returnedAt = TokenIndexColumn.create()
-					returnCalls = ForwardCallArray.create()
-					returnColumnsArePrivate = true
-				end 'firstReturnInThisBody'
-
 				self.noteReturnedGlobalOrForward((q + 1) as TokenIndex, regionEnd: sharedSweptValueLineEnd, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls)
 			end 'returnStatement'
 
@@ -14315,7 +14374,7 @@ export type Parser
 	// *"a position past either column is a parameter the sweep recorded nothing for"*. So the old pre-fill was
 	// writing out, per parameter of every declaration in the program, the very default its readers supply free.
 	//
-	// ⛔⛔ **THE COLUMNS USED TO START FROM `sharedEmptyBoolColumn` FOR AN EMPTY NAME LIST, AND THAT HANDED A
+	// ⛔⛔ **THE COLUMNS USED TO START FROM A SHARED MODULE-LEVEL EMPTY FOR AN EMPTY NAME LIST, AND THAT HANDED A
 	// `let` GLOBAL'S RECORD TO A NAME THIS SWEEP THEN WRITES.** `initialBitColumn` returned the module-level
 	// shared empty when the count was zero and a fresh array otherwise — so whether its result could be written
 	// depended on an ARGUMENT, and the only thing making that safe was the caller's own `target <
@@ -14933,19 +14992,27 @@ export type Parser
 	// The signal walk itself, over `[start, regionEnd)`. ALSO records `hasControlFlow` (P1.7 slice 3b-v): the
 	// region is NOT straight-line — a nested block-opener, or a `return`/`throw`/`break`/`continue` — the token
 	// signal the caller pairs with "has an opaque feed parameter" to decide the drop needs the descriptor.
+	// ⭐ **THE TWELVE SIGNALS `scanDescriptorSignalsIn` COLLECTS, AS BIT POSITIONS IN ONE MASK.** Named
+	// rather than numbered at the use sites for the reason every other bit vocabulary in this compiler is
+	// (`maskHasParam`'s `ParamPositionMask`, whose two accessors these mirror): a bare `1 shl 7` in a `match`
+	// arm is a fact nothing can check. See the mask's declaration inside the function for why the flags stopped
+	// being twelve `var bool`s.
 	function scanDescriptorSignalsIn(start TokenIndex, regionEnd TokenIndex) returns MethodDescriptorScan
-		var direct = false
-		var readsFixedElementCount = false
+		// ⭐⭐ **THE TWELVE ANSWERS THIS WALK COLLECTS TRAVEL AS ONE MASK — E5001's OWN CURE, NOT A STYLE**
+		// **CHOICE.** Each was a `var bool` declared here and set inside the token loop below, so each was a
+		// value LIVE ACROSS that loop and the allocator owed it a register for the whole body. shv2 refused
+		// its own source over exactly this: *"the loop at Parser.maxon:14977 needs 10 more register(s) than
+		// are available — 24 values must be held in registers at once"*, and twelve of those twenty-four
+		// were these, every one reported as **read 0 times in the loop** — written on the way past and not
+		// consulted until the walk is over. One machine word carries all twelve, and the loop's working set
+		// drops by eleven. The named slots and the two accessors are `ScanSignal` above this function.
+		var signals = NoScanSignals
 		var callees = ByteArrayArray.create()
 		// ⭐ Copied off its shared anchor at each chained edge (`nameColumnWith`), so every body of every other
 		// type allocates nothing for it — the `sharedEmptyCorpusContainerCallees` discipline, one column over.
 		var sizedContainerSelfCallees = sharedEmptySizedContainerSelfCallees
 		// Hoisted out of the walk: it is a property of the enclosing DECLARATION, not of a token.
 		let insideTheSizedContainer = self.signatures.isVectorBaseName(self.enclosingType)
-		var hasControlFlow = false
-		var hasContainerMoveOut = false
-		var reassignsOpaqueField = false
-		var hasArrayCopy = false
 		// ⭐ **THE LOCALS THIS BODY BINDS TO A `Self{…}` — a call on one of them is a SELF-CALL** (W43b). See
 		// `selfTypedLocalBoundAt` for why the binding is read rather than every receiver over-approximated.
 		var selfTypedLocals = ByteArrayArray.create()
@@ -14956,19 +15023,13 @@ export type Parser
 		var nestedInstanceLocalBases = ByteArrayArray.create()
 		// ⭐ Does this region write a `Self{…}`? Every field-default helper of the enclosing type is CALLED by
 		// one (`Parser.fillFieldDefault`), so the caller turns this into edges (W43b).
-		var constructsSelfLiteral = false
 		// ⭐ Does this region build a RECORD — a struct literal or a tuple literal (W41-opaque)?
-		var buildsRecord = false
 		// ⭐ Does this region CALL a method that hands back a bare type parameter (W58)? See
 		// `MethodDescriptorScan.adoptsOpaqueCallResult`.
-		var adoptsOpaqueCallResult = false
 		// ⭐ Does this region CALL a method some declaration gives a type-parameter FEED parameter (BATCH41)?
 		// See `MethodDescriptorScan.forwardsToATypeParamFeed`.
-		var forwardsToATypeParamFeed = false
 		// ⭐ Does this region STORE INTO A CONTAINER (W60)? See `MethodDescriptorScan.storesContainerElement`.
-		var storesContainerElement = false
 		// ⭐ Does this region walk `for … in self` (W159)? See `MethodDescriptorScan.walksReceiverAsACursor`.
-		var walksReceiverAsACursor = false
 		// ⭐ The cross-type call edges (ARRG), copied off the anchor at each one (`nameColumnWith`). See
 		// `MethodDescriptorScan.corpusContainerCallees` and `sharedEmptyCorpusContainerCallees`.
 		var corpusContainerCallees = sharedEmptyCorpusContainerCallees
@@ -14982,13 +15043,13 @@ export type Parser
 		while q < regionEnd 'walk'
 			let kind = self.kindAt(q)
 			if kind == TokenKind.sizeof and self.sizeofOperandIsTypeParamAt(q) 'directSizeof'
-				direct = true
+				signals = maskWithSignal(signals, signal: ScanSignalDirect)
 			end 'directSizeof'
 			// ⭐ `countof(Self)` reserves the COUNT slot, and deliberately NOT the descriptor one (W190): the
 			// count travels as its own hidden constant argument, so a body that reads nothing else about its
 			// type argument can be called from a frame that carries no descriptor at all.
 			if kind == TokenKind.countof and self.countofOperandIsTheOwnInstanceAt(q) 'directCountof'
-				readsFixedElementCount = true
+				signals = maskWithSignal(signals, signal: ScanSignalReadsFixedElementCount)
 			end 'directCountof'
 			// ⭐⭐ **AND SO DOES `Self{}` INSIDE THE SIZED CONTAINER, WHICH IS `stdlib/Vector.maxon`'s `create()`
 			// (W190).** That literal BUILDS the record, and a fixed-size container's record is born with its
@@ -14998,21 +15059,21 @@ export type Parser
 			// such expression, so the count reaches this one body through the construction rather than
 			// through a keyword.
 			if self.ownRecordLiteralOfTheSizedContainerAt(q) 'sizedContainerLiteral'
-				readsFixedElementCount = true
+				signals = maskWithSignal(signals, signal: ScanSignalReadsFixedElementCount)
 			end 'sizedContainerLiteral'
 			// A `return`/`throw`/`break`/`continue` is a NON-final exit (or, at the tail, harmless over-inclusion):
 			// with one of these OR a nested block below, a feed parameter can be left live at an exit and dropped,
 			// so the method needs the descriptor. A straight-line body has none and unconditionally consumes its
 			// feed. Over-inclusion only reserves an unused descriptor parameter (sound), never a wrong drop.
 			if kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.break or kind == TokenKind.continue 'earlyExit'
-				hasControlFlow = true
+				signals = maskWithSignal(signals, signal: ScanSignalHasControlFlow)
 			end 'earlyExit'
 			// Constructing an opaque-`T` container (`ElementArray.create()`, or the literal `ElementArray{}` it
 			// shares a producer with — and since S2u a `Vector with <N> <type parameter>`, since W134 a
 			// `__ManagedList with <type parameter>`) stamps its element destructor from the enclosing instance's
 			// threaded descriptor, so — like `sizeof(T)` — it needs the descriptor param (P1.7 slice 3b-i, S2i).
 			if kind == TokenKind.identifier and self.opaqueContainerConstructionAt(q) 'opaqueContainerConstruction'
-				direct = true
+				signals = maskWithSignal(signals, signal: ScanSignalDirect)
 			end 'opaqueContainerConstruction'
 			// ⭐⭐ **`Self{}` IS A THIRD SPELLING OF THAT SAME CONSTRUCTION (W57)**, and it is here for the
 			// reason the header above records the literal form being added for: the parser grew a producer and
@@ -15021,7 +15082,7 @@ export type Parser
 			// enclosing instance is `Array with <its own parameter>`, so the create stamps `element_destroy@40`
 			// from the threaded descriptor exactly as `ElementArray{}` does one arm up.
 			if kind == TokenKind.selfType and self.opaqueSelfArrayConstructionAt(q) 'opaqueSelfArrayConstruction'
-				direct = true
+				signals = maskWithSignal(signals, signal: ScanSignalDirect)
 			end 'opaqueSelfArrayConstruction'
 			// A `.pop()`/`.remove(i)` array MOVE-OUT hands back an OWNED element dropped at scope exit; when the
 			// element is an opaque `typeParameter` that drop routes through the descriptor-gated
@@ -15031,7 +15092,7 @@ export type Parser
 			// descriptor for a concrete-array move-out is sound. READ accessors (`get`/`first`/`last`) BORROW and
 			// drop nothing, so they are not move-outs and are excluded.
 			if kind == TokenKind.identifier and self.containerMoveOutMethodAt(q) 'arrayMoveOut'
-				hasContainerMoveOut = true
+				signals = maskWithSignal(signals, signal: ScanSignalHasContainerMoveOut)
 			end 'arrayMoveOut'
 			// A `.slice()`/`.clone()`/`.append()` array COPY lowers, on an OPAQUE array, to an
 			// `__managed_{slice,clone,append}_opaque(arr, …, descriptor)` wrapper that reads the enclosing instance's
@@ -15039,7 +15100,7 @@ export type Parser
 			// The receiver is NOT resolved here, so ANY copy is recorded and the caller decides; over-reserving an
 			// unused descriptor for a concrete-array copy is sound.
 			if kind == TokenKind.identifier and self.arrayCopyMethodAt(q) 'arrayCopy'
-				hasArrayCopy = true
+				signals = maskWithSignal(signals, signal: ScanSignalHasArrayCopy)
 			end 'arrayCopy'
 			// A `.push()`/`.set()`/`.insert()` MOVE-IN may store a BORROWED opaque `T`, whose reference is taken
 			// through the enclosing instance's `retainFunc@64` (W60) — so, like the move-out and the copy, the
@@ -15048,7 +15109,7 @@ export type Parser
 			// owns, costs an unused parameter; missing one refuses a legal program at
 			// `requireDescriptorForOpaqueStores`.
 			if kind == TokenKind.identifier and self.containerMoveInMutatorCallAt(q) 'containerStore'
-				storesContainerElement = true
+				signals = maskWithSignal(signals, signal: ScanSignalStoresContainerElement)
 			end 'containerStore'
 			// A `self.<opaqueManagedField> = …` REASSIGNMENT drops the field's OLD opaque value through the
 			// descriptor-gated `__drop_type_param` (P1.7 Finding A), so — like an opaque array move-out — the
@@ -15056,7 +15117,7 @@ export type Parser
 			// `self.signatures` (the SAME `isManagedOpaqueTypeParamField` the reserved slot and the emitted drop
 			// decide off), so a trivial-only field reserves nothing (byte-identical) and a managed one reserves.
 			if kind == TokenKind.self and self.opaqueFieldReassignAt(q) 'opaqueFieldReassign'
-				reassignsOpaqueField = true
+				signals = maskWithSignal(signals, signal: ScanSignalReassignsOpaqueField)
 			end 'opaqueFieldReassign'
 			if kind == TokenKind.self and self.isSelfMethodCallAt(q) 'selfCall'
 				callees.push(self.tokenAt(q + 2).value)
@@ -15158,7 +15219,7 @@ export type Parser
 			// Read at the `.` rather than at the name, so a keyword-named method (D8) is seen for
 			// `tokenCanBeAName`'s reason and a bare `name(` — which is a SIBLING call, and covered — is not.
 			if kind == TokenKind.dot and tokenCanBeAName(self.tokenAt(q + 1)) and self.kindAt(q + 2) == TokenKind.leftParen and self.signatures.methodNameEverReturnsBareTypeParameter(self.tokenAt(q + 1).value) 'adoptsOpaqueResult'
-				adoptsOpaqueCallResult = true
+				signals = maskWithSignal(signals, signal: ScanSignalAdoptsOpaqueCallResult)
 			end 'adoptsOpaqueResult'
 			// ⭐⭐ **THE CALLER'S HALF OF THE CONSTRUCTOR-FEED RETAIN (BATCH41)** — the exact twin of the arm
 			// above, one direction over: that one is a `.<name>(` whose callee HANDS BACK a bare `T`, this one
@@ -15168,7 +15229,7 @@ export type Parser
 			// reason: a keyword-named method (D8) is seen, and a bare `name(` is a SIBLING call the fixpoint
 			// already reaches through its own edge.
 			if kind == TokenKind.dot and tokenCanBeAName(self.tokenAt(q + 1)) and self.kindAt(q + 2) == TokenKind.leftParen and self.signatures.methodNameEverFeedsATypeParameter(self.tokenAt(q + 1).value) 'forwardsToAFeed'
-				forwardsToATypeParamFeed = true
+				signals = maskWithSignal(signals, signal: ScanSignalForwardsToATypeParamFeed)
 			end 'forwardsToAFeed'
 			// ⭐⭐ **THE CROSS-TYPE EDGE (ARRG)** — a `.<member>(` the CORPUS serves on a builtin generic
 			// container. Read at the `.` for the arm above's reason, and recorded as an EDGE rather than as a
@@ -15209,10 +15270,10 @@ export type Parser
 			// `forStatementWalksBareReceiverAt` for why the source must be the BARE receiver and why every
 			// other source stays with the refusal.
 			if kind == TokenKind.for and self.forStatementWalksBareReceiverAt(q) 'walksTheReceiver'
-				walksReceiverAsACursor = true
+				signals = maskWithSignal(signals, signal: ScanSignalWalksReceiverAsACursor)
 			end 'walksTheReceiver'
 			if kind == TokenKind.selfType and self.kindAt(q + 1) == TokenKind.leftBrace 'selfLiteral'
-				constructsSelfLiteral = true
+				signals = maskWithSignal(signals, signal: ScanSignalConstructsSelfLiteral)
 			end 'selfLiteral'
 			// ⭐ A `<TypeName>{` / `Self{` STRUCT literal is a record construction (W41-opaque) — the half of
 			// the signal that IS a token test. The tuple half is folded in below, off a paren stack.
@@ -15232,7 +15293,7 @@ export type Parser
 			// signal were the first two), and each cure was the same: ask the narrower question the signal
 			// actually means.
 			if kind == TokenKind.leftBrace and tokenCanBeAName(self.tokenAt(q - 1)) and self.kindAt(q + 1) != TokenKind.rightBrace 'structLiteral'
-				buildsRecord = true
+				signals = maskWithSignal(signals, signal: ScanSignalBuildsRecord)
 			end 'structLiteral'
 			// ⭐⭐ **A TUPLE LITERAL IS A `(` IN EXPRESSION POSITION HOLDING A DEPTH-1 COMMA, and a token test
 			// cannot see it (W41-opaque).** A `(` FOLLOWING something that can end a primary expression opens a
@@ -15248,7 +15309,7 @@ export type Parser
 				groupIsTuplePosition.push(kind == TokenKind.leftParen and not self.tokenEndsAPrimaryExpression((q - 1) as TokenIndex))
 			end 'opensGroup'
 			if kind == TokenKind.comma and not groupIsTuplePosition.isEmpty() and (try groupIsTuplePosition.last() otherwise panic("scanDescriptorSignalsIn: groupIsTuplePosition is non-empty by the guard and has no last")) 'topLevelCommaInAGrouping'
-				buildsRecord = true
+				signals = maskWithSignal(signals, signal: ScanSignalBuildsRecord)
 			end 'topLevelCommaInAGrouping'
 			if (kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace) and not groupIsTuplePosition.isEmpty() 'closesGroup'
 				// A region may CLOSE more groups than it opens (a field default is the `=` to the end of its
@@ -15260,12 +15321,12 @@ export type Parser
 			// guarded, so it can be left live at the merge. A method's own block is already open before this
 			// walk starts (`methodBodyEndFrom` consumed it), so every opener here is a nested one.
 			if self.opensBlockAt(q) 'opensBlock'
-				hasControlFlow = true
+				signals = maskWithSignal(signals, signal: ScanSignalHasControlFlow)
 			end 'opensBlock'
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, forwardsToATypeParamFeed: forwardsToATypeParamFeed, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, readsFixedElementCount: readsFixedElementCount, sizedContainerSelfCallees: sizedContainerSelfCallees, endPos: regionEnd)
+		return MethodDescriptorScan.create(maskHasSignal(signals, signal: ScanSignalDirect), callees: callees, hasControlFlow: maskHasSignal(signals, signal: ScanSignalHasControlFlow), hasContainerMoveOut: maskHasSignal(signals, signal: ScanSignalHasContainerMoveOut), reassignsOpaqueField: maskHasSignal(signals, signal: ScanSignalReassignsOpaqueField), hasArrayCopy: maskHasSignal(signals, signal: ScanSignalHasArrayCopy), constructsSelfLiteral: maskHasSignal(signals, signal: ScanSignalConstructsSelfLiteral), buildsRecord: maskHasSignal(signals, signal: ScanSignalBuildsRecord), adoptsOpaqueCallResult: maskHasSignal(signals, signal: ScanSignalAdoptsOpaqueCallResult), forwardsToATypeParamFeed: maskHasSignal(signals, signal: ScanSignalForwardsToATypeParamFeed), storesContainerElement: maskHasSignal(signals, signal: ScanSignalStoresContainerElement), walksReceiverAsACursor: maskHasSignal(signals, signal: ScanSignalWalksReceiverAsACursor), corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, readsFixedElementCount: maskHasSignal(signals, signal: ScanSignalReadsFixedElementCount), sizedContainerSelfCallees: sizedContainerSelfCallees, endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
 
 	// ⭐⭐⭐ **THE ONE EDGE IN THE DESCRIPTOR-NEED FIXPOINT THAT LEAVES THE ENCLOSING TYPE (ARRG).** A `.<m>(`
@@ -28509,7 +28570,7 @@ export type Parser
 		// drop the old one owed. `moveManagedValueInto`'s header states the rule and names this exception; the
 		// two are stated together because "a rebind moves" is true of one door and false of this one.
 		let owned = try self.moveManagedValueInto(value, argBareLocal: not rhsBareLocalName.isEmpty(), isString: tagIsByteRecord(maxonTypeTag(binding.varType)), range: range)
-		self.emitDecref(self.emitCellLoad(binding, range: range), range: range)
+		self.emitDecref(self.emitCellLoad(binding.varType, box: binding.boundValue, range: range), range: range)
 		self.emitCellStore(binding, value: owned, range: range)
 	end 'reassignCellBinding'
 
@@ -33243,13 +33304,22 @@ export type Parser
 		while i > floor 'eachOwned'
 			i = i - 1
 			let binding = try self.ownedBindings.get(i) otherwise panic("emitScopeDrops: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
+			// ⚠ **THE FOUR FACTS ARE READ OUT AND THE RECORD LET GO BEFORE ANYTHING IS EMITTED.** A binding
+			// read out of `ownedBindings` is a BORROW of that array, and every emit below writes the parser's
+			// own storage — so holding the record across them is refused (E3070), and the refusal is about a
+			// real shape: this loop caches `count()` and walks downward, so an emit that enrolled a binding
+			// would grow the array under a pointer into it. None of the four can dangle.
+			let bindingMovedFrom = binding.movedFrom
+			let bindingIsCell = binding.isCellBinding
+			let bindingVarType = binding.varType
+			let bindingValue = binding.boundValue
 			// ⭐ **DROP-SKIP FOR A MOVED-FROM BINDING.** Its owned value was transferred to another
 			// binding by a `let u = t` / `s = t`, which now owns and drops it — decref-ing it here too
 			// would double-free (the exact bug #41 filed for `s = t`). The moved-from binding stays in
 			// the list (removal would desync the block/loop drop marks), so the SKIP is what makes a
 			// moved-out value drop exactly once. This one guard serves every exit that funnels through
 			// here — `return`, a block fall-through, a `break`/`continue`.
-			if not binding.movedFrom 'liveOwner'
+			if not bindingMovedFrom 'liveOwner'
 				// ⭐⭐ **A CELL IS DROPPED IN TWO STEPS, BECAUSE IT OWNS TWO THINGS (PBR-2)** — the record it holds
 				// and the one-word box holding it. The occupant is LOADED rather than remembered, for
 				// `reassignCellBinding`'s reason: a callee may have replaced it through the very pointer this
@@ -33259,18 +33329,18 @@ export type Parser
 				//
 				// ⚠ Only a cell this frame OWNS reaches here: a by-reference PARAMETER's cell is the caller's and is
 				// never enrolled (`bindParameters`), so `ownedBindings` holds only locals and r-value scratch cells.
-				if binding.isCellBinding 'aCellOwnsTwoThings'
-					if self.signatures.typeIsManaged(binding.varType, from: self.artifact.typeNames) 'cellHoldsAManagedRecord'
-						self.emitDecref(self.emitCellLoad(binding, range: SourceRange.ofToken(anchor)), range: SourceRange.ofToken(anchor))
+				if bindingIsCell 'aCellOwnsTwoThings'
+					if self.signatures.typeIsManaged(bindingVarType, from: self.artifact.typeNames) 'cellHoldsAManagedRecord'
+						self.emitDecref(self.emitCellLoad(bindingVarType, box: bindingValue, range: SourceRange.ofToken(anchor)), range: SourceRange.ofToken(anchor))
 					end 'cellHoldsAManagedRecord'
 
 					// The BOX, freed explicitly rather than through `emitDecref` — see `allocateCell` for why the
 					// tag-routed drop would run the CONTENT's destructor over an 8-byte cell.
-					self.emitOwnershipRuntimeCall(MmDecrefName, args: singletonArgs(binding.boundValue), range: SourceRange.ofToken(anchor))
+					self.emitOwnershipRuntimeCall(MmDecrefName, args: singletonArgs(bindingValue), range: SourceRange.ofToken(anchor))
 					continue
 				end 'aCellOwnsTwoThings'
 
-				self.emitDecref(binding.boundValue, range: SourceRange.ofToken(anchor))
+				self.emitDecref(bindingValue, range: SourceRange.ofToken(anchor))
 			end 'liveOwner'
 		end 'eachOwned'
 		self.currentBlock = saved
@@ -34963,9 +35033,36 @@ export type Parser
 			// caller wrote a literal, and `pick(v, …)` / `pick("ab", …)` over one `pick(s String, …)` differ in
 			// nothing this frame can read. `__str_retain` is that decision, made where it can be — off the
 			// record's own `capacity@16`. See its header for the two measurements that bound it on both sides.
-			if door == BorrowLaunderDoor.merged 'mergedEdge'
+			// ⭐⭐ **A HAND-OFF RETAINS, IT DOES NOT COPY — `__str_retain`, WHICH IS THE ONLY PARTY THAT CAN
+			// TELL AN IMMORTAL LITERAL FROM A HEAP RECORD.** Both hand-off doors take this arm: a MERGE edge
+			// always did (a copy of one edge is a write nobody sees — `grow(make() if c else s)` printed
+			// `v=ab` against the oracle's `v=abXY`), and a `return` now does too. The property the return
+			// door was copying FOR is unchanged: `__str_retain` clones an immortal `.rdata` literal and
+			// increfs a heap record, so what the caller adopts is an owned, independently-droppable record
+			// either way — which is exactly what makes a `try f() otherwise <owned>` merge's ok edge
+			// provably a heap record rather than its caller's literal.
+			//
+			// ⛔⛔ **COPYING A RETURNED BORROWED STRING IS AGAINST THE LANGUAGE.** Maxon is single-ownership
+			// with reference semantics — *"everything is a reference; if you want a copy you do it explicitly
+			// with `clone()`"* (user ruling) — so a `return name` handing back a DIFFERENT record than the `name`
+			// it was given is a copy the author did not write, and the caller's value stops being the callee's.
+			// The rule is the reason; the cost is not.
+			//
+			// ⚠ **AND THE COST IS *NOT* THE REASON — MEASURED, because it was the suspicion that found this
+			// door.** A self-compile made the shv2-built compiler allocate **1,089,279** times against the
+			// bootstrap-built one's **618,817** on the same input (1.76x), and this arm was the first
+			// hypothesis. Removing the copy here moved it to **1,078,206** — about 11,000 of a ~470,000 gap,
+			// ~2%. So the blowup is somewhere else and is STILL OPEN; do not read this comment as having
+			// explained it.
+			//
+			// ⚠ **THE `binding` DOOR STILL COPIES AND IS NOT THIS CHANGE.** Its copy is load-bearing for a
+			// different rule — it is what keeps `var b = <a String let>` legal — and the ownership ruling
+			// says that program should be **E3078** (`a var may not be declared from an immutable
+			// reference`) rather than a silent copy. That is a spec-visible decision about a refusal, not a
+			// cost fix, so it is left where it is and named here rather than folded in.
+			if borrowLaunderDoorIsHandOff(door) 'handOff'
 				return self.retainBorrowedByteRecord(value, range: range)
-			end 'mergedEdge'
+			end 'handOff'
 
 			return self.promoteToOwnedString(value, range: range)
 		end 'byteRecord'
@@ -36394,6 +36491,26 @@ export type Parser
 	// comparison against the real length IS the bounds check, which is what lets the element read below
 	// be the UNCHECKED one; a stale snapshot would let that read run off the end of the buffer.
 	//
+	// ⭐⭐ **THE DESTRUCTURING LOOP LIVES IN A FRAME OF ITS OWN, AND THAT IS E5001's CURE APPLIED AT THE
+	// FUNCTION BOUNDARY.** `for (k, v) in m` binds one name per tuple element, which is a LOOP — and it sat
+	// at the far end of `parseForStatement`, a function that by then holds two dozen locals it still needs
+	// afterwards. Every one of them was live ACROSS this loop, so the allocator owed each a register for its
+	// whole body: shv2 refused its own source with *"the loop at Parser.maxon:36919 needs 11 more
+	// register(s) than are available — 25 values"*, of which **sixteen were read 0 times in the loop**. They
+	// are not the loop's working set at all; they are the CALLER's. Behind a call they spill around it at no
+	// cost, which is exactly what the diagnostic's *"the values idle across the loop were already spilled
+	// around it"* sentence describes for everything outside a loop.
+	//
+	// ⚠ It takes six arguments and that is the honest count: this is a self-contained step of the parse
+	// (*"bind one loop variable per tuple element"*) and each argument is a fact only the caller holds.
+	function declareDestructuredLoopVariables(func IrFunction, nameToks TokenArray, loopValue ValueId, patternTok Token, forTok Token, bodyEndIndex TokenIndex) throws ParseError
+		let layout = try self.requireDestructurableTuple(loopValue, nameToks: nameToks, keywordTok: forTok, patternSubject: ForPatternSubject, sourceNoun: ForPatternSourceNoun, needsClause: ForPatternNeedsClause)
+		for i in 0 upto nameToks.count() 'eachName'
+			let nameTok = try nameToks.get(i) otherwise panic("declareDestructuredLoopVariables: nameToks.get OOB at {i} below count {nameToks.count()}")
+			try self.declareLoopVariable(func, nameTok: nameTok, value: self.emitFieldLoad(loopValue, layout: layout, index: i, range: SourceRange.between(patternTok, last: nameTok)), bodyEndIndex: bodyEndIndex)
+		end 'eachName'
+	end 'declareDestructuredLoopVariables'
+
 	// ⭐ **THE ELEMENT IS A BORROW** (`emitContainerElementAccessor`, `borrowed`) — the array keeps
 	// ownership and its own `__managed_decref` walk destroys it, exactly as `get`/`first`/`last` already
 	// yield (`dispatchArrayMethod`). The loop variable is therefore enrolled in NEITHER `ownedBindings`
@@ -36446,10 +36563,16 @@ export type Parser
 		// is carried (not the `Token` itself — a `var` may not alias an immutable aggregate binding,
 		// E3078) so the loop test below can anchor its type diagnostic on the operator the user wrote;
 		// an array form has no such operator and anchors on the `for`.
-		var isRange = false
-		var rangeInclusive = false
-		var limit = source
-		var testAnchorIndex = forIndex
+		// ⭐⭐ **THE TEN FACTS THE SOURCE EXPRESSION SETTLES, IN ONE RECORD — E5001's OTHER CURE, AND THE ONE
+		// THIS FUNCTION NEEDED.** Each was a `var` of its own, and all ten were live from the header analysis
+		// down to the merge at the end — so the allocator owed ten registers across a function that also
+		// needs its five blocks, its phis and its carried-var columns. shv2 refused its own source here:
+		// *"the code at Parser.maxon:36458 needs 11 more register(s) than are available — 25 values must be
+		// held in registers at once at this point"*, with the note that everything spillable already had
+		// been. A RECORD's fields live in memory and are never promoted, which is exactly what the
+		// diagnostic asks for — and the bundle is not arbitrary: these ten ARE one answer, *what kind of
+		// thing is being iterated*, settled once by the header and read by every phase after it.
+		var src = ForSourceFacts.create(source, testAnchorIndex: forIndex)
 		// ⭐⭐ **A RANGE WHOSE BOUNDS ARE BOTH CHARACTER LITERALS IS A RANGE OF `Character`S** (A5m-ab), and
 		// this is the one place that is decided. Every character literal is a `Character`
 		// (`parseCharLiteral`), so `for c in 'a' to 'e'` arrives here with two RECORDS where the loop needs two
@@ -36463,30 +36586,29 @@ export type Parser
 		// ⚠ **BOTH, OR NEITHER.** `for i in 'a' to n` is an INTEGER range from 97 — one bound is a number, so
 		// the range is over numbers, exactly as `cp == '-'` is a comparison of numbers. The element type
 		// follows the PAIR and not either half, which is why the two tags are read BEFORE the coercion.
-		var isCharacterRange = false
 		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeHeader'
-			isRange = true
-			rangeInclusive = self.at(TokenKind.to)
-			testAnchorIndex = self.pos
+			src.isRange = true
+			src.rangeInclusive = self.at(TokenKind.to)
+			src.testAnchorIndex = self.pos
 			self.advance()
 			let limitStart = self.pos
-			limit = try self.parseExpression(func, block: self.currentBlock)
-			let bothWereCharacters = self.tagOf(source) == ValueTypeTag.character and self.tagOf(limit) == ValueTypeTag.character
-			source = try self.integerizedOperand(source, expected: ValueTypeTag.integer, start: sourceStart, pastEnd: testAnchorIndex)
-			limit = try self.integerizedOperand(limit, expected: ValueTypeTag.integer, start: limitStart, pastEnd: self.pos)
+			src.limit = try self.parseExpression(func, block: self.currentBlock)
+			let bothWereCharacters = self.tagOf(source) == ValueTypeTag.character and self.tagOf(src.limit) == ValueTypeTag.character
+			source = try self.integerizedOperand(source, expected: ValueTypeTag.integer, start: sourceStart, pastEnd: src.testAnchorIndex)
+			src.limit = try self.integerizedOperand(src.limit, expected: ValueTypeTag.integer, start: limitStart, pastEnd: self.pos)
 			// A pair of Characters that did NOT both coerce is a pair of bounds the counter cannot step — a
 			// binding rather than a literal, or a multi-codepoint cluster — and `requireCountableRangeBound`
 			// below refuses it in its own words rather than this flag promising an element it cannot mint.
-			isCharacterRange = bothWereCharacters and tagIsIntegral(self.tagOf(source)) and tagIsIntegral(self.tagOf(limit))
+			src.isCharacterRange = bothWereCharacters and tagIsIntegral(self.tagOf(source)) and tagIsIntegral(self.tagOf(src.limit))
 		end 'rangeHeader'
 
 		// ⭐ **A COUNTED RANGE'S BOUNDS MUST BE INTEGERS**, asked here — the moment both are in hand and
 		// before a single block of the loop exists, so a refused program emits no op. See
 		// `requireCountableRangeBound`: without it a `float` range PANICKED in the x64 emitter and a
 		// `bool` range was silently accepted.
-		if isRange 'countedRange'
+		if src.isRange 'countedRange'
 			try self.requireCountableRangeBound(source, anchor: self.tokenAt(sourceStart))
-			try self.requireCountableRangeBound(limit, anchor: self.tokenAt(testAnchorIndex))
+			try self.requireCountableRangeBound(src.limit, anchor: self.tokenAt(src.testAnchorIndex))
 		end 'countedRange'
 
 		// ⭐⭐ **ONLY THE ARRAY FORM LOCKS ITS SOURCE, AND THE FORK IS WHERE THAT IS DECIDED.** The lock
@@ -36511,7 +36633,6 @@ export type Parser
 		// than one the source stores (see the ownership note on the element read below), so there is no
 		// borrow for a mutation to invalidate. What it does share with the array form is that its source is
 		// a heap record evaluated once into the preheader.
-		var isString = false
 		// ⭐⭐ **A LIST SOURCE WAS A FOURTH FORM HERE — A NODE CURSOR THE LOOP BUILT — AND IT WENT WITH THE
 		// SYNTHESIZED `List` (W153).** The header's block-arg carried a NODE POINTER seeded from `__list_head`,
 		// tested against 0, read through `__list_node_value` and advanced by `__list_node_next`. A corpus
@@ -36539,19 +36660,15 @@ export type Parser
 		// element must be yielded BEFORE the first advance, which falls out of seeding the flag to 0 in the
 		// preheader and computing the next flag in the STEP: a while-shaped loop would advance first and drop
 		// element 0. `partial-availability` counting exactly 2 over a 2-element sequence is the arity check on it.
-		var cursorSurface = MethodSurface.none
 		// What the header's error-flag block-arg starts at for a CURSOR source (W3). `atTheFirstElement` is the
 		// bare cursor form's literal 0 — "no throw yet", which is what makes the first trip unconditional — and
 		// `fromFactory` is a throwing `createIterator()`'s own flag, so an empty collection reports itself
 		// through the loop's ordinary exit test. See `materializeIterableIterationSource`.
-		var cursorEntrySeed = CursorEntrySeed.atTheFirstElement
-		var sourceLock = false
 		// ⭐ **THE E3070 SUBJECT OF THE ELEMENT THIS LOOP WILL BORROW** — resolved HERE, beside the lock and
 		// off the same `sourceStart`, because both are answers about the SOURCE and both must be taken before
 		// the loop VARIABLE is declared: `for arr in arr` must key on the source binding, not on the loop
 		// variable that shadows its name. Empty for a range (no borrow) and for a source that names no
 		// binding, exactly as the lock is.
-		var elementBorrowSubject = EmptySourceText
 
 		// ⭐⭐ **THE CURSOR GETS A SCOPE OF ITS OWN, AND THE SOURCE EXPRESSION'S TEMPORARIES STAY OUTSIDE IT.**
 		// `forMark` above holds everything the SOURCE EXPRESSION enrolled — a record `keepFieldSourceAliveForItsRead`
@@ -36574,7 +36691,7 @@ export type Parser
 		// has no empty edge — and the exit's drops come out in the order they always did (cursor first, then the
 		// source's temporaries in reverse), because that is the order one call over the shared list produced.
 		let cursorMark = self.openBlock()
-		if not isRange 'collectionSource'
+		if not src.isRange 'collectionSource'
 			// ⚠ **A `Map` REWRITE STOOD HERE AND WENT WITH `__map_entries` (W105).** It replaced a SYNTHESIZED
 			// map source with an `Array with (Key, Value)` the runtime walk materialized, because that record
 			// stored no element a loop body could be handed. A corpus `Map` declares `Iterable` and its
@@ -36591,8 +36708,8 @@ export type Parser
 				notIterable gives source
 				cursor(iterator, _) gives iterator
 			end 'walkedValue'
-			cursorEntrySeed = match iterable 'walkedSeed'
-				notIterable gives cursorEntrySeed
+			src.cursorEntrySeed = match iterable 'walkedSeed'
+				notIterable gives src.cursorEntrySeed
 				cursor(_, seed) gives CursorEntrySeed.fromFactory(seed)
 			end 'walkedSeed'
 
@@ -36605,9 +36722,9 @@ export type Parser
 			// the source BEFORE the rewrite and this one describes the cursor AFTER it, so they are surfaces of
 			// two different values. What is shared is the FUNCTION, so they cannot disagree; what is not shared
 			// is the cost, and for a witness-dispatched source each ask walks the slot list per protocol name.
-			cursorSurface = try self.cursorIterationSurface(source, forTok: forTok)
-			try self.requireIterableSource(source, cursorSurface: cursorSurface, forTok: forTok)
-			isString = tagIsText(self.tagOf(source))
+			src.cursorSurface = try self.cursorIterationSurface(source, forTok: forTok)
+			try self.requireIterableSource(source, cursorSurface: src.cursorSurface, forTok: forTok)
+			src.isString = tagIsText(self.tagOf(source))
 
 			// ⭐⭐ **THE LOCK IS EVERY COLLECTION FORM'S; ONLY THE BORROW SUBJECT IS THE ARRAY'S.** The
 			// String form shipped without the lock, on the reasoning that a String hands the body a MINTED
@@ -36625,7 +36742,7 @@ export type Parser
 			// **E3019** on the runnable bootstrap, and the rebind is **E2013** there. Both halves of the
 			// full lock therefore MATCH the oracle; the exemption diverged from it on the one program it
 			// was protecting and segfaulted on the one it was not.
-			sourceLock = self.lockIterationSource(sourceStart)
+			src.sourceLock = self.lockIterationSource(sourceStart)
 
 			// The BORROW SUBJECT is the SLOT-BACKED forms' — the array's and the vector's — and the
 			// String form's alone is exempt, for the reason the lock is not: a String's element is
@@ -36635,8 +36752,8 @@ export type Parser
 			// A CURSOR is exempt for the String's reason and not the array's, even though its source is a
 			// record: the element the body sees is whatever `current()` RETURNS, so its ownership is that
 			// call's answer (`mintCallResult`) and not a borrow this loop took out of a slot it can name.
-			if not isString and not methodSurfaceExists(cursorSurface) 'slotBorrowConcerns'
-				elementBorrowSubject = self.borrowSubjectNameAt(sourceStart)
+			if not src.isString and not methodSurfaceExists(src.cursorSurface) 'slotBorrowConcerns'
+				src.elementBorrowSubject = self.borrowSubjectNameAt(sourceStart)
 			end 'slotBorrowConcerns'
 
 			// ⭐ **AN OWNED ARRAY TEMPORARY BECOMES AN OWNED BINDING OF THIS FRAME.** `for x in [1,2,3]`
@@ -36673,8 +36790,8 @@ export type Parser
 		//
 		// A RANGE's index IS the user's loop variable, so it takes the START bound's type (a ranged
 		// alias stays one). An ARRAY's index is a compiler-owned counter and is a plain integer.
-		let indexTag = self.tagOf(source) if isRange else ValueTypeTag.integer
-		let indexNameId = self.valueNameId(source) if isRange else UnnamedTypeId
+		let indexTag = self.tagOf(source) if src.isRange else ValueTypeTag.integer
+		let indexNameId = self.valueNameId(source) if src.isRange else UnnamedTypeId
 		let indexPhi = self.mintPhi(header, tag: indexTag, nameId: indexNameId)
 
 		// The carried set is selected against `mutableVars` HERE, not at the extent scan above, because
@@ -36692,7 +36809,7 @@ export type Parser
 		// value is not a coincidence of meaning: 0 is "index 0" for one and "no error" for the other, and both
 		// are what the preheader owes its header.
 		var firstIndex = source
-		if not isRange 'counterStartsAtZero'
+		if not src.isRange 'counterStartsAtZero'
 			firstIndex = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 		end 'counterStartsAtZero'
 		// The carried bindings' PRE-loop values, captured here because the empty-`Iterable` edge below needs
@@ -36718,7 +36835,7 @@ export type Parser
 		// one point, with no conditional-drop form to express "only if it was created". So the path that owns
 		// nothing must not reach the point that drops.
 		var emptyExit = EmptyIterableExit.none
-		match cursorEntrySeed 'entry'
+		match src.cursorEntrySeed 'entry'
 			atTheFirstElement then self.emitBranch(self.currentBlock, targetId: header.id)
 			fromFactory(flag) then emptyExit = EmptyIterableExit.entered(self.emitEmptyIterableEntry(func, flag: flag, header: header, forTok: forTok))
 		end 'entry'
@@ -36728,17 +36845,17 @@ export type Parser
 		// error; for an array it is `idx < __managed_count(arr)`, both operands compiler-minted integers.
 		//
 		self.currentBlock = header
-		var bound = limit
-		var testOp = MaxonCmpOp.le if rangeInclusive else MaxonCmpOp.lt
+		var bound = src.limit
+		var testOp = MaxonCmpOp.le if src.rangeInclusive else MaxonCmpOp.lt
 		// ⭐ **A USER CURSOR'S TEST IS `flag == 0`** — "the last `advance()` did not throw" — and it is the one
 		// form that needs no length read, because the value the header carries already IS the end condition.
 		// The preheader seeds it 0 (see `firstIndex` above), which is what makes the FIRST trip unconditional —
 		// the do-while this form's header argues for.
-		if methodSurfaceExists(cursorSurface) 'cursorStillPositioned'
+		if methodSurfaceExists(src.cursorSurface) 'cursorStillPositioned'
 			bound = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 			testOp = MaxonCmpOp.eq
 		end 'cursorStillPositioned'
-		if not isRange and not methodSurfaceExists(cursorSurface) 'lengthReadLive'
+		if not src.isRange and not methodSurfaceExists(src.cursorSurface) 'lengthReadLive'
 			// ⭐ **THE LENGTH IS RE-READ LIVE IN THE HEADER for a String too** — `length@8` off the record,
 			// the same discipline the array form's live `__managed_count` follows and for the same reason: the
 			// header comparison IS the bounds check that licenses the unchecked read below it.
@@ -36746,9 +36863,9 @@ export type Parser
 			// ⚠ The String's index is a BYTE position, not a cluster ordinal, so the header asks "is there
 			// a byte left?" — which is exactly the reference's `countGraphemes` loop condition
 			// (`while pos < len`). A cluster ordinal would need the count, which costs a whole extra scan.
-			bound = self.emitLoadStringField(source, offset: StringLengthOffset, range: SourceRange.ofToken(forTok)) if isString else self.emitRuntimeCall(ManagedCountName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
+			bound = self.emitLoadStringField(source, offset: StringLengthOffset, range: SourceRange.ofToken(forTok)) if src.isString else self.emitRuntimeCall(ManagedCountName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
 		end 'lengthReadLive'
-		let cond = try self.emitCompare(indexPhi, rhs: bound, op: testOp, opTok: self.tokenAt(testAnchorIndex))
+		let cond = try self.emitCompare(indexPhi, rhs: bound, op: testOp, opTok: self.tokenAt(src.testAnchorIndex))
 
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
 		try self.requireNewlineAfterBlockLabel()
@@ -36795,14 +36912,14 @@ export type Parser
 		// ⭐ **A CHARACTER RANGE MINTS ITS ELEMENT FROM THE COUNTER**, where a String mints it from a byte
 		// range — two producers of the SAME owned per-trip Character, which is why the ownership below is
 		// asked once for both rather than beside each. See `GraphemeRuntime.buildCharFromCodepoint`.
-		if isCharacterRange 'mintFromCodepoint'
+		if src.isCharacterRange 'mintFromCodepoint'
 			loopValue = self.emitRuntimeCall(CharFromCodepointName, args: singletonArgs(indexPhi), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
 		end 'mintFromCodepoint'
-		if isString 'readCluster'
+		if src.isString 'readCluster'
 			graphemeEnd = self.emitRuntimeCall(CorpusFindGraphemeEnd, args: pairArgs(source, second: indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok), argLabels: corpusFindGraphemeEndLabels())
 			loopValue = self.emitRuntimeCall(CharAtName, args: tripleArgs(source, second: indexPhi, third: graphemeEnd), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
 		end 'readCluster'
-		if isString or isCharacterRange 'ownsTheTripsCharacter'
+		if src.isString or src.isCharacterRange 'ownsTheTripsCharacter'
 			// ⭐⭐ **THE OWNERSHIP RULING: A MINTED CHARACTER IS OWNED, WHERE AN ARRAY'S ELEMENT IS BORROWED — and
 			// the difference is not a preference, it is a fact about where the value lives.** Slice A could
 			// borrow because the ARRAY KEEPS the element and its own `__managed_decref` walk destroys it, so
@@ -36844,8 +36961,8 @@ export type Parser
 		// `__list_node_value` off the carried NODE where an array reads `__managed_get_unchecked` off an
 		// ordinal. A corpus `List` is a declared `Iterable` now and reads its element through `current()` like
 		// every other cursor.
-		if not isRange and not isString and not methodSurfaceExists(cursorSurface) 'readElement'
-			loopValue = self.emitContainerElementAccessor(func, callee: ManagedGetUncheckedName, container: source, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), reference: ContainerElementReference.borrowed, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(patternTok))
+		if not src.isRange and not src.isString and not methodSurfaceExists(src.cursorSurface) 'readElement'
+			loopValue = self.emitContainerElementAccessor(func, callee: ManagedGetUncheckedName, container: source, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), reference: ContainerElementReference.borrowed, borrowSubjectName: src.elementBorrowSubject, range: SourceRange.ofToken(patternTok))
 		end 'readElement'
 		// ⭐⭐ **A CURSOR'S ELEMENT IS WHATEVER `current()` RETURNS, AND ITS OWNERSHIP IS THAT CALL'S ANSWER —
 		// NOT A THIRD RULE HERE.** The other four forms each needed one: an array/list element is a BORROW the
@@ -36857,8 +36974,8 @@ export type Parser
 		// re-scopes it to the per-trip frame, where all four trip exits already drop to a mark — and it is a
 		// silent no-op on the scalar case, which is why the call is unconditional rather than gated on a
 		// managed-return test that would be a second opinion about what the call minted.
-		if methodSurfaceExists(cursorSurface) 'readCursorElement'
-			loopValue = try self.emitReceiverProtocolCall(cursorSurface, methodName: CurrentMethodName, anchor: patternTok, resultUsed: true)
+		if methodSurfaceExists(src.cursorSurface) 'readCursorElement'
+			loopValue = try self.emitReceiverProtocolCall(src.cursorSurface, methodName: CurrentMethodName, anchor: patternTok, resultUsed: true)
 			self.giveTemporaryScopeLifetime(loopValue, name: IterationElementBindingName)
 		end 'readCursorElement'
 
@@ -36881,11 +36998,7 @@ export type Parser
 		if self.patternNamesOneWholeElement(nameToks) 'bindTheWholeElement'
 			try self.declareLoopVariable(func, nameTok: self.soleLoopVariableName(nameToks), value: loopValue, bodyEndIndex: bodyEndIndex)
 		end 'bindTheWholeElement' else 'bindEachDestructuredName'
-			let layout = try self.requireDestructurableTuple(loopValue, nameToks: nameToks, keywordTok: forTok, patternSubject: ForPatternSubject, sourceNoun: ForPatternSourceNoun, needsClause: ForPatternNeedsClause)
-			for i in 0 upto nameToks.count() 'eachName'
-				let nameTok = try nameToks.get(i) otherwise panic("parseForStatement: nameToks.get OOB at {i} below count {nameToks.count()}")
-				try self.declareLoopVariable(func, nameTok: nameTok, value: self.emitFieldLoad(loopValue, layout: layout, index: i, range: SourceRange.between(patternTok, last: nameTok)), bodyEndIndex: bodyEndIndex)
-			end 'eachName'
+			try self.declareDestructuredLoopVariables(func, nameToks: nameToks, loopValue: loopValue, patternTok: patternTok, forTok: forTok, bodyEndIndex: bodyEndIndex)
 		end 'bindEachDestructuredName'
 
 		var bodyEnd = try self.parseBlockBody(func, block: body, label: loopLabelTok.value)
@@ -36894,7 +37007,7 @@ export type Parser
 		self.assertScanAligned("parseForStatement", predictedEnd: bodyEndIndex)
 
 		let ctx = try self.loops.pop() otherwise panic("parseForStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
-		self.releaseIterationSource(sourceLock)
+		self.releaseIterationSource(src.sourceLock)
 
 		// The step block, read off the context rather than spelled again — see `parseWhileStatement`'s
 		// fall-through for why the two loop parsers share that derivation.
@@ -36939,10 +37052,10 @@ export type Parser
 		// loop NORMALLY (the header's next test fails) rather than escaping it, so `has()` need not declare
 		// `throws` to iterate — the contract `stdlib/Interfaces.maxon` states and both references implement.
 		var nextIndex = graphemeEnd
-		if methodSurfaceExists(cursorSurface) 'cursorAdvanceStep'
-			nextIndex = try self.emitCursorAdvance(func, cursorSurface: cursorSurface, anchor: forTok)
+		if methodSurfaceExists(src.cursorSurface) 'cursorAdvanceStep'
+			nextIndex = try self.emitCursorAdvance(func, cursorSurface: src.cursorSurface, anchor: forTok)
 		end 'cursorAdvanceStep' else 'builtinSourceStep'
-			if not isString 'ordinalStep'
+			if not src.isString 'ordinalStep'
 				let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 				nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
 			end 'ordinalStep'
@@ -39595,11 +39708,16 @@ export type Parser
 		let entryVals = self.snapshotBindings(carried)
 
 		// Arm-loop state. The first arm's test goes into the block the scrutinee left control in
-		// (`self.currentBlock`); `prevTestBlock`/`prevExitBlock` are seeded with it too and read only
+		// (`self.currentBlock`); `prevTestBlockId`/`prevExitBlock` are seeded with it too and read only
 		// under the flag that makes them meaningful (`hasRealArm` / `prevFallthrough`) — a block has
 		// no empty value, and a sentinel would be a lie a later read could believe.
+		//
+		// ⭐ `prevTestBlockId` is an ID, not a second NAME for `currentTestBlock`: the advance below is
+		// `prevTestBlockId = currentTestBlock.id`, and copying the BINDING there would move the block out
+		// of `currentTestBlock` (single ownership — E3102 on the next arm's read of it). The one reader
+		// re-fetches, which `IrModule.getBlockByIdIn` asks for anyway across block-minting calls.
 		var currentTestBlock = self.currentBlock
-		var prevTestBlock = self.currentBlock
+		var prevTestBlockId = self.currentBlock.id
 		var hasRealArm = false
 		var sawDefault = false
 		var prevFallthrough = false
@@ -39741,15 +39859,18 @@ export type Parser
 		// value in no interval goes: the `default` body (set when the default arm is parsed) or a `dead`
 		// block for an exhaustive enum (created after the loop).
 		let usePlan = self.matchUsesIntervalPlan(isEnumMatch, scrut: scrut)
-		// `var` because the dispatch is emitted INTO this block after the loop (`emitMatchDispatch` sets its
-		// terminator), so the whole-program mutating-parameter analysis sees `entry` mutated — the same
-		// let/var sensitivity `finalizeMatchMerge` documents at its edge-recording site.
-		var dispatchEntry = currentTestBlock
+		// ⭐ **THE ENTRY BLOCK IS HELD BY ITS `BlockId`, NOT AS A SECOND NAME FOR `currentTestBlock`** —
+		// `IrModule.getBlockByIdIn`'s own rule (*"use this instead of holding an IrBlock struct alias across
+		// other block-creating / block-mutating calls"*), and the arm loop below is exactly such a span: it
+		// mints a block per arm. Aliasing it here would also be a second mutable name for one owned value,
+		// which single ownership refuses (E3102 on the next read of `currentTestBlock`) — the block is
+		// re-fetched at the one place the dispatch is emitted.
+		let dispatchEntryId = currentTestBlock.id
 		var dispatchIntervals = DispatchIntervalArray.create()
 		// The block a value in no interval branches to. Seeded to the entry only as a placeholder — it is
 		// always overwritten before the dispatch is emitted (a `default` body, or an exhaustive enum's dead
 		// block), and a scalar match with no default throws E2026 before then.
-		var planMissBlockId = dispatchEntry.id
+		var planMissBlockId = dispatchEntryId
 		var planMissArgs = ValueIdArray.create()
 
 		while true 'arms'
@@ -39787,6 +39908,7 @@ export type Parser
 					end 'planDefaultArgs' else if hasRealArm 'defaultFailEdge'
 						// The fail edge into the default body — the last real arm's `condBranch` else, already
 						// emitted; only its phi args are recorded now.
+						var prevTestBlock = try self.artifact.module.getBlockByIdIn(func, id: prevTestBlockId) otherwise panic("parseMatchCommon: the previous test block {prevTestBlockId} is not in its own function")
 						self.recordBranchEdge(prevTestBlock, targetId: defaultBody.id, argIds: matchEdgeArgs)
 					end 'defaultFailEdge'
 				end 'defaultIsFtTarget' else 'defaultFresh'
@@ -39871,11 +39993,13 @@ export type Parser
 				// `var` because the body block is forwarded to functions that fill it (payload phis, the arm
 				// body) — a `let` cannot back a mutating parameter.
 				var bodyBlock = self.newBlock(func, label: b"matcharm", line: patternTok.line)
-				// The linear chain's next test block. A planned match emits its dispatch after the loop and
+				// The linear chain's next test block, held by ID rather than as a second NAME for
+				// `bodyBlock` — one block, one owner, so aliasing it would poison `bodyBlock` for the
+				// pattern collectors below (E3102). A planned match emits its dispatch after the loop and
 				// mints its own test blocks there, so it creates none here (an unused block would be dead).
-				var nextTest = bodyBlock
+				var nextTestId = bodyBlock.id
 				if not usePlan 'chainNextTest'
-					nextTest = self.newBlock(func, label: b"matchnext", line: patternTok.line)
+					nextTestId = self.newBlock(func, label: b"matchnext", line: patternTok.line).id
 				end 'chainNextTest'
 
 				// The pattern's facts: an interval PLAN (enum tags, or ordered-scalar values — collected, no
@@ -39940,7 +40064,7 @@ export type Parser
 					end 'stampArgs'
 				end 'planEdgeArgs' else 'chainEdge'
 					self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
-					self.emitCondBranch(currentTestBlock, cond: cond, thenId: bodyBlock.id, elseId: nextTest.id, ifTok: patternTok)
+					self.emitCondBranch(currentTestBlock, cond: cond, thenId: bodyBlock.id, elseId: nextTestId, ifTok: patternTok)
 				end 'chainEdge'
 
 				// A `walk(dir)` arm's payload bindings are declared at the HEAD of the arm body, in a
@@ -40021,10 +40145,10 @@ export type Parser
 					end 'armReaches'
 				end 'notFallThrough'
 
-				prevTestBlock = currentTestBlock
+				prevTestBlockId = currentTestBlock.id
 				hasRealArm = true
 				if not usePlan 'chainAdvance'
-					currentTestBlock = nextTest
+					currentTestBlock = try self.artifact.module.getBlockByIdIn(func, id: nextTestId) otherwise panic("parseMatchCommon: the chain's next test block {nextTestId} is not in its own function")
 				end 'chainAdvance'
 			end 'patternArm'
 		end 'arms'
@@ -40128,7 +40252,7 @@ export type Parser
 		// wired its dispatch inline, so this runs only for a planned match.
 		if usePlan 'emitPlan'
 			let normalized = self.normalizeDispatchIntervals(dispatchIntervals)
-			try self.emitMatchDispatch(func, entry: dispatchEntry, subject: dispatchSubject, intervals: normalized, missTarget: planMissBlockId, missArgs: planMissArgs, opTok: matchTok)
+			try self.emitMatchDispatch(func, entryId: dispatchEntryId, subject: dispatchSubject, intervals: normalized, missTarget: planMissBlockId, missArgs: planMissArgs, opTok: matchTok)
 		end 'emitPlan'
 
 		// ⭐⭐ **DRAIN THE BREAK EXITS INTO THE REACHING SET — BEFORE `finalizeMatchMerge` COUNTS IT.** That
@@ -40138,9 +40262,26 @@ export type Parser
 		// edges are recorded on each arm's OWN block, so the merge's predecessor order is not a property of
 		// this list, and `finalizeMatchMerge`'s only order-sensitive read is "arm 0 is the type reference",
 		// which a statement match does not use.
+		//
+		// ⛔⛔ **PUSHED ONE AT A TIME, AND `append` WOULD BE A WRONG ANSWER — THE DIVERGENCE THAT STOPPED SHV2
+		// SELF-HOSTING.** `Array.append` DEEP-CLONES a managed element in shv2, deliberately and by its own
+		// runtime's design: shv2 is move-only, so two arrays holding one element record would double-destroy
+		// it (`ManagedMemoryRuntime.ManagedCloneManagedName` states the rule and why both references, which
+		// refcount, may incref instead). A `MatchArmExit` cloned that way carries a CLONE of its
+		// `exitBlock` — so `finalizeMatchMerge` terminated a copy and the module's real block was left
+		// `Terminator.unset`. `push` co-owns the record, which is what this drain needs and what the
+		// reference compilers happened to give `append` for free.
+		//
+		// ⛔ MEASURED end to end: the bootstrap-built compiler compiled this file correctly (its `append`
+		// shares), so the defect was invisible until shv2 compiled ITSELF — and the shv2-built compiler then
+		// died on every `break` out of a `match`: *"IrBlock 'matcharm' (id=2) has no terminator — parser left
+		// it in Terminator.unset"*, on 87 specs at once. The one-line source repro is
+		// `b.append(a)` over an `Array with <a struct holding a managed field>`: **oracle 5, shv2 0**.
 		if not isExpression 'drainBreakExits'
 			let matchCtx = try self.matches.pop() otherwise panic("parseMatchCommon: the match stack is empty at the end of a statement match — one is pushed before the arm loop")
-			reachingArms.append(matchCtx.breakExits)
+			for i in 0 upto matchCtx.breakExits.count() 'eachBreakExit'
+				reachingArms.push(try matchCtx.breakExits.get(i) otherwise panic("parseMatchCommon: breakExits.get OOB at {i} inside its own count()"))
+			end 'eachBreakExit'
 		end 'drainBreakExits'
 
 		let outcome = try self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.matchExpression if isExpression else MergeConstruct.matchStatement)
@@ -42960,7 +43101,8 @@ export type Parser
 	// `missTarget` (the `default` body, or a `dead` block for an exhaustive enum). NO new IR op — internal
 	// nodes compare `subject < pivot` and leaves test their interval, all with the same `compare`/
 	// `condBranch` the chain used, so the backend and every later pass are untouched (a jump table is Slice 2).
-	function emitMatchDispatch(func IrFunction, entry IrBlock, subject ValueId, intervals DispatchIntervalArray, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws ParseError
+	function emitMatchDispatch(func IrFunction, entryId BlockId, subject ValueId, intervals DispatchIntervalArray, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws ParseError
+		var entry = try self.artifact.module.getBlockByIdIn(func, id: entryId) otherwise panic("emitMatchDispatch: the dispatch entry block {entryId} is not in its own function")
 		try self.emitDispatchRange(func, from: 0, to: intervals.count(), block: entry, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
 	end 'emitMatchDispatch'
 
@@ -43975,9 +44117,13 @@ export type Parser
 		for br in armInnerBlockRefs 'reattach'
 			func.blockRefs.push(br)
 		end 'reattach'
-		var trueExit = trueBranch
+		// Held by ID: a second owning NAME for `trueBranch` would move the block out of it (single
+		// ownership), and the branch is still read below for the condition's `then` target. The one
+		// consumer re-fetches, which is what `IrModule.getBlockByIdIn` asks for across block-minting calls
+		// anyway — and the false arm's `parseExpression` between here and there mints plenty.
+		var trueExitId = trueBranch.id
 		if armExit.id != startBlock.id 'multiBlockArm'
-			trueExit = armExit
+			trueExitId = armExit.id
 		end 'multiBlockArm'
 
 		// The false arm parses straight into its own block, so it never runs on the true path — from the
@@ -44008,6 +44154,7 @@ export type Parser
 		// `condExit` is still open when the merge's per-arm reconciliation runs.
 		let carried = VarInfoArray.create()
 		var reachingArms = MatchArmExitArray.create()
+		let trueExit = try self.artifact.module.getBlockByIdIn(func, id: trueExitId) otherwise panic("parseTernaryExpression: the true arm's exit block {trueExitId} is not in its own function")
 		reachingArms.push(MatchArmExit.create(trueExit, exitVals: ValueIdArray.create(), give: settledTrue, moveMark: trueMoveMark, blame: trueBlame))
 		reachingArms.push(MatchArmExit.create(falseExit, exitVals: ValueIdArray.create(), give: settledFalse, moveMark: falseMoveMark, blame: falseBlame))
 		let outcome = try self.finalizeMatchMerge(func, matchTok: ifTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.ternary)
@@ -45840,12 +45987,27 @@ export type Parser
 	// ⚠ **EVERY GAP FALLS TO `possiblyZero`, AND THE TWO DIRECTIONS ARE NOT SYMMETRIC.** See the union's own
 	// header: a wrong `neverZero` is a silent hardware trap, a wrong `possiblyZero` is a visible needless `try`.
 	//
-	// ⚠ **A RANGED FLOAT ALIAS CANNOT BE PROVEN HERE, AND THAT IS A KNOWN GAP RATHER THAN AN OVERSIGHT.** A
-	// value of a ranged FLOAT alias carries tag `float`, not `named` (its register class depends on the tag, so
-	// the alias name cannot ride there — see `aliasChangesTheShiftFill`'s float arm), so `declaredAliasOfValue`
-	// has nothing to look up and the answer is `possiblyZero`. The bootstrap CAN prove it, from a side map of
-	// its own; the divergence costs a needless `try` on `x / d` for a `float(1.0 to 2.0)` divisor and nothing
-	// else, and no corpus case spells one.
+	// ⭐⭐ **A RANGED FLOAT ALIAS IS PROVEN HERE THROUGH `valueDenotedAlias`, AND THIS WAS A GAP UNTIL SHV2
+	// COMPILED ITSELF.** A value of a ranged FLOAT alias carries tag `float`, not `named` — its register class
+	// depends on the tag, so the alias name cannot ride there (see `aliasChangesTheShiftFill`'s float arm) —
+	// so `declaredAliasOfValue`, which reads the TAG, has nothing to look up. The side map that holds it
+	// already existed: `ValueDeclaredAliasMap` is written for exactly this case (`applyCast`, and the
+	// `returns <float alias>` result at the call door), and `valueDenotedAlias` is the reader that consults
+	// it BEFORE falling back to the tag. This function read the fallback DIRECTLY and so could not see it.
+	//
+	// ⛔ **MEASURED on this compiler's own source, where the header used to say "no corpus case spells one".**
+	// `ScaleCorpus.floatDivideSource` divides by a `FloatGroupDivisor` = `float(2.25 to 5.25)` binding, and
+	// the two compilers then disagreed in a way NO source spelling satisfies: shv2 demanded a `try` the
+	// bootstrap refused as `E2001 try requires a function call` (it proves the range and sees no throw). The
+	// canonical rule is `specs/arithmetic-operators.md`'s — *"a value whose ranged type excludes 0"* compiles
+	// to a bare divide, **"for both integer and float division"** — so the bootstrap was right and this was
+	// simply unable to ask.
+	//
+	// ⚠ **G14's WITHHOLD IS UNTOUCHED, because it lives in the FALLBACK.** `valueDenotedAlias` is
+	// `recordedCastAlias` first and `provenAliasOfValue` second, so a merge whose declared alias nothing
+	// proved still answers `undeclared` here and still gets `possiblyZero`. What the recorded arm adds is a
+	// value whose range WAS enforced — an `as` cast and a ranged `return` both emit the guard, which is the
+	// same enforcement the list below turns on.
 	//
 	// ⚠⚠ **THE ALIAS ARM IS ONLY AS SOUND AS THE RANGE IS ENFORCED, AND THE ENFORCEMENT IS NOT THIS
 	// FUNCTION'S — it is `InsertRangeChecks`', and this verdict is WRONG rather than merely coarse
@@ -45894,7 +46056,7 @@ export type Parser
 		// runtime `0` died `panic: integer divide by zero`, the exact uncatchable fault A1f closed the
 		// PARAMETER door to prevent. The withheld claim falls to `undeclared` below, which is the conservative
 		// arm this function already documents as the safe direction.
-		return match self.provenAliasOfValue(divisor) 'a'
+		return match self.valueDenotedAlias(divisor) 'a'
 			// One alias, both bounds tests — and the float arm answers `mayBeNegativeOne: false` for the same
 			// reason the float CONSTANT arm does, not because a float range was examined and cleared.
 			declared(alias) gives divisorProofOf(DivisorZeroVerdict.neverZero if rangeExcludesZero(alias.low, high: alias.high, isFloat: aliasIsFloat(alias)) else DivisorZeroVerdict.possiblyZero, mayBeNegativeOne: not aliasIsFloat(alias) and not rangeExcludesNegativeOne(alias.low, high: alias.high))
@@ -47930,7 +48092,7 @@ export type Parser
 		let len = bytes.count()
 		var i = 0 as ByteOffset
 		while i < len 'eachByte'
-			let value = (try bytes.get(i) otherwise panic("requireEveryByteInRange: i < len just held but get({i}) failed")) as ParsedInt
+			let value = try bytes.get(i) otherwise panic("requireEveryByteInRange: i < len just held but get({i}) failed")
 			if not literalInRange(value, low: alias.low, high: alias.high, isFloat: isFloat) 'outsideTheElementsRange'
 				throw ParseError.byteStringByteOutOfRange(value, offset: i as ParsedInt, aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, line: line, column: column)
 			end 'outsideTheElementsRange'
@@ -51246,8 +51408,29 @@ export type Parser
 
 		if isString 'string'
 			if not self.valueIsOwnedHeap(arg) 'promoteBorrowed'
-				// A borrowed String literal/param — copy its bytes into a fresh owned record the box can drop.
-				let owned = self.promoteToOwnedString(arg, range: range)
+				// ⭐⭐ **A BORROWED BYTE RECORD IS CO-OWNED, NOT COPIED — THE SAME ANSWER THE STRUCT/UNION ARM
+				// DIRECTLY BELOW GIVES, AND FOR THE SAME REASON.** Maxon is single-ownership with reference
+				// semantics: *"everything is a reference; if you want a copy you do it explicitly with
+				// `clone()`"*. A `Self{name: n}` that stores a DIFFERENT record than the `n` it was handed is
+				// a copy the author did not write, and it makes the field's identity diverge from the
+				// source's — which is precisely the divergence the aggregate arm refuses to introduce.
+				// `__str_retain` is what lets this be said at all: it increfs a HEAP record and copies only
+				// an immortal `.rdata` literal, which cannot be increfed because its header is in a
+				// read-only image section. The copy that remains is therefore about the LITERAL's storage
+				// class, not about borrowing.
+				//
+				// ⚠ **THE ALLOCATION SAVING IS REAL AND SMALL, AND THE RULE IS WHY THIS CHANGED — NOT THE
+				// COST.** Every registry this compiler builds is keyed and valued by NAMES, so this door was
+				// the obvious suspect for the self-compile's allocation gap (a shv2-built compiler allocates
+				// **1,089,279** times against the bootstrap-built one's **618,817** on the same input, 1.76x,
+				// concentrated in `phase:signatures`). MEASURED: removing the copy here took the total to
+				// **1,077,766** — a few hundred allocations, against a ~470,000 gap. **The gap is still
+				// unexplained and this comment does not explain it.**
+				//
+				// ⚠ The result is a FRESH SSA value that this frame owns, exactly as the copy was, so the
+				// pending-temp bookkeeping is unchanged: the sink adopts the reference and the statement
+				// drain must not also drop it.
+				let owned = self.retainBorrowedByteRecord(arg, range: range)
 				self.removeFromPendingTemps(owned)
 				return owned
 			end 'promoteBorrowed'
@@ -64919,7 +65102,7 @@ export type Parser
 	// reach one.
 	function bindingValue(binding VarInfo, range SourceRange) returns ValueId
 		if binding.isCellBinding 'livesInACell'
-			return self.emitCellLoad(binding, range: range)
+			return self.emitCellLoad(binding.varType, box: binding.boundValue, range: range)
 		end 'livesInACell'
 
 		return binding.boundValue
@@ -64945,9 +65128,14 @@ export type Parser
 	// because the parameter is not the only cell: a `var` LOCAL promoted to a cell (`declareCellLocal`, so a
 	// callee can write it) is rebindable by this frame's own store and dangles identically. One door covers
 	// both, which is the census argument `bindingValue` makes directly above.
-	function emitCellLoad(binding VarInfo, range SourceRange) returns ValueId
-		let cellType = self.resolveFloatAliasType(binding.varType)
-		let loaded = self.emitIndirectLoad(cellType, box: binding.boundValue, offset: CellContentOffset, storageType: self.wordSlotStorageType(cellType), range: range)
+	// ⚠ **IT TAKES THE CELL'S TYPE AND ITS BOX, NOT THE `VarInfo` THEY CAME OFF** — the two facts it ever
+	// read, and the difference is not tidiness. `emitScopeDrops` reads its binding out of `ownedBindings`,
+	// which makes it a BORROW of that array, and this function EMITS — so handing the record in kept the
+	// borrow live across a write to the parser's own storage (E3070, on this compiler's own source). Two
+	// scalars cannot dangle.
+	function emitCellLoad(cellVarType MaxonType, box ValueId, range SourceRange) returns ValueId
+		let cellType = self.resolveFloatAliasType(cellVarType)
+		let loaded = self.emitIndirectLoad(cellType, box: box, offset: CellContentOffset, storageType: self.wordSlotStorageType(cellType), range: range)
 		if self.valueIsManagedHeap(loaded) 'managedOccupant'
 			self.markRebindableSlotRead(loaded)
 		end 'managedOccupant'
@@ -64958,7 +65146,7 @@ export type Parser
 		// cell-resident, and MEASURED on the rung tip that alone laundered the taint — `grow(b)` in the very
 		// frame that owns `b` compiled and mutated a `let` global (exit 8) purely because a closure elsewhere
 		// in the body had turned `b` into a cell, while the identical program without that closure is refused.
-		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: binding.boundValue, to: loaded)
+		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: box, to: loaded)
 		return loaded
 	end 'emitCellLoad'
 
@@ -65113,7 +65301,7 @@ export type Parser
 					return binding.boundValue
 				end 'handOverTheCell'
 
-				return self.emitCellLoad(binding, range: SourceRange.ofToken(tok))
+				return self.emitCellLoad(binding.varType, box: binding.boundValue, range: SourceRange.ofToken(tok))
 			end 'livesInACell'
 
 			return binding.boundValue
@@ -70770,8 +70958,15 @@ export type Parser
 		let subjectCount = func.borrowFacts.subjects.count()
 		for k in 0 upto subjectCount 'eachSubjectOfThisBody'
 			let subject = try func.borrowFacts.subjects.get(k) otherwise panic("noteReceiverBorrowSubjects: subjects.get OOB at {k} inside count()")
-			if subject.isSelfField 'fieldOfTheEnclosingReceiver'
-				self.recordReceiverMutationSite(func, callee: callee, display: display, anchor: anchor, argColumn: argColumn, subjectName: subject.name)
+			// ⚠ **THE NAME IS COPIED, WHICH IS WHAT TURNS THE BOUND ABOVE FROM A PREMISE INTO AN
+			// ARGUMENT.** The recorder resolves each name through `borrowSubjectIdOf`, which APPENDS to this
+			// very list for a name it has not seen — so the loop is reading elements out of an array its own
+			// body can grow. The count taken first says it cannot happen here; the copy means nothing has to
+			// believe that. One `ByteArray` per self-field subject, in a body that has any at all.
+			let isSelfField = subject.isSelfField
+			let subjectOwnName = subject.name.clone()
+			if isSelfField 'fieldOfTheEnclosingReceiver'
+				self.recordReceiverMutationSite(func, callee: callee, display: display, anchor: anchor, argColumn: argColumn, subjectName: subjectOwnName)
 			end 'fieldOfTheEnclosingReceiver'
 		end 'eachSubjectOfThisBody'
 	end 'noteReceiverBorrowSubjects'
@@ -71253,8 +71448,15 @@ export type Parser
 			try filled.set(suppliedSlot, value: true) otherwise panic("fillArgsFromParamDefaults: filled.set OOB at {suppliedSlot} despite suppliedSlot < paramCount")
 		end 'markSupplied'
 
-		// Built lazily: a call that omitted nothing this loop can supply keeps the shared empty column.
-		var defaultSlots = NoDefaultArgSlots
+		// ⚠ **THE COLUMN IS BUILT OWNED AND THE SHARED EMPTY ONE IS SUBSTITUTED AT THE RETURN** — it may
+		// NOT be seeded with `NoDefaultArgSlots` and pushed into later. That constant is a module-level
+		// `let`, and a `var` reaching it is a MUTABLE name for an IMMUTABLE value, which single ownership
+		// refuses (E3019 at the `push`, since `push` mutates its receiver) — the guard that made the seed
+		// safe at runtime is invisible to a static rule, and rightly so: the rule is about what the name
+		// CAN reach, not what this path happens to do. The shared column still leaves this function for
+		// every call that fills no default, so nothing downstream changes; only calls that omitted an
+		// argument with no default pay a transient empty array, and they are the error paths.
+		var defaultSlots = ParamCountArray.create()
 
 		for slot in 0 upto paramCount 'fillDefaults'
 			let supplied = try filled.get(slot) otherwise panic("fillArgsFromParamDefaults: filled.get OOB at {slot} despite slot < paramCount")
@@ -71267,15 +71469,16 @@ export type Parser
 				continue
 			end 'noDefault'
 
-			if defaultSlots is NoDefaultArgSlots 'firstDefaultOfThisCall'
-				defaultSlots = ParamCountArray.create()
-			end 'firstDefaultOfThisCall'
 			defaultSlots.push(slot)
 
 			let paramName = try info.paramNames.get(slot) otherwise panic("fillArgsFromParamDefaults: paramNames.get OOB at {slot} despite slot < paramCount")
 			let value = try self.emitDefaultArgValue(producer, anchor: anchor)
 			pushDefaultedCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: paramName, range: SourceRange.ofToken(anchor))
 		end 'fillDefaults'
+
+		if defaultSlots.count() == 0 'noneFillable'
+			return NoDefaultArgSlots
+		end 'noneFillable'
 
 		return defaultSlots
 	end 'fillArgsFromParamDefaults'

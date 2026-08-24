@@ -107,7 +107,7 @@ end 'asyncResultConsumedFlag'
 // entry that drops it. The offset is carried rather than the slot INDEX because the result and the error
 // live at fixed struct offsets while the arguments live in the inline region — three sources, one shape, so
 // the emitter below has one loop instead of three.
-export type AsyncManagedSlot
+type AsyncManagedSlot
 	export let offset as ByteOffset
 	export let dropCallee as ByteArray
 
@@ -126,7 +126,7 @@ export typealias AsyncManagedSlotArray = Array with AsyncManagedSlot
 // `resultSlots`/`errorSlots` are arrays holding at most one entry each, so that all three lists feed the
 // SAME `emitSlotReleases` loop; a `union { none; one(slot) }` would say the same thing and need its own arm
 // at every use.
-export type AsyncReleasePlan
+type AsyncReleasePlan
 	export let argSlots as AsyncManagedSlotArray
 	export let resultSlots as AsyncManagedSlotArray
 	export let errorSlots as AsyncManagedSlotArray
@@ -170,7 +170,7 @@ end 'asyncCalleeNeedsReleaser'
 // ⚠ **AN UNDECLARED CALLEE ANSWERS THE INERT PLAN RATHER THAN PANICKING.** Its program is already rejected
 // by SemanticCheck's E3004, but the collect walk below runs over the module regardless of whether the
 // program is doomed, and a panic here would replace a positioned diagnostic with a compiler crash.
-export function asyncReleasePlanFor(callee ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
+function asyncReleasePlanFor(callee ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
 	var argSlots = AsyncManagedSlotArray.create()
 	let sig = try funcSignatures.get(callee) otherwise return AsyncReleasePlan.create(argSlots, resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: false)
 
@@ -278,7 +278,7 @@ end 'asyncSlotOwnsHeap'
 // it owns — which is why the convenience wrappers `slotTypeIsManaged`/`slotTypeDropCallee` cannot serve here.
 // Resolving a signature's ids against the wrong interner is OPEN #52's exact shape: it misreads a managed
 // payload whenever a ranged alias shifts the interning order, and the symptom is a leak or a wild free.
-export function asyncSlotDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns ByteArray
+function asyncSlotDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns ByteArray
 	if asyncErasedUnionIsBoxed(signatures, aggregateName: aggregateName) 'erasedBoxedUnion'
 		return signatures.unionBoxDropCallee(aggregateName)
 	end 'erasedBoxedUnion'

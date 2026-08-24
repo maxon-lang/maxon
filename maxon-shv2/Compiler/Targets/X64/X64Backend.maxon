@@ -135,7 +135,7 @@ export let OpcodeCmpRmReg = 0x39  // cmp r/m, r  (reg field = source), same shap
 // cmp r, r/m (3B /r; reg field = DEST, r/m = source) — the LOAD-form compare, so `cmp reg, [base+disp]`
 // computes `reg - [mem]` and sets flags in THAT direction (unlike `cmp [mem], reg` = 0x39, which negates them).
 // EXPORTED because the GT stack guard (X64GtRuntime) needs `projectedRsp - [gt+stackGuard]` for its `jae`.
-export let OpcodeCmpRegRm = 0x3B
+let OpcodeCmpRegRm = 0x3B
 let OpcodeAndRmReg = 0x21  // and r/m, r  (reg field = source), same shape as sub
 let OpcodeOrRmReg = 0x09  // or  r/m, r  (reg field = source), same shape as sub
 export let OpcodeXorRmReg = 0x31  // xor r/m, r  (reg field = source), same shape as sub
@@ -804,7 +804,7 @@ end 'encodeMovsdBaseDispReg'
 // rhs and `lowerBinOpImm`'s `div` arm permanently unreachable. The IEEE bits ARE an integer we
 // hold, but the only ways into an XMM are a load or a `movq` through a GPR, and the load costs
 // no register.
-export function encodeMovsdRegRip(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
+function encodeMovsdRegRip(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
 	encodeModRmRipRelative(code, twoByteEscape: true, opcode: OpcodeMovsdRegRm, regField: dest, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.ripRelDisp32))
 	writeDword(code, value: 0)
@@ -1093,7 +1093,7 @@ end 'encodeMovzxRegByteBaseDisp'
 // One pending chunk-local rel32/disp32 site: the chunk-local offset of its 4-byte field
 // and the label id it targets. `resolveChunkRel32Fixups` patches each once every label's
 // offset is known (a forward jump targets a block emitted later in the chunk).
-export type ChunkRel32Fixup
+type ChunkRel32Fixup
 	export var codeOffset as CodeOffset
 	export var targetLabel as BlockId
 	export var site as PatchSite
@@ -1267,7 +1267,7 @@ end 'encodeLeaRegGlobal'
 // the SAME `RdataRelocation` — only the kind differs (`ripRelDisp32` for `.rdata` vs
 // `dataSectionRipRelDisp32` for `.data`), which is exactly what routes the PE writer to measure the
 // disp32 from `.rdata`'s RVA rather than `.data`'s.
-export function encodeLeaRegRdata(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
+function encodeLeaRegRdata(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
 	emitLeaRipRelPrefix(code, dest: dest)
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.ripRelDisp32))
 	writeDword(code, value: 0)
@@ -1524,7 +1524,7 @@ end 'encodeCallReg'
 // call, so `wide: false` keeps the prefix minimal (only a REX.B for an r8-r15 base); the `/2` extension
 // rides the ModR/M reg field via `emitBaseDispModRmBits`, and `regField: rax` gives REX.R = 0 (an opcode
 // extension needs none), so a base in rax..rdi emits no REX at all (`call [rax+8]` = `FF 50 08`).
-export function encodeCallMem(code ByteArray, base X64Register, disp Imm32)
+function encodeCallMem(code ByteArray, base X64Register, disp Imm32)
 	emitRex(code, wide: false, regField: X64Register.rax, rmField: base)
 	code.push(OpcodeCallIndirect)
 	emitBaseDispModRmBits(code, regFieldBits: Grp5ExtCall, base: base, disp: disp)

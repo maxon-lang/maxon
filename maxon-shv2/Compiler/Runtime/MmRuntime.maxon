@@ -720,7 +720,7 @@ end 'emitStoreField'
 // ⭐ **ONE MACHINE-WORD SLOT — the stride every WORD-INDEXED buffer in the runtime uses.** A hash table's
 // `keys`/`states`/`hashes`/`values` columns, and the element buffer of any `Array` whose element is a managed
 // POINTER or a machine-word int, all address slot `i` at `base + i·8`.
-export let WordSlotBytes = 8 as ParsedInt
+let WordSlotBytes = 8 as ParsedInt
 
 // The byte address of word slot `index` in a parallel buffer — `base + index · WordSlotBytes`.
 //
@@ -741,7 +741,7 @@ export function emitWordSlotLoad(module StdModule, block IrBlock, base ValueId, 
 end 'emitWordSlotLoad'
 
 // Store `value` into slot `index` (one i64 word) of parallel buffer `base`.
-export function emitWordSlotStore(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
+function emitWordSlotStore(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
 	emitStoreField(module, block: block, record: emitWordSlotAddr(module, block: block, base: base, index: index, ids: ids), offset: 0, value: value)
 end 'emitWordSlotStore'
 
@@ -1747,7 +1747,7 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 	for (_, layout) in project.structTypes 'eachStruct'
 		if usage.neededDestructors.contains(destructorSymbol(layout.name)) 'referenced'
 			usage.usesHeap = true
-			declareStructFieldDropNeeds(usage, layout: layout, project: project, signatures: signatures)
+			declareStructFieldDropNeeds(usage, layout: layout, typeNames: project.typeNames, signatures: signatures)
 		end 'referenced'
 		// The record's DICTIONARY cascade's own bits (W183) — the struct arm of the instance pair below, and
 		// like it the only walk that can turn on `__drop_type_param`'s install bit for this record.
@@ -1793,7 +1793,7 @@ end 'declareDestructorCascadeNeeds'
 // mirror image field for field: that one collects the nested SYMBOLS a cascade names, this one declares the
 // runtime BITS the same callees need. Both ask `managedStructFieldDropCallee`, so the callee a field is
 // accounted for under and the callee it is dropped through are one answer.
-function declareStructFieldDropNeeds(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures)
+function declareStructFieldDropNeeds(usage RuntimeUsage, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
@@ -1806,7 +1806,7 @@ function declareStructFieldDropNeeds(usage RuntimeUsage, layout StructLayout, pr
 			usage.usesDropExistential = true
 			continue
 		end 'existential'
-		recordCallUsage(managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures), usage: usage)
+		recordCallUsage(managedStructFieldDropCallee(layout, index: i, typeNames: typeNames, signatures: signatures), usage: usage)
 	end 'eachField'
 end 'declareStructFieldDropNeeds'
 
@@ -1815,7 +1815,7 @@ end 'declareStructFieldDropNeeds'
 // the callee it was accounted for under.
 function declareStructDictionaryDropNeeds(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures)
 	for i in 0 upto layout.fieldCount() 'eachField'
-		match dictionaryStructFieldDropKind(layout, index: i, project: project, signatures: signatures) 'released'
+		match dictionaryStructFieldDropKind(layout, index: i, typeNames: project.typeNames, signatures: signatures) 'released'
 			none then continue
 			released(kind) then declareDropKindNeeds(usage, kind: kind)
 		end 'released'
@@ -2017,7 +2017,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	while work.hasPending() 'drain'
 		let node = work.take()
 		match node 'node'
-			declaredStruct(layout) then addNestedStructDestructors(usage, layout: layout, project: project, signatures: signatures, work: work)
+			declaredStruct(layout) then addNestedStructDestructors(usage, layout: layout, typeNames: project.typeNames, signatures: signatures, work: work)
 			declaredStructDictionary(layout) then addNestedStructDictionaryDestructors(usage, layout: layout, project: project, signatures: signatures, work: work)
 			declaredUnion(layout) then addNestedUnionDestructors(usage, layout: layout, project: project, signatures: signatures, work: work)
 			genericInstance(id) then addNestedInstanceDestructors(usage, id: id, signatures: signatures, work: work)
@@ -2033,16 +2033,16 @@ end 'closeDestructorNeeds'
 // layout and misresolving its id against `project.typeNames` — the OPEN #56 mismatch (a panic when the misread
 // name was no declared type, a WRONG destructor when it happened to be one), now unrepresentable rather than
 // re-asserted by a comment at each site. Precondition: the caller checked `structFieldIsManaged`.
-function managedStructFieldDropCallee(layout StructLayout, index FieldIndex, project Project, signatures ProgramSignatures) returns ByteArray
+function managedStructFieldDropCallee(layout StructLayout, index FieldIndex, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
 	let fieldType = try layout.fieldTypes.get(index) otherwise panic("managedStructFieldDropCallee: fieldTypes.get OOB at {index}")
-	return managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: fieldType)
+	return managedFieldDropCallee(signatures, typeNames: typeNames, fieldType: fieldType)
 end 'managedStructFieldDropCallee'
 
 // Add the nested `__destruct_<T>` of each managed field of struct `layout` to the needed set, queueing each
 // newly-needed cascade on `work` so its OWN nesting is closed in turn. A field whose drop callee is a
 // destructor symbol (a managed struct/union) contributes its symbol; a String (`__str_decref`) or scalar-only
 // box (`__mm_decref`) contributes none.
-function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
+function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, work CascadeWorklist)
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
@@ -2055,7 +2055,7 @@ function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, pro
 		if signatures.structFieldIsExistential(layout.name, index: i) 'existential'
 			continue
 		end 'existential'
-		insertIfDestructorSymbol(usage, callee: managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures), work: work)
+		insertIfDestructorSymbol(usage, callee: managedStructFieldDropCallee(layout, index: i, typeNames: typeNames, signatures: signatures), work: work)
 	end 'eachField'
 end 'addNestedStructDestructors'
 
@@ -2066,7 +2066,7 @@ end 'addNestedStructDestructors'
 // other managed field names whatever its concrete drop callee names.
 function addNestedStructDictionaryDestructors(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
 	for i in 0 upto layout.fieldCount() 'eachField'
-		match dictionaryStructFieldDropKind(layout, index: i, project: project, signatures: signatures) 'released'
+		match dictionaryStructFieldDropKind(layout, index: i, typeNames: project.typeNames, signatures: signatures) 'released'
 			none then continue
 			released(kind) then noteNestedCascadeOf(usage, kind: kind, work: work)
 		end 'released'
@@ -2308,8 +2308,13 @@ end 'StructRuntimeEntryKind'
 // answer that shape already produced once. The project's entry is the authoritative resolved one wherever
 // it exists; this walk supplies only what nothing committed.
 function installStructRuntimeEntries(module StdModule, project Project, signatures ProgramSignatures, needed ReferencedEntrySymbols, kind StructRuntimeEntryKind)
+	// ⚠⚠ **THE TWO WALKS HAND OVER LAYOUTS FROM TWO NAME SPACES, AND THE INTERNER TRAVELS WITH THE
+	// LAYOUT.** A `project.structTypes` layout's field-type ids index `project.typeNames`; an INTERNED TUPLE
+	// comes out of the signature index and its ids index that index's table. Resolving both against the
+	// project's is OPEN #56 — see `ProgramSignatures.indexTypeNames` for the panic it produced on this
+	// compiler's own source, and for why a misread that happens to land on a declared type is worse.
 	for (_, layout) in project.structTypes 'each'
-		installOneStructRuntimeEntry(module, layout: layout, project: project, signatures: signatures, needed: needed, kind: kind)
+		installOneStructRuntimeEntry(module, layout: layout, typeNames: project.typeNames, project: project, signatures: signatures, needed: needed, kind: kind)
 	end 'each'
 
 	for layout in signatures.tupleLayouts() 'eachInternedTuple'
@@ -2317,17 +2322,17 @@ function installStructRuntimeEntries(module StdModule, project Project, signatur
 			continue
 		end 'committedAlready'
 
-		installOneStructRuntimeEntry(module, layout: layout, project: project, signatures: signatures, needed: needed, kind: kind)
+		installOneStructRuntimeEntry(module, layout: layout, typeNames: signatures.indexTypeNames(), project: project, signatures: signatures, needed: needed, kind: kind)
 	end 'eachInternedTuple'
 end 'installStructRuntimeEntries'
 
 // The one layout, under whichever entry the walk is installing. The two arms below are the ONLY place the
 // drop side and the clone side part company, which is the property the shared walk exists to make visible.
-function installOneStructRuntimeEntry(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures, needed ReferencedEntrySymbols, kind StructRuntimeEntryKind)
+function installOneStructRuntimeEntry(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures, needed ReferencedEntrySymbols, kind StructRuntimeEntryKind)
 	match kind 'entry'
-		destructor then installOneStructDestructor(module, layout: layout, project: project, signatures: signatures, needed: needed)
-		dictionaryDestructor then installOneStructDictionaryDestructor(module, layout: layout, project: project, signatures: signatures, needed: needed)
-		cloner then installOneStructCloner(module, layout: layout, project: project, signatures: signatures, needed: needed)
+		destructor then installOneStructDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed)
+		dictionaryDestructor then installOneStructDictionaryDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed)
+		cloner then installOneStructCloner(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed)
 	end 'entry'
 end 'installOneStructRuntimeEntry'
 
@@ -2345,7 +2350,7 @@ end 'projectHasStructLayout'
 // One layout's cascade, or nothing when it is unreferenced or owns nothing droppable. Split out when the
 // substituted-tuple walk landed (W41) so the two walks share one admission test rather than each spelling
 // it — the shape where one of them comes to admit a layout the other would have declined.
-function installOneStructDestructor(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures, needed DestructorSet)
+function installOneStructDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, needed DestructorSet)
 	if not signatures.structHasManagedField(layout.name) 'noManaged'
 		return
 	end 'noManaged'
@@ -2354,7 +2359,7 @@ function installOneStructDestructor(module StdModule, layout StructLayout, proje
 		return
 	end 'notReferenced'
 
-	synthesizeStructDestructor(module, layout: layout, project: project, signatures: signatures)
+	synthesizeStructDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures)
 end 'installOneStructDestructor'
 
 // Emit `__destruct_<Struct>(box)` — the field list is built here and the entry/lower/drop/free skeleton
@@ -2366,13 +2371,13 @@ end 'installOneStructDestructor'
 // A struct has NO tag — every field is always present — so the cascade drops unconditionally rather than
 // under a tag switch. It shares its skeleton with the generic-instance cascade (P1.6-B2), which is the same
 // tagless box shape over a substituted field list.
-function synthesizeStructDestructor(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
+function synthesizeStructDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
 	var drops = ManagedFieldDropArray.create()
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalarField'
 			continue
 		end 'scalarField'
-		drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), kind: structFieldDropKind(layout, index: i, project: project, signatures: signatures)))
+		drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), kind: structFieldDropKind(layout, index: i, typeNames: typeNames, signatures: signatures)))
 	end 'eachField'
 	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(layout.name), drops: drops)
 end 'synthesizeStructDestructor'
@@ -2381,7 +2386,7 @@ end 'synthesizeStructDestructor'
 // differs: not "does it own a managed field" (a bare parameter is not one) but "does it rest a slot at a
 // parameter at all". `recordOpaqueSlotDeclaration` carries WHICH declaration's parameters; only the drop site
 // has to check that, so here the presence is the whole test.
-function installOneStructDictionaryDestructor(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures, needed DestructorSet)
+function installOneStructDictionaryDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, needed DestructorSet)
 	match signatures.recordOpaqueSlotDeclaration(layout.name) 'restsASlot'
 		none then return
 		declaredBy then break 'restsASlot'
@@ -2391,7 +2396,7 @@ function installOneStructDictionaryDestructor(module StdModule, layout StructLay
 		return
 	end 'notReferenced'
 
-	synthesizeStructDictionaryDestructor(module, layout: layout, project: project, signatures: signatures)
+	synthesizeStructDictionaryDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures)
 end 'installOneStructDictionaryDestructor'
 
 // Emit `__destruct_dict_<Struct>(descriptor, box)` (W183) — `synthesizeStructDestructor` with the one field
@@ -2399,10 +2404,10 @@ end 'installOneStructDictionaryDestructor'
 // `synthesizeGenericInstanceDestructor`. The skeleton (the refcount check to last owner, the null-guarded
 // drops, the free) is the shared `emitFieldCascadeDestructor`, so this cascade releases at REFCOUNT ZERO like
 // every other — which is what makes it safe for a record a shared frame is not the last owner of.
-function synthesizeStructDictionaryDestructor(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
+function synthesizeStructDictionaryDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
 	var drops = ManagedFieldDropArray.create()
 	for i in 0 upto layout.fieldCount() 'eachField'
-		match dictionaryStructFieldDropKind(layout, index: i, project: project, signatures: signatures) 'released'
+		match dictionaryStructFieldDropKind(layout, index: i, typeNames: typeNames, signatures: signatures) 'released'
 			none then continue
 			released(kind) then drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), kind: kind))
 		end 'released'
@@ -2431,7 +2436,7 @@ end 'synthesizeStructDictionaryDestructor'
 // slot). Collapsing them onto one classifier over a `CascadeFieldSource{declaredStruct(layout), instance(id)}`
 // is the right shape and would let the six near-identical walks share their loop; it is filed rather than
 // done here because it lands in a cascade this rung had just repaired.
-function dictionaryStructFieldDropKind(layout StructLayout, index FieldIndex, project Project, signatures ProgramSignatures) returns FieldDropKindOption
+function dictionaryStructFieldDropKind(layout StructLayout, index FieldIndex, typeNames TypeNameInterner, signatures ProgramSignatures) returns FieldDropKindOption
 	if signatures.structFieldIsOpaque(layout.name, index: index) 'aBareParameterSlot'
 		return FieldDropKindOption.released(FieldDropKind.throughDescriptor(DropTypeParamName, descriptor: DictionaryDestructorDescriptorParam, blockOffset: signatures.structFieldOpaqueBlockOffset(layout.name, index: index)))
 	end 'aBareParameterSlot'
@@ -2440,7 +2445,7 @@ function dictionaryStructFieldDropKind(layout StructLayout, index FieldIndex, pr
 		return FieldDropKindOption.none
 	end 'scalarField'
 
-	return FieldDropKindOption.released(structFieldDropKind(layout, index: index, project: project, signatures: signatures))
+	return FieldDropKindOption.released(structFieldDropKind(layout, index: index, typeNames: typeNames, signatures: signatures))
 end 'dictionaryStructFieldDropKind'
 
 // HOW struct field `index` is released — the `existential` kind for an interface-typed field
@@ -2448,11 +2453,11 @@ end 'dictionaryStructFieldDropKind'
 // declared type, because the alternative is `managedFieldDropCallee` inventing a 1-argument callee for a
 // slot whose destructor is a run-time fact; that function's own `interfaceRef` guard says so from the other
 // side.
-function structFieldDropKind(layout StructLayout, index FieldIndex, project Project, signatures ProgramSignatures) returns FieldDropKind
+function structFieldDropKind(layout StructLayout, index FieldIndex, typeNames TypeNameInterner, signatures ProgramSignatures) returns FieldDropKind
 	if signatures.structFieldIsExistential(layout.name, index: index) 'fatPointer'
 		return FieldDropKind.existential
 	end 'fatPointer'
-	return FieldDropKind.direct(managedStructFieldDropCallee(layout, index: index, project: project, signatures: signatures))
+	return FieldDropKind.direct(managedStructFieldDropCallee(layout, index: index, typeNames: typeNames, signatures: signatures))
 end 'structFieldDropKind'
 
 // ⭐⭐ **THE PER-INSTANCE DESTRUCTOR CASCADE (P1.6-B2).** A generic instance is a monomorphized base struct
@@ -2970,12 +2975,12 @@ end 'installStructCloners'
 //
 // ⚠ There is NO managed-field gate here and the drop twin has one, which is not an omission: a scalar-only box
 // still needs a fresh-box clone, because a clone must ALLOCATE where a trivial drop is just `__mm_decref`.
-function installOneStructCloner(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures, needed ClonerSet)
+function installOneStructCloner(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures, needed ClonerSet)
 	if not needed.contains(clonerSymbol(layout.name)) 'notReferenced'
 		return
 	end 'notReferenced'
 
-	synthesizeStructCloner(module, layout: layout, project: project, signatures: signatures)
+	synthesizeStructCloner(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures)
 end 'installOneStructCloner'
 
 // The union twin of `installStructCloners`.
@@ -3099,14 +3104,14 @@ end 'emitFieldCascadeCloner'
 
 // The managed field list of declared struct `layout`, resolved through the shared `managedFieldCloneStrategy`
 // over `project.typeNames` — the ONE interner that layout's field-type ids live in.
-function synthesizeStructCloner(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
+function synthesizeStructCloner(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures)
 	var clones = ManagedFieldCloneArray.create()
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("synthesizeStructCloner: fieldTypes.get OOB at {i}")
-		clones.push(ManagedFieldClone.create(layout.offsetOfField(i), strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType, asElement: false)))
+		clones.push(ManagedFieldClone.create(layout.offsetOfField(i), strategy: managedFieldCloneStrategy(signatures, typeNames: typeNames, fieldType: fieldType, asElement: false)))
 	end 'eachField'
 
 	emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: String.from(layout.name), clones: clones, project: project)
@@ -3401,7 +3406,7 @@ end 'fiveArgs'
 // Six positional call arguments — `__ds_emit_log_event(nameId, cat, lvl, unitId, arg0, arg1)`, the widest
 // entry the DebugStream producer writes. It joins the ladder for its siblings' stated reason: the arity is
 // the CONTRACT's, and a call site building its own array would be that contract spelled a second time.
-export function sixArgs(first ValueId, second ValueId, third ValueId, fourth ValueId, fifth ValueId, sixth ValueId) returns ValueIdArray
+function sixArgs(first ValueId, second ValueId, third ValueId, fourth ValueId, fifth ValueId, sixth ValueId) returns ValueIdArray
 	var args = fiveArgs(first, second: second, third: third, fourth: fourth, fifth: fifth)
 	args.push(sixth)
 	return args

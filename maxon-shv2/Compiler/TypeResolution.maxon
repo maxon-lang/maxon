@@ -233,7 +233,7 @@ end 'UnknownTypeName'
 // Resolve every unresolved/named type in `module`'s function signatures to a
 // concrete `MaxonType`, and re-sync each function's resolved return type into
 // the project's `funcReturnTypes` registry (SemanticCheck's source of truth).
-export function resolveTypes(project Project, module MaxonModule)
+module function resolveTypes(project Project, module MaxonModule)
 	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
 	// reference, and the memoized query is a map probe that has no business being on that path. (It
 	// used to be fetched inside `resolveNamedType`, on the rare qualified-alias arm only — this is
@@ -422,13 +422,13 @@ end 'functionAliasNameId'
 // keep a type name and a function name from colliding — so the order they are tried in cannot matter.
 //
 // `undeclared` is the honest answer for a name in neither, and every caller must handle it rather than assume.
-export union DeclaredFunctionShape
+union DeclaredFunctionShape
 	declared(shape FunctionShape)
 	undeclared
 end 'DeclaredFunctionShape'
 
 // The registries this reads travel as one `FunctionTypeRegistry` — see there for why all four move together.
-export function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
+function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
 	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
 		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
 		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, returnAggregateName: sig.returnAggregateName))

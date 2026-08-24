@@ -114,7 +114,7 @@ export let GtOffTibStackLimit = 0x98
 // the 0x60–0xA0 gap this rung leaves ZEROED-BUT-UNUSED — graft on without moving a field. Its role at THIS
 // rung is documentation + the resume contract; single-M has no race, so it is a plain flag, not the
 // multi-M park-gate the reference uses it for.
-export let GtOffIoYielded = 0xA8
+let GtOffIoYielded = 0xA8
 
 // --- P1.5 dogfood slice 1a-ii: the IOCP overlapped-read handshake fields ---
 // The 32-byte Win32 OVERLAPPED the yielding ReadFile is issued against, EMBEDDED in the GT struct's reserved
@@ -148,7 +148,7 @@ export let GtOffIoParked = 0xA0
 //   IoParkedDrainDone (3)  the completion thread finished draining an ABANDONED GT (the drop arm's spin target)
 //   IoParkedNormalDone (4) the completion thread finished a NORMAL read (status=ready, enqueued) — the drop arm reads
 //                          this to detect a promise dropped just AFTER its read completed, and unlinks it before freeing
-export let IoParkedInFlight = 1
+let IoParkedInFlight = 1
 export let IoParkedAbandoned = 2
 export let IoParkedDrainDone = 3
 export let IoParkedNormalDone = 4
@@ -191,7 +191,7 @@ export let GtOffReleaser = 0xB0
 // equivalent of). Placing it at 0xB8 keeps every already-placed field (0x00–0xB0 — the authoritative layout
 // through `io_yielded`@0xA8, plus shv2's own `releaser`@0xB0) byte-identical and moves only the inline
 // argument region, which is shv2's own invention and grafts onto nothing.
-export let GtOffTraceId = 0xB8
+let GtOffTraceId = 0xB8
 
 // ⭐ THE INLINE ARGUMENT REGION (P1.5-B1c #87). MaxAsyncArgs i64 slots living at the END of the GT struct,
 // so a spawn needs NO separate `__slab_alloc`'d argument buffer — `__gt_spawn` sets `gt.argBuf` (0x48) to a
@@ -221,7 +221,7 @@ export let GtOffArgInline = 0xC0
 // 0xF0 = 240 bytes = 0xC0 header + ArgBufBytes (0x30) inline arg region. The header words 0x60–0xA0 remain
 // RESERVED (the reference's io_result/io_handle/cancel/tib fields), slab-zeroed and unused until the
 // subprocess/IOCP slice fills them. Must be a multiple of 8 (whole-word fields).
-export let GtStructSize = GtOffArgInline + ArgBufBytes
+let GtStructSize = GtOffArgInline + ArgBufBytes
 
 // --- GT status ---
 // `ready` (the slab-zeroed initial state), `completed` (set by the trampoline, read by the drive loop's
@@ -243,7 +243,7 @@ let GtStatusWaiting = 3
 // frames of a green thread's entry, so `__gt_morestack` is exercised by ordinary spec programs rather than
 // only by a contrived deep recursion. (It was brought up at 0x100000 while the guard was still proven inert,
 // and shrunk here once morestack was disassembly-verified — that step is done; see the B1a′ history.)
-export let GtStackSize = 0x800
+let GtStackSize = 0x800
 
 // The GUARD MARGIN (P1.5-B1a′): the cushion a function's prologue projects below its frame before comparing
 // against the stack guard, and the offset `__gt_spawn`/`__gt_morestack` place the guard above the stack base. It
@@ -284,7 +284,7 @@ export let MaxAsyncArgs = 6
 // One argument buffer slot per argument, i64-wide. The stride the lowering STORES at, the trampoline LOADS
 // at, and `ArgBufBytes` sizes by — one fact, so the three cannot drift.
 export let GtArgSlotBytes = 8
-export let ArgBufBytes = MaxAsyncArgs * GtArgSlotBytes
+let ArgBufBytes = MaxAsyncArgs * GtArgSlotBytes
 
 // One machine word ON THE STACK: what a `push r64` moves rsp by, what a `call`'s pushed return address
 // occupies, and the stride of every saved-register word in the hand-laid frames this file's `__gt_spawn`
@@ -430,10 +430,10 @@ export let GtTrampolineName = b"__gt_trampoline"
 // function — it manipulates rsp and walks the saved-rbp chain, unrepresentable in Std. EXPORTED because the
 // prologue guard's `call __gt_morestack` (X64Backend) and the chunk's own name must agree — one spelling.
 export let GtMorestackName = b"__gt_morestack"
-export let GtInitName = b"__gt_init"
+let GtInitName = b"__gt_init"
 export let GtSpawnName = b"__gt_spawn"
 export let GtEnqueueName = b"__gt_enqueue"
-export let GtDequeueName = b"__gt_dequeue"
+let GtDequeueName = b"__gt_dequeue"
 export let GtAwaitName = b"__gt_await"
 export let GtTryAwaitName = b"__gt_try_await"
 
@@ -539,7 +539,7 @@ export let GtReschedName = b"__gt_resched"
 // hold whether or not another GT happens to be ready — so it parks on a deadline of `now` and comes back
 // through the scheduler's poll, a genuine suspension every time. That is also what keeps the trace honest for
 // the single-spawn case, where the run queue is empty and a handoff would not have suspended anything.
-export let GtIoParkName = b"__gt_io_park"
+let GtIoParkName = b"__gt_io_park"
 
 // ⭐⭐ **THE ASYNC TRACE (`--async-trace`).** `__gt_trace_emit(tagRecord, value, suffixRecord)` prints one line
 // — `<tag><value><suffix?>\n` — to stderr, and the six sites that call it (`spawn #`, `io_yield #`,
@@ -785,7 +785,7 @@ let GtProcCheckName = b"__gt_proc_check"
 // `__io_completion_loop` is the hand-assembled completion-drain thread entry (X64GtRuntime). Named in the `__gt_`
 // / `__io_` bands so `isGtRuntimeCallee`/`isIoRuntimeCallee` catch them and they stay out of the goldens.
 export let IoReadName = b"__gt_io_read"
-export let IoInitName = b"__io_init"
+let IoInitName = b"__io_init"
 export let IoCompletionLoopName = b"__io_completion_loop"
 
 // --- `.data` globals (all i64, zero-initialized) ---
@@ -4547,14 +4547,14 @@ end 'buildGtIoRead'
 // it (the yielding overlapped read the streaming reader shares with the probe), the reader returns through the
 // first '\n' INCLUDING it, and compacts the tail forward for the next call. EOF (a 0-byte read) is latched per
 // stream. stderr is read post-exit only in the harness, so it never multiplexes against a live stdout read.
-export let SubpTableLabel = b"__subp_table"
-export let SubpMaxHandles = 64
-export let SubpSlotBytes = 184
+let SubpTableLabel = b"__subp_table"
+let SubpMaxHandles = 64
+let SubpSlotBytes = 184
 
 // Slot fields (i64). The two stream sub-blocks are identical 5-word layouts (readEnd/bufPtr/bufCap/bufLen/eof), so
 // the reader takes a stream-base offset and indexes within. The persistent buffers (bufPtr/bytesOut/writeBuf)
 // survive release for reuse; the OS handles are cleared at release.
-export let SubpSlotInUse = 0
+let SubpSlotInUse = 0
 export let SubpSlotHProcess = 8
 export let SubpSlotStdinWrite = 16
 export let SubpSlotBytesOut = 24
@@ -4588,10 +4588,10 @@ export let SubpSlotErrLimit = 160 as ByteOffset
 // for `durationMs` off the WAIT and a handle may be spawned long before anyone waits on it.
 export let SubpSlotWaitStartMs = 168 as ByteOffset
 export let SubpStreamReadEnd = 0
-export let SubpStreamBufPtr = 8
-export let SubpStreamBufCap = 16
-export let SubpStreamBufLen = 24
-export let SubpStreamEof = 32
+let SubpStreamBufPtr = 8
+let SubpStreamBufCap = 16
+let SubpStreamBufLen = 24
+let SubpStreamEof = 32
 export let SubpReadChunkBytes = 4096
 let SubpInitialLineBufBytes = 4096
 export let SubpMaxLineBytes = 1048576  // 1 MiB per-line cap — a newline-less child cannot grow the buffer without bound
@@ -4635,7 +4635,7 @@ let SubpStrFromBytesName = b"__gt_subp_str_from_bytes"
 // The prefix `scanRuntimeUsage` matches to turn on the whole subprocess runtime for any `__gt_subp_*` call,
 // and the one `SemanticCheck.calleeNeedsWin32Substrate` reads to refuse such a program on a target that
 // cannot lower it (E3104).
-export let SubpCalleePrefix = b"__gt_subp_"
+let SubpCalleePrefix = b"__gt_subp_"
 
 // ⭐ **IS THIS CALLEE A SUBPROCESS RUNTIME ENTRY?** THE one test, read by `scanRuntimeUsage` and by
 // `SemanticCheck`, written once for the reason `isProcessRuntimeCallee` is: a band's membership question
@@ -4959,7 +4959,7 @@ end 'emitSubpSecurityAttributes'
 // contract would otherwise arrive as fourteen live values across a spawn that immediately spills them all.
 // Its fields are i64 because every one of them is a machine word: a buffer address, a `cstring`, a Win32
 // flag word or a kind discriminator.
-export let SubpReqCmdline = 0 as ByteOffset  // a MUTABLE NUL-terminated command line; CreateProcessA writes to it
+let SubpReqCmdline = 0 as ByteOffset  // a MUTABLE NUL-terminated command line; CreateProcessA writes to it
 export let SubpReqCwd = 8 as ByteOffset  // cstring, or 0 to inherit the parent's working directory
 export let SubpReqFlags = 16 as ByteOffset  // Win32 dwCreationFlags, already translated from the surface bitfield
 export let SubpReqStdinKind = 24 as ByteOffset
@@ -4971,7 +4971,7 @@ export let SubpReqErrKind = 64 as ByteOffset
 export let SubpReqErrData = 72 as ByteOffset
 export let SubpReqErrLimit = 80 as ByteOffset
 export let SubpReqDetach = 88 as ByteOffset  // 1 ⇒ answer the child's PID and let it go, rather than a handle
-export let SubpReqBytes = 96 as ParsedInt
+let SubpReqBytes = 96 as ParsedInt
 
 // ⭐ **THE STDIO KIND DISCRIMINATORS, WHICH ARE `stdlib/Subprocess.maxon`'s OWN ENUM VALUES.** `StdinKind`
 // (`none`/`inherit`/`bytes`/`file`) and `OutputKind` (`discard`/`inherit`/`collect`/`file`) are declared there
@@ -4982,9 +4982,9 @@ export let SubpReqBytes = 96 as ParsedInt
 // thing on either side of a child, which is what lets `emitSubpNonPipeChildHandle` serve all three streams
 // with one body. `0` differs only in name (`none` reads the NUL device, `discard` writes it — the same open),
 // and `2` is the one genuinely per-direction value (`bytes` feeds a pipe, `collect` drains one).
-export let SubpStdioInherit = 1 as ParsedInt
-export let SubpStdioFile = 3 as ParsedInt
-export let SubpStdinBytes = 2 as ParsedInt
+let SubpStdioInherit = 1 as ParsedInt
+let SubpStdioFile = 3 as ParsedInt
+let SubpStdinBytes = 2 as ParsedInt
 export let SubpOutCollect = 2 as ParsedInt
 // ⚠ **`pipe` IS shv2's OWN FIFTH STDIN KIND AND HAS NO SURFACE SPELLING.** `StreamingSubprocess` wants a stdin
 // pipe with NO payload preloaded, which `StdinKind` cannot say — its `bytes` arm always carries one. Appended
@@ -5472,7 +5472,7 @@ end 'emitSubpCloseOwnedChildEnds'
 // handle to close: this runs only where `CreateProcessA` left the slab-zeroed PROCESS_INFORMATION untouched.
 // Each handle is reloaded from memory so no handle occupies a register here, and a slot field left 0 by a
 // non-pipe stream reaches `CloseHandle(0)`, which is the no-op that keeps this path free of kind tests.
-export function emitSubpCloseSlotHandles(module StdModule, block IrBlock, ids ValueMinter, slot ValueId, childScratch ValueId)
+function emitSubpCloseSlotHandles(module StdModule, block IrBlock, ids ValueMinter, slot ValueId, childScratch ValueId)
 	let stdinWrite = emitLoadField(module, block: block, record: slot, offset: SubpSlotStdinWrite, ids: ids)
 	module.appendOp(block, op: StdOp.osCloseHandle(stdinWrite))
 	let stdoutBase = emitConst(module, block: block, value: SubpStdoutBase as ParsedInt, ids: ids)

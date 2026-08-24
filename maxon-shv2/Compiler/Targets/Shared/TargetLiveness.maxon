@@ -35,7 +35,7 @@
 // deliberately generic OVER those spaces and has no one purpose to name — the column builders, which
 // fill a colour column and a Hall matching alike, and `maxOf`, which takes the larger of a value id
 // or of a register pressure.
-export typealias DenseInt = int(0 to u64.max)
+typealias DenseInt = int(0 to u64.max)
 export typealias DenseColumn = Array with DenseInt
 
 // How many entries a dense column has — the argument the builders below size one with, and the
@@ -93,7 +93,7 @@ end 'seqAt'
 // "no later use" sentinel. It must NOT be `u64.max`: on `int(0 to u64.max)` that all-ones pattern
 // compares as negative under `>`, so Belady would collapse to first-fit and evict the lowest id
 // rather than the farthest next use.
-export function seqLimitFor(numBlocks CfgIndex) returns OpSeq
+function seqLimitFor(numBlocks CfgIndex) returns OpSeq
 	return numBlocks * SeqStride
 end 'seqLimitFor'
 
@@ -233,7 +233,7 @@ end 'classRowMax'
 
 // The population across every file. Derived rather than carried alongside, so there is no second
 // counter to drift out of step with the per-class row it summarises.
-export function classRowTotal(row RegCountColumn) returns RegCount
+function classRowTotal(row RegCountColumn) returns RegCount
 	var total = 0 as RegCount
 	for n in row 'eachClass'
 		total = total + n
@@ -262,7 +262,7 @@ end 'operandClass'
 // The same lookup for a caller that holds the VALUE and no operand — which is what
 // `opTransientDefOf`'s callers hold, deliberately: the transient's selection rule is stated once and
 // hands back an id, so the class read may not be a second `classes.get` spelled beside each use.
-export function valueClass(v ValueId, classes ValueClassColumn) returns RegClass
+function valueClass(v ValueId, classes ValueClassColumn) returns RegClass
 	return try classes.get(v) otherwise panic("valueClass: value {v} has no recorded register class — the lowering's class column does not cover it")
 end 'valueClass'
 
@@ -375,7 +375,7 @@ end 'zeroColumn'
 // the function is live in half the blocks — so an insertion sort's O(n²) is not a bound this code is
 // entitled to assume. Bottom-up merge sort: O(n log n), and the scratch buffer is the caller's, so the
 // sort allocates nothing per split.
-export function sortColumnAscending(list DenseColumn, scratch DenseColumn)
+function sortColumnAscending(list DenseColumn, scratch DenseColumn)
 	let n = list.count()
 	if n < 2 'nothingToDo'
 		return
@@ -2422,12 +2422,12 @@ end 'SplitValues'
 // that covers more than these is not merely wasted work: it is the same work, done again, on data that
 // already holds the answer. (`sweepBlockPressure` took it too, until the splitter stopped re-deriving
 // `forbidden` by walking a block at all — see `PressureIndex.clobberOr`.)
-export union ScannedValues
+union ScannedValues
 	all
 	split(values SplitValues)
 end 'ScannedValues'
 
-export function scannedValuesHold(which ScannedValues, valueId ValueId) returns bool
+function scannedValuesHold(which ScannedValues, valueId ValueId) returns bool
 	return match which 'w'
 		all gives true
 		split(values) gives values.holds(valueId)
@@ -2565,7 +2565,7 @@ end 'lastOpOf'
 // Build the index in ONE pass over the function: create it empty, then record every def, flag and use
 // site on the way through — through the index's own mutators, which are the ones a SPLIT edits it with
 // (see "EDITS" above).
-export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount ValueId, opFacts OpVariantFacts) returns UseIndex
+function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount ValueId, opFacts OpVariantFacts) returns UseIndex
 	var index = UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks)
 
 	var buf = OperandList.create()
@@ -3081,7 +3081,7 @@ end 'sweepEstablishedRegisters'
 // residue neither can prevent — greedy is not exact for list colouring — is repaired by
 // `SplitDriver.repairAtExhaustion` / `repairByEvictingOccupant`. Keeping the old sentence here would be
 // the same one-fact-written-twice this rung corrected in `HallCondition.hallVerdictAt`'s own header.
-export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
+function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
 	var buf = scratch.buf
@@ -3170,7 +3170,7 @@ end 'countDeadPhis'
 // physical(argReg[i])` per parameter — a PARALLEL COPY from the incoming ABI registers.
 // Collected once (paramCount is capped at the register-arg count), then consumed by the
 // cross-param register forbidding below.
-export type ParamCapture
+type ParamCapture
 	export var valueId as ValueId
 	export var incomingReg as RegNum
 
@@ -3187,7 +3187,7 @@ export typealias ParamCaptureArray = Array with ParamCapture
 // ONLY by its capture, so this matches every capture exactly and excludes the call- and
 // idiv-result `mov`s (whose destinations are >= paramCount). The incoming register is read
 // straight from the IR — the copy's physical source — so this needs no target ABI table.
-export function collectEntryParamCaptures(module TargetModule, topo FuncTopology, paramCount ParamCount) returns ParamCaptureArray
+function collectEntryParamCaptures(module TargetModule, topo FuncTopology, paramCount ParamCount) returns ParamCaptureArray
 	var captures = ParamCaptureArray.create()
 	if paramCount == 0 'noParams'
 		return captures
@@ -3398,7 +3398,7 @@ end 'opClobberMask'
 // the x64 `operandRegister`/`X64Register.fromRawValue` door range-check-panicked on. `regMaskAdd`
 // forms the same clobber bit from the `RegNum` directly — bit-identical for the x64 registers this
 // already handled (an `X64Register.rawValue` IS its `RegNum`).
-export function physicalDefMask(buf OperandList) returns RegMask
+function physicalDefMask(buf OperandList) returns RegMask
 	var mask = 0 as RegMask
 	for o in buf 'physDefs'
 		if operandIsDef(o) and not operandIsVirtual(o) 'physDef'
@@ -3494,7 +3494,7 @@ end 'addOpTransientPressure'
 //
 // The tuple is `(found, defId, isReuse, reuseInputId)`: `defId` and `isReuse` are meaningless unless
 // `found`, and `reuseInputId` unless `isReuse`. A discriminated record, not a sentinel.
-export function opTransientDefOf(buf OperandList) returns (bool, ValueId, bool, ValueId)
+function opTransientDefOf(buf OperandList) returns (bool, ValueId, bool, ValueId)
 	for o in buf 'each'
 		if not (operandIsDef(o) and operandIsVirtual(o)) 'notAVirtualDef'
 			continue

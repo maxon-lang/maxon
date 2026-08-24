@@ -200,7 +200,7 @@ end 'parseRungCount'
 
 // The number of `if`s, files, functions... in one knob at one rung. Bounded well above the top
 // rung's largest knob (rung 7's deepBlocks is 200 << 7 = 25,600).
-export typealias KnobSize = int(1 to 1048576)
+typealias KnobSize = int(1 to 1048576)
 
 // A POSITION within a knob, not a COUNT of one — 0-based, where `KnobSize` starts at 1. The upper
 // bound is `KnobSize`'s max minus one because the generators walk `0 upto size`, and `upto` excludes
@@ -851,7 +851,7 @@ typealias TrackedValueArray = Array with TrackedValue
 export let CorpusOkExit = 7
 
 // ...and when one did not. Distinct from `CorpusOkExit` and from 0, so silence is never success.
-export let CorpusWitnessFailedExit = 1
+let CorpusWitnessFailedExit = 1
 
 // What a failed witness adds to the accumulator. Large and odd, so that neither two failures nor a
 // failure plus a legitimate contribution can cancel back to the seed: every knob's real per-site
@@ -867,7 +867,7 @@ let CorpusWitnessFailedOffset = 1000000007
 let SeedInitial = 1
 let SeedStep = 3
 
-export function corpusSeedValue() returns TrackedValue
+function corpusSeedValue() returns TrackedValue
 	return SeedInitial + SeedStep * ((GeneratedLoopTrips * (GeneratedLoopTrips - 1)) / 2)
 end 'corpusSeedValue'
 
@@ -2391,7 +2391,9 @@ function floatOpsSource(groupCount KnobSize) returns String
 		trackedFloatSet(tracked, slot: p, value: trackedFloatAt(tracked, slot: p) * floatGroupMultiplier(i))
 		out.append("\tf{r} = f{r} / {floatGroupDivisorWhole(i)}.25\n")
 		// Bound rather than divided by in place: the non-zero range travels with the BINDING, which is
-		// the same shape `intDivideSource` emits for `ScaleDivisor` one knob over.
+		// the same shape `intDivideSource` emits for `ScaleDivisor` one knob over. `FloatGroupDivisor` is
+		// `float(2.25 to 5.25)`, so the divide is provably safe and takes no `try` — and this line is what
+		// found that shv2 was not reading a ranged FLOAT alias as a proof at all (see `Parser.divisorProof`).
 		let divisor = floatGroupDivisor(i)
 		trackedFloatSet(tracked, slot: r, value: trackedFloatAt(tracked, slot: r) / divisor)
 

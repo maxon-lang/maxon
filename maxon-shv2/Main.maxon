@@ -27,17 +27,17 @@ let DefaultSpecDir = "specs-shv2"
 // from (`refuseIfStale`) and a checkout another command is already writing (`acquireTreeLock`). Both
 // say the same thing to the reader — the tree is not in a state to be measured, fix that and re-run —
 // so the number is declared once, HERE, where the driver's exit codes are decided.
-export let NothingRanExitCode = 2
+module let NothingRanExitCode = 2
 
 // The CLI spellings the spec-test WORKER POOL has to re-emit, because a worker is this same
 // executable re-launched with this same command line (see SpecWorkerPool). Named here — where the
 // parser that reads them back also lives — so the two halves of that command line cannot drift
 // apart into a hang. The rest of the driver's flags are matched inline: they are read here and
 // nowhere else.
-export let SpecTestCommandName = "spec-test"
-export let WorkerPersistentFlag = "--worker-persistent"
-export let FilterFlagPrefix = "--filter="
-export let UpdateRequiredFlag = "--update-required"
+module let SpecTestCommandName = "spec-test"
+module let WorkerPersistentFlag = "--worker-persistent"
+module let FilterFlagPrefix = "--filter="
+module let UpdateRequiredFlag = "--update-required"
 
 // ⭐ `--network` — RUN THE CASES THAT REACH A REAL EXTERNAL HOST. The cases marked `<!-- network: live -->`
 // across `tcp-client`, `async-tcp` and `http-client` open a socket to `tcpbin.com` / `httpbin.org`; a default
@@ -52,7 +52,7 @@ export let UpdateRequiredFlag = "--update-required"
 //
 // It is in the re-emitted set because the parent forwards it to every worker: both halves of the pool run
 // the same selection rule, and a worker that never heard the flag would answer for tests nobody counted.
-export let NetworkFlag = "--network"
+module let NetworkFlag = "--network"
 
 // ⛔⛔ **`--compiler=<path>` IS WITHDRAWN, AND THE SPELLING IS KEPT SO THE REFUSAL CAN NAME IT.**
 //
@@ -71,7 +71,7 @@ let WithdrawnCompilerFlagPrefix = "--compiler"
 // `--target=` is in this re-emitted set (not with `build`'s options) because a cross-target
 // spec run forwards it to every worker's command line — see SpecWorkerPool.spawnNoWait. The
 // parser below reads it back through this same constant, so the two halves cannot drift.
-export let TargetFlagPrefix = "--target="
+module let TargetFlagPrefix = "--target="
 let WorkersFlagPrefix = "--workers="
 
 // ⭐ **THE TWO IR-SIDECAR SPELLINGS.** ⛔ They used to be EXPORTED *"because the spec runner emits
@@ -111,7 +111,7 @@ let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 // `CompileProduct.totalCpuTicks` (G20), which is the same number from the same whole-compile probe
 // without the file. It was written out as a literal at the parser below AND at the scale runner
 // until a second harness would have made a third copy.
-export let MetricsFlagPrefix = "--metrics="
+module let MetricsFlagPrefix = "--metrics="
 
 // Comma, matching every other list-valued flag and directive this project reads (`--target`s in a
 // `<!-- targets: … -->` marker, the reference's own `TargetsDirectiveRegex`). One separator, so a
@@ -151,7 +151,7 @@ end 'main'
 
 // The outcome of resolving a `--target=<cpu>-<os>` spelling: either the Target it
 // names, or the raw spelling for the error message when it names no known target.
-export union TargetResolution
+module union TargetResolution
 	resolved(target Target)
 	unrecognized(spec String)
 end 'TargetResolution'
@@ -166,7 +166,7 @@ end 'TargetResolution'
 // `fragments/<name>` LANE DIRECTORY's name — a lane is named by a target spelling, so "which target is
 // this?" has one answer and one reader. A private copy of the loop there would be a second table in all
 // but name, and its failure mode is a census that quietly stops covering the next backend that lands.
-export function parseBuildTarget(spec String) returns TargetResolution
+module function parseBuildTarget(spec String) returns TargetResolution
 	for candidate in supportedTargets() 'each'
 		if targetToString(candidate) == spec 'match'
 			return TargetResolution.resolved(candidate)
@@ -182,7 +182,7 @@ end 'parseBuildTarget'
 // target to, and it must sweep ALL of them or it is a check scoped to whichever target its author
 // happened to think of. A second array spelled there would agree today and would then quietly stop
 // covering the next backend that lands, which is the one it would exist to catch.
-export function supportedTargets() returns TargetArray
+module function supportedTargets() returns TargetArray
 	return [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.x64, os: Os.linux), Target.create(CpuArch.arm64, os: Os.macos), Target.create(CpuArch.arm64, os: Os.linux), Target.create(CpuArch.wasm32, os: Os.wasi)]
 end 'supportedTargets'
 
@@ -664,7 +664,7 @@ end 'specDirSpelling'
 //
 // Exported for `Testing/ScaleTestRunner`, which owns `scale-test`'s entry point the way this file owns
 // the other three.
-export function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount, usage String) returns bool
+module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount, usage String) returns bool
 	if args.paths.count() <= allowed 'withinBudget'
 		return false
 	end 'withinBudget'
@@ -757,7 +757,7 @@ end 'reportResults'
 // instead of being crammed onto a verdict line. A NOTRUN prints none either, for the opposite reason —
 // every case on such a lane shares ONE reason, so it is stated once in the trailer instead of several
 // thousand times here.
-export function verdictLine(outcome TestOutcome, label String) returns String
+module function verdictLine(outcome TestOutcome, label String) returns String
 	return match outcome 'verdict'
 		pass gives "PASS {label}"
 		fail(reason) gives "FAIL {label}: {reason}"
@@ -797,7 +797,7 @@ end 'firstBadOption'
 //
 // Shared by every command's failure path so the mapping lives in one place — including the scale-test
 // runner, which is why it is exported.
-export function reportCompileError(e CompileError)
+module function reportCompileError(e CompileError)
 	match e 'report'
 		fileNotFound(p) then emitDiagnosticLine("error: file not found: {p}")
 		directoryNotFound(p) then emitDiagnosticLine("error: directory not found: {p}")
@@ -916,7 +916,7 @@ export typealias SourcePathSpellingArray = Array with String
 // cache flags, ...) as the driver gains those capabilities.
 // Exported: the scale-test runner lives in Testing/ and takes the parsed args, exactly as the
 // spec-test runner takes them from inside Main.
-export type MaxonArgs
+module type MaxonArgs
 	export var command as MaxonCommand
 	// ⭐⭐ **EVERY POSITIONAL, IN THE ORDER TYPED (A3m).** `build` compiles them all and the ORDER is
 	// load-bearing — `Compiler.loadSourceFiles` registers sources in exactly this order, which is how

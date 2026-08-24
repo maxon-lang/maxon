@@ -71,7 +71,7 @@ end 'Visibility'
 // `public` are the same visibility (see the header above), so every reader that cares about REACH rather
 // than about the unused-export claim asks here instead of spelling `== global or == public`. That
 // disjunction written out at N sites is a set written down N times, and the N+1th tier reaches N-1 of them.
-export function isProgramWideTier(visibility Visibility) returns bool
+function isProgramWideTier(visibility Visibility) returns bool
 	return visibility == Visibility.global or visibility == Visibility.public
 end 'isProgramWideTier'
 
@@ -388,7 +388,7 @@ export function tierOrdinal(visibility Visibility) returns VisibilityTier
 	end 'tier'
 end 'tierOrdinal'
 
-export typealias VisibilityTier = int(0 to 3)
+typealias VisibilityTier = int(0 to 3)
 
 // One `Visibility` per struct field, in declaration order. See `StructLayout.fieldVisibility`.
 export typealias VisibilityArray = Array with Visibility
@@ -2125,9 +2125,13 @@ export type RangedAliasRegistry
 	// fact that nothing currently runs between the two loops.
 	export function settleRangeContests()
 		var mints = RangedTypeAliasArray.create()
-		// Starts as the shared empty handle and is replaced by a real map on the FIRST contest, so an
-		// uncontested program — the whole corpus — still allocates no index. NEVER mutated while shared.
-		var settled = sharedEmptyRangeContests
+		// ⚠ **BUILT OWNED, AND THE SHARED EMPTY HANDLE IS WHAT THE FIELD KEEPS WHEN NOTHING IS CONTESTED.**
+		// This used to start AS `sharedEmptyRangeContests` and copy-on-write on the first contest, guarded by
+		// an `is`-identity test. That is a mutable name reaching a module-level `let`'s record, which single
+		// ownership refuses (E3019 at the `upsert`) — the guard that made it safe is invisible to the rule,
+		// and the rule is about what the name CAN reach. The publish below is already gated on `count() > 0`,
+		// so an uncontested program still never touches the field; what it now costs is one empty map.
+		var settled = RangeContestedAliasMap.create()
 		for (name, byFile) in self.multiplyDeclared 'eachMultiplyDeclaredName'
 			var claimants = RangedTypeAliasArray.create()
 			for (_, alias) in byFile 'eachDeclaration'
@@ -2147,9 +2151,6 @@ export type RangedAliasRegistry
 				mints.push(rangeQualifiedMint(claimant, spelling: spelling))
 			end 'eachDistinctRange'
 
-			if settled is sharedEmptyRangeContests 'stillShared'
-				settled = RangeContestedAliasMap.create()
-			end 'stillShared'
 			settled.upsert(name, value: spellings)
 		end 'eachMultiplyDeclaredName'
 
@@ -2281,7 +2282,7 @@ end 'rangeHoldsEveryByte'
 // so anything looser reads a bound above `i64.max` as one below zero. `I64MinBound`/`I64MaxBound` are the
 // very constants `Parser.parseInt` enforces, so what "every int" means here cannot drift from what the lexer
 // admits.
-export function rangeSpansEveryInt(low ParsedInt, high ParsedInt) returns bool
+function rangeSpansEveryInt(low ParsedInt, high ParsedInt) returns bool
 	return low == I64MinBound and high == I64MaxBound
 end 'rangeSpansEveryInt'
 
@@ -2635,6 +2636,24 @@ export typealias RangeCheckSiteArray = Array with RangeCheckSite
 // there is nothing for a site to say about it.
 export type RangeCheckArgSite
 	export var value as ValueId
+	// ⭐⭐ **WHICH CALL THIS SITE CAME FROM — the name the SOURCE wrote, and the one field of the pair that is
+	// never rewritten.** `callee` below is RETARGETED to the resolved overload member
+	// (`SemanticCheck.retargetArgRangeSites`), so after the first retarget it no longer answers *"whose call
+	// was this?"* — and that retarget finds its sites by matching the argument's `value`, which a `let`
+	// binding passed to two different calls shares.
+	//
+	// ⛔⛔ **MEASURED ON THIS COMPILER'S OWN SOURCE, AND IT REFUSED A LEGAL PROGRAM.**
+	// `arm64EmitStoreSlot(asm, reg: …, slot: SlotTextOffset)` followed by
+	// `arm64EmitLoadSlot(asm, reg: …, slot: SlotTextOffset)` — two DIFFERENT functions, each with an
+	// overload elsewhere in the tree, sharing one `let` — made the second call read the FIRST call's site as
+	// *"claimed by another member"* and report **E2015 two calls to different overloads of
+	// 'arm64EmitStoreSlot'**, naming a set the reported call is not even in. Twenty such refusals, all in
+	// `Arm64PanicRuntime`, all on code the reference compilers accept.
+	//
+	// ⚠ The residual the retarget's own header describes is UNAFFECTED and still reported: two calls of the
+	// SAME bare name resolving to two members share this field as well as the value, which is exactly the
+	// case that cannot be told apart and the one the diagnostic is about.
+	export let bareCallee as ByteArray
 	export var callee as ByteArray
 	export var argIndex as ParamCount
 	export var label as ByteArray
@@ -2642,8 +2661,10 @@ export type RangeCheckArgSite
 	export var line as LineNumber
 	export var column as ColumnNumber
 
+	// ⚠ `bareCallee` is a COPY and not a second store of the same record: one value written into two fields
+	// of one literal is a repeated owning store, which single ownership refuses.
 	export static function create(value ValueId, callee ByteArray, argIndex ParamCount, label ByteArray, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckArgSite
-		return Self{value: value, callee: callee, argIndex: argIndex, label: label, block: block, line: line, column: column}
+		return Self{value: value, bareCallee: callee.clone(), callee: callee, argIndex: argIndex, label: label, block: block, line: line, column: column}
 	end 'create'
 end 'RangeCheckArgSite'
 
@@ -3045,8 +3066,8 @@ function isBuiltinManagedWrapperInterface(interfaceName ByteArray) returns bool
 	return interfaceName.equals(BuiltinStringLiteralInterfaceName) or interfaceName.equals(BuiltinCharLiteralInterfaceName) or interfaceName.equals(BuiltinArrayLiteralInterfaceName)
 end 'isBuiltinManagedWrapperInterface'
 
-export let BuiltinStringLiteralInterfaceName = b"BuiltinStringLiteral"
-export let BuiltinCharLiteralInterfaceName = b"BuiltinCharLiteral"
+let BuiltinStringLiteralInterfaceName = b"BuiltinStringLiteral"
+let BuiltinCharLiteralInterfaceName = b"BuiltinCharLiteral"
 export let BuiltinArrayLiteralInterfaceName = b"BuiltinArrayLiteral"
 
 // The size of a struct with NO fields. A zero-byte allocation would hand two distinct empty
@@ -3181,7 +3202,7 @@ end 'whereConstraintsMatch'
 // ordered comparison above (do these two lists agree slot for slot?) and the de-duplication below (does this
 // list already reserve a slot for this constraint?). Written out at each, the pair test was the same
 // expression in two files.
-export function whereConstraintsEqual(constraint WhereConstraint, other WhereConstraint) returns bool
+function whereConstraintsEqual(constraint WhereConstraint, other WhereConstraint) returns bool
 	return constraint.typeParamIndex == other.typeParamIndex and constraint.interfaceName.equals(other.interfaceName)
 end 'whereConstraintsEqual'
 
@@ -4056,7 +4077,7 @@ export typealias ConformanceBindingArray = Array with ByteArrayArray
 // that writes no clause at all. Shared for `sharedEmptyDeclaredConformances`' reason, which is the same
 // reason one column over: nearly every declaration in the corpus binds nothing, and a fresh empty array per
 // declaration would be an allocation for the absence of a fact. Read-only.
-export let sharedEmptyConformanceBindings = ConformanceBindingArray.create()
+let sharedEmptyConformanceBindings = ConformanceBindingArray.create()
 
 // ⭐ **WHAT ONE `implements` CLAUSE CONTRIBUTES: the interface NAMES, and the `with` arguments EACH of
 // them binds.** `Parser.readOptionalImplementsClause` returns the pair rather than the names alone because
@@ -4159,12 +4180,12 @@ end 'builtinErrorConformance'
 // NAME is an IMMORTAL `.rdata` String, i.e. a machine word that is constant per case exactly as an index is,
 // so the identical branchless `Σᵢ constantᵢ × (tag == tagᵢ)` selects it — see
 // `Parser.emitEnumCaseConstantSelect`, which is the ONE emitter all three read through.
-export let EnumOrdinalMemberName = b"ordinal"
+let EnumOrdinalMemberName = b"ordinal"
 
 // ⭐ **`s.name` — THE CASE'S SPELLING, AS A `String`.** The constant selected is `EnumLayout.caseNames[i]`,
 // materialized as the same immortal `.rdata` record a source literal of those bytes materializes, so it is
 // never allocated, refcounted or dropped and may be returned out of the function that read it.
-export let EnumNameMemberName = b"name"
+let EnumNameMemberName = b"name"
 
 // ⭐ **`s.rawValue` — WHAT THE CASE WAS DECLARED AS, IN THE DOMAIN ITS BACKING NAMES.** The one accessor whose
 // RESULT TYPE depends on `EnumLayout.backing`: an `int` for an integer (or unnumbered) backing, a `float` for
@@ -4961,7 +4982,7 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 //
 // Seeded UNCONDITIONALLY beside the other four for their stated reason: `createEnumRegistry` is the one door
 // that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`.
-export function builtinDivisionByZeroErrorEnum() returns EnumLayout
+module function builtinDivisionByZeroErrorEnum() returns EnumLayout
 	var layout = EnumLayout.createCompilerOwned(DivisionByZeroErrorTypeName, conformsTo: builtinErrorConformance())
 	addBuiltinEnumCase(layout, caseName: DivisionByZeroCaseName)
 	return layout
@@ -4970,7 +4991,7 @@ end 'builtinDivisionByZeroErrorEnum'
 // ⭐ **WHAT `<Enum>.fromRawValue(raw)` THROWS ON A RAW VALUE NO CASE CARRIES.** The division family's twin in
 // every respect — declared in no corpus file, seeded unconditionally beside it for the same reason, and
 // payload-free so it stays golden-neutral (see `createEnumRegistry`).
-export function builtinEnumLookupErrorEnum() returns EnumLayout
+module function builtinEnumLookupErrorEnum() returns EnumLayout
 	var layout = EnumLayout.createCompilerOwned(EnumLookupErrorTypeName, conformsTo: builtinErrorConformance())
 	// ⚠ **DECLARATION ORDER IS THE WIRE FORMAT** — `addBuiltinEnumCase` derives each tag from its position,
 	// and `EnumLookupRuntime` transcribes both. Appending is safe; reordering silently renames every handler
@@ -5088,7 +5109,7 @@ end 'BuiltinErrorDeclarationSource'
 // third — SILENCE is what `BuiltinErrorOrdinalCheck.requireTotal` withdrew, and this enum is what replaced
 // it. Read at the two failure arms of `recordCase`, which must say different things about a claim and about
 // an exemption: telling an author that a case nothing throws "is thrown as 9" would be a lying diagnostic.
-export enum BuiltinErrorCaseUse
+enum BuiltinErrorCaseUse
 	// The runtime returns this case's ordinal as an error flag, out of a literal it transcribed.
 	thrown
 	// The runtime never produces this case at all. Its ordinal is transcribed anyway — see the ⭐ paragraph
@@ -5240,7 +5261,7 @@ end 'BuiltinErrorOrdinalCheck'
 // What `declaredBuiltinErrorEnum` found. `notDeclared` is a real answer with its own case rather than an
 // empty layout, because an empty one would make every `claim` behind it report the SAME "declares no such
 // case" — one diagnostic per ordinal, for the single fact that the module was not loaded.
-export union DeclaredBuiltinErrorEnum
+module union DeclaredBuiltinErrorEnum
 	found(layout EnumLayout)
 	notDeclared
 end 'DeclaredBuiltinErrorEnum'
@@ -5254,7 +5275,7 @@ end 'DeclaredBuiltinErrorEnum'
 // `fileNotFound` naming the path), so what actually reaches here is the module present but no longer LISTED,
 // or listed but no longer declaring the enum. Both are edits to this checkout, and both would otherwise
 // produce a compiler that throws ordinals no handler arm can name.
-export function declaredBuiltinErrorEnum(project Project, typeName ByteArray, installer ByteArray) returns DeclaredBuiltinErrorEnum
+module function declaredBuiltinErrorEnum(project Project, typeName ByteArray, installer ByteArray) returns DeclaredBuiltinErrorEnum
 	let layout = try project.enumTypes.get(typeName) otherwise 'notDeclared'
 		// ⚠ Names no module either, for `BuiltinErrorOrdinalCheck.refuse`'s reason directly above: SEVERAL
 		// families reach this and they are declared across several different files. It said "six families
@@ -5835,7 +5856,7 @@ end 'fieldDefaultHelperName'
 // the static generic constructor whose descriptor is read off its own result. It reads the prefix rather
 // than a `CalleeMint`, because the mint is a parse-time fact and does not ride the op; it lives beside the
 // join so the prefix keeps its one speller.
-export function isFieldDefaultHelperName(callee ByteArray) returns bool
+module function isFieldDefaultHelperName(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: FieldDefaultHelperPrefix)
 end 'isFieldDefaultHelperName'
 
@@ -6271,7 +6292,7 @@ end 'argDuplicateMessage'
 // runs before any `FuncSignature` exists) and a `WitnessDispatchTarget` (an interface method, which is in no
 // registry at all). Each of those grew its own copy of this scan; the list is the only thing the scan reads,
 // so taking it directly is what collapses them to one.
-export function indexOfParamIn(paramNames ByteArrayArray, name ByteArray) returns ParamCount
+function indexOfParamIn(paramNames ByteArrayArray, name ByteArray) returns ParamCount
 	for i in 0 upto paramNames.count() 'each'
 		let paramName = try paramNames.get(i) otherwise panic("indexOfParamIn: paramNames.get OOB at {i}")
 		if paramName.equals(name) 'match'

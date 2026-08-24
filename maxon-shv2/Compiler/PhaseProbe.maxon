@@ -239,7 +239,7 @@ export function recordPhase(project Project, phase CompilePhase, probe PhaseProb
 	recordPhaseDelta(project, phase: phase, delta: probe.elapsed())
 end 'recordPhase'
 
-export function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
+function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 	project.timings.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)
 	closePhaseSpan(compilePhaseName(phase), unit: project.traceUnit)
@@ -262,16 +262,16 @@ end 'recordPhaseDelta'
 // biggest cost inside the wrong bucket, which is the failure CompileTimings was built to
 // stop and which it stopped only for the clock. `inner` is the accumulated total of the
 // inner phase taken BEFORE the outer one opened; this subtracts what it grew by.
-export function recordPhaseExcluding(project Project, phase RegAllocPhase, probe PhaseProbe, innerPhase RegAllocPhase, innerBefore PhaseDelta)
+module function recordPhaseExcluding(project Project, phase RegAllocPhase, probe PhaseProbe, innerPhase RegAllocPhase, innerBefore PhaseDelta)
 	let innerGrowth = regAllocAccumulated(project, phase: innerPhase).minus(innerBefore)
 	recordRegAllocDelta(project, phase: phase, delta: probe.elapsed().minus(innerGrowth))
 end 'recordPhaseExcluding'
 
-export function recordRegAllocPhase(project Project, phase RegAllocPhase, probe PhaseProbe)
+module function recordRegAllocPhase(project Project, phase RegAllocPhase, probe PhaseProbe)
 	recordRegAllocDelta(project, phase: phase, delta: probe.elapsed())
 end 'recordRegAllocPhase'
 
-export function recordRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
+function recordRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
 	project.timings.regAlloc.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.regAlloc.addPhase(phase, delta: delta)
 	closePhaseSpan(regAllocPhaseName(phase), unit: project.traceUnit)
@@ -320,7 +320,7 @@ end 'closeOpenPhaseSpans'
 //
 // `costOf` remains the right accessor everywhere else — the report and the metrics file read
 // it a few dozen times per compile, where one allocation buys the pairing guarantee.
-export function regAllocAccumulated(project Project, phase RegAllocPhase) returns PhaseDelta
+module function regAllocAccumulated(project Project, phase RegAllocPhase) returns PhaseDelta
 	let idx = phase.ordinal
 	let nanos = try project.timings.regAlloc.phaseNanos.get(idx) otherwise panic("regAllocAccumulated: phaseNanos index OOB for '{regAllocPhaseName(phase)}'")
 	let cpuTicks = try project.timings.regAlloc.phaseCpuTicks.get(idx) otherwise panic("regAllocAccumulated: phaseCpuTicks index OOB for '{regAllocPhaseName(phase)}'")

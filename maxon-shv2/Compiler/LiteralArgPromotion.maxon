@@ -84,7 +84,7 @@ export function promoteArgsNeedingAWritableRecord(project Project, module MaxonM
 	end 'alreadyRefused'
 
 	for i in 0 upto module.functions.count() 'eachFunc'
-		let func = try module.functions.get(i) otherwise panic("promoteArgsNeedingAWritableRecord: functions.get OOB at {i}")
+		let func = functionAt(module, index: i)
 		// The same reachability gate `scanRuntimeUsage` and `lowerMaxonToStd` apply: a stdlib body no back
 		// end will receive is not worth rewriting, and an op inserted into one would sit in front of a scan
 		// that deliberately skips the function.
@@ -95,6 +95,18 @@ export function promoteArgsNeedingAWritableRecord(project Project, module MaxonM
 		promoteInFunction(project, module: module, func: func, funcIndex: i, mutationSummary: mutationSummary)
 	end 'eachFunc'
 end 'promoteArgsNeedingAWritableRecord'
+
+// ⭐⭐ **THE FUNCTION RECORD AS A REFERENCE THIS FRAME OWNS, NOT AS A BORROW OF THE MODULE.** Reading an
+// element out of `module.functions` and BINDING it makes the binding a borrow of the whole module for as
+// long as it lives (E3070) — and the promotion below writes `module.ops` throughout, which is precisely
+// what the rule forbids holding a borrow across. Returning it takes the reference instead: shv2's return
+// convention promotes a BORROWED managed value to an owned one (`Parser.emitOwnedValueReturn` — *"a
+// borrowed struct/union/instance INCREFS"*), so the caller holds a `+1` that no write to the module can
+// invalidate. That is the language's answer to "I need to keep this element", and it costs one incref per
+// function of the program.
+function functionAt(module MaxonModule, index FuncIndex) returns IrFunction
+	return try module.functions.get(index) otherwise panic("functionAt: module.functions.get OOB at {index}")
+end 'functionAt'
 
 // One function, in three walks — and every function in almost every program leaves after the first,
 // having allocated nothing.
@@ -294,9 +306,9 @@ end 'promoteInBlock'
 function promoteCallAt(project Project, module MaxonModule, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("promoteCallAt: opIdx {opIdx} not in module.ops")
 	match op 'op'
-		call(_, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, op: op, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
+		call(_, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
 		literal to stringLiteral then break 'op'
-		tryCall(_, _, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, op: op, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
+		tryCall(_, _, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
 		throwError to indirectCall then break 'op'
 		asyncCall then break 'op'
 		await to tryAwait then break 'op'
@@ -319,7 +331,10 @@ end 'promoteCallAt'
 // A callee with NO signature is left alone for `addCallParamEdges`' reason — it is compiler-internal
 // (`__managed_append` and friends, whose receiver writes the parser recorded directly) or undeclared, which
 // is E3004 and so cannot reach a pass that runs only on an error-free project.
-function promoteArgsOf(project Project, module MaxonModule, op MaxonOp, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
+// ⚠ **IT REPLACES THE OP AT `opIdx`, SO IT DOES NOT TAKE THE OP.** The store releases the record, and a
+// caller that had handed its own borrow in would be left holding a released pointer — E3070's shape, and the
+// reason this door reads the op back for itself at the one line that needs it.
+function promoteArgsOf(project Project, module MaxonModule, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
 	let mask = mutationSummary.maskOf(callee)
 	// Short-circuited, so the second lookup is paid only by the handful of calls whose callee writes
 	// anything at all.
@@ -373,7 +388,9 @@ function promoteArgsOf(project Project, module MaxonModule, op MaxonOp, opIdx Op
 		newRefs.push(appendPromotionRuntimeCall(module, project: project, funcIndex: funcIndex, result: try promoted.get(i) otherwise panic("promoteArgsOf: promoted.get OOB at {i}"), callee: try callees.get(i) otherwise panic("promoteArgsOf: callees.get OOB at {i} — the three columns are pushed together"), arg: try sources.get(i) otherwise panic("promoteArgsOf: sources.get OOB at {i} — the three columns are pushed together"), range: range))
 	end 'eachPromotion'
 
-	try module.ops.set(opIdx, value: withRewrittenArgs(op, args: promotedArgs)) otherwise panic("promoteArgsOf: module.ops.set OOB at {opIdx}")
+	let original = try module.ops.get(opIdx) otherwise panic("promoteArgsOf: module.ops.get OOB at {opIdx}")
+	let rewritten = withRewrittenArgs(original, args: promotedArgs)
+	try module.ops.set(opIdx, value: rewritten) otherwise panic("promoteArgsOf: module.ops.set OOB at {opIdx}")
 	newRefs.push(opIdx)
 
 	for writable in promoted 'eachRelease'

@@ -59,7 +59,7 @@ export let StringLengthOffset = ManagedRecordLengthOffset
 // these names alias them.
 export let StringCapacityOffset = ManagedRecordCapacityOffset
 export let StringElementSizeOffset = ManagedRecordElementSizeOffset
-export let StringParentPtrOffset = ManagedRecordParentOffset
+let StringParentPtrOffset = ManagedRecordParentOffset
 
 // ⭐ **`element_destroy@40` — A STRING'S IS ALWAYS `TrivialElementDestroy`, AND THAT IS A FACT RATHER THAN
 // A FILLER.** A String's elements are `Byte`s; a byte owns nothing, so there is no per-element destructor
@@ -67,7 +67,7 @@ export let StringParentPtrOffset = ManagedRecordParentOffset
 // reason the five above are: `__managed_decref` reads this slot out of a String record now (W157 —
 // `__str_bytes_view` hands one over), so a divergence would be a wrong load in a function that cannot tell
 // which record it was handed.
-export let StringElementDestroyOffset = ManagedRecordElementDestroyOffset
+let StringElementDestroyOffset = ManagedRecordElementDestroyOffset
 
 // ⭐⭐ **SLOT@48 IS `singleByteGraphemes` — *EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE* — AND IT
 // USED TO BE THE STRICTLY WEAKER `isAscii`.** The corpus field this record IS
@@ -513,7 +513,7 @@ export let StrRetainName = b"__str_retain"
 // ⭐ **ONE PASS TESTING BOTH, rather than an ASCII scan followed by a CR scan** — the corpus's
 // `scanSingleByteGraphemes` (`stdlib/String.maxon:1048`) is the same loop for the same stated reason, and
 // this is its compile-time twin over a literal's bytes.
-export function bytesAreSingleByteGraphemes(bytes ByteArray) returns bool
+function bytesAreSingleByteGraphemes(bytes ByteArray) returns bool
 	for b in bytes 'each'
 		// A CR is ASCII and is NOT a grapheme on its own — GB3 joins it to a following LF — so it is the one
 		// byte that clears this flag without being high.
@@ -525,7 +525,7 @@ export function bytesAreSingleByteGraphemes(bytes ByteArray) returns bool
 end 'bytesAreSingleByteGraphemes'
 
 // The NUL-terminated blob for a literal's payload — the bytes, then one NUL.
-export function stringBlobBytes(bytes ByteArray) returns ByteArray
+function stringBlobBytes(bytes ByteArray) returns ByteArray
 	var blob = ByteArray.create()
 	blob.append(bytes)
 	blob.push(NulTerminator)
@@ -600,7 +600,7 @@ end 'registerStringBlob'
 
 // Register a literal's record, seeded with its blob's offset (see `buildStringRecordBytes` for why the
 // offset, not 0). `blobLabel` must already be registered — its offset is read back here.
-export function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength ByteCount, singleByteGraphemes bool) returns String
+function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength ByteCount, singleByteGraphemes bool) returns String
 	let blobOffset = globalData.rdataOffsetOf(blobLabel)
 	return globalData.registerRdataConstant(StringRecordPrefix, bytes: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes))
 end 'registerStringRecord'

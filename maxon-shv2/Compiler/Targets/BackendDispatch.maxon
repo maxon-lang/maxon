@@ -216,7 +216,7 @@ export typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
 // How many labels a concat pass has laid so far — the ordinal `recordChunkLabel` compares the map's height
 // against. Not a `FuncIndex`: a chunk is not a module function (the entry stub, the hand-assembled runtime
 // chunks and `__symtable` have no position in `stdModule.functions`).
-export typealias ChunkLabelCount = int(0 to u64.max)
+module typealias ChunkLabelCount = int(0 to u64.max)
 
 // ⭐⭐ **LAY ONE CHUNK'S LABEL DOWN, AND REFUSE A SECOND CLAIM ON THAT NAME (A2l).**
 //
@@ -240,7 +240,7 @@ export typealias ChunkLabelCount = int(0 to u64.max)
 // The count trick is `FunctionNameIndex.create`'s, for its reason: this is called with `laidOut` labels
 // already in the map, so the height IS `laidOut + 1` afterwards unless one insert collapsed two names —
 // one integer compare, and no second hash probe on a per-chunk loop.
-export function recordChunkLabel(labelOffsets FuncLabelOffsetMap, name ByteArray, offset CodeOffset, laidOut ChunkLabelCount, project Project, funcNames FunctionNameIndex) throws CompileError
+module function recordChunkLabel(labelOffsets FuncLabelOffsetMap, name ByteArray, offset CodeOffset, laidOut ChunkLabelCount, project Project, funcNames FunctionNameIndex) throws CompileError
 	labelOffsets.upsert(name, value: offset)
 
 	if labelOffsets.count() != laidOut + 1 'duplicateChunkName'
@@ -284,7 +284,7 @@ end 'refuseDuplicateChunkName'
 // `initGlobals` is `RuntimeUsage.usesManagedGlobals` — whether the program declares a managed top-level
 // `var`, and so carries `__module_init`/`__maxon_global_cleanup` (P1.7 slice 2a). A program with none
 // carries neither call and its emitted stub is byte-identical to before that rung.
-export function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, debugStream bool)
+function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, debugStream bool)
 	match target.os 'os'
 		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, debugStream: debugStream)
 		// ⛔ The Linux stub takes no `debugStream`: the producer's three host primitives are x64-windows

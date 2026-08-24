@@ -1123,7 +1123,12 @@ export type PressureIndex
 			// leaf index by the run length climbs exactly `log2(len)` levels.
 			let first = try self.blockFirst.get(b) otherwise panic("PressureIndex.placeRuns: blockFirst.get OOB for block {b}")
 			let run = try self.blockLen.get(b) otherwise panic("PressureIndex.placeRuns: blockLen.get OOB for block {b}")
-			try self.blockNode.set(b, value: (self.slotCount + first) / run) otherwise panic("PressureIndex.placeRuns: blockNode.set OOB for block {b}")
+			// ⚠ The divide needs a `try` because the RANGE does not survive the column: `run` was written a
+			// line above as `roundUpToPowerOfTwo(…)`, which is 1 or more, but `blockLen` is a `DenseColumn`
+			// (`Array with DenseInt`, `int(0 to u64.max)`) and a read out of it carries the ELEMENT's range,
+			// not the writer's. So `divisorProof` sees a divisor that may be zero and is right to.
+			let node = try ((self.slotCount + first) / run) otherwise panic("PressureIndex.placeRuns: block {b}'s run length is a power of two and so never 0 — it was written from roundUpToPowerOfTwo one loop above")
+			try self.blockNode.set(b, value: node) otherwise panic("PressureIndex.placeRuns: blockNode.set OOB for block {b}")
 		end 'eachNode'
 
 		self.holdsOp.refill(self.slotCount, value: false)
@@ -5443,7 +5448,7 @@ function insertReloadFor(module TargetModule, cfg FuncCfg, index UseIndex, useRe
 	// the reload goes at the END of the block's body — after every op, ahead of the branch, and so ahead
 	// of every branch edge that reads it.
 	let at = match index.useKindAt(useRecord) 'k'
-		op gives bodyPositionOfUse(index, block: block, record: useRecord)
+		op gives opUseReloadPosition(index, block: block, record: useRecord)
 		edge gives beforeBranchPosition(block)
 	end 'k'
 
@@ -5536,6 +5541,29 @@ function usePositionIn(index UseIndex, block IrBlock, record UseRecordIndex) ret
 
 	return pos
 end 'usePositionIn'
+
+// ⭐⭐ **WHERE A RELOAD FOR AN *OP* USE GOES — AND THE TERMINATOR IS AN OP LIKE ANY OTHER.**
+// `usePositionIn`'s own header says so (*"a record there is an edge use, OR A USE THE TERMINATOR ITSELF
+// READS"*), and a `ret v` / `errorReturn v` is exactly that: the value's only reader in its block is the
+// block's last instruction. Such a use is anchored one past the body, where `opRefs` has no slot — so the
+// reload goes where an EDGE use's does, at the end of the body and ahead of a conditional branch if the
+// block has one. That position dominates the terminator, which is the whole requirement.
+//
+// ⛔⛔ **IT WAS A PANIC, AND SHV2'S OWN SOURCE IS WHERE IT FIRED** — *"use record 122 is anchored at
+// position 4 of block 'tryok', whose body holds 4 op(s) — that position is the block's TERMINATOR, and a
+// spill op cannot be spliced after one"*. The message was right that a spill may not go AFTER a terminator
+// and wrong that the position implied one: `beforeBranchPosition` is the answer to where it goes instead,
+// and it already existed one arm over. `bodyPositionOfUse` keeps its refusal for the caller that genuinely
+// needs a body op (`rematerializeConstant` re-emits a constant BEFORE the op that reads it, and a
+// terminator has no "before" inside the body).
+function opUseReloadPosition(index UseIndex, block IrBlock, record UseRecordIndex) returns BlockOpPos
+	let pos = usePositionIn(index, block: block, record: record)
+	if pos >= block.opRefs.count() 'theTerminatorItselfReadsIt'
+		return beforeBranchPosition(block)
+	end 'theTerminatorItselfReadsIt'
+
+	return pos
+end 'opUseReloadPosition'
 
 // The `opRefs` position of an OP use, which must name a BODY op. The one position a record can carry
 // that `opRefs` does not hold is the block's TERMINATOR — `collectBlockOps` numbers it one past the

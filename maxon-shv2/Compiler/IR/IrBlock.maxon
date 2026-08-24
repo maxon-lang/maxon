@@ -121,6 +121,27 @@ export union Terminator
 	opIndex(index OpIndex)
 end 'Terminator'
 
+// ⭐ **THE TWO QUESTIONS ABOUT A TERMINATOR SLOT, ASKED OF THE SLOT ITSELF.** `IrBlock.hasTerminatorOp` /
+// `terminatorIndex` are these read off `self.terminator`, and they delegate rather than restate — one rule,
+// one place, whichever half a caller holds. A caller that may NOT hold the block is why they exist: reading
+// a block out of `module.blocks` is a BORROW of that module (E3070), so a pass that writes while it walks
+// copies the slot out and asks these (see `LowerMaxonToStd`'s block walk).
+module function terminatorNamesAnOp(terminator Terminator) returns bool
+	return match terminator 'check'
+		unset to fallthrough gives false
+		opIndex gives true
+	end 'check'
+end 'terminatorNamesAnOp'
+
+// The op index a terminator slot names. Panics for a slot that names none — guard with
+// `terminatorNamesAnOp`, exactly as `IrBlock.terminatorIndex` asks its callers to.
+module function terminatorOpIndexOf(terminator Terminator) returns OpIndex
+	match terminator 'unwrap'
+		opIndex(index) then return index
+		default panic("terminatorOpIndexOf: this terminator slot names no op")
+	end 'unwrap'
+end 'terminatorOpIndexOf'
+
 // Where a block's CONDITIONAL branch lives — the second half of the terminator, for
 // the tiers whose two-way branch does not fit one terminator slot.
 //
@@ -181,12 +202,7 @@ export type IrBlock
 	// Dead and fallthrough blocks return false — they have no op to
 	// reference even though they are effectively terminated.
 	export function hasTerminatorOp() returns bool
-		return match self.terminator 'check'
-			unset gives false
-			dead gives false
-			fallthrough gives false
-			opIndex gives true
-		end 'check'
+		return terminatorNamesAnOp(self.terminator)
 	end 'hasTerminatorOp'
 
 	// True when control cannot flow off the end of this block — it has a
@@ -205,10 +221,11 @@ export type IrBlock
 	// Returns the op index of the block's terminator. Panics if the
 	// terminator is not opIndex(_); callers must guard with hasTerminatorOp.
 	export function terminatorIndex() returns OpIndex
-		match self.terminator 'unwrap'
-			opIndex(index) then return index
-			default panic("terminatorIndex: block '{String.from(self.label)}' has no terminator op")
-		end 'unwrap'
+		if not terminatorNamesAnOp(self.terminator) 'noTerminatorOp'
+			panic("terminatorIndex: block '{String.from(self.label)}' has no terminator op")
+		end 'noTerminatorOp'
+
+		return terminatorOpIndexOf(self.terminator)
 	end 'terminatorIndex'
 
 	// True when the block has a conditional-branch body op (a second successor named by

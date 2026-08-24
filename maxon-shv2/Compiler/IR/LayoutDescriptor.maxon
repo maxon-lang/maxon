@@ -52,13 +52,13 @@
 
 // The fixed on-disk size of ONE descriptor block — one type parameter's dictionary. Every field is a
 // machine word (8 bytes), and there are nine of them.
-export let LAYOUT_DESCRIPTOR_BYTE_SIZE = 72 as ByteOffset
+let LAYOUT_DESCRIPTOR_BYTE_SIZE = 72 as ByteOffset
 
 // The byte offset of the `elementLogicalSize` slot — the source-level `sizeof` of the single type
 // arg. `sizeof(T)` inside a shared generic body lowers to a load of `[descriptor + this]`. It is the
 // ONE offset a reader needs at this slice, so it is the only one exported; B2 exports `destroyFunc@40`
 // when the drop path reads it.
-export let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56 as ByteOffset
+module let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56 as ByteOffset
 
 // The byte offset of the `copyFunc` slot — the DEEP-CLONE function for the instance's single type
 // argument (the "dictionary" entry a shared generic body reads to COPY an opaque `T`). It is the exact
@@ -128,7 +128,7 @@ let LAYOUT_FIELD_BYTES = 8 as ByteOffset
 
 // The alignment (`alignment@8`) every trivial-arg generic box takes — one machine word. A B1 box is a
 // row of 8-byte slots (`StructLayout` lays fields out at 8-byte strides), so the box aligns to 8.
-export let LAYOUT_MIN_ALIGNMENT = 8 as MachineWord
+module let LAYOUT_MIN_ALIGNMENT = 8 as MachineWord
 
 // The storage width of the single type argument in the box (`elementSize@16`) — an opaque `T` slot is
 // one machine word whatever the argument, which is DISTINCT from `elementLogicalSize@56` (the argument's
@@ -345,7 +345,7 @@ end 'elementStrideOf'
 // needs it wherever it sizes a buffer for a known element count without a record to read — the constant array
 // literal's `.rdata` blob — and a second, byte-only spelling there would size a packed blob as though its
 // negative stride were a byte width.
-export function elementsByteLen(count ParsedInt, stride ElementStride) returns ParsedInt
+function elementsByteLen(count ParsedInt, stride ElementStride) returns ParsedInt
 	if stride < 0 'subBytePacked'
 		let bits = count * (0 - stride)
 		return (bits + (BitsPerByte - 1)) / BitsPerByte
@@ -627,7 +627,7 @@ let LAYOUT_ZERO_SLOTS_TAIL = 1 as ByteOffset
 // is the arg's STORAGE width in the box (8 for an opaque `T` slot, whatever the arg), the second is
 // the arg's full SOURCE size (bool=1, Pair=16). For a trivial arg they diverge (8 vs 1) exactly where
 // the header says they must.
-export type LayoutDescriptor
+module type LayoutDescriptor
 	export var size as MachineWord
 	export var alignment as MachineWord
 	export var elementSize as MachineWord
@@ -642,7 +642,7 @@ end 'LayoutDescriptor'
 // words. The three function-pointer slots (+32 copyFunc, +40 destroyFunc, +64 retainFunc) and the
 // field-offsets slot (+48) are zero on disk in B1: a trivial instance has no thunk, owes no reference and
 // has no field-offset blob, so nothing patches them and the blob needs no relocation.
-export function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount TypeParamPosition) returns ByteArray
+module function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount TypeParamPosition) returns ByteArray
 	var buf = ByteArray.create()
 	buf.reserve(layoutDescriptorBytesFor(typeParamCount))
 	for _ in 0 upto typeParamCount 'eachTypeParam'
@@ -685,7 +685,7 @@ end 'encodeLayoutDescriptor'
 // The header fields (size, alignment, elementSize, elementLogicalSize) are the INSTANCE's and are the
 // same in every block, so block `i` is a complete dictionary for parameter `i` and a reader never has
 // to hold two pointers.
-export function layoutDescriptorBytesFor(typeParamCount TypeParamPosition) returns ByteOffset
+function layoutDescriptorBytesFor(typeParamCount TypeParamPosition) returns ByteOffset
 	return LAYOUT_DESCRIPTOR_BYTE_SIZE * typeParamCount
 end 'layoutDescriptorBytesFor'
 
@@ -716,7 +716,7 @@ end 'writeLayoutWord'
 // mirroring shv2's own composite-key `GenericInstanceRegistry`.
 export typealias LayoutLabelMap = Map with (GenericInstanceId, String)
 
-export type LayoutDescriptorRegistry
+module type LayoutDescriptorRegistry
 	var labels as LayoutLabelMap
 
 	export static function create() returns LayoutDescriptorRegistry

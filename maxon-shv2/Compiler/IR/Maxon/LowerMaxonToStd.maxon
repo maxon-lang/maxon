@@ -211,7 +211,7 @@ end 'functionUsesSecondaryReturnSlot'
 // operand type. `lowerDivision` is the one place a `/` picks its Std op, and `appendStdBinOp`
 // carries the guard that makes an integer `binOp(div)` unrepresentable rather than merely
 // unwritten. Do not call this with `div` from anywhere else.
-export function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
+function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
 	match op 'map'
 		add then return StdBinOpcode.add
 		sub then return StdBinOpcode.sub
@@ -240,7 +240,7 @@ end 'maxonBinOpToStdOpcode'
 // the TYPE decision that split `not` into `bitNot`/`logicalNot` was already made in
 // the parser (see MaxonUnaryOp), so nothing is re-derived here. Exhaustive by
 // construction.
-export function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
+function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 	match op 'map'
 		neg then return StdUnaryOpcode.neg
 		bitNot then return StdUnaryOpcode.bitNot
@@ -299,7 +299,7 @@ end 'assertUnaryOperandDomain'
 // Map a source-level comparison operator to its Std predicate. M4 is a 1:1 mapping;
 // exhaustive by construction (every MaxonCmpOp arm is named). The x64 tier turns the
 // predicate into a signed jcc condition when it fuses the compare with its branch.
-export function maxonCmpOpToStdPred(op MaxonCmpOp) returns StdCmpPred
+function maxonCmpOpToStdPred(op MaxonCmpOp) returns StdCmpPred
 	return match op 'map'
 		eq gives StdCmpPred.eq
 		ne gives StdCmpPred.ne
@@ -466,6 +466,15 @@ type WitnessAdapterRequest
 	export static function create(conformerType ByteArray, implName ByteArray, adapterName ByteArray, slotArity ParamCount, instance WitnessTableInstance) returns WitnessAdapterRequest
 		return Self{conformerType: conformerType, implName: implName, adapterName: adapterName, slotArity: slotArity, instance: instance}
 	end 'create'
+
+	// ⚠ **AN INDEPENDENT COPY, FOR THE DRAIN THAT CANNOT HOLD A BORROW.** `installWitnessSlotAdapters`
+	// reads a queued request out of `pendingWitnessAdapters` and hands it to a call that APPENDS to that
+	// very array — see the loop, which grows by design. A borrowed element may not be held across the
+	// write (E3070), and the three name columns are what the copy has to be deep in: they are the request's
+	// only managed fields, and the array owns the ones it holds.
+	export function clone() returns WitnessAdapterRequest
+		return Self{conformerType: self.conformerType.clone(), implName: self.implName.clone(), adapterName: self.adapterName.clone(), slotArity: self.slotArity, instance: self.instance}
+	end 'clone'
 end 'WitnessAdapterRequest'
 
 typealias WitnessAdapterRequestArray = Array with WitnessAdapterRequest
@@ -1178,17 +1187,26 @@ type MaxonToStdLowering
 			self.emitParams(srcFunc)
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
+				// ⚠ **THE SOURCE BLOCK IS READ FOR ITS THREE FACTS AND NOT HELD ACROSS THE OP LOOP.** A block
+				// read out of `maxonModule.blocks` is a BORROW of that module, and `lowerOp`/`lowerTerminator`
+				// write the lowering's own storage — so the held alias is refused (E3070). It is also the
+				// staleness `IrModule.getBlockByIdIn` warns about, one container over: *"use this instead of
+				// holding an IrBlock struct alias across other block-creating / block-mutating calls"*. The
+				// per-op ref is re-read through `maxonBlockOpRefAt`, which is two indexed loads.
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
+				let srcBlockId = srcBlock.id
+				let srcOpCount = srcBlock.opRefs.count()
+				let srcTerminator = srcBlock.terminator
 				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: stdModule.blocks 1:1 with maxonModule.blocks but get({blockRef}) failed")
 
 				self.retypeBlockArgs(dstBlock)
 
-				for maxonOpPos in 0 upto srcBlock.opRefs.count() 'eachOp'
+				for maxonOpPos in 0 upto srcOpCount 'eachOp'
 					// BEFORE the op is lowered: a site recorded at this ordinal names the op that SPENDS its
 					// value, so its guard must split the Std block where that op's own ops are about to begin.
-					self.rangeSites.recordAt(srcBlock.id, maxonOpPos: maxonOpPos, stdOpPos: dstBlock.opRefs.count())
-					let opIdx = try srcBlock.opRefs.get(maxonOpPos) otherwise panic("lowerMaxonToStd: opRefs.get OOB at {maxonOpPos} despite the upto bound")
-					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise panic("lowerMaxonToStd: opIdx from srcBlock.opRefs not in maxonModule.ops")
+					self.rangeSites.recordAt(srcBlockId, maxonOpPos: maxonOpPos, stdOpPos: dstBlock.opRefs.count())
+					let opIdx = self.maxonBlockOpRefAt(blockRef, pos: maxonOpPos)
+					let hlOp = self.maxonOpAt(opIdx)
 					// The op's own index, for the SIDE TABLES keyed by it. Set here rather than threaded through
 					// `lowerOp`'s callees because the depth is arbitrary — the one reader today
 					// (`allocTagIndexOf`) sits four frames down.
@@ -1198,17 +1216,17 @@ type MaxonToStdLowering
 
 				// A site whose value is spent by the block's TERMINATOR sits past the last body op, so the end
 				// of the body — before the terminator's own ops — is where its guard belongs.
-				self.rangeSites.recordAt(srcBlock.id, maxonOpPos: srcBlock.opRefs.count(), stdOpPos: dstBlock.opRefs.count())
+				self.rangeSites.recordAt(srcBlockId, maxonOpPos: srcOpCount, stdOpPos: dstBlock.opRefs.count())
 
-				if srcBlock.hasTerminatorOp() 'hasTerm'
-					let termOp = try self.maxonModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("lowerMaxonToStd: terminatorIndex not in maxonModule.ops")
+				if terminatorNamesAnOp(srcTerminator) 'hasTerm'
+					let termOp = self.maxonOpAt(terminatorOpIndexOf(srcTerminator))
 					self.lowerTerminator(termOp, dstBlock: dstBlock)
 				end 'hasTerm' else 'noTermOp'
 					// An op-less terminator (`dead` for an unreachable if/else continuation,
 					// `fallthrough` if a later pass elides one) carries no op to lower, but
 					// its marker must survive so the Std block is still "terminated" — the
 					// clone above left every dst block at `unset`.
-					self.carryOplessTerminator(srcBlock, dstBlock: dstBlock)
+					carryOplessTerminator(srcTerminator, srcBlockId: srcBlockId, dstBlock: dstBlock)
 				end 'noTermOp'
 			end 'eachBlock'
 		end 'eachFunc'
@@ -2158,13 +2176,39 @@ type MaxonToStdLowering
 		return method.paramTypeNames.count() if method.isStatic else 1 + method.paramTypeNames.count()
 	end 'witnessSlotAbiArity'
 
+	// ⭐⭐ **ONE MAXON OP, AS A REFERENCE THIS FRAME OWNS RATHER THAN A BORROW OF THE MODULE.** An op read
+	// out of `self.maxonModule.ops` and BOUND is a borrow of the module for as long as the binding lives
+	// (E3070), and `lowerOp`/`lowerTerminator` are methods that write this lowering's storage — so the
+	// binding cannot span the call, however plainly this pass never writes its SOURCE module. Returning the
+	// op takes a reference instead: shv2's return convention promotes a borrowed managed value to an owned
+	// one (`Parser.emitOwnedValueReturn` — *"a borrowed struct/union/instance INCREFS"*), which is the
+	// language's answer to "I need to hold this element", and costs one incref/decref per lowered op.
+	function maxonOpAt(opIdx OpIndex) returns MaxonOp
+		return try self.maxonModule.ops.get(opIdx) otherwise panic("maxonOpAt: op {opIdx} is not in maxonModule.ops")
+	end 'maxonOpAt'
+
+	// ⭐ **ONE MAXON OP REF, READ AFRESH.** `lowerMaxonToStd`'s block walk may not hold its source block
+	// across the op loop (see there), so the per-op ref comes back through the module each time: an indexed
+	// load for the block and one for the ref. It is a method rather than an inlined pair of `get`s so the
+	// two panics that describe the invariant are written once.
+	function maxonBlockOpRefAt(blockRef BlockRef, pos ElementCount) returns OpIndex
+		let block = try self.maxonModule.blocks.get(blockRef) otherwise panic("maxonBlockOpRefAt: blockRef {blockRef} is not in maxonModule.blocks")
+		return try block.opRefs.get(pos) otherwise panic("maxonBlockOpRefAt: opRefs.get OOB at {pos} in block {blockRef}")
+	end 'maxonBlockOpRefAt'
+
 	// Build the bodies of every requested witness-slot adapter, after the function walk (see
 	// `WitnessAdapterRequest`). An adapter's own dictionary may request a further table, whose slots may
 	// request further adapters, so the list is drained by INDEX over a growing array rather than by `for..in`.
 	function installWitnessSlotAdapters(project Project)
 		var next = 0 as ElementCount
 		while next < self.pendingWitnessAdapters.count() 'drain'
-			let request = try self.pendingWitnessAdapters.get(next) otherwise panic("installWitnessSlotAdapters: pendingWitnessAdapters.get OOB at {next} below count {self.pendingWitnessAdapters.count()}")
+			// ⚠⚠ **THE REQUEST IS COPIED OUT, AND THIS IS THE ONE SITE WHERE THAT IS NOT MERELY THE BORROW
+			// RULE BEING SATISFIED — IT IS THE HAZARD THE RULE EXISTS FOR.** `synthesizeWitnessSlotAdapter`
+			// APPENDS to `pendingWitnessAdapters` (an adapter's own dictionary may request a further table,
+			// which is why this loop drains by index over a growing array in the first place), so the element
+			// borrow `get` hands back is taken out of an array that then grows underneath it. E3070 refused
+			// it; a `clone()` is what makes the request this frame's own for the length of the call.
+			let request = (try self.pendingWitnessAdapters.get(next) otherwise panic("installWitnessSlotAdapters: pendingWitnessAdapters.get OOB at {next} below count {self.pendingWitnessAdapters.count()}")).clone()
 			next = next + 1
 			self.synthesizeWitnessSlotAdapter(request, project: project)
 		end 'drain'
@@ -2610,9 +2654,25 @@ type MaxonToStdLowering
 	// callee is always such a constructor (a static that returns its own instance), so a non-instance result is
 	// an internal invariant break.
 	function materializeStaticConstructorLayout(result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
-		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notInstance'
-			panic("materializeStaticConstructorLayout: layout-needing static callee '{String.from(callee)}' returns a {self.valueTagOf(result).name}, not a generic instance — a receiverless layout-needing callee is a generic constructor whose result carries the concrete gid")
-		end 'notInstance'
+		// ⭐⭐ **`Self.create()` INSIDE THE GENERIC'S OWN BODY IS THE SECOND RECEIVERLESS SHAPE, AND ITS
+		// DESCRIPTOR IS THE CALLER'S — a forward, exactly as the field-default helper's is.** A `Self` call
+		// names the type over its own parameters, not a concrete instantiation, so there is no gid to read a
+		// blob address off and nothing to read it off: `Parser.scopedGenericInstanceOf` answers `notInScope`
+		// for the scope's OWN name deliberately (its header carries the measurement — resolving `Self` to an
+		// instance over its own parameters made `Box.make(x)` return a `Box_T…` that stopped satisfying
+		// `returns Self`), so the result keeps the base's `structRef` and there is nothing concrete here by
+		// construction. The enclosing body is a member of that very generic, so the descriptor it was handed
+		// IS this call's — the same reasoning `emitInstanceDescriptorAddr` uses for an instance over the
+		// enclosing body's own parameters, one tag over.
+		//
+		// ⛔⛔ **IT WAS A PANIC, AND SHV2'S OWN SOURCE IS WHERE IT FIRED.** `BlockKeyedTable.forBlockCount`
+		// opens with `var table = Self.create()` — the ordinary way a generic's sized constructor reuses its
+		// empty one — and lowering it aborted the compile outright: *"layout-needing static callee
+		// 'BlockKeyedTable.create' returns a structRef, not a generic instance"*. The invariant the panic
+		// asserted was simply not the whole set of receiverless shapes.
+		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notAConcreteInstance'
+			return self.forwardCallerLayout(callee)
+		end 'notAConcreteInstance'
 		return self.emitInstanceDescriptorAddr(result, dstBlock: dstBlock)
 	end 'materializeStaticConstructorLayout'
 
@@ -4305,12 +4365,17 @@ type MaxonToStdLowering
 	// there); an `opIndex` terminator never reaches here (the caller guards with
 	// hasTerminatorOp). This keeps `assertAllBlocksTerminated` satisfied for the
 	// unreachable continuation block the `if`/`else` parser marks `dead`.
-	function carryOplessTerminator(srcBlock IrBlock, dstBlock IrBlock)
-		match srcBlock.terminator 'carry'
+	// ⚠ **IT TAKES THE TERMINATOR SLOT AND THE BLOCK'S ID, NOT THE BLOCK.** Its caller walks the Maxon
+	// blocks while WRITING the lowering's own storage, so it may not hold a block record read out of
+	// `maxonModule.blocks` (E3070) — and the slot is a scalar-payload union it copied out before the walk
+	// began. The id replaces the label the panic used to quote for the same reason, and names the block
+	// more exactly (a label is not an identity).
+	function carryOplessTerminator(srcTerminator Terminator, srcBlockId BlockId, dstBlock IrBlock)
+		match srcTerminator 'carry'
 			unset then break 'carry'
 			dead then dstBlock.terminator = Terminator.dead
 			fallthrough then dstBlock.terminator = Terminator.fallthrough
-			opIndex then panic("carryOplessTerminator: block '{String.from(srcBlock.label)}' has an op terminator but hasTerminatorOp() was false")
+			opIndex then panic("carryOplessTerminator: block {srcBlockId} has an op terminator but terminatorNamesAnOp() was false")
 		end 'carry'
 	end 'carryOplessTerminator'
 

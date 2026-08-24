@@ -31,7 +31,7 @@
 
 // One arm per scheduled pass. Payload-free today; kept a `union` (not an enum)
 // to match v1 and leave room for passes that carry configuration payloads.
-export union PassKind
+union PassKind
 	// Phase 2: Maxon-level. Chunk C bodies (placeholders in M1).
 	resolveTypes
 	semanticCheck
@@ -105,7 +105,7 @@ end 'PassClassification'
 // runs EVERY pass whole-module regardless — this classification is recorded for
 // the M5 fan-out driver, not yet acted on (per PLAN.md: classification present
 // but trivial at M1).
-export function classifyPass(pass PassKind) returns PassClassification
+function classifyPass(pass PassKind) returns PassClassification
 	return match pass 'classify'
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
@@ -127,7 +127,7 @@ end 'classifyPass'
 // silently go unmeasured — which is the whole point of the attribution (see
 // CompileTimings' header). The mapping is 1:1 today and is expected to stay so; a
 // pass grouping several phases would defeat the table's purpose.
-export function compilePhaseOfPass(pass PassKind) returns CompilePhase
+function compilePhaseOfPass(pass PassKind) returns CompilePhase
 	return match pass 'phase'
 		resolveTypes gives CompilePhase.resolveTypes
 		semanticCheck gives CompilePhase.semanticCheck
@@ -142,7 +142,7 @@ export function compilePhaseOfPass(pass PassKind) returns CompilePhase
 end 'compilePhaseOfPass'
 
 // Human-readable pass name for logging (union has no `.name`, unlike an enum).
-export function passKindToString(pass PassKind) returns String
+function passKindToString(pass PassKind) returns String
 	return match pass 'name'
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"

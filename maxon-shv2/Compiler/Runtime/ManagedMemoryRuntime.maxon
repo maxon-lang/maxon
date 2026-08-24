@@ -296,7 +296,7 @@ export let ManagedCapacityName = b"__managed_capacity"
 // compiler's own. Every other name struck from `arraySurfaceMemberNames` kept its runtime, because every
 // other one has a non-`Array` caller (`ManagedClearName` is `stdlib/Array.maxon:363`'s AND the BUFFER
 // surface's, which is exactly why `clear` left the `Array` roster and stayed on the buffer's).
-export let ManagedReserveName = b"__managed_reserve"
+let ManagedReserveName = b"__managed_reserve"
 export let ManagedResizeName = b"__managed_resize"
 export let ManagedFirstName = b"__managed_first"
 export let ManagedClearName = b"__managed_clear"
@@ -378,7 +378,7 @@ export let ManagedAppendOpaqueName = b"__managed_append_opaque"
 // `append` duplicate the SOURCE's elements and therefore need the trivial / deep-clone / opaque split; `map`
 // stores what the TRANSFORM answered and never duplicates an element, so a managed element needs no cloner
 // here — the transform's result is a fresh owned value and `dest` is its sole owner.
-export let ManagedMapName = b"__managed_map"
+let ManagedMapName = b"__managed_map"
 
 // ⭐⭐ **`Array`'s OWN `Hashable`/`Equatable` CONFORMANCE, AS THE TWO SYMBOLS THE *DIRECT* DOOR CALLS
 // (array-hashable).** `arr.hash()`, `a.equals(b)` and the `==`/`!=` operator all lower to these; the
@@ -397,7 +397,7 @@ export let ManagedMapName = b"__managed_map"
 // the qualifier would silently disable E3004, arity and argument-type checking on that user's call.
 // A `__`-prefixed name is owned by the compiler with no reservation needed, which is exactly what the
 // direct door requires.
-export let ManagedHashName = b"__managed_hash"
+let ManagedHashName = b"__managed_hash"
 export let ManagedEqName = b"__managed_eq"
 
 // ⭐⭐ **THE `__ManagedMemory` MEMBERS R4.2 DELIVERS.** `__ManagedMemory` IS an `Array with Byte` at this
@@ -735,8 +735,8 @@ export let RetainExistentialName = b"__retain_existential"
 // ⭐ The two ELEMENT-RANGE helpers packing made runtime functions rather than emitted-inline loops — see
 // `buildManagedMoveElems` for the register-pressure measurement that forced the split, and for why the four
 // mutators that used to inline a byte `memmove` now call one function instead.
-export let ManagedMoveElemsName = b"__managed_move_elems"
-export let ManagedZeroElemsName = b"__managed_zero_elems"
+let ManagedMoveElemsName = b"__managed_move_elems"
+let ManagedZeroElemsName = b"__managed_zero_elems"
 
 let ManagedGrownCapName = b"__managed_grown_cap"
 let ManagedGrowName = b"__managed_grow"
@@ -1597,7 +1597,7 @@ end 'emitLoadElemAndOkReturn'
 // Call `__managed_cow_detach(arr)` — the one obligation every in-place mutator owes before it touches the
 // buffer (see `buildManagedCowDetach` for the rule and for which mutators call this directly). The callee is
 // void, so the minted result is unread; it exists because a `call` op always defines a value.
-export function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
+function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
 	let detached = ids.mint()
 	module.appendOp(block, op: StdOp.call(detached, callee: ManagedCowDetachName, args: argsOf(arr)))
 end 'emitCowDetach'
@@ -2314,7 +2314,7 @@ end 'emitPackedWindowCopy'
 // store and the incref land on the join it produces — `emitViewRecordTail`, which is the other half. Calling
 // one without the other leaves `parent@32` at whatever `__managed_create`'s zeroing left, which reads as
 // `NoOwedAllocation`: a view that silently owes nothing and lets its parent's bytes be freed under it.
-export function emitViewRecordHead(module StdModule, block IrBlock, srcBuffer ValueId, start ValueId, sliceLen ValueId, elementSize ValueId, elementDestroy ValueId, ids ValueMinter) returns ValueId
+function emitViewRecordHead(module StdModule, block IrBlock, srcBuffer ValueId, start ValueId, sliceLen ValueId, elementSize ValueId, elementDestroy ValueId, ids ValueMinter) returns ValueId
 	let newRec = ids.mint()
 	module.appendOp(block, op: StdOp.call(newRec, callee: ManagedCreateName, args: twoArgs(elementSize, second: elementDestroy)))
 
@@ -2329,7 +2329,7 @@ end 'emitViewRecordHead'
 
 // The SECOND half: the source's owed base is now known, so record the debt and take out the second
 // ownership it names. `cur` is the join the base arrived on; `exit` is the caller's continuation.
-export function emitViewRecordTail(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, view ValueId, base ValueId, ids ValueMinter)
+function emitViewRecordTail(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, view ValueId, base ValueId, ids ValueMinter)
 	emitStoreField(module, block: cur, record: view, offset: ManagedRecordParentOffset, value: base)
 	var afterIncref = emitReleaseOwedBase(module, func: func, cur: cur, base: base, callee: MmIncrefName, ids: ids)
 	module.setTerminator(afterIncref, op: StdOp.branch(exit.id))
@@ -2819,7 +2819,7 @@ end 'buildManagedSet'
 // under an `idx < length` gate the first staged value would never be released. The null guard releases it,
 // costs nothing extra, and is pinned by `managed-memory-methods.staging-a-managed-element-twice-releases-
 // the-first` (a leak there is exit 101).
-export function emitElementStoreAndOkReturn(module StdModule, func IrFunction, store IrBlock, arr ValueId, index ValueId, value ValueId, ids ValueMinter)
+function emitElementStoreAndOkReturn(module StdModule, func IrFunction, store IrBlock, arr ValueId, index ValueId, value ValueId, ids ValueMinter)
 	let buffer = emitLoadField(module, block: store, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: store, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let one = emitConst(module, block: store, value: 1, ids: ids)
@@ -3215,7 +3215,7 @@ end 'buildManagedAppend'
 // the slot load hand back the container's OWN word — the source keeps owning it, exactly as shv2's `for … in`
 // element read does — while the transform's result is a fresh value `__managed_push` stores into a record the
 // parser stamped with the element's destructor. One owner each, so neither leaks nor double-frees.
-export function emitMappedElementPush(module StdModule, block IrBlock, transform ValueId, env ValueId, elem ValueId, dest ValueId, ids ValueMinter)
+function emitMappedElementPush(module StdModule, block IrBlock, transform ValueId, env ValueId, elem ValueId, dest ValueId, ids ValueMinter)
 	let mapped = ids.mint()
 	module.appendOp(block, op: StdOp.callIndirect(mapped, calleeReg: transform, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: twoArgs(elem, second: env)))
 	let pushed = ids.mint()

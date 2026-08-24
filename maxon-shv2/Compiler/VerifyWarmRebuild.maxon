@@ -399,9 +399,20 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 		return false
 	end 'cannotProve'
 
-	let editedPath = try project.db.sourcePaths.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
+	// ⚠⚠ **BOTH OF THESE ARE OWNED COPIES, AND NEITHER IS DEFENSIVE.** What this gate does is EDIT the
+	// project five times, and both values it carries across those edits are read out of the very storage an
+	// edit writes:
+	//   • `editedPath` is an element of `project.db.sourcePaths`, and `fileChanged` PUSHES to that array on
+	//     its `newFile` arm — so the element pointer can be invalidated by a call this function makes.
+	//     E3070 refused it, which is how it was found.
+	//   • `original` is the CONTENT of the `sourceFiles` entry for that same path, and every `fileChanged`
+	//     below UPSERTS that key — releasing the entry this string belongs to while five later
+	//     interpolations still read it. The borrow checker does not watch a `Map` read, so nothing refused
+	//     this one; it is the same defect one container over and it is fixed at the same time.
+	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
+	let editedPath = try FilePath.from(firstPath.path.clone()) otherwise panic("verifyInvalidation: '{firstPath.path}' came out of the project's own source list, so it cannot fail to re-parse as a path")
 	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyInvalidation: sourcePaths lists {editedPath} but sourceFiles has no entry for it")
-	let original = entry.content
+	let original = entry.content.clone()
 
 	// Warm every per-file memo (and the signature index) against the UNEDITED program. Only
 	// `queryAllModule` runs, so nothing mutates the memoized module (the trap in this file's header).

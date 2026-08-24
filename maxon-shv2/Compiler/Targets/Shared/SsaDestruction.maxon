@@ -21,7 +21,7 @@
 export typealias MoveIndex = int(0 to u64.max)
 
 // Where an edge's parallel copy may be placed without running on a sibling edge.
-export enum EdgePlacement
+enum EdgePlacement
 	// Pred has ONE successor: the moves run at the predecessor's end.
 	predEnd
 	// Succ has ONE predecessor: the moves run at the successor's start.
@@ -41,7 +41,7 @@ end 'EdgePlacement'
 // encoder, from `regClassOf` of the register (`emitRegRegMove` / `emitRegRegSwap` in X64Backend).
 // That is why floats needed no case here: a `mov` becomes a `movsd`, and a `swap` — which x64
 // has no `xchg` form of for XMMs — becomes a triple-`xorpd`, without this file knowing either.
-export type EdgeMovePlan
+type EdgeMovePlan
 	export var predLocal as CfgIndex
 	export var succLocal as CfgIndex
 	export var predBlockId as BlockId
@@ -80,7 +80,7 @@ end 'EdgeMovePlan'
 export typealias EdgeMovePlanArray = Array with EdgeMovePlan
 
 // A sequenced parallel copy: `dsts[i]` ← `srcs[i]`, a swap when `isSwap[i]`.
-export type MoveSequence
+type MoveSequence
 	export var dsts as RegNumColumn
 	export var srcs as RegNumColumn
 	export var isSwap as BoolArray
@@ -293,21 +293,23 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 				continue
 			end 'flagCaptureHandled'
 
-			let uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
-
+			// ⚠⚠ **THE PAIR IS SETTLED AND EMITTED BEFORE THE OP IS BOUND, AND THE ORDER IS THE WHOLE POINT.**
+			// An op read out of `module.ops` is a BORROW of `module` (E3070), the sequencer PUSHES its moves
+			// onto that same array, and a borrow's liveness is its last use in SOURCE order — so a single
+			// `uncolored` binding serving both the pair test and the coloring below would still be live
+			// across the push however the arguments were computed. Both halves therefore read the ops
+			// themselves, each releasing its borrow before it writes.
+			//
 			// A `tryCall` capture pair is resequenced through the parallel-copy sequencer, using the
 			// UNCOLORED ops (their dests are still virtual, so their ids can be looked up in `alloc`).
-			if prevWasCall and pos + 1 < bodyCount and isCaptureMove(uncolored) 'maybePair'
-				let nextIdx = try block.opRefs.get(pos + 1) otherwise panic("colorAndDropSelfMoves: opRefs.get OOB at {pos + 1}")
-				let nextUncolored = try module.ops.get(nextIdx) otherwise panic("colorAndDropSelfMoves: opIdx {nextIdx} not in module.ops")
-				if isCaptureMove(nextUncolored) 'isPair'
-					emitResequencedCapture(module, resultOp: uncolored, flagOp: nextUncolored, alloc: alloc, newRefs: newRefs)
-					skipNext = true
-					prevWasCall = false
-					continue
-				end 'isPair'
-			end 'maybePair'
+			if prevWasCall and pos + 1 < bodyCount and isCaptureMovePairAt(module, block: block, pos: pos) 'isPair'
+				emitResequencedCaptureAt(module, block: block, pos: pos, alloc: alloc, newRefs: newRefs)
+				skipNext = true
+				prevWasCall = false
+				continue
+			end 'isPair'
 
+			let uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
 			let colored = colorTargetOp(uncolored, alloc: alloc)
 			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
 			prevWasCall = colored.rawValue.isCall
@@ -371,13 +373,45 @@ end 'vregIsPhysical'
 // `newRefs`. The two DESTS are colored via `alloc`; the two SRCS are the physical return registers the
 // lowering already fixed. `sequenceParallelCopy` drops a self-move (a hint-satisfied capture emits
 // nothing) and breaks a value/flag swap with `xchg` — the whole point of routing through it.
-function emitResequencedCapture(module TargetModule, resultOp TargetOp, flagOp TargetOp, alloc Allocation, newRefs OpIndexArray)
+// Are the ops at `pos` and `pos + 1` of `block` BOTH capture moves? The caller has already established that
+// the previous op was a call and that `pos + 1` is in range; this reads the two ops and answers, holding
+// neither — see the caller for why that matters.
+function isCaptureMovePairAt(module TargetModule, block IrBlock, pos ElementCount) returns bool
+	let opIdx = try block.opRefs.get(pos) otherwise panic("isCaptureMovePairAt: opRefs.get OOB at {pos}")
+	let op = try module.ops.get(opIdx) otherwise panic("isCaptureMovePairAt: opIdx {opIdx} not in module.ops")
+	if not isCaptureMove(op) 'notTheFirstHalf'
+		return false
+	end 'notTheFirstHalf'
+
+	let nextIdx = try block.opRefs.get(pos + 1) otherwise panic("isCaptureMovePairAt: opRefs.get OOB at {pos + 1}")
+	let nextOp = try module.ops.get(nextIdx) otherwise panic("isCaptureMovePairAt: opIdx {nextIdx} not in module.ops")
+	return isCaptureMove(nextOp)
+end 'isCaptureMovePairAt'
+
+// The pair at `pos`, resequenced. The FOUR NUMBERS are read out first and the ops released, because the
+// sequencer below pushes onto the very array they were borrowed from — and four numbers is all a capture
+// move ever contributed: one destination register and one source register each.
+function emitResequencedCaptureAt(module TargetModule, block IrBlock, pos ElementCount, alloc Allocation, newRefs OpIndexArray)
+	let opIdx = try block.opRefs.get(pos) otherwise panic("emitResequencedCaptureAt: opRefs.get OOB at {pos}")
+	let op = try module.ops.get(opIdx) otherwise panic("emitResequencedCaptureAt: opIdx {opIdx} not in module.ops")
+	let resultDst = alloc.regNumOf(captureMoveDestId(op))
+	let resultSrc = captureMoveSrcReg(op)
+
+	let nextIdx = try block.opRefs.get(pos + 1) otherwise panic("emitResequencedCaptureAt: opRefs.get OOB at {pos + 1}")
+	let nextOp = try module.ops.get(nextIdx) otherwise panic("emitResequencedCaptureAt: opIdx {nextIdx} not in module.ops")
+	let flagDst = alloc.regNumOf(captureMoveDestId(nextOp))
+	let flagSrc = captureMoveSrcReg(nextOp)
+
+	emitResequencedCapture(module, resultDst: resultDst, resultSrc: resultSrc, flagDst: flagDst, flagSrc: flagSrc, newRefs: newRefs)
+end 'emitResequencedCaptureAt'
+
+function emitResequencedCapture(module TargetModule, resultDst RegNum, resultSrc RegNum, flagDst RegNum, flagSrc RegNum, newRefs OpIndexArray)
 	var dsts = RegNumColumn.create()
 	var srcs = RegNumColumn.create()
-	dsts.push(alloc.regNumOf(captureMoveDestId(resultOp)))
-	srcs.push(captureMoveSrcReg(resultOp))
-	dsts.push(alloc.regNumOf(captureMoveDestId(flagOp)))
-	srcs.push(captureMoveSrcReg(flagOp))
+	dsts.push(resultDst)
+	srcs.push(resultSrc)
+	dsts.push(flagDst)
+	srcs.push(flagSrc)
 
 	let moves = sequenceParallelCopy(dsts, srcs: srcs)
 	for i in 0 upto moves.count() 'eachMove'
@@ -686,59 +720,87 @@ end 'buildFuncTopologyByIndex'
 // to invalidate.
 function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget BlockId, newTarget BlockId)
 	var retargeted = false
+	// ⚠ **THE PREDECESSOR IS READ OUT AND LET GO BEFORE THE FIRST WRITE.** `module.blocks.get` hands back a
+	// BORROW of `module` (E3070), and every `retarget*` below writes `module.ops` — so holding the block
+	// across them is refused, and rightly: the block record belongs to the array being written through.
+	// Everything this function needs from it is three values that outlive the borrow — the two terminator
+	// slots (scalar-payload unions, copied out) and the id the conditional half's panic cites. That id
+	// REPLACES the label that panic used to quote, which was a borrowed `ByteArray` and could not be held
+	// either; it is also the better citation, since a block's label is not its identity.
+	//
+	// ⭐ The two halves moved into functions of their own at the same time, and not for tidiness: a `match`
+	// arm takes ONE statement, so reading the slot as the union it is — rather than through a
+	// `hasCondBranchOp()`/`condBranchIndex()` pair whose second half panics if the first was not asked —
+	// needs the arm's work to be a call. The pair is now unspellable in the wrong order here.
 	let predBlock = try module.blocks.get(predRef) otherwise panic("retargetControlOp: predRef not in module.blocks")
+	let condBranch = predBlock.condBranch
+	let terminator = predBlock.terminator
+	let predBlockId = predBlock.id
 
-	if predBlock.hasCondBranchOp() 'hasCond'
-		let opIdx = predBlock.condBranchIndex()
-		let op = try module.ops.get(opIdx) otherwise panic("retargetControlOp: conditional branch op {opIdx} not in module.ops")
-		match op 'cond'
-			jcc(cond, target) then retargeted = retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			// The arm64 conditional branches: a flag test (`b.cond`) or a register zero-test (`cbz`/`cbnz`).
-			// Each carries its own target block id, retargeted the same way the `jcc` is.
-			arm64CondBranch(cond, target) then retargeted = retargetArm64CondBranch(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			arm64Cbz(reg, target) then retargeted = retargetArm64Cbz(module, opIdx: opIdx, reg: reg, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			arm64Cbnz(reg, target) then retargeted = retargetArm64Cbnz(module, opIdx: opIdx, reg: reg, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			default panic("retargetControlOp: block '{String.from(predBlock.label)}' records its conditional branch at op {opIdx}, but that op is not a `jcc`/`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`")
-		end 'cond'
-	end 'hasCond'
+	match condBranch 'condSlot'
+		none then break 'condSlot'
+		opIndex(opIdx) then retargeted = retargetCondBranchOp(module, opIdx: opIdx, predBlockId: predBlockId, oldTarget: oldTarget, newTarget: newTarget) or retargeted
+	end 'condSlot'
 
-	if predBlock.hasTerminatorOp() 'hasTerm'
-		let ti = predBlock.terminatorIndex()
-		let op = try module.ops.get(ti) otherwise panic("retargetControlOp: terminator not in module.ops")
-		match op 'term'
-			jmp(target) then retargeted = retargetJmp(module, opIdx: ti, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			ret then break 'term'
-			prologue to epilogue then panic("retargetControlOp: pred terminator is a frame op")
-			jcc then panic("retargetControlOp: jcc reached as a terminator")
-			movRegImm to divideReg then panic("retargetControlOp: non-terminator op as terminator")
-			pushReg to popReg then panic("retargetControlOp: pushReg/popReg reached as a terminator — they are body ops inserted post-regalloc")
-			storeSlotReg to loadRegSlot then panic("retargetControlOp: a spill/reload reached as a terminator — the splitter inserts them as body ops, never as terminators")
-			andRegReg to movqXmmGpr then panic("retargetControlOp: non-terminator op as terminator")
-			// The arm64 band: `arm64Branch` is the unconditional terminator (retargeted like `jmp`);
-			// `arm64Ret` is the ret terminator (like x64 `ret`). Everything else — the conditional
-			// branches, ALU, frame, call ops — is not a terminator here.
-			arm64Ret then break 'term'
-			arm64Branch(target) then retargeted = retargetArm64Branch(module, opIdx: ti, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			arm64CondBranch to arm64Fcsel then panic("retargetControlOp: an arm64 non-terminator op reached as a terminator")
-			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
-			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
-			leaRegFunc to x64Syscall then panic("retargetControlOp: non-terminator op as terminator")
-			callMem then panic("retargetControlOp: a `callMem` (witness call) is a body op, not a terminator")
-			arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("retargetControlOp: a stack-argument op is a body op, not a terminator")
-			arm64FmovGprFp to arm64FmovFpGpr then panic("retargetControlOp: an arm64 general↔vector `fmov` (a bit reinterpretation) is a body op, not a terminator")
-			leaRegSlot then panic("retargetControlOp: a `leaRegSlot` (a frame address) is a body op, not a terminator")
-			// A jump table is a multiway terminator: redirect EVERY case slot (and the default) that names
-			// `oldTarget` — a range/`or` arm fills several slots with one block, so the split of that single
-			// CFG edge redirects all of them through the one split block.
-			x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then retargeted = retargetJumpTableX64(module, opIdx: ti, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then retargeted = retargetJumpTableArm64(module, opIdx: ti, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-		end 'term'
-	end 'hasTerm'
+	match terminator 'termSlot'
+		unset to fallthrough then break 'termSlot'
+		opIndex(ti) then retargeted = retargetTerminatorOp(module, opIdx: ti, oldTarget: oldTarget, newTarget: newTarget) or retargeted
+	end 'termSlot'
 
 	if not retargeted 'noMatch'
 		panic("retargetControlOp: predecessor block ref {predRef} has no branch to block id {oldTarget} to redirect")
 	end 'noMatch'
 end 'retargetControlOp'
+
+// The CONDITIONAL half of the retarget above — the block's `condBranch` op, whichever of the four spellings
+// this target uses. `predBlockId` is carried only for the panic, because the block itself may not be held
+// across the writes these arms make (see the caller).
+function retargetCondBranchOp(module TargetModule, opIdx OpIndex, predBlockId BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("retargetCondBranchOp: conditional branch op {opIdx} not in module.ops")
+	match op 'cond'
+		jcc(cond, target) then return retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget)
+		// The arm64 conditional branches: a flag test (`b.cond`) or a register zero-test (`cbz`/`cbnz`).
+		// Each carries its own target block id, retargeted the same way the `jcc` is.
+		arm64CondBranch(cond, target) then return retargetArm64CondBranch(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget)
+		arm64Cbz(reg, target) then return retargetArm64Cbz(module, opIdx: opIdx, reg: reg, target: target, oldTarget: oldTarget, newTarget: newTarget)
+		arm64Cbnz(reg, target) then return retargetArm64Cbnz(module, opIdx: opIdx, reg: reg, target: target, oldTarget: oldTarget, newTarget: newTarget)
+		default panic("retargetCondBranchOp: block {predBlockId} records its conditional branch at op {opIdx}, but that op is not a `jcc`/`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`")
+	end 'cond'
+end 'retargetCondBranchOp'
+
+// The TERMINATOR half — the block's terminator op. Every arm that is not a real terminator panics, which is
+// the roster the caller used to carry inline.
+function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget BlockId, newTarget BlockId) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("retargetTerminatorOp: terminator not in module.ops")
+	match op 'term'
+		jmp(target) then return retargetJmp(module, opIdx: opIdx, target: target, oldTarget: oldTarget, newTarget: newTarget)
+		ret then return false
+		prologue to epilogue then panic("retargetTerminatorOp: pred terminator is a frame op")
+		jcc then panic("retargetTerminatorOp: jcc reached as a terminator")
+		movRegImm to divideReg then panic("retargetTerminatorOp: non-terminator op as terminator")
+		pushReg to popReg then panic("retargetTerminatorOp: pushReg/popReg reached as a terminator — they are body ops inserted post-regalloc")
+		storeSlotReg to loadRegSlot then panic("retargetTerminatorOp: a spill/reload reached as a terminator — the splitter inserts them as body ops, never as terminators")
+		andRegReg to movqXmmGpr then panic("retargetTerminatorOp: non-terminator op as terminator")
+		// The arm64 band: `arm64Branch` is the unconditional terminator (retargeted like `jmp`);
+		// `arm64Ret` is the ret terminator (like x64 `ret`). Everything else — the conditional
+		// branches, ALU, frame, call ops — is not a terminator here.
+		arm64Ret then return false
+		arm64Branch(target) then return retargetArm64Branch(module, opIdx: opIdx, target: target, oldTarget: oldTarget, newTarget: newTarget)
+		arm64CondBranch to arm64Fcsel then panic("retargetTerminatorOp: an arm64 non-terminator op reached as a terminator")
+		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
+		// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
+		leaRegFunc to x64Syscall then panic("retargetTerminatorOp: non-terminator op as terminator")
+		callMem then panic("retargetTerminatorOp: a `callMem` (witness call) is a body op, not a terminator")
+		arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("retargetTerminatorOp: a stack-argument op is a body op, not a terminator")
+		arm64FmovGprFp to arm64FmovFpGpr then panic("retargetTerminatorOp: an arm64 general↔vector `fmov` (a bit reinterpretation) is a body op, not a terminator")
+		leaRegSlot then panic("retargetTerminatorOp: a `leaRegSlot` (a frame address) is a body op, not a terminator")
+		// A jump table is a multiway terminator: redirect EVERY case slot (and the default) that names
+		// `oldTarget` — a range/`or` arm fills several slots with one block, so the split of that single
+		// CFG edge redirects all of them through the one split block.
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return retargetJumpTableX64(module, opIdx: opIdx, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, oldTarget: oldTarget, newTarget: newTarget)
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return retargetJumpTableArm64(module, opIdx: opIdx, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, oldTarget: oldTarget, newTarget: newTarget)
+	end 'term'
+end 'retargetTerminatorOp'
 
 function retargetJcc(module TargetModule, opIdx OpIndex, cond X64CondCode, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
 	if target != oldTarget 'notThis'
@@ -833,7 +895,7 @@ function remapJumpTargets(caseTargets BlockIdArray, oldTarget BlockId, newTarget
 end 'remapJumpTargets'
 
 // The physical op for move `i` of a plan: an `xchg` for a cycle-break, else a `mov`.
-export function moveOpOf(plan EdgeMovePlan, i MoveIndex) returns TargetOp
+function moveOpOf(plan EdgeMovePlan, i MoveIndex) returns TargetOp
 	let dst = TargetVReg.physical(plan.moveDstAt(i))
 	let src = TargetVReg.physical(plan.moveSrcAt(i))
 	if plan.moveIsSwapAt(i) 'swap'

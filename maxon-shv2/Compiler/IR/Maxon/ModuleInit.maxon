@@ -48,6 +48,14 @@
 // reason, as `__mm_leak_check`: nothing in the module calls them, and a pruned root leaves the stub's
 // `call`/`bl`/`call $n` fixup with no target (loud on every backend, never silent).
 
+// ⭐ **WHICH TAGS CARRY A NAME THAT WAS INTERNED SOMEWHERE — the question `projectScopedNameId` crosses on.**
+// A primitive names nothing, and a `genericInstance` carries a whole-program `GenericInstanceId` rather than
+// a name id (there is exactly ONE `GenericInstanceRegistry` in the compiler), so neither needs a crossing;
+// these four are the tags whose id is an index into a TYPE-NAME table, and therefore table-relative.
+function tagNamesAnIndexInternedType(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.named or tagIsStructRef(tag) or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.function
+end 'tagNamesAnIndexInternedType'
+
 // The two synthesized names. `__`-prefixed, so `isCompilerInternalCallee` treats them as the compiler's
 // own (no E3004, no signature slotting) and `TargetPrinter.isRuntimeFunction` keeps them out of every
 // golden fragment — a program with no managed global emits neither, so the corpus is unmoved.
@@ -63,7 +71,7 @@
 // value it is testing for rather than spelling a bare `0`. `InitializingSlot` is written for the duration of
 // the initializer and is the whole of the cycle detection. Neither is an address any allocator returns, so
 // the two and every real record are disjoint by construction.
-export let UninitializedSlot = 0 as ParsedInt
+let UninitializedSlot = 0 as ParsedInt
 let InitializingSlot = 1 as ParsedInt
 
 export let ModuleInitName = b"__module_init"
@@ -578,6 +586,14 @@ function materializedValue(fn SynthesizedFunction, value GlobalInitArgumentValue
 	end 'value'
 end 'materializedValue'
 
+// ⭐ **THE TYPE A SCALAR LITERAL'S OP CARRIES — ITS STORAGE, WHICH IS NOT ITS IDENTITY.** Every scalar type
+// is its own storage except a `named` one: a payload-free enum case and a ranged alias are both an i64, and
+// the tier below has no `named` to lower. See `emitTypedLiteral` for the two ways the missing distinction
+// showed up.
+function literalStorageType(valueType MaxonType) returns MaxonType
+	return MaxonType.integer if maxonTypeTag(valueType) == ValueTypeTag.named else valueType
+end 'literalStorageType'
+
 // ONE element's value, ready to be pushed. An integer element is its number; a String element is the
 // immortal `.rdata` literal CLONED, because the array becomes the element's sole owner and `__managed_decref`'s
 // walk `__str_decref`s every live slot — the same promotion `Parser.moveElementIntoContainer` applies to a
@@ -792,7 +808,7 @@ type SynthesizedFunction
 	function mint(tag ValueTypeTag, nameId TypeNameId) returns ValueId
 		let id = self.valueTags.count()
 		self.valueTags.push(tag)
-		self.valueNameIds.push(nameId)
+		self.valueNameIds.push(self.projectScopedNameId(tag, nameId: nameId))
 		self.valueClosureEnv.push(0)
 		self.valueIsCapturingClosure.push(false)
 		return id
@@ -803,6 +819,32 @@ type SynthesizedFunction
 	function mintOfType(valueType MaxonType) returns ValueId
 		return self.mint(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType))
 	end 'mintOfType'
+
+	// ⭐⭐ **EVERY NAME ID THIS CARRIER MINTS CROSSES FROM THE SIGNATURE INDEX'S TABLE INTO THE PROJECT'S,
+	// HERE, AND ONCE.** These two functions are built from types the INDEX resolved
+	// (`ProgramSignatures.globalInitValue` and the const-evaluator arena behind it), and their ops are
+	// appended to the MERGED module, whose readers speak `project.typeNames`. `ProgramSignatures`' own rule
+	// says what that costs: *"names travel between interners; ids never do"* — an id means whatever name
+	// happens to sit at that number in the other table.
+	//
+	// ⛔⛔ **MEASURED ON THIS COMPILER'S OWN LEXER, 62 TIMES OVER.** `var keywordMap = [b"if":
+	// KeywordInfo.create(…), …]` synthesizes one `Map.upsert` per pair, and the value argument's id — the
+	// index's `KeywordInfo` — read back through the project's table named a completely unrelated type:
+	// **`E3005 argument type mismatch for 'value': expected 'KeywordInfo', got 'SpillSlot'`**. Nothing was
+	// wrong with the program; the number meant two things. A repro needs the two tables to have DIVERGED,
+	// which is why a small one does not show it — the ids coincide until enough types are declared, and a
+	// read that is right only while two independent insertion orders agree is a wrong answer waiting.
+	//
+	// It sits in `mint` rather than at the five emit sites because that is the ONE place a value of this
+	// carrier gets its type columns, and a door list is what rots.
+	function projectScopedNameId(tag ValueTypeTag, nameId TypeNameId) returns TypeNameId
+		if not tagNamesAnIndexInternedType(tag) 'carriesNoNameToCross'
+			return nameId
+		end 'carriesNoNameToCross'
+
+		let signatures = try queryProgramSignatures(self.project) otherwise panic("ModuleInit.projectScopedNameId: queryProgramSignatures failed while synthesizing a module initializer — it is computed and memoized before the pipeline runs, so it cannot fail fresh here")
+		return self.project.typeNames.intern(signatures.indexSpaceTypeName(maxonTypeOfTag(tag, nameId: nameId)))
+	end 'projectScopedNameId'
 
 	// ⭐ **THE ADDRESS OF A MANAGED GLOBAL'S `.data` SLOT** — `globalAddr <label>`, minted as a pointer
 	// (`Parser.emitGlobalAddr`'s twin on this carrier). BOTH synthesized functions open every global with
@@ -885,9 +927,19 @@ type SynthesizedFunction
 	// It does NOT record the value in a constant column, and `Parser.emitLiteralIn` does: that column is the
 	// PARSER's constant view, feeding the shift-count rule and `foldConstOperands` over source the user
 	// wrote. Nothing here is folded against anything, so there is no view to keep.
+	// ⭐⭐ **THE VALUE'S IDENTITY AND THE OP'S STORAGE ARE TWO ANSWERS, AND AN ENUM CASE IS WHERE THEY PART.**
+	// `Parser.emitEnumTagLiteral` makes the same split for a body's `Color.red`: the VALUE is `named(Color)`
+	// — which is what an argument check compares against a `Color` parameter — while the OP carries
+	// `integer`, because a payload-free enum's value IS its i64 tag and `maxonTypeToStdType` panics outright
+	// on a `named` (*"must be resolved to a primitive before lowering"*).
+	//
+	// ⛔⛔ **WRITTEN AS ONE TYPE, A TOP-LEVEL `KeywordInfo.create(TokenKind.if, …)` COULD ONLY BE WRONG ONE
+	// WAY OR THE OTHER — and this compiler's own lexer is written that way.** Minting at the op's `integer`
+	// gave **`E3005 argument type mismatch for 'kind': expected 'TokenKind', got 'int'`**, once per keyword;
+	// carrying `named` onto the op instead panicked the lowering. Both are the same missing distinction.
 	function emitTypedLiteral(value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
 		let result = self.mintOfType(valueType)
-		self.emit(MaxonOp.literal(result, value: value, valueType: valueType), range: range)
+		self.emit(MaxonOp.literal(result, value: value, valueType: literalStorageType(valueType)), range: range)
 		return result
 	end 'emitTypedLiteral'
 

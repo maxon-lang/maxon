@@ -1042,7 +1042,7 @@ end 'arm64NonNegDisp'
 // it targets. `wide` selects the field width — an unconditional `b` carries a 26-bit imm (±128 MiB),
 // a `b.cond`/`cbz`/`cbnz` a 19-bit imm (±1 MiB). A function's blocks are contiguous within its one
 // chunk, so these resolve HERE (like x64's `resolveChunkRel32Fixups`), independent of concat.
-export type Arm64BlockBranchFixup
+type Arm64BlockBranchFixup
 	export var codeOffset as CodeOffset
 	export var targetBlock as BlockId
 	export var wide as bool
@@ -1072,7 +1072,7 @@ export function arm64EmitCbz(code ByteArray, fixups Arm64BlockBranchFixupArray, 
 	emitArm64Insn(code, insn: Arm64OpCbz or reg)
 end 'arm64EmitCbz'
 
-export function arm64EmitCbnz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
+function arm64EmitCbnz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
 	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
 	emitArm64Insn(code, insn: Arm64OpCbnz or reg)
 end 'arm64EmitCbnz'
@@ -1558,7 +1558,7 @@ end 'arm64EmitStackFree'
 // (`rdataRelocs`) and `leaFuncAddr` code→`.text`-function pairs (`funcAdrpRelocs`) are rebased by concat;
 // within-function block branches are resolved HERE, since a function's blocks are contiguous within its
 // one chunk.
-export function emitArm64FunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
+function emitArm64FunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
@@ -1615,7 +1615,7 @@ end 'emitArm64FunctionChunk'
 // managed top-level `var`), and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
-export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, os Os)
+function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, os Os)
 	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, os: os))
 end 'appendArm64RuntimeChunks'
 
@@ -1634,7 +1634,7 @@ end 'appendArm64RuntimeChunks'
 // place that decides it. `__symtable` CLOSES `.text` after everything else, exactly as x64's concat
 // closes its own — the arm64 panic runtime's backtrace symbolizes every frame against it, and reads
 // `__symtable - mrt_start` as the size of the code.
-export function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
+function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var relocations = RelocationArray.create()

@@ -1121,14 +1121,14 @@ end 'receiverMeetsExtensionConstraints'
 // ⚠ **`extends` COUNTS, through the same `conformanceSatisfiesInterface` a concrete conformer is asked
 // about** — `where T is Ordered` with `interface Ordered extends Equatable` discharges a callee's
 // `Equatable`, and it discharges it FROM THE `Ordered` SLOT, which is the table that callee needs.
-export union OpaqueConstraintDischarge
+module union OpaqueConstraintDischarge
 	// The owner's witness slot that already carries this interface for this parameter.
 	slot(index WitnessSlotIndex)
 	// The owner declaration promises nothing reaching `interfaceName` — E3017, and never a forward.
 	unsatisfied
 end 'OpaqueConstraintDischarge'
 
-export function opaqueParamDischarge(signatures ProgramSignatures, interfaces IrInterfaceMap, token TypeParamId, interfaceName ByteArray) returns OpaqueConstraintDischarge
+module function opaqueParamDischarge(signatures ProgramSignatures, interfaces IrInterfaceMap, token TypeParamId, interfaceName ByteArray) returns OpaqueConstraintDischarge
 	// A token no declaration filed owns nothing and promises nothing. `typeParamOwnerOf` THROWS on absence
 	// rather than panicking, and answering `unsatisfied` here is the safe direction: a refused program, never
 	// a forwarded slot nobody reserved.
@@ -1192,7 +1192,7 @@ end 'constrainedParamAssociatedBindings'
 // Does this verdict discharge the constraint? The bool the union deliberately is not, for the one caller
 // that needs the verdict WITHOUT the index — the E3017 check, which has a diagnostic to emit and no slot to
 // place. Asked through this rather than by re-matching the union, so "discharged" has one definition.
-export function opaqueConstraintIsDischarged(verdict OpaqueConstraintDischarge) returns bool
+function opaqueConstraintIsDischarged(verdict OpaqueConstraintDischarge) returns bool
 	return match verdict 'verdict'
 		slot gives true
 		unsatisfied gives false

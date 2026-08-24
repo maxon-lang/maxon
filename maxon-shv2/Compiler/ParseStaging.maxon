@@ -126,15 +126,16 @@ export type FuncReturnTypeEntry
 	// with the index complete.
 	export var returnAliasName as ByteArray
 
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = sharedNoDeclaredParamNames, paramTypes MaxonTypeArray = sharedNoDeclaredParamTypes, returnAliasName ByteArray = EmptySourceText) returns FuncReturnTypeEntry
+	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS — because a default expression belongs to
+	// the CALLER.** The bootstrap fills an omitted argument by INLINING the default at the call site, so a
+	// default naming a module-level `let` requires that `let` to be visible from every calling file — and
+	// shv2, which emits a per-declaration helper instead, then reports the anchor as an unused export
+	// (E3092) and the two compilers cannot both be satisfied by one visibility. An empty container costs a
+	// record; a name whose scope two compilers disagree about costs a build.
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = ByteArrayArray.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ByteArray = EmptySourceText) returns FuncReturnTypeEntry
 		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, returnAliasName: returnAliasName}
 	end 'create'
 end 'FuncReturnTypeEntry'
-
-// ⭐ The ONE "this record states no parameter list" pair, shared by every producer that has none to state.
-// NEVER mutated.
-export let sharedNoDeclaredParamNames = ByteArrayArray.create()
-export let sharedNoDeclaredParamTypes = MaxonTypeArray.create()
 
 export typealias FuncReturnTypeEntryArray = Array with FuncReturnTypeEntry
 
