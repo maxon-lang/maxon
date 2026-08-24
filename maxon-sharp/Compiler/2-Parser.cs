@@ -3887,6 +3887,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private AliasReach ReachOfLocalType(string typeName) {
     if (_isStdlib) return AliasReach.Program;
 
+    // ⚠ BOTH ALIAS TABLES ARE READ, AND NEITHER HALF HAS A CASE THAT CAN SEE IT. A typealias
+    // naming a generic instance gets its cloner from `CloneSynthesisPass` after parsing, not from
+    // here, so no program reaches these two `Contains` calls today. They are read in PAIR anyway
+    // because reading only `_exportedTypeAliases` — which is what this did — is half of a two-half
+    // fact, and it is the half that produces a WRONG answer: a `module typealias` would have been
+    // called file-private. Do not assume a spec case covers this line.
     bool isExported = _exportedTypes.Contains(typeName) || _exportedTypeAliases.Contains(typeName);
     bool isModuleVisible = _moduleVisibleTypes.Contains(typeName)
       || _moduleVisibleTypeAliases.Contains(typeName);

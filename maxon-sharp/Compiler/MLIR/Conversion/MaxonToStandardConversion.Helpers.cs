@@ -724,8 +724,18 @@ public static partial class MaxonToStandardConversion {
         return widened.Result;
       }
 
+      // ⚠ SIGNEDNESS COMES FROM THE VALUE, NOT FROM THE OP'S DEFAULT. `StdU32` DERIVES FROM
+      // `StdI32` (`StandardValues.cs:28`), so this arm catches unsigned values too, and
+      // `StdExtI32ToI64Op`'s `signExtend` default of true would round-trip any u32 >= 2^31 as a
+      // NEGATIVE i64 — a silent wrong number, not a crash.
+      //
+      // ⚠ THE ARM IS UNREACHABLE TODAY AND THEREFORE UNGATED IN BOTH POLARITIES: every narrow
+      // payload arrives here already widened as an `StdI64`, so `arith.extsi`/`arith.extui` appear
+      // ZERO times in the emitted IR for u32, i32 and byte payload round-trips and no spec case can
+      // see either answer. It is written correctly rather than left to a default, and CORRECTED
+      // rather than made to throw, so that whatever makes it reachable gets the right number.
       case StdI32 i32: {
-        var ext = new StdExtI32ToI64Op(i32);
+        var ext = new StdExtI32ToI64Op(i32, signExtend: i32 is not StdU32);
         block.AddOp(ext);
         return ext.Result;
       }

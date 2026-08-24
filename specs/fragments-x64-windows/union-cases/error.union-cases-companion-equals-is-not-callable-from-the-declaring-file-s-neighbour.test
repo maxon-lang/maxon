@@ -1,0 +1,36 @@
+// Test: error.union-cases-companion-equals-is-not-callable-from-the-declaring-file-s-neighbour
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+export function firstTag() returns Shape.unionCases
+	return Shape.unionCases.circle
+end 'firstTag'
+
+// --- file: b.maxon
+export function tagOf(s Shape) returns Shape.unionCases
+	return match s 'm'
+		circle gives Shape.unionCases.circle
+		square gives Shape.unionCases.square
+	end 'm'
+end 'tagOf'
+
+// --- file: c.maxon
+function main() returns ExitCode
+	let a = tagOf(Shape.circle(1))
+	let b = tagOf(Shape.square(2))
+	if a.equals(b) 'same'
+		return 1
+	end 'same'
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3008: specs/fragments/union-cases/error.union-cases-companion-equals-is-not-callable-from-the-declaring-file-s-neighbour.test:26:7: function 'Shape.unionCases.equals' is not exported
+```
+---
+---

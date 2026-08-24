@@ -566,3 +566,44 @@ end 'main'
 ```maxoncstderr
 error E3008: specs/fragments/union-cases/error.union-cases-companion-equals-is-not-callable-cross-file.test:22:7: function 'Shape.unionCases.equals' is not exported
 ```
+
+<!-- test: error.union-cases-companion-equals-is-not-callable-from-the-declaring-file-s-neighbour -->
+The same refusal with the companion materialized by the OTHER file. `.unionCases` is synthesized on
+demand by whichever file mentions it first, and its registry entry carries the UNION's source file,
+so "which file asked first" used to decide the answer: the declaring file got a file-private member
+and any other file got an exported one, from one program. Here the declaring file names it first;
+above, a third file does. Both refuse, and that is the point of having both.
+```maxon
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+export function firstTag() returns Shape.unionCases
+	return Shape.unionCases.circle
+end 'firstTag'
+
+// --- file: b.maxon
+export function tagOf(s Shape) returns Shape.unionCases
+	return match s 'm'
+		circle gives Shape.unionCases.circle
+		square gives Shape.unionCases.square
+	end 'm'
+end 'tagOf'
+
+// --- file: c.maxon
+function main() returns ExitCode
+	let a = tagOf(Shape.circle(1))
+	let b = tagOf(Shape.square(2))
+	if a.equals(b) 'same'
+		return 1
+	end 'same'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/union-cases/error.union-cases-companion-equals-is-not-callable-from-the-declaring-file-s-neighbour.test:26:7: function 'Shape.unionCases.equals' is not exported
+```
