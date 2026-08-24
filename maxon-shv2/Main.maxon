@@ -151,7 +151,7 @@ end 'main'
 
 // The outcome of resolving a `--target=<cpu>-<os>` spelling: either the Target it
 // names, or the raw spelling for the error message when it names no known target.
-union TargetResolution
+export union TargetResolution
 	resolved(target Target)
 	unrecognized(spec String)
 end 'TargetResolution'
@@ -161,7 +161,12 @@ end 'TargetResolution'
 // spelling — so the parser and the printer read the same table and cannot drift into
 // accepting a spelling the compiler cannot name back. A spec that names none of them
 // is rejected; the list grows as backends land.
-function parseBuildTarget(spec String) returns TargetResolution
+//
+// EXPORTED because `GoldenTracking.reportUncomparedGoldens` asks the identical question of a
+// `fragments/<name>` LANE DIRECTORY's name — a lane is named by a target spelling, so "which target is
+// this?" has one answer and one reader. A private copy of the loop there would be a second table in all
+// but name, and its failure mode is a census that quietly stops covering the next backend that lands.
+export function parseBuildTarget(spec String) returns TargetResolution
 	for candidate in supportedTargets() 'each'
 		if targetToString(candidate) == spec 'match'
 			return TargetResolution.resolved(candidate)
@@ -574,6 +579,13 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	// where an agent mints a new spec's goldens and never sees that they are untracked.
 	reportGoldenDrift(run.results)
 	reportGoldenCensus(run.results, effectiveTarget: effectiveTarget)
+
+	// ⭐ THE CENSUS'S MISSING FOURTH COLUMN, and it sits directly under it because it answers the
+	// question the other three cannot even ask: a golden nothing COMPARES. All four columns above are
+	// keyed on a case that produced a result, so a `.test` whose case was renamed away contributes to
+	// none of them — see `GoldenTracking.reportUncomparedGoldens`.
+	reportUncomparedGoldens(specDir, effectiveTarget: effectiveTarget)
+
 	reportUntrackedGoldens(specDir)
 
 	if testsExit != 0 'someTestFailed'

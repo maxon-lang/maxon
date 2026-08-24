@@ -60,13 +60,38 @@ let FixturesRelativeDir = "maxon-shv2/Testing/harness-fixtures"
 // exactly as it does there — see `harnessCorpusRoots`.
 let GatesRelativeDir = "maxon-shv2/Testing/harness-gates"
 
-// The one gate case: `<gates root>/<this>/network-gate.md`, holding a single case marked
+// The FIRST gate case: `<gates root>/<this>/network-gate.md`, holding a single case marked
 // `<!-- network: live -->`. The directory name and the spec's `<spec>/<test>` label are both named here
 // because the assertions below are ABOUT that exact case, and a gate that silently ran some other
 // directory would be a gate that proves nothing.
 let NetworkGateCaseDir = "network"
 let NetworkGateSpecName = "network-gate"
 let NetworkGateTestName = "network-gate.live"
+
+// ⭐ **THE SECOND GATE CASE — the orphaned-golden census.** `<gates root>/<this>/orphan-gate.md`, with a
+// `fragments/` tree this gate PLANTS and then removes. Named here for `NetworkGateCaseDir`'s reason: the
+// assertions below are about these exact files, and a gate that silently ran some other directory would
+// prove nothing.
+let OrphanGateCaseDir = "orphan-golden"
+let OrphanGateSpecName = "orphan-gate"
+
+// ⭐⭐ **THE LANE THE ORPHANS ARE PLANTED IN IS FIXED, AND DELIBERATELY NOT THE HOST'S.** The census
+// covers EVERY `fragments/<target>` directory rather than the run's own target — that is the property
+// orphan debris on an unrun lane depends on — so planting into a lane the sub-run does not build for is
+// what proves it. On a Windows host it happens to coincide; everywhere else the gate is asserting the
+// cross-lane reach directly.
+let OrphanGateLane = "x64-windows"
+
+// The three planted files, one per census arm. Each is named for what makes it uncomparable, because
+// that name is what a reader of a failed gate reads first.
+let OrphanGateMissingCase = "a-case-this-spec-no-longer-declares"
+let OrphanGateRestrictedCase = "orphan-gate.restricted-elsewhere"
+let OrphanGateVanishedSpec = "a-spec-that-no-longer-exists"
+let OrphanGateVanishedCase = "a-case-of-a-spec-that-is-gone"
+
+// What a planted golden holds. Its CONTENT is never read — the census asks only whether anything
+// compares the file — so it says what it is, for whoever finds one left behind by an interrupted run.
+let OrphanGatePlantedContent = "// planted by HarnessSelfTest.requireOrphanedGoldensAreReported and removed by it; never compared\n"
 
 let FixtureSpecExtension = ".md"
 
@@ -311,6 +336,10 @@ export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 
 	let label = "{NetworkGateSpecName}/{NetworkGateTestName}"
 
+	// What a spawn failure would have to say, spelled ONCE for this gate's two runs. A local rather
+	// than a module constant because it interpolates `NetworkFlag`, and a top-level `let` may not.
+	let proves = "a marked case stays out of a default run and comes back under `{NetworkFlag}`"
+
 	// ⭐ WHAT "THE CASE RAN" LOOKS LIKE, BUILT FROM THE REPORT'S OWN RENDERER rather than from a second
 	// spelling of the verdict token. An empty reason makes this a PREFIX of the real line, which is what
 	// `contains` needs; the reason itself is the fixture's deliberately-wrong stdout and is not the point.
@@ -325,7 +354,7 @@ export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 
 	var broken = StringArray.create()
 
-	let byDefault = everythingSaid(runNetworkGate(harnessExe, caseDir: caseDir, includeNetwork: false))
+	let byDefault = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: proves))
 	if byDefault.contains(ranVerdict) 'defaultRanIt'
 		broken.push("a DEFAULT run of the fixture RAN '{label}', which is marked `{NetworkMarker} {NetworkLiveValue} -->`. Every suite in this tree would then be a coin toss on a third party's uptime.\n")
 	end 'defaultRanIt'
@@ -338,7 +367,7 @@ export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 		broken.push("a DEFAULT run named the case it left out but not the REASON: the census headline no longer mentions `{NetworkMarker}`, so a reader is told coverage is missing and not what would bring it back.\n")
 	end 'defaultGaveNoReason'
 
-	let withNetwork = everythingSaid(runNetworkGate(harnessExe, caseDir: caseDir, includeNetwork: true))
+	let withNetwork = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: true, proves: proves))
 	if not withNetwork.contains(ranVerdict) 'flagDidNotIncludeIt'
 		broken.push("a `{NetworkFlag}` run did NOT run '{label}'. The flag no longer reaches selection, so every `{NetworkMarker} {NetworkLiveValue} -->` case is unreachable by any command line — shelved in all but name. It said:\n{withNetwork}\n")
 	end 'flagDidNotIncludeIt'
@@ -357,19 +386,134 @@ export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 	panic("HarnessSelfTest: the live-network gate FAILED {broken.count()} of its checks. It is what keeps a suite's verdict from depending on tcpbin.com and httpbin.org being up, and what keeps the cases it drops from vanishing silently.{report}")
 end 'requireNetworkGateHolds'
 
-// One run of the gate fixture, with or without `NetworkFlag`. A spawn failure PANICS on the spot
-// rather than joining the report, for `checkFixture`'s reason: that is the instrument being broken
-// rather than the property being gone, and the two must not read alike.
-function runNetworkGate(harnessExe FilePath, caseDir FilePath, includeNetwork bool) returns ProcessCapture
+// ⭐ **ONE RUN OF ANY GATE FIXTURE — shared by both gates, because they differ only in a flag and in
+// which gate a failure names.** A second copy is how the two would come to spawn the harness
+// differently, which is the drift `fixtureArgv` already exists to prevent one level down.
+//
+// A spawn failure PANICS on the spot rather than joining the caller's report, for `checkFixture`'s
+// reason: that is the instrument being broken rather than the property being gone, and the two must not
+// read alike. `proves` is what the caller would otherwise have written into its own panic — the sentence
+// that tells a reader what stopped being checked.
+function runGateFixture(harnessExe FilePath, caseDir FilePath, includeNetwork bool, proves String) returns ProcessCapture
 	var argv = fixtureArgv(caseDir)
 	if includeNetwork 'wantsLiveNetwork'
 		argv.push(NetworkFlag)
 	end 'wantsLiveNetwork'
 
 	return try runProcess(Executable.path(harnessExe), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
-		panic("HarnessSelfTest: could not run the live-network gate fixture ({e.displayReason()}) — it proves a marked case stays out of a default run and comes back under `{NetworkFlag}`, and a gate nothing runs is a claim")
+		panic("HarnessSelfTest: could not run a gate fixture ({e.displayReason()}) — it proves {proves}, and a gate nothing runs is a claim")
 	end 'spawnFailed'
-end 'runNetworkGate'
+end 'runGateFixture'
+
+// ⭐⭐ **PROVE THE SUITE STILL NAMES A GOLDEN NOTHING COMPARES.** Three reports ask what a golden did —
+// did it DRIFT, was it COMPARED, is it TRACKED — and none of them can see a `.test` whose case no longer
+// exists: `checkTestFragment` opens the file BY PATH and never enumerates, and the census loops over
+// RESULTS, so a file with no result appears in none of its columns. `GoldenTracking
+// .reportUncomparedGoldens` is the fourth question, and this is what keeps it answered.
+//
+// ⛔ **AN ORDINARY SPEC CASE STRUCTURALLY CANNOT PIN THIS, for `requireHarnessRefusalsFire`'s reason one
+// level down.** What is under test is a report the PARENT prints after every worker has finished, about
+// the whole spec directory — a case cannot observe it, and committing an orphan to `specs-shv2/` to be
+// observed would put a permanently-uncomparable file in the corpus the census exists to keep clean.
+//
+// ⭐ **SO THE ORPHANS ARE PLANTED AND REMOVED, not committed** — and that buys the half a committed
+// fixture could not have: a NEGATIVE CONTROL. The gate runs the fixture twice, once with the files there
+// and once without, and requires the report to appear and then to disappear. A census that named
+// everything would satisfy the first run and fail the second; one that named nothing fails the first.
+// (Planted under the gate corpus's own gitignored `fragments/`, so an interrupted run leaves nothing
+// tracked behind, and the next run overwrites it.)
+//
+// Called ONCE by the suite's parent beside the other tree-level guards, and PANICS naming every property
+// that failed.
+export function requireOrphanedGoldensAreReported(harnessExe FilePath, specDir FilePath)
+	if isHarnessFixtureSubRun(specDir) 'thisIsAFixtureSubRun'
+		return
+	end 'thisIsAFixtureSubRun'
+
+	let root = try FilePath.from(GatesRelativeDir) otherwise panic("HarnessSelfTest: '{GatesRelativeDir}' is not a valid path")
+	// Interpolated rather than passed as the bare constant, for `requireNetworkGateHolds`' reason.
+	let caseDir = root.join("{OrphanGateCaseDir}")
+	if not Directory.isDirectory(caseDir) 'noFixture'
+		panic("HarnessSelfTest: the orphaned-golden gate fixture is not at {GatesRelativeDir}/{OrphanGateCaseDir}, so nothing proves that a `.test` no case reads is still NAMED by a suite run. Run the suite from the repo root.")
+	end 'noFixture'
+
+	// Spelled once for this gate's two runs, beside the network gate's own.
+	let proves = "a golden nothing compares is still NAMED by a suite run"
+
+	let planted = plantOrphanGoldens(caseDir)
+	let withOrphans = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: proves))
+	removePlantedGoldens(planted)
+	let withoutOrphans = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: proves))
+
+	var broken = StringArray.create()
+
+	// The expectations are BUILT BY THE REPORT'S OWN RENDERER (`uncomparedEntry`), never spelled here —
+	// `requireNetworkGateHolds`' argument, and the reason `UncomparedReason` is a union rather than a
+	// sentence built at each site. A change to how an entry reads reaches this gate instead of stranding it.
+	for expected in expectedOrphanEntries() 'eachExpected'
+		if not withOrphans.contains(expected) 'notNamed'
+			broken.push("a run over the fixture did NOT name a planted golden. Expected its report to contain:\n{expected}and it said:\n{withOrphans}\n")
+		end 'notNamed'
+	end 'eachExpected'
+
+	// THE NEGATIVE CONTROL. Without it the gate is satisfied by a census that reports every golden in the
+	// tree, which is the same as no census at all — and it is the half that would rot silently, because a
+	// report that fires too often looks exactly like a report that works.
+	if withoutOrphans.contains(UncomparedHeadline) 'reportedACleanTree'
+		broken.push("the SAME fixture, with the planted goldens removed, still printed the census. Then the report does not depend on there being anything to report, and every suite run in this tree is telling its reader about files that are fine. It said:\n{withoutOrphans}\n")
+	end 'reportedACleanTree'
+
+	if broken.isEmpty() 'everyPropertyHeld'
+		return
+	end 'everyPropertyHeld'
+
+	// ⚠ `panic` takes a STRING LITERAL — see `requireHarnessRefusalsFire` for the constraint.
+	let report = indentedList(broken, indent: BrokenHarnessFixtureIndent)
+	panic("HarnessSelfTest: the orphaned-golden census FAILED {broken.count()} of its checks. It is the only thing in this tree that can see a golden nothing compares — a reference file that cannot be wrong, because nothing reads it.{report}")
+end 'requireOrphanedGoldensAreReported'
+
+// The three entries a planted run must print — one per census arm, each built by the census's own
+// renderer so that this gate cannot come to disagree with the report about what an entry says.
+function expectedOrphanEntries() returns StringArray
+	var expected = StringArray.create()
+	expected.push(uncomparedEntry("{OrphanGateLane}/{OrphanGateSpecName}/{OrphanGateMissingCase}{FragmentExtension}", reason: UncomparedReason.noSuchCase(OrphanGateSpecName, caseName: OrphanGateMissingCase)))
+	expected.push(uncomparedEntry("{OrphanGateLane}/{OrphanGateSpecName}/{OrphanGateRestrictedCase}{FragmentExtension}", reason: UncomparedReason.laneCannotSelectIt(OrphanGateSpecName, caseName: OrphanGateRestrictedCase, laneName: OrphanGateLane)))
+	expected.push(uncomparedEntry("{OrphanGateLane}/{OrphanGateVanishedSpec}/{OrphanGateVanishedCase}{FragmentExtension}", reason: UncomparedReason.noSuchSpec(OrphanGateVanishedSpec)))
+	return expected
+end 'expectedOrphanEntries'
+
+// Write the three goldens nothing can ever compare, and hand back what was written so it can be removed
+// again. Every failure PANICS on the spot rather than joining the report, for `checkFixture`'s reason:
+// an instrument that could not be set up is not a property being gone, and the two must not read alike.
+function plantOrphanGoldens(caseDir FilePath) returns FilePathArray
+	let laneDir = caseDir.join("{FragmentsSubdir}").join("{OrphanGateLane}")
+
+	var planted = FilePathArray.create()
+	planted.push(plantOneGolden(laneDir.join("{OrphanGateSpecName}"), caseName: OrphanGateMissingCase))
+	planted.push(plantOneGolden(laneDir.join("{OrphanGateSpecName}"), caseName: OrphanGateRestrictedCase))
+	planted.push(plantOneGolden(laneDir.join("{OrphanGateVanishedSpec}"), caseName: OrphanGateVanishedCase))
+	return planted
+end 'plantOrphanGoldens'
+
+// One planted golden, with its per-spec directory made if it is not there. `Directory.create` is mkdir -p.
+function plantOneGolden(specGoldenDir FilePath, caseName String) returns FilePath
+	if not Directory.create(specGoldenDir) 'noDirectory'
+		panic("HarnessSelfTest: could not create the orphaned-golden gate's fixture directory. The gate plants a `.test` nothing declares and requires the run to name it; without the directory it would prove nothing and would say so as a missing entry.")
+	end 'noDirectory'
+
+	let path = specGoldenDir.join("{caseName}{FragmentExtension}")
+	try File.writeText(path, content: OrphanGatePlantedContent) otherwise panic("HarnessSelfTest: could not plant the orphaned-golden gate's fixture file. A gate that cannot set up its own subject proves nothing.")
+	return path
+end 'plantOneGolden'
+
+// Take the planted goldens away again, so the tree this gate ran in is the tree it found. A removal that
+// fails PANICS: a leftover planted file is a permanent, deliberate orphan in a corpus whose whole point
+// is that there are none, and the next run's negative control would read it as a live defect.
+function removePlantedGoldens(planted FilePathArray)
+	for path in planted 'eachPlanted'
+		try File.delete(path) otherwise panic("HarnessSelfTest: could not remove a golden the orphaned-golden gate planted. It would stay behind as a real orphan, and the next run's negative control would report the gate's own litter as a defect.")
+	end 'eachPlanted'
+end 'removePlantedGoldens'
 
 // The substring `caseDir`'s one `.md` says its refusal must print — see `ExpectRefusalMarker`.
 //

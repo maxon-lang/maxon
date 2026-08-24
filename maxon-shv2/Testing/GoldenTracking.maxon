@@ -132,6 +132,24 @@ export function reportGoldenCensus(results SpecTestResultArray, effectiveTarget 
 	printError("note: goldens on {targetToString(effectiveTarget)}: {compared + drifted} COMPARED against a committed reference ({drifted} of them differ, listed above), {minted} MINTED with nothing to compare against, {unrecorded} NOT RECORDED — no committed reference and this host may not write one, so their emitted code is unreviewed on this lane.\n")
 end 'reportGoldenCensus'
 
+// Where a spec directory's goldens live — and whether it has any at all. BOTH tree-level reports below
+// start here: a spec directory that pins no codegen (every harness fixture sub-run, for one) owes
+// neither of them anything, and asking that one question in two places is how two reports come to
+// disagree about which directory they are describing.
+union GoldenRoot
+	at(root FilePath)
+	none
+end 'GoldenRoot'
+
+function goldenRootIn(specDir FilePath) returns GoldenRoot
+	let root = specDir.join("{FragmentsSubdir}")
+	if not Directory.exists(root) 'noGoldensAtAll'
+		return GoldenRoot.none
+	end 'noGoldensAtAll'
+
+	return GoldenRoot.at(root)
+end 'goldenRootIn'
+
 // ⭐ **THE TRACKING REPORT — goldens this tree has on disk and never put under version control.**
 //
 // A run that MINTS a golden passes: there is nothing to compare against, and a first run that failed
@@ -141,12 +159,10 @@ end 'reportGoldenCensus'
 // port shipped its fragments untracked, and `A3n` closed a rung adding a whole spec with ZERO of its
 // three goldens. This is the looking.
 export function reportUntrackedGoldens(specDir FilePath)
-	let fragmentsRoot = specDir.join("{FragmentsSubdir}")
-	if not Directory.exists(fragmentsRoot) 'noGoldensAtAll'
-		// A spec directory that pins no codegen — every harness fixture sub-run, for one. There is
-		// nothing to owe.
-		return
-	end 'noGoldensAtAll'
+	match goldenRootIn(specDir) 'goldens'
+		none then return
+		at then break 'goldens'
+	end 'goldens'
 
 	match untrackedGoldensIn(specDir) 'answer'
 		unavailable(reason) then reportUnchecked(reason)
@@ -223,3 +239,331 @@ end 'reportOwed'
 function reportUnchecked(reason String)
 	printError("warning: the golden-tracking report did NOT run — {reason}. This run cannot say whether the suite left goldens uncommitted.\n")
 end 'reportUnchecked'
+
+// ============================================================================================
+// ⭐⭐ THE FOURTH QUESTION — DOES ANYTHING COMPARE THIS GOLDEN AT ALL?
+// ============================================================================================
+//
+// The three reports above ask whether a golden DRIFTED, how much of this run was checked against one,
+// and whether the files are under version control. **Not one of them can see a `.test` whose case no
+// longer exists**, and neither can the comparison itself: `SpecTestRunner.checkTestFragment` opens
+// `<fragmentDir>/<test.name>.test` BY PATH and never enumerates, so an orphan is structurally
+// unreachable from that side; and `reportGoldenCensus` above loops over `results`, so a file with NO
+// result cannot appear in any of its four columns. ⇒ A golden whose case was RENAMED, split or deleted
+// stays on disk, stays tracked, never drifts and agrees with nothing — a reference that cannot be wrong
+// because nothing reads it. `W136`'s review found 58 of them by hand and deleted them; this is the
+// question that stops the next rename re-creating the set.
+//
+// ⛔ **THE PREDICATE IS THE SPEC'S OWN ROSTER AND THE LANE'S NAME — NEVER WHAT THIS RUN EXECUTED.** A
+// `--filter` run executes a handful of cases; keyed on "did this case run", this would scream on every
+// filtered run and would be switched off inside a week. Every term below is read out of the spec TEXT
+// and out of the lane directory's own name, so a filtered run, a full run, a cross-target run and a run
+// on another host all produce the identical answer.
+//
+// ⚠ **A GOLDEN PRESENT ON ONE LANE AND ABSENT ON ANOTHER IS NOT A FINDING, and lane symmetry is never
+// asked.** Measured: `fragments/x64-linux/field-declared-unknown-type/…-nameable-at-a-parameter.test`
+// exists on x64-linux and on no other lane, legitimately — a lane's goldens accrete as that lane is
+// run. The question is only ever whether THIS lane can ever compare THIS file.
+//
+// ⚠ **IT COVERS EVERY LANE, not this run's target** — `reportUntrackedGoldens`' own argument, and it
+// bites harder here: orphan debris accretes fastest on the lanes nobody runs, where neither a compare
+// nor a mint ever visits the directory. Which is why a lane's Target comes from its DIRECTORY NAME
+// rather than from the run.
+//
+// ⚖ REPORTED, NEVER JUDGED, exactly like the three above (user ruling 2026-08-02). It touches neither
+// the failed count nor the exit code. And a finding is NOT always "delete the file": a case may have
+// been RENAMED, in which case the golden should be renamed with it, so **the count is also a lower
+// bound on renames nobody noticed.**
+
+// The case names of one spec — its roster, and the subset of it a given lane can pin. A set rather than
+// a walk per file: a spec's goldens are checked against its roster once per file, and a linear scan
+// there would make the census quadratic in a spec's case count (`vector.md` alone declares 118).
+typealias SpecCaseNameSet = Set with String
+
+// The spec NAMES the corpus declares — a different question from the one above, asked of the same
+// spelling. Named separately because `collectGoldensOfVanishedSpecs` reads it as "is there a spec called
+// this", and a parameter typed `SpecCaseNameSet` there would be describing the wrong membership.
+typealias SpecNameSet = Set with String
+
+// What a `fragments/<name>` directory turned out to be. A directory whose name resolves to no target
+// this compiler builds for is a THIRD answer rather than a silent skip: it is the shape a renamed or
+// retired target leaves behind, and everything under it is unreachable by every lane at once.
+union GoldenLaneTarget
+	builds(target Target)
+	namesNoTarget
+end 'GoldenLaneTarget'
+
+// One `fragments/<name>` directory: where it is, what it is called, and what that name resolves to.
+//
+// The name is stored rather than derived, because it is the ONLY spelling available on the
+// `namesNoTarget` arm — `targetToString` has nothing to say about a directory that names no target.
+type GoldenLane
+	export let dir as FilePath
+	export let name as String
+	export let target as GoldenLaneTarget
+
+	export static function create(dir FilePath, name String, target GoldenLaneTarget) returns GoldenLane
+		return Self{dir: dir, name: name, target: target}
+	end 'create'
+end 'GoldenLane'
+
+typealias GoldenLaneArray = Array with GoldenLane
+
+// ⭐ **THE CENSUS ITSELF.** Called by the PARENT beside the three reports above, on every run.
+//
+// `effectiveTarget` is this RUN's target and is used for ONE thing: `parseSpecFile` resolves the
+// target-qualified ```Stdout: / ```Stderr: / ```Maxoncstderr: fences against it. Every field this
+// census reads — a case's name, its `<!-- targets: -->` restriction, its trace directive, its section
+// pins — is the same whichever key the parse was given, which is what lets ONE parse per spec answer
+// for all four lanes.
+export function reportUncomparedGoldens(specDir FilePath, effectiveTarget Target)
+	match goldenRootIn(specDir) 'goldens'
+		none then return
+		at(fragmentsRoot) then reportUncomparedUnder(fragmentsRoot, specDir: specDir, effectiveTarget: effectiveTarget)
+	end 'goldens'
+end 'reportUncomparedGoldens'
+
+// The census proper, once its root is known. Split from the guard above only because a `match` arm is
+// one expression and this is the whole walk.
+function reportUncomparedUnder(fragmentsRoot FilePath, specDir FilePath, effectiveTarget Target)
+	var entries = StringArray.create()
+	let lanes = goldenLanesIn(fragmentsRoot, entries: entries)
+
+	// ⭐ SPEC-OUTER, LANE-INNER, so each spec is parsed ONCE and asked of every lane. The other nesting
+	// reads more naturally and costs four parses of the whole corpus.
+	var declaredSpecs = SpecNameSet.create()
+	let specPaths = try specFilePaths(specDir) otherwise panic("GoldenTracking.reportUncomparedUnder: could not list the spec directory. The parent already listed it to build this run's plan (SpecWorkerPool.buildPlans), and a run that selected nothing never reaches here.")
+
+	for specPath in specPaths 'eachSpec'
+		let specName = specPath.stem()
+		declaredSpecs.insert(specName)
+
+		let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget)) otherwise panic("GoldenTracking.reportUncomparedUnder: a spec the parent already parsed to build this run's plan no longer parses.")
+		let roster = rosterOf(specFile)
+
+		for lane in lanes 'eachLane'
+			collectUncomparedIn(lane, specName: specName, specFile: specFile, roster: roster, entries: entries)
+		end 'eachLane'
+	end 'eachSpec'
+
+	collectGoldensOfVanishedSpecs(lanes, declaredSpecs: declaredSpecs, entries: entries)
+
+	let headline = "note: {entries.count()} golden fragment(s) under {fragmentsRoot.toString()} {UncomparedHeadline}. GOLDENS ARE REFERENCE, NOT A GATE:\n{ResultNoteIndent}nothing failed on this and the exit code is unaffected. Each file below is a reference that cannot be wrong,\n{ResultNoteIndent}because no case on that lane ever reads it. DELETE it — or, if its case was RENAMED, rename the file with\n{ResultNoteIndent}it, which is the reading this count is also a lower bound on.\n"
+	reportResultNote(entries, headline: headline)
+end 'reportUncomparedUnder'
+
+// Every `fragments/<name>` lane directory, with what its name resolves to. A stray FILE directly under
+// `fragments/` is reported rather than skipped: the goldens live two levels down, so nothing there is
+// compared by anything either.
+function goldenLanesIn(fragmentsRoot FilePath, entries StringArray) returns GoldenLaneArray
+	var lanes = GoldenLaneArray.create()
+
+	let listed = try Directory.list(fragmentsRoot) otherwise 'cannotList'
+		entries.push(uncheckedEntry("{fragmentsRoot.toString()} could not be listed, so NOTHING below it was censused"))
+		return lanes
+	end 'cannotList'
+
+	for entry in listed 'eachEntry'
+		let name = entry.filename()
+		if not Directory.isDirectory(entry) 'notALane'
+			entries.push(uncomparedEntry("{FragmentsSubdir}/{name}", reason: UncomparedReason.strayUnderFragmentsRoot))
+			continue
+		end 'notALane'
+
+		// The lane's target comes from its own name, matched against the one table `--target` is matched
+		// against (`Main.parseBuildTarget`) — a second reader of that spelling is how a report comes to
+		// describe a lane the compiler cannot name back.
+		let resolved = match parseBuildTarget(name) 'resolution'
+			resolved(target) gives GoldenLaneTarget.builds(target)
+			unrecognized gives GoldenLaneTarget.namesNoTarget
+		end 'resolution'
+
+		lanes.push(GoldenLane.create(entry, name: name, target: resolved))
+	end 'eachEntry'
+
+	return lanes
+end 'goldenLanesIn'
+
+// Every ACTIVE case a spec declares. A `<!-- disabled-test: … -->` case is deliberately NOT one: it is
+// never compiled, never run and mints no golden (`SpecParser`'s header), so a `.test` bearing its name
+// is a file nothing compares — which is precisely this census's finding, and an enabled case may never
+// be re-disabled.
+function rosterOf(specFile SpecFile) returns SpecCaseNameSet
+	var names = SpecCaseNameSet.create()
+	for test in specFile.tests 'eachTest'
+		names.insert(test.name)
+	end 'eachTest'
+	return names
+end 'rosterOf'
+
+// The cases `lane` can ever compare a golden for — asked of `selectedTests`, the harness's ONE selection
+// door, rather than of a second copy of its rules. `filter` is empty because a filter is a property of
+// one command line and this is a property of the tree; `includeNetwork` is TRUE because a
+// `<!-- network: live -->` case IS compared under `--network`, so its golden is not dead.
+//
+// A lane whose name resolves to no target can select nothing: no run of any command line visits it.
+function pinnableOn(lane GoldenLane, specFile SpecFile, specName String) returns SpecCaseNameSet
+	return match lane.target 'resolution'
+		builds(target) gives selectableCaseNamesOn(target, specFile: specFile, specName: specName)
+		namesNoTarget gives SpecCaseNameSet.create()
+	end 'resolution'
+end 'pinnableOn'
+
+// The half of the answer that needs a real target — split out only because a `match` arm is one
+// expression and this one is a loop.
+function selectableCaseNamesOn(laneTarget Target, specFile SpecFile, specName String) returns SpecCaseNameSet
+	var names = SpecCaseNameSet.create()
+	let selection = selectedTests(specFile, specName: specName, filter: "", effectiveTarget: laneTarget, includeNetwork: true)
+	for test in selection.selected 'eachTest'
+		names.insert(test.name)
+	end 'eachTest'
+	return names
+end 'selectableCaseNamesOn'
+
+// One spec's goldens on one lane, classified. THREE outcomes and no silent fourth: the file is pinnable
+// there (nothing to say), its case exists but that lane can never select it, or no case of that name
+// exists at all.
+function collectUncomparedIn(lane GoldenLane, specName String, specFile SpecFile, roster SpecCaseNameSet, entries StringArray)
+	let specGoldens = lane.dir.join(specName)
+	if not Directory.isDirectory(specGoldens) 'laneHasNoneForThisSpec'
+		return
+	end 'laneHasNoneForThisSpec'
+
+	let pinnable = pinnableOn(lane, specFile: specFile, specName: specName)
+
+	let listed = try Directory.list(specGoldens) otherwise 'cannotList'
+		entries.push(uncheckedEntry("{specGoldens.toString()} could not be listed, so its goldens were not censused"))
+		return
+	end 'cannotList'
+
+	for entry in listed 'eachEntry'
+		if entry.fileExtension() != FragmentExtension 'notAGolden'
+			continue
+		end 'notAGolden'
+
+		let caseName = entry.stem()
+		if pinnable.contains(caseName) 'thisLaneComparesIt'
+			continue
+		end 'thisLaneComparesIt'
+
+		entries.push(uncomparedEntry("{lane.name}/{specName}/{entry.filename()}", reason: uncomparedReasonFor(lane, caseName: caseName, specName: specName, roster: roster)))
+	end 'eachEntry'
+end 'collectUncomparedIn'
+
+// WHY a lane does not pin a golden it holds — and the answers need different fixes, which is why they
+// are not folded into one sentence. A case nobody declares wants the FILE changed; a case its lane
+// cannot select wants the MARKER read, and may want it widened instead.
+function uncomparedReasonFor(lane GoldenLane, caseName String, specName String, roster SpecCaseNameSet) returns UncomparedReason
+	match lane.target 'resolution'
+		namesNoTarget then return UncomparedReason.laneNamesNoTarget(lane.name)
+		builds then break 'resolution'
+	end 'resolution'
+
+	if not roster.contains(caseName) 'noSuchCase'
+		return UncomparedReason.noSuchCase(specName, caseName: caseName)
+	end 'noSuchCase'
+
+	return UncomparedReason.laneCannotSelectIt(specName, caseName: caseName, laneName: lane.name)
+end 'uncomparedReasonFor'
+
+// The goldens of a spec that is not there any more: a whole `.md` renamed or deleted leaves its entire
+// per-spec directory behind on every lane at once. Swept after the per-spec pass because it is the
+// complement of it — the directories no spec claimed.
+function collectGoldensOfVanishedSpecs(lanes GoldenLaneArray, declaredSpecs SpecNameSet, entries StringArray)
+	for lane in lanes 'eachLane'
+		let listed = try Directory.list(lane.dir) otherwise 'cannotList'
+			entries.push(uncheckedEntry("{lane.dir.toString()} could not be listed, so its spec directories were not censused"))
+			continue
+		end 'cannotList'
+
+		for entry in listed 'eachEntry'
+			let specName = entry.filename()
+			if declaredSpecs.contains(specName) 'aSpecStillDeclaresIt'
+				continue
+			end 'aSpecStillDeclaresIt'
+
+			if not Directory.isDirectory(entry) 'strayFile'
+				entries.push(uncomparedEntry("{lane.name}/{specName}", reason: UncomparedReason.strayUnderLane))
+				continue
+			end 'strayFile'
+
+			collectGoldensOfOneVanishedSpec(lane, specName: specName, specGoldens: entry, entries: entries)
+		end 'eachEntry'
+	end 'eachLane'
+end 'collectGoldensOfVanishedSpecs'
+
+// Every golden under one such directory, named individually rather than counted: the reader's next act
+// is on FILES, and a count sends them off to re-derive the list this already walked.
+function collectGoldensOfOneVanishedSpec(lane GoldenLane, specName String, specGoldens FilePath, entries StringArray)
+	let listed = try Directory.list(specGoldens) otherwise 'cannotList'
+		entries.push(uncheckedEntry("{specGoldens.toString()} could not be listed, so its goldens were not censused"))
+		return
+	end 'cannotList'
+
+	for entry in listed 'eachEntry'
+		if entry.fileExtension() != FragmentExtension 'notAGolden'
+			continue
+		end 'notAGolden'
+
+		entries.push(uncomparedEntry("{lane.name}/{specName}/{entry.filename()}", reason: UncomparedReason.noSuchSpec(specName)))
+	end 'eachEntry'
+end 'collectGoldensOfOneVanishedSpec'
+
+// ⭐ **ONE ENTRY OF THE CENSUS, AND THE ONE PLACE ITS TEXT IS SPELLED.** A path a reader can act on,
+// then why nothing reads it, at `ResultNoteIndent` — the depth every other trailer in this suite puts a
+// case at, because a reader takes the trailers as one column.
+//
+// EXPORTED, with `UncomparedReason` and `UncomparedHeadline`, because `HarnessSelfTest`'s orphan gate
+// asserts on these exact lines. It builds its expectations by CALLING this, the way
+// `requireNetworkGateHolds` builds its own from `verdictLine` and `resultNoteEntry`: a gate that spelled
+// the sentence itself would be one fact written twice, and the half that drifts is always the one
+// nothing renders.
+export function uncomparedEntry(relPath String, reason UncomparedReason) returns String
+	return "{ResultNoteIndent}{relPath} — {uncomparedReasonText(reason)}\n"
+end 'uncomparedEntry'
+
+// Every way a golden on disk can be one that nothing compares. A closed union rather than a String built
+// at each site: the gate one level up asserts that three of these arms actually fire, and it can only do
+// that against a set something enumerates.
+export union UncomparedReason
+	// The spec is there and active; it declares no case by that name. Rename debris, or a deletion.
+	noSuchCase(specName String, caseName String)
+	// The spec declares the case, but this lane can never select it — so its golden there is unreadable
+	// reference whatever the compiler emits.
+	laneCannotSelectIt(specName String, caseName String, laneName String)
+	// No spec of that name exists at all: a whole `.md` renamed or deleted, leaving its directory behind.
+	noSuchSpec(specName String)
+	// A `fragments/<name>` directory naming no target this compiler builds for.
+	laneNamesNoTarget(laneName String)
+	// A file where only a lane directory belongs.
+	strayUnderFragmentsRoot
+	// A file where only a per-spec directory belongs.
+	strayUnderLane
+end 'UncomparedReason'
+
+// The sentence each arm reads as. Split from the union so the arms carry the data and this carries the
+// wording — and so a gate can name an arm without quoting a sentence.
+function uncomparedReasonText(reason UncomparedReason) returns String
+	return match reason 'reason'
+		noSuchCase(specName, caseName) gives "{specName} declares no case named `{caseName}`"
+		// Selection's remaining gates are all the spec's own text: a `<!-- targets: … -->` restriction, a
+		// trace directive only x64-windows can capture, a section pin a container format cannot answer, or
+		// a `status: draft` spec. Naming WHICH would mean re-deriving `selectableThisRun`'s conjunction
+		// here, and a second copy of it is worth less than the sentence that sends the reader to the case.
+		laneCannotSelectIt(specName, caseName, laneName) gives "{specName} declares `{caseName}`, but no run on {laneName} can select it — read its markers and its spec's status"
+		noSuchSpec(specName) gives "no spec named `{specName}` exists, so nothing on any lane declares this case"
+		laneNamesNoTarget(laneName) gives "`{laneName}` names no target this compiler builds for, so no run of any command line visits this lane"
+		strayUnderFragmentsRoot gives "a file directly under the fragments root, where only per-target lane directories live"
+		strayUnderLane gives "a file directly under a lane directory, where only per-spec directories live"
+	end 'reason'
+end 'uncomparedReasonText'
+
+// The words the census's headline is recognised by — its one spelling, shared with the gate that
+// asserts a tree with nothing to report prints NO such headline.
+export let UncomparedHeadline = "are COMPARED BY NOTHING"
+
+// A part of the tree the census could NOT read. Reported inside the same list rather than swallowed,
+// for `reportUnchecked`'s reason one level up: "we chose not to look" must never read as "we looked".
+function uncheckedEntry(what String) returns String
+	return "{ResultNoteIndent}{what}\n"
+end 'uncheckedEntry'
