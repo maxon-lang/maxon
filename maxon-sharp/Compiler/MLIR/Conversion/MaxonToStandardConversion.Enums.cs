@@ -325,16 +325,54 @@ public static partial class MaxonToStandardConversion {
       if (hasExtraArgs && caseHasAssocValues) {
         for (int ai = 0; ai < enumCase.AssociatedValues!.Count; ai++) {
           var avArg = tryCallOp.Args[1 + ai];
-          // Branchless case selection makes this a SELECT rather than a store, and a select is an
-          // i64 operation — so the payload is widened into the slot's representation here instead of
-          // being stored at its own type the way the direct construct stores it.
-          var avStdVal = EmitPayloadAsSlotBits(block, valueMap[avArg]);
+          var avSlotValue = valueMap[avArg];
+
+          // ⛔ A MANAGED PAYLOAD IS A SYMBOLIC HANDLE, NOT AN SSA VALUE, AND USING IT AS ONE WROTE
+          // AN UNRELATED NUMBER INTO THE SLOT. An `StdHeapPtr` carries the NAME of the variable the
+          // argument lowering stored the pointer in; its id belongs to the Maxon value space, so as
+          // a `select` operand it aliases whatever Std value happens to share that id. MEASURED for
+          // `Named.fromName("titled", <String>)`: the operand printed as `%21` — the no-match flag —
+          // and the slot was written with the CONSTANT 1, which the first `mm_incref` through the
+          // payload then dereferenced. The direct construct (`MaxonEnumConstructOp`) has always
+          // LOADED the pointer first; this site has to do the same.
+          var avManagedPtr = avSlotValue as StdHeapPtr;
+
+          StdI64 avStdVal;
+          if (avManagedPtr != null) {
+            var payloadVarName = avManagedPtr.VarName
+              ?? throw new InvalidOperationException(
+                $"union payload slot: the managed payload of '{enumType.Name}.{enumCase.Name}' "
+                + "arrived as an StdHeapPtr with no variable name, so there is no pointer to load. "
+                + "Every managed argument is stored to a variable before it reaches a construct.");
+            avStdVal = (StdI64)EmitLoad(block, payloadVarName, varTypes);
+          } else {
+            // Branchless case selection makes this a SELECT rather than a store, and a select is an
+            // i64 operation — so a scalar payload is widened into the slot's representation here
+            // instead of being stored at its own type the way the direct construct stores it.
+            avStdVal = EmitPayloadAsSlotBits(block, avSlotValue);
+          }
+
           int byteOffset = UnionPayloadOffset(ai);
           var currentPayload = new StdLoadIndirectOp(enumPtr, byteOffset, IrType.I64);
           block.AddOp(currentPayload);
           var selectPayload = new StdSelectI64Op(isMatch, avStdVal, (StdI64)currentPayload.Result);
           block.AddOp(selectPayload);
           block.AddOp(new StdStoreIndirectOp(selectPayload.Result, enumPtr, byteOffset, IrType.I64));
+
+          // ⭐ AND THE UNION HAS TO TAKE A REFERENCE TO WHAT IT NOW POINTS AT — the obligation the
+          // direct construct discharges with a plain `EmitIncrefValue`, because it knows its case at
+          // COMPILE time. This site picks the case at RUNTIME, so the reference is conditional on
+          // the same `isMatch` the slot's own select is: select NULL on the other arm and go through
+          // the null-guarded call, which keeps the site branchless. An unconditional incref would
+          // leak the argument once per non-matching case — and on a `fromName` that finds no case at
+          // all, that is every case there is.
+          if (avManagedPtr != null) {
+            var noRetain = new StdConstI64Op(0);
+            block.AddOp(noRetain);
+            var retained = new StdSelectI64Op(isMatch, avStdVal, noRetain.Result);
+            block.AddOp(retained);
+            EmitIncrefValueIfNonnull(block, retained.Result, scopeName: _currentFuncName);
+          }
         }
       }
     }

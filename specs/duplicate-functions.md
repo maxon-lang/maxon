@@ -83,3 +83,84 @@ end 'main'
 ```maxoncstderr
 error E3006: specs/fragments/duplicate-functions/error.multi-file-duplicate-main.test:8:10: Duplicate function 'main'
 ```
+
+### Two files declaring one TYPE collide on the members the compiler wrote for it
+
+⚠ **THE DIAGNOSTIC NAMES A MEMBER NOBODY WROTE, AT NO POSITION, AND THAT IS NOT WHAT IT SHOULD SAY.**
+What has gone wrong is that two files declare a type of the same name; what is REPORTED is a duplicate
+`hash`, with no file and no line, because the collision is only noticed when the two files' modules are
+merged and each has built that type's synthesized body. These cases pin the REFUSAL, not the wording —
+a diagnostic naming the second DECLARATION would be strictly better and would replace both messages.
+
+⭐ **THE ENUM ARM IS LONG-STANDING AND WAS NEVER GATED; THE UNION ARM IS NEW, AND IT REPLACES A SILENT
+MISCOMPILE.** A union has no synthesized `hash` of its own, so until its `.unionCases` companion was
+minted by the union's own declaration there was nothing to collide and the program COMPILED — into a
+binary that printed the right answer and then reported `MM leak: 1 allocation(s) remain`, exit 101.
+MEASURED, with a single-file program using the identical construct exiting 0 as the control. Refusing
+at compile time is what the enum arm already did.
+
+<!-- test: error.two-files-declare-one-enum -->
+```maxon
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Shape
+	circle
+	square
+end 'Shape'
+
+export function fromA() returns Integer
+	return match Shape.circle 'm'
+		circle gives 1
+		square gives 2
+	end 'm'
+end 'fromA'
+
+// --- file: b.maxon
+enum Shape
+	dot
+	line
+end 'Shape'
+
+function main() returns ExitCode
+	let t = Shape.dot
+	print("{t.name} {fromA()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: Duplicate function 'Shape.hash'
+```
+
+<!-- test: error.two-files-declare-one-union -->
+```maxon
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+export function fromA() returns Integer
+	return match Shape.circle(1) 'm'
+		circle(r) gives r
+		square(s) gives s
+	end 'm'
+end 'fromA'
+
+// --- file: b.maxon
+union Shape
+	dot
+	line
+end 'Shape'
+
+function main() returns ExitCode
+	let t = Shape.dot
+	print("{t.name} {fromA()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: Duplicate function 'Shape.unionCases.hash'
+```

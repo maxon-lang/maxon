@@ -700,8 +700,14 @@ public static partial class MaxonToStandardConversion {
   ///
   /// A float is reinterpreted rather than converted, so the eight bytes the extract reads back as
   /// `f64` are the ones the caller passed. A `bool` becomes 1 or 0, which is what the extract's
-  /// `!= 0` expects. A heap pointer is already an <c>StdI64</c> (<c>StdHeapPtr</c> derives from it)
-  /// and needs nothing.
+  /// `!= 0` expects.
+  ///
+  /// ⚠ SCALARS ONLY — A MANAGED PAYLOAD MUST NOT COME THROUGH HERE, AND USED TO. An
+  /// <c>StdHeapPtr</c> derives from <c>StdI64</c>, so it fell into the first arm and was handed
+  /// straight back: it is a symbolic handle naming the VARIABLE that holds the pointer, not an SSA
+  /// value, and as a `select` operand it aliased whatever Std value shared its id — measured, the
+  /// no-match flag, so a `String` payload's slot was written with the constant 1. The caller loads a
+  /// managed payload from its variable and increfs it, and only what is left reaches this.
   /// </summary>
   private static StdI64 EmitPayloadAsSlotBits(IrBlock<StandardOp> block, StdValue payload) {
     switch (payload) {

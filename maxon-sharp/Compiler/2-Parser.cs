@@ -3924,15 +3924,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// resolve, and again when its body is built, which REPLACES the stub with a fresh function. A
   /// flag set only on the stub is dropped by the rebuild.
   ///
-  /// ⚠ THE REACH IS A PARAMETER, NOT A LOOKUP, so a caller that must NOT inherit the type's
-  /// visibility says so in one word at its own call site instead of arranging for a table to answer
-  /// narrowly — see <see cref="EnsureUnionCasesCompanion"/>, whose stubs never get bodies.
+  /// ⚠ THE REACH IS A PARAMETER, NOT A LOOKUP, because the pre-register callers run at a point where
+  /// no table can answer: they hold the declaration's modifiers and hand them over.
   ///
-  /// ⚠ THE THREE PRE-REGISTER CALLERS ARE NOT THE AUTHORITY WHERE A REBUILD RUNS, AND ARE WHERE IT
-  /// DOES NOT. `SynthesizeDeclaredClone`, `SynthesizeStructEquals` and `SynthesizeEnumHashAndEquals`
+  /// ⚠ THE PRE-REGISTER CALLERS ARE NOT THE AUTHORITY WHERE A REBUILD RUNS, AND ARE WHERE IT DOES
+  /// NOT. `SynthesizeDeclaredClone`, `SynthesizeStructEquals` and `SynthesizeEnumHashAndEquals`
   /// REPLACE the stub, so for every type whose body is built the rebuild's reach is the one that
-  /// survives and the stub's is dead. The companion is the live counter-example: nothing rebuilds it,
-  /// so its stub's reach is the only one there is. Both must therefore be right.
+  /// survives and the stub's is dead. The stub's still has to be right, because a call is resolved —
+  /// and its visibility checked — against whatever the module holds AT THAT MOMENT, which for a
+  /// cross-file call is the stub. Both must therefore be right.
   ///
   /// ⚠ REGISTERED WITH NEITHER FLAG — which is what all six sites did — A SYNTHESIZED MEMBER IS
   /// FILE-PRIVATE, and <see cref="IsFunctionVisible"/> refused `h.clone()` one file over with
@@ -4727,31 +4727,57 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     };
     _typeRegistry[enumName] = finalEnumType;
 
-    // Pre-register synthetic hash() and equals() methods for enums (not unions). The reach comes
-    // from the modifiers in hand, not from `_exportedTypes`/`_moduleVisibleTypes` — those are filled
-    // a few lines BELOW, so reading them here would call every `export enum` file-private.
-    if (!isUnion) {
-      PreRegisterSyntheticEnumMethods(module, AliasScope.ReachOf(isExported, isModuleVisible),
-        enumName, finalEnumType);
-    }
-
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
     _currentTypeName = null;
 
-    if (isExported) _exportedTypes.Add(enumName);
-    if (isModuleVisible) _moduleVisibleTypes.Add(enumName);
+    // hash() and equals() belong to the enum itself, or — for a union, whose own `hash`/`equals` are
+    // not synthesized at all (`ResolveAutoEquatableConformance`) — to its `.unionCases` companion.
+    var syntheticMemberOwner = isUnion ? UnionCasesCompanionOf(finalEnumType) : finalEnumType;
+
+    // ⚠ THE COMPANION'S VISIBILITY IS RECORDED FROM THE DECLARATION, NOT FROM THE MINT. Minting is
+    // memoized in the type registry and a later pass reads the type back rather than re-minting, so
+    // a record written where the companion is created was ABSENT on the pass that builds the bodies
+    // — leaving `ReachOfLocalType` to answer `File` for the rebuild that survives, and an
+    // `export union`'s discriminant members unreachable one file over. The companion IS this
+    // declaration seen through the discriminant, so it reaches exactly as far as the union.
+    if (isExported) {
+      _exportedTypes.Add(enumName);
+      _exportedTypes.Add(syntheticMemberOwner.Name);
+    }
+    if (isModuleVisible) {
+      _moduleVisibleTypes.Add(enumName);
+      _moduleVisibleTypes.Add(syntheticMemberOwner.Name);
+    }
+
+    PreRegisterSyntheticEnumMethods(module, AliasScope.ReachOf(isExported, isModuleVisible),
+      syntheticMemberOwner.Name, syntheticMemberOwner);
 
     ConsumeBlockEnd();
   }
 
   /// <summary>
-  /// Lazily materialize the <UnionName>.unionCases companion enum the first
-  /// time it's referenced — either through member access (UnionName.unionCases.X)
-  /// or as a type name (parameter / variable / return type). Synthesizing on
-  /// demand keeps the compiled binary smaller for unions whose discriminant
-  /// is never used as a first-class value.
+  /// The <UnionName>.unionCases companion enum — a plain int-backed enum with one bare case per
+  /// variant, in declaration order. Memoized in the type registry, so the first caller mints it and
+  /// every later one reads it back.
+  ///
+  /// ⭐ THE UNION'S OWN DECLARATION MINTS IT (<see cref="PreScanEnum"/>), AND THAT IS WHAT MAKES ITS
+  /// MEMBERS BUILDABLE AT ALL. It used to be materialized purely on demand, from whichever file
+  /// first wrote `U.unionCases` — and a type nobody declares is a type no file owns, which cost
+  /// twice. Its `hash`/`equals` were registered as stubs and their bodies were never built, because
+  /// the only thing that builds an enum's bodies is <see cref="ParseEnumDecl"/> and the companion is
+  /// never "declared": the emitted module really did contain
+  /// `func @U.unionCases.equals(self: i64, other: i64) -> i1 { }`, and calling it returned whatever
+  /// fell out of the next function in `.text` — measured, `circle.equals(square)` answered TRUE. And
+  /// the reach of those stubs was decided by WHICH file asked first, since only the declaring file's
+  /// parser has the union's modifiers. Minted at the declaration, exactly one file owns both.
+  ///
+  /// ⚠ The on-demand callers still exist and still mint: a parser is constructed per file per pass
+  /// and seeds its registry from the module as it stood then, so a file that names `U.unionCases`
+  /// can be parsed before the declaring file's pre-scan of that pass has published it. They mint the
+  /// TYPE only — the members, and the visibility record they are registered under, are the
+  /// declaration's, written once by the one parser that holds the union's modifiers.
   /// </summary>
-  private IrEnumType EnsureUnionCasesCompanion(IrModule<MaxonOp> module, IrEnumType union) {
+  private IrEnumType UnionCasesCompanionOf(IrEnumType union) {
     var companionName = union.Name + ".unionCases";
     if (_typeRegistry.TryGetValue(companionName, out var existing) && existing is IrEnumType existingEnum) {
       return existingEnum;
@@ -4768,21 +4794,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       IsUnion = false
     };
     _typeRegistry[companionName] = companionType;
-
-    // ⛔ THE COMPANION'S SYNTHESIZED MEMBERS ARE FILE-PRIVATE ON PURPOSE: YOU CANNOT EXPORT A MEMBER
-    // THAT DOES NOT EXIST. Every other compiler-synthesized `clone`/`equals`/`hash` inherits its
-    // declaring type's visibility, and these deliberately do not, because the stubs registered on the
-    // next line are the ONLY thing that ever exists for them — `SynthesizeEnumHashAndEquals` is
-    // reached from `ParseEnumDecl` alone and the companion is never "declared", so the emitted module
-    // really does contain `func @U.unionCases.equals(self: i64, other: i64) -> i1 { }`. Giving them
-    // the union's reach turns a compile-time `E3008` into a runtime call into an empty body, which is
-    // strictly worse than refusing: measured, a cross-file `.equals()` on a companion value went from
-    // refused to a nil-dereference panic. `AliasReach.File` here keeps the refusal until the bodies
-    // exist, and the case that holds it is `specs/union-cases.md`'s
-    // `error.union-cases-companion-equals-is-not-callable-cross-file`.
-    PreRegisterSyntheticEnumMethods(module, AliasReach.File, companionName, companionType);
-    if (_exportedTypes.Contains(union.Name)) _exportedTypes.Add(companionName);
-    if (_moduleVisibleTypes.Contains(union.Name)) _moduleVisibleTypes.Add(companionName);
     return companionType;
   }
 
@@ -4983,11 +4994,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Pre-register synthetic hash() and equals() method signatures for enums.
   /// These are registered during pre-scan so monomorphization can find them.
   ///
-  /// ⚠ <paramref name="reach"/> IS PASSED IN RATHER THAN LOOKED UP, because neither caller can be
-  /// served by a lookup at the moment it calls. `ParseEnumDecl` runs BEFORE `_exportedTypes.Add`, so
-  /// a table read here would call every `export enum` file-private and only the later rebuild would
-  /// mask it; it holds the modifiers itself and hands them over. `EnsureUnionCasesCompanion` needs
-  /// the opposite of what the tables would say, deliberately — see its own note.
+  /// ⚠ <paramref name="reach"/> IS PASSED IN RATHER THAN LOOKED UP. The caller is `PreScanEnum`,
+  /// which holds the declaration's modifiers; a table read here would answer for the enclosing
+  /// PARSER's view rather than for the declaration, and for a union's `.unionCases` companion — a
+  /// type no file declares — there is no table entry to read at all.
+  ///
+  /// ⚠ <paramref name="enumName"/> IS THE MEMBERS' OWNER, WHICH FOR A UNION IS THE COMPANION AND NOT
+  /// THE UNION. A union's own `hash`/`equals` are not synthesized (see `ResolveAutoEquatableConformance`).
   /// </summary>
   private void PreRegisterSyntheticEnumMethods(IrModule<MaxonOp> module, AliasReach reach,
       string enumName, IrEnumType enumType) {
@@ -7330,10 +7343,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       SkipNewlines();
     }
 
-    // Synthesize hash() and equals() for enums (not unions)
-    if (!enumType.IsUnion) {
-      SynthesizeEnumHashAndEquals(module, enumName, enumType);
-    }
+    // Synthesize hash() and equals() bodies — the enum's own, or, for a union, its `.unionCases`
+    // companion's. The companion is registered by the same declaration (see PreScanEnum), so this is
+    // the one file that builds them: the full parse gives every file its own module, and two files
+    // each building a body merge into `Duplicate function`.
+    var syntheticMemberOwner = enumType.IsUnion ? UnionCasesCompanionOf(enumType) : enumType;
+    SynthesizeEnumHashAndEquals(module, syntheticMemberOwner.Name, syntheticMemberOwner);
 
     // Synthesize clone() for an auto-Cloneable union, the same place and on the same condition a
     // struct's is synthesized (`ParseTypeDecl`).
@@ -9103,7 +9118,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             && _typeRegistry.TryGetValue(name, out var unionEntry)
             && unionEntry is IrEnumType union
             && union.IsUnion) {
-          EnsureUnionCasesCompanion(_currentModule!, union);
+          UnionCasesCompanionOf(union);
           Advance(); // consume '.'
           Advance(); // consume 'unionCases'
           return dotName;
@@ -16281,10 +16296,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           CheckNoSelfFieldShadow(bindingName, bindingLine, bindingCol);
         var assocType = assocValues[i].Type;
         var bindingKind = assocType.ToValueKind();
-        string? structTypeName = assocType is IrStructType st ? st.Name
-          : assocType is IrEnumType et ? et.Name : null;
 
-        var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, enumTypeName, i, bindingKind, structTypeName);
+        // The RECORD this payload loads, when it is one. Shapes the load, and is null for a scalar.
+        string? payloadRecordTypeName = DeclaredTypeNameOf(assocType);
+
+        // ⭐ AND, SEPARATELY, WHAT THE PAYLOAD WAS DECLARED AS — which for a ranged alias is the
+        // ALIAS, not the primitive underneath it. A payload binding states a declared type exactly
+        // as a struct field read and a ranged parameter do, and the declared-type doors read that
+        // name off the binding's `VarInfo`. Dropped, the binding arrived as a bare primitive: E3010
+        // went SILENT for it while the identical cast on a local and on a struct field was refused
+        // cleanly, and the cast it then let through died in lowering as
+        // `E9001 … Unable to cast 'StdI64' to 'StdF64'` — a .NET stack trace printed at the user.
+        // A KIND IS A LOSSY PROJECTION OF A TYPE, and the half it drops is the RANGE.
+        string? bindingTypeName = payloadRecordTypeName
+          ?? (assocType is IrRangedPrimitiveType assocRanged ? assocRanged.Name : null);
+
+        var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, enumTypeName, i, bindingKind, payloadRecordTypeName);
         _currentBlock!.AddOp(payloadOp);
 
         // A function-typed payload's signature is its DECLARED type, and the binding is the only
@@ -16301,7 +16328,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
         _currentBlock!.AddOp(new MaxonAssignOp(bindingName, payloadOp.Result,
           isDeclaration: true, isMutable: scrutineeMutable, bindingKind));
-        _variables.Declare(bindingName, bindingKind, scrutineeMutable, payloadOp.Result, _currentBlock!, structTypeName: structTypeName, fnType: bindingFnType, payloadBinding: payloadBinding);
+        _variables.Declare(bindingName, bindingKind, scrutineeMutable, payloadOp.Result, _currentBlock!, structTypeName: bindingTypeName, fnType: bindingFnType, payloadBinding: payloadBinding);
         if (!bindingName.StartsWith("__discard_")) {
           _localVarLocations.Add((bindingName, bindingLine, bindingCol));
         }
@@ -19449,7 +19476,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           // Lets readers match exhaustively on the discriminant of any union, regardless of
           // whether variants carry associated values.
           if (memberName == "unionCases" && enumType.IsUnion) {
-            var companionEnum = EnsureUnionCasesCompanion(_currentModule!, enumType);
+            var companionEnum = UnionCasesCompanionOf(enumType);
             var companionName = companionEnum.Name;
             _usedTypeAliases.Add(token.Value);
             Advance(); // consume '.'

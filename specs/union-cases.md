@@ -26,7 +26,9 @@ end 'Shape'
 //   end
 ```
 
-Because `Shape.unionCases` is a regular enum it inherits `.allCases`, `.allCaseNames`, `.rawValue`, `.fromRawValue`, `.name`, and `.ordinal`. Match arms over a `Shape.unionCases` value are exhaustiveness-checked, just like match arms over the union itself.
+Because `Shape.unionCases` is a regular enum it inherits `.allCases`, `.allCaseNames`, `.rawValue`, `.fromRawValue`, `.name`, `.ordinal`, and the synthesized `.hash()` / `.equals()` every enum gets. Match arms over a `Shape.unionCases` value are exhaustiveness-checked, just like match arms over the union itself.
+
+The companion is minted by the union's own declaration, so its synthesized members are built once, by the file that declares the union, and reach exactly as far as the union does.
 
 The intended use is symmetric (de)serialization: write the variant's `rawValue` to a buffer alongside its payload; on read, lift the raw `int` back to a `U.unionCases` via `fromRawValue` and match on it to dispatch the payload reader. Adding a new variant to the union forces a non-exhaustive-match build error in *both* writer and reader.
 
@@ -524,18 +526,148 @@ end 'main'
 7
 ```
 
-### A synthesized member of `.unionCases` is NOT reachable across a file boundary
+### `fromName` with a HEAP payload
 
-<!-- test: error.union-cases-companion-equals-is-not-callable-cross-file -->
-⛔ **A CARVE-OUT, AND IT IS DELIBERATE: YOU CANNOT EXPORT A MEMBER THAT DOES NOT EXIST.** Every
-other compiler-synthesized `clone`/`equals`/`hash` takes its declaring type's visibility — see
-`specs/export-keyword.md`'s *"A member the COMPILER wrote is as visible as the type it belongs to"*.
-The `.unionCases` companion is the one exception, because `EnsureUnionCasesCompanion` registers its
-`hash` and `equals` as STUBS and nothing ever builds their bodies: the emitted module contains
-`func @Shape.unionCases.equals(self: i64, other: i64) -> i1 { }`, and calling it panics with a nil
-dereference. Giving those stubs the union's visibility would turn this compile-time refusal into a
-runtime call into an empty function, which is strictly worse than refusing. The refusal stands until
-the companion has real bodies.
+⛔ **THE SLOT WAS WRITTEN WITH AN UNRELATED NUMBER, AND THE UNION NEVER TOOK A REFERENCE.** `fromName` picks its
+case at RUNTIME, so it writes every payload slot branchlessly — load the slot, `arith.select` between that and
+the new value, store the result. Two things follow from that shape and neither was handled.
+
+⚠ **A MANAGED PAYLOAD IS A SYMBOLIC HANDLE, NOT AN SSA VALUE.** An `StdHeapPtr` names the VARIABLE holding the
+pointer and carries an id from the Maxon value space, so as a `select` operand it aliased whatever Std value
+happened to share that id. MEASURED for `Named.fromName("titled", <String>)`: the operand printed as `%21` — the
+call's own no-match flag — so the slot was written with the CONSTANT 1, and the first `mm_incref` through the
+payload dereferenced it. The direct construct (`MaxonEnumConstructOp`) has always LOADED the pointer from its
+variable first.
+
+⚠ **AND THE REFERENCE THE UNION TAKES IS CONDITIONAL.** The direct construct increfs unconditionally because it
+knows its case at compile time; this site does not, so the incref is selected on the same `isMatch` the slot's
+own store is and goes through the null-guarded call. An unconditional one would leak the argument once per
+non-matching case.
+
+<!-- test: union-payload.from-name-writes-a-heap-payload-slot -->
+```maxon
+union Named
+	blank
+	titled(t String)
+end 'Named'
+
+function main() returns ExitCode
+	let n = try Named.fromName("titled", "a payload long enough to be a real heap allocation") otherwise Named.blank
+	let s = match n 'k'
+		blank gives "blank"
+		titled(t) gives t
+	end 'k'
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a payload long enough to be a real heap allocation
+```
+
+<!-- test: union-payload.from-name-retains-only-the-matching-case-s-heap-payload -->
+TWO cases carry a heap payload into the SAME slot, so the arm the runtime does not take is the one that has to
+stay quiet: `subtitled` re-selects slot 0 after `titled` has written it, and an incref there would be a second
+reference to a record with one owner. The exit code is the assertion — the runtime reports a surviving
+allocation as 101.
+```maxon
+typealias Small = int(0 to 1000)
+
+union Named
+	blank
+	titled(t String)
+	subtitled(s String)
+	numbered(n Small)
+end 'Named'
+
+function textOf(n Named) returns String
+	return match n 'k'
+		blank gives "blank"
+		titled(t) gives t
+		subtitled(s) gives s
+		numbered(v) gives "num{v}"
+	end 'k'
+end 'textOf'
+
+function main() returns ExitCode
+	let a = try Named.fromName("titled", "a payload long enough to be a real heap allocation") otherwise Named.blank
+	print("{textOf(a)}\n")
+	let b = try Named.fromName("subtitled", "a second payload long enough to be a real heap allocation") otherwise Named.blank
+	print("{textOf(b)}\n")
+	let c = try Named.fromName("numbered", 7) otherwise Named.blank
+	print("{textOf(c)}\n")
+	let d = try Named.fromName("blank") otherwise Named.numbered(1)
+	print("{textOf(d)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a payload long enough to be a real heap allocation
+a second payload long enough to be a real heap allocation
+num7
+blank
+```
+
+### `.unionCases` has real `hash` and `equals`
+
+⛔ **THE COMPANION IS A TYPE NO FILE DECLARES, AND FOR A LONG TIME THAT MEANT NO FILE BUILT ITS MEMBERS.** Its
+`hash` and `equals` were registered as STUBS and nothing ever filled them in — the only thing that builds an
+enum's bodies is `ParseEnumDecl`, and the companion is never "declared". The emitted module contained
+`func @Shape.unionCases.equals(self: i64, other: i64) -> i1 { }` verbatim, so a call fell through into whatever
+the emitter had placed next in `.text`.
+
+⛔ **WHAT THAT LOOKED LIKE WAS A PROPERTY OF MODULE LAYOUT, NOT OF THE BUG.** A nil dereference, a stack
+overflow and a correct-by-luck exit 0 were all observed from ONE compiler over three one-line variants, so a
+case keyed on the panic would be a false-red generator wired to an unrelated property. These cases pin the
+ANSWER, which is layout-independent. MEASURED before the fix: `circle.equals(square)` answered **true**.
+
+⭐ **THE UNION'S OWN DECLARATION NOW MINTS THE COMPANION**, which is what makes the members buildable at all:
+exactly one file owns them, so their bodies are built once and their reach is the union's own rather than
+"whichever file wrote `U.unionCases` first". A synthesized member is as visible as the type it belongs to — see
+`specs/export-keyword.md`'s *"A member the COMPILER wrote is as visible as the type it belongs to"* — and the
+companion is no longer the exception it had to be while the bodies did not exist.
+
+<!-- test: union-cases.companion-equals-and-hash -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(r Integer)
+	square(s Integer)
+	point
+end 'Shape'
+
+function main() returns ExitCode
+	let a = Shape.unionCases.circle
+	let a2 = Shape.unionCases.circle
+	let b = Shape.unionCases.square
+	let p = Shape.unionCases.point
+	print("aa={a.equals(a2)} ab={a.equals(b)} ap={a.equals(p)}\n")
+	print("h={a.hash()} hb={b.hash()} hp={p.hash()}\n")
+	print("hashAgrees={a.hash() == a2.hash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+aa=true ab=false ap=false
+h=0 hb=1 hp=2
+hashAgrees=true
+```
+
+<!-- test: union-cases.companion-equals-crosses-a-file-boundary -->
+The companion is materialized by a file that is NOT the union's, and the call is in a THIRD. This used to be
+`error.union-cases-companion-equals-is-not-callable-cross-file`, a deliberate carve-out holding the member
+file-private because you cannot export one that does not exist. The bodies exist, so the fence is retired and
+the member reaches exactly as far as `export union Shape` says.
 ```maxon
 // --- file: a.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -560,19 +692,21 @@ function main() returns ExitCode
 	if a.equals(b) 'same'
 		return 1
 	end 'same'
+	if not a.equals(tagOf(Shape.circle(9))) 'differs'
+		return 2
+	end 'differs'
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3008: specs/fragments/union-cases/error.union-cases-companion-equals-is-not-callable-cross-file.test:22:7: function 'Shape.unionCases.equals' is not exported
+```exitcode
+0
 ```
 
-<!-- test: error.union-cases-companion-equals-is-not-callable-from-the-declaring-file-s-neighbour -->
-The same refusal with the companion materialized by the OTHER file. `.unionCases` is synthesized on
-demand by whichever file mentions it first, and its registry entry carries the UNION's source file,
-so "which file asked first" used to decide the answer: the declaring file got a file-private member
-and any other file got an exported one, from one program. Here the declaring file names it first;
-above, a third file does. Both refuse, and that is the point of having both.
+<!-- test: union-cases.companion-equals-crosses-a-file-boundary-when-the-declaring-file-names-it-first -->
+The same program with the DECLARING file naming `.unionCases` first. Both orders are kept because they take
+different routes through the compiler, not because the answer could differ: here the declaring file's use site
+reads back the companion its own pre-scan minted, and above a foreign parser mints the type itself. Their
+answers agreeing is the point — "who asked first" once decided the member's reach.
 ```maxon
 // --- file: a.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -601,9 +735,46 @@ function main() returns ExitCode
 	if a.equals(b) 'same'
 		return 1
 	end 'same'
+	if not a.equals(firstTag()) 'differsFromFirst'
+		return 2
+	end 'differsFromFirst'
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3008: specs/fragments/union-cases/error.union-cases-companion-equals-is-not-callable-from-the-declaring-file-s-neighbour.test:26:7: function 'Shape.unionCases.equals' is not exported
+```exitcode
+0
+```
+
+<!-- test: union-cases.companion-equals-reaches-a-module-union-s-subtree -->
+The `module` half of the same fact, and it needs its own case: the reach the rebuilt bodies take is
+read back out of the parser's own tables, and reading only the exported one is half of a two-half
+fact — the half that answers WRONG for a `module union`, calling its companion's members file-private
+inside the very subtree the modifier opens. `Shape` is declared in one file of `api/` and its
+discriminant compared in another.
+```maxon
+// --- file: api/shapes.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+// --- file: api/tags.maxon
+module function tagsDiffer() returns bool
+	let a = Shape.unionCases.circle
+	let b = Shape.unionCases.square
+	return not a.equals(b)
+end 'tagsDiffer'
+
+// --- file: api/main.maxon
+function main() returns ExitCode
+	if tagsDiffer() 'differ'
+		return 7
+	end 'differ'
+	return 1
+end 'main'
+```
+```exitcode
+7
 ```

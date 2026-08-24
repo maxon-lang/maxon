@@ -645,3 +645,61 @@ end 'main'
 ```maxoncstderr
 error E3010: specs/fragments/type-casting/error.unneeded.through-a-try-otherwise-result.test:17:39: unneeded cast: 'Narrow' already fits in 'Mid'
 ```
+
+## E3010 SEES A DECLARED ALIAS THROUGH A UNION PAYLOAD BINDING TOO — THE THIRD DOOR OF THE SAME FAMILY
+
+⛔ **A `match` ARM'S PAYLOAD BINDING ARRIVED AS A BARE PRIMITIVE, AND THAT COST TWICE.** The binding recorded a
+declared type name only when the associated value was a struct or an enum, so a ranged alias was dropped: the
+door above went SILENT for it, and — because nothing had refused the cast — a cross-kind `int` → `float` cast
+reached the backend and died there as `E9001: Unable to cast object of type 'StdI64' to type 'StdF64'` with a
+four-frame .NET stack trace printed at the user.
+
+⭐ **THE SAME CAST ONE PLACE OVER WAS ALREADY REFUSED CLEANLY**, which is what identified this as a missing door
+rather than a policy question: a plain local and a struct FIELD both answered E3010 for the identical pair of
+aliases. The case below holds all three shapes in one program, in declaration order, so the assertion is that
+they answer IDENTICALLY.
+
+⛔ **A float → float SPELLING PROVES NOTHING HERE AND WAS ONCE OFFERED AS IF IT DID.** `v as Fraction` between
+two float ranges compiles in all three shapes, because E3010 is not supposed to fire there at all — probing it
+tests a door that was never open. The int → float spelling is the one that discriminates.
+
+<!-- test: error.unneeded.through-a-union-payload-binding -->
+```maxon
+typealias Count = int(0 to 255)
+typealias Small = float(0.0 to 10.0)
+
+union Tagged
+	blank
+	one(n Count)
+end 'Tagged'
+
+type Holder
+	export var n as Count
+
+	export static function make() returns Holder
+		return Self{n: 5}
+	end 'make'
+end 'Holder'
+
+function fromPayload(t Tagged) returns Small
+	return match t 'k'
+		blank gives 0.0
+		one(n) gives n as Small
+	end 'k'
+end 'fromPayload'
+
+function main() returns ExitCode
+	let local = 5 as Count
+	let a = local as Small
+	let h = Holder.make()
+	let b = h.n as Small
+	let c = fromPayload(Tagged.one(3))
+	print("{a} {b} {c}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:21:18: unneeded cast: 'Count' already fits in 'Small'
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:27:16: unneeded cast: 'Count' already fits in 'Small'
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:29:14: unneeded cast: 'Count' already fits in 'Small'
+```

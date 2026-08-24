@@ -1,0 +1,66 @@
+// Test: union-cases.companion-equals-reaches-a-module-union-s-subtree
+// --- file: api/shapes.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+// --- file: api/tags.maxon
+module function tagsDiffer() returns bool
+	let a = Shape.unionCases.circle
+	let b = Shape.unionCases.square
+	return not a.equals(b)
+end 'tagsDiffer'
+
+// --- file: api/main.maxon
+function main() returns ExitCode
+	if tagsDiffer() 'differ'
+		return 7
+	end 'differ'
+	return 1
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @api.Shape.unionCases.equals(self: i64, other: i64) -> i1 {
+  entry:
+    x64.jmp stdlib.int.equals
+  }
+  func @api.tagsDiffer() -> i1 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rbp-16], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call api.Shape.unionCases.equals
+    x64.mov rsi, 1
+    x64.xor rax, rsi
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call api.tagsDiffer
+    x64.test rax, rax
+    x64.je main.differ_0.after
+  differ_0:
+    x64.mov rax, 7
+    x64.epilogue
+    x64.ret
+  differ_0.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---
