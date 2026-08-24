@@ -69,20 +69,23 @@ public static class LiteralCoverageAnalysisPass {
   // constant.
   private enum LitKind { String, ByteString, Char, Array, EmptyContainer }
 
-  private enum Reason { Eligible, MutatingIntrinsicTarget, PassedToMutatingParam, ConservativeIndirect, Aliased }
+  // Eligible = never written through, share it outright. Materialised = written through, but every
+  // write has an insertion point, so it is shared AND the lowering rebinds it before each write. The
+  // rest are rejections, kept apart so the coverage report can say WHY.
+  private enum Reason { Eligible, Materialised, MutatingIntrinsicTarget, PassedToMutatingParam, ConservativeIndirect, Aliased }
 
-  /// Runs the whole-program escape analysis and returns the SET of static-eligible literal
-  /// site ids (the MaxonValue result id of each provably-never-mutated string/byte/char
-  /// literal). This is the sound lower bound the static-literal lowering consumes: a site in
-  /// the set is safe to emit as one shared immortal record; a site absent from it falls back
-  /// to a per-evaluation heap allocation. When <paramref name="report"/> is set, also prints
-  /// the coverage report to stderr (the `--literal-coverage` measurement path).
-  public static HashSet<int> Run(IrModule<MaxonOp> module, bool report) {
+  /// Runs the whole-program escape analysis and writes its verdict onto the module: the SET of
+  /// site ids that may become one shared immortal record (`StaticEligibleLiteralIds`), and the ops
+  /// before which the lowering must insert a materialise (`MaterialisePoints`) for the sites that
+  /// are shared DESPITE being written through. A site absent from both falls back to a
+  /// per-evaluation heap allocation. When <paramref name="report"/> is set, also prints the
+  /// coverage report to stderr (the `--literal-coverage` measurement path).
+  public static void Run(IrModule<MaxonOp> module, bool report) {
     var analysis = new Analysis(module);
     analysis.BuildGraphs();
     analysis.Solve();
     if (report) analysis.Report();
-    return analysis.CollectEligible();
+    analysis.PublishVerdict();
   }
 
   private sealed class Analysis {
@@ -187,6 +190,8 @@ public static class LiteralCoverageAnalysisPass {
     }
 
     private sealed class CallSite {
+      // The call itself — a materialise for an argument is inserted in front of THIS op.
+      public required MaxonCallOp Op;
       public required string Callee;
       public required int[] ArgNodes;
       public required int[] ArgValueIds;
@@ -200,6 +205,13 @@ public static class LiteralCoverageAnalysisPass {
       // Nodes mutated regardless of interprocedural facts.
       public readonly List<int> IntrinsicSinks = [];
       public readonly List<int> IndirectSinks = [];
+      // The same marks, split by whether a materialise could be put in FRONT of them. A write whose
+      // receiver this pass can name is placeable; an escape into a heap place is not, and neither is
+      // an indirect/closure/async capture (IndirectSinks, which is unplaceable in its entirety).
+      // Every mark lands in exactly one of these, because MarkMutated is private to the two entry
+      // points that classify — there is no way to mark a component without saying which it is.
+      public readonly List<(int Node, MaxonOp Op, MaxonValue Receiver)> PlaceableWrites = [];
+      public readonly List<int> UnplaceableSinks = [];
       // Value ids that sit DIRECTLY in a sink position — used for reason attribution.
       public readonly HashSet<int> IntrinsicSinkValueIds = [];
       public readonly HashSet<int> IndirectSinkValueIds = [];
@@ -212,6 +224,17 @@ public static class LiteralCoverageAnalysisPass {
       // Literal sites in this function. Preview is the literal text (truncated),
       // kept only for the optional LITCOV_DUMP diagnostic.
       public readonly List<(LitKind Kind, int ValueId, string Preview)> Literals = [];
+      // Built once, on first use, and shared by the report and the verdict — see PlanIndex.
+      public PlanIndex? Plan;
+    }
+
+    /// The per-function indexes the materialise plan reads. Three single walks of the body, so the
+    /// plan stays linear in program size rather than re-walking once per candidate site.
+    private sealed class PlanIndex {
+      public readonly Dictionary<int, MaxonOp> ProducerOf = [];         // value id -> the op that defined it
+      public readonly Dictionary<int, int> NonAssignUses = [];          // value id -> uses by ops that are not assigns
+      public readonly Dictionary<int, HashSet<string>> ReadNames = [];  // root -> the binding names this body READS
+      public readonly Dictionary<int, List<MaxonOp>> ProducersOfRoot = [];
     }
 
     public void BuildGraphs() {
@@ -273,7 +296,7 @@ public static class LiteralCoverageAnalysisPass {
           // global is immutable, so its initializer stays eligible. Mirrors the IsMutable guard on
           // constant array literals.
           if (_module.GlobalVarInfos.TryGetValue(gs.GlobalName, out var gvi) && gvi.Mutable) {
-            AddSink(ctx, gs.Value.Id);
+            AddEscapeSink(ctx, gs.Value.Id);
           }
           break;
         case MaxonFieldAccessOp fa when fa.Result != null:
@@ -297,7 +320,7 @@ public static class LiteralCoverageAnalysisPass {
             // no literal site in it to mark. (Guarding on it was tried and MEASURED to change nothing
             // — 3295 golden `mm_alloc` sites either way.) `managed` is excluded above for the usual
             // reason: a wrapper IS its record, so that access is aliasing rather than a place.
-            if (fa.FieldName != ManagedWrapperFieldName) AddSink(ctx, fa.Result.Id);
+            if (fa.FieldName != ManagedWrapperFieldName) AddEscapeSink(ctx, fa.Result.Id);
           }
           break;
         // --- enum payload slots: a heap place, exactly like a struct field ---
@@ -366,7 +389,7 @@ public static class LiteralCoverageAnalysisPass {
 
         // --- dedicated mutating managed-mem ops: receiver is operand 0 ---
         case MaxonManagedMemSetOp setOp:
-          AddSink(ctx, setOp.ManagedStruct.Id);
+          AddWriteSink(ctx, setOp, setOp.ManagedStruct);
           AddEscapeSink(ctx, setOp.Value);
           break;
 
@@ -377,7 +400,7 @@ public static class LiteralCoverageAnalysisPass {
         case MaxonManagedMemRemoveOp:
         case MaxonManagedMemByteSetOp:
         case MaxonManagedMemAppendOp:
-          if (op.Operands.Count > 0) AddSink(ctx, op.Operands[0].Id);
+          if (op.Operands.Count > 0) AddWriteSink(ctx, op, op.Operands[0]);
           break;
 
         // --- indirect / async: every arg conservatively mutated ---
@@ -419,9 +442,21 @@ public static class LiteralCoverageAnalysisPass {
       }
     }
 
-    private void AddSink(FuncCtx ctx, int valueId) {
+    /// Mark a value's component mutated. PRIVATE on purpose: every mark must also be classified as
+    /// placeable or not (see FuncCtx.PlaceableWrites), and a caller that could mark without saying
+    /// which would leave a component looking fully placeable when it is not — which under
+    /// materialise-at-the-write is a silent write through a shared record, not a lost optimization.
+    private void MarkMutated(FuncCtx ctx, int valueId) {
       ctx.IntrinsicSinks.Add(ValueNode(valueId));
       ctx.IntrinsicSinkValueIds.Add(valueId);
+    }
+
+    /// A WRITE through <paramref name="receiver"/>, performed by <paramref name="op"/>. The receiver
+    /// is a value this pass can name, so the lowering could rebind it to a private record immediately
+    /// before the op rather than the site having to be refused outright.
+    private void AddWriteSink(FuncCtx ctx, MaxonOp op, MaxonValue receiver) {
+      MarkMutated(ctx, receiver.Id);
+      ctx.PlaceableWrites.Add((ValueNode(receiver.Id), op, receiver));
     }
 
     /// A managed value STORED INTO A HEAP PLACE — a struct field, a container slot, a mutable global —
@@ -454,7 +489,115 @@ public static class LiteralCoverageAnalysisPass {
     /// what is NOT a store: `sb.append(other)` COPIES its source's bytes rather than putting the source
     /// anywhere, so only `set` puts a value in a container slot.
     private void AddEscapeSink(FuncCtx ctx, MaxonValue value) {
-      if (value is MaxonStruct or MaxonEnum) AddSink(ctx, value.Id);
+      if (value is MaxonStruct or MaxonEnum) AddEscapeSink(ctx, value.Id);
+    }
+
+    private void AddEscapeSink(FuncCtx ctx, int valueId) {
+      MarkMutated(ctx, valueId);
+      ctx.UnplaceableSinks.Add(ValueNode(valueId));
+    }
+
+    private PlanIndex PlanIndexFor(FuncCtx ctx) {
+      if (ctx.Plan != null) return ctx.Plan;
+      var idx = new PlanIndex();
+      foreach (var block in ctx.Func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          foreach (var res in op.Results) {
+            idx.ProducerOf[res.Id] = op;
+            var producedRoot = Find(ValueNode(res.Id));
+            if (!idx.ProducersOfRoot.TryGetValue(producedRoot, out var producers))
+              idx.ProducersOfRoot[producedRoot] = producers = [];
+            producers.Add(op);
+          }
+          if (op is not MaxonAssignOp)
+            foreach (var operand in op.Operands)
+              idx.NonAssignUses[operand.Id] = idx.NonAssignUses.GetValueOrDefault(operand.Id) + 1;
+          if (op is IReadsVarByName reader) {
+            var readRoot = Find(VarNode(ctx.Func.Name, reader.ReadVarName));
+            if (!idx.ReadNames.TryGetValue(readRoot, out var names))
+              idx.ReadNames[readRoot] = names = [];
+            names.Add(reader.ReadVarName);
+          }
+        }
+      }
+      ctx.Plan = idx;
+      return idx;
+    }
+
+    /// A site the program DOES write through can still be ONE shared immortal record, provided every
+    /// write is somewhere a materialise can be inserted in front of: rebind the local to a private
+    /// empty record first, so the write lands on a record that local owns. That is exactly what the
+    /// 75 hand-written `sharedEmptyX` anchors do, and it is the only thing that reaches the shape
+    /// they exist for — `var s = create(); if rare: s.push(x)` — because this analysis is
+    /// flow-INSENSITIVE, so one reachable write poisons the value on every path, including the paths
+    /// that never write.
+    ///
+    /// THE SOUNDNESS DIRECTION IS INVERTED HERE, AND THAT IS THE WHOLE RISK. Everywhere else in this
+    /// pass a missed write costs an allocation. Here a missed write is a write THROUGH THE SHARED
+    /// RECORD — the four corruptions AddEscapeSink lists, arriving by a new road. So this returns
+    /// null on anything it cannot fully account for, and the caller then leaves the site allocating
+    /// exactly as before. Every `return null` below is that rule, not a missing case.
+    private List<(MaxonOp Op, MaterialisePoint Point)>? PlanMaterialise(
+      FuncCtx ctx, int siteValueId, int root, PlanIndex idx) {
+
+      // What to build in place of the shared record: the factory's own constant. Only an
+      // empty-container site reaches here, so its def is the call to that factory.
+      if (idx.ProducerOf.GetValueOrDefault(siteValueId) is not MaxonCallOp defCall
+          || !_module.ConstantEmptyContainerFactories.TryGetValue(defCall.Callee, out var record))
+        return null;
+
+      // (1) Anything marking this component that has NO placement kills it. These are exactly the
+      // marks FinalMutation makes, split so nothing can mark a component without landing in one of
+      // them: an escape into a heap place, a closure/indirect/async capture, a caller that writes
+      // through the returned value, and a parameter — whose record belongs to the caller, so this
+      // body owns no lvalue for it.
+      foreach (var n in ctx.UnplaceableSinks) if (Find(n) == root) return null;
+      foreach (var n in ctx.IndirectSinks) if (Find(n) == root) return null;
+      if (_callerMutatesResult.Contains(ctx.Func.Name))
+        foreach (var rn in ctx.ReturnNodes) if (Find(rn) == root) return null;
+      foreach (var pn in ctx.ParamNodes) if (pn >= 0 && Find(pn) == root) return null;
+
+      // (2) Exactly ONE binding may read the component. MEASURED why: `var b = a` ALIASES in this
+      // language — `a.push(1)` then `b.count()` is 1 and `a is b` is true — so rebinding `a` at the
+      // write would leave `b` looking at the shared empty record: 0 where the language says 1, and
+      // `is` false where it says true. A second reader is a second handle, and a rebind reaches one.
+      if (!idx.ReadNames.TryGetValue(root, out var names) || names.Count != 1) return null;
+      var binding = names.First();
+
+      // (3) ...and nothing else holds the record: every value in the component is either the site's
+      // own def or a reload of that binding, and the def flows nowhere but into assigns. Together
+      // with (2) that says the record is reachable ONLY through the binding, which is what makes
+      // rebinding it a COMPLETE rewrite rather than a partial one.
+      if (idx.NonAssignUses.GetValueOrDefault(siteValueId) != 0) return null;
+      if (idx.ProducersOfRoot.TryGetValue(root, out var producers))
+        foreach (var producer in producers)
+          if (!ReferenceEquals(producer, defCall)
+              && (producer is not IReadsVarByName reload || reload.ReadVarName != binding))
+            return null;
+
+      // (4) One placement per write, and the write's RECEIVER must itself be a reload of the binding:
+      // an op holding the record by any other route is one the rebind would not reach.
+      var points = new List<(MaxonOp, MaterialisePoint)>();
+      foreach (var (node, op, receiver) in ctx.PlaceableWrites) {
+        if (Find(node) != root) continue;
+        if (idx.ProducerOf.GetValueOrDefault(receiver.Id) is not IReadsVarByName recvReload
+            || recvReload.ReadVarName != binding) return null;
+        points.Add((op, new MaterialisePoint(binding, record)));
+      }
+      foreach (var call in ctx.Calls) {
+        if (!_mutatingParams.TryGetValue(call.Callee, out var mutatedParams)) continue;
+        foreach (var i in mutatedParams) {
+          if (i >= call.ArgNodes.Length || Find(call.ArgNodes[i]) != root) continue;
+          if (idx.ProducerOf.GetValueOrDefault(call.ArgValueIds[i]) is not IReadsVarByName argReload
+              || argReload.ReadVarName != binding) return null;
+          points.Add((call.Op, new MaterialisePoint(binding, record)));
+        }
+      }
+
+      // (5) The component IS mutated, so something marked it. An empty plan means that something
+      // reached none of the lists above — fail closed rather than share a record whose write was
+      // never found.
+      return points.Count == 0 ? null : points;
     }
 
     private void BindParam(IrFunction<MaxonOp> f, FuncCtx ctx, int index, string name, int valueId) {
@@ -478,13 +621,14 @@ public static class LiteralCoverageAnalysisPass {
       // Known mutating builtins: arg 0 is the mutated receiver, and `set`'s arg 2 is a value stored
       // INTO the container, which escapes for the reason AddEscapeSink states.
       if (MutatingBuiltinCallees.Contains(call.Callee)) {
-        if (call.Args.Count > 0) AddSink(ctx, call.Args[0].Id);
+        if (call.Args.Count > 0) AddWriteSink(ctx, call, call.Args[0]);
         if (call.Callee == ElementStoreBuiltinCallee && call.Args.Count > ElementStoreValueArgIndex)
           AddEscapeSink(ctx, call.Args[ElementStoreValueArgIndex]);
         return;
       }
 
       var site = new CallSite {
+        Op = call,
         Callee = CanonicalCallee(call.Callee),
         ArgNodes = new int[call.Args.Count],
         ArgValueIds = new int[call.Args.Count],
@@ -569,21 +713,21 @@ public static class LiteralCoverageAnalysisPass {
       return (mutatedRoots, mpSinkValueIds);
     }
 
-    /// The static-eligible literal site ids — every literal whose value never reaches a
-    /// mutation, computed with the exact same Classify the report counts. A LOWER BOUND
-    /// (all imprecision rejects), so the lowering that reads it can only ever be conservative.
-    public HashSet<int> CollectEligible() {
+    /// Write the verdict onto the module: which sites become one shared immortal record, and where
+    /// the lowering must insert a materialise for the ones that are shared DESPITE being written
+    /// through. Computed with the exact same Classify the report counts, so the two can never
+    /// disagree about a site.
+    public void PublishVerdict() {
       var eligible = new HashSet<int>();
       foreach (var ctx in _ctxs) {
         if (ctx.Literals.Count == 0) continue;
         var (mutatedRoots, mpSinkValueIds) = FinalMutation(ctx);
-        foreach (var (_, valueId, _) in ctx.Literals) {
-          if (Classify(ctx, valueId, mutatedRoots, mpSinkValueIds) == Reason.Eligible) {
-            eligible.Add(valueId);
-          }
+        foreach (var (kind, valueId, _) in ctx.Literals) {
+          var reason = Classify(ctx, kind, valueId, mutatedRoots, mpSinkValueIds, _module.MaterialisePoints);
+          if (reason is Reason.Eligible or Reason.Materialised) eligible.Add(valueId);
         }
       }
-      return eligible;
+      _module.StaticEligibleLiteralIds = eligible;
     }
 
     public void Report() {
@@ -603,7 +747,7 @@ public static class LiteralCoverageAnalysisPass {
         var scopeName = ctx.Func.IsStdlib ? "stdlib" : "user";
 
         foreach (var (kind, valueId, preview) in ctx.Literals) {
-          var reason = Classify(ctx, valueId, mutatedRoots, mpSinkValueIds);
+          var reason = Classify(ctx, kind, valueId, mutatedRoots, mpSinkValueIds, record: null);
           all.Add(kind, reason);
           tally.Add(kind, reason);
           if (dump != null && reason != Reason.Eligible) {
@@ -627,9 +771,28 @@ public static class LiteralCoverageAnalysisPass {
       return oneLine.Length <= 40 ? oneLine : oneLine[..40] + "...";
     }
 
-    private Reason Classify(FuncCtx ctx, int valueId, HashSet<int> mutatedRoots, HashSet<int> mpSinkValueIds) {
+    /// The verdict for one site. <paramref name="record"/> is where a materialise plan is filed; the
+    /// report passes null, because counting a site must not also commit the lowering to anything.
+    private Reason Classify(FuncCtx ctx, LitKind kind, int valueId, HashSet<int> mutatedRoots,
+                            HashSet<int> mpSinkValueIds,
+                            Dictionary<MaxonOp, List<MaterialisePoint>>? record) {
       if (!_valueNode.TryGetValue(valueId, out var node) || !mutatedRoots.Contains(Find(node))) {
         return Reason.Eligible;
+      }
+      // Written through, but perhaps placeably so. Only an empty container: its materialise is the
+      // factory's own constant, which the lowering can rebuild inline, where a written-through STRING
+      // would need its bytes copied and is the escaped-into-a-place case besides.
+      if (kind == LitKind.EmptyContainer) {
+        var plan = PlanMaterialise(ctx, valueId, Find(node), PlanIndexFor(ctx));
+        if (plan != null) {
+          if (record != null) {
+            foreach (var (op, point) in plan) {
+              if (!record.TryGetValue(op, out var atOp)) record[op] = atOp = [];
+              atOp.Add(point);
+            }
+          }
+          return Reason.Materialised;
+        }
       }
       if (ctx.IntrinsicSinkValueIds.Contains(valueId)) return Reason.MutatingIntrinsicTarget;
       if (mpSinkValueIds.Contains(valueId)) return Reason.PassedToMutatingParam;
@@ -641,7 +804,8 @@ public static class LiteralCoverageAnalysisPass {
       sb.AppendLine(
         $"literal-coverage [{name}]: {t.Static}/{t.Total} static-eligible " +
         $"(strings {t.StrStatic}/{t.StrTotal}, bytestrings {t.ByteStatic}/{t.ByteTotal}, chars {t.CharStatic}/{t.CharTotal}, " +
-        $"constarrays {t.ArrStatic}/{t.ArrTotal}, emptycontainers {t.EmptyStatic}/{t.EmptyTotal})");
+        $"constarrays {t.ArrStatic}/{t.ArrTotal}, emptycontainers {t.EmptyStatic}/{t.EmptyTotal}" +
+        $"{(t.Materialised > 0 ? $", {t.Materialised} materialised" : "")})");
       if (t.Total > t.Static) {
         sb.AppendLine(
           $"  rejected: mutating-intrinsic-target={t.RejIntrinsic} passed-to-mutating-param={t.RejParam} " +
@@ -654,11 +818,14 @@ public static class LiteralCoverageAnalysisPass {
       public int StrTotal, StrStatic, ByteTotal, ByteStatic, CharTotal, CharStatic, ArrTotal, ArrStatic,
                  EmptyTotal, EmptyStatic;
       public int RejIntrinsic, RejParam, RejAliased, RejIndirect;
+      public int Materialised;
 
       public void Add(LitKind kind, Reason reason) {
         Total++;
-        bool ok = reason == Reason.Eligible;
+        // A materialised site IS shared — it just carries insertions — so it counts as static.
+        bool ok = reason is Reason.Eligible or Reason.Materialised;
         if (ok) Static++;
+        if (reason == Reason.Materialised) Materialised++;
         switch (kind) {
           case LitKind.String: StrTotal++; if (ok) StrStatic++; break;
           case LitKind.ByteString: ByteTotal++; if (ok) ByteStatic++; break;

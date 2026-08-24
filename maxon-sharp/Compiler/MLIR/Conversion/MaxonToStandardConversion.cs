@@ -486,6 +486,15 @@ public static partial class MaxonToStandardConversion {
         }
 
         foreach (var op in block.Operations) {
+          // A planned MATERIALISE goes in FRONT of the op that writes, and it splits the block — so it
+          // runs before the span bookkeeping below, which must see the block this op will actually be
+          // emitted into. The op then lowers unchanged: a struct argument is loaded from its var slot
+          // at the call site, so the rebind is what that load picks up.
+          if (module.MaterialisePoints.TryGetValue(op, out var materialisePoints)) {
+            foreach (var materialisePoint in materialisePoints)
+              EmitMaterialise(materialisePoint, newFunc, ref newBlock, varTypes);
+          }
+
           // A block lowering has moved past is COMPLETE — nothing appends to it again — so its final
           // size is the last mark's end and stamping it here loses nothing by being early.
           if (spanMarks != null && !ReferenceEquals(spanMarkBlock, newBlock)) {

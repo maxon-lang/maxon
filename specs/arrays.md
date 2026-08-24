@@ -642,6 +642,128 @@ end 'main'
 taken=red! untouched=red still=2
 ```
 
+#### A write REBINDS the local rather than costing the record
+
+An empty container is shared until something writes through it. A write does not have to cost the
+sharing on every path that reaches the function: the compiler rebinds the local to a private record
+immediately before the write, so a path that never writes never pays. The shared record is therefore
+still the answer for the common case of `var s = create()` with a write that only sometimes happens.
+
+The rebind reaches exactly one local, so it is only ever done when the compiler can see that the
+record has no second handle: two names for one array are ALIASES, and rebinding one of them would
+leave the other reading an array that no longer exists. Those cases keep their own record.
+
+<!-- test: empty-array-conditionally-written-still-shares -->
+The write is reachable but not taken. Both calls hand back the shared record, and both are empty.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function makeSites(rare bool) returns IntArray
+	var s = IntArray.create()
+	if rare 'r'
+		s.push(1)
+	end 'r'
+	return s
+end 'makeSites'
+
+function main() returns ExitCode
+	let a = makeSites(false)
+	let b = makeSites(false)
+	print("shared? {a is b} a={a.count()} b={b.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+shared? true a=0 b=0
+```
+
+<!-- test: empty-array-conditionally-written-is-private-when-taken -->
+The same function on the path that DOES write. Each call now owns its record, they are not the same
+value, and neither call's push reaches the other.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function makeSites(rare bool) returns IntArray
+	var s = IntArray.create()
+	if rare 'r'
+		s.push(1)
+	end 'r'
+	return s
+end 'makeSites'
+
+function main() returns ExitCode
+	let a = makeSites(true)
+	let b = makeSites(true)
+	let empty = makeSites(false)
+	if a is b 'distinct'
+		return 1
+	end 'distinct'
+	return a.count() + b.count() + empty.count()
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: empty-array-with-a-second-name-is-not-rebound -->
+Two names for one array are aliases, so the write through one is visible through the other. A rebind
+would reach only the name it was written on, which is why an aliased array keeps its own record from
+the start.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var b = a
+	a.push(1)
+	if a is not b 'aliased'
+		return 99
+	end 'aliased'
+	return a.count() * 10 + b.count()
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: empty-array-written-in-a-loop-stays-correct -->
+The rebind happens in front of the write, so a loop that writes many times materialises once and
+appends to the record it owns from then on — the second and later writes find a record that is no
+longer the shared one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function collect(upTo Integer) returns IntArray
+	var s = IntArray.create()
+	var i = 0
+	while i < upTo 'each'
+		s.push(i)
+		i = i + 1
+	end 'each'
+	return s
+end 'collect'
+
+function main() returns ExitCode
+	let none = collect(0)
+	let some = collect(5)
+	let alsoNone = collect(0)
+	if none is not alsoNone 'empties-shared'
+		return 90
+	end 'empties-shared'
+	return none.count() + some.count() + (try some.get(4) otherwise 0)
+end 'main'
+```
+```exitcode
+9
+```
+
 ### Byte Array Push and Get
 
 <!-- test: byte-array-push-get -->

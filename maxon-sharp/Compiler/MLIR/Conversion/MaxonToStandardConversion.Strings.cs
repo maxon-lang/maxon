@@ -324,6 +324,62 @@ public static partial class MaxonToStandardConversion {
 		return EmitStaticRecordUserPtr(globalLabel, info.TypeName, resultId, "sempty", block, varTypes, temps, inlineTarget: null);
 	}
 
+	/// Emit the MATERIALISE the escape analysis planned for the op that follows: if
+	/// <paramref name="point"/>'s binding still holds the SHARED immortal empty record, rebind it to a
+	/// private one, so the write about to happen lands on a record that binding owns.
+	///
+	/// This is the compiler emitting the IR maxon-shv2 writes by hand 75 times — `x = materializedX(x)`
+	/// before a write — and it is what lets `var s = create(); if rare: s.push(v)` keep the shared
+	/// record on the common path. The escape analysis is flow-INSENSITIVE, so without this the one
+	/// reachable `push` costs every call of that function an allocation it never uses.
+	///
+	/// The test is the record's own immortal sentinel, the same one mm_incref and mm_decref make
+	/// (RuntimeEmitter.EmitImmortalReturnGuard) — not a comparison against the static record's address,
+	/// which would need that record to have been interned already, and it may be lowered later.
+	/// What gets built is the factory's own constant, so the private record is byte-identical to what
+	/// the factory would have returned, at rc=1: the binding's existing scope-end decref then balances
+	/// it exactly as it balances a real `create()`.
+	private static void EmitMaterialise(
+	  MaterialisePoint point, IrFunction<StandardOp> func, ref IrBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes) {
+
+		var uid = IrContext.Current.NextId();
+		var mintLabel = $"__materialise_{uid}";
+		var contLabel = $"__materialised_{uid}";
+
+		var current = (StdI64)EmitLoad(block, point.Binding, varTypes);
+		var refcount = new StdLoadIndirectOp(current, Rt.MmOffRefcount, IrType.I64);
+		block.AddOp(refcount);
+		var immortal = new StdConstI64Op(Rt.MmImmortalRefcount);
+		block.AddOp(immortal);
+		var isShared = new StdCmpI64Op("eq", (StdI64)refcount.Result, immortal.Result);
+		block.AddOp(isShared);
+		block.AddOp(new StdCondBrOp(isShared.Result, mintLabel, contLabel));
+
+		var mint = func.Body.AddBlock(mintLabel);
+		var fresh = EmitAlloc(mint, FusedManagedRecordSize(point.Record.TypeName), point.Record.TypeName,
+		  scopeName: _currentFuncName);
+		void StoreField(long value, int offset) {
+			var constant = new StdConstI64Op(value);
+			mint.AddOp(constant);
+			mint.AddOp(new StdStoreIndirectOp(constant.Result, fresh, offset, IrType.I64));
+		}
+		// Empty is empty: nothing to point at, nothing in it, nothing owned, no parent — only the
+		// element width, which is what tells the two records apart.
+		StoreField(0, ManagedFieldBuffer);
+		StoreField(0, ManagedFieldLength);
+		StoreField(0, ManagedFieldCapacity);
+		StoreField(point.Record.ElementSize, ManagedFieldElementSize);
+		StoreField(0, ManagedFieldParentPtr);
+		EmitIncrefValue(mint, fresh, scopeName: _currentFuncName);
+		// The record being overwritten is the immortal one — that is this block's entry condition —
+		// so there is nothing to release before the store.
+		EmitStore(mint, fresh, point.Binding, varTypes);
+		mint.AddOp(new StdBrOp(contLabel));
+
+		block = func.Body.AddBlock(contLabel);
+	}
+
 	/// For a managed-element array literal, return its elements' static-record labels in order if
 	/// EVERY element is a static string/char literal, else null (so the caller falls back to the heap
 	/// path). Elements reach the block as `maxon.assign %elem {var = <ArrayLiteralTag>.<i>}`; an

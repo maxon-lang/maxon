@@ -19,7 +19,7 @@ ExitCode: 0
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=80
+    x64.prologue stack_size=96
     x64.lea rax, [rip+__static_lit_0]
     x64.mov rcx, rax
     x64.mov rdx, 32
@@ -34,10 +34,13 @@ module {
     x64.mov rcx, [rbp-16]
     x64.call stdlib.String.toByteArray
     x64.mov [rbp-24], rax
-    x64.call ByteArray.create
-    x64.mov [rbp-32], rax
-    x64.mov r8, 12
-    x64.mov [rbp-40], r8
+    x64.lea r8, [rip+__static_lit_1]
+    x64.mov r9, r8
+    x64.mov rax, 32
+    x64.add r9, rax
+    x64.mov [rbp-32], r9
+    x64.mov rax, 12
+    x64.mov [rbp-40], rax
     x64.jmp main.copy_0.header
   copy_0.header:
     x64.mov rax, [rbp-24]
@@ -64,19 +67,49 @@ module {
   otherwise_default_continue_0:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rcx+-8]
+    x64.mov rbx, 4611686018427387904
+    x64.cmp rdx, rbx
+    x64.jne main.__materialised_0
+  __materialise_0:
+    x64.lea_func rax, [__destruct_ByteArray]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.xor edx, edx
+    x64.mov [rax+0], rdx
+    x64.xor ebx, ebx
+    x64.mov [rax+8], rbx
+    x64.xor esi, esi
+    x64.mov [rax+16], rsi
+    x64.mov rdi, 1
+    x64.mov [rax+24], rdi
+    x64.xor r8d, r8d
+    x64.mov [rax+32], r8
+    x64.mov [rbp-88], rax
+    x64.mov rcx, [rbp-88]
+    x64.call mm_incref
+    x64.mov r9, [rbp-88]
+    x64.mov [rbp-32], r9
+    x64.jmp main.__materialised_0
+  __materialised_0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
     x64.mov rdx, [rbp-56]
     x64.call ByteArray.push
-    x64.mov rdx, 1
-    x64.mov rbx, [rbp-40]
-    x64.add rbx, rdx
-    x64.mov [rbp-40], rbx
+    x64.mov rcx, 1
+    x64.mov rdx, [rbp-40]
+    x64.add rdx, rcx
+    x64.mov [rbp-40], rdx
     x64.jmp main.copy_0.header
   copy_0.exit:
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
     x64.call stdlib.String.from
     x64.mov [rbp-64], rax
-    x64.lea rcx, [rip+__static_lit_1]
+    x64.lea rcx, [rip+__static_lit_2]
     x64.mov rdx, rcx
     x64.mov rbx, 32
     x64.add rdx, rbx

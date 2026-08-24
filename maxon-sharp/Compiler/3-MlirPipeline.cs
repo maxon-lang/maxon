@@ -58,7 +58,7 @@ public class IrPipeline {
       sw.Restart(); BorrowCheckPass.Run(module);                          StageTimer.Record(timings, "borrow",     sw.ElapsedMilliseconds);
       sw.Restart(); ValueTupleAbiPass.Run(module);                        StageTimer.Record(timings, "valueTuple", sw.ElapsedMilliseconds);
       sw.Restart(); StackPromotionAnalysisPass.Run(module);               StageTimer.Record(timings, "stackProm",  sw.ElapsedMilliseconds);
-      sw.Restart(); module.StaticEligibleLiteralIds = LiteralCoverageAnalysisPass.Run(module, report: Compiler.LiteralCoverage); StageTimer.Record(timings, "litStatic", sw.ElapsedMilliseconds);
+      sw.Restart(); LiteralCoverageAnalysisPass.Run(module, report: Compiler.LiteralCoverage); StageTimer.Record(timings, "litStatic", sw.ElapsedMilliseconds);
     } else {
       ParameterMutationAnalysisPass.Run(module);
       PurityAnalysisPass.Run(module);
@@ -73,7 +73,7 @@ public class IrPipeline {
       BorrowCheckPass.Run(module);
       ValueTupleAbiPass.Run(module);
       StackPromotionAnalysisPass.Run(module);
-      module.StaticEligibleLiteralIds = LiteralCoverageAnalysisPass.Run(module, report: Compiler.LiteralCoverage);
+      LiteralCoverageAnalysisPass.Run(module, report: Compiler.LiteralCoverage);
     }
 
     // Why LiteralCoverageAnalysisPass sits HERE (what it decides is stated in its own doc, once):

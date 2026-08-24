@@ -3284,3 +3284,62 @@ end 'main'
 ```exitcode
 1
 ```
+
+### A shared record is never written through
+
+A never-mutated `String` literal, and an empty container nothing writes to, are each emitted ONCE as a
+shared immortal record. That is only safe while nothing can write through them, and a value stored
+into a heap PLACE — a struct field, a container slot, a union payload — can always be fetched back out
+and written through from somewhere the compiler cannot follow. Such a value gets its own record.
+
+The two cases below are the doors that are not an array slot; the array ones live in `arrays.md`. Each
+was a real corruption: the write grew the SHARED record in place, so an untouched occurrence of the
+same value elsewhere in the program read the mutated bytes, and the grown buffer leaked because an
+immortal record's destructor is 0.
+
+<!-- test: shared-record-not-written-through-a-field-assign -->
+`StringBuilder.build()` hands its buffer to the finished `String` and resets itself with an empty one.
+If that empty buffer were the shared record, two builders would share it, and appending to either
+would publish the other's length.
+```maxon
+function main() returns ExitCode
+	var a = StringBuilder.create()
+	var b = StringBuilder.create()
+	let fromA = a.build()
+	let fromB = b.build()
+	a.append("AAA")
+	print("a={a.byteLength()} b={b.byteLength()} fromA=[{fromA}] fromB=[{fromB}]")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=3 b=0 fromA=[] fromB=[]
+```
+
+<!-- test: shared-record-not-written-through-a-union-payload -->
+A union payload is a place too. The `String` reading of it: appending to a payload matched out of one
+union must not reach an untouched literal of the same text.
+```maxon
+union Tagged
+	named(name String)
+end 'Tagged'
+
+function main() returns ExitCode
+	var boxed = Tagged.named("tag")
+	match boxed 'grow'
+		named(n) then n.append("!")
+	end 'grow'
+	let untouched = "tag"
+	print("untouched={untouched}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+untouched=tag
+```

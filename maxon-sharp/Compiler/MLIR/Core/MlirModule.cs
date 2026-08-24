@@ -182,6 +182,15 @@ public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool Is
 // DIFFERENT records: same width, different element release, different type tag.
 public record ConstantEmptyContainerInfo(string TypeName, int ElementSize);
 
+/// One place the lowering MUST insert a materialise: immediately before the op this is keyed by, the
+/// local binding <paramref name="Binding"/> is rebound from the shared immortal empty record to a
+/// private one, so the write that op performs lands on a record the binding owns.
+/// <paramref name="Record"/> says what to build — the same constant the factory would have returned.
+///
+/// This is the compiler emitting the IR this codebase already writes BY HAND: the 75 `sharedEmptyX`
+/// anchors in maxon-shv2 are all `x = materializedX(x)` before a write, for exactly this reason.
+public record MaterialisePoint(string Binding, ConstantEmptyContainerInfo Record);
+
 // Metadata for a module-level global variable (stored in IrModule.GlobalVarInfos for cross-file seeding).
 // IsExported and IsModuleVisible are mutually exclusive (enforced at the parser).
 public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null, bool IsLazy = false,
@@ -620,6 +629,22 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // means the analysis has not run (e.g. a unit test bypassing the pipeline); the lowering
   // then treats every literal as non-eligible.
   public HashSet<int>? StaticEligibleLiteralIds { get; set; }
+
+  // The other half of that verdict: sites whose record is shared even though the program DOES write
+  // through them, because every such write has an insertion point here. Keyed by the writing op (by
+  // reference — the lowering walks these same objects), because a materialise is a statement about a
+  // point in the program, not about a value.
+  //
+  // ⛔ THE SOUNDNESS DIRECTION HERE IS THE OPPOSITE OF StaticEligibleLiteralIds. A missing entry
+  // there costs an allocation; a missing entry HERE is a write through a record shared with every
+  // other empty container of its type. So a site reaches this map only when the analysis holds a
+  // placement for EVERY sink marking its component — see LiteralCoverageAnalysisPass.PlanMaterialise,
+  // which fails closed on anything it cannot place.
+  //
+  // Deliberately NOT copied by Clone/Merge, unlike ConstantArrayLiterals: those keys are ids, these
+  // are op REFERENCES, and a clone re-makes every op — copied entries would name ops in the wrong
+  // module. The pass that fills it runs after both, so there is nothing to carry.
+  public Dictionary<TOp, List<MaterialisePoint>> MaterialisePoints { get; } = [];
 
   // Source files containing interface extensions that found no conforming types
   // during initial pre-scan (due to file ordering). Rescanned after all pre-scans.
