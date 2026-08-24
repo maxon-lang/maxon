@@ -453,6 +453,16 @@ ran, because `==` reaches the same `equals` symbol without asking. One operation
 disagreeing. Five arrivals of that one cause are pinned below: a struct's `clone` and `equals`, a
 union's `clone`, and an enum's `equals` and `hash`.
 
+⚠ **THE SAME ASYMMETRY SURVIVES ONE VISIBILITY DOWN, THROUGH A DIFFERENT DOOR, AND THE RULE THERE
+IS NOT SETTLED.** On a value of a NON-exported type held across a file boundary — the shape the next
+section blesses — `a == b` compiles and runs (`non-exported-struct-values-compare-across-a-file-boundary`,
+and measured again with a SYNTHESIZED `equals`), while `a.equals(b)` and `a.clone()` are refused
+`E4006: Unknown type 'Rec' in field access chain`. That refusal is the TYPE-name check at the field
+access chain, not the function-visibility check above, and it is the same check that pins
+`error.non-exported-type-cross-file` and `error.string-pattern-against-a-non-exported-struct-scrutinee`.
+Whether the next section's *"it writes no name, so there is no visibility to demand"* extends to a
+member the COMPILER named is a question for its own rung; nothing here changes it either way.
+
 <!-- test: synthesized-clone-crosses-an-exported-type-s-file-boundary -->
 ```maxon
 // --- file: holder.maxon
