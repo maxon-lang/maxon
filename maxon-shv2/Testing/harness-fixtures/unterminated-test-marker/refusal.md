@@ -15,7 +15,7 @@ span the `NOTE:` line below. Measured 2026-08-23: the bootstrap ran three cases 
 `specs/unary-operators.md` and `negate-float` was not one of them. So this fixture pins a
 DIVERGENCE FROM THE REFERENCE, not merely a shv2 preference.
 
-<!-- expect-refusal: this line opens a test marker and never closes it -->
+<!-- expect-refusal: this test marker is never closed -->
 
 ## Tests
 

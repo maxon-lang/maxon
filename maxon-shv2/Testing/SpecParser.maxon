@@ -1067,10 +1067,11 @@ function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey S
 		// scan is the point: a second "skip a disabled test" walker would be free to
 		// disagree with this one about where a test's blocks end, and the failure
 		// mode of that disagreement is a shelved case silently RUNNING.
-		if carriesMarker(line, marker: DisabledTestMarker) 'isDisabledMarker'
+		let openings = markerOpeningsIn(line)
+		if openingsCarry(openings, marker: DisabledTestMarker) 'isDisabledMarker'
 			disabledCount = disabledCount + 1
 			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: false, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
-		end 'isDisabledMarker' else if carriesMarker(line, marker: TestMarker) 'isMarker'
+		end 'isDisabledMarker' else if openingsCarry(openings, marker: TestMarker) 'isMarker'
 			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: true, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
 		end 'isMarker' else 'notMarker'
 			i = i + 1
@@ -1103,13 +1104,37 @@ end 'extractTests'
 //
 // It PANICS in the parent, before a worker exists, exactly as this file's other spec-authoring
 // refusals do; `HarnessSelfTest`'s `unterminated-test-marker` fixture is what proves it still fires.
-function refuseUnterminatedTestMarker(markerLine String, markerIndex LineIndex, specPath FilePath)
-	if markerLine.contains(MarkerEnd) 'properlyClosed'
+function refuseUnterminatedTestMarker(markerLine String, marker String, markerIndex LineIndex, specPath FilePath)
+	// ⛔ **ASKED OF THIS MARKER'S OWN OPENING, NOT OF THE LINE.** It used to be `markerLine.contains`, and
+	// on `<!-- note --> <!-- test: foo` that is satisfied by the OTHER comment's closer while the test
+	// marker runs off the end of the line — the exact shape this refusal exists to catch, walking through
+	// the check meant to stop it. Zero such lines in either corpus, which is how the last two got in.
+	match markerOpeningAmong(markerOpeningsIn(markerLine), marker: marker) 'opening'
+		absent then panic("SpecParser.refuseUnterminatedTestMarker: '{markerLine}' was recognized as carrying '{marker}' moments ago and no longer does — recognition and this refusal have come apart, which is the one thing they may never do")
+		at(text) then refuseUnclosedOpening(text, markerIndex: markerIndex, specPath: specPath)
+	end 'opening'
+end 'refuseUnterminatedTestMarker'
+
+// The refusal itself, once the marker's own opening is in hand.
+function refuseUnclosedOpening(opening String, markerIndex LineIndex, specPath FilePath)
+	if opening.contains(MarkerEnd) 'properlyClosed'
 		return
 	end 'properlyClosed'
 
-	panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: this line opens a test marker and never closes it — there is no '{MarkerEnd}' anywhere on it, so everything after the '{MarkerNameSep}' would be read as the case NAME: '{markerLine.trim()}'. That is how a case its author COMMENTED OUT gets run: the `-->` ends up below the case's fences, the marker parses anyway, and the harness compiles and runs a program the file says is switched off. The reference parser declines this marker outright, so the same file already means two different things to two compilers. Close the marker on its own line — and if the case was meant to be shelved, delete the trailing `-->` as well and write it as a `{DisabledTestMarker} NAME -->` naming the rung that unlocks it")
-end 'refuseUnterminatedTestMarker'
+	panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: this test marker is never closed — its own '{CommentOpen}' has no '{MarkerEnd}' after it, so everything past the '{MarkerNameSep}' would be read as the case NAME: '{opening}'. That is how a case its author COMMENTED OUT gets run: the `-->` ends up below the case's fences, the marker parses anyway, and the harness compiles and runs a program the file says is switched off. The reference parser declines this marker outright, so the same file already means two different things to two compilers. Close the marker on its own line — and if the case was meant to be shelved, delete the trailing `-->` as well and write it as a `{DisabledTestMarker} NAME -->` naming the rung that unlocks it")
+end 'refuseUnclosedOpening'
+
+// Which of the two spellings a case's marker line was recognized by. `extractTests` asks the disabled
+// one first and the active one second, and this says the same thing from the `active` flag it already
+// passes — so the refusal below interrogates the opening that was actually matched, rather than
+// guessing which of the two it was.
+function testMarkerSpellingFor(active bool) returns String
+	if active 'liveCase'
+		return TestMarker
+	end 'liveCase'
+
+	return DisabledTestMarker
+end 'testMarkerSpellingFor'
 
 // Scan one test starting at its marker line, returning the line index to resume the
 // outer scan from. When `active`, the parsed test is pushed onto `tests`; when not
@@ -1134,7 +1159,7 @@ end 'refuseUnterminatedTestMarker'
 // line and silently drop the assertion. A spec that pins a panic would then pass on the
 // exit code alone, which is the one failure mode a panic spec exists to catch.
 function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, active bool, specPath FilePath, effectiveTargetKey String) returns LineIndex
-	refuseUnterminatedTestMarker(markerLine, markerIndex: markerIndex, specPath: specPath)
+	refuseUnterminatedTestMarker(markerLine, marker: testMarkerSpellingFor(active), markerIndex: markerIndex, specPath: specPath)
 
 	let lineCount = lines.count()
 	let name = markerValue(markerLine)
@@ -1174,7 +1199,11 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		if line.startsWith(SectionHeadingPrefix) 'sectionEnd'
 			break
 		end 'sectionEnd'
-		if carriesMarker(line, marker: TestMarker) or carriesMarker(line, marker: DisabledTestMarker) 'nextMarker'
+		// Computed ONCE and asked of every family below — see `markerOpeningsIn` for why that matters here
+		// in particular: this loop runs over every line of every case and asks eight questions of each.
+		let openings = markerOpeningsIn(line)
+
+		if openingsCarry(openings, marker: TestMarker) or openingsCarry(openings, marker: DisabledTestMarker) 'nextMarker'
 			break
 		end 'nextMarker'
 
@@ -1183,7 +1212,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// through to `i = i + 1` and be silently ignored (which is exactly how safety.md's four markers
 		// went unread until this rung). Parsed here so a disabled case consumes it identically to a live
 		// one; the disabled case then discards the whole test, targets and all.
-		if carriesMarker(line, marker: TargetsMarker) 'targetsMarker'
+		if openingsCarry(openings, marker: TargetsMarker) 'targetsMarker'
 			targets = parseTargetKeys(line)
 			i = i + 1
 			continue
@@ -1193,7 +1222,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// first fence, read here for `TargetsMarker`'s reasons exactly: it is neither a fence nor a next-test
 		// marker, so without an arm it falls through to `i = i + 1` and is silently ignored, and a disabled
 		// case must consume it identically to a live one.
-		if carriesMarker(line, marker: ArgsMarker) 'argsMarker'
+		if openingsCarry(openings, marker: ArgsMarker) 'argsMarker'
 			programArgs = parseProgramArgs(line)
 			i = i + 1
 			continue
@@ -1201,7 +1230,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 
 		// The valueless flag marker. Consumed identically to the four above — including on a DISABLED case, so
 		// shelving a trace case does not leave its marker to fall through as unread prose.
-		if carriesMarker(line, marker: AsyncTraceMarker) 'asyncTraceMarker'
+		if openingsCarry(openings, marker: AsyncTraceMarker) 'asyncTraceMarker'
 			asyncTrace = true
 			i = i + 1
 			continue
@@ -1210,13 +1239,13 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// The other two valueless flag markers, consumed identically — including on a DISABLED case, so
 		// shelving a capture case does not leave its marker to fall through as unread prose. Each only RAISES
 		// the mode; see `raisedTraceCapture` for what that means when a block has already named a family.
-		if carriesMarker(line, marker: MmTraceMarker) 'mmTraceMarker'
+		if openingsCarry(openings, marker: MmTraceMarker) 'mmTraceMarker'
 			traceCapture = raisedTraceCapture(traceCapture, family: TraceFamily.mm)
 			i = i + 1
 			continue
 		end 'mmTraceMarker'
 
-		if carriesMarker(line, marker: LogTraceMarker) 'logTraceMarker'
+		if openingsCarry(openings, marker: LogTraceMarker) 'logTraceMarker'
 			traceCapture = raisedTraceCapture(traceCapture, family: TraceFamily.log)
 			i = i + 1
 			continue
@@ -1225,7 +1254,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// The network gate the author SPELLED, consumed identically to the five above — including on a
 		// DISABLED case, so shelving a live-network case does not leave its marker to fall through as
 		// unread prose. The VALUE is refused rather than defaulted; see `parseNetworkValue`.
-		if carriesMarker(line, marker: NetworkMarker) 'networkMarker'
+		if openingsCarry(openings, marker: NetworkMarker) 'networkMarker'
 			network = parseNetworkValue(line, specPath: specPath, testName: name)
 			i = i + 1
 			continue
@@ -1707,11 +1736,24 @@ export function markerValue(line String) returns String
 	return ""
 end 'markerValue'
 
-// ⭐ **EVERY `<!--` ON A LINE, AS THE TEXT THAT FOLLOWS IT — the ONE place that decides where a marker
-// BEGINS.** The two questions this file asks of a marker line — WHICH marker is it (`carriesMarker`)
-// and what is its VALUE (`markerValue`) — have to agree about that, and a second walk is how they would
-// come not to. The text before the first opening is not an opening, and a line carrying none yields
-// none.
+// ⭐⭐ **EVERY `<!--` ON A LINE, EACH NORMALIZED TO THE CANONICAL SPELLING — the ONE place that decides
+// where a marker begins, and the one place the reference's `\s*` is spent.**
+//
+// Each opening comes back as `<!-- <trimmed text>`, which is exactly what the marker constants above
+// ARE — so every question after this one is a plain `startsWith` against a constant, with no
+// whitespace rule of its own and nothing to allocate. NORMALIZING THE OPENING RATHER THAN TAKING EACH
+// MARKER CONSTANT APART is what makes the tolerance cost one allocation per LINE instead of one per
+// (line × marker family): there are eight families, and `scanTestFromMarker` asks about all of them on
+// every line of every case (measured 2026-08-24: the per-family form cost ~0.5 s of fixed overhead on
+// a run that parses the corpus and exits).
+//
+// The three questions this file asks of a marker line — WHICH marker is it (`openingsCarry`), what is
+// its VALUE (`markerValue`), and is it CLOSED (`refuseUnterminatedTestMarker`) — all read this one
+// answer. A second walk is how they would come to disagree, and one of them already had: the refusal
+// asked the whole LINE for a `-->` while the body asked one OPENING, so on `<!-- note --> <!-- test: x`
+// the refusal was satisfied by the other comment's closer and the unterminated marker went through.
+//
+// The text before the first opening is not an opening, and a line carrying none yields none.
 function markerOpeningsIn(line String) returns StringArray
 	var openings = StringArray.create()
 	var seenFirst = false
@@ -1721,7 +1763,7 @@ function markerOpeningsIn(line String) returns StringArray
 			continue
 		end 'textBeforeTheFirstOpening'
 
-		openings.push(piece)
+		openings.push("{CommentOpen} {piece.trim()}")
 	end 'eachPiece'
 
 	return openings
@@ -1735,33 +1777,43 @@ function markerBodyOf(opening String) returns String
 	return try parts.get(0) otherwise panic("SpecParser.markerBodyOf: split yields at least one part for any input, so index 0 cannot be absent")
 end 'markerBodyOf'
 
-// ⭐ **DOES `line` CARRY `marker`, allowing the whitespace the reference allows after `<!--`?** Asked in
-// place of `line.contains(<literal>)` at every marker arm in this file — see the constants above for the
-// two divergences the literal form was.
-export function carriesMarker(line String, marker String) returns bool
-	let keyword = markerKeyword(marker)
-	for opening in markerOpeningsIn(line) 'eachOpening'
-		if opening.trim().startsWith(keyword) 'thisOpeningIsIt'
-			return true
+// ⭐ **DOES ONE OF THESE OPENINGS CARRY `marker`?** The openings are already canonical, so this is the
+// plain prefix test the marker constants were always written to be — the whitespace the reference
+// allows was spent once, in `markerOpeningsIn`.
+//
+// Takes the OPENINGS rather than the line so the caller can compute them once and ask about all eight
+// families; `carriesMarker` below is the door for a caller that asks once.
+function openingsCarry(openings StringArray, marker String) returns bool
+	return match markerOpeningAmong(openings, marker: marker) 'opening'
+		at gives true
+		absent gives false
+	end 'opening'
+end 'openingsCarry'
+
+// WHICH opening carries `marker`, not merely whether one does — the refusal needs the opening itself,
+// because whether a marker is closed is a property of ITS `<!--`, never of the line it sits on.
+union MarkerOpening
+	at(text String)
+	absent
+end 'MarkerOpening'
+
+function markerOpeningAmong(openings StringArray, marker String) returns MarkerOpening
+	for opening in openings 'eachOpening'
+		if opening.startsWith(marker) 'thisOpeningIsIt'
+			return MarkerOpening.at(opening)
 		end 'thisOpeningIsIt'
 	end 'eachOpening'
 
-	return false
+	return MarkerOpening.absent
+end 'markerOpeningAmong'
+
+// The one-shot door: does `line` carry `marker`? For callers that ask about a single family, where
+// computing the openings and asking are one act — `SpecTestRunner`'s two line walks, and the harness
+// self-test's fixture reader. The scanners in this file hoist the openings instead, because they ask
+// eight times per line.
+export function carriesMarker(line String, marker String) returns bool
+	return openingsCarry(markerOpeningsIn(line), marker: marker)
 end 'carriesMarker'
-
-// The keyword half of a marker constant — `test:` out of `<!-- test:`. DERIVED rather than declared a
-// second time: the constants are the canonical spelling, and a parallel table of bare keywords beside
-// them would be this project's signature bug in the one file that keeps naming it. The shape is
-// enforced rather than assumed, exactly as `splitSourceSections` enforces its own markers' prefix.
-function markerKeyword(marker String) returns String
-	let parts = marker.split(CommentOpen)
-	if parts.count() != 2 'notAMarkerConstant'
-		panic("SpecParser.markerKeyword: '{marker}' is not a marker constant — every one of them opens with exactly one '{CommentOpen}', which is what lets its keyword be derived here rather than written down a second time")
-	end 'notAMarkerConstant'
-
-	let keyword = try parts.get(1) otherwise panic("SpecParser.markerKeyword: '{marker}' split into 2 parts but part 1 is absent")
-	return keyword.trim()
-end 'markerKeyword'
 
 // The target keys a `<!-- targets: k1, k2 -->` marker names — its value split on `,`, each part
 // trimmed, empties dropped. An EMPTY result (a blank value) is "no restriction", which the runner

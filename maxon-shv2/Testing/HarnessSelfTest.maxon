@@ -112,6 +112,13 @@ let FixtureSpecExtension = ".md"
 
 // The line a fixture carries to say which refusal it is about: `<!-- expect-refusal: <substring> -->`.
 //
+// ⛔ **IT IS READ THROUGH `carriesMarker` LIKE EVERY OTHER MARKER, and for one rung it was not.** The
+// commit that widened shv2's marker grammar to the reference's claimed *"every recognition site goes
+// through `carriesMarker`"* and this one still asked `line.contains`, so a fixture written
+// `<!--  expect-refusal: … -->` kept the narrow rule — the very class that commit closed, surviving
+// inside it. Fixture-local and loud rather than dangerous, but a false claim in the record is worse
+// than the missed site.
+//
 // ⭐ **IT LIVES IN THE FIXTURE, NOT IN A ROSTER HERE, AND THAT IS THE `LadderIndex` LESSON APPLIED.**
 // A hand-maintained table of (case, expected text) beside a directory of cases is one fact written
 // twice, and the half that drifts is always the table. The case SET is derived by listing the
@@ -627,7 +634,7 @@ function expectedRefusalIn(caseDir FilePath, caseName String) returns String
 	let text = try File.readText(fixtureSpecIn(caseDir, caseName: caseName)) otherwise panic("HarnessSelfTest: could not read the '{caseName}' fixture's spec file")
 
 	for line in text.split("\n") 'eachLine'
-		if line.contains(ExpectRefusalMarker) 'isTheMarker'
+		if carriesMarker(line, marker: ExpectRefusalMarker) 'isTheMarker'
 			let expected = markerValue(line)
 			if expected.isEmpty() 'noValue'
 				panic("HarnessSelfTest: the '{caseName}' fixture's '{ExpectRefusalMarker}' marker names no text. It must carry the part of the refusal's message that identifies it — and NOT the `<file>:<line>` a panic prints in front of it, which moves on every edit above it.")
