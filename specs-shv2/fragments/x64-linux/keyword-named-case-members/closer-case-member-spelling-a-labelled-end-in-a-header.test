@@ -34,37 +34,34 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.cmpRegImm32 rdx, 1
     x64.jcc equal, spin
-    x64.jmp critsplit
+    x64.jmp critsplit#11
   spin:
     x64.movRegImm32 rdx, 1
     x64.cmpRegImm32 rdx, 1
     x64.jcc equal, inner
-    x64.jmp critsplit
+    x64.jmp critsplit#12
   inner:
     x64.leaRegRegImm32 rax, rax, 21
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#5
+  critsplit#12:
+    x64.jmp ifcont#5
+  ifcont#5:
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.cmpRegImm32 rcx, 2
     x64.jcc equal, done
-    x64.jmp ifcont
+    x64.jmp ifcont#7
   done:
-    x64.movRegReg r8, rax
     x64.jmp whileexit
-  ifcont:
+  ifcont#7:
     x64.jmp whilehdr
-  critsplit:
-    x64.movRegReg r8, rax
+  critsplit#11:
     x64.jmp whileexit
   whileexit:
-    x64.cmpRegImm32 r8, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 rax, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -75,22 +72,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
+    x64.leaRegRegImm32 r8, rax, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

@@ -21,7 +21,7 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.storeSlotReg slot0, xmm6
-    x64.movsdRegRip xmm6, [rip + __fconst_0]
+    x64.movsdRegRip xmm6, [rip + __fconst_2]
     x64.movRegReg xmm0, xmm6
     x64.callDirect float.hash
     x64.movRegReg rbx, r8
@@ -31,7 +31,7 @@ func @main {
     x64.callDirect int.hash
     x64.cmpRegReg rbx, r8
     x64.jcc notEqual, chainDiffers
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   chainDiffers:
     x64.movRegImm32 r8, 1
     x64.loadRegSlot xmm6, slot0
@@ -39,10 +39,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.cmpRegImm32 rbx, 1374389535
     x64.jcc notEqual, pinned
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   pinned:
     x64.movRegImm32 r8, 2
     x64.loadRegSlot xmm6, slot0
@@ -50,7 +50,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#4:
     x64.movRegImm32 r8, 0
     x64.loadRegSlot xmm6, slot0
     x64.epilogue 40
@@ -63,9 +63,27 @@ func @int.hash {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rax, 4294967295
     x64.movRegReg r8, rcx
     x64.andRegReg r8, rcx, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -74,9 +92,38 @@ func @float.hash {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movqGprXmm r8, xmm0
+    x64.movRegImm rax, -9223372036854775807
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.cmpRegReg r8, rax
+    x64.jcc equal, negzero
+    x64.jmp ifcont
+  negzero:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg r8, r8, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

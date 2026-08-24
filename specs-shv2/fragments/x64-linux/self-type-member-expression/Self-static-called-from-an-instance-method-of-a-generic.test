@@ -49,14 +49,24 @@ func @Holder.twin {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
     x64.prologue 40
+    x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect Holder.make
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __retain_type_param
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __destruct_dict_Holder
+    x64.movRegReg r8, r13
     x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -66,39 +76,28 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegImm32 rcx, 42
-    x64.callDirect Holder.make
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
+    x64.prologue 48
+    x64.movRegImm32 rax, 42
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegRdata rdx, [rip + __layout_Holder_Num]
     x64.callDirect Holder.twin
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
 }

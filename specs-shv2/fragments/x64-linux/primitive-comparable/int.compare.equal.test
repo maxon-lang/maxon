@@ -21,27 +21,27 @@ func @main {
     x64.movRegImm32 rdx, 42
     x64.callDirect int.compare
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext#5
+  matcharm#1:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchnext#5:
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#2
+    x64.jmp matchnext#6
+  matcharm#2:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchnext#6:
     x64.cmpRegImm32 r8, 2
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#3
     x64.jmp matchdead
-  matcharm:
+  matcharm#3:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
@@ -55,21 +55,21 @@ func @int.compare {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegReg rcx, rdx
-    x64.jcc less, less
-    x64.jmp notLess
-  less:
+    x64.jcc less, lt
+    x64.jmp ifcont#2
+  lt:
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
-  notLess:
+  ifcont#2:
     x64.cmpRegReg rcx, rdx
-    x64.jcc greater, greater
-    x64.jmp equal
-  greater:
+    x64.jcc greater, gt
+    x64.jmp ifcont#4
+  gt:
     x64.movRegImm32 r8, 2
     x64.popReg rbp
     x64.ret
-  equal:
+  ifcont#4:
     x64.movRegImm32 r8, 1
     x64.popReg rbp
     x64.ret

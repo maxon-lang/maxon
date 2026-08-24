@@ -18,8 +18,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -44,77 +43,77 @@ func @Math.exp {
     x64.movRegReg xmm6, xmm0
     x64.movsdRegRip xmm0, [rip + __fconst_4]
     x64.ucomisdRegReg xmm6, xmm0
-    x64.jcc parity, ifcont
+    x64.jcc parity, ifcont#2
     x64.jmp fordered
   fordered:
     x64.jcc equal, zero
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   zero:
     x64.movsdRegRip xmm0, [rip + __fconst_3]
     x64.loadRegSlot xmm6, slot0
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegReg xmm0, xmm6
     x64.callDirect Math.isPositiveInfinity
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, positiveInfinity
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   positiveInfinity:
     x64.movRegReg xmm0, xmm6
     x64.loadRegSlot xmm6, slot0
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#4:
     x64.movRegReg xmm0, xmm6
     x64.callDirect Math.isNegativeInfinity
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, negativeInfinity
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   negativeInfinity:
     x64.movsdRegRip xmm0, [rip + __fconst_4]
     x64.loadRegSlot xmm6, slot0
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#6:
     x64.movsdRegRip xmm0, [rip + __fconst_4]
     x64.ucomisdRegReg xmm0, xmm6
     x64.setccReg above, rax
     x64.jcc above, neg
-    x64.jmp critsplit
+    x64.jmp critsplit#26
   neg:
     x64.movsdRegRip xmm0, [rip + __fconst_4]
     x64.subsdRegReg xmm0, xmm0, xmm6
-    x64.jmp ifcont
-  critsplit:
+    x64.jmp ifcont#8
+  critsplit#26:
     x64.movRegReg xmm0, xmm6
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#8
+  ifcont#8:
     x64.movRegImm32 rsi, 0
-    x64.jmp whilehdr
-  whilehdr:
+    x64.jmp whilehdr#9
+  whilehdr#9:
     x64.movsdRegRip xmm1, [rip + __fconst_3]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc above, reduce
-    x64.jmp whileexit
+    x64.jmp whileexit#11
   reduce:
     x64.movsdRegRip xmm1, [rip + __fconst_5]
     x64.divsdRegReg xmm0, xmm0, xmm1
     x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp whilehdr
-  whileexit:
+    x64.jmp whilehdr#9
+  whileexit#11:
     x64.movsdRegRip xmm1, [rip + __fconst_3]
     x64.movsdRegRip xmm2, [rip + __fconst_3]
     x64.movsdRegRip xmm3, [rip + __fconst_3]
     x64.movsdRegRip xmm4, [rip + __fconst_6]
-    x64.jmp whilehdr
-  whilehdr:
+    x64.jmp whilehdr#12
+  whilehdr#12:
     x64.ucomisdRegReg xmm4, xmm3
     x64.jcc above, series
-    x64.jmp whileexit
+    x64.jmp whileexit#14
   series:
     x64.mulsdRegReg xmm1, xmm1, xmm0
     x64.movsdRegRip xmm5, [rip + __fconst_4]
@@ -123,12 +122,12 @@ func @Math.exp {
     x64.setccReg parity, rdx
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rcx
+    x64.setccReg equal, rdi
     x64.divsdRegReg xmm1, xmm1, xmm3
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, tryerr#16
+    x64.jmp tryok#15
+  tryerr#16:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movsdRegRip xmm0, [rip + __fconst_4]
@@ -136,13 +135,13 @@ func @Math.exp {
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#15:
     x64.addsdRegReg xmm2, xmm2, xmm1
     x64.movRegImm32 rcx, 1
     x64.cvtsi2sdRegReg xmm5, rcx
     x64.addsdRegReg xmm3, xmm3, xmm5
-    x64.jmp whilehdr
-  whileexit:
+    x64.jmp whilehdr#12
+  whileexit#14:
     x64.movRegImm32 rcx, 0
     x64.jmp forhdr
   forhdr:
@@ -158,7 +157,7 @@ func @Math.exp {
   forexit:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, invert
-    x64.jmp critsplit
+    x64.jmp critsplit#27
   invert:
     x64.movsdRegRip xmm0, [rip + __fconst_3]
     x64.movsdRegRip xmm1, [rip + __fconst_4]
@@ -170,9 +169,9 @@ func @Math.exp {
     x64.setccReg equal, rax
     x64.divsdRegReg xmm0, xmm0, xmm2
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#23
+    x64.jmp tryok#22
+  tryerr#23:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movsdRegRip xmm0, [rip + __fconst_4]
@@ -180,12 +179,12 @@ func @Math.exp {
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.jmp ifcont
-  critsplit:
+  tryok#22:
+    x64.jmp ifcont#24
+  critsplit#27:
     x64.movRegReg xmm0, xmm2
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#24
+  ifcont#24:
     x64.loadRegSlot xmm6, slot0
     x64.epilogue 48
     x64.popReg rbp

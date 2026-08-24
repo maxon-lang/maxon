@@ -214,7 +214,7 @@ func @spreadHash {
     x64.jcc greater, __rc_panic#2
     x64.jmp __rc_ok#1
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_48]
+    x64.leaRegRdata rcx, [rip + __str_blob_21]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -247,7 +247,7 @@ func @spreadHash {
     x64.jcc greater, __rc_panic#5
     x64.jmp __rc_ok#4
   __rc_panic#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_49]
+    x64.leaRegRdata rcx, [rip + __str_blob_22]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -416,7 +416,7 @@ func @Map.insertAtSlot {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_50]
+    x64.leaRegRdata rcx, [rip + __str_blob_23]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -433,7 +433,7 @@ func @Map.insertAtSlot {
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
   tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]
+    x64.leaRegRdata rcx, [rip + __str_blob_9]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -451,7 +451,7 @@ func @Map.insertAtSlot {
     x64.jcc notEqual, tryerr#4
     x64.jmp tryok#3
   tryerr#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]
+    x64.leaRegRdata rcx, [rip + __str_blob_10]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -469,7 +469,7 @@ func @Map.insertAtSlot {
     x64.jcc notEqual, tryerr#6
     x64.jmp tryok#5
   tryerr#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]
+    x64.leaRegRdata rcx, [rip + __str_blob_11]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -487,7 +487,7 @@ func @Map.insertAtSlot {
     x64.jcc notEqual, tryerr#8
     x64.jmp tryok#7
   tryerr#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]
+    x64.leaRegRdata rcx, [rip + __str_blob_12]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -672,7 +672,7 @@ func @Map.findSlot {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_51]
+    x64.leaRegRdata rcx, [rip + __str_blob_24]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -1317,9 +1317,27 @@ func @int.hash {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rax, 4294967295
     x64.movRegReg r8, rcx
     x64.andRegReg r8, rcx, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_25]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -1329,14 +1347,7 @@ func @int.equals {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegReg rcx, rdx
-    x64.jcc equal, equal
-    x64.jmp notEqual
-  equal:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  notEqual:
-    x64.movRegImm32 r8, 0
+    x64.setccReg equal, r8
     x64.popReg rbp
     x64.ret
 }

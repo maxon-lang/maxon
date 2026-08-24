@@ -23,7 +23,7 @@ func @getVal {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.popReg rbp
     x64.ret
 }
@@ -37,24 +37,6 @@ func @callIt {
     x64.movRegReg rbx, rcx
     x64.movRegReg rcx, rdx
     x64.callReg rbx
-    x64.movsdRegRip xmm1, [rip + __fconst_3]
-    x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc above, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movsdRegRip xmm1, [rip + __fconst_4]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc above, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movsdRegRip xmm0, [rip + __fconst_3]
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -74,28 +56,11 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -46,9 +46,9 @@ func @classify {
     x64.prologue 40
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext#4
+  matcharm#1:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -57,48 +57,48 @@ func @classify {
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r8 + 8], rax
     x64.movRegReg rcx, r8
-    x64.jmp matchcont
-  matchnext:
+    x64.jmp matchcont#5
+  matchnext#4:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
-  matcharm:
+    x64.jcc equal, matcharm#2
+    x64.jmp matchdead#3
+  matcharm#2:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
     x64.movRegReg rcx, rbx
-    x64.jmp matchcont
-  matchcont:
+    x64.jmp matchcont#5
+  matchcont#5:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#8
+    x64.jmp matchnext#10
+  matcharm#8:
     x64.movRegImm32 rbx, 0
-    x64.jmp matchcont
-  matchnext:
+    x64.jmp matchcont#12
+  matchnext#10:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#6
+    x64.jmp matchnext#11
+  matcharm#6:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
-    x64.jmp matchcont
-  matchnext:
+    x64.jmp matchcont#12
+  matchnext#11:
     x64.cmpRegImm32 rax, 2
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
-  matcharm:
+    x64.jcc equal, matcharm#7
+    x64.jmp matchdead#9
+  matcharm#7:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
-    x64.jmp matchcont
-  matchcont:
+    x64.jmp matchcont#12
+  matchcont#12:
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
-  matchdead:
+  matchdead#9:
+  matchdead#3:
 }
 
 func @main {

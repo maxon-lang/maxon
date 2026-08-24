@@ -43,7 +43,7 @@ func @mixed {
     x64.pushReg r15
     x64.prologue 40
     x64.storeSlotReg slot0, rcx
-    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.leaRegRdata rbx, [rip + __str_rec_2]
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -52,11 +52,11 @@ func @mixed {
     x64.storeBaseDispReg.word64 [r12 + 0], rax
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
-    x64.leaRegRegImm32 rcx, rbx, 49
+    x64.leaRegRegImm32 rcx, rbx, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
+    x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r13
     x64.movRegReg rax, rbx
@@ -71,36 +71,36 @@ func @mixed {
     x64.storeBaseDispReg.word64 [r12 + 8], r14
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext#4
+  matcharm#1:
     x64.movRegImm32 rbx, 0
-    x64.jmp matchcont
-  matchnext:
+    x64.jmp matchcont#5
+  matchnext#4:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
-  matcharm:
+    x64.jcc equal, matcharm#2
+    x64.jmp matchdead#3
+  matcharm#2:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r12 + 8], rax
     x64.movRegImm32 rbx, 1
     x64.callDirect __str_decref
-    x64.jmp matchcont
-  matchcont:
+    x64.jmp matchcont#5
+  matchcont#5:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#6
+    x64.jmp matchnext#9
+  matcharm#6:
     x64.movRegImm32 rax, 0
-    x64.jmp matchcont
-  matchnext:
+    x64.jmp matchcont#10
+  matchnext#9:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
-  matcharm:
+    x64.jcc equal, matcharm#7
+    x64.jmp matchdead#8
+  matcharm#7:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegReg rcx, r13
@@ -109,8 +109,8 @@ func @mixed {
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.movRegReg rax, r14
-    x64.jmp matchcont
-  matchcont:
+    x64.jmp matchcont#10
+  matchcont#10:
     x64.leaRegRegReg rbx, rbx, rax
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_M
@@ -123,8 +123,8 @@ func @mixed {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
-  matchdead:
+  matchdead#8:
+  matchdead#3:
 }
 
 func @main {
@@ -146,11 +146,11 @@ func @main {
     x64.storeBaseDispReg.word64 [r12 + 0], rax
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
-    x64.leaRegRegImm32 rcx, rbx, 49
+    x64.leaRegRegImm32 rcx, rbx, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
+    x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r13
     x64.movRegReg rax, rbx
@@ -170,8 +170,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -189,27 +188,6 @@ func @main {
   __rc_ok:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_M
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r15

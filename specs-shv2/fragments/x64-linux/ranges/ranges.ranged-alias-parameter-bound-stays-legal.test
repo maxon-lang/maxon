@@ -11,7 +11,7 @@ end 'sumTo'
 
 function main() returns ExitCode
 	var chars = 0
-	for c in 'a' to 'e' 'k'
+	for _ in 'a' to 'e' 'k'
 		chars = chars + 1
 	end 'k'
 	return (sumTo(5) + chars) as ExitCode
@@ -19,26 +19,32 @@ end 'main'
 ---
 ExitCode: 20
 ---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
 func @sumTo {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
+    x64.jcc less, __rc_panic#6
+    x64.jmp __rc_chk#7
+  __rc_chk#7:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
+    x64.jcc greater, __rc_panic#6
+    x64.jmp __rc_ok#5
+  __rc_panic#6:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#5:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 rax, 0
     x64.jmp forhdr
@@ -54,20 +60,20 @@ func @sumTo {
     x64.jmp forhdr
   forexit:
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
+    x64.jcc less, __rc_panic#9
+    x64.jmp __rc_chk#10
+  __rc_chk#10:
     x64.cmpRegImm32 r8, 63
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
+    x64.jcc greater, __rc_panic#9
+    x64.jmp __rc_ok#8
+  __rc_panic#9:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#8:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -78,19 +84,24 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.movRegImm32 rbx, 0
-    x64.movRegImm32 rax, 97
+    x64.movRegImm32 r12, 97
     x64.jmp forhdr
   forhdr:
-    x64.cmpRegImm32 rax, 101
+    x64.cmpRegImm32 r12, 101
     x64.jcc lessEqual, k
     x64.jmp forexit
   k:
+    x64.movRegReg rcx, r12
+    x64.callDirect __char_from_cp
     x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
     x64.jmp forstep
   forstep:
-    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr
   forexit:
     x64.movRegImm32 rcx, 5
@@ -100,37 +111,21 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

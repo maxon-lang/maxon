@@ -14,7 +14,9 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.callDirect float.clone
     x64.movsdRegRip xmm1, [rip + __fconst_0]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc parity, ifcont
@@ -24,10 +26,20 @@ func @main {
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 1
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @float.clone {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.popReg rbp
     x64.ret
 }

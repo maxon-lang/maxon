@@ -62,12 +62,13 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __layout_Array_Int]
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_remove
+    x64.callDirect Array.remove
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.movRegImm32 r12, 99
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -77,10 +78,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.cmpRegImm32 r8, 20
     x64.jcc notEqual, val
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   val:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -91,12 +92,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#4:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 2
     x64.jcc notEqual, cnt
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   cnt:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -107,23 +108,23 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#6:
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
     x64.movRegImm rax, -1
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#9
+  tryok#7:
     x64.movRegReg rax, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#9
+  trycont#9:
     x64.cmpRegImm32 rax, 10
     x64.jcc notEqual, c0
-    x64.jmp ifcont
+    x64.jmp ifcont#11
   c0:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx
@@ -134,23 +135,23 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#11:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#13
+    x64.jmp tryok#12
+  tryerr#13:
     x64.movRegImm rax, -1
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#14
+  tryok#12:
     x64.movRegReg rax, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#14
+  trycont#14:
     x64.cmpRegImm32 rax, 30
     x64.jcc notEqual, c1
-    x64.jmp ifcont
+    x64.jmp ifcont#16
   c1:
     x64.movRegImm32 r12, 4
     x64.movRegReg rcx, rbx
@@ -161,11 +162,51 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#16:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.remove {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_remove
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

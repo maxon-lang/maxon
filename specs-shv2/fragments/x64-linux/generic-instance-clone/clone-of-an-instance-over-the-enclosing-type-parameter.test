@@ -29,11 +29,11 @@ type Bag uses Element
 	end 'copy'
 end 'Bag'
 
-typealias StrBag = Bag with String
+typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	b.add("a boxed string held by a generic bag", tag: 4)
+	var b = IntBag.create()
+	b.add(91, tag: 4)
 
 	let c = b.copy()
 
@@ -137,12 +137,12 @@ func @main {
     x64.prologue 40
     x64.callDirect Bag.create
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.movRegImm32 rdx, 91
     x64.movRegImm32 rax, 4
-    x64.leaRegRdata r9, [rip + __layout_Bag_String]
+    x64.leaRegRdata r9, [rip + __layout_Bag_Integer]
     x64.movRegReg rcx, rbx
     x64.callDirect Bag.add
-    x64.leaRegRdata rdx, [rip + __layout_Bag_String]
+    x64.leaRegRdata rdx, [rip + __layout_Bag_Integer]
     x64.movRegReg rcx, rbx
     x64.callDirect Bag.copy
     x64.movRegReg r12, r8
@@ -156,7 +156,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Bag_String
+    x64.callDirect __destruct_Bag_Integer
     x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r13
@@ -176,7 +176,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Bag_String
+    x64.callDirect __destruct_Bag_Integer
     x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r13
@@ -189,7 +189,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Bag_String
+    x64.callDirect __destruct_Bag_Integer
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -198,7 +198,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_28]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -243,9 +243,7 @@ func @Array.clone {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

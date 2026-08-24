@@ -58,16 +58,16 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
     x64.storeSlotReg slot2, rax
-    x64.leaRegRegImm32 rcx, rax, 49
+    x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot3, r8
-    x64.leaRegRegImm32 r15, r8, 48
+    x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.movRegReg rax, rbx
@@ -89,7 +89,7 @@ func @main {
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -102,6 +102,197 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.reserve {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_capacity
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.cmpRegReg r12, r14
+    x64.jcc greater, grow
+    x64.jmp ifcont
+  grow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.createIterator {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect ArrayIterator.create
+    x64.movRegReg r12, r8
+    x64.movRegReg r13, r10
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ArrayIterator.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __managed_cursor_create
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_cursor_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ArrayIterator.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ArrayIterator.advance {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -321,54 +512,54 @@ func @sha256ReadBE32 {
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.movRegImm32 r13, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#3
+  tryok#1:
     x64.movRegReg r13, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#3
+  trycont#3:
     x64.leaRegRegImm32 rdx, r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#5
+    x64.jmp tryok#4
+  tryerr#5:
     x64.movRegImm32 r14, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#6
+  tryok#4:
     x64.movRegReg r14, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#6
+  trycont#6:
     x64.leaRegRegImm32 rdx, r12, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
     x64.movRegImm32 r15, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#9
+  tryok#7:
     x64.movRegReg r15, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#9
+  trycont#9:
     x64.leaRegRegImm32 rdx, r12, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#11
+    x64.jmp tryok#10
+  tryerr#11:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#12
+  tryok#10:
     x64.movRegReg rax, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#12
+  trycont#12:
     x64.shlRegImm8 r13, r13, 24
     x64.shlRegImm8 r14, r14, 16
     x64.orRegReg r13, r13, r14
@@ -395,24 +586,25 @@ func @sha256Compress {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 168
+    x64.prologue 184
     x64.movRegReg rbx, rcx
-    x64.storeSlotReg slot0, rbx
+    x64.storeSlotReg slot1, rbx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg r14, r8
+    x64.storeSlotReg slot0, r14
     x64.movRegImm32 rdx, 64
     x64.movRegReg rcx, r14
-    x64.callDirect __managed_reserve
+    x64.callDirect Array.reserve
     x64.movRegImm32 r15, 0
-    x64.jmp whilehdr
-  whilehdr:
+    x64.jmp whilehdr#1
+  whilehdr#1:
     x64.cmpRegImm32 r15, 16
     x64.jcc less, readWords
-    x64.jmp whileexit
+    x64.jmp whileexit#3
   readWords:
     x64.imulRegRegImm32 rax, r15, 4
     x64.leaRegRegReg rdx, r13, rax
@@ -422,26 +614,26 @@ func @sha256Compress {
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.leaRegRegImm32 r15, r15, 1
-    x64.jmp whilehdr
-  whileexit:
-    x64.jmp whilehdr
-  whilehdr:
-    x64.storeSlotReg slot10, r15
+    x64.jmp whilehdr#1
+  whileexit#3:
+    x64.jmp whilehdr#4
+  whilehdr#4:
+    x64.storeSlotReg slot13, r15
     x64.cmpRegImm32 r15, 64
     x64.jcc less, extend
-    x64.jmp whileexit
+    x64.jmp whileexit#6
   extend:
     x64.leaRegRegImm32 rdx, r15, -2
     x64.movRegReg rcx, r14
     x64.callDirect __managed_get
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -449,18 +641,18 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#7:
     x64.leaRegRegImm32 rdx, r15, -7
     x64.movRegReg rcx, r14
     x64.callDirect __managed_get
-    x64.storeSlotReg slot15, r8
+    x64.storeSlotReg slot17, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -468,18 +660,18 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#9:
     x64.leaRegRegImm32 rdx, r15, -15
     x64.movRegReg rcx, r14
     x64.callDirect __managed_get
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.jcc notEqual, tryerr#12
+    x64.jmp tryok#11
+  tryerr#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -487,18 +679,18 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#11:
     x64.leaRegRegImm32 rdx, r15, -16
     x64.movRegReg rcx, r14
     x64.callDirect __managed_get
     x64.movRegReg r15, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]
+    x64.jcc notEqual, tryerr#14
+    x64.jmp tryok#13
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -506,52 +698,55 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#13:
     x64.movRegReg rcx, r13
     x64.callDirect sha256SmSigma0
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
     x64.callDirect sha256SmSigma1
     x64.leaRegRegReg rax, r15, r13
-    x64.loadRegSlot rcx, slot15
+    x64.loadRegSlot rcx, slot17
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegReg rdx, rax, r8
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg rdx, rdx, rax
     x64.movRegReg rcx, r14
     x64.callDirect __managed_push
-    x64.loadRegSlot rax, slot10
+    x64.loadRegSlot rax, slot13
     x64.leaRegRegImm32 rax, rax, 1
     x64.movRegReg r15, rax
-    x64.jmp whilehdr
-  whileexit:
+    x64.jmp whilehdr#4
+  whileexit#6:
     x64.movRegImm32 r12, 0
     x64.leaRegGlobal rax, __data_sha256KTable
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
-    x64.movRegImm32 r15, 0
-    x64.jmp forhdr
-  forhdr:
-    x64.storeSlotReg slot13, r15
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_count
-    x64.cmpRegReg r15, r8
-    x64.jcc less, foldRoundConstants
-    x64.jmp forexit
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect Array.createIterator
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit#47
+    x64.jmp forempty#16
+  critsplit#47:
+    x64.jmp forhdr#15
+  forhdr#15:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, foldRoundConstants
+    x64.jmp forexit#19
   foldRoundConstants:
+    x64.leaRegRdata rdx, [rip + __layout_ArrayIterator_int]
     x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r15
-    x64.callDirect __managed_get_unchecked
+    x64.callDirect ArrayIterator.current
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]
+    x64.jcc notEqual, tryerr#21
+    x64.jmp tryok#20
+  tryerr#21:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -559,7 +754,7 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#20:
     x64.leaRegRegReg rax, r8, r15
     x64.movRegImm32 rcx, 4294967295
     x64.andRegReg rax, rax, rcx
@@ -567,58 +762,12 @@ func @sha256Compress {
     x64.movRegReg rdx, r12
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]
-    x64.callDirect mrt_panic
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forstep
-  forstep:
-    x64.loadRegSlot rax, slot13
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.movRegReg r15, rax
-    x64.jmp forhdr
-  forexit:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get_in_bounds
-    x64.storeSlotReg slot4, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]
-    x64.callDirect mrt_panic
-    x64.epilogue 168
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get_in_bounds
-    x64.storeSlotReg slot6, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#23
+    x64.jmp tryok#22
+  tryerr#23:
     x64.leaRegRdata rcx, [rip + __str_blob_9]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -626,18 +775,33 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 2
+  tryok#22:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forstep#18
+  forstep#18:
+    x64.movRegReg rcx, r13
+    x64.callDirect ArrayIterator.advance
+    x64.movRegReg rax, r10
+    x64.jmp forhdr#15
+  forexit#19:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_ArrayIterator_int
+    x64.jmp forjoin#24
+  forempty#16:
+    x64.jmp forjoin#24
+  forjoin#24:
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get_in_bounds
-    x64.storeSlotReg slot9, r8
+    x64.callDirect Vector.get
+    x64.storeSlotReg slot5, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#26
+    x64.jmp tryok#25
+  tryerr#26:
     x64.leaRegRdata rcx, [rip + __str_blob_10]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -645,18 +809,19 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 3
+  tryok#25:
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get_in_bounds
-    x64.storeSlotReg slot14, r8
+    x64.callDirect Vector.get
+    x64.storeSlotReg slot8, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#28
+    x64.jmp tryok#27
+  tryerr#28:
     x64.leaRegRdata rcx, [rip + __str_blob_11]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -664,18 +829,19 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 4
+  tryok#27:
+    x64.movRegImm32 rdx, 2
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get_in_bounds
-    x64.movRegReg r12, r8
+    x64.callDirect Vector.get
+    x64.storeSlotReg slot12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#30
+    x64.jmp tryok#29
+  tryerr#30:
     x64.leaRegRdata rcx, [rip + __str_blob_12]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -683,18 +849,19 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 5
+  tryok#29:
+    x64.movRegImm32 rdx, 3
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get_in_bounds
-    x64.movRegReg r13, r8
+    x64.callDirect Vector.get
+    x64.storeSlotReg slot16, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#32
+    x64.jmp tryok#31
+  tryerr#32:
     x64.leaRegRdata rcx, [rip + __str_blob_13]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -702,18 +869,19 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 6
+  tryok#31:
+    x64.movRegImm32 rdx, 4
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get_in_bounds
-    x64.movRegReg r15, r8
+    x64.callDirect Vector.get
+    x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#34
+    x64.jmp tryok#33
+  tryerr#34:
     x64.leaRegRdata rcx, [rip + __str_blob_14]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -721,17 +889,19 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 7
+  tryok#33:
+    x64.movRegImm32 rdx, 5
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get_in_bounds
+    x64.callDirect Vector.get
+    x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#36
+    x64.jmp tryok#35
+  tryerr#36:
     x64.leaRegRdata rcx, [rip + __str_blob_15]
     x64.callDirect mrt_panic
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -739,117 +909,183 @@ func @sha256Compress {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rbx, 0
-    x64.loadRegSlot rax, slot4
-    x64.loadRegSlot rcx, slot6
-    x64.loadRegSlot rdx, slot9
-    x64.loadRegSlot rsi, slot14
-    x64.movRegReg rdi, r13
-    x64.movRegReg r13, r8
-    x64.jmp forhdr
-  forhdr:
-    x64.storeSlotReg slot12, rdi
-    x64.storeSlotReg slot8, r15
-    x64.storeSlotReg slot7, rax
-    x64.storeSlotReg slot5, rcx
-    x64.storeSlotReg slot3, rdx
-    x64.storeSlotReg slot2, rsi
-    x64.storeSlotReg slot1, rbx
+  tryok#35:
+    x64.movRegImm32 rdx, 6
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Vector.get
+    x64.movRegReg r15, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#38
+    x64.jmp tryok#37
+  tryerr#38:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]
+    x64.callDirect mrt_panic
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#37:
+    x64.movRegImm32 rdx, 7
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Vector.get
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#40
+    x64.jmp tryok#39
+  tryerr#40:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]
+    x64.callDirect mrt_panic
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#39:
     x64.movRegReg rcx, r14
-    x64.callDirect __managed_count
-    x64.cmpRegReg rbx, r8
-    x64.jcc less, rounds
-    x64.jmp forexit
+    x64.callDirect Array.createIterator
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit#48
+    x64.jmp forempty#42
+  critsplit#48:
+    x64.loadRegSlot rcx, slot5
+    x64.loadRegSlot rdx, slot8
+    x64.loadRegSlot rsi, slot12
+    x64.loadRegSlot rdi, slot16
+    x64.xchgRegReg rbx, rcx
+    x64.xchgRegReg rcx, r15
+    x64.jmp forhdr#41
+  forhdr#41:
+    x64.storeSlotReg slot15, rcx
+    x64.storeSlotReg slot11, r12
+    x64.storeSlotReg slot7, rdx
+    x64.storeSlotReg slot4, rsi
+    x64.storeSlotReg slot3, rbx
+    x64.storeSlotReg slot2, rdi
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, rounds
+    x64.jmp forexit#45
   rounds:
+    x64.leaRegRdata rdx, [rip + __layout_ArrayIterator_ParsedInt]
     x64.movRegReg rcx, r14
-    x64.movRegReg rdx, rbx
-    x64.callDirect __managed_get_unchecked
-    x64.storeSlotReg slot11, r8
+    x64.callDirect ArrayIterator.current
+    x64.storeSlotReg slot10, r8
     x64.movRegReg rcx, r12
     x64.callDirect sha256BigSigma1
-    x64.leaRegRegReg rbx, r13, r8
+    x64.leaRegRegReg r15, r15, r8
     x64.movRegReg rcx, r12
-    x64.loadRegSlot rdx, slot12
-    x64.movRegReg rax, r15
+    x64.movRegReg rdx, r13
+    x64.loadRegSlot rax, slot15
     x64.callDirect sha256Ch
-    x64.leaRegRegReg rax, rbx, r8
-    x64.loadRegSlot rcx, slot11
-    x64.leaRegRegReg rbx, rax, rcx
+    x64.leaRegRegReg rax, r15, r8
+    x64.loadRegSlot rcx, slot10
+    x64.leaRegRegReg r12, rax, rcx
     x64.movRegImm32 rax, 4294967295
-    x64.andRegReg rbx, rbx, rax
-    x64.loadRegSlot r13, slot7
-    x64.movRegReg rcx, r13
+    x64.andRegReg r12, r12, rax
+    x64.movRegReg rcx, rbx
     x64.callDirect sha256BigSigma0
     x64.movRegReg r15, r8
-    x64.movRegReg rcx, r13
-    x64.loadRegSlot rdx, slot5
-    x64.loadRegSlot rax, slot3
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot7
+    x64.loadRegSlot rax, slot4
     x64.callDirect sha256Maj
     x64.leaRegRegReg rax, r15, r8
     x64.movRegImm32 rcx, 4294967295
     x64.andRegReg rax, rax, rcx
     x64.loadRegSlot rcx, slot2
-    x64.leaRegRegReg rcx, rcx, rbx
-    x64.movRegImm32 rdx, 4294967295
-    x64.andRegReg rcx, rcx, rdx
-    x64.leaRegRegReg rax, rbx, rax
-    x64.movRegImm32 rdx, 4294967295
-    x64.andRegReg rax, rax, rdx
-    x64.jmp forstep
-  forstep:
-    x64.loadRegSlot rdx, slot1
-    x64.leaRegRegImm32 rdx, rdx, 1
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot rdi, slot5
-    x64.loadRegSlot r8, slot7
-    x64.loadRegSlot r9, slot8
-    x64.loadRegSlot r10, slot12
+    x64.leaRegRegReg rbx, rcx, r12
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rbx, rbx, rcx
+    x64.leaRegRegReg r12, r12, rax
+    x64.movRegImm32 rax, 4294967295
+    x64.andRegReg r12, r12, rax
+    x64.jmp forstep#44
+  forstep#44:
+    x64.movRegReg rcx, r14
+    x64.callDirect ArrayIterator.advance
+    x64.loadRegSlot rdx, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.loadRegSlot rsi, slot7
+    x64.loadRegSlot rax, slot11
+    x64.loadRegSlot rcx, slot15
+    x64.movRegReg r15, rcx
+    x64.movRegReg rcx, r13
+    x64.movRegReg r13, rax
+    x64.movRegReg rax, r10
+    x64.xchgRegReg rbx, r12
+    x64.jmp forhdr#41
+  forexit#45:
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_ArrayIterator_ParsedInt
+    x64.loadRegSlot rbx, slot2
+    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot r12, slot4
+    x64.loadRegSlot r14, slot7
+    x64.loadRegSlot rcx, slot11
+    x64.loadRegSlot rdx, slot15
+    x64.movRegReg rsi, r15
+    x64.xchgRegReg r13, rcx
+    x64.jmp forjoin#46
+  forempty#42:
+    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot r14, slot8
+    x64.loadRegSlot rcx, slot12
+    x64.loadRegSlot rdx, slot16
+    x64.movRegReg rsi, rbx
     x64.movRegReg rbx, rdx
-    x64.movRegReg rdx, rdi
-    x64.movRegReg rdi, r12
-    x64.movRegReg r12, rcx
-    x64.movRegReg rcx, r8
-    x64.movRegReg r15, r10
-    x64.movRegReg r13, r9
-    x64.jmp forhdr
-  forexit:
+    x64.movRegReg rdx, r15
+    x64.xchgRegReg r12, rcx
+    x64.xchgRegReg r13, rcx
+    x64.jmp forjoin#46
+  forjoin#46:
+    x64.storeSlotReg slot14, rcx
+    x64.storeSlotReg slot9, rdx
+    x64.storeSlotReg slot6, rsi
     x64.movRegImm32 rdx, 0
-    x64.loadRegSlot rbx, slot0
-    x64.movRegReg rcx, rbx
-    x64.loadRegSlot rax, slot7
+    x64.loadRegSlot r15, slot1
+    x64.movRegReg rcx, r15
     x64.callDirect sha256AddIntoState
     x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.loadRegSlot rax, slot5
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, r14
     x64.callDirect sha256AddIntoState
     x64.movRegImm32 rdx, 2
-    x64.movRegReg rcx, rbx
-    x64.loadRegSlot rax, slot3
-    x64.callDirect sha256AddIntoState
-    x64.movRegImm32 rdx, 3
-    x64.movRegReg rcx, rbx
-    x64.loadRegSlot rax, slot2
-    x64.callDirect sha256AddIntoState
-    x64.movRegImm32 rdx, 4
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r15
     x64.movRegReg rax, r12
     x64.callDirect sha256AddIntoState
-    x64.movRegImm32 rdx, 5
-    x64.movRegReg rcx, rbx
-    x64.loadRegSlot rax, slot12
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, rbx
     x64.callDirect sha256AddIntoState
-    x64.movRegImm32 rdx, 6
-    x64.movRegReg rcx, rbx
-    x64.loadRegSlot rax, slot8
-    x64.callDirect sha256AddIntoState
-    x64.movRegImm32 rdx, 7
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, r15
     x64.movRegReg rax, r13
     x64.callDirect sha256AddIntoState
-    x64.movRegReg rcx, r14
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, r15
+    x64.loadRegSlot rax, slot14
+    x64.callDirect sha256AddIntoState
+    x64.movRegImm32 rdx, 6
+    x64.movRegReg rcx, r15
+    x64.loadRegSlot rax, slot9
+    x64.callDirect sha256AddIntoState
+    x64.movRegImm32 rdx, 7
+    x64.movRegReg rcx, r15
+    x64.loadRegSlot rax, slot6
+    x64.callDirect sha256AddIntoState
+    x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
-    x64.epilogue 168
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -870,14 +1106,15 @@ func @sha256AddIntoState {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __managed_get
+    x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]
     x64.callDirect mrt_panic
     x64.epilogue 40
     x64.popReg r13
@@ -885,18 +1122,20 @@ func @sha256AddIntoState {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.leaRegRegReg rax, r8, r13
     x64.movRegImm32 rcx, 4294967295
     x64.andRegReg rax, rax, rcx
+    x64.leaRegRdata r9, [rip + __layout_Vector_N8_Word32]
+    x64.movRegImm32 rsi, 8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __managed_set
+    x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_19]
     x64.callDirect mrt_panic
     x64.epilogue 40
     x64.popReg r13
@@ -904,7 +1143,7 @@ func @sha256AddIntoState {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#3:
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -924,61 +1163,20 @@ func @sha256 {
     x64.pushReg r15
     x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
+    x64.leaRegRdata rcx, [rip + __layout_Vector_N8_Word32]
     x64.movRegImm32 rdx, 8
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_resize
+    x64.callDirect Vector.create
+    x64.movRegReg r12, r8
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1779033703
+    x64.leaRegRdata r9, [rip + __layout_Vector_N8_Word32]
+    x64.movRegImm32 rsi, 8
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_set_in_bounds
+    x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_18]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 1
-    x64.movRegImm32 rax, 3144134277
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_set_in_bounds
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_19]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 2
-    x64.movRegImm32 rax, 1013904242
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_set_in_bounds
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_20]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -990,15 +1188,17 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 3
-    x64.movRegImm32 rax, 2773480762
+  tryok#1:
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 3144134277
+    x64.leaRegRdata r9, [rip + __layout_Vector_N8_Word32]
+    x64.movRegImm32 rsi, 8
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_set_in_bounds
+    x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_blob_21]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1010,15 +1210,17 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 4
-    x64.movRegImm32 rax, 1359893119
+  tryok#3:
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 1013904242
+    x64.leaRegRdata r9, [rip + __layout_Vector_N8_Word32]
+    x64.movRegImm32 rsi, 8
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_set_in_bounds
+    x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  tryerr#6:
     x64.leaRegRdata rcx, [rip + __str_blob_22]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1030,15 +1232,17 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 5
-    x64.movRegImm32 rax, 2600822924
+  tryok#5:
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 2773480762
+    x64.leaRegRdata r9, [rip + __layout_Vector_N8_Word32]
+    x64.movRegImm32 rsi, 8
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_set_in_bounds
+    x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
     x64.leaRegRdata rcx, [rip + __str_blob_23]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1050,15 +1254,17 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 6
-    x64.movRegImm32 rax, 528734635
+  tryok#7:
+    x64.movRegImm32 rdx, 4
+    x64.movRegImm32 rax, 1359893119
+    x64.leaRegRdata r9, [rip + __layout_Vector_N8_Word32]
+    x64.movRegImm32 rsi, 8
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_set_in_bounds
+    x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
     x64.leaRegRdata rcx, [rip + __str_blob_24]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1070,15 +1276,17 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 7
-    x64.movRegImm32 rax, 1541459225
+  tryok#9:
+    x64.movRegImm32 rdx, 5
+    x64.movRegImm32 rax, 2600822924
+    x64.leaRegRdata r9, [rip + __layout_Vector_N8_Word32]
+    x64.movRegImm32 rsi, 8
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_set_in_bounds
+    x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#12
+    x64.jmp tryok#11
+  tryerr#12:
     x64.leaRegRdata rcx, [rip + __str_blob_25]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1090,277 +1298,17 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.movRegReg r13, r8
-    x64.imulRegRegImm32 r14, r13, 8
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg r15, r8
-    x64.leaRegRegImm32 rdx, r13, 72
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_reserve
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, rbx
-    x64.callDirect __managed_append
-    x64.movRegImm32 rdx, 128
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.jmp whilehdr
-  whilehdr:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_count
-    x64.movRegImm32 rcx, 64
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg rcx
-    x64.cmpRegImm32 rdx, 56
-    x64.jcc notEqual, pad
-    x64.jmp whileexit
-  pad:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.jmp whilehdr
-  whileexit:
-    x64.movRegReg rax, r14
-    x64.sarRegImm8 rax, r14, 56
-    x64.movRegReg rdx, rax
-    x64.andRegImm32 rdx, rax, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_34]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.movRegReg rax, r14
-    x64.sarRegImm8 rax, r14, 48
-    x64.movRegReg rdx, rax
-    x64.andRegImm32 rdx, rax, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.movRegReg rax, r14
-    x64.sarRegImm8 rax, r14, 40
-    x64.movRegReg rdx, rax
-    x64.andRegImm32 rdx, rax, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.movRegReg rax, r14
-    x64.sarRegImm8 rax, r14, 32
-    x64.movRegReg rdx, rax
-    x64.andRegImm32 rdx, rax, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_37]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.movRegReg rax, r14
-    x64.sarRegImm8 rax, r14, 24
-    x64.movRegReg rdx, rax
-    x64.andRegImm32 rdx, rax, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_38]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.movRegReg rax, r14
-    x64.sarRegImm8 rax, r14, 16
-    x64.movRegReg rdx, rax
-    x64.andRegImm32 rdx, rax, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_39]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.movRegReg rax, r14
-    x64.sarRegImm8 rax, r14, 8
-    x64.movRegReg rdx, rax
-    x64.andRegImm32 rdx, rax, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_40]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.movRegReg rdx, r14
-    x64.andRegImm32 rdx, r14, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_41]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_push
-    x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
-  whilehdr:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_count
-    x64.cmpRegReg rbx, r8
-    x64.jcc less, processBlocks
-    x64.jmp whileexit
-  processBlocks:
+  tryok#11:
+    x64.movRegImm32 rdx, 6
+    x64.movRegImm32 rax, 528734635
+    x64.leaRegRdata r9, [rip + __layout_Vector_N8_Word32]
+    x64.movRegImm32 rsi, 8
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r15
-    x64.movRegReg rax, rbx
-    x64.callDirect sha256Compress
-    x64.leaRegRegImm32 rbx, rbx, 64
-    x64.jmp whilehdr
-  whileexit:
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 32
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_reserve
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_get_in_bounds
+    x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#14
+    x64.jmp tryok#13
+  tryerr#14:
     x64.leaRegRdata rcx, [rip + __str_blob_26]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1372,17 +1320,17 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect emitBE32
-    x64.movRegImm32 rdx, 1
+  tryok#13:
+    x64.movRegImm32 rdx, 7
+    x64.movRegImm32 rax, 1541459225
+    x64.leaRegRdata r9, [rip + __layout_Vector_N8_Word32]
+    x64.movRegImm32 rsi, 8
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_get_in_bounds
+    x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#16
+    x64.jmp tryok#15
+  tryerr#16:
     x64.leaRegRdata rcx, [rip + __str_blob_27]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1394,17 +1342,278 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#15:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect emitBE32
-    x64.movRegImm32 rdx, 2
+    x64.callDirect __managed_count
+    x64.movRegReg r13, r8
+    x64.imulRegRegImm32 r14, r13, 8
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r15, r8
+    x64.leaRegRegImm32 rdx, r13, 72
+    x64.movRegReg rcx, r15
+    x64.callDirect Array.reserve
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_append
+    x64.movRegImm32 rdx, 128
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.jmp whilehdr#17
+  whilehdr#17:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_count
+    x64.movRegImm32 rcx, 64
+    x64.movRegReg rax, r8
+    x64.cqo
+    x64.idivReg rcx
+    x64.cmpRegImm32 rdx, 56
+    x64.jcc notEqual, pad
+    x64.jmp whileexit#19
+  pad:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.jmp whilehdr#17
+  whileexit#19:
+    x64.movRegReg rax, r14
+    x64.sarRegImm8 rax, r14, 56
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#40
+    x64.jmp __rc_chk#41
+  __rc_chk#41:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#40
+    x64.jmp __rc_ok#39
+  __rc_panic#40:
+    x64.leaRegRdata rcx, [rip + __str_blob_37]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#39:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.movRegReg rax, r14
+    x64.sarRegImm8 rax, r14, 48
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#43
+    x64.jmp __rc_chk#44
+  __rc_chk#44:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#43
+    x64.jmp __rc_ok#42
+  __rc_panic#43:
+    x64.leaRegRdata rcx, [rip + __str_blob_38]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#42:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.movRegReg rax, r14
+    x64.sarRegImm8 rax, r14, 40
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#46
+    x64.jmp __rc_chk#47
+  __rc_chk#47:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#46
+    x64.jmp __rc_ok#45
+  __rc_panic#46:
+    x64.leaRegRdata rcx, [rip + __str_blob_39]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#45:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.movRegReg rax, r14
+    x64.sarRegImm8 rax, r14, 32
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#49
+    x64.jmp __rc_chk#50
+  __rc_chk#50:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#49
+    x64.jmp __rc_ok#48
+  __rc_panic#49:
+    x64.leaRegRdata rcx, [rip + __str_blob_40]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#48:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.movRegReg rax, r14
+    x64.sarRegImm8 rax, r14, 24
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#52
+    x64.jmp __rc_chk#53
+  __rc_chk#53:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#52
+    x64.jmp __rc_ok#51
+  __rc_panic#52:
+    x64.leaRegRdata rcx, [rip + __str_blob_41]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#51:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.movRegReg rax, r14
+    x64.sarRegImm8 rax, r14, 16
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#55
+    x64.jmp __rc_chk#56
+  __rc_chk#56:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#55
+    x64.jmp __rc_ok#54
+  __rc_panic#55:
+    x64.leaRegRdata rcx, [rip + __str_blob_42]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#54:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.movRegReg rax, r14
+    x64.sarRegImm8 rax, r14, 8
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#58
+    x64.jmp __rc_chk#59
+  __rc_chk#59:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#58
+    x64.jmp __rc_ok#57
+  __rc_panic#58:
+    x64.leaRegRdata rcx, [rip + __str_blob_43]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#57:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.movRegReg rdx, r14
+    x64.andRegImm32 rdx, r14, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#61
+    x64.jmp __rc_chk#62
+  __rc_chk#62:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#61
+    x64.jmp __rc_ok#60
+  __rc_panic#61:
+    x64.leaRegRdata rcx, [rip + __str_blob_44]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#60:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_push
+    x64.movRegImm32 rbx, 0
+    x64.jmp whilehdr#20
+  whilehdr#20:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_count
+    x64.cmpRegReg rbx, r8
+    x64.jcc less, processBlocks
+    x64.jmp whileexit#22
+  processBlocks:
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_get_in_bounds
+    x64.movRegReg rdx, r15
+    x64.movRegReg rax, rbx
+    x64.callDirect sha256Compress
+    x64.leaRegRegImm32 rbx, rbx, 64
+    x64.jmp whilehdr#20
+  whileexit#22:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 32
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.reserve
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
+    x64.movRegReg rcx, r12
+    x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#24
+    x64.jmp tryok#23
+  tryerr#24:
     x64.leaRegRdata rcx, [rip + __str_blob_28]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1416,17 +1625,18 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#23:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect emitBE32
-    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_get_in_bounds
+    x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#26
+    x64.jmp tryok#25
+  tryerr#26:
     x64.leaRegRdata rcx, [rip + __str_blob_29]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1438,17 +1648,18 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#25:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect emitBE32
-    x64.movRegImm32 rdx, 4
+    x64.movRegImm32 rdx, 2
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_get_in_bounds
+    x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#28
+    x64.jmp tryok#27
+  tryerr#28:
     x64.leaRegRdata rcx, [rip + __str_blob_30]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1460,17 +1671,18 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#27:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect emitBE32
-    x64.movRegImm32 rdx, 5
+    x64.movRegImm32 rdx, 3
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_get_in_bounds
+    x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#30
+    x64.jmp tryok#29
+  tryerr#30:
     x64.leaRegRdata rcx, [rip + __str_blob_31]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1482,17 +1694,18 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#29:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect emitBE32
-    x64.movRegImm32 rdx, 6
+    x64.movRegImm32 rdx, 4
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_get_in_bounds
+    x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#32
+    x64.jmp tryok#31
+  tryerr#32:
     x64.leaRegRdata rcx, [rip + __str_blob_32]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1504,17 +1717,18 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#31:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect emitBE32
-    x64.movRegImm32 rdx, 7
+    x64.movRegImm32 rdx, 5
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_get_in_bounds
+    x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#34
+    x64.jmp tryok#33
+  tryerr#34:
     x64.leaRegRdata rcx, [rip + __str_blob_33]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1526,7 +1740,53 @@ func @sha256 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#33:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect emitBE32
+    x64.movRegImm32 rdx, 6
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
+    x64.movRegReg rcx, r12
+    x64.callDirect Vector.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#36
+    x64.jmp tryok#35
+  tryerr#36:
+    x64.leaRegRdata rcx, [rip + __str_blob_34]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#35:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect emitBE32
+    x64.movRegImm32 rdx, 7
+    x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
+    x64.movRegReg rcx, r12
+    x64.callDirect Vector.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#38
+    x64.jmp tryok#37
+  tryerr#38:
+    x64.leaRegRdata rcx, [rip + __str_blob_35]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#37:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect emitBE32
@@ -1559,77 +1819,13 @@ func @emitBE32 {
     x64.movRegReg rdx, rax
     x64.andRegImm32 rdx, rax, 255
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
+    x64.jcc less, __rc_panic#2
+    x64.jmp __rc_chk#3
+  __rc_chk#3:
     x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_42]
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegReg rax, r12
-    x64.sarRegImm8 rax, r12, 16
-    x64.movRegReg rdx, rax
-    x64.andRegImm32 rdx, rax, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegReg rax, r12
-    x64.sarRegImm8 rax, r12, 8
-    x64.movRegReg rdx, rax
-    x64.andRegImm32 rdx, rax, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_44]
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegReg rdx, r12
-    x64.andRegImm32 rdx, r12, 255
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
+    x64.jcc greater, __rc_panic#2
+    x64.jmp __rc_ok#1
+  __rc_panic#2:
     x64.leaRegRdata rcx, [rip + __str_blob_45]
     x64.callDirect mrt_panic
     x64.epilogue 32
@@ -1637,10 +1833,224 @@ func @emitBE32 {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegReg rax, r12
+    x64.sarRegImm8 rax, r12, 16
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#5
+    x64.jmp __rc_chk#6
+  __rc_chk#6:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#5
+    x64.jmp __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_46]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegReg rax, r12
+    x64.sarRegImm8 rax, r12, 8
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#8
+    x64.jmp __rc_chk#9
+  __rc_chk#9:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#8
+    x64.jmp __rc_ok#7
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_47]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#7:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegReg rdx, r12
+    x64.andRegImm32 rdx, r12, 255
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#11
+    x64.jmp __rc_chk#12
+  __rc_chk#12:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#11
+    x64.jmp __rc_ok#10
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_48]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#10:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Vector.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.movRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
+    x64.movRegReg rcx, rax
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Vector.count {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Vector.get {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.movRegReg r12, rax
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Vector.set {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegReg r14, r9
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, rsi
+    x64.callDirect Vector.count
+    x64.cmpRegReg r12, r8
+    x64.jcc greaterEqual, pastTheFixedSize
+    x64.jmp ifcont
+  pastTheFixedSize:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r13
+    x64.callDirect __drop_type_param
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_36]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

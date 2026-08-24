@@ -60,7 +60,7 @@ func @main {
     x64.callDirect __managed_cursor_current
     x64.movRegReg r13, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_clear
+    x64.callDirect Array.clear
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_count
     x64.leaRegRegReg r13, r13, r8
@@ -90,6 +90,24 @@ func @main {
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.clear {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_clear
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

@@ -23,18 +23,18 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.leaRegRdata rbx, [rip + __str_rec_3]
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
     x64.movRegReg r12, r8
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
-    x64.leaRegRegImm32 rcx, rbx, 49
+    x64.leaRegRegImm32 rcx, rbx, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
+    x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r13
     x64.movRegReg rax, rbx
@@ -49,14 +49,14 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
     x64.callDirect __managed_push
-    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.leaRegRdata rax, [rip + __str_rec_4]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRegImm32 rcx, r13, 49
+    x64.leaRegRegImm32 rcx, r13, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
+    x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r13
@@ -74,11 +74,11 @@ func @main {
     x64.leaRegRdata rax, [rip + __str_rec_5]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRegImm32 rcx, r13, 49
+    x64.leaRegRegImm32 rcx, r13, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
+    x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r13
@@ -211,6 +211,60 @@ func @__managed_set {
     x64.leaRegRegReg r12, r12, rax
     x64.jmp dtorh
   mcont:
+    x64.movRegImm32 rax, 0
+    x64.cmpRegReg r14, rax
+    x64.jcc less, stpk
+    x64.jmp stby
+  stpk:
+    x64.movRegImm32 rcx, 63
+    x64.movRegReg rax, r14
+    x64.sarRegCl rax, r14
+    x64.movRegImm rdx, -1
+    x64.movRegReg rsi, rax
+    x64.xorRegReg rsi, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, r14
+    x64.movRegImm32 rdi, 3
+    x64.movRegReg rcx, rdi
+    x64.shlRegCl r14, r14
+    x64.andRegReg rdx, rdx, rax
+    x64.andRegReg r14, r14, rsi
+    x64.orRegReg rdx, rdx, r14
+    x64.loadRegSlot rax, slot1
+    x64.imulRegReg rax, rax, rdx
+    x64.movRegImm32 rsi, 3
+    x64.movRegReg rcx, rsi
+    x64.movRegReg rsi, rax
+    x64.shrRegCl rsi, rax
+    x64.movRegImm32 rdi, 7
+    x64.andRegReg rax, rax, rdi
+    x64.movRegImm32 rdi, 64
+    x64.subRegReg rdi, rdi, rdx
+    x64.movRegImm r8, -1
+    x64.movRegReg rcx, rdi
+    x64.shrRegCl r8, r8
+    x64.leaRegRegReg rdx, rax, rdx
+    x64.movRegImm32 rdi, 7
+    x64.leaRegRegReg rdx, rdx, rdi
+    x64.movRegImm32 rdi, 3
+    x64.movRegReg rcx, rdi
+    x64.shrRegCl rdx, rdx
+    x64.leaRegRegReg rdx, r13, rsi
+    x64.loadRegBaseDisp.byte rsi, [rdx + 0]
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdi, r8
+    x64.shlRegCl rdi, r8
+    x64.movRegImm r9, -1
+    x64.xorRegReg rdi, rdi, r9
+    x64.andRegReg rsi, rsi, rdi
+    x64.loadRegSlot rdi, slot0
+    x64.andRegReg rdi, rdi, r8
+    x64.movRegReg rcx, rax
+    x64.shlRegCl rdi, rdi
+    x64.orRegReg rsi, rsi, rdi
+    x64.storeBaseDispReg.byte [rdx + 0], rsi
+    x64.jmp stjoin
+  stby:
     x64.loadRegSlot rax, slot1
     x64.imulRegReg rax, rax, r14
     x64.leaRegRegReg rax, r13, rax
@@ -221,6 +275,8 @@ func @__managed_set {
     x64.jcc greaterEqual, sted
     x64.jmp steb
   sted:
+    x64.jmp stjoin
+  stjoin:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
     x64.epilogue 56
@@ -238,9 +294,9 @@ func @__managed_set {
     x64.movRegReg rcx, rsi
     x64.loadRegSlot rsi, slot0
     x64.shrRegCl rsi, rsi
-    x64.leaRegRegReg rcx, rax, rdx
-    x64.storeBaseDispReg.byte [rcx + 0], rsi
-    x64.movRegImm32 rcx, 1
-    x64.leaRegRegReg rdx, rdx, rcx
+    x64.leaRegRegReg rdi, rax, rdx
+    x64.storeBaseDispReg.byte [rdi + 0], rsi
+    x64.movRegImm32 rsi, 1
+    x64.leaRegRegReg rdx, rdx, rsi
     x64.jmp steh
 }

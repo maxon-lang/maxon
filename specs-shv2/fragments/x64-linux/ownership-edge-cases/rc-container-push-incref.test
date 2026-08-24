@@ -64,9 +64,14 @@ func @main {
   scope:
     x64.movRegImm32 rcx, 10
     x64.callDirect Node.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r12
     x64.callDirect __managed_push
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
     x64.jmp ifcont
   ifcont:
     x64.movRegImm32 rdx, 0
@@ -95,8 +100,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
+    x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

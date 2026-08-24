@@ -50,7 +50,8 @@ func @Tag.create {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.cmpRegImm32 r12, 0
@@ -62,10 +63,11 @@ func @Tag.create {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_30]
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -74,9 +76,16 @@ func @Tag.create {
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.storeBaseDispReg.word64 [r8 + 8], r12
-    x64.epilogue 32
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -99,7 +108,7 @@ func @Tag.digest {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_31]
+    x64.leaRegRdata rcx, [rip + __str_blob_5]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -184,16 +193,16 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 56
-    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.prologue 72
+    x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.movRegImm32 rbx, 3
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRegImm32 rcx, r13, 49
+    x64.leaRegRegImm32 rcx, r13, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
+    x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
@@ -208,10 +217,14 @@ func @main {
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, rbx
     x64.callDirect Tag.create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
     x64.leaRegRdata rdx, [rip + __witness_Tag.Digest]
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, rbx
     x64.callDirect Box.create
-    x64.storeSlotReg slot0, r8
+    x64.storeSlotReg slot1, r8
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
@@ -228,12 +241,12 @@ func @main {
     x64.callDirect __uint_to_string
     x64.movRegReg r13, r8
     x64.leaRegRegReg rax, r12, r13
-    x64.storeSlotReg slot1, rax
-    x64.leaRegRegImm32 rcx, rax, 49
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot2, r8
-    x64.leaRegRegImm32 r15, r8, 48
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12
@@ -244,9 +257,9 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r13
-    x64.loadRegSlot rbx, slot2
+    x64.loadRegSlot rbx, slot3
     x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rax, slot2
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm rax, -3
     x64.storeBaseDispReg.word64 [rbx + 16], rax
@@ -259,10 +272,12 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
-    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __destruct_Box_Tag
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_Tag
     x64.movRegReg r8, rbx
-    x64.epilogue 56
+    x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

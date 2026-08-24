@@ -62,11 +62,16 @@ func @replaceFromLocal {
     x64.movRegImm32 rcx, 42
     x64.callDirect Node.create
     x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __mm_decref
     x64.storeBaseDispReg.word64 [rbx + 0], r12
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -143,11 +148,11 @@ func @main {
     x64.movRegReg r13, r8
     x64.leaRegRegReg rax, r12, r13
     x64.storeSlotReg slot2, rax
-    x64.leaRegRegImm32 rcx, rax, 49
+    x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot3, r8
-    x64.leaRegRegImm32 r15, r8, 48
+    x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12

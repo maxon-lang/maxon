@@ -107,53 +107,53 @@ func @main {
   tryerr:
     x64.loadRegBaseDisp.word64 rax, [r10 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#3
+    x64.jmp matchnext#6
+  matcharm#3:
     x64.loadRegBaseDisp.word64 rax, [r10 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r10 + 16]
     x64.leaRegRegReg r12, rax, rcx
-    x64.jmp matchcont
-  matchnext:
+    x64.jmp matchcont#7
+  matchnext#6:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
-  matcharm:
+    x64.jcc equal, matcharm#4
+    x64.jmp matchdead#5
+  matcharm#4:
     x64.loadRegBaseDisp.word64 rax, [r10 + 8]
     x64.loadRegBaseDisp.word64 rax, [r10 + 16]
     x64.movRegImm32 r12, 900
-    x64.jmp matchcont
-  matchcont:
+    x64.jmp matchcont#7
+  matchcont#7:
     x64.movRegReg rcx, r10
     x64.callDirect __mm_decref
-    x64.movRegReg rax, r12
     x64.jmp trycont
-  matchdead:
+  matchdead#5:
   tryok:
-    x64.movRegReg rax, r12
     x64.jmp trycont
   trycont:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.leaRegRegReg rax, rax, rdx
+    x64.callDirect __mm_retain
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#9
+    x64.jmp matchnext#12
+  matcharm#9:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.leaRegRegReg rax, r12, rax
     x64.leaRegRegReg r12, rax, rcx
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Lex
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
+    x64.jcc less, __rc_panic#15
+    x64.jmp __rc_chk#16
+  __rc_chk#16:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic#15
+    x64.jmp __rc_ok#14
+  __rc_panic#15:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -162,32 +162,33 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#14:
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchnext:
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
-  matcharm:
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.leaRegRegImm32 r12, rax, 500
+  matchnext#12:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#10
+    x64.jmp matchdead#11
+  matcharm#10:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 16]
+    x64.leaRegRegImm32 r12, r12, 500
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Lex
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
+    x64.jcc less, __rc_panic#18
+    x64.jmp __rc_chk#19
+  __rc_chk#19:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic#18
+    x64.jmp __rc_ok#17
+  __rc_panic#18:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -196,13 +197,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#17:
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
-  matchcont:
+  matchdead#11:
+  matchcont#13:
 }

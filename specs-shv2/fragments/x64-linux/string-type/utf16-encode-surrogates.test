@@ -27,25 +27,25 @@ func @main {
     x64.movRegImm32 rcx, 128512
     x64.callDirect utf16LeadSurrogate
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
     x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
     x64.storeSlotReg slot2, rax
-    x64.leaRegRegImm32 rcx, rax, 49
+    x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot4, r8
-    x64.leaRegRegImm32 r15, r8, 48
+    x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.movRegReg rax, rbx
@@ -67,31 +67,31 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 rcx, 128512
     x64.callDirect utf16TrailSurrogate
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeSlotReg slot1, r12
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
     x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
     x64.storeSlotReg slot3, rax
-    x64.leaRegRegImm32 rcx, rax, 49
+    x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot5, r8
-    x64.leaRegRegImm32 r15, r8, 48
+    x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.movRegReg rax, rbx
@@ -113,7 +113,7 @@ func @main {
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
@@ -133,38 +133,38 @@ func @utf16LeadSurrogate {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
+    x64.jcc less, __rc_panic#2
+    x64.jmp __rc_chk#3
+  __rc_chk#3:
     x64.cmpRegImm32 rcx, 1114111
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
+    x64.jcc greater, __rc_panic#2
+    x64.jmp __rc_ok#1
+  __rc_panic#2:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#1:
     x64.leaRegRegImm32 rax, rcx, -65536
     x64.sarRegImm8 rax, rax, 10
     x64.leaRegRegImm32 r8, rax, 55296
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
+    x64.jcc less, __rc_panic#5
+    x64.jmp __rc_chk#6
+  __rc_chk#6:
     x64.cmpRegImm32 r8, 65535
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
+    x64.jcc greater, __rc_panic#5
+    x64.jmp __rc_ok#4
+  __rc_panic#5:
     x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#4:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -176,40 +176,51 @@ func @utf16TrailSurrogate {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
+    x64.jcc less, __rc_panic#2
+    x64.jmp __rc_chk#3
+  __rc_chk#3:
     x64.cmpRegImm32 rcx, 1114111
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
+    x64.jcc greater, __rc_panic#2
+    x64.jmp __rc_ok#1
+  __rc_panic#2:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#1:
     x64.leaRegRegImm32 rax, rcx, -65536
     x64.movRegImm32 rcx, 1024
     x64.cqo
     x64.idivReg rcx
     x64.leaRegRegImm32 r8, rdx, 56320
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
+    x64.jcc less, __rc_panic#5
+    x64.jmp __rc_chk#6
+  __rc_chk#6:
     x64.cmpRegImm32 r8, 65535
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
+    x64.jcc greater, __rc_panic#5
+    x64.jmp __rc_ok#4
+  __rc_panic#5:
     x64.leaRegRdata rcx, [rip + __str_blob_5]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#4:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

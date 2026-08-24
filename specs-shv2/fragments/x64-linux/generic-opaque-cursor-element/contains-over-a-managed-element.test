@@ -115,7 +115,11 @@ func @Bag.createIterator {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect __retain_type_param
+    x64.movRegReg rcx, r8
     x64.callDirect BagIter.create
     x64.movRegImm32 r10, 0
     x64.epilogue 32
@@ -218,6 +222,7 @@ func @Bag.contains {
     x64.movRegReg rbx, rdx
     x64.movRegReg r12, rax
     x64.movRegReg r13, r9
+    x64.movRegReg rdx, r13
     x64.callDirect Bag.createIterator
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
@@ -246,8 +251,9 @@ func @Bag.contains {
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r15
     x64.callDirect __drop_type_param
-    x64.movRegReg rcx, r14
-    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __destruct_dict_BagIter_T779624e88745be2b
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r15
@@ -268,8 +274,9 @@ func @Bag.contains {
     x64.movRegReg rax, r10
     x64.jmp forhdr
   forexit:
-    x64.movRegReg rcx, r14
-    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __destruct_dict_BagIter_T779624e88745be2b
     x64.jmp forjoin
   forempty:
     x64.jmp forjoin

@@ -18,14 +18,14 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rax, 4
     x64.leaRegRegImm32 rax, rax, -1
-    x64.jumpTable rax, default=matchdefault [[0..1]=matcharm, [2..3]=matcharm] @__jumptable_1
+    x64.jumpTable rax, default=matchdefault [[0..1]=matcharm#1, [2..3]=matcharm#2] @__jumptable_1
   matchdefault:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
-  matcharm:
+  matcharm#1:
     x64.movRegImm32 r8, 10
     x64.jmp matchcont
-  matcharm:
+  matcharm#2:
     x64.movRegImm32 r8, 20
     x64.jmp matchcont
   matchcont:
@@ -33,8 +33,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

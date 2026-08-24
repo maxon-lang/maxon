@@ -39,8 +39,10 @@ func @Value.fromString {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegImm32 rax, 0
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.cmpRegImm32 r8, 0
     x64.jcc equal, check
     x64.jmp ifcont
   check:
@@ -52,7 +54,9 @@ func @Value.fromString {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -89,8 +93,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -105,6 +108,17 @@ func @main {
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.byteLength {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __managed_count
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

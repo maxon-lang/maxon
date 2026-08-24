@@ -55,16 +55,15 @@ func @main {
     x64.callDirect Boxed.giveBack
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#1
     x64.jmp matchnext
-  matcharm:
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
-    x64.cmpRegImm32 rbx, 0
+  matcharm#1:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegImm32 rax, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -77,28 +76,11 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.leaRegRegImm32 rbx, rax, 0
     x64.movRegReg rcx, r8
     x64.callDirect __destruct_Boxed
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Boxed
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
@@ -107,9 +89,9 @@ func @main {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#2
     x64.jmp matchdead
-  matcharm:
+  matcharm#2:
     x64.movRegImm32 rbx, 1
     x64.movRegReg rcx, r8
     x64.callDirect __destruct_Boxed

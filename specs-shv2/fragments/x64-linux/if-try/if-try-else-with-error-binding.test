@@ -7,19 +7,18 @@ enum MyError implements Error
 	second
 end 'MyError'
 
-function mayFail(which Integer) returns Integer throws MyError
+function runStep(which Integer) throws MyError
 	if which == 1 'check1'
 		throw MyError.first
 	end 'check1'
 	if which == 2 'check2'
 		throw MyError.second
 	end 'check2'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(1) 'check'
+	if try runStep(1) 'check'
 		result = 100
 	end 'check' else (e) 'err'
 		match e 'kind'
@@ -32,31 +31,31 @@ end 'main'
 ---
 ExitCode: 50
 ---
-func @mayFail {
+func @runStep {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 1
     x64.jcc equal, check1
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   check1:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.cmpRegImm32 rcx, 2
     x64.jcc equal, check2
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   check2:
     x64.movRegImm32 rax, 1
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 42
+  ifcont#4:
+    x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
     x64.popReg rbp
     x64.ret
@@ -68,7 +67,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 1
-    x64.callDirect mayFail
+    x64.callDirect runStep
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, check
     x64.jmp ifelse
@@ -78,16 +77,16 @@ func @main {
   ifelse:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#3
     x64.jmp matchnext
-  matcharm:
+  matcharm#3:
     x64.movRegImm32 rax, 50
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#4
     x64.jmp matchdead
-  matcharm:
+  matcharm#4:
     x64.movRegImm32 rax, 60
     x64.jmp matchcont
   matchcont:
@@ -98,8 +97,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

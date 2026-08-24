@@ -16,22 +16,24 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.movRegImm32 rbx, 65
-    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.leaRegRdata rcx, [rip + __str_rec_2]
+    x64.leaRegRdata rbx, [rip + __str_rec_3]
+    x64.leaRegRdata rdx, [rip + __str_rec_2]
     x64.callDirect __str_eq
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, andrhs
     x64.jmp critsplit
   andrhs:
-    x64.cmpRegImm32 rbx, 65
-    x64.setccReg equal, rax
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
     x64.jmp scmerge
   critsplit:
+    x64.movRegReg r8, rax
     x64.jmp scmerge
   scmerge:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, check
     x64.jmp ifcont
   check:

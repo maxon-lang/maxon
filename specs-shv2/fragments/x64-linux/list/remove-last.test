@@ -27,26 +27,26 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 136
-    x64.movRegImm32 rcx, 48
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __barr_blob_0]
-    x64.storeBaseDispReg.word64 [rbx + 0], rax
-    x64.movRegImm32 rax, 3
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, -2
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 8
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect __list_from
+    x64.movRegImm32 rbx, 10
+    x64.leaRegRdata rcx, [rip + __layout_List_int]
+    x64.callDirect List.create
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
+    x64.leaRegRdata rax, [rip + __layout_List_int]
     x64.movRegReg rcx, r12
-    x64.callDirect __list_remove_last
+    x64.movRegReg rdx, rbx
+    x64.callDirect List.append
+    x64.movRegImm32 rdx, 20
+    x64.leaRegRdata rax, [rip + __layout_List_int]
+    x64.movRegReg rcx, r12
+    x64.callDirect List.append
+    x64.movRegImm32 rdx, 30
+    x64.leaRegRdata rax, [rip + __layout_List_int]
+    x64.movRegReg rcx, r12
+    x64.callDirect List.append
+    x64.leaRegRdata rdx, [rip + __layout_List_int]
+    x64.movRegReg rcx, r12
+    x64.callDirect List.removeLast
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
@@ -66,7 +66,7 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_2]
+    x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r14, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot10, rax
@@ -103,18 +103,18 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegReg rcx, r12
-    x64.callDirect __list_count
+    x64.callDirect List.count
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
     x64.storeSlotReg slot2, r13
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_2]
+    x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r14, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot11, rax
@@ -150,8 +150,9 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
+    x64.leaRegRdata rdx, [rip + __layout_List_int]
     x64.movRegReg rcx, r12
-    x64.callDirect __list_last
+    x64.callDirect List.last
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#5
     x64.jmp tryok#4
@@ -171,7 +172,7 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_2]
+    x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
@@ -207,12 +208,135 @@ func @main {
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0
-    x64.callDirect __list_decref
+    x64.callDirect __destruct_List_int
     x64.movRegReg r8, rbx
     x64.epilogue 136
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __list_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.count {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __list_count
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.last {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __list_tail_checked
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __list_node_value
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __list_node_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.append {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __list_append
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.removeLast {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __list_tail_checked
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rdx, r12
+    x64.callDirect __list_remove_node
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __list_node_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

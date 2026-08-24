@@ -34,13 +34,13 @@ func @classify {
     x64.setccReg less, rax
     x64.movRegImm32 rcx, 0
     x64.jcc less, first
-    x64.jmp critsplit
+    x64.jmp critsplit#8
   first:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#2
+  critsplit#8:
+    x64.jmp ifcont#2
+  ifcont#2:
     x64.movRegImm32 rsi, 0
     x64.jmp whilehdr
   whilehdr:
@@ -54,14 +54,14 @@ func @classify {
   whileexit:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, second
-    x64.jmp critsplit
+    x64.jmp critsplit#9
   second:
     x64.leaRegRegImm32 r8, rcx, 100
-    x64.jmp ifcont
-  critsplit:
+    x64.jmp ifcont#7
+  critsplit#9:
     x64.movRegReg r8, rcx
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#7
+  ifcont#7:
     x64.popReg rbp
     x64.ret
 }
@@ -78,8 +78,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

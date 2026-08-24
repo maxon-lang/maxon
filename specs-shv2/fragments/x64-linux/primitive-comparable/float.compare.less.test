@@ -21,27 +21,27 @@ func @main {
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.callDirect float.compare
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext#5
+  matcharm#1:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchnext#5:
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#2
+    x64.jmp matchnext#6
+  matcharm#2:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchnext#6:
     x64.cmpRegImm32 r8, 2
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#3
     x64.jmp matchdead
-  matcharm:
+  matcharm#3:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
@@ -55,42 +55,54 @@ func @float.compare {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.ucomisdRegReg xmm0, xmm0
-    x64.jcc parity, selfIsNan
-    x64.jmp fordered
-  fordered:
-    x64.jcc notEqual, selfIsNan
-    x64.jmp selfNotNan
-  selfIsNan:
+    x64.jcc parity, self_nan
+    x64.jmp fordered#11
+  fordered#11:
+    x64.jcc notEqual, self_nan
+    x64.jmp ifcont#4
+  self_nan:
     x64.ucomisdRegReg xmm1, xmm1
-    x64.jcc parity, equal
-    x64.jmp fordered
-  fordered:
-    x64.jcc notEqual, equal
-    x64.jmp less
-  selfNotNan:
-    x64.ucomisdRegReg xmm1, xmm1
-    x64.jcc parity, greater
-    x64.jmp fordered
-  fordered:
-    x64.jcc notEqual, greater
-    x64.jmp ordered
-  ordered:
-    x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc above, less
-    x64.jmp notLess
-  less:
+    x64.jcc parity, both_nan
+    x64.jmp fordered#12
+  fordered#12:
+    x64.jcc notEqual, both_nan
+    x64.jmp ifcont#3
+  both_nan:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont#3:
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
-  notLess:
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc above, greater
-    x64.jmp equal
-  greater:
+  ifcont#4:
+    x64.ucomisdRegReg xmm1, xmm1
+    x64.jcc parity, other_nan
+    x64.jmp fordered#13
+  fordered#13:
+    x64.jcc notEqual, other_nan
+    x64.jmp ifcont#6
+  other_nan:
     x64.movRegImm32 r8, 2
     x64.popReg rbp
     x64.ret
-  equal:
+  ifcont#6:
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, lt
+    x64.jmp ifcont#8
+  lt:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, gt
+    x64.jmp ifcont#10
+  gt:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
     x64.movRegImm32 r8, 1
     x64.popReg rbp
     x64.ret

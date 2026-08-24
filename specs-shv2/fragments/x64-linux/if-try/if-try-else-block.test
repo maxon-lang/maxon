@@ -1,21 +1,18 @@
 // Test: if-try-else-block
 
-typealias Integer = int(i64.min to i64.max)
-
 enum MyError implements Error
 	failed
 end 'MyError'
 
-function mayFail(succeed bool) returns Integer throws MyError
+function runStep(succeed bool) throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(false) 'check'
+	if try runStep(false) 'check'
 		result = 1
 	end 'check' else 'err'
 		result = 2
@@ -25,7 +22,7 @@ end 'main'
 ---
 ExitCode: 2
 ---
-func @mayFail {
+func @runStep {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -40,7 +37,7 @@ func @mayFail {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 r8, 42
+    x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
     x64.popReg rbp
     x64.ret
@@ -52,7 +49,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 0
-    x64.callDirect mayFail
+    x64.callDirect runStep
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, check
     x64.jmp ifelse
@@ -67,8 +64,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

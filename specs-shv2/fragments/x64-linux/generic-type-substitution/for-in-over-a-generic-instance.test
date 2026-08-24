@@ -29,7 +29,7 @@ function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(3)
 	a.push(4)
-	var w = IntWalker.create(a)
+	let w = IntWalker.create(a)
 	var total = 0
 	for x in w 'walk'
 		total = total + x
@@ -51,15 +51,23 @@ func @Walker.create {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.storeBaseDispReg.word64 [r8 + 8], r12
-    x64.epilogue 32
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -136,7 +144,8 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -148,9 +157,11 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
     x64.callDirect Walker.create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 r12, 0
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
     x64.movRegImm32 rax, 0
     x64.jmp forhdr
   forhdr:
@@ -159,38 +170,42 @@ func @main {
     x64.jmp forexit
   walk:
     x64.leaRegRdata rdx, [rip + __layout_Walker_Integer]
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect Walker.current
-    x64.leaRegRegReg r12, r12, r8
+    x64.leaRegRegReg r13, r13, r8
     x64.jmp forstep
   forstep:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect Walker.advance
     x64.movRegReg rax, r10
     x64.jmp forhdr
   forexit:
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r12, 255
+    x64.cmpRegImm32 r13, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r12, r12, 0
-    x64.movRegReg rcx, rbx
+    x64.leaRegRegImm32 r13, r13, 0
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_Walker_Integer
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

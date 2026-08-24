@@ -43,26 +43,25 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __print_string
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect print
     x64.movRegImm32 rcx, 10
     x64.callDirect bump
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rcx, [rip + __str_rec_3]
-    x64.callDirect __print_string
+    x64.leaRegRdata rcx, [rip + __str_rec_4]
+    x64.callDirect print
     x64.movRegImm32 rcx, 5
     x64.callDirect bump
     x64.movRegReg r12, r8
     x64.leaRegRdata rcx, [rip + __str_rec_5]
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.subRegReg r12, r12, rbx
     x64.leaRegRegImm32 r8, r12, -5
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -78,6 +77,17 @@ func @main {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

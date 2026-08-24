@@ -1,13 +1,16 @@
 // Test: scalar-conformer-co-owned-into-a-var
 typealias Integer = int(i64.min to i64.max)
 
-function use(h Comparable) returns Integer
+function use(h Comparable, replace bool) returns Integer
 	var v = h
+	if replace 'maybe'
+		v = h
+	end 'maybe'
 	return 11 if true else 12
 end 'use'
 
 function main() returns ExitCode
-	return use(7) as ExitCode
+	return use(7, replace: false) as ExitCode
 end 'main'
 ---
 ExitCode: 11
@@ -24,28 +27,50 @@ func @use {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
     x64.prologue 32
-    x64.movRegReg rax, rcx
-    x64.movRegReg rbx, rdx
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, rax
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
     x64.callDirect __retain_existential
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, maybe
+    x64.jmp critsplit
+  maybe:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect __retain_existential
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __drop_existential
+    x64.movRegReg rdx, rbx
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rdx, r14
+    x64.jmp ifcont
+  ifcont:
     x64.movRegImm32 rax, 1
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ternarytrue
     x64.jmp ternaryfalse
   ternarytrue:
-    x64.movRegImm32 r12, 11
+    x64.movRegImm32 rbx, 11
     x64.jmp matchcont
   ternaryfalse:
-    x64.movRegImm32 r12, 12
+    x64.movRegImm32 rbx, 12
     x64.jmp matchcont
   matchcont:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
+    x64.movRegReg rcx, r13
     x64.callDirect __drop_existential
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -58,18 +83,18 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 7
-    x64.leaRegRdata rdx, [rip + __witness_int.Comparable]
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __witness_int.Comparable]
     x64.callDirect use
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -86,21 +111,21 @@ func @int.compare {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegReg rcx, rdx
-    x64.jcc less, less
-    x64.jmp notLess
-  less:
+    x64.jcc less, lt
+    x64.jmp ifcont#2
+  lt:
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
-  notLess:
+  ifcont#2:
     x64.cmpRegReg rcx, rdx
-    x64.jcc greater, greater
-    x64.jmp equal
-  greater:
+    x64.jcc greater, gt
+    x64.jmp ifcont#4
+  gt:
     x64.movRegImm32 r8, 2
     x64.popReg rbp
     x64.ret
-  equal:
+  ifcont#4:
     x64.movRegImm32 r8, 1
     x64.popReg rbp
     x64.ret

@@ -1,5 +1,5 @@
 // Test: cross-file-generic-alias-is-a-swept-value-type-either-order
-// --- file: aaa-main.maxon
+// --- file: main.maxon
 type Holder
 	export var nums as IntArray
 
@@ -30,7 +30,7 @@ function main() returns ExitCode
 	return (x + y + z) as ExitCode
 end 'main'
 
-// --- file: zzz-alias.maxon
+// --- file: alias.maxon
 export typealias Int = int(i64.min to i64.max)
 export typealias IntArray = Array with Int
 ---
@@ -47,7 +47,8 @@ func @Holder.create {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -58,8 +59,15 @@ func @Holder.create {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -122,9 +130,9 @@ func @main {
     x64.callDirect __managed_get
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder
@@ -137,7 +145,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.movRegReg rcx, rbx
     x64.callDirect Holder.more
     x64.movRegReg r13, r8
@@ -146,12 +154,12 @@ func @main {
     x64.callDirect __managed_get
     x64.movRegReg r14, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
+    x64.movRegImm32 r12, 1
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder
     x64.movRegReg r8, r12
@@ -163,7 +171,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#3:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
     x64.callDirect make
@@ -173,12 +181,12 @@ func @main {
     x64.callDirect __managed_get
     x64.movRegReg r15, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  tryerr#6:
+    x64.movRegImm32 r12, 1
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder
     x64.movRegReg r8, r12
@@ -190,7 +198,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#5:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
     x64.leaRegRegReg rax, r12, r14
@@ -199,8 +207,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
+    x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -218,27 +225,6 @@ func @main {
   __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15

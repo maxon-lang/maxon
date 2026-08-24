@@ -38,17 +38,11 @@ func @float.equals {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, notEqual
-    x64.jmp fordered
-  fordered:
-    x64.jcc equal, equal
-    x64.jmp notEqual
-  equal:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  notEqual:
-    x64.movRegImm32 r8, 0
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, r8
     x64.popReg rbp
     x64.ret
 }

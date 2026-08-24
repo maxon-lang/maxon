@@ -41,9 +41,9 @@ func @R.norm {
     x64.prologue 40
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext#5
+  matcharm#1:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -52,11 +52,11 @@ func @R.norm {
     x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.storeBaseDispReg.word64 [r8 + 8], rbx
     x64.jmp matchcont
-  matchnext:
+  matchnext#5:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#2
+    x64.jmp matchnext#6
+  matcharm#2:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -65,11 +65,11 @@ func @R.norm {
     x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.storeBaseDispReg.word64 [r8 + 8], rbx
     x64.jmp matchcont
-  matchnext:
+  matchnext#6:
     x64.cmpRegImm32 rax, 2
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#3
     x64.jmp matchdead
-  matcharm:
+  matcharm#3:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -105,23 +105,23 @@ func @main {
     x64.callDirect R.norm
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext#5
+  matcharm#1:
     x64.movRegImm32 rbx, 1
     x64.jmp matchcont
-  matchnext:
+  matchnext#5:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#2
+    x64.jmp matchnext#6
+  matcharm#2:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
     x64.jmp matchcont
-  matchnext:
+  matchnext#6:
     x64.cmpRegImm32 rax, 2
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#3
     x64.jmp matchdead
-  matcharm:
+  matcharm#3:
     x64.movRegImm32 rbx, 2
     x64.jmp matchcont
   matchcont:
@@ -133,8 +133,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

@@ -84,9 +84,9 @@ func @makeSlice {
     x64.callDirect __managed_push
     x64.movRegImm32 rdx, 1
     x64.movRegImm32 rax, 3
-    x64.leaRegFunc r9, [rip + __clone_Op]
+    x64.leaRegRdata r9, [rip + __layout_Array_Op]
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_slice_managed
+    x64.callDirect Array.slice
     x64.movRegReg r12, r8
     x64.movRegReg r13, r10
     x64.cmpRegImm32 r13, 0
@@ -126,16 +126,16 @@ func @main {
     x64.callDirect makeSlice
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.movRegImm32 r8, 96
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 2
@@ -157,9 +157,9 @@ func @main {
     x64.callDirect __managed_get
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  tryerr#6:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -169,7 +169,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r8 + 8], rax
     x64.movRegReg rcx, r8
     x64.jmp trycont
-  tryok:
+  tryok#5:
     x64.movRegReg rcx, r12
     x64.callDirect __mm_incref
     x64.movRegReg rcx, r12
@@ -177,9 +177,9 @@ func @main {
   trycont:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#9
+    x64.jmp matchnext#12
+  matcharm#9:
     x64.movRegImm32 r12, 98
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
@@ -190,11 +190,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchnext#12:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#8
+    x64.jmp matchnext#13
+  matcharm#8:
     x64.loadRegBaseDisp.word64 r12, [rcx + 8]
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
@@ -203,8 +203,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
+    x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -223,11 +222,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchnext#13:
     x64.cmpRegImm32 rax, 2
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#10
     x64.jmp matchdead
-  matcharm:
+  matcharm#10:
     x64.movRegImm32 r12, 97
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
@@ -240,4 +239,59 @@ func @main {
     x64.ret
   matchdead:
   matchcont:
+}
+
+func @Array.slice {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.callDirect __mm_retain
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.movRegReg r9, r13
+    x64.callDirect __managed_slice_opaque
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }

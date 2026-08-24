@@ -15,8 +15,8 @@ type Container uses Element
 	end 'push'
 
 	export function peekEnds()
-		let a = try self.items.first() otherwise return
-		let b = try self.items.last() otherwise return
+		_ = try self.items.first() otherwise return
+		_ = try self.items.last() otherwise return
 	end 'peekEnds'
 end 'Container'
 
@@ -75,31 +75,40 @@ func @Container.peekEnds {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __managed_first
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.epilogue 40
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect __managed_last
+    x64.movRegReg rdx, r12
+    x64.callDirect Array.last
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.epilogue 40
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.epilogue 40
+  tryok#3:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __drop_type_param
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -121,11 +130,11 @@ func @main {
     x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRegImm32 rcx, r13, 49
+    x64.leaRegRegImm32 rcx, r13, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
+    x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
@@ -137,9 +146,11 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata rax, [rip + __layout_Container_String]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect Container.push
+    x64.leaRegRdata rdx, [rip + __layout_Container_String]
     x64.movRegReg rcx, rbx
     x64.callDirect Container.peekEnds
     x64.movRegImm32 r12, 0
@@ -150,6 +161,55 @@ func @main {
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.last {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_count
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, empty
+    x64.jmp ifcont
+  empty:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rdx, r8, -1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

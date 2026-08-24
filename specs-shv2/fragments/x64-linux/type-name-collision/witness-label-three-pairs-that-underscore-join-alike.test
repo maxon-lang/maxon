@@ -196,22 +196,6 @@ func @HoldD.go {
     x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callMem [rbx + 24]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 r8, 100
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -244,22 +228,6 @@ func @HoldCD.go {
     x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callMem [rbx + 24]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 r8, 100
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -292,22 +260,6 @@ func @HoldBCD.go {
     x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callMem [rbx + 24]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 r8, 100
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -327,6 +279,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
+    x64.leaRegRdata rdx, [rip + __witness_A_B_C.D]
     x64.movRegReg rcx, rbx
     x64.callDirect HoldD.create
     x64.movRegReg r12, r8
@@ -336,6 +289,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
+    x64.leaRegRdata rdx, [rip + __witness_A_B.C_D]
     x64.movRegReg rcx, rbx
     x64.callDirect HoldCD.create
     x64.movRegReg r13, r8
@@ -345,6 +299,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
+    x64.leaRegRdata rdx, [rip + __witness_A.B_C_D]
     x64.movRegReg rcx, rbx
     x64.callDirect HoldBCD.create
     x64.movRegReg r14, r8
@@ -373,12 +328,11 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

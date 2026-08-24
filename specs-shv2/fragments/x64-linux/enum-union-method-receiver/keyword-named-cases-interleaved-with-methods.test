@@ -41,7 +41,7 @@ function main() returns ExitCode
 	let e = Weird.end
 	let x = Weird.export
 	let o = Weird.omega
-	var acc = a.tag() + f.tag() * 10 + e.tag() * 100 + x.tag() * 1000 + o.tag() * 10000
+	let acc = a.tag() + f.tag() * 10 + e.tag() * 100 + x.tag() * 1000 + o.tag() * 10000
 	if acc != 54321 'bad'
 		return 1
 	end 'bad'
@@ -96,21 +96,21 @@ func @Weird.tag {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jumpTable rcx, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm] @__jumptable_0
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5] @__jumptable_0
   matchdead:
-  matcharm:
+  matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
-  matcharm:
+  matcharm#2:
     x64.movRegImm32 r8, 2
     x64.jmp matchcont
-  matcharm:
+  matcharm#3:
     x64.movRegImm32 r8, 3
     x64.jmp matchcont
-  matcharm:
+  matcharm#4:
     x64.movRegImm32 r8, 4
     x64.jmp matchcont
-  matcharm:
+  matcharm#5:
     x64.movRegImm32 r8, 5
     x64.jmp matchcont
   matchcont:
@@ -153,7 +153,7 @@ func @main {
     x64.leaRegRegReg rax, rbx, rax
     x64.cmpRegImm32 rax, 54321
     x64.jcc notEqual, bad
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   bad:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
@@ -164,12 +164,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegImm32 rcx, 0
     x64.callDirect Weird.mid
     x64.cmpRegImm32 r8, 2
     x64.jcc notEqual, badMid
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   badMid:
     x64.movRegImm32 r8, 2
     x64.epilogue 40
@@ -180,7 +180,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#4:
     x64.movRegImm32 rcx, 0
     x64.callDirect Weird.two
     x64.movRegReg rbx, r8
@@ -189,7 +189,7 @@ func @main {
     x64.leaRegRegReg rax, rbx, r8
     x64.cmpRegImm32 rax, 50
     x64.jcc notEqual, badTwo
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   badTwo:
     x64.movRegImm32 r8, 3
     x64.epilogue 40
@@ -200,7 +200,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#6:
     x64.movRegImm32 r8, 7
     x64.epilogue 40
     x64.popReg r15

@@ -56,9 +56,9 @@ func @isScalar {
     x64.setccReg lessEqual, rdx
     x64.andRegReg rax, rax, rdx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm
+    x64.jcc notEqual, matcharm#1
     x64.jmp matchnext
-  matcharm:
+  matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
   matchnext:
@@ -68,9 +68,9 @@ func @isScalar {
     x64.setccReg lessEqual, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm
+    x64.jcc notEqual, matcharm#2
     x64.jmp matchdead
-  matcharm:
+  matcharm#2:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
   matchcont:
@@ -118,44 +118,43 @@ func @main {
     x64.callDirect isScalar
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, f
-    x64.jmp critsplit
+    x64.jmp critsplit#10
   f:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#2
+  critsplit#10:
+    x64.jmp ifcont#2
+  ifcont#2:
     x64.callDirect pickBoolean
     x64.movRegReg rcx, r8
     x64.callDirect isScalar
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, b
-    x64.jmp critsplit
+    x64.jmp critsplit#11
   b:
     x64.leaRegRegImm32 rbx, rbx, 2
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#4
+  critsplit#11:
+    x64.jmp ifcont#4
+  ifcont#4:
     x64.callDirect pickNamed
     x64.movRegReg rcx, r8
     x64.callDirect isScalar
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, n
-    x64.jmp critsplit
+    x64.jmp critsplit#12
   n:
-    x64.leaRegRegImm32 r8, rbx, 4
-    x64.jmp ifcont
-  critsplit:
-    x64.movRegReg r8, rbx
-    x64.jmp ifcont
-  ifcont:
-    x64.cmpRegImm32 r8, 0
+    x64.leaRegRegImm32 rax, rbx, 4
+    x64.jmp ifcont#6
+  critsplit#12:
+    x64.movRegReg rax, rbx
+    x64.jmp ifcont#6
+  ifcont#6:
+    x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 rax, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -167,23 +166,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
+    x64.leaRegRegImm32 r8, rax, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

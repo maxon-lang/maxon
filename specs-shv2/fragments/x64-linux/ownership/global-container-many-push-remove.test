@@ -67,11 +67,11 @@ func @main {
     x64.pushReg r15
     x64.prologue 56
     x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
-  whilehdr:
+    x64.jmp whilehdr#1
+  whilehdr#1:
     x64.cmpRegImm32 rbx, 20
     x64.jcc less, push
-    x64.jmp whileexit
+    x64.jmp whileexit#3
   push:
     x64.leaRegGlobal rax, __data_globalArr
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -81,22 +81,23 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp whilehdr
-  whileexit:
+    x64.jmp whilehdr#1
+  whileexit#3:
     x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
-  whilehdr:
+    x64.jmp whilehdr#4
+  whilehdr#4:
     x64.leaRegGlobal rax, __data_globalArr
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 0
     x64.jcc greater, remove
-    x64.jmp whileexit
+    x64.jmp whileexit#6
   remove:
     x64.leaRegGlobal rax, __data_globalArr
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_remove
+    x64.leaRegRdata rax, [rip + __layout_Array_Item]
+    x64.callDirect Array.remove
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -115,8 +116,8 @@ func @main {
     x64.leaRegRegReg rbx, rbx, rax
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.jmp whilehdr
-  whileexit:
+    x64.jmp whilehdr#4
+  whileexit#6:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -131,11 +132,11 @@ func @main {
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
     x64.storeSlotReg slot1, rax
-    x64.leaRegRegImm32 rcx, rax, 49
+    x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot2, r8
-    x64.leaRegRegImm32 r15, r8, 48
+    x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.movRegReg rax, rbx
@@ -157,7 +158,7 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
@@ -167,6 +168,57 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.remove {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_remove
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

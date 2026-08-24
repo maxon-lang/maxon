@@ -74,22 +74,6 @@ func @Point.create {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -128,11 +112,11 @@ func @Point.name {
     x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.leaRegRegImm32 rcx, r12, 49
+    x64.leaRegRegImm32 rcx, r12, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
-    x64.leaRegRegImm32 r14, r13, 48
+    x64.leaRegRegImm32 r14, r13, 56
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12
@@ -177,43 +161,50 @@ func @Box.itemNameLength {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callMem [rbx + 24]
+    x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
-    x64.cmpRegImm32 rbx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rbx, 1000
+    x64.cmpRegImm32 r12, 1000
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 r10, 0
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -232,6 +223,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
+    x64.leaRegRdata rdx, [rip + __witness_Point.Namer]
     x64.movRegReg rcx, rbx
     x64.callDirect Box.create
     x64.movRegReg r12, r8
@@ -242,6 +234,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
+    x64.leaRegRdata rdx, [rip + __witness_Point.Namer]
     x64.movRegReg rcx, rbx
     x64.callDirect Box.create
     x64.movRegReg r13, r8
@@ -251,39 +244,38 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect Box.itemNameLength
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.movRegImm32 rbx, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#3
+  tryok#1:
     x64.movRegReg rbx, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#3
+  trycont#3:
     x64.leaRegRdata rdx, [rip + __witness_Point.Namer]
     x64.movRegReg rcx, r13
     x64.callDirect Box.itemNameLength
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#5
+    x64.jmp tryok#4
+  tryerr#5:
     x64.movRegImm32 rax, 1
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#6
+  tryok#4:
     x64.movRegReg rax, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#6
+  trycont#6:
     x64.leaRegRegReg rbx, rbx, rax
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -297,30 +289,22 @@ func @main {
     x64.callDirect __destruct_Box_Point
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Box_Point
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
+}
+
+func @String.byteLength {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __managed_count
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

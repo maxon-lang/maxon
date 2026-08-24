@@ -8,7 +8,7 @@ function main() returns ExitCode
 	try b.setLength(2) otherwise return 5
 	try b.set(0, value: 3) otherwise return 6
 	try b.set(1, value: 4) otherwise return 6
-	try a.append(b) otherwise return 7
+	a.append(b)
 	if a.length() != 4 'badLen'
 		return 8
 	end 'badLen'
@@ -54,9 +54,9 @@ func @main {
     x64.callDirect __managed_mem_create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
     x64.popReg r15
@@ -66,14 +66,14 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set_length
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -86,15 +86,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#3:
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  tryerr#6:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -107,15 +107,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#5:
     x64.movRegImm32 rdx, 1
     x64.movRegImm32 rax, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -128,15 +128,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#7:
     x64.movRegImm32 rcx, 4
     x64.movRegImm32 rdx, 8
     x64.callDirect __managed_mem_create
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
     x64.movRegImm32 r12, 4
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -149,14 +149,14 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#9:
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, r12
     x64.callDirect __managed_set_length
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#12
+    x64.jmp tryok#11
+  tryerr#12:
     x64.movRegImm32 r13, 5
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -171,15 +171,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#11:
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 3
     x64.movRegReg rcx, r12
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#14
+    x64.jmp tryok#13
+  tryerr#14:
     x64.movRegImm32 r13, 6
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -194,15 +194,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#13:
     x64.movRegImm32 rdx, 1
     x64.movRegImm32 rax, 4
     x64.movRegReg rcx, r12
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#16
+    x64.jmp tryok#15
+  tryerr#16:
     x64.movRegImm32 r13, 6
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -217,34 +217,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#15:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __managed_mem_append
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.movRegImm32 r13, 7
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
+    x64.callDirect __managed_append
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 4
     x64.jcc notEqual, badLen
-    x64.jmp ifcont
+    x64.jmp ifcont#18
   badLen:
     x64.movRegImm32 r13, 8
     x64.movRegReg rcx, r12
@@ -260,15 +241,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#18:
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#20
+    x64.jmp tryok#19
+  tryerr#20:
     x64.movRegImm32 r13, 9
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -283,15 +264,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#19:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg r14, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#22
+    x64.jmp tryok#21
+  tryerr#22:
     x64.movRegImm32 r13, 9
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -306,15 +287,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#21:
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg r15, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#24
+    x64.jmp tryok#23
+  tryerr#24:
     x64.movRegImm32 r13, 9
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -329,14 +310,14 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#23:
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#26
+    x64.jmp tryok#25
+  tryerr#26:
     x64.movRegImm32 r13, 9
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -351,10 +332,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#25:
     x64.cmpRegImm32 r13, 1
     x64.jcc notEqual, badV0
-    x64.jmp ifcont
+    x64.jmp ifcont#28
   badV0:
     x64.movRegImm32 r13, 10
     x64.movRegReg rcx, r12
@@ -370,10 +351,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#28:
     x64.cmpRegImm32 r14, 2
     x64.jcc notEqual, badV1
-    x64.jmp ifcont
+    x64.jmp ifcont#30
   badV1:
     x64.movRegImm32 r13, 11
     x64.movRegReg rcx, r12
@@ -389,10 +370,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#30:
     x64.cmpRegImm32 r15, 3
     x64.jcc notEqual, badV2
-    x64.jmp ifcont
+    x64.jmp ifcont#32
   badV2:
     x64.movRegImm32 r13, 12
     x64.movRegReg rcx, r12
@@ -408,10 +389,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#32:
     x64.cmpRegImm32 r8, 4
     x64.jcc notEqual, badV3
-    x64.jmp ifcont
+    x64.jmp ifcont#34
   badV3:
     x64.movRegImm32 r13, 13
     x64.movRegReg rcx, r12
@@ -427,7 +408,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#34:
     x64.movRegImm32 r13, 0
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref

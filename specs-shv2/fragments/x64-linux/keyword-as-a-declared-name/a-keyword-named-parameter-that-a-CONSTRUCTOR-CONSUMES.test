@@ -10,7 +10,7 @@ end 'Box'
 typealias StrBox = Box with String
 
 function main() returns ExitCode
-	var n = 7
+	let n = 7
 	let msg = "hello{n}"
 	let b = StrBox.create(msg)
 	return b.value.byteLength() * 7 as ExitCode
@@ -65,11 +65,11 @@ func @main {
     x64.movRegReg rbx, r8
     x64.leaRegRegReg rax, r13, rbx
     x64.storeSlotReg slot0, rax
-    x64.leaRegRegImm32 rcx, rax, 49
+    x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot1, r8
-    x64.leaRegRegImm32 r15, r8, 48
+    x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
@@ -91,18 +91,22 @@ func @main {
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect Box.create
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.imulRegRegImm32 rbx, rax, 7
+    x64.callDirect __str_retain
     x64.movRegReg rcx, r8
+    x64.callDirect Box.create
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.callDirect String.byteLength
+    x64.imulRegRegImm32 r13, r8, 7
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_Box_String
-    x64.cmpRegImm32 rbx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegImm32 r13, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -118,13 +122,24 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r13
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.byteLength {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __managed_count
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

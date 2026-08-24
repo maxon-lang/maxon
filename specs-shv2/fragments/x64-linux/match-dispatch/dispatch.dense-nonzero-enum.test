@@ -19,11 +19,21 @@ end 'rank'
 
 function main() returns ExitCode
 	var n = 0 as ExitCode
-	if rank(Priority.p0) == 1 'a' n = n + 1 end 'a'
-	if rank(Priority.p1) == 2 'b' n = n + 1 end 'b'
-	if rank(Priority.p2) == 3 'c' n = n + 1 end 'c'
-	if rank(Priority.p3) == 4 'd' n = n + 1 end 'd'
-	if rank(Priority.p4) == 5 'e' n = n + 1 end 'e'
+	if rank(Priority.p0) == 1 'a'
+		n = n + 1
+	end 'a'
+	if rank(Priority.p1) == 2 'b'
+		n = n + 1
+	end 'b'
+	if rank(Priority.p2) == 3 'c'
+		n = n + 1
+	end 'c'
+	if rank(Priority.p3) == 4 'd'
+		n = n + 1
+	end 'd'
+	if rank(Priority.p4) == 5 'e'
+		n = n + 1
+	end 'e'
 	return n
 end 'main'
 ---
@@ -35,21 +45,21 @@ func @rank {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.leaRegRegImm32 rax, rcx, -10
-    x64.jumpTable rax, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm] @__jumptable_2
+    x64.jumpTable rax, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5] @__jumptable_2
   matchdead:
-  matcharm:
+  matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
-  matcharm:
+  matcharm#2:
     x64.movRegImm32 r8, 2
     x64.jmp matchcont
-  matcharm:
+  matcharm#3:
     x64.movRegImm32 r8, 3
     x64.jmp matchcont
-  matcharm:
+  matcharm#4:
     x64.movRegImm32 r8, 4
     x64.jmp matchcont
-  matcharm:
+  matcharm#5:
     x64.movRegImm32 r8, 5
     x64.jmp matchcont
   matchcont:
@@ -57,8 +67,7 @@ func @rank {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -85,64 +94,63 @@ func @main {
     x64.callDirect rank
     x64.cmpRegImm32 r8, 1
     x64.jcc equal, a
-    x64.jmp critsplit
+    x64.jmp critsplit#14
   a:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#2
+  critsplit#14:
+    x64.jmp ifcont#2
+  ifcont#2:
     x64.movRegImm32 rcx, 11
     x64.callDirect rank
     x64.cmpRegImm32 r8, 2
     x64.jcc equal, b
-    x64.jmp critsplit
+    x64.jmp critsplit#15
   b:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#4
+  critsplit#15:
+    x64.jmp ifcont#4
+  ifcont#4:
     x64.movRegImm32 rcx, 12
     x64.callDirect rank
     x64.cmpRegImm32 r8, 3
     x64.jcc equal, c
-    x64.jmp critsplit
+    x64.jmp critsplit#16
   c:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#6
+  critsplit#16:
+    x64.jmp ifcont#6
+  ifcont#6:
     x64.movRegImm32 rcx, 13
     x64.callDirect rank
     x64.cmpRegImm32 r8, 4
     x64.jcc equal, d
-    x64.jmp critsplit
+    x64.jmp critsplit#17
   d:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#8
+  critsplit#17:
+    x64.jmp ifcont#8
+  ifcont#8:
     x64.movRegImm32 rcx, 14
     x64.callDirect rank
     x64.cmpRegImm32 r8, 5
     x64.jcc equal, e
-    x64.jmp critsplit
+    x64.jmp critsplit#18
   e:
     x64.leaRegRegImm32 r8, rbx, 1
-    x64.jmp ifcont
-  critsplit:
+    x64.jmp ifcont#10
+  critsplit#18:
     x64.movRegReg r8, rbx
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#10
+  ifcont#10:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

@@ -61,7 +61,7 @@ func @HoldA.create {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -73,7 +73,13 @@ func @HoldA.create {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], r12
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -87,15 +93,18 @@ func @HoldA.adopt {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.movRegReg rcx, r12
     x64.callDirect __mm_incref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
     x64.storeBaseDispReg.word64 [rbx + 0], r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

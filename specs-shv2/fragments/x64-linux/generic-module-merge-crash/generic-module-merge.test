@@ -114,37 +114,41 @@ func @Container.merge {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 56
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
     x64.callDirect Container.appendOps
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
     x64.movRegReg rcx, r12
     x64.callDirect Container.itemCount
-    x64.movRegReg r14, r8
-    x64.movRegReg rdx, r13
+    x64.movRegReg r15, r8
+    x64.movRegReg rdx, r14
     x64.jmp forhdr
   forhdr:
     x64.storeSlotReg slot0, rdx
-    x64.cmpRegReg rdx, r14
+    x64.cmpRegReg rdx, r15
     x64.jcc less, eachItem
     x64.jmp forexit
   eachItem:
     x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
     x64.callDirect Container.getItem
-    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r8
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
+    x64.movRegReg rdx, r8
     x64.callDirect Container.cloneItem
-    x64.movRegReg r15, r8
+    x64.movRegReg r14, r8
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r15
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r13
     x64.callDirect Container.pushItem
-    x64.movRegReg rcx, r15
+    x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r13
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
     x64.jmp forstep
   forstep:
@@ -152,7 +156,7 @@ func @Container.merge {
     x64.leaRegRegImm32 rdx, rax, 1
     x64.jmp forhdr
   forexit:
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -326,14 +330,17 @@ func @main {
     x64.callDirect Container.create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 10
+    x64.leaRegRdata rax, [rip + __layout_Container_Integer]
     x64.movRegReg rcx, rbx
     x64.callDirect Container.pushOp
     x64.movRegImm32 rdx, 20
+    x64.leaRegRdata rax, [rip + __layout_Container_Integer]
     x64.movRegReg rcx, rbx
     x64.callDirect Container.pushOp
     x64.movRegImm32 rcx, 99
     x64.callDirect Wrapper.create
     x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __layout_Container_Integer]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect Container.pushItem
@@ -363,15 +370,16 @@ func @main {
   scmerge:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, check
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   check:
     x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Container_Integer]
     x64.movRegReg rcx, r12
     x64.callDirect Container.getItem
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.cmpRegImm32 rax, 99
     x64.jcc equal, valueCheck
-    x64.jmp ifcont
+    x64.jmp ifcont#5
   valueCheck:
     x64.movRegImm32 r13, 0
     x64.movRegReg rcx, r8
@@ -387,11 +395,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#5:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#6
+  ifcont#6:
     x64.movRegImm32 r13, 1
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Container_Integer

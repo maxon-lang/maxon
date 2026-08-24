@@ -62,14 +62,14 @@ func @tryIt {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.leaRegRegImm32 rcx, r12, 49
+    x64.leaRegRegImm32 rcx, r12, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
-    x64.leaRegRegImm32 r14, r13, 48
+    x64.leaRegRegImm32 r14, r13, 56
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12
@@ -96,45 +96,19 @@ func @pick {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
     x64.prologue 32
     x64.callDirect tryIt
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rax, [rip + __str_rec_3]
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.leaRegRegImm32 rcx, r12, 49
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
-    x64.leaRegRegImm32 r14, r13, 48
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r14, r12
-    x64.storeBaseDispReg.word64 [r13 + 0], r14
-    x64.storeBaseDispReg.word64 [r13 + 8], r12
-    x64.movRegImm rax, -3
-    x64.storeBaseDispReg.word64 [r13 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r13 + 24], rax
-    x64.movRegReg r8, r13
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __str_retain
     x64.jmp trycont
   tryok:
     x64.jmp trycont
   trycont:
     x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -153,19 +127,19 @@ func @main {
     x64.movRegImm32 rcx, 1
     x64.callDirect pick
     x64.movRegReg r12, r8
-    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.leaRegRdata rdx, [rip + __str_rec_2]
     x64.movRegReg rcx, rbx
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, x
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   x:
     x64.leaRegRdata rdx, [rip + __str_rec_3]
     x64.movRegReg rcx, r12
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, y
-    x64.jmp ifcont
+    x64.jmp ifcont#3
   y:
     x64.movRegImm32 r13, 0
     x64.movRegReg rcx, r12
@@ -179,9 +153,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
-    x64.jmp ifcont
-  ifcont:
+  ifcont#3:
+    x64.jmp ifcont#4
+  ifcont#4:
     x64.movRegImm32 r13, 1
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref

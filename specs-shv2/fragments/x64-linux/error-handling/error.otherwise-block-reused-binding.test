@@ -90,57 +90,56 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.callDirect mayFailAssoc
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.loadRegBaseDisp.word64 rax, [r10 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#3
     x64.jmp matchnext
-  matcharm:
+  matcharm#3:
     x64.loadRegBaseDisp.word64 rax, [r10 + 8]
     x64.leaRegRegImm32 rbx, rax, 0
-    x64.jmp matchcont
+    x64.jmp matchcont#7
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
-  matcharm:
+    x64.jcc equal, matcharm#4
+    x64.jmp matchdead#5
+  matcharm#4:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp matchcont
-  matchcont:
+    x64.jmp matchcont#7
+  matchcont#7:
     x64.movRegReg rcx, r10
     x64.callDirect __mm_decref
-    x64.jmp trycont
-  matchdead:
-  tryok:
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#8
+  matchdead#5:
+  tryok#1:
+    x64.jmp trycont#8
+  trycont#8:
     x64.callDirect mayFailSimple
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
-  matcharm:
+    x64.jcc equal, matcharm#11
+    x64.jmp matchdead#12
+  matcharm#11:
     x64.leaRegRegImm32 r8, rbx, 35
-    x64.jmp matchcont
-  matchcont:
-    x64.jmp trycont
-  matchdead:
-  tryok:
+    x64.jmp matchcont#13
+  matchcont#13:
+    x64.jmp trycont#14
+  matchdead#12:
+  tryok#9:
     x64.movRegReg r8, rbx
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#14
+  trycont#14:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

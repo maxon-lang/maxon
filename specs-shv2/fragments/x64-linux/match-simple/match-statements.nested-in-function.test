@@ -21,16 +21,16 @@ func @categorize {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.leaRegRegImm32 rax, rcx, -1
-    x64.jumpTable rax, default=matchdefault [[0..2]=matcharm, [3..5]=matcharm] @__jumptable_1
+    x64.jumpTable rax, default=matchdefault [[0..2]=matcharm#1, [3..5]=matcharm#2] @__jumptable_1
   matchdefault:
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
-  matcharm:
+  matcharm#1:
     x64.movRegImm32 r8, 1
     x64.popReg rbp
     x64.ret
-  matcharm:
+  matcharm#2:
     x64.movRegImm32 r8, 2
     x64.popReg rbp
     x64.ret
@@ -48,8 +48,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

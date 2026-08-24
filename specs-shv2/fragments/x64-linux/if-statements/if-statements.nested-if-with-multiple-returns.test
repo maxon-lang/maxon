@@ -26,26 +26,26 @@ func @test {
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, maybePrefix
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   maybePrefix:
     x64.cmpRegImm32 rdx, 1
     x64.jcc equal, isHex
-    x64.jmp ifcont
+    x64.jmp ifcont#3
   isHex:
     x64.movRegImm32 r8, 1
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#3:
     x64.cmpRegImm32 rdx, 2
     x64.jcc equal, isBinary
-    x64.jmp ifcont
+    x64.jmp ifcont#5
   isBinary:
     x64.movRegImm32 r8, 2
     x64.popReg rbp
     x64.ret
-  ifcont:
-    x64.jmp ifcont
-  ifcont:
+  ifcont#5:
+    x64.jmp ifcont#6
+  ifcont#6:
     x64.movRegImm32 r8, 42
     x64.popReg rbp
     x64.ret
@@ -63,8 +63,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

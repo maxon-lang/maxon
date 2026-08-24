@@ -30,15 +30,26 @@ func @main {
     x64.jcc above, lt
     x64.jmp ifelse
   lt:
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __print_string
+    x64.leaRegRdata rcx, [rip + __str_rec_2]
+    x64.callDirect print
     x64.jmp ifcont
   ifelse:
     x64.leaRegRdata rcx, [rip + __str_rec_3]
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.jmp ifcont
   ifcont:
     x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

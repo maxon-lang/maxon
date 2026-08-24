@@ -28,24 +28,23 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegImm32 rdx, 2
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegImm32 rdx, 3
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, -2
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 3
     x64.jcc notEqual, cnt
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   cnt:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -56,7 +55,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
@@ -72,7 +71,7 @@ func @main {
   trycont:
     x64.cmpRegImm32 rax, 2
     x64.jcc notEqual, check
-    x64.jmp ifcont
+    x64.jmp ifcont#7
   check:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -83,7 +82,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#7:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref

@@ -23,33 +23,44 @@ func @main {
     x64.callDirect Unicode.isWhitespace
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, space
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   space:
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __print_string
-    x64.jmp ifcont
-  ifcont:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect print
+    x64.jmp ifcont#2
+  ifcont#2:
     x64.movRegImm32 rcx, 12288
     x64.callDirect Unicode.isWhitespace
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, ideographic
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   ideographic:
-    x64.leaRegRdata rcx, [rip + __str_rec_3]
-    x64.callDirect __print_string
-    x64.jmp ifcont
-  ifcont:
+    x64.leaRegRdata rcx, [rip + __str_rec_4]
+    x64.callDirect print
+    x64.jmp ifcont#4
+  ifcont#4:
     x64.movRegImm32 rcx, 65
     x64.callDirect Unicode.isWhitespace
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, letter
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   letter:
     x64.leaRegRdata rcx, [rip + __str_rec_5]
-    x64.callDirect __print_string
-    x64.jmp ifcont
-  ifcont:
+    x64.callDirect print
+    x64.jmp ifcont#6
+  ifcont#6:
     x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -77,125 +88,125 @@ func @Unicode.isWhitespace {
   __rc_ok:
     x64.cmpRegImm32 rcx, 9
     x64.movRegImm32 rax, 0
-    x64.jcc greaterEqual, andrhs
-    x64.jmp critsplit
-  andrhs:
+    x64.jcc greaterEqual, andrhs#1
+    x64.jmp critsplit#31
+  andrhs#1:
     x64.cmpRegImm32 rcx, 13
     x64.setccReg lessEqual, rax
-    x64.jmp scmerge
-  critsplit:
-    x64.jmp scmerge
-  scmerge:
+    x64.jmp scmerge#2
+  critsplit#31:
+    x64.jmp scmerge#2
+  scmerge#2:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ascii_control_ws
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   ascii_control_ws:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#4:
     x64.cmpRegImm32 rcx, 32
     x64.jcc equal, space
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   space:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#6:
     x64.cmpRegImm32 rcx, 133
     x64.jcc equal, nel
-    x64.jmp ifcont
+    x64.jmp ifcont#8
   nel:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#8:
     x64.cmpRegImm32 rcx, 160
     x64.jcc equal, nbsp
-    x64.jmp ifcont
+    x64.jmp ifcont#10
   nbsp:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#10:
     x64.cmpRegImm32 rcx, 5760
     x64.jcc equal, ogham
-    x64.jmp ifcont
+    x64.jmp ifcont#12
   ogham:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#12:
     x64.cmpRegImm32 rcx, 8192
     x64.movRegImm32 rax, 0
-    x64.jcc greaterEqual, andrhs
-    x64.jmp critsplit
-  andrhs:
+    x64.jcc greaterEqual, andrhs#13
+    x64.jmp critsplit#30
+  andrhs#13:
     x64.cmpRegImm32 rcx, 8202
     x64.setccReg lessEqual, rax
-    x64.jmp scmerge
-  critsplit:
-    x64.jmp scmerge
-  scmerge:
+    x64.jmp scmerge#14
+  critsplit#30:
+    x64.jmp scmerge#14
+  scmerge#14:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, general_punctuation_spaces
-    x64.jmp ifcont
+    x64.jmp ifcont#16
   general_punctuation_spaces:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#16:
     x64.cmpRegImm32 rcx, 8232
     x64.jcc equal, line_sep
-    x64.jmp ifcont
+    x64.jmp ifcont#18
   line_sep:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#18:
     x64.cmpRegImm32 rcx, 8233
     x64.jcc equal, para_sep
-    x64.jmp ifcont
+    x64.jmp ifcont#20
   para_sep:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#20:
     x64.cmpRegImm32 rcx, 8239
     x64.jcc equal, nnbsp
-    x64.jmp ifcont
+    x64.jmp ifcont#22
   nnbsp:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#22:
     x64.cmpRegImm32 rcx, 8287
     x64.jcc equal, mmsp
-    x64.jmp ifcont
+    x64.jmp ifcont#24
   mmsp:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#24:
     x64.cmpRegImm32 rcx, 12288
     x64.jcc equal, ideographic
-    x64.jmp ifcont
+    x64.jmp ifcont#26
   ideographic:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#26:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp

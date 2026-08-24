@@ -11,7 +11,7 @@ function main() returns ExitCode
 	var i = 0
 	while i < 50 'loop'
 		let inner = StrBox.create("{i}")
-		let outer = BoxBox.create(inner)
+		_ = BoxBox.create(inner)
 		i = i + 1
 	end 'loop'
 	return 0
@@ -67,11 +67,11 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect __int_to_string
     x64.movRegReg r13, r8
-    x64.leaRegRegImm32 rcx, r13, 49
+    x64.leaRegRegImm32 rcx, r13, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
+    x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
@@ -87,11 +87,16 @@ func @main {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r14
     x64.callDirect Box.create
-    x64.movRegReg rcx, r8
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
     x64.callDirect Box.create
-    x64.leaRegRegImm32 rbx, rbx, 1
     x64.movRegReg rcx, r8
     x64.callDirect __destruct_Box_Box_String
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Box_String
     x64.jmp whilehdr
   whileexit:
     x64.movRegImm32 r8, 0

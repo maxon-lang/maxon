@@ -39,30 +39,30 @@ func @Math.reduceToPiRange {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp whilehdr
-  whilehdr:
+    x64.jmp whilehdr#1
+  whilehdr#1:
     x64.movsdRegRip xmm1, [rip + __fconst_4]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc above, reduce_pos
-    x64.jmp whileexit
+    x64.jmp whileexit#3
   reduce_pos:
     x64.movsdRegRip xmm1, [rip + __fconst_5]
     x64.subsdRegReg xmm0, xmm0, xmm1
-    x64.jmp whilehdr
-  whileexit:
-    x64.jmp whilehdr
-  whilehdr:
+    x64.jmp whilehdr#1
+  whileexit#3:
+    x64.jmp whilehdr#4
+  whilehdr#4:
     x64.movsdRegRip xmm1, [rip + __fconst_4]
     x64.movsdRegRip xmm2, [rip + __fconst_3]
     x64.subsdRegReg xmm2, xmm2, xmm1
     x64.ucomisdRegReg xmm2, xmm0
     x64.jcc above, reduce_neg
-    x64.jmp whileexit
+    x64.jmp whileexit#6
   reduce_neg:
     x64.movsdRegRip xmm1, [rip + __fconst_5]
     x64.addsdRegReg xmm0, xmm0, xmm1
-    x64.jmp whilehdr
-  whileexit:
+    x64.jmp whilehdr#4
+  whileexit#6:
     x64.popReg rbp
     x64.ret
 }
@@ -231,11 +231,11 @@ func @Math.tan {
     x64.movRegReg xmm6, xmm0
     x64.movsdRegRip xmm0, [rip + __fconst_3]
     x64.ucomisdRegReg xmm6, xmm0
-    x64.jcc parity, ifcont
-    x64.jmp fordered
-  fordered:
+    x64.jcc parity, ifcont#2
+    x64.jmp fordered#9
+  fordered#9:
     x64.jcc equal, zero
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   zero:
     x64.movRegReg xmm0, xmm6
     x64.loadRegSlot xmm6, slot0
@@ -243,7 +243,7 @@ func @Math.tan {
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegReg xmm0, xmm6
     x64.callDirect Math.sin
     x64.movRegReg xmm7, xmm0
@@ -251,16 +251,16 @@ func @Math.tan {
     x64.callDirect Math.cos
     x64.movsdRegRip xmm1, [rip + __fconst_3]
     x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, ifcont
-    x64.jmp fordered
-  fordered:
+    x64.jcc parity, ifcont#6
+    x64.jmp fordered#10
+  fordered#10:
     x64.jcc equal, div_zero
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   div_zero:
     x64.movsdRegRip xmm0, [rip + __fconst_3]
     x64.ucomisdRegReg xmm7, xmm0
     x64.jcc above, positive
-    x64.jmp ifcont
+    x64.jmp ifcont#5
   positive:
     x64.movsdRegRip xmm0, [rip + __fconst_9]
     x64.loadRegSlot xmm6, slot0
@@ -268,14 +268,14 @@ func @Math.tan {
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#5:
     x64.movsdRegRip xmm0, [rip + __fconst_10]
     x64.loadRegSlot xmm6, slot0
     x64.loadRegSlot xmm7, slot1
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#6:
     x64.movsdRegRip xmm1, [rip + __fconst_3]
     x64.ucomisdRegReg xmm0, xmm1
     x64.setccReg notEqual, rcx

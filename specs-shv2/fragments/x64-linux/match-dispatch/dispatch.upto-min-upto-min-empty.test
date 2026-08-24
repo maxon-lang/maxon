@@ -10,9 +10,15 @@ function main() returns ExitCode
 	// `min upto min` is also empty. The wrap bug turned it into `[i64.min, i64.max]`, matching every
 	// value; that the ordinary values below still fall to default proves the arm is dead.
 	var n = 0 as ExitCode
-	if classify(5) == 0 'a' n = n + 1 end 'a'
-	if classify(0) == 0 'b' n = n + 1 end 'b'
-	if classify(-1) == 0 'c' n = n + 1 end 'c'
+	if classify(5) == 0 'a'
+		n = n + 1
+	end 'a'
+	if classify(0) == 0 'b'
+		n = n + 1
+	end 'b'
+	if classify(-1) == 0 'c'
+		n = n + 1
+	end 'c'
 	return n
 end 'main'
 ---
@@ -45,42 +51,41 @@ func @main {
     x64.callDirect classify
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, a
-    x64.jmp critsplit
+    x64.jmp critsplit#10
   a:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#2
+  critsplit#10:
+    x64.jmp ifcont#2
+  ifcont#2:
     x64.movRegImm32 rcx, 0
     x64.callDirect classify
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, b
-    x64.jmp critsplit
+    x64.jmp critsplit#11
   b:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#4
+  critsplit#11:
+    x64.jmp ifcont#4
+  ifcont#4:
     x64.movRegImm rcx, -1
     x64.callDirect classify
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, c
-    x64.jmp critsplit
+    x64.jmp critsplit#12
   c:
     x64.leaRegRegImm32 r8, rbx, 1
-    x64.jmp ifcont
-  critsplit:
+    x64.jmp ifcont#6
+  critsplit#12:
     x64.movRegReg r8, rbx
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#6
+  ifcont#6:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

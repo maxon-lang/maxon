@@ -21,12 +21,24 @@ end 'idx'
 
 function main() returns ExitCode
 	var n = 0 as ExitCode
-	if idx(Color.red) == 1 'a' n = n + 1 end 'a'
-	if idx(Color.green) == 2 'b' n = n + 1 end 'b'
-	if idx(Color.blue) == 3 'c' n = n + 1 end 'c'
-	if idx(Color.cyan) == 4 'd' n = n + 1 end 'd'
-	if idx(Color.magenta) == 5 'e' n = n + 1 end 'e'
-	if idx(Color.yellow) == 6 'f' n = n + 1 end 'f'
+	if idx(Color.red) == 1 'a'
+		n = n + 1
+	end 'a'
+	if idx(Color.green) == 2 'b'
+		n = n + 1
+	end 'b'
+	if idx(Color.blue) == 3 'c'
+		n = n + 1
+	end 'c'
+	if idx(Color.cyan) == 4 'd'
+		n = n + 1
+	end 'd'
+	if idx(Color.magenta) == 5 'e'
+		n = n + 1
+	end 'e'
+	if idx(Color.yellow) == 6 'f'
+		n = n + 1
+	end 'f'
 	return n
 end 'main'
 ---
@@ -37,24 +49,24 @@ func @idx {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.jumpTable rcx, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm, [5]=matcharm] @__jumptable_2
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5, [5]=matcharm#6] @__jumptable_2
   matchdead:
-  matcharm:
+  matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
-  matcharm:
+  matcharm#2:
     x64.movRegImm32 r8, 2
     x64.jmp matchcont
-  matcharm:
+  matcharm#3:
     x64.movRegImm32 r8, 3
     x64.jmp matchcont
-  matcharm:
+  matcharm#4:
     x64.movRegImm32 r8, 4
     x64.jmp matchcont
-  matcharm:
+  matcharm#5:
     x64.movRegImm32 r8, 5
     x64.jmp matchcont
-  matcharm:
+  matcharm#6:
     x64.movRegImm32 r8, 6
     x64.jmp matchcont
   matchcont:
@@ -62,8 +74,7 @@ func @idx {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -90,75 +101,74 @@ func @main {
     x64.callDirect idx
     x64.cmpRegImm32 r8, 1
     x64.jcc equal, a
-    x64.jmp critsplit
+    x64.jmp critsplit#16
   a:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#2
+  critsplit#16:
+    x64.jmp ifcont#2
+  ifcont#2:
     x64.movRegImm32 rcx, 1
     x64.callDirect idx
     x64.cmpRegImm32 r8, 2
     x64.jcc equal, b
-    x64.jmp critsplit
+    x64.jmp critsplit#17
   b:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#4
+  critsplit#17:
+    x64.jmp ifcont#4
+  ifcont#4:
     x64.movRegImm32 rcx, 2
     x64.callDirect idx
     x64.cmpRegImm32 r8, 3
     x64.jcc equal, c
-    x64.jmp critsplit
+    x64.jmp critsplit#18
   c:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#6
+  critsplit#18:
+    x64.jmp ifcont#6
+  ifcont#6:
     x64.movRegImm32 rcx, 3
     x64.callDirect idx
     x64.cmpRegImm32 r8, 4
     x64.jcc equal, d
-    x64.jmp critsplit
+    x64.jmp critsplit#19
   d:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#8
+  critsplit#19:
+    x64.jmp ifcont#8
+  ifcont#8:
     x64.movRegImm32 rcx, 4
     x64.callDirect idx
     x64.cmpRegImm32 r8, 5
     x64.jcc equal, e
-    x64.jmp critsplit
+    x64.jmp critsplit#20
   e:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#10
+  critsplit#20:
+    x64.jmp ifcont#10
+  ifcont#10:
     x64.movRegImm32 rcx, 5
     x64.callDirect idx
     x64.cmpRegImm32 r8, 6
     x64.jcc equal, f
-    x64.jmp critsplit
+    x64.jmp critsplit#21
   f:
     x64.leaRegRegImm32 r8, rbx, 1
-    x64.jmp ifcont
-  critsplit:
+    x64.jmp ifcont#12
+  critsplit#21:
     x64.movRegReg r8, rbx
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#12
+  ifcont#12:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:

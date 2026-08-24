@@ -33,28 +33,28 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.prologue 32
-    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegImm32 rdx, 2
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegImm32 rdx, 3
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, -2
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 2
+    x64.leaRegRdata r9, [rip + __layout_Array_int]
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_slice
+    x64.callDirect Array.slice
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -66,7 +66,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_append
@@ -84,15 +84,15 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#7
+    x64.jmp tryok#6
+  tryerr#7:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#8
+  tryok#6:
     x64.movRegReg rax, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#8
+  trycont#8:
     x64.leaRegRegReg r13, r13, rax
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp whilehdr
@@ -101,40 +101,40 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
     x64.movRegImm32 r14, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#11
+  tryok#9:
     x64.movRegReg r14, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#11
+  trycont#11:
     x64.cmpRegImm32 r13, 9
     x64.movRegImm32 rax, 0
-    x64.jcc equal, andrhs
-    x64.jmp critsplit
-  andrhs:
+    x64.jcc equal, andrhs#12
+    x64.jmp critsplit#18
+  andrhs#12:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 5
     x64.setccReg equal, rax
-    x64.jmp scmerge
-  critsplit:
-    x64.jmp scmerge
-  scmerge:
+    x64.jmp scmerge#13
+  critsplit#18:
+    x64.jmp scmerge#13
+  scmerge#13:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, andrhs
-    x64.jmp critsplit
-  andrhs:
+    x64.jcc notEqual, andrhs#14
+    x64.jmp critsplit#19
+  andrhs#14:
     x64.cmpRegImm32 r14, 1
     x64.setccReg equal, rax
-    x64.jmp scmerge
-  critsplit:
+    x64.jmp scmerge#15
+  critsplit#19:
     x64.movRegReg rax, rcx
-    x64.jmp scmerge
-  scmerge:
+    x64.jmp scmerge#15
+  scmerge#15:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ok
     x64.jmp ifcont
@@ -159,6 +159,61 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.slice {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.callDirect __mm_retain
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.movRegReg r9, r13
+    x64.callDirect __managed_slice_opaque
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

@@ -26,35 +26,34 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegImm32 rdx, 2
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegImm32 rdx, 3
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, -2
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_count
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 1
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#1
     x64.jmp matchnext
-  matcharm:
+  matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 r12, 3
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#2
     x64.jmp matchdefault
-  matcharm:
+  matcharm#2:
     x64.movRegImm32 r8, 7
     x64.jmp matchcont
   matchcont:
@@ -62,12 +61,11 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -82,7 +80,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   matchdefault:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

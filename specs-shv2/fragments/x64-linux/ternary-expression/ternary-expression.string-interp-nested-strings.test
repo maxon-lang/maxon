@@ -25,14 +25,14 @@ func @main {
     x64.pushReg r15
     x64.prologue 56
     x64.movRegImm32 rax, 1
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
     x64.loadRegBaseDisp.word64 r12, [rcx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ternarytrue
     x64.jmp ternaryfalse
   ternarytrue:
-    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.leaRegRdata rax, [rip + __str_rec_4]
     x64.jmp matchcont
   ternaryfalse:
     x64.leaRegRdata rax, [rip + __str_rec_5]
@@ -42,11 +42,11 @@ func @main {
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, r12, r14
     x64.storeSlotReg slot0, rax
-    x64.leaRegRegImm32 rcx, rax, 49
+    x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot1, r8
-    x64.leaRegRegImm32 r15, r8, 48
+    x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12
@@ -66,7 +66,7 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegReg rcx, rbx
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
@@ -77,6 +77,17 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

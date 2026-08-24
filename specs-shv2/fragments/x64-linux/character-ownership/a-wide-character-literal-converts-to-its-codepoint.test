@@ -35,24 +35,24 @@ func @main {
     x64.movRegImm32 rcx, 233
     x64.cmpRegImm32 rcx, 233
     x64.jcc equal, accent
-    x64.jmp critsplit
+    x64.jmp critsplit#5
   accent:
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#2
+  critsplit#5:
+    x64.jmp ifcont#2
+  ifcont#2:
     x64.movRegImm32 rcx, 20013
     x64.cmpRegImm32 rcx, 20013
     x64.jcc equal, han
-    x64.jmp critsplit
+    x64.jmp critsplit#6
   han:
     x64.leaRegRegImm32 rbx, rax, 1
-    x64.jmp ifcont
-  critsplit:
+    x64.jmp ifcont#4
+  critsplit#6:
     x64.movRegReg rbx, rax
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#4
+  ifcont#4:
     x64.movRegImm32 rax, 233
     x64.leaRegRegImm32 r12, rax, 1
     x64.movRegImm32 rcx, 21
@@ -64,7 +64,7 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -85,11 +85,11 @@ func @main {
     x64.leaRegRegReg rcx, rcx, r8
     x64.leaRegRegReg rax, rcx, rax
     x64.storeSlotReg slot1, rax
-    x64.leaRegRegImm32 rcx, rax, 49
+    x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot2, r8
-    x64.leaRegRegImm32 r12, r8, 48
+    x64.leaRegRegImm32 r12, r8, 56
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.movRegReg rax, rbx
@@ -125,7 +125,7 @@ func @main {
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
@@ -135,6 +135,17 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

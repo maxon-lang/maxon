@@ -40,11 +40,11 @@ func @bump {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, critsplit
-    x64.jmp tryblkok
-  critsplit:
+    x64.jcc notEqual, critsplit#12
+    x64.jmp tryblkok#2
+  critsplit#12:
     x64.jmp tryblkerr
-  tryblkok:
+  tryblkok#2:
     x64.movRegImm32 rdx, 0
     x64.leaRegRegImm32 rax, r8, 1
     x64.cmpRegImm32 rax, 0
@@ -65,16 +65,16 @@ func @bump {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, critsplit
-    x64.jmp tryblkok
-  critsplit:
+    x64.jcc notEqual, critsplit#13
+    x64.jmp tryblkok#3
+  critsplit#13:
     x64.jmp tryblkerr
   tryblkerr:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#4
     x64.jmp matchnext
-  matcharm:
+  matcharm#4:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.epilogue 40
@@ -83,9 +83,9 @@ func @bump {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#5
     x64.jmp matchdead
-  matcharm:
+  matcharm#5:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.epilogue 40
@@ -93,7 +93,7 @@ func @bump {
     x64.popReg rbp
     x64.ret
   matchdead:
-  tryblkok:
+  tryblkok#3:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

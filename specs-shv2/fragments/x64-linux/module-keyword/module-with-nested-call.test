@@ -29,6 +29,18 @@ func @inner {
     x64.ret
 }
 
+func @outer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect inner
+    x64.leaRegRegImm32 r8, r8, 20
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -39,8 +51,7 @@ func @main {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -51,18 +62,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @outer {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect inner
-    x64.leaRegRegImm32 r8, r8, 20
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
