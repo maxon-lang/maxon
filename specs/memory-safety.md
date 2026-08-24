@@ -3344,6 +3344,83 @@ end 'main'
 untouched=tag
 ```
 
+<!-- test: retained-payload-that-escapes-shares-the-owner-s-record -->
+⭐ **THE LEAK GATE FOR THAT DOOR, AND IT IS THE EXIT CODE THAT CARRIES IT.** The case above keeps
+the payload inside the match; this one lets it ESCAPE and be appended through from outside. The bind
+is an INCREF rather than a copy, so the escaped `String` is a SECOND owner of the record the union
+still holds, and the append is visible through both — which is what the `stdout` block says.
+
+⚠ **THE `exitcode` BLOCK IS THE HALF THAT CARRIES IT, AND THE CASE ABOVE CANNOT SUBSTITUTE FOR IT.**
+Until `4a69525121` this program printed the RIGHT line and then exited **101** — `MM raw leak:
+1 allocation(s) remain` — because the literal was emitted as a shared immortal record, the append
+grew it in place, and an immortal record's destructor is 0 so the grown buffer was never freed.
+Measured on `maxon-sharp` at `4a69525121~1`: this program, exit 101, stdout correct. The sibling
+above goes red on that same compiler, but by its `stdout` (`untouched=tag!`) — it is a WRONG ANSWER
+case that happens to leak, and it was written at `035fae8fa9`, AFTER the fix, so it has never been
+red. A leak whose answer is right is a shape it cannot express, and this one is exactly that.
+`specs-shv2/union-managed-payload.md` carries this same program and used to settle the bootstrap's
+behaviour in prose — "answers identically (measured — same two lines of stdout)" — which is a
+measurement of `stdout` standing in for a question only the exit code could answer. This case is
+that measurement written down where it can fail.
+```maxon
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns String
+	return match m 'k'
+		silent gives "a fallback literal long enough to be a real heap string"
+		text(s) gives s
+	end 'k'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("original payload, long enough to be a real heap allocation")
+	var escaped = grab(m)
+	escaped.append(" MUTATED")
+	print(grab(m))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original payload, long enough to be a real heap allocation MUTATED
+```
+
+<!-- test: mutated-payload-bound-inside-the-arm-frees-its-record -->
+The same accounting one binding-shape over, which is the shape the defect was first seen in: the
+payload is appended to INSIDE the arm, through a `var` union, and never escapes. It exited 101 too,
+so both routes to a grown payload record are pinned rather than the one that happened to be
+reported.
+```maxon
+union Word
+	spelled(text String)
+	blank
+end 'Word'
+
+function main() returns ExitCode
+	var a = Word.spelled("head, long enough to be a real heap allocation")
+	match a 'm'
+		spelled(text) then text.append(" tail")
+		blank then return 1
+	end 'm'
+	match a 'read'
+		spelled(text) then print(text)
+		blank then return 1
+	end 'read'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+head, long enough to be a real heap allocation tail
+```
+
 ### A field's record is reachable by more than the field
 
 A struct field holding a managed value hands out the SAME record to everything that reads it, and that

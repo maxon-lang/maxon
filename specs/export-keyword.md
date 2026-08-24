@@ -439,6 +439,176 @@ end 'main'
 error E2004: specs/fragments/export-keyword/error.non-exported-enum-cross-file.test:10:10: Undefined variable 'InternalStatus'
 ```
 
+### A member the COMPILER wrote is as visible as the type it belongs to
+
+`clone`, `equals` and `hash` are synthesized for a type whose members all conform — nobody writes
+them, so nobody writes a visibility modifier for them either. The only visibility the declaration
+states is the TYPE's, and that is the one they take.
+
+⚠ **THEY USED TO TAKE NONE, WHICH MEANT FILE-PRIVATE, AND THE OPERATOR DISAGREED WITH THE
+METHOD.** `IsFunctionVisible` reads `IsExported`/`IsModuleVisible` off the function, and the six
+places that register a synthesized member set neither — so `h.clone()` one file over was
+`E3008: function 'Holder.clone' is not exported` while `a == b` over the identical pair compiled and
+ran, because `==` reaches the same `equals` symbol without asking. One operation, two spellings,
+disagreeing. Five arrivals of that one cause are pinned below: a struct's `clone` and `equals`, a
+union's `clone`, and an enum's `equals` and `hash`.
+
+<!-- test: synthesized-clone-crosses-an-exported-type-s-file-boundary -->
+```maxon
+// --- file: holder.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Holder
+	export var count as Integer
+	export var scale as Integer
+
+	export static function make(c Integer, s Integer) returns Holder
+		return Holder{count: c, scale: s}
+	end 'make'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = Holder.make(3, s: 4)
+	let c = h.clone()
+	return c.count + c.scale
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: synthesized-equals-crosses-an-exported-type-s-file-boundary -->
+The method half of the case at `non-exported-struct-values-compare-across-a-file-boundary`, which
+pins the OPERATOR. `maxon-selfhosted` rewrites a struct `==` into a `methodCall` of `equals` and has
+no field-wise fallback (`Compiler/IR/TypeResolution.maxon:7831`), so the two spellings are one call
+and may not answer differently.
+```maxon
+// --- file: holder.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Holder
+	export var count as Integer
+	export var scale as Integer
+
+	export static function make(c Integer, s Integer) returns Holder
+		return Holder{count: c, scale: s}
+	end 'make'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = Holder.make(3, s: 4)
+	let b = Holder.make(3, s: 4)
+	let c = Holder.make(9, s: 9)
+	if a.equals(b) 'same'
+		if a.equals(c) 'differs'
+			return 1
+		end 'differs'
+		return 7
+	end 'same'
+	return 2
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: synthesized-clone-crosses-an-exported-union-s-file-boundary -->
+```maxon
+// --- file: answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = classify(42)
+	let c = a.clone()
+	return match c 'm'
+		small gives 1
+		big(n) gives n
+	end 'm'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: synthesized-equals-crosses-an-exported-enum-s-file-boundary -->
+```maxon
+// --- file: shade.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum Shade
+	dim
+	bright
+end 'Shade'
+
+export function pick(n Integer) returns Shade
+	if n > 1 'b'
+		return Shade.bright
+	end 'b'
+	return Shade.dim
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = pick(0)
+	let b = pick(5)
+	if a.equals(b) 'same'
+		return 1
+	end 'same'
+	return 7
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: synthesized-hash-crosses-an-exported-enum-s-file-boundary -->
+Two equal values hash equal — asserted as a RELATION so the case pins the call being reachable
+rather than any particular hash function.
+```maxon
+// --- file: shade.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum Shade
+	dim
+	bright
+end 'Shade'
+
+export function pick(n Integer) returns Shade
+	if n > 1 'b'
+		return Shade.bright
+	end 'b'
+	return Shade.dim
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = pick(5)
+	let b = pick(9)
+	if a.hash() == b.hash() 'agree'
+		return 7
+	end 'agree'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
 ### Holding a value of a type you may not NAME
 
 A file that RECEIVES a value of another file's non-exported `enum`, `union` or `type` — from an

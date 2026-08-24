@@ -652,3 +652,41 @@ end 'main'
 error E2003: specs/fragments/export-keyword/error.hidden-alias-const-and-body-cast.test:6:14: Expected type name after 'as'
 error E3062: specs/fragments/export-keyword/error.hidden-alias-const-and-body-cast.test:3:11: unused typealias: 'Dead'
 ```
+
+### A member the COMPILER wrote crosses a file boundary
+
+<!-- test: synthesized-clone-crosses-an-exported-type-s-file-boundary -->
+⭐ **A RATCHET, NOT A GATE — THIS COMPILER ALREADY GETS IT RIGHT AND THE POINT IS THAT IT KEEPS
+DOING SO.** `clone` is synthesized for a type whose fields all conform, so nobody writes it and
+nobody writes a visibility modifier for it. The bootstrap registered its stub with neither
+`IsExported` nor `IsModuleVisible`, which meant file-private, and refused this exact program with
+`E3008: function 'Holder.clone' is not exported` while `a == b` over the identical pair compiled and
+ran — one operation, two spellings, disagreeing. shv2 has never had that split; the case is here so
+a future change to how a synthesized member is registered cannot reintroduce it silently.
+
+⚠ The `.equals()` sibling is deliberately NOT here: shv2 synthesizes no `equals` at all and answers
+`E3004: call to undefined function 'Holder.equals'`. That is a different gap and belongs to its own
+row, not to this one.
+```maxon
+// --- file: holder.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Holder
+	export var count as Integer
+	export var scale as Integer
+
+	export static function make(c Integer, s Integer) returns Holder
+		return Holder{count: c, scale: s}
+	end 'make'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = Holder.make(3, s: 4)
+	let c = h.clone()
+	return c.count + c.scale
+end 'main'
+```
+```exitcode
+7
+```

@@ -188,6 +188,33 @@ end 'main'
 42
 ```
 
+<!-- test: module-synthesized-clone-same-directory -->
+A member the compiler wrote takes the TYPE's visibility, so a `module type`'s synthesized `clone`
+is reachable from exactly the directory subtree the type is — not from its declaring file alone,
+which is what a stub carrying no visibility at all meant.
+```maxon
+// --- file: feature/crate.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module type Crate
+	module var count as Integer
+
+	module static function make(c Integer) returns Self
+		return Self{count: c}
+	end 'make'
+end 'Crate'
+
+// --- file: feature/main.maxon
+function main() returns ExitCode
+	let h = Crate.make(42)
+	let c = h.clone()
+	return c.count
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: module-typealias-same-directory -->
 ```maxon
 // --- file: feature/types.maxon

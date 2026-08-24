@@ -260,3 +260,35 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: float-payload-write-back -->
+The write-back is the third site that has to know a payload slot's type, and it had the same
+unconditional `i64` the construct and the extract did. Assigning a `float` through a `var` binding
+writes the new bits into the same eight bytes the construct wrote.
+```maxon
+typealias Fraction = float(0.0 to 1000.0)
+
+union Sample
+	blank
+	measured(d Fraction)
+end 'Sample'
+
+function main() returns ExitCode
+	var s = Sample.measured(0.5)
+	match s 'update'
+		measured(d) then d = 0.25
+		blank then return 0
+	end 'update'
+	let after = match s 'read'
+		measured(d) gives d
+		blank gives 0.0
+	end 'read'
+	if after == 0.25 'exact'
+		return 7
+	end 'exact'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```

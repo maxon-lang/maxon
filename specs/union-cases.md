@@ -320,3 +320,105 @@ end 'main'
 ```exitcode
 5
 ```
+
+### A `float` payload slot
+
+The flat payload slot is 8 bytes and every kind of payload shares it, so a `float` payload is a
+question about the slot's TYPE, not about its size.
+
+⚠ **THE FRONT END ACCEPTED THIS AND THE REGISTER ALLOCATOR DIED OF IT.** All three lowering
+sites — construct, extract and write-back — named the slot `i64` unconditionally, so a `float`
+payload's bits, which live in an xmm register, were asked for a general-purpose home they never
+had: `error E9001: RegisterManager: value %N has no register and no stack home`, printed with a
+four-frame .NET stack trace, at the user. The slot's type is now taken from the value stored in it,
+which is why the case below need not bind the payload to fail — `float-payload-constructed-without-binding`
+is the CONSTRUCT alone. `maxon-shv2` refuses the same program cleanly with `E2015`;
+`maxon-selfhosted` aborts with a `panic` (`IR/Maxon/LowerMaxonToStd.maxon:12528`). Of the three, only
+this compiler ever accepted it.
+
+<!-- test: union-payload.float-payload-constructed-without-binding -->
+The narrowest form: the payload is never bound, and the arms name no variable. Constructing the
+value is enough.
+```maxon
+typealias Fraction = float(0.0 to 1000.0)
+typealias Reading = int(0 to 255)
+
+union Sample
+	blank
+	measured(d Fraction)
+end 'Sample'
+
+function take(s Sample) returns Reading
+	return match s 'm'
+		blank gives 1
+		measured gives 2
+	end 'm'
+end 'take'
+
+function main() returns ExitCode
+	return take(Sample.measured(0.5))
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: union-payload.float-payload-round-trips-through-the-slot -->
+The value stored is the value read back, to the bit — the slot is a reinterpretation of the same
+eight bytes, not a conversion through an integer.
+```maxon
+typealias Fraction = float(0.0 to 1000.0)
+
+union Sample
+	blank
+	measured(d Fraction)
+end 'Sample'
+
+function main() returns ExitCode
+	let s = Sample.measured(0.5)
+	let d = match s 'm'
+		blank gives 0.0
+		measured(v) gives v
+	end 'm'
+	if d == 0.5 'exact'
+		return 7
+	end 'exact'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: union-payload.float-payload-beside-an-int-payload -->
+Two cases whose payloads occupy the SAME slot at different types. The slot is written and read at
+whichever type the case declares, so the int case is unaffected by the float one sharing its offset.
+```maxon
+typealias Fraction = float(0.0 to 1000.0)
+typealias Integer = int(i64.min to i64.max)
+
+union Sample
+	counted(n Integer)
+	measured(d Fraction)
+end 'Sample'
+
+function main() returns ExitCode
+	let a = Sample.counted(5)
+	let b = Sample.measured(0.25)
+	let n = match a 'ma'
+		counted(v) gives v
+		measured gives 0
+	end 'ma'
+	let d = match b 'mb'
+		counted gives 0.0
+		measured(v) gives v
+	end 'mb'
+	if d == 0.25 'exact'
+		return n + 2
+	end 'exact'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```

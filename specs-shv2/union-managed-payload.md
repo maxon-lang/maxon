@@ -482,12 +482,24 @@ a first payload string long enough to heap
 <!-- test: retained-payload-that-escapes-shares-the-owner-s-record -->
 The retain is an INCREF, not a copy, so a payload that escapes the borrow is a SECOND
 owner of the SAME record — and an in-place `append` through it is visible to the union
-that still holds it. That is not a shv2 quirk: the **bootstrap answers identically**
-(measured — same two lines of stdout), so the observable semantics of a payload bound
-out of a borrowed union agree across the two compilers. It is pinned because it is the
-one place the incref-vs-copy choice is *observable* rather than internal: were the bind
-to copy the way `promoteBorrowedToOwned` copies a borrowed String for a `var`, this
-program would print the unmutated original and disagree with the reference.
+that still holds it. It is pinned because it is the one place the incref-vs-copy choice is
+*observable* rather than internal: were the bind to copy the way `promoteBorrowedToOwned`
+copies a borrowed String for a `var`, this program would print the unmutated original and
+disagree with the reference.
+
+⛔ **THIS DOC USED TO SETTLE THAT AGAINST THE BOOTSTRAP HERE, IN PROSE — "the bootstrap
+answers identically (measured — same two lines of stdout)" — AND THAT PARENTHETICAL NAMED A
+SPELLING NARROWER THAN THE FACT.** It compared `stdout`, and never the EXIT CODE. For twelve
+days the bootstrap printed the same two lines and then exited **101**, `MM raw leak:
+1 allocation(s) remain`, on this exact program; `4a69525121` closed it as a side effect of a
+rung about empty containers. No committed case in either corpus was ever RED on it: the
+nearest, `specs/memory-safety.md`'s `shared-record-not-written-through-a-union-payload`, goes
+red on that compiler by its `stdout` rather than its exit code, and was authored after the fix.
+A dated measurement had been left standing as a cross-compiler fact inside the one case whose
+whole purpose is to pin cross-compiler agreement. The claim is not restated here,
+because prose cannot fail: the bootstrap's own copy of this program now lives in
+`specs/memory-safety.md` as `retained-payload-that-escapes-shares-the-owner-s-record`, with an
+`exitcode` block, where the C# suite runs it.
 ```maxon
 union M
 	silent
