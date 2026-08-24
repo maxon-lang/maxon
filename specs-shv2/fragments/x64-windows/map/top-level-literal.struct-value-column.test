@@ -81,8 +81,8 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r12 + 24], rax
     x64.leaRegRdata rax, [rip + __layout_Map_Array_Byte_Info]
-    x64.leaRegRdata r9, [rip + __witness_Array.Hashable]
-    x64.leaRegRdata rsi, [rip + __witness_Array.Equatable]
+    x64.leaRegRdata r9, [rip + __witness_Array_Byte.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_Array_Byte.Equatable]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect Map.get
@@ -129,8 +129,8 @@ func @main {
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegGlobal rax, __data_table
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.leaRegRdata rdx, [rip + __witness_Array.Hashable]
-    x64.leaRegRdata rax, [rip + __witness_Array.Equatable]
+    x64.leaRegRdata rdx, [rip + __witness_Array_Byte.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_Array_Byte.Equatable]
     x64.callDirect Map.count
     x64.movRegReg r15, r8
     x64.movRegImm32 rcx, 20
@@ -1540,6 +1540,45 @@ func @__fieldDefault#Map#hashes {
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg r8, rcx
+    x64.andRegReg r8, rcx, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_36]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.setccReg equal, r8
     x64.popReg rbp
     x64.ret
 }
