@@ -1061,6 +1061,37 @@ function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey S
 	return ExtractedTests.create(tests, disabledCount: disabledCount)
 end 'extractTests'
 
+// ⭐⭐ **A TEST MARKER THAT IS NEVER CLOSED IS REFUSED — because the way a spec author COMMENTS A CASE
+// OUT is to leave the `-->` until after its fences, and this parser used to RUN such a case.**
+//
+// `markerValue` answers with everything to the end of the line when it finds no `TestMarkerEnd`, and
+// that fallback is right for it — it reads six different markers and cannot decide for all of them. For
+// a TEST marker it is a wrong answer with teeth: the name parses, the case becomes ACTIVE, and the
+// harness compiles and runs a program the file says is switched off. Every other marker's fallback is
+// harmless by comparison (`markerValue` trims, so an unterminated `<!-- targets: x64-windows` yields the
+// same key a closed one would); this is the only one that CREATES A CASE.
+//
+// ⛔ **MEASURED 2026-08-23, AND IT IS A DIVERGENCE FROM THE REFERENCE RATHER THAN A PREFERENCE.** The
+// bootstrap's `SpecParser.cs` `TestMarkerRegex` is `<!--\s*test:\s*(\S+)\s*-->` — it REQUIRES the end
+// token, and `\s*` cannot span the prose line such a case carries — so it correctly declines the
+// marker. `specs/unary-operators.md` held one, and the bootstrap ran three cases of that file with
+// `negate-float` NOT among them, while shv2 ran the identical marker in its own copy as a live case.
+// One `.md`, two meanings, and the silent half was ours.
+//
+// Asked at the ONE door both kinds of marker go through, so a shelved case is refused identically —
+// `extractTests` routes `<!-- disabled-test: … -->` here too, and the two must not come to disagree
+// about what a well-formed marker line is.
+//
+// It PANICS in the parent, before a worker exists, exactly as this file's other spec-authoring
+// refusals do; `HarnessSelfTest`'s `unterminated-test-marker` fixture is what proves it still fires.
+function refuseUnterminatedTestMarker(markerLine String, markerIndex LineIndex, specPath FilePath)
+	if markerLine.contains(TestMarkerEnd) 'properlyClosed'
+		return
+	end 'properlyClosed'
+
+	panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: this line opens a test marker and never closes it — there is no '{TestMarkerEnd}' on it, so everything after '{TestMarkerNameSep}' would be read as the case NAME: '{markerLine.trim()}'. That is how a case its author COMMENTED OUT gets run: the `-->` ends up below the case's fences, the marker parses anyway, and the harness compiles and runs a program the file says is switched off. The reference parser declines this marker outright, so the same file already means two different things to two compilers. Close the marker on its own line — and if the case was meant to be shelved, delete the trailing `-->` as well and write it as a `{DisabledTestMarker} NAME -->` naming the rung that unlocks it")
+end 'refuseUnterminatedTestMarker'
+
 // Scan one test starting at its marker line, returning the line index to resume the
 // outer scan from. When `active`, the parsed test is pushed onto `tests`; when not
 // (a `<!-- disabled-test: … -->` case) it is scanned identically and DISCARDED, so
@@ -1084,6 +1115,8 @@ end 'extractTests'
 // line and silently drop the assertion. A spec that pins a panic would then pass on the
 // exit code alone, which is the one failure mode a panic spec exists to catch.
 function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, active bool, specPath FilePath, effectiveTargetKey String) returns LineIndex
+	refuseUnterminatedTestMarker(markerLine, markerIndex: markerIndex, specPath: specPath)
+
 	let lineCount = lines.count()
 	let name = markerValue(markerLine)
 	var source = ""

@@ -49,8 +49,14 @@ end 'main'
 ```
 
 
-<!-- test: negate-float 
-NOTE: Float negation is not yet implemented in codegen
+<!-- test: negate-float -->
+Negation of a `float`, brought back to an `ExitCode` by `trunc`. `-(-3.5)` is `3.5` and `trunc`
+truncates toward zero, so the program exits 3.
+
+⚠ **The note here used to read "Float negation is not yet implemented in codegen", and it was the
+reason the whole case sat inside an HTML comment — with the closing `-->` below the fences, so this
+runner's marker regex (which requires the end token) never matched it and the case did not run.**
+Floats landed; measured 2026-08-23, this program exits 3.
 ```maxon
 function main() returns ExitCode
 	let x = -3.5
@@ -62,7 +68,6 @@ end 'main'
 ```exitcode
 3
 ```
--->
 
 
 <!-- test: double-negation -->

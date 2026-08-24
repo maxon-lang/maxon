@@ -24,10 +24,16 @@ Unary `+` (identity) is not yet parsed — no test needs it.
 
 ## Tests
 
-The M3 slice of `specs/unary-operators.md`: prefix `-` on a literal and on a
-variable, plus the double-negation parse error. `negate-int` (needs `if` + `==`,
-M4) and `negate-float` (needs floats + `trunc`, later) are DEFERRED and recorded
-under `## Deferred` below.
+Prefix `-` on a literal and on a variable, negation in a WIDER context, the double-negation parse
+error, and negation of an `int` and of a `float`.
+
+⛔ **This paragraph used to say `negate-int` and `negate-float` were DEFERRED "under `## Deferred`
+below", and every part of that was false.** Both cases are ACTIVE and both pass; this file has no
+`## Deferred` section. It was a dated measurement — true of the M3 slice, when `if`/`==` and floats
+were the gaps — left standing as a fact long after the gaps closed. `negate-float` was worse than
+stale: it was live BY ACCIDENT, because its marker was never closed, so a case its author had
+commented out ran on every suite. `SpecParser.refuseUnterminatedTestMarker` refuses that shape now,
+and the marker below is closed deliberately.
 
 <!-- test: unary-minus -->
 ```maxon
@@ -92,8 +98,13 @@ end 'main'
 ```
 
 
-<!-- test: negate-float 
-NOTE: Float negation is not yet implemented in codegen
+<!-- test: negate-float -->
+Negation of a `float`, brought back to an `ExitCode` by `trunc`. `-(-3.5)` is `3.5` and `trunc`
+truncates toward zero, so the program exits 3.
+
+⚠ **The note here used to read "Float negation is not yet implemented in codegen", and it was the
+reason the whole case sat inside an HTML comment.** Floats landed; the case passes, on the host lane
+and on `wasm32-wasi`. The bootstrap agrees: the same program built with `bin/maxon.exe` exits 3.
 ```maxon
 function main() returns ExitCode
 	let x = -3.5
@@ -105,4 +116,3 @@ end 'main'
 ```exitcode
 3
 ```
--->
