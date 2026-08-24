@@ -89,6 +89,21 @@ let OrphanGateRestrictedCase = "orphan-gate.restricted-elsewhere"
 let OrphanGateVanishedSpec = "a-spec-that-no-longer-exists"
 let OrphanGateVanishedCase = "a-case-of-a-spec-that-is-gone"
 
+// ⛔⛔ **THE FOURTH PLANTED FILE IS THE ONE THAT MUST *NOT* BE NAMED — the OVER-REPORTING control, and
+// without it this gate could not fail in the direction that actually rots.** The three above prove the
+// census SEES an orphan; nothing proved it can tell an orphan from a golden that is fine. The negative
+// control below cannot: after `removePlantedGoldens` this fixture holds NO golden at all (its one active
+// case is deliberately made to FAIL, so it mints none, and its second case is unselectable on the planted
+// lane), so a census that named EVERY golden in the tree would name exactly the three planted ones and
+// then, correctly, nothing — passing both halves while reporting 19,723 files on the real corpus.
+// MEASURED 2026-08-23: with `pinnableOn` made to match no case, the suite reported every golden in
+// `specs-shv2/fragments` and this gate stayed GREEN.
+//
+// ⇒ Plant a golden for the case this fixture DECLARES and this lane CAN select, and require the run to
+// stay silent about it. It is inert: the case fails, so `recordFragmentAndCleanup` never reaches the
+// comparison and the planted bytes are never read.
+let OrphanGatePinnableCase = "orphan-gate.selected"
+
 // What a planted golden holds. Its CONTENT is never read — the census asks only whether anything
 // compares the file — so it says what it is, for whoever finds one left behind by an interrupted run.
 let OrphanGatePlantedContent = "// planted by HarnessSelfTest.requireOrphanedGoldensAreReported and removed by it; never compared\n"
@@ -456,6 +471,14 @@ export function requireOrphanedGoldensAreReported(harnessExe FilePath, specDir F
 		end 'notNamed'
 	end 'eachExpected'
 
+	// ⛔ THE OVER-REPORTING CONTROL — see `OrphanGatePinnableCase`. Asserted on the PATH rather than on a
+	// rendered sentence, deliberately: what must hold is that NO reason may be attached to this file, and
+	// naming one reason here would leave the gate satisfied by the census producing a different one.
+	let pinnableEntryPath = "{OrphanGateLane}/{OrphanGateSpecName}/{OrphanGatePinnableCase}{FragmentExtension}"
+	if withOrphans.contains(pinnableEntryPath) 'namedAGoldenItsLaneCompares'
+		broken.push("the census NAMED '{pinnableEntryPath}', a golden for a case this fixture declares and this lane can select. Then it does not distinguish an orphan from a reference that is fine, and on the real corpus it names every golden in the tree — a report that fires on everything is switched off inside a week, which is the failure this whole census exists to survive. It said:\n{withOrphans}\n")
+	end 'namedAGoldenItsLaneCompares'
+
 	// THE NEGATIVE CONTROL. Without it the gate is satisfied by a census that reports every golden in the
 	// tree, which is the same as no census at all — and it is the half that would rot silently, because a
 	// report that fires too often looks exactly like a report that works.
@@ -492,6 +515,7 @@ function plantOrphanGoldens(caseDir FilePath) returns FilePathArray
 	planted.push(plantOneGolden(laneDir.join("{OrphanGateSpecName}"), caseName: OrphanGateMissingCase))
 	planted.push(plantOneGolden(laneDir.join("{OrphanGateSpecName}"), caseName: OrphanGateRestrictedCase))
 	planted.push(plantOneGolden(laneDir.join("{OrphanGateVanishedSpec}"), caseName: OrphanGateVanishedCase))
+	planted.push(plantOneGolden(laneDir.join("{OrphanGateSpecName}"), caseName: OrphanGatePinnableCase))
 	return planted
 end 'plantOrphanGoldens'
 
