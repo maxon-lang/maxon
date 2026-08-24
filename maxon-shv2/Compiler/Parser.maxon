@@ -2245,10 +2245,17 @@ let sharedEmptyTopLevelBorrowSubjects = VarInfoMap.create()
 // instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
 let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
 
-// The `paramSites` list of a function no parameter of which is a ranged alias — which is most of them.
-// Same invariant as the two above: it is never mutated (`rangedParamSites` builds a FRESH array on the
-// first parameter that HAS an alias and returns this one otherwise), so it is safe both across the
-// per-file parse fan-out and stored into `FunctionRangeChecks`.
+// The `paramSites` column of a function no parameter of which is a ranged alias — which is most of them.
+//
+// ⭐ **IT IS NOW ONLY EVER READ, AND THAT IS A STRONGER PROPERTY THAN THE ONE THIS COMMENT USED TO
+// CLAIM.** It said the array "is never mutated" because `rangedParamSites` was careful to build a fresh
+// one before its first `push` — an invariant held by a `var` binding, an `is`-identity test and a free
+// function, none of which any analysis can see. **`rangedParamSites` no longer returns this array at
+// all**: it throws `RangedParamError.noRangedParameters`, so the only thing that can reach here is the
+// `otherwise` at its two call sites, which read it into a field and never write it. There is no binding
+// to launder and no `push` to get wrong — which is what `W117` (`E3019`) has been objecting to, and what
+// `0ec62e39a6` ("initialBitColumn laundered a shared `let` global, and three callers wrote through it")
+// is the cost of getting wrong.
 let sharedEmptyParamSites = RangeCheckParamSiteArray.create()
 
 // ⭐ **WHICH DECLARATION A PARAMETER LIST BELONGS TO, asked for exactly one purpose: may a parameter here
@@ -2382,8 +2389,15 @@ end 'PendingDefaultHelper'
 typealias PendingDefaultHelperArray = Array with PendingDefaultHelper
 
 // The list a file holds until it has declared a default — nearly every file, and every file on the scale
-// corpus. Materialized copy-on-write exactly as `sharedEmptyParamSites` is, and a free function for that
-// binding's stated reason.
+// corpus.
+//
+// ⚠ **THIS SAID "materialized copy-on-write exactly as `sharedEmptyParamSites` is", AND THAT STOPPED
+// BEING TRUE THE MOMENT `rangedParamSites` LEARNED TO THROW.** That binding no longer copy-on-writes
+// anything — it is read-only now, and its `materializedParamSites` is deleted. This one still does hold
+// the pattern, via `materializedPendingDefaultHelpers` below, so the two are no longer the same shape and
+// a reader sent from here to there would have found a mechanism that is gone. **The remaining COW anchors
+// are described by their own headers, never by a pointer at a sibling** — a cross-reference is one fact
+// written in two files' worth of places, and it goes stale in exactly this direction.
 let sharedEmptyPendingDefaultHelpers = PendingDefaultHelperArray.create()
 
 function materializedPendingDefaultHelpers(pending PendingDefaultHelperArray) returns PendingDefaultHelperArray
@@ -2394,21 +2408,25 @@ function materializedPendingDefaultHelpers(pending PendingDefaultHelperArray) re
 	return pending
 end 'materializedPendingDefaultHelpers'
 
-// Materialize `rangedParamSites`' list on the FIRST parameter that turns out to be a ranged alias; a
-// list already materialized is returned untouched.
+// ⭐⭐ **"THIS FUNCTION DECLARES NO RANGED-ALIAS PARAMETER" — the answer `rangedParamSites` gives INSTEAD
+// OF AN EMPTY ARRAY, and the reason it is an error rather than a value.**
 //
-// ⚠ It is a free function rather than two lines inside the walk because reassigning the walk's own
-// enclosing binding from INSIDE a branch leaves that binding undefined on the merge path — `E9001 …
-// 'firstRangedParam_10' does not dominate 'firstRangedParam_10.merge'`, measured on this exact loop. Its
-// predecessor `materializedParamAliasNames` was split out for the same reason and blamed the padding
-// loop it happened to contain; the loop was incidental, the reassignment-in-a-branch is the shape.
-function materializedParamSites(sites RangeCheckParamSiteArray) returns RangeCheckParamSiteArray
-	if sites is sharedEmptyParamSites 'firstRangedParam'
-		return RangeCheckParamSiteArray.create()
-	end 'firstRangedParam'
-
-	return sites
-end 'materializedParamSites'
+// An empty list here was a SENTINEL: it said *"there is nothing to report"* in the one spelling that is
+// also a perfectly good list, so every caller was free to take it, bind it, and carry it on — and one of
+// them then had to be handed a shared empty array to carry, which is where the whole
+// `sharedEmptyParamSites` / `materializedParamSites` / `is`-identity apparatus came from. **A thrown
+// error has no such spelling.** The caller must NAME the empty case, at the call site, in the one place
+// that knows what the absence means — and the producer never fabricates a list it has nothing to put in.
+//
+// ⛔ **IT IS DELIBERATELY NOT A `ParseError`.** That union is the parser's DIAGNOSTIC channel —
+// `queryParseOps` turns anything thrown there into a project diagnostic — and a function with no ranged
+// parameter is not a defect in the program, it is most functions. Routing it through `ParseError` would
+// either surface a compile error on valid source or require a caller to swallow a diagnostic, and a
+// discarded diagnostic is worse than the sentinel this replaces. `ScopeError` is the shape copied: a
+// small `implements Error` union beside its raiser, carrying no code because it never reaches a reader.
+union RangedParamError implements Error
+	noRangedParameters
+end 'RangedParamError'
 
 // The signals one method's body contributes to the descriptor-need fixpoint (P1.6-B1): whether it directly
 // reads `sizeof(T)`, the siblings it calls on `self`, and the token position just past its `end` (so the
@@ -23681,7 +23699,9 @@ export type Parser
 		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
 		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
 		self.rangeCheckReturnAlias = self.rangedReturnAliasName(returnType)
-		self.rangeCheckParamSites = self.rangedParamSites(paramTypes, paramRanges: paramRanges)
+		// No ranged parameter is the common case and it is now SAID rather than encoded in an empty list:
+		// the producer throws, and the column keeps the shared read-only empty this file already holds for it.
+		self.rangeCheckParamSites = try self.rangedParamSites(paramTypes, paramRanges: paramRanges) otherwise sharedEmptyParamSites
 		for paramType in paramTypes 'seedParamTypes'
 			// ⭐ A FLOAT-ALIAS parameter is a genuine FLOAT value, so its value TAG must be `float`, not the
 			// `named` a ranged alias otherwise carries — exactly as F2a resolves a float-returning callee's
@@ -24012,9 +24032,16 @@ export type Parser
 		end 'r'
 	end 'rangedReturnAliasName'
 
-	// ⭐ **THE PARAMETER TWIN OF THE LINE ABOVE — one site per RANGED-ALIAS parameter, and the SHARED empty
-	// array when none of them is.** Asked once per function, off the declared parameter types, at the one
-	// point they still carry their names.
+	// ⭐ **THE PARAMETER TWIN OF THE LINE ABOVE — one site per RANGED-ALIAS parameter, and a THROW when none
+	// of them is.** Asked once per function, off the declared parameter types, at the one point they still
+	// carry their names.
+	//
+	// ⛔ **IT USED TO ANSWER "NONE" WITH AN EMPTY ARRAY, AND THAT SENTINEL IS WHAT COST THIS FILE AN
+	// APPARATUS.** Returning the empty list meant returning SOMETHING, and the cheapest something was a
+	// module-level shared array — which then had to be laundered through a `var` binding, guarded by an
+	// `is`-identity test and privatised by a free function before any `push`, an invariant held by nothing
+	// but a comment. See `RangedParamError` for why the absence is an error instead, and
+	// `sharedEmptyParamSites` for what is left of the array once nothing writes it.
 	//
 	// It exists because a CALL ARGUMENT cannot be checked where it is written. Every other position holds
 	// its own declared type; a call argument's type belongs to the callee, which may be declared in a file
@@ -24032,8 +24059,12 @@ export type Parser
 	//
 	// The array is built lazily — most functions take no ranged parameter at all, and one shared empty
 	// array is the difference between that and one allocation per function in the program.
-	function rangedParamSites(paramTypes MaxonTypeArray, paramRanges SourceRangeArray) returns RangeCheckParamSiteArray
-		var sites = sharedEmptyParamSites
+	function rangedParamSites(paramTypes MaxonTypeArray, paramRanges SourceRangeArray) returns RangeCheckParamSiteArray throws RangedParamError
+		if not self.declaresARangedParam(paramTypes) 'noneRanged'
+			throw RangedParamError.noRangedParameters
+		end 'noneRanged'
+
+		var sites = RangeCheckParamSiteArray.create()
 		for i in 0 upto paramTypes.count() 'eachParam'
 			let paramType = try paramTypes.get(i) otherwise panic("rangedParamSites: paramTypes.get OOB at {i}")
 			let aliasName = self.rangedAliasName(maxonTypeTag(paramType), nameId: typeNameIdOf(paramType))
@@ -24042,11 +24073,29 @@ export type Parser
 			end 'notRanged'
 
 			let nameRange = try paramRanges.get(i) otherwise panic("rangedParamSites: paramRanges.get OOB at {i} — one range is pushed per parameter name token, so the two lists have the same length")
-			sites = materializedParamSites(sites)
 			sites.push(RangeCheckParamSite.create(i, aliasName: aliasName, line: nameRange.line, column: nameRange.column))
 		end 'eachParam'
 		return sites
 	end 'rangedParamSites'
+
+	// ⭐ **DOES THIS PARAMETER LIST DECLARE A RANGED ALIAS AT ALL** — the question `rangedParamSites` must
+	// answer BEFORE it builds anything, so that a function with none allocates no list to report it with.
+	//
+	// It answers a `bool` rather than the first ranged index, and that is the same rule this pair exists to
+	// obey: an index would need a *"none"* spelling, and the only ones available are a sentinel past the end
+	// or a second error — one sentinel traded for another. The cost is that the fill loop below re-probes
+	// from 0; that is `count()` extra `rangedAliasName` lookups on the RARE path where a ranged parameter
+	// exists, against zero allocations on the common path where none does.
+	function declaresARangedParam(paramTypes MaxonTypeArray) returns bool
+		for i in 0 upto paramTypes.count() 'eachParam'
+			let paramType = try paramTypes.get(i) otherwise panic("declaresARangedParam: paramTypes.get OOB at {i}")
+			if not self.rangedAliasName(maxonTypeTag(paramType), nameId: typeNameIdOf(paramType)).isEmpty() 'ranged'
+				return true
+			end 'ranged'
+		end 'eachParam'
+
+		return false
+	end 'declaresARangedParam'
 
 	// ⭐ **THE ONE PLACE A `MaxonType` IS ASKED WHETHER IT DENOTES A RANGED ALIAS.** Every reader of that
 	// question goes through here — the return path above, and the `as`-cast path's TWO readers (which
@@ -66485,7 +66534,9 @@ export type Parser
 		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
 		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
 		self.rangeCheckReturnAlias = EmptySourceText
-		self.rangeCheckParamSites = self.rangedParamSites(paramTypes, paramRanges: paramRanges)
+		// No ranged parameter is the common case and it is now SAID rather than encoded in an empty list:
+		// the producer throws, and the column keeps the shared read-only empty this file already holds for it.
+		self.rangeCheckParamSites = try self.rangedParamSites(paramTypes, paramRanges: paramRanges) otherwise sharedEmptyParamSites
 		// The enclosing scope becomes a CAPTURE scope for the duration of the body — a body name resolving
 		// into it (an enclosing local/param/self-field, not the closure's own params) is a capture. Pushed
 		// here, popped just before the restore.
