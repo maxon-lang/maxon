@@ -621,9 +621,10 @@ public static partial class MaxonToStandardConversion {
                   EmitIncrefValue(newBlock, childHeapPtr, scopeName: func.Name);
                   slotIdx++;
                 } else {
-                  // Scalar payload: store directly
+                  // Scalar payload: store directly, at the slot type its own value implies
                   var argStdVal = valueMap[enumConstructOp.Args[ai]];
-                  newBlock.AddOp(new StdStoreIndirectOp(argStdVal, enumPtr, byteOffset, IrType.I64));
+                  newBlock.AddOp(new StdStoreIndirectOp(argStdVal, enumPtr, byteOffset,
+                    UnionPayloadSlotType(argStdVal)));
                   slotIdx++;
                 }
               }
@@ -684,7 +685,8 @@ public static partial class MaxonToStandardConversion {
                 EmitStore(newBlock, (StdI64)loadOp.Result, tempName, varTypes);
                 valueMap[enumPayloadOp.Result] = new StdHeapPtr(enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, tempName);
               } else {
-                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, IrType.I64);
+                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset,
+                  UnionPayloadSlotType(enumPayloadOp.ResultKind));
                 newBlock.AddOp(loadOp);
                 if (enumPayloadOp.ResultKind == MaxonValueKind.Bool) {
                   // Bool payloads are stored as i64 in heap slots; convert to i1 via != 0
@@ -804,7 +806,8 @@ public static partial class MaxonToStandardConversion {
                 EmitIncrefValue(newBlock, childHeapPtr, scopeName: func.Name);
               } else {
                 var newStdVal = valueMap[payloadAssign.NewValue];
-                newBlock.AddOp(new StdStoreIndirectOp(newStdVal, enumHeapPtr, byteOffset, IrType.I64));
+                newBlock.AddOp(new StdStoreIndirectOp(newStdVal, enumHeapPtr, byteOffset,
+                  UnionPayloadSlotType(newStdVal)));
               }
               break;
             }

@@ -1,0 +1,80 @@
+// Test: synthesized-hash-crosses-an-exported-enum-s-file-boundary
+// --- file: shade.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum Shade
+	dim
+	bright
+end 'Shade'
+
+export function pick(n Integer) returns Shade
+	if n > 1 'b'
+		return Shade.bright
+	end 'b'
+	return Shade.dim
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = pick(5)
+	let b = pick(9)
+	if a.hash() == b.hash() 'agree'
+		return 7
+	end 'agree'
+	return 1
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Shade.hash(self: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call stdlib.int.hash
+    x64.mov ecx, rax
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @pick(n: i64) -> i64 {
+  entry:
+    x64.mov rax, 1
+    x64.cmp rcx, rax
+    x64.jle pick.b_0.after
+  b_0:
+    x64.mov rax, 1
+    x64.ret
+  b_0.after:
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 5
+    x64.call pick
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 9
+    x64.call pick
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Shade.hash
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.call Shade.hash
+    x64.mov rdx, [rbp-24]
+    x64.cmp rdx, rax
+    x64.jne main.agree_0.after
+  agree_0:
+    x64.mov rax, 7
+    x64.epilogue
+    x64.ret
+  agree_0.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

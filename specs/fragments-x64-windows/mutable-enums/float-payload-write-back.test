@@ -1,0 +1,137 @@
+// Test: float-payload-write-back
+typealias Fraction = float(0.0 to 1000.0)
+
+union Sample
+	blank
+	measured(d Fraction)
+end 'Sample'
+
+function main() returns ExitCode
+	var s = Sample.measured(0.5)
+	match s 'update'
+		measured(d) then d = 0.25
+		blank then return 0
+	end 'update'
+	let after = match s 'read'
+		measured(d) gives d
+		blank gives 0.0
+	end 'read'
+	if after == 0.25 'exact'
+		return 7
+	end 'exact'
+	return 1
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.movsd xmm0, [rip+__float_0.5]
+    x64.movsd [rbp-48], xmm0
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 10
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.movsd xmm0, [rbp-48]
+    x64.movsd [rax+8], xmm0
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rbx, [rbp-16]
+    x64.xor esi, esi
+    x64.cmp rbx, rsi
+    x64.je main.update_0.case1
+  update_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.je main.update_0.case0
+  update_0.dispatch1:
+    x64.jmp main.update_0.merge
+  update_0.case0:
+    x64.movsd xmm0, [rip+__float_0.25]
+    x64.mov rax, [rbp-8]
+    x64.movsd [rax+8], xmm0
+    x64.jmp main.update_0.merge
+  update_0.case1:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  update_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-8]
+    x64.mov [rbp-24], rdx
+    x64.movsd xmm0, [rip+__float_0]
+    x64.movsd [rbp-32], xmm0
+    x64.mov [rbp-40], rcx
+    x64.mov rbx, [rbp-40]
+    x64.xor esi, esi
+    x64.cmp rbx, rsi
+    x64.je main.read_0.case1
+  read_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-40]
+    x64.cmp rcx, rax
+    x64.je main.read_0.case0
+  read_0.dispatch1:
+    x64.jmp main.read_0.merge
+  read_0.case0:
+    x64.mov rax, [rbp-24]
+    x64.movsd xmm0, [rax+8]
+    x64.movsd [rbp-32], xmm0
+    x64.jmp main.read_0.merge
+  read_0.case1:
+    x64.movsd xmm0, [rip+__float_0]
+    x64.movsd [rbp-32], xmm0
+    x64.jmp main.read_0.merge
+  read_0.merge:
+    x64.movsd xmm0, [rbp-32]
+    x64.movsd xmm1, [rip+__float_0.25]
+    x64.ucomisd xmm0, xmm1
+    x64.jne main.exact_0.after
+    x64.jp main.exact_0.after
+  exact_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 7
+    x64.epilogue
+    x64.ret
+  exact_0.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Sample(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Sample.done
+  done:
+    x64.ret
+  }
+}
+---

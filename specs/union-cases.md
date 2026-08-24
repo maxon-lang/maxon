@@ -422,3 +422,33 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: union-payload.f32-ranged-float-payload-occupies-the-slot-as-a-double -->
+An `f32`-ranged alias is the only way to spell a 32-bit float — bare `float32` is not a type — and
+it changes nothing here: the slot is eight bytes and the value arrives already lowered as a double,
+so the slot is written and read at `f64` like any other float payload. Pinned because the lowering
+rule says so in words, and a rule stated in a comment cannot fail.
+```maxon
+typealias Tiny = float(f32.min to f32.max)
+
+union Sample
+	blank
+	measured(d Tiny)
+end 'Sample'
+
+function main() returns ExitCode
+	let v = 0.5 as Tiny
+	let s = Sample.measured(v)
+	let d = match s 'm'
+		blank gives 0.0
+		measured(x) gives x
+	end 'm'
+	if d == 0.5 'exact'
+		return 7
+	end 'exact'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```

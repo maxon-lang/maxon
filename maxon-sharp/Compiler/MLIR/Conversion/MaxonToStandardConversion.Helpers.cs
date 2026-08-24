@@ -617,6 +617,48 @@ public static partial class MaxonToStandardConversion {
   private static int UnionPayloadOffset(int slotIndex) =>
     UnionFirstPayloadOffset + slotIndex * UnionPayloadSlotSize;
 
+  /// <summary>
+  /// The type a union payload slot is written and read AS.
+  ///
+  /// ⭐ THE SLOT IS EIGHT BYTES WHATEVER IT HOLDS, SO THIS IS NOT A QUESTION ABOUT WIDTH — IT IS A
+  /// QUESTION ABOUT WHICH REGISTER FILE THE VALUE LIVES IN. Every non-float payload names `i64`: an
+  /// int, a heap pointer, and a narrowed scalar all occupy the whole slot, and a `bool` is stored
+  /// widened and converted back with `!= 0` at the read. A float is the exception, and the only one.
+  ///
+  /// ⚠ ALL THREE SITES — CONSTRUCT, EXTRACT AND WRITE-BACK — NAMED IT `i64` UNCONDITIONALLY, AND
+  /// THE FRONT END ACCEPTS A FLOAT PAYLOAD, so the refusal arrived from the far end of the pipeline
+  /// or not at all: the construct asked the register allocator for a general-purpose home for a
+  /// value that only ever had an xmm one (`E9001: RegisterManager: value %N has no register and no
+  /// stack home`) and the extract threw an unhandled `InvalidCastException` reported as `E9001 ...
+  /// Unable to cast StdI64 to StdF64` — both with a .NET stack trace, at the user.
+  ///
+  /// `maxon-selfhosted` reaches the same eight bytes by BITCASTING through an integer
+  /// (`Compiler/IR/Maxon/LowerMaxonToStd.maxon:12530`, which guards the identical three sites). It
+  /// is not needed here: <c>StdStoreIndirectOp</c>/<c>StdLoadIndirectOp</c> already carry a field
+  /// type and both targets already implement `f64` for it, so naming the type IS the lowering.
+  ///
+  /// ⚠ A FLOAT PAYLOAD IS `f64` WHATEVER ITS DECLARED RANGE, INCLUDING AN <c>f32</c>-RANGED ONE.
+  /// The slot is eight bytes, and `float(f32.min to f32.max)` — the only way to spell a 32-bit
+  /// float, since bare `float32` is not a type — is MEASURED to arrive here as an <c>StdF64</c>, so
+  /// naming the slot `f32` would be a four-byte answer to an eight-byte value that no program can
+  /// reach. It would also be a store x64 cannot emit: <c>RegisterManager.EmitStoreIndirect</c>
+  /// throws on `f32` where arm64's dispatch handles it, a cross-target gap this rule must not walk
+  /// into. Store and load therefore agree at `f64` for BOTH float kinds, which is what makes them
+  /// unable to disagree.
+  /// </summary>
+  private static IrType UnionPayloadSlotType(MaxonValueKind payloadKind) =>
+    payloadKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? IrType.F64 : IrType.I64;
+
+  /// <summary>
+  /// The same rule asked of an ALREADY-LOWERED payload, which is what the two STORE sites hold. A
+  /// <c>MaxonValue</c> cannot answer it — one <c>MaxonFloat</c> class serves both float widths — and
+  /// the union's DECLARED case payload is out of reach at a write-back, which carries a flat slot
+  /// index and no case name to read a type off. This only CLASSIFIES; which <c>IrType</c> follows
+  /// from that is the overload above's, once.
+  /// </summary>
+  private static IrType UnionPayloadSlotType(StdValue payload) =>
+    UnionPayloadSlotType(payload is StdF64 or StdF32 ? MaxonValueKind.Float : MaxonValueKind.Integer);
+
   /// True for a fused String type (conforms to BuiltinStringLiteral): a 48-byte record
   /// whose first 40 bytes are a __ManagedMemory, with singleByteGraphemesFlag at offset 40.
   private static bool IsFusedStringType(string? typeName) =>

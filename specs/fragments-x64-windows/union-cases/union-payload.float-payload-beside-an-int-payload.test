@@ -1,0 +1,178 @@
+// Test: union-payload.float-payload-beside-an-int-payload
+typealias Fraction = float(0.0 to 1000.0)
+typealias Integer = int(i64.min to i64.max)
+
+union Sample
+	counted(n Integer)
+	measured(d Fraction)
+end 'Sample'
+
+function main() returns ExitCode
+	let a = Sample.counted(5)
+	let b = Sample.measured(0.25)
+	let n = match a 'ma'
+		counted(v) gives v
+		measured gives 0
+	end 'ma'
+	let d = match b 'mb'
+		counted gives 0.0
+		measured(v) gives v
+	end 'mb'
+	if d == 0.25 'exact'
+		return n + 2
+	end 'exact'
+	return 1
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov rax, 5
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 7
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 5
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.movsd xmm0, [rip+__float_0.25]
+    x64.movsd [rbp-80], xmm0
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 7
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rsi, 1
+    x64.mov [rax+0], rsi
+    x64.movsd xmm0, [rbp-80]
+    x64.movsd [rax+8], xmm0
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r8, [rbp-8]
+    x64.mov r9, [r8+0]
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.mov [rbp-32], rax
+    x64.mov [rbp-40], r9
+    x64.mov rax, [rbp-40]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.je main.ma_0.case0
+  ma_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-40]
+    x64.cmp rcx, rax
+    x64.je main.ma_0.case1
+  ma_0.dispatch1:
+    x64.jmp main.ma_0.merge
+  ma_0.case0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-32], rcx
+    x64.jmp main.ma_0.merge
+  ma_0.case1:
+    x64.xor eax, eax
+    x64.mov [rbp-32], rax
+    x64.jmp main.ma_0.merge
+  ma_0.merge:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-48], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rcx+0]
+    x64.mov rbx, [rbp-16]
+    x64.mov [rbp-56], rbx
+    x64.movsd xmm0, [rip+__float_0]
+    x64.movsd [rbp-64], xmm0
+    x64.mov [rbp-72], rdx
+    x64.mov rsi, [rbp-72]
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
+    x64.je main.mb_0.case0
+  mb_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-72]
+    x64.cmp rcx, rax
+    x64.je main.mb_0.case1
+  mb_0.dispatch1:
+    x64.jmp main.mb_0.merge
+  mb_0.case0:
+    x64.movsd xmm0, [rip+__float_0]
+    x64.movsd [rbp-64], xmm0
+    x64.jmp main.mb_0.merge
+  mb_0.case1:
+    x64.mov rax, [rbp-56]
+    x64.movsd xmm0, [rax+8]
+    x64.movsd [rbp-64], xmm0
+    x64.jmp main.mb_0.merge
+  mb_0.merge:
+    x64.movsd xmm0, [rbp-64]
+    x64.movsd xmm1, [rip+__float_0.25]
+    x64.ucomisd xmm0, xmm1
+    x64.jne main.exact_0.after
+    x64.jp main.exact_0.after
+  exact_0:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-48]
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-80], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-80]
+    x64.epilogue
+    x64.ret
+  exact_0.after:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Sample(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Sample.done
+  done:
+    x64.ret
+  }
+}
+---

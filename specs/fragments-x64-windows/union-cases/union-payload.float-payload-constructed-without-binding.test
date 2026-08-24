@@ -1,0 +1,119 @@
+// Test: union-payload.float-payload-constructed-without-binding
+typealias Fraction = float(0.0 to 1000.0)
+typealias Reading = int(0 to 255)
+
+union Sample
+	blank
+	measured(d Fraction)
+end 'Sample'
+
+function take(s Sample) returns Reading
+	return match s 'm'
+		blank gives 1
+		measured gives 2
+	end 'm'
+end 'take'
+
+function main() returns ExitCode
+	return take(Sample.measured(0.5))
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @take(s: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.mov [rbp-24], rdx
+    x64.mov rax, [rbp-24]
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.je take.m_0.case0
+  m_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.je take.m_0.case1
+  m_0.dispatch1:
+    x64.jmp take.m_0.merge
+  m_0.case0:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp take.m_0.merge
+  m_0.case1:
+    x64.mov rax, 2
+    x64.mov [rbp-16], rax
+    x64.jmp take.m_0.merge
+  m_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov rdx, 255
+    x64.cmp rax, rdx
+    x64.jg take.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl take.__range_panic_0
+    x64.jmp take.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.movsd xmm0, [rip+__float_0.5]
+    x64.movsd [rbp-16], xmm0
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 5
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.movsd xmm0, [rbp-16]
+    x64.movsd [rax+8], xmm0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call take
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Sample(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Sample.done
+  done:
+    x64.ret
+  }
+}
+---

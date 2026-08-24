@@ -2153,6 +2153,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Track non-exported types/enums (only for types defined in this file).
     // Module-visible types are tracked separately so cross-file seeding can let
     // them through when the accessor is in scope.
+    //
+    // ⚠ This is the same three-way answer `ReachOfLocalType` gives, and it deliberately does NOT
+    // call it: "declared in this file" is asked of `module.TypeDefSourceFiles` here and of the
+    // parser's own registry there. They disagree in a module the token pre-scan never filled, where
+    // this loop is currently a no-op — routing it through the other reader would start populating
+    // these tables in that module and change what every reader of them decides.
     foreach (var (name, type) in _typeRegistry) {
       if ((type is IrStructType || type is IrEnumType || type is IrRangedPrimitiveType)
           && !_exportedTypes.Contains(name)
@@ -3763,6 +3769,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// The method an Equatable type is compared through.
   private const string EqualsMethodName = "equals";
 
+  /// The method a Hashable type is hashed through. Synthesized for every enum beside `equals`, so
+  /// the two are registered and rebuilt together.
+  private const string HashMethodName = "hash";
+
   /// <summary>
   /// After all types are pre-scanned, auto-add Cloneable conformance to structs
   /// whose fields are all Cloneable and to unions whose case payloads are all Cloneable.
@@ -3855,6 +3865,70 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// ⭐ HOW FAR A TYPE THIS FILE DECLARED REACHES, from THIS PARSER'S OWN RECORD OF THE DECLARATION.
+  ///
+  /// ⚠ IT DELIBERATELY DOES NOT READ THE MODULE'S <c>NonExportedTypeNames</c>/
+  /// <c>ModuleVisibleTypeNames</c>, THE WAY <see cref="IsTypeVisibleAcrossFiles"/> DOES, AND THE
+  /// DIFFERENCE IS MEASURED. One source file is parsed into MORE THAN ONE module instance and only
+  /// some of them have had the token pre-scan fill those tables: for `module type Crate` the two
+  /// registrations of `feature.Crate.clone` read `Subtree` and then `Program`, from the same
+  /// declaration in the same file, differing only in which module they were handed
+  /// (`ModuleVisibleTypeNames.Count` 1 and 0). The LAST registration is the one that survives, so
+  /// the tables answer whichever way the passes happen to fall. `_exportedTypes` and
+  /// `_moduleVisibleTypes` are filled by this parser's own pre-scan and read the same every pass.
+  ///
+  /// A name with no declaration recorded HERE reaches the whole program: that is a tuple or a
+  /// generic instance (whose cloners <see cref="Passes.CloneSynthesisPass"/> builds after parsing
+  /// anyway), and every stdlib type, which is seeded into every parser whatever its declaration says.
+  ///
+  /// ⚠ BARE-NAME-KEYED: pass the TYPE's name, never a member's. `Crate` reaches; the member
+  /// registered for it is `feature.Crate.clone`.
+  /// </summary>
+  private AliasReach ReachOfLocalType(string typeName) {
+    if (_isStdlib || _exportedTypes.Contains(typeName) || _exportedTypeAliases.Contains(typeName))
+      return AliasReach.Program;
+    if (_moduleVisibleTypes.Contains(typeName)) return AliasReach.Subtree;
+
+    // `_locallyDefinedTypes` is NOT the test: it is filled by the STRUCT pre-scan only, so a union
+    // declared right here reads false in it. The registry entry's own source file covers both.
+    return _typeRegistry.TryGetValue(typeName, out var declared)
+        && declared.SourceFilePath == _sourceFilePath
+      ? AliasReach.File
+      : AliasReach.Program;
+  }
+
+  /// <summary>
+  /// Register a member NOBODY WROTE — `clone`, `equals`, `hash` — on behalf of the type declared as
+  /// <paramref name="typeName"/>, and give it that type's own visibility.
+  ///
+  /// ⭐ IT IS THE ONE PLACE THAT DECISION IS MADE, and it has to be, because a synthesized member is
+  /// registered TWICE: once as a body-less stub during pre-scan, so a call to it can resolve, and
+  /// again when its body is built, which REPLACES the stub with a fresh function. A flag set only on
+  /// the stub is dropped by the rebuild.
+  ///
+  /// ⚠ REGISTERED WITH NEITHER FLAG — which is what all six sites did — A SYNTHESIZED MEMBER IS
+  /// FILE-PRIVATE, and <see cref="IsFunctionVisible"/> refused `h.clone()` one file over with
+  /// `E3008 ... is not exported` for a type whose whole declaration says `export`. The operator did
+  /// not agree with the method: `a == b` reaches the same `equals` symbol through a direct call that
+  /// asks no visibility question, so it compiled and ran over the identical pair. `maxon-selfhosted`
+  /// settles which of the two is right — it rewrites a struct `==` into a `methodCall` of `equals`
+  /// with no field-wise fallback, so they are ONE call — and settles the visibility the same way,
+  /// reading `let visibility = st.visibility` off the declaring struct
+  /// (<c>Compiler/Parser.maxon:19735</c>).
+  /// </summary>
+  private IrFunction<MaxonOp> AddSynthesizedMember(IrModule<MaxonOp> module, string typeName,
+      string memberName, List<string> paramNames, List<IrType> paramTypes, IrType returnType) {
+    var reach = ReachOfLocalType(typeName);
+    var func = new IrFunction<MaxonOp>(memberName, paramNames, paramTypes, returnType, null) {
+      SourceFilePath = _sourceFilePath,
+      IsExported = reach == AliasReach.Program,
+      IsModuleVisible = reach == AliasReach.Subtree
+    };
+    module.AddFunction(func);
+    return func;
+  }
+
+  /// <summary>
   /// Pre-register a stub clone() method for an auto-Cloneable type. The BODY arrives later — in
   /// <see cref="ParseTypeDecl"/> for a struct and <see cref="ParseEnumDecl"/> for a union — and a
   /// stub without one would let `x.clone()` resolve to a symbol the backend never defines.
@@ -3863,10 +3937,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var cloneName = $"{QualifiedInNamespace(typeName)}.{ManagedElementCopy.CloneMethodName}";
     if (module.FindFunctionByExactName(cloneName) != null) return;
 
-    module.AddFunction(new IrFunction<MaxonOp>(
-      cloneName, [CloneBodySynthesis.SelfParamName], [selfType], selfType, null) {
-      SourceFilePath = _sourceFilePath
-    });
+    AddSynthesizedMember(module, typeName, cloneName,
+      [CloneBodySynthesis.SelfParamName], [selfType], selfType);
   }
 
   /// The name a type declared in this file is registered under — its own, or the enclosing
@@ -3884,10 +3956,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var equalsName = $"{QualifiedInNamespace(typeName)}.{EqualsMethodName}";
     if (module.FindFunctionByExactName(equalsName) != null) return;
 
-    module.AddFunction(new IrFunction<MaxonOp>(
-      equalsName, ["self", "other"], [selfType, selfType], IrType.I1, null) {
-      SourceFilePath = _sourceFilePath
-    });
+    AddSynthesizedMember(module, typeName, equalsName,
+      ["self", "other"], [selfType, selfType], IrType.I1);
   }
 
   private void ValidateWhereConstraints(
@@ -4871,24 +4941,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? enumName : $"{namespace_}.{enumName}";
 
     // hash() -> int
-    var hashName = $"{qualifiedTypeName}.hash";
-    if (module.FindFunctionByExactName(hashName) == null) {
-      var hashFunc = new IrFunction<MaxonOp>(
-        hashName, ["self"], [(IrType)enumType], IrType.I64, null) {
-        SourceFilePath = _sourceFilePath
-      };
-      module.AddFunction(hashFunc);
-    }
+    var hashName = $"{qualifiedTypeName}.{HashMethodName}";
+    if (module.FindFunctionByExactName(hashName) == null)
+      AddSynthesizedMember(module, enumName, hashName, ["self"], [(IrType)enumType], IrType.I64);
 
     // equals(other Self) -> bool
     var equalsName = $"{qualifiedTypeName}.{EqualsMethodName}";
-    if (module.FindFunctionByExactName(equalsName) == null) {
-      var equalsFunc = new IrFunction<MaxonOp>(
-        equalsName, ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1, null) {
-        SourceFilePath = _sourceFilePath
-      };
-      module.AddFunction(equalsFunc);
-    }
+    if (module.FindFunctionByExactName(equalsName) == null)
+      AddSynthesizedMember(module, enumName, equalsName,
+        ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1);
   }
 
   /// <summary>
@@ -7314,11 +7375,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (stub == null || stub.Body.Blocks.Count > 0) return;
 
     module.RemoveFunction(stub);
-    var cloneFunc = new IrFunction<MaxonOp>(
-      cloneName, [CloneBodySynthesis.SelfParamName], [selfType], selfType, null) {
-      SourceFilePath = _sourceFilePath
-    };
-    module.AddFunction(cloneFunc);
+    var cloneFunc = AddSynthesizedMember(module, typeName, cloneName,
+      [CloneBodySynthesis.SelfParamName], [selfType], selfType);
 
     // A member type may live in a different namespace than the type being synthesized (a
     // `Testing/` struct with a `String` field clones through `stdlib.String.clone`, not
@@ -7343,11 +7401,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (equalsFunc.Body.Blocks.Count > 0) return;
 
     module.RemoveFunction(equalsFunc);
-    equalsFunc = new IrFunction<MaxonOp>(
-      equalsName, ["self", "other"], [(IrType)structType, (IrType)structType], IrType.I1, null) {
-      SourceFilePath = _sourceFilePath
-    };
-    module.AddFunction(equalsFunc);
+    equalsFunc = AddSynthesizedMember(module, typeName, equalsName,
+      ["self", "other"], [(IrType)structType, (IrType)structType], IrType.I1);
     var block = equalsFunc.Body.AddBlock("entry");
 
     var selfParam = new MaxonStructParamOp(0, "self", typeName);
@@ -7432,14 +7487,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     else throw new InvalidOperationException($"Unsupported enum backing type for Hashable: {enumType.BackingType}");
 
     // --- hash() ---
-    var hashName = $"{qualifiedTypeName}.hash";
+    var hashName = $"{qualifiedTypeName}.{HashMethodName}";
     var hashFunc = module.FindFunctionByExactName(hashName)
       ?? throw new InvalidOperationException($"Expected hash stub for {qualifiedTypeName}");
     module.RemoveFunction(hashFunc);
-    hashFunc = new IrFunction<MaxonOp>(hashName, ["self"], [(IrType)enumType], IrType.I64, null) {
-      SourceFilePath = _sourceFilePath
-    };
-    module.AddFunction(hashFunc);
+    hashFunc = AddSynthesizedMember(module, enumName, hashName,
+      ["self"], [(IrType)enumType], IrType.I64);
     var hashBlock = hashFunc.Body.AddBlock("entry");
 
     // self param
@@ -7465,7 +7518,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // Call backingType.hash(hashValue)
-    var hashCall = new MaxonCallOp($"{backingTypeName}.hash", [hashValue], MaxonValueKind.Integer);
+    var hashCall = new MaxonCallOp($"{backingTypeName}.{HashMethodName}", [hashValue], MaxonValueKind.Integer);
     hashBlock.AddOp(hashCall);
     hashBlock.AddOp(new MaxonScopeEndOp(scopeEndVars));
     hashBlock.AddOp(new MaxonReturnOp(hashCall.Result));
@@ -7475,10 +7528,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var equalsFunc = module.FindFunctionByExactName(equalsName)
       ?? throw new InvalidOperationException($"Expected equals stub for {qualifiedTypeName}");
     module.RemoveFunction(equalsFunc);
-    equalsFunc = new IrFunction<MaxonOp>(equalsName, ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1, null) {
-      SourceFilePath = _sourceFilePath
-    };
-    module.AddFunction(equalsFunc);
+    equalsFunc = AddSynthesizedMember(module, enumName, equalsName,
+      ["self", "other"], [(IrType)enumType, (IrType)enumType], IrType.I1);
     var equalsBlock = equalsFunc.Body.AddBlock("entry");
 
     var selfParam2 = new MaxonEnumParamOp(0, "self", enumName, useTag ? MaxonValueKind.Integer : backingKind);
