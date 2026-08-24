@@ -202,16 +202,33 @@ public static class LiteralCoverageAnalysisPass {
     private sealed class FuncCtx {
       public required IrFunction<MaxonOp> Func;
       public readonly List<CallSite> Calls = [];
-      // Nodes mutated regardless of interprocedural facts.
-      public readonly List<int> IntrinsicSinks = [];
-      public readonly List<int> IndirectSinks = [];
-      // The same marks, split by whether a materialise could be put in FRONT of them. A write whose
-      // receiver this pass can name is placeable; an escape into a heap place is not, and neither is
-      // an indirect/closure/async capture (IndirectSinks, which is unplaceable in its entirety).
-      // Every mark lands in exactly one of these, because MarkMutated is private to the two entry
-      // points that classify — there is no way to mark a component without saying which it is.
+      // Every node this body marks mutated, split by whether a materialise could be put in FRONT of
+      // whatever marked it. A write whose receiver this pass can name is placeable; an escape into a
+      // heap place is not, and neither is an indirect/closure/async capture (unplaceable in its
+      // entirety). THE MUTATED SET IS EXACTLY THESE THREE LISTS — see MutatedNodes — so a mark that
+      // did not classify itself is not a mark at all, rather than one PlanMaterialise cannot see.
+      //
+      // ⛔ It was the second thing, and that is a wrong ANSWER under materialise-at-the-write, not a
+      // lost optimization. A separate `IntrinsicSinks` list fed the mutated set while an array
+      // literal's element slots were appended straight to it, reaching neither of the plan's checks:
+      // MEASURED, `var s = Inner.create(); let arr = [s]; s.push(7)` rebound `s` and left the slot
+      // holding the shared empty record, so reading the array back answered 0 elements where the
+      // language says 1 — silently, exit 0. A comment here asserted the invariant that line broke.
       public readonly List<(int Node, MaxonOp Op, MaxonValue Receiver)> PlaceableWrites = [];
       public readonly List<int> UnplaceableSinks = [];
+      public readonly List<int> IndirectSinks = [];
+
+      /// The component roots this body mutates, before the interprocedural facts are folded in. It
+      /// is a VIEW of the three lists rather than a fourth one, which is what makes "every mark is
+      /// classified" a property of the code instead of a claim about it.
+      public IEnumerable<int> MutatedNodes {
+        get {
+          foreach (var (node, _, _) in PlaceableWrites) yield return node;
+          foreach (var node in UnplaceableSinks) yield return node;
+          foreach (var node in IndirectSinks) yield return node;
+        }
+      }
+
       // Value ids that sit DIRECTLY in a sink position — used for reason attribution.
       public readonly HashSet<int> IntrinsicSinkValueIds = [];
       public readonly HashSet<int> IndirectSinkValueIds = [];
@@ -366,13 +383,18 @@ public static class LiteralCoverageAnalysisPass {
           // IsMutable guard). A managed array in a mutable global is instead caught by the
           // GlobalStore sink below, so it needs no special case here.
           if (sl.ArrayLiteralTag != null) {
-            // An array literal's ELEMENTS are stored into the array at construction, which is the same
-                  // escape a `set` is (see AddEscapeSink) — `["red","green"].get(0).append("!")`
-            // grew the shared literal and made an untouched `let r = "red"` read "red!". The elements
+            // An array literal's ELEMENTS are stored into the array at construction, which is the
+            // same escape a `set` is (see AddEscapeSink) — `["red","green"].get(0).append("!")` grew
+            // the shared literal and made an untouched `let r = "red"` read "red!". The elements
             // reach the block as assigns to `<tag>.<i>` variables, so the SLOT is what gets sunk; a
             // primitive element's slot costs nothing, since a primitive is never a literal site.
+            //
+            // It goes in UNPLACEABLE, like every other store into a place, and for the same reason:
+            // the slot now holds the record, and a rebind reaches the BINDING, never the slot. The
+            // slot is a variable with no SSA value of its own, so it is added by node rather than
+            // through AddEscapeSink — the list is the classification, so this is the same statement.
             for (int slot = 0; slot < sl.ArrayLiteralCount; slot++) {
-              ctx.IntrinsicSinks.Add(VarNode(f.Name, $"{sl.ArrayLiteralTag}.{slot}"));
+              ctx.UnplaceableSinks.Add(VarNode(f.Name, $"{sl.ArrayLiteralTag}.{slot}"));
             }
 
             bool constMutableGlobal =
@@ -442,21 +464,12 @@ public static class LiteralCoverageAnalysisPass {
       }
     }
 
-    /// Mark a value's component mutated. PRIVATE on purpose: every mark must also be classified as
-    /// placeable or not (see FuncCtx.PlaceableWrites), and a caller that could mark without saying
-    /// which would leave a component looking fully placeable when it is not — which under
-    /// materialise-at-the-write is a silent write through a shared record, not a lost optimization.
-    private void MarkMutated(FuncCtx ctx, int valueId) {
-      ctx.IntrinsicSinks.Add(ValueNode(valueId));
-      ctx.IntrinsicSinkValueIds.Add(valueId);
-    }
-
     /// A WRITE through <paramref name="receiver"/>, performed by <paramref name="op"/>. The receiver
     /// is a value this pass can name, so the lowering could rebind it to a private record immediately
     /// before the op rather than the site having to be refused outright.
     private void AddWriteSink(FuncCtx ctx, MaxonOp op, MaxonValue receiver) {
-      MarkMutated(ctx, receiver.Id);
       ctx.PlaceableWrites.Add((ValueNode(receiver.Id), op, receiver));
+      ctx.IntrinsicSinkValueIds.Add(receiver.Id);
     }
 
     /// A managed value STORED INTO A HEAP PLACE — a struct field, a container slot, a mutable global —
@@ -493,8 +506,8 @@ public static class LiteralCoverageAnalysisPass {
     }
 
     private void AddEscapeSink(FuncCtx ctx, int valueId) {
-      MarkMutated(ctx, valueId);
       ctx.UnplaceableSinks.Add(ValueNode(valueId));
+      ctx.IntrinsicSinkValueIds.Add(valueId);
     }
 
     private PlanIndex PlanIndexFor(FuncCtx ctx) {
@@ -660,8 +673,7 @@ public static class LiteralCoverageAnalysisPass {
 
       // Collect the roots of every mutated component.
       var mutatedRoots = new HashSet<int>();
-      foreach (var n in ctx.IntrinsicSinks) mutatedRoots.Add(Find(n));
-      foreach (var n in ctx.IndirectSinks) mutatedRoots.Add(Find(n));
+      foreach (var n in ctx.MutatedNodes) mutatedRoots.Add(Find(n));
       foreach (var call in ctx.Calls) {
         if (_mutatingParams.TryGetValue(call.Callee, out var mp)) {
           foreach (var i in mp) {
@@ -695,8 +707,7 @@ public static class LiteralCoverageAnalysisPass {
     private (HashSet<int> mutatedRoots, HashSet<int> mutatingParamSinkValueIds) FinalMutation(FuncCtx ctx) {
       var mutatedRoots = new HashSet<int>();
       var mpSinkValueIds = new HashSet<int>();
-      foreach (var n in ctx.IntrinsicSinks) mutatedRoots.Add(Find(n));
-      foreach (var n in ctx.IndirectSinks) mutatedRoots.Add(Find(n));
+      foreach (var n in ctx.MutatedNodes) mutatedRoots.Add(Find(n));
       foreach (var call in ctx.Calls) {
         if (_mutatingParams.TryGetValue(call.Callee, out var mp)) {
           foreach (var i in mp) {

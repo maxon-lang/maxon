@@ -39,6 +39,52 @@ public static partial class MaxonToStandardConversion {
 		int TagIndex, int Length, long Capacity, int ElementSize, bool IsString, bool SingleByteGraphemes,
 		string[]? ElementLabels = null);
 
+	// The IrType a static record's .data blob is declared with. One spelling, because the emitter
+	// matches on it to place the blob.
+	private const string StaticRecordBlobTypeName = "__StaticLiteralRecord";
+
+	/// What one static record HOLDS — the ONLY thing that differs between the four kinds of them, and
+	/// therefore the only thing InternStaticRecord takes. Everything else about a record (where its
+	/// blob is, how big it is, what type tag it carries, that it is memoized and materialized at all)
+	/// is the same for a string, a constant array, a managed-element array and an empty container.
+	private readonly record struct StaticRecordContents(
+		string? RdataLabel, int Length, long Capacity, int ElementSize,
+		bool IsString = false, bool SingleByteGraphemes = false, string[]? ElementLabels = null);
+
+	/// Mint the ONE shared immortal record for <paramref name="key"/>: its .data blob global, its
+	/// size, its type tag, the module-init request that fills it, and the memo that makes a second
+	/// sight of the same key reuse it. Returns the blob's label.
+	///
+	/// ⚠ EVERY static-record lowering ends here, and that is what it is for. Sized, tagged, memoized
+	/// and requested once per KIND, a fifth kind that omitted one of those would not fail to compile,
+	/// and none of the three omissions is a lost optimization: a missing memo mints a record per SITE,
+	/// so two spellings of one literal quietly stop being the same value; a missing materialization
+	/// request leaves a blob whose refcount is 0 rather than immortal, and the first decref FREES it —
+	/// a .data address handed to the allocator; a size computed the other way puts the record's fields
+	/// somewhere the header is not.
+	///
+	/// Callers ask <c>_staticRecordLabels</c> themselves first and only reach here on a MISS, so
+	/// nothing a miss costs — an rdata id, a blob, a tag — is paid on the common path where the
+	/// literal is already interned. <paramref name="extraBytes"/> is what the record carries PAST its
+	/// own fields: an inline element pointer table, and nothing else today.
+	private static string InternStaticRecord(
+	  (string Signature, string TypeName) key, IrModule<StandardOp> result, int extraBytes,
+	  StaticRecordContents contents) {
+
+		var globalLabel = $"__static_lit_{_nextStaticLiteralId++}";
+		int recordSize = FusedManagedRecordSize(key.TypeName);
+		int allocSize = Rt.MmHeaderSize + recordSize + extraBytes;
+		// A raw, zero-initialized .data blob (writable — its buffer field is fixed up at init).
+		result.Globals.Add(new IrGlobal(globalLabel, new IrType(StaticRecordBlobTypeName, allocSize)));
+
+		_staticLiteralRecords!.Add(new StaticLiteralRecord(
+			globalLabel, contents.RdataLabel, recordSize, allocSize, EnsureTagIndex(key.TypeName),
+			contents.Length, contents.Capacity, contents.ElementSize,
+			contents.IsString, contents.SingleByteGraphemes, contents.ElementLabels));
+		_staticRecordLabels![key] = globalLabel;
+		return globalLabel;
+	}
+
 	/// Reset the static-literal state for a fresh module lowering, seeding the eligibility set
 	/// computed by LiteralCoverageAnalysisPass (a sound lower bound; null when the pass did not run).
 	private static void ResetStaticLiteralState(HashSet<int>? eligible) {
@@ -145,17 +191,8 @@ public static partial class MaxonToStandardConversion {
 		var rdataLabel = $"__{rdataPrefix}_{NextRdataId()}";
 		var (label, byteLen) = InternRdataLiteral(value, rdataLabel, result, encoding);
 
-		var globalLabel = $"__static_lit_{_nextStaticLiteralId++}";
-		int recordSize = FusedManagedRecordSize(typeName);
-		int allocSize = Rt.MmHeaderSize + recordSize;
-		// A raw, zero-initialized .data blob (writable — its buffer field is fixed up at init).
-		result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
-
-		_staticLiteralRecords!.Add(new StaticLiteralRecord(
-			globalLabel, label, recordSize, allocSize, EnsureTagIndex(typeName), byteLen,
-			MmCapacityRdata, /*elementSize*/ 1, isString, singleByteGraphemes));
-		_staticRecordLabels[key] = globalLabel;
-		return globalLabel;
+		return InternStaticRecord(key, result, extraBytes: 0, new StaticRecordContents(
+			label, byteLen, MmCapacityRdata, /*elementSize*/ 1, isString, singleByteGraphemes));
 	}
 
 	/// Materialize a static record's user pointer (= &blob + MmHeaderSize, past the header, exactly
@@ -241,14 +278,8 @@ public static partial class MaxonToStandardConversion {
 		if (!_staticRecordLabels!.TryGetValue(key, out var globalLabel)) {
 			var rdataLabel = $"__sarr_{NextRdataId()}";
 			result.RdataEntries.Add((rdataLabel, packed, alignment));
-			globalLabel = $"__static_lit_{_nextStaticLiteralId++}";
-			int recordSize = FusedManagedRecordSize(typeName);
-			int allocSize = Rt.MmHeaderSize + recordSize;
-			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
-			_staticLiteralRecords!.Add(new StaticLiteralRecord(
-				globalLabel, rdataLabel, recordSize, allocSize, EnsureTagIndex(typeName),
-				info.Values.Length, MmCapacityRdata, elementSize, /*isString*/ false, /*singleByteGraphemes*/ false));
-			_staticRecordLabels[key] = globalLabel;
+			globalLabel = InternStaticRecord(key, result, extraBytes: 0, new StaticRecordContents(
+				rdataLabel, info.Values.Length, MmCapacityRdata, elementSize));
 		}
 
 		return EmitStaticRecordUserPtr(globalLabel, typeName, resultId, "sarr", block, varTypes, temps, inlineTarget);
@@ -271,15 +302,11 @@ public static partial class MaxonToStandardConversion {
 		// Intern by (element-label signature, typeName): arrays of the same literals share one record.
 		var key = (string.Join(",", elementLabels), typeName);
 		if (!_staticRecordLabels!.TryGetValue(key, out var globalLabel)) {
-			globalLabel = $"__static_lit_{_nextStaticLiteralId++}";
-			int recordSize = FusedManagedRecordSize(typeName);   // 40 for an Array
-			int allocSize = Rt.MmHeaderSize + recordSize + elementLabels.Length * StaticManagedElementSize;
-			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
-			_staticLiteralRecords!.Add(new StaticLiteralRecord(
-				globalLabel, /*rdataLabel*/ null, recordSize, allocSize, EnsureTagIndex(typeName),
-				elementLabels.Length, /*capacity*/ elementLabels.Length, StaticManagedElementSize,
-				/*isString*/ false, /*singleByteGraphemes*/ false, elementLabels));
-			_staticRecordLabels[key] = globalLabel;
+			globalLabel = InternStaticRecord(
+				key, result, extraBytes: elementLabels.Length * StaticManagedElementSize,
+				new StaticRecordContents(
+					/*rdataLabel*/ null, elementLabels.Length, /*capacity*/ elementLabels.Length,
+					StaticManagedElementSize, ElementLabels: elementLabels));
 		}
 		_staticLiteralLabelByResultId![resultId] = globalLabel;
 		return EmitStaticRecordUserPtr(globalLabel, typeName, resultId, "smarr", block, varTypes, temps, inlineTarget);
@@ -304,17 +331,11 @@ public static partial class MaxonToStandardConversion {
 
 		var key = ($"empty:{info.ElementSize}", info.TypeName);
 		if (!_staticRecordLabels!.TryGetValue(key, out var globalLabel)) {
-			globalLabel = $"__static_lit_{_nextStaticLiteralId++}";
-			int recordSize = FusedManagedRecordSize(info.TypeName);
-			int allocSize = Rt.MmHeaderSize + recordSize;
-			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
 			// Capacity 0, not MmCapacityRdata: `capacity()` is a READ a program can make, and an empty
 			// container built by the factory answers 0. The sentinel is for a record borrowing bytes it
 			// must not free — this one borrows nothing, and never reaches a free either way (immortal).
-			_staticLiteralRecords!.Add(new StaticLiteralRecord(
-				globalLabel, /*rdataLabel*/ null, recordSize, allocSize, EnsureTagIndex(info.TypeName),
-				/*length*/ 0, /*capacity*/ 0, info.ElementSize, /*isString*/ false, /*singleByteGraphemes*/ false));
-			_staticRecordLabels[key] = globalLabel;
+			globalLabel = InternStaticRecord(key, result, extraBytes: 0, new StaticRecordContents(
+				/*rdataLabel*/ null, /*length*/ 0, /*capacity*/ 0, info.ElementSize));
 		}
 		// Deliberately NOT recorded in _staticLiteralLabelByResultId: that map exists so a
 		// managed-element array literal can point its inline table at its elements' static records,

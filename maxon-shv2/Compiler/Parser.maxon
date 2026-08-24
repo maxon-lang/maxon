@@ -2400,6 +2400,13 @@ typealias PendingDefaultHelperArray = Array with PendingDefaultHelper
 // written in two files' worth of places, and it goes stale in exactly this direction.
 let sharedEmptyPendingDefaultHelpers = PendingDefaultHelperArray.create()
 
+// ⚠ **IT IS A FREE FUNCTION, NOT TWO LINES INSIDE THE WALK, AND THE REASON IS A COMPILER SHAPE RATHER
+// THAN ANYTHING ABOUT DEFAULTS.** Reassigning the walk's own enclosing binding from INSIDE a branch
+// leaves that binding undefined on the merge path — `E9001 … does not dominate` — so the fresh array has
+// to be produced by something the branch merely CALLS. The reason was written on `materializedParamSites`
+// until W202 deleted that helper; it lives here now because this is the last place that obeys it.
+// (Its predecessor `materializedParamAliasNames` blamed the padding loop it happened to contain; the loop
+// was incidental, the reassignment-in-a-branch is the shape.)
 function materializedPendingDefaultHelpers(pending PendingDefaultHelperArray) returns PendingDefaultHelperArray
 	if pending is sharedEmptyPendingDefaultHelpers 'firstDefault'
 		return PendingDefaultHelperArray.create()
@@ -24694,11 +24701,12 @@ export type Parser
 	// arguments on the type where every other door already reads them.
 	//
 	// ⚠ The walk's list is allocated up front and COLLAPSED to the shared empty when nothing claimed, rather
-	// than materialized copy-on-write the way `rangedParamSites` does it. The reason is `materializedParamSites`'
-	// own header: reassigning the walk's binding from inside a branch is the measured `E9001 … does not
-	// dominate` shape, and the claim here is discovered inside an `if let` that no `continue` guard can flatten
-	// without asking `declaredExistentialInstanceAt` twice. The cost is one empty array per parsed function,
-	// which is strictly less than the full-length column `paramAggregateNamesOf` builds beside it.
+	// than materialized copy-on-write. Copy-on-write would mean reassigning the walk's own binding from
+	// inside a branch, which is the measured `E9001 … does not dominate` shape — see
+	// `materializedPendingDefaultHelpers`, the one helper still built around it — and the claim here is
+	// discovered inside an `if let` that no `continue` guard can flatten without asking
+	// `declaredExistentialInstanceAt` twice. The cost is one empty array per parsed function, which is
+	// strictly less than the full-length column `paramAggregateNamesOf` builds beside it.
 	function paramExistentialSitesOf(paramTypes MaxonTypeArray, paramTypeStarts TokenIndexColumn) returns ParamExistentialSiteArray
 		var sites = ParamExistentialSiteArray.create()
 		for i in 0 upto paramTypes.count() 'eachParam'

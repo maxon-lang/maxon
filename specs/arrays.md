@@ -732,6 +732,41 @@ end 'main'
 11
 ```
 
+<!-- test: empty-array-in-an-array-literal-slot-is-not-rebound -->
+A second handle does not have to be a NAME. An array literal's element slot holds the very same
+record, so once an empty array is written into one, a rebind of the local would reach the local and
+leave the slot reading an array that is no longer the one the local names. `held` must report the
+element that WAS written, and the untouched build must still report none.
+```maxon
+typealias Score = int(-1000 to 1000)
+typealias Inner = Array with Score
+typealias Outer = Array with Inner
+
+function build(flag bool) returns Outer
+	var s = Inner.create()
+	let held = [s]
+	if flag 'f'
+		s.push(7)
+	end 'f'
+	return held
+end 'build'
+
+function main() returns ExitCode
+	let written = build(true)
+	let untouched = build(false)
+	let a = try written.get(0) otherwise Inner.create()
+	let b = try untouched.get(0) otherwise Inner.create()
+	print("held={a.count()} untouched={b.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+held=1 untouched=0
+```
+
 <!-- test: empty-array-written-in-a-loop-stays-correct -->
 The rebind happens in front of the write, so a loop that writes many times materialises once and
 appends to the record it owns from then on — the second and later writes find a record that is no
