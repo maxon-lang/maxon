@@ -1,0 +1,648 @@
+// InlineManagedPrimitives — a Std→Std pass that expands the FAST PATH of the five hottest
+// `__ManagedMemory` element primitives AT THEIR CALL SITES, and leaves the call itself — verbatim, on a
+// slow arm — to serve every other case.
+//
+// ⭐⭐ **WHY A PASS AND NOT MERELY A CHEAPER RUNTIME BODY.** The runtime bodies are shared, target-neutral
+// Std graphs, and a shared body is reached by a CALL: the `__gt_morestack` prologue check, the frame push
+// and pop, the argument moves, the `call` and the `ret`. MEASURED 2026-08-25 (EC0's instrument —
+// `scripts/self-host-ab.sh` + `scripts/sample_profile.py`): the compiler shv2 EMITS runs the identical
+// self-compile **1.8× slower** than the bootstrap-emitted one, and ~40% of stage-2's samples sit in these
+// bodies — `__managed_mem_set` 21%, `__managed_get` 10.8%, `__managed_cow_detach` 4.1%, `__managed_set`
+// 3.5%. That is ~25 instructions of protocol around a ~10-instruction fast path, paid per ELEMENT ACCESS,
+// and **no body can make it cheaper because it is not in the body.** The bootstrap emits the same fast
+// paths inline (`maxon-sharp/Compiler/MLIR/Conversion/MaxonToStandardConversion.ManagedMemory.cs`,
+// `LowerManagedMemGet` :246-396 / `LowerManagedMemSet` :604-682); this is shv2's answer to the same
+// question, one tier down and shared by every backend.
+//
+// ⛔⛔ **THE PASS RE-DERIVES NOTHING. EVERY TEST IT EMITS IS THE RUNTIME'S OWN EXPORTED EMITTER** —
+// `emitIndexOutOfRange`, `emitBufferNotOwned`, `emitIsSharedAllocation`, `emitSlotAddr`, `emitLoadField`,
+// `emitCmp`, `emitConst`. A hand-copied arm is the drifting checklist `buildManagedCowDetach`'s header
+// rejects, and it has already been measured wrong once in this exact family: R4.4's hand-written
+// `capacity < 0` stood in for `__managed_cow_detach`'s TWO arms, so a `setByte` through the owner of a
+// VIEWED buffer wrote straight through the sharing — **198 where the answer is 110**
+// (`managed-memory-methods.set-byte-through-a-viewed-owner-detaches-first`). What this pass adds is the
+// ROUTING, never a predicate.
+//
+// ⭐⭐ **THE SLOW ARM IS THE ORIGINAL CALL, MOVED — NOT A RE-IMPLEMENTATION.** Every refusal, every throw,
+// every COW detach, every element destructor and the whole packed/narrow-stride world stay exactly where
+// they are. The pass never DECIDES anything: it emits a chain of preconditions and, on the first one that
+// does not hold, hands control to the untouched call. So the answer this compiler produces is the runtime's
+// answer for every input, and the only thing a fast arm can be wrong about is *taking itself when it should
+// not have* — which is why each precondition below is the runtime's own emitter and nothing else.
+//
+// ⭐ **EVERY PRECONDITION IS PURE AND FAULT-FREE, WHICH IS WHY THEIR ORDER IS FREE — WITH ONE EXCEPTION
+// THAT IS NOT.** The tests are field loads off a record the caller already holds plus compares, so
+// reordering them cannot change what the program does. The exception is `emitIsSharedAllocation`, which
+// reads the allocation HEADER below `buffer@0` — an interior pointer has none, and a null buffer has no
+// address at all — so it is reached only after `emitBufferNotOwned` and the `buffer != 0` test, in exactly
+// `__managed_cow_detach`'s own arm order. That ordering is a REQUIREMENT, not a preference.
+//
+// ⚠ **WHERE IT IS SCHEDULED, AND WHY IT IS NOT WHERE IT WAS FIRST PLANNED (EC1-b).** It runs AFTER
+// `insertRangeChecks` and before `pruneDeadBlockArgs`/`foldConstOperands`. Before the range checks it
+// CANNOT go: a range-check site is recorded as `(blockId, stdOpPos)` in the coordinate space
+// `lowerMaxonToStd` left the block in (`RangeCheckSite.stdOpPos`, `Project.maxon`), and this pass SPLITS
+// blocks and removes an op from one — so every site recorded past a split point would either land in a
+// block that no longer holds it or trip `guardSiteAt`'s own `pastTheBlock` panic. Running after costs
+// nothing and keeps that coordinate space untouched. Before `foldConstOperands` it must go, and that half
+// of the plan stands: every bound and stride this pass emits is a `const`, and the fold is what turns them
+// into `cmpImm`/`binOpImm` operands so they never occupy a register in the loops this pass makes hotter.
+//
+// ⚠ **REGISTER PRESSURE IS THE COST, AND IT IS PAID IN THE LOOPS THE ALLOCATOR REFUSES TO SPILL.** Each
+// fast arm holds a handful of values live across its guard chain. They are kept to the minimum that is
+// still one spelling: the stride constant is re-minted in the block that uses it rather than carried from
+// the block that compared against it (the fold deletes both), and `element_size@24` dies at its own test.
+// The values that genuinely span the region are the call's own arguments, which were live across the call
+// this replaces.
+
+// The element stride these fast arms are the whole of: ONE MACHINE WORD. `element_size@24` is SIGNED and
+// runtime-valued — a byte stride when positive, `-(bits per element)` when the elements are sub-byte packed
+// (`ManagedMemoryRuntime`'s header) — so a straight `loadIndirect`/`storeIndirect i64` is the complete
+// answer for exactly this one stamp and for no other. Every other stride (1, 2, 4, and every packed one)
+// goes to the runtime, whose `emitLoadElemAt`/`emitStoreElemAt` own that arithmetic and its zero-extension
+// rules.
+//
+// DERIVED from `LayoutDescriptor.MachineWordBytes` — the owner of "how wide is a value with no narrower
+// home" — rather than written as an 8 beside it, because the stamp this compares against IS that width:
+// `ProgramSignatures.arrayElementSize` stamps `element_size@24` off the same ladder.
+let WordElementStride = MachineWordBytes as ParsedInt
+
+// The block labels this pass mints. They reach the committed goldens, so they are short, prefixed
+// `__im_` (inline-managed, disjoint from `InsertRangeChecks`' `__rc_`), and each names WHAT THE BLOCK IT
+// LABELS DOES rather than which guard sent control there.
+let InlineContLabel = b"__im_cont"
+let InlineSlowLabel = b"__im_slow"
+let InlineStrideLabel = b"__im_stride"
+let InlineLoadLabel = b"__im_load"
+let InlineEmptyLabel = b"__im_empty"
+let InlineOwnedLabel = b"__im_owned"
+let InlineBufferLabel = b"__im_buffer"
+let InlineViewedLabel = b"__im_viewed"
+let InlineDestroyLabel = b"__im_destroy"
+let InlineStoreLabel = b"__im_store"
+
+// How many sites the pass expanded — a diagnostic counter, reported once per compile.
+typealias InlinedSiteCount = int(0 to u64.max)
+
+// The minter every `PrimitiveInliner` starts with and NONE OF THEM EVER MINTS FROM: `valueIds()` replaces
+// it with a real one before the first mint, so this exists only so that a function with no site pays no
+// allocation. Shared for the reason `InsertRangeChecks.sharedEmptyGuardChainTail` is shared, and safe for
+// the same reason — the one operation that would write to it is the one that replaces it.
+let sharedUnseededMinter = ValueMinter.create(0)
+
+// The two NON-throwing primitives, reached as a plain `StdOp.call`.
+enum PlainPrimitive
+	// `__managed_count(arr) -> length@8`. The one member with no fast/slow split at all: a field load IS
+	// the whole body, so the call is REPLACED IN PLACE and no block is carved.
+	count
+	// `__managed_get_unchecked(arr, index) -> value` — the read a `for x in arr` header makes. No bounds
+	// check and no empty-slot check, because the loop header already owns both (`ManagedGetUncheckedName`).
+	uncheckedGet
+end 'PlainPrimitive'
+
+// The three THROWING ones, reached as an `StdOp.tryCall` over the dual-register `(value, flag)` ABI.
+enum ThrowingPrimitive
+	// `__managed_get(arr, index) -> (value, flag)` — the bounds-checked element read.
+	checkedGet
+	// `__managed_set(arr, index, value)` — the `Array` surface's LENGTH-bounded element write.
+	set
+	// `__managed_mem_set(arr, index, value)` — the `__ManagedMemory` surface's CAPACITY-bounded one. It
+	// differs from `set` in exactly one thing — the record field its index is checked against — which is
+	// why the two share an expander and a single `limitOffset`. ⚖ The capacity bound is the user ruling of
+	// 2026-07-30; see `ManagedMemSetName`.
+	memSet
+end 'ThrowingPrimitive'
+
+// What an op at a scanned position is. `notInlinable` is everything else in the module, including a call to
+// a `__managed_*` entry this pass does not expand.
+union ManagedCallSite
+	notInlinable
+	plain(kind PlainPrimitive, callee ByteArray, args ValueIdArray, resultId ValueId)
+	throwing(kind ThrowingPrimitive, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId)
+end 'ManagedCallSite'
+
+// What expanding at one position did to the block holding it.
+union BlockExpansion
+	// Nothing was carved: either the op is not a site, or it was a `__managed_count` rewritten in place.
+	// The scan of this block carries on.
+	noSite
+	// The block was CARVED: everything past the site now lives in this continuation, so the scan of the
+	// original block is over and the caller scans the continuation instead.
+	continuation(blockRef BlockRef)
+end 'BlockExpansion'
+
+// The two blocks every carved site has, held together because every expander wires both.
+type InlineFrame
+	// Takes the ORIGINAL result ids as its block args and holds every op that followed the call.
+	export var cont as IrBlock
+	// The `BlockRef` naming that continuation, CAPTURED at the split rather than searched for afterwards.
+	// The split is the one moment it is knowable in O(1) — `splitBlockExit` is the only `addBlock` inside
+	// it, so the continuation is the function's last-registered block exactly then and never again. A
+	// search for it later would be O(blocks) per site, i.e. Θ(sites × blocks) over a function that
+	// accesses many elements — which is precisely the function this pass exists for.
+	export var contRef as BlockRef
+	// Holds the original call, verbatim, defining FRESH result ids.
+	export var slow as IrBlock
+
+	export static function create(cont IrBlock, contRef BlockRef, slow IrBlock) returns InlineFrame
+		return Self{cont: cont, contRef: contRef, slow: slow}
+	end 'create'
+end 'InlineFrame'
+
+// Expand every inlinable `__ManagedMemory` primitive call in the module.
+export function inlineManagedPrimitives(project Project, module StdModule)
+	var expanded = 0 as InlinedSiteCount
+	for func in module.functions 'eachFunc'
+		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
+		// `insertRangeChecks` and `lowerMaxonToStd` skip on, stated the same way. Here it is purely cost:
+		// this pass registers no `.rdata` and so cannot move a golden through `nextStringId` the way those
+		// two could, and `eliminateDeadFunctions` drops the function before isel either way. What it buys
+		// is not doing per-block work for the large unreachable tail of every listed stdlib module.
+		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+
+		var inliner = PrimitiveInliner.create(module, func: func)
+		inliner.run()
+		expanded = expanded + inliner.expanded
+	end 'eachFunc'
+
+	let total = expanded
+	logDebug(LogCategory.ir, message: function() gives "inlineManagedPrimitives: expanded {total} managed-primitive call site(s) across {module.funcCount()} function(s)")
+end 'inlineManagedPrimitives'
+
+// Per-function expander: owns the module and function it rewrites plus the fresh-ValueId counter its
+// inline ops draw from, seeded past every id the function already uses.
+type PrimitiveInliner
+	var module as StdModule
+	var func as IrFunction
+	// ⚠ **SEEDED LAZILY, AND THAT IS A COST DECISION.** `nextFreeValueId` walks every block-arg and every
+	// live op of the function and MATERIALIZES the live-op index array to do it — and this pass visits
+	// EVERY function in the module, the overwhelming majority of which hold no managed primitive at all.
+	// Seeded in `create`, each of those would pay a second whole-function walk plus its allocation for
+	// nothing. It starts as `sharedUnseededMinter`, which is never minted from, and is REPLACED by a real
+	// minter at the first site — the same shared-empty-until-needed shape `InsertRangeChecks` gives its
+	// three chain columns, and for the same measured reason.
+	var ids as ValueMinter
+	var seeded as bool
+	export var expanded as InlinedSiteCount
+
+	static function create(module StdModule, func IrFunction) returns PrimitiveInliner
+		return Self{module: module, func: func, ids: sharedUnseededMinter, seeded: false, expanded: 0}
+	end 'create'
+
+	// The function's fresh-ValueId counter, seeded past every id it already uses on first use.
+	function valueIds() returns ValueMinter
+		if self.seeded 'already'
+			return self.ids
+		end 'already'
+
+		self.ids = ValueMinter.create(nextFreeValueId(self.module, func: self.func))
+		self.seeded = true
+		return self.ids
+	end 'valueIds'
+
+	// ⭐⭐ **WHAT MAKES THIS WALK TERMINATE IS *WHICH* NEW BLOCK IT FOLLOWS.** An expansion appends three
+	// kinds of block: the GUARD CHAIN (which holds no call at all), the SLOW arm (which holds the very call
+	// just expanded) and the CONTINUATION (which holds the rest of the site block's ops, and so may hold
+	// the next call). Only the CONTINUATION is ever revisited, so the moved call is never rediscovered and
+	// the walk cannot cycle — which is why there is no "already expanded" marker column anywhere in this
+	// file, and why the outer loop's bound is SNAPSHOTTED: every block this pass appends is appended to the
+	// very array that loop is walking.
+	//
+	// ⚠ **AND THERE IS NO WORKLIST ARRAY, WHICH IS THE SAME FACT PAYING FOR ITSELF.** A carve hands back
+	// exactly one block to carry on in, so the queue is never longer than one and a chain of carves is a
+	// loop rather than a list — costing this pass ZERO allocations in the functions that hold no site at
+	// all, and those are most of them.
+	function run()
+		let originalBlockCount = self.func.blockRefs.count()
+		for i in 0 upto originalBlockCount 'eachBlock'
+			let blockRef = try self.func.blockRefs.get(i) otherwise panic("PrimitiveInliner.run: blockRefs.get OOB at {i} despite the snapshot bound")
+			self.expandChainFrom(blockRef)
+		end 'eachBlock'
+	end 'run'
+
+	// Expand every site reachable by carving forward from one original block: each carve leaves the rest of
+	// the ops in a continuation, which is where the next site can only be.
+	function expandChainFrom(blockRef BlockRef)
+		var current = blockRef
+		var carving = true
+		while carving 'chain'
+			match self.expandBlock(current) 'outcome'
+				noSite then carving = false
+				continuation(contRef) then current = contRef
+			end 'outcome'
+		end 'chain'
+	end 'expandChainFrom'
+
+	// Expand the sites in one block, left to right. A `__managed_count` is rewritten in place and the scan
+	// carries on past it; the four that need a branch END the scan, because everything after the call has
+	// moved to the continuation the caller carries on in.
+	//
+	// ⚠ **IT WALKS `block.opRefs`, WHICH IS THE BODY HALF OF `IrModule.liveOpIndices`' OWN DESCENT — never
+	// the flat `module.ops`.** That array is append-only and full of orphans from every earlier pass; and a
+	// site needs its POSITION IN ITS BLOCK, which the flat array cannot give. A terminator is never a call,
+	// so the half this walk omits holds no site.
+	function expandBlock(blockRef BlockRef) returns BlockExpansion
+		var pos = 0 as BlockOpPos
+		while pos < self.blockAt(blockRef).opRefs.count() 'eachOp'
+			let outcome = self.expandAt(blockRef, pos: pos)
+			if carvedTheBlock(outcome) 'carved'
+				return outcome
+			end 'carved'
+			pos = pos + 1
+		end 'eachOp'
+
+		return BlockExpansion.noSite
+	end 'expandBlock'
+
+	// One position: classify it, and route to the expander its shape names.
+	function expandAt(blockRef BlockRef, pos BlockOpPos) returns BlockExpansion
+		match classifySite(self.opAt(blockRef, pos: pos)) 'site'
+			notInlinable then break 'site'
+			plain(kind, callee, args, resultId) then return self.expandPlain(blockRef, pos: pos, kind: kind, callee: callee, args: args, resultId: resultId)
+			throwing(kind, callee, args, resultId, errorFlagId) then return self.expandThrowing(blockRef, pos: pos, kind: kind, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+		end 'site'
+
+		return BlockExpansion.noSite
+	end 'expandAt'
+
+	function expandPlain(blockRef BlockRef, pos BlockOpPos, kind PlainPrimitive, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockExpansion
+		return match kind 'plain'
+			count gives self.rewriteCountInPlace(blockRef, pos: pos, args: args, resultId: resultId, callee: callee)
+			uncheckedGet gives self.expandUncheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+		end 'plain'
+	end 'expandPlain'
+
+	// ⭐ `__managed_count(arr)` IS THE ONE MEMBER WITH NOTHING TO GUARD: its whole body is
+	// `loadIndirect i64 [arr + length@8]` (`buildManagedCount`), which is legal wherever the call was —
+	// the record is the caller's own and no field of it is consulted. So the call op is REPLACED at its own
+	// index, keeping `resultId`, and not one block or edge moves. `IrModule.ops` is indexed by
+	// `block.opRefs`, so an in-place replacement is invisible to every other reference in the function —
+	// the same discipline the register allocator's colorer states for itself.
+	function rewriteCountInPlace(blockRef BlockRef, pos BlockOpPos, args ValueIdArray, resultId ValueId, callee ByteArray) returns BlockExpansion
+		let arr = argAt(args, index: 0, callee: callee)
+		let opIdx = self.opIndexAt(blockRef, pos: pos)
+		try self.module.ops.set(opIdx, value: StdOp.loadIndirect(resultId, addrId: arr, offset: ManagedRecordLengthOffset, valueType: StdType.i64)) otherwise panic("rewriteCountInPlace: module.ops.set OOB at {opIdx}, which block {blockRef} of '{String.from(self.func.name)}' names at position {pos}")
+		self.expanded = self.expanded + 1
+
+		return BlockExpansion.noSite
+	end 'rewriteCountInPlace'
+
+	// `__managed_get_unchecked(arr, index) -> value`: the whole-word arm is a slot address and one load.
+	// There is deliberately NO bounds check and NO empty-slot check here — not because they are cheap to
+	// omit, but because `__managed_get_unchecked`'s body does not have them either: the `for`-in header
+	// re-reads the length live on every trip and a managed array cannot hold an empty slot inside
+	// `[0, count)` (`ManagedGetUncheckedName`'s header states both, and names the parser rule the second
+	// rests on). Adding one here would be this pass deciding something, which it does not do.
+	function expandUncheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockExpansion
+		let arr = argAt(args, index: 0, callee: callee)
+		let index = argAt(args, index: 1, callee: callee)
+		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+
+		var cur = self.blockAt(blockRef)
+		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineLoadLabel)
+
+		let value = self.emitWordElementLoad(cur, arr: arr, index: index)
+		self.module.setTerminator(cur, op: StdOp.branch(frame.cont.id))
+		attachEdge(cur, targetId: frame.cont.id, argIds: argsOf(value))
+
+		return self.finish(frame)
+	end 'expandUncheckedGet'
+
+	function expandThrowing(blockRef BlockRef, pos BlockOpPos, kind ThrowingPrimitive, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockExpansion
+		return match kind 'throwing'
+			checkedGet gives self.expandCheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+			set gives self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordLengthOffset)
+			memSet gives self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordCapacityOffset)
+		end 'throwing'
+	end 'expandThrowing'
+
+	// `__managed_get(arr, index) -> (value, flag)`. The fast arm is `buildManagedGet`'s success path with
+	// its two branches kept and its byte loop collapsed: in range, whole-word stride, and — for a MANAGED
+	// element only — a slot that is not empty.
+	//
+	// ⭐ **THE EMPTY-SLOT ARM IS GATED ON THE DESTRUCTOR, EXACTLY AS `emitLoadElemAndOkReturn` GATES IT.** A
+	// trivial element's 0 is a genuine value and must not throw; a managed element's NULL is a slot
+	// `resize` grew and nothing wrote, and reading its fields would fault, so it throws `emptySlot`. Only
+	// that second case leaves for the slow arm, which is where the throw lives — so an array of Strings
+	// keeps the inline read for every slot that holds one.
+	function expandCheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockExpansion
+		let arr = argAt(args, index: 0, callee: callee)
+		let index = argAt(args, index: 1, callee: callee)
+		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+
+		var cur = self.blockAt(blockRef)
+		cur = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: frame.slow, next: InlineStrideLabel)
+		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineLoadLabel)
+
+		let value = self.emitWordElementLoad(cur, arr: arr, index: index)
+		// ONE `const 0` serves the destructor test, the null test and the success flag: `NoErrorFlag` IS 0
+		// and so is "no per-element destructor", and `foldConstOperands` folds both compares into
+		// immediates afterwards, leaving the edge argument as its only reader.
+		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
+		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
+		let managed = emitCmp(self.module, block: cur, a: destroy, b: noError, pred: StdCmpPred.ne, ids: self.valueIds())
+
+		var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel)
+		self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.cont.id))
+		attachEdge(cur, targetId: frame.cont.id, argIds: twoArgs(value, second: noError))
+
+		// `value` and `noError` are defined in `cur`, which dominates this block, so both are readable here
+		// and on this block's own edge to the continuation without a block arg of their own.
+		let isEmpty = emitCmp(self.module, block: checkEmpty, a: value, b: noError, pred: StdCmpPred.eq, ids: self.valueIds())
+		self.module.setTerminator(checkEmpty, op: StdOp.condBranch(isEmpty, thenBlockId: frame.slow.id, elseBlockId: frame.cont.id))
+		attachEdge(checkEmpty, targetId: frame.cont.id, argIds: twoArgs(value, second: noError))
+
+		return self.finish(frame)
+	end 'expandCheckedGet'
+
+	// `__managed_set` / `__managed_mem_set`. ⭐⭐ **THE COW ARMS ARE `__managed_cow_detach`'s OWN THREE
+	// ARMS, ASKED IN ITS OWN ORDER, AND ANSWERED BY REFUSING RATHER THAN BY DETACHING.** A detach that has
+	// nothing to do is the case a write in a loop takes every iteration; a detach that has something to do
+	// allocates and copies, and that belongs in the runtime. So this arm proves the three conditions under
+	// which the detach would have returned without touching anything — the buffer is this record's
+	// (`emitBufferNotOwned`), it exists, and nobody is viewing it (`emitIsSharedAllocation`) — and hands
+	// every other shape to the call, which detaches exactly as it always did.
+	//
+	// ⚠ The order of those three is NOT free: `emitIsSharedAllocation` reads the allocation header below
+	// `buffer@0`, which a view's interior pointer does not have and a null buffer does not have either.
+	// This is `buildManagedCowDetach`'s arm order for that reason, not by imitation.
+	//
+	// ⚠ **A MANAGED ELEMENT LEAVES FOR THE SLOW ARM AT `element_destroy@40`, AND THAT IS AN OWNERSHIP
+	// OBLIGATION, NOT A CONSERVATISM.** A `set` over a managed element DESTROYS the occupant it overwrites
+	// (`emitElementStoreAndOkReturn`), and the throwing path DESTROYS the element it refused to store
+	// (`emitDestroyRejectedElement`). Both are the runtime's, both are gated on this field, and a fast arm
+	// that stored over an occupant would be a leak — measured at exit 101 when that call was missing from
+	// `__managed_set` itself (R4.6).
+	function expandElementStore(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, limitOffset ByteOffset) returns BlockExpansion
+		let arr = argAt(args, index: 0, callee: callee)
+		let index = argAt(args, index: 1, callee: callee)
+		let value = argAt(args, index: 2, callee: callee)
+		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+
+		var cur = self.blockAt(blockRef)
+		cur = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineOwnedLabel)
+
+		let notOwned = emitBufferNotOwned(self.module, block: cur, record: arr, ids: self.valueIds())
+		cur = self.guard(cur, refused: notOwned, slow: frame.slow, next: InlineBufferLabel)
+
+		let buffer = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
+		let zeroBuf = emitConst(self.module, block: cur, value: NoBufferAllocated, ids: self.valueIds())
+		let unallocated = emitCmp(self.module, block: cur, a: buffer, b: zeroBuf, pred: StdCmpPred.eq, ids: self.valueIds())
+		cur = self.guard(cur, refused: unallocated, slow: frame.slow, next: InlineViewedLabel)
+
+		let viewed = emitIsSharedAllocation(self.module, block: cur, ptr: buffer, ids: self.valueIds())
+		cur = self.guard(cur, refused: viewed, slow: frame.slow, next: InlineStrideLabel)
+
+		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineDestroyLabel)
+
+		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
+		let noDestroy = emitConst(self.module, block: cur, value: TrivialElementDestroy, ids: self.valueIds())
+		let managed = emitCmp(self.module, block: cur, a: destroy, b: noDestroy, pred: StdCmpPred.ne, ids: self.valueIds())
+		cur = self.guard(cur, refused: managed, slow: frame.slow, next: InlineStoreLabel)
+
+		let stride = emitConst(self.module, block: cur, value: WordElementStride, ids: self.valueIds())
+		let slot = emitSlotAddr(self.module, block: cur, buffer: buffer, index: index, elementSize: stride, ids: self.valueIds())
+		self.module.appendOp(cur, op: StdOp.storeIndirect(slot, offset: 0, valueId: value, valueType: StdType.i64))
+
+		// The ok exit of a throwing VOID entry: the placeholder value the ABI never moves, and the flag,
+		// are both `NoErrorFlag` — one `const`, exactly as `emitVoidOkReturn` spells it in the runtime.
+		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
+		self.module.setTerminator(cur, op: StdOp.branch(frame.cont.id))
+		attachEdge(cur, targetId: frame.cont.id, argIds: twoArgs(noError, second: noError))
+
+		return self.finish(frame)
+	end 'expandElementStore'
+
+	// --- the shared pieces every carved expansion is built from ---
+
+	// ⭐ THE ONE PRECONDITION EVERY FAST ARM SHARES — the element is one whole machine word, so the access
+	// is a single `loadIndirect`/`storeIndirect i64`. See `WordElementStride` for why that stamp and no
+	// other, and `ManagedMemoryRuntime`'s SUB-BYTE BIT-PACKED ELEMENTS section for what the runtime does
+	// with the rest.
+	function guardWordStride(cur IrBlock, arr ValueId, slow IrBlock, next ByteArray) returns IrBlock
+		let elementSize = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: self.valueIds())
+		let stride = emitConst(self.module, block: cur, value: WordElementStride, ids: self.valueIds())
+		let narrowOrPacked = emitCmp(self.module, block: cur, a: elementSize, b: stride, pred: StdCmpPred.ne, ids: self.valueIds())
+		return self.guard(cur, refused: narrowOrPacked, slow: slow, next: next)
+	end 'guardWordStride'
+
+	// The index bound, through `emitIndexOutOfRange` — the ONE home of "reject this index", which carries
+	// the NEGATIVE half with it (`StdCmpPred` is signed only, so `-1 >= 3` is false and a negative index
+	// would otherwise address before the buffer). The three entries differ only in the record field the
+	// limit is read from: `length@8` for the `Array` surface's `get`/`set`, `capacity@16` for the buffer's
+	// `mem_set`.
+	//
+	// ⚠ `__managed_mem_set`'s runtime asks the same question as two separate tests (`emitIsNegative`, then
+	// `index >= capacity` inside `emitBufferAccessGuard`) rather than through this composition. The
+	// predicate is identical — a disjunction of the same two compares over the same two words — and asking
+	// it once here is the composition that already exists rather than a fourth spelling of it. A NON-OWNED
+	// record's `capacity@16` is negative and so passes this test; `emitBufferNotOwned` is what refuses it,
+	// one guard later, which is the same order `emitBufferAccessGuard` reaches its own detach in.
+	function guardIndexInRange(cur IrBlock, arr ValueId, index ValueId, limitOffset ByteOffset, slow IrBlock, next ByteArray) returns IrBlock
+		let limit = emitLoadField(self.module, block: cur, record: arr, offset: limitOffset, ids: self.valueIds())
+		let outOfRange = emitIndexOutOfRange(self.module, block: cur, index: index, length: limit, ids: self.valueIds())
+		return self.guard(cur, refused: outOfRange, slow: slow, next: next)
+	end 'guardIndexInRange'
+
+	// One fast-path precondition: when `refused` holds, control leaves for the slow arm; otherwise it falls
+	// into a fresh block the caller goes on emitting into. `cur` is TERMINATED here, so every body op the
+	// caller wanted in it must already be there.
+	function guard(cur IrBlock, refused ValueId, slow IrBlock, next ByteArray) returns IrBlock
+		let ok = self.module.addBlock(self.func, label: next)
+		self.module.setTerminator(cur, op: StdOp.condBranch(refused, thenBlockId: slow.id, elseBlockId: ok.id))
+		return ok
+	end 'guard'
+
+	// The whole-word element read: `[buffer@0 + index · 8]`. The address is `emitSlotAddr`'s — the runtime's
+	// one home of "where does element `index` start" — and the load is a plain `loadIndirect i64` rather
+	// than `emitLoadElemAt`, because collapsing that byte loop IS this arm. The two agree by construction at
+	// this stride: `emitLoadElemAt` accumulates the eight little-endian bytes and then masks with
+	// `AllBitsSet`, which is the identity for a 64-bit field, so the value is bit-for-bit the same one.
+	function emitWordElementLoad(cur IrBlock, arr ValueId, index ValueId) returns ValueId
+		let buffer = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
+		let stride = emitConst(self.module, block: cur, value: WordElementStride, ids: self.valueIds())
+		let slot = emitSlotAddr(self.module, block: cur, buffer: buffer, index: index, elementSize: stride, ids: self.valueIds())
+		let value = self.valueIds().mint()
+		self.module.appendOp(cur, op: StdOp.loadIndirect(value, addrId: slot, offset: 0, valueType: StdType.i64))
+		return value
+	end 'emitWordElementLoad'
+
+	// Carve the call out of its block and build the frame around it: `head` keeps everything BEFORE the
+	// call and loses its exit, the CONTINUATION takes everything after it plus that exit, and the call is
+	// re-emitted verbatim into a SLOW block — with FRESH result ids, because the ids it used to define are
+	// now the continuation's block args, and a value may be defined once.
+	//
+	// ⚠ The original op is left behind as an ORPHAN in `module.ops`. That is the tier's own model
+	// (`IrModule.ops` is append-only and retains what block-rebuilding passes replace), and it is why every
+	// reader asks `liveOpIndices` rather than scanning the array.
+	function openPlain(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns InlineFrame
+		let cont = self.carve(blockRef, pos: pos)
+		let contRef = self.lastBlockRef()
+		var slow = self.module.addBlock(self.func, label: InlineSlowLabel)
+		let slowResult = self.valueIds().mint()
+		self.module.appendOp(slow, op: StdOp.call(slowResult, callee: callee, args: args))
+		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
+		attachEdge(slow, targetId: cont.id, argIds: argsOf(slowResult))
+		attachBlockArgs(cont, valueIds: argsOf(resultId))
+
+		return InlineFrame.create(cont, contRef: contRef, slow: slow)
+	end 'openPlain'
+
+	// `openPlain`'s dual-register twin: a `tryCall` defines a VALUE and an ERROR FLAG, so both are minted
+	// fresh on the slow arm and both become continuation block args.
+	function openThrowing(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns InlineFrame
+		let cont = self.carve(blockRef, pos: pos)
+		let contRef = self.lastBlockRef()
+		var slow = self.module.addBlock(self.func, label: InlineSlowLabel)
+		let slowResult = self.valueIds().mint()
+		let slowFlag = self.valueIds().mint()
+		self.module.appendOp(slow, op: StdOp.tryCall(slowResult, errorFlagId: slowFlag, callee: callee, args: args))
+		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
+		attachEdge(slow, targetId: cont.id, argIds: twoArgs(slowResult, second: slowFlag))
+		attachBlockArgs(cont, valueIds: twoArgs(resultId, second: errorFlagId))
+
+		return InlineFrame.create(cont, contRef: contRef, slow: slow)
+	end 'openThrowing'
+
+	// Split the site block just PAST the call, then drop the call off the head — so the head holds the ops
+	// before it, the continuation holds the ops after it, and the call itself is held by neither.
+	//
+	// It reuses `InsertRangeChecks`' splitter rather than adding a second one: what a split has to get right
+	// is moving the block's whole EXIT (terminator, conditional branch and outgoing edge args) onto the
+	// continuation while leaving the head un-terminated, and that is one rule with one home.
+	function carve(blockRef BlockRef, pos BlockOpPos) returns IrBlock
+		var head = self.blockAt(blockRef)
+		let cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: InlineContLabel)
+		head.opRefs.truncate(pos)
+		return cont
+	end 'carve'
+
+	// The outcome every carved expansion returns, plus the one counter bump they share.
+	function finish(frame InlineFrame) returns BlockExpansion
+		self.expanded = self.expanded + 1
+		return BlockExpansion.continuation(frame.contRef)
+	end 'finish'
+
+	// --- block/op access ---
+
+	function blockAt(blockRef BlockRef) returns IrBlock
+		return try self.module.blocks.get(blockRef) otherwise panic("PrimitiveInliner: blockRef {blockRef} of '{String.from(self.func.name)}' is not in module.blocks")
+	end 'blockAt'
+
+	function opIndexAt(blockRef BlockRef, pos BlockOpPos) returns OpIndex
+		return try self.blockAt(blockRef).opRefs.get(pos) otherwise panic("PrimitiveInliner: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
+	end 'opIndexAt'
+
+	function opAt(blockRef BlockRef, pos BlockOpPos) returns StdOp
+		let opIdx = self.opIndexAt(blockRef, pos: pos)
+		return try self.module.ops.get(opIdx) otherwise panic("PrimitiveInliner: op index {opIdx} named by block {blockRef} of '{String.from(self.func.name)}' is not in module.ops")
+	end 'opAt'
+
+	// The `BlockRef` naming the block `IrModule.addBlock` registered LAST — `addBlock` hands back the block
+	// alone, and a ref is what may be held across the blocks this pass goes on adding (the discipline
+	// `guardSiteAt` states: a ref survives every later append, where an `IrBlock` alias answers a different
+	// question). It is read IMMEDIATELY after the append it is about; a later read would name a later block.
+	function lastBlockRef() returns BlockRef
+		return try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("PrimitiveInliner.lastBlockRef: '{String.from(self.func.name)}' has no blocks")
+	end 'lastBlockRef'
+end 'PrimitiveInliner'
+
+// Whether an outcome CARVED its block — i.e. everything past the site now lives in a continuation, so the
+// scan of the original block is over and the caller enqueues that continuation instead.
+function carvedTheBlock(outcome BlockExpansion) returns bool
+	return match outcome 'carved'
+		noSite gives false
+		continuation gives true
+	end 'carved'
+end 'carvedTheBlock'
+
+// Give `pred` one more outgoing edge, carrying `argIds` to `targetId`.
+//
+// ⚠ It REBUILDS `branchEdges` and field-assigns rather than pushing into whatever array the block holds,
+// which is `IrBlock`'s stated rule and not a formality: the three tiers SHARE one phi model, and a Std
+// block's arrays can be the very arrays `queryAllModule` hands back on every cache hit — so an in-place
+// write corrupts the memo for every later compile of the project, silently, with nothing downstream that
+// re-reads the model to notice.
+function attachEdge(pred IrBlock, targetId BlockId, argIds ValueIdArray)
+	var predBlock = pred
+	var edges = BranchEdgeArray.create()
+	for edge in predBlock.branchEdges 'carryExisting'
+		edges.push(edge)
+	end 'carryExisting'
+	edges.push(BranchEdge.create(targetId, argIds: argIds))
+	predBlock.branchEdges = edges
+end 'attachEdge'
+
+// Give `block` the block args `valueIds` names, in order — the continuation half of the same rule
+// `attachEdge` follows, and the positional `blockArgs[k] ↔ edge.argIds[k]` pairing every predecessor this
+// pass wires must match. Every value these primitives carry is a machine word.
+function attachBlockArgs(block IrBlock, valueIds ValueIdArray)
+	var target = block
+	var blockArgs = IrBlockArgArray.create()
+	for valueId in valueIds 'each'
+		blockArgs.push(IrBlockArg.create(valueId, argType: StdType.i64))
+	end 'each'
+	target.blockArgs = blockArgs
+end 'attachBlockArgs'
+
+// The argument at `index`, with the callee named in the failure — a runtime entry's arity is fixed by the
+// builder that emitted it, so a mismatch here is a compiler bug and not a program error.
+function argAt(args ValueIdArray, index ParamCount, callee ByteArray) returns ValueId
+	return try args.get(index) otherwise panic("InlineManagedPrimitives: '{String.from(callee)}' was called with {args.count()} argument(s) and this expansion reads argument {index}")
+end 'argAt'
+
+// The value `buffer@0` holds when a record has no element buffer at all — an array that never grew. It is
+// the zero `__mm_alloc` leaves the record at, and `__managed_cow_detach`'s `checkShared` arm compares
+// against exactly it.
+let NoBufferAllocated = 0 as ParsedInt
+
+// Classify one op. EXHAUSTIVE over `StdOp`: the two call variants are named and everything else is covered
+// by range arms, so a variant APPENDED past the end of the union fails to compile here until it is
+// consciously placed — the band-append invariant working in the reviewer's favour.
+//
+// ⚠ It matches on the callee's NAME because that is what survives the lowering: a runtime callee reaches
+// Std as a plain `ByteArray` on `call`/`tryCall` (`LowerMaxonToStd.lowerRuntimeCall` /
+// `appendThrowingCall`), and the names compared against are the runtime's own exported constants, never
+// literals — `ManagedGetName`, `ManagedGetUncheckedName`, `ManagedSetName`, `ManagedMemSetName`,
+// `ManagedCountName`.
+//
+// ⚠ `tryCall` is ALSO how an EXISTENTIAL-returning call is spelled (its second def is the paired witness
+// table, not an error flag — `LowerMaxonToStd.appendDirectCall`). Matching on the callee name is what keeps
+// the two apart: no `__managed_*` entry returns an interface.
+function classifySite(op StdOp) returns ManagedCallSite
+	return match op 'site'
+		const to param gives ManagedCallSite.notInlinable
+		call(resultId, callee, args) gives plainSite(callee, args: args, resultId: resultId)
+		retVoid to rdataAddr gives ManagedCallSite.notInlinable
+		tryCall(resultId, errorFlagId, callee, args) gives throwingSite(callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+		errorReturn to osThreadCpuTicks gives ManagedCallSite.notInlinable
+	end 'site'
+end 'classifySite'
+
+// The two non-throwing primitives, by name.
+function plainSite(callee ByteArray, args ValueIdArray, resultId ValueId) returns ManagedCallSite
+	if callee.equals(ManagedCountName) 'count'
+		return ManagedCallSite.plain(PlainPrimitive.count, callee: callee, args: args, resultId: resultId)
+	end 'count'
+	if callee.equals(ManagedGetUncheckedName) 'uncheckedGet'
+		return ManagedCallSite.plain(PlainPrimitive.uncheckedGet, callee: callee, args: args, resultId: resultId)
+	end 'uncheckedGet'
+
+	return ManagedCallSite.notInlinable
+end 'plainSite'
+
+// The three throwing ones, by name.
+function throwingSite(callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns ManagedCallSite
+	if callee.equals(ManagedGetName) 'checkedGet'
+		return ManagedCallSite.throwing(ThrowingPrimitive.checkedGet, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+	end 'checkedGet'
+	if callee.equals(ManagedSetName) 'set'
+		return ManagedCallSite.throwing(ThrowingPrimitive.set, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+	end 'set'
+	if callee.equals(ManagedMemSetName) 'memSet'
+		return ManagedCallSite.throwing(ThrowingPrimitive.memSet, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+	end 'memSet'
+
+	return ManagedCallSite.notInlinable
+end 'throwingSite'

@@ -48,6 +48,21 @@ union PassKind
 	// the existing `pruneDeadBlockArgs to foldConstOperands` union range still names the three
 	// block-arg/const passes exactly.
 	insertRangeChecks
+	// Phase 3.45: Std → Std expansion of the `__ManagedMemory` element primitives' FAST PATHS at their
+	// call sites (EC1), leaving the call itself — verbatim — as the slow arm every other case takes.
+	//
+	// ⚠ **IT RUNS AFTER `insertRangeChecks`, AND THAT IS FORCED RATHER THAN CHOSEN.** A range-check site is
+	// recorded as `(blockId, stdOpPos)` in the coordinate space `lowerMaxonToStd` left the block in
+	// (`RangeCheckSite.stdOpPos`), and this pass SPLITS blocks and removes an op from one — so a site
+	// recorded past a split point would land in a block that no longer holds it, or trip `guardSiteAt`'s
+	// own `pastTheBlock` panic. Running after leaves that coordinate space untouched and costs nothing:
+	// the guards this pass emits are ordinary loads and compares, of no interest to a narrowing check.
+	//
+	// It runs BEFORE `foldConstOperands`, which IS chosen: every bound and stride it emits is a `const`,
+	// and the fold is what turns them into `cmpImm`/`binOpImm` operands so they never occupy a register in
+	// the loops this pass makes hotter. It also runs before `pruneDeadBlockArgs`, which then drops the
+	// continuation result arg of a void `set` nothing reads.
+	inlineManagedPrimitives
 	// Phase 3.5: Std → Std machine-form rewrites.
 	//
 	// `pruneDeadBlockArgs` deletes the loop-header phis nothing ever reads — a var the loop
@@ -113,6 +128,9 @@ function classifyPass(pass PassKind) returns PassClassification
 		checkUnusedExports gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
 		insertRangeChecks gives PassClassification.perFunction
+		// Intra-function by construction: a site is expanded entirely inside the block that holds it, and
+		// nothing about the callee's body is consulted — the body is not even in the module yet.
+		inlineManagedPrimitives gives PassClassification.perFunction
 		pruneDeadBlockArgs gives PassClassification.perFunction
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
@@ -134,6 +152,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		checkUnusedExports gives CompilePhase.checkUnusedExports
 		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
 		insertRangeChecks gives CompilePhase.insertRangeChecks
+		inlineManagedPrimitives gives CompilePhase.inlineManagedPrimitives
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstOperands gives CompilePhase.foldConstOperands
@@ -149,6 +168,7 @@ function passKindToString(pass PassKind) returns String
 		checkUnusedExports gives "checkUnusedExports"
 		lowerMaxonToStd gives "lowerMaxonToStd"
 		insertRangeChecks gives "insertRangeChecks"
+		inlineManagedPrimitives gives "inlineManagedPrimitives"
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstOperands gives "foldConstOperands"
@@ -191,6 +211,7 @@ export function buildLoweringPasses() returns PassKindArray
 	var passes = PassKindArray.create()
 	passes.push(PassKind.lowerMaxonToStd)
 	passes.push(PassKind.insertRangeChecks)
+	passes.push(PassKind.inlineManagedPrimitives)
 	passes.push(PassKind.pruneDeadBlockArgs)
 	passes.push(PassKind.elimTrivialBlockArgs)
 	passes.push(PassKind.foldConstOperands)
@@ -347,6 +368,7 @@ export type PassPipeline
 			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
+			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
 			foldConstOperands then foldConstOperands(self.stdModule)

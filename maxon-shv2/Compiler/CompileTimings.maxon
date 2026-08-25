@@ -290,6 +290,13 @@ export enum CompilePhase
 	// own phase beside `installRuntime` because the two scale with different things: the runtime is a
 	// fixed library gated on usage bits, while this grows with the program's TYPES.
 	synthesizeBodies
+	// The managed-primitive call-site expansion (`inlineManagedPrimitives`, EC1). APPENDED HERE rather than
+	// beside the four Std passes it runs among, for the reason this enum's header gives — the ordinals are
+	// the wire format every `.metrics.tsv` ever written is indexed by, so a member slotted into the middle
+	// would re-attribute every historical measurement to the wrong phase. Its own phase, like every other
+	// Std pass: it walks every block of every function and appends blocks, and a cost billed into a
+	// neighbour is a cost nobody can act on.
+	inlineManagedPrimitives
 end 'CompilePhase'
 
 // Per-compile timing state, owned by `Project` (which is already threaded through

@@ -783,7 +783,7 @@ type RangeCheckEmitter
 	function splitFor(site GuardSite, chain GuardChain) returns IrBlock
 		return match chain 'chain'
 			blockChain(siteBlockId) gives self.splitChainEnd(site, sourceBlockId: siteBlockId)
-			retChain gives self.splitBlockInPlace(site.block, position: site.position)
+			retChain gives splitBlockInPlace(self.module, func: self.func, head: site.block, position: site.position, label: RangeCheckOkLabel)
 		end 'chain'
 	end 'splitFor'
 
@@ -824,52 +824,10 @@ type RangeCheckEmitter
 		end 'carveSegment'
 		headBlock.opRefs = segment
 
-		let ok = self.splitBlockExit(headBlock)
+		let ok = splitBlockExit(self.module, func: self.func, head: headBlock, label: RangeCheckOkLabel)
 		self.extendGuardChain(sourceBlockId, continuation: ok, splitAt: site.position)
 		return ok
 	end 'splitChainEnd'
-
-	// Split `head` at `position` in place: ops before it stay in `head`, ops from it on move to the
-	// continuation.
-	//
-	// ⚠ **WHY THE RETURN SITES DO NOT USE `splitChainEnd`, AND WHY NEITHER SPLIT CAN BE THE OTHER.** A
-	// return site has no chain to extend (see `GuardChain`), and the block it splits can be a
-	// continuation an alias site minted — `retBlockOf` resolves its recorded block to that block's
-	// current chain END — so it is a block no site's coordinates describe and no pre-split list covers.
-	// It is also split at its very END (`guardReturns` passes `opRefs.count()`), which is why splitting
-	// in place costs nothing here: the loop moves no op and the truncate drops none. `splitChainEnd`
-	// cannot work this way because it repeats on the SAME source block, and that is exactly where moving
-	// the ops past the cut becomes Θ(guards × block).
-	function splitBlockInPlace(head IrBlock, position BlockOpPos) returns IrBlock
-		var headBlock = head
-		var tailOps = OpIndexArray.create()
-		for i in position upto headBlock.opRefs.count() 'moveTail'
-			let opIdx = try headBlock.opRefs.get(i) otherwise panic("splitBlockInPlace: opRefs.get OOB at {i}")
-			tailOps.push(opIdx)
-		end 'moveTail'
-		headBlock.opRefs.truncate(position)
-
-		var ok = self.splitBlockExit(headBlock)
-		ok.opRefs = tailOps
-		return ok
-	end 'splitBlockInPlace'
-
-	// The half of a split that is the same whichever way the ops are placed: mint the continuation and
-	// move `head`'s EXIT onto it — the terminator, the conditional branch and the outgoing edge arguments
-	// — leaving `head` un-terminated for the cascade to finish.
-	function splitBlockExit(head IrBlock) returns IrBlock
-		var ok = self.module.addBlock(self.func, label: b"__rc_ok")
-		var headBlock = head
-
-		ok.terminator = headBlock.terminator
-		ok.condBranch = headBlock.condBranch
-		ok.branchEdges = headBlock.branchEdges
-
-		headBlock.terminator = Terminator.unset
-		headBlock.condBranch = CondBranch.none
-		headBlock.branchEdges = BranchEdgeArray.create()
-		return ok
-	end 'splitBlockExit'
 
 	// The op list the site block held BEFORE any guard split it — the coordinate space a site's recorded
 	// `stdOpPos` is written in, and the one list every segment of that block's chain is carved out of.
@@ -1256,6 +1214,69 @@ type RangeCheckEmitter
 		self.intConsts.upsert(resultId, value: value)
 	end 'recordConst'
 end 'RangeCheckEmitter'
+
+// The label this pass's continuations carry. `InlineManagedPrimitives` passes its own — the two passes
+// share the splitter below and nothing else, and a golden that named every continuation `__rc_ok` would
+// say a range check produced blocks a range check knows nothing about.
+let RangeCheckOkLabel = b"__rc_ok"
+
+// ⭐⭐ **THE BLOCK SPLIT, SHARED — AND SHARED BECAUSE THERE IS EXACTLY ONE RULE TO GET RIGHT.** A split
+// has to move the head block's whole EXIT onto the continuation — the terminator, the conditional branch
+// AND the outgoing edge arguments — and leave the head un-terminated for the caller to finish. Miss any
+// one of those three and the result is a block with two exits or a successor whose phis lose their
+// incoming values, neither of which any gate reads back. `InsertRangeChecks` needed it first and
+// `InlineManagedPrimitives` (EC1) needs the identical thing, so it is a free function over `(module,
+// func)` rather than a method: a second copy would be that one rule written twice, in two passes that
+// split for different reasons and would learn about a change to it separately.
+//
+// The LABEL is the caller's, because a continuation belongs to the pass that minted it and the label
+// reaches the committed goldens.
+
+// Split `head` at `position` in place: ops before it stay in `head`, ops from it on move to the
+// continuation.
+//
+// ⚠ **WHY `InsertRangeChecks`' RETURN SITES DO NOT USE `splitChainEnd`, AND WHY NEITHER SPLIT CAN BE THE
+// OTHER.** A return site has no chain to extend (see `GuardChain`), and the block it splits can be a
+// continuation an alias site minted — `retBlockOf` resolves its recorded block to that block's current
+// chain END — so it is a block no site's coordinates describe and no pre-split list covers. It is also
+// split at its very END (`guardReturns` passes `opRefs.count()`), which is why splitting in place costs
+// nothing there: the loop moves no op and the truncate drops none. `splitChainEnd` cannot work this way
+// because it repeats on the SAME source block, and that is exactly where moving the ops past the cut
+// becomes Θ(guards × block).
+//
+// ⚠ `InlineManagedPrimitives` splits at ONE position per call site and never repeats on a block it has
+// already split — its continuation is what it scans next — so the quadratic that argument is about
+// cannot arise there, and it takes this half.
+export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position BlockOpPos, label ByteArray) returns IrBlock
+	var headBlock = head
+	var tailOps = OpIndexArray.create()
+	for i in position upto headBlock.opRefs.count() 'moveTail'
+		let opIdx = try headBlock.opRefs.get(i) otherwise panic("splitBlockInPlace: opRefs.get OOB at {i}")
+		tailOps.push(opIdx)
+	end 'moveTail'
+	headBlock.opRefs.truncate(position)
+
+	var ok = splitBlockExit(module, func: func, head: headBlock, label: label)
+	ok.opRefs = tailOps
+	return ok
+end 'splitBlockInPlace'
+
+// The half of a split that is the same whichever way the ops are placed: mint the continuation and move
+// `head`'s EXIT onto it — the terminator, the conditional branch and the outgoing edge arguments —
+// leaving `head` un-terminated for the caller to finish.
+export function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label ByteArray) returns IrBlock
+	var ok = module.addBlock(func, label: label)
+	var headBlock = head
+
+	ok.terminator = headBlock.terminator
+	ok.condBranch = headBlock.condBranch
+	ok.branchEdges = headBlock.branchEdges
+
+	headBlock.terminator = Terminator.unset
+	headBlock.condBranch = CondBranch.none
+	headBlock.branchEdges = BranchEdgeArray.create()
+	return ok
+end 'splitBlockExit'
 
 // ⭐ **THE `ValueId` A NARROWED PARAMETER'S GUARD CHECKS — its DECLARED POSITION, and the two readers of
 // that fact must be one function.** `parseFunction` reserves ids `0..paramCount-1` for parameters, user
