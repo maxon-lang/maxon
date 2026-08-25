@@ -1597,7 +1597,7 @@ end 'emitLoadElemAndOkReturn'
 // Call `__managed_cow_detach(arr)` — the one obligation every in-place mutator owes before it touches the
 // buffer (see `buildManagedCowDetach` for the rule and for which mutators call this directly). The callee is
 // void, so the minted result is unread; it exists because a `call` op always defines a value.
-function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
+export function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
 	let detached = ids.mint()
 	module.appendOp(block, op: StdOp.call(detached, callee: ManagedCowDetachName, args: argsOf(arr)))
 end 'emitCowDetach'
@@ -1622,7 +1622,7 @@ end 'emitCowDetach'
 //      `StringRuntime.__str_bytes_view`. Its OTHER caller, `emitRecordView`, is case 1.
 //
 // A call site that fits none of the three is a bug, not a fourth case.
-function emitSlotAddr(module StdModule, block IrBlock, buffer ValueId, index ValueId, elementSize ValueId, ids ValueMinter) returns ValueId
+export function emitSlotAddr(module StdModule, block IrBlock, buffer ValueId, index ValueId, elementSize ValueId, ids ValueMinter) returns ValueId
 	let offset = emitBin(module, block: block, a: index, b: elementSize, opcode: StdBinOpcode.mul, ids: ids)
 	return emitBin(module, block: block, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitSlotAddr'
@@ -2116,7 +2116,7 @@ end 'emitZeroElems'
 // is FALSE and the index reads as "in bounds", then `buffer + index·elementSize` addresses BEFORE the buffer
 // (an OOB heap read/write). This explicit guard is the ONE home of "reject a negative index" — shared by
 // `emitIndexOutOfRange` (get/set/remove) and `buildManagedSlice`, so the fact is written once.
-function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
+export function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: value, b: zero, pred: StdCmpPred.lt, ids: ids)
 end 'emitIsNegative'
