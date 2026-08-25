@@ -2557,7 +2557,10 @@ end 'isLegalRepeatedAlias'
 // ⚠ **WHAT IS STILL UNENFORCED IS NOT A POSITION** — it is the zero-initialized slot `Array.resize`
 // EXPOSES, which no value ever crosses into. Pinned by `specs-shv2/safety.md`'s
 // `divide-by-zero-fault-through-a-resized-array-slot`.
-export enum RangeCheckGuard
+// ⚠ `module`, not `export`: `InsertRangeChecks` is the only reader and it sits under `Compiler/`, and
+// shv2's own `checkUnusedExports` (E3093) is what says so — the SELF-COMPILE runs that pass and the
+// bootstrap does not.
+module enum RangeCheckGuard
 	runtime
 	compileTimeOnly
 end 'RangeCheckGuard'
@@ -5096,7 +5099,10 @@ end 'addBuiltinEnumCase'
 // `requireUnreservedName` (E2051) refuses any source but `stdlib/Builtins.maxon` itself to declare them.
 
 // WHERE THE LAYOUT A CHECK VERIFIES AGAINST CAME FROM — and therefore who is at fault when it disagrees.
-export enum BuiltinErrorDeclarationSource
+// ⚠ `module`, not `export`: it is reached only as a field of the check below, from `Compiler/Runtime/`, and
+// shv2's own `checkUnusedExports` (E3093) is what says so — the SELF-COMPILE runs that pass and the
+// bootstrap does not.
+module enum BuiltinErrorDeclarationSource
 	// A `builtin…ErrorEnum()` constructor in this file. Nothing outside the compiler's own source can move
 	// it, so a disagreement is a compiler bug and the check PANICS.
 	synthesized
@@ -5117,7 +5123,9 @@ enum BuiltinErrorCaseUse
 	neverThrown
 end 'BuiltinErrorCaseUse'
 
-export type BuiltinErrorOrdinalCheck
+// ⚠ `module`, not `export`: every installer that raises one lives under `Compiler/Runtime/`, and shv2's own
+// `checkUnusedExports` (E3093) is what says so — the SELF-COMPILE runs that pass and the bootstrap does not.
+module type BuiltinErrorOrdinalCheck
 	// The declaration every claim is checked against.
 	var declaration as EnumLayout
 	// Where that declaration came from — see `BuiltinErrorDeclarationSource`.
