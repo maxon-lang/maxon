@@ -275,9 +275,13 @@ step "4/10  The full unfiltered shv2 suite"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # ⚠ REDIRECTED, never piped. A pipe decides what to keep BEFORE you know what failed, so a red run
 #   costs a second full run just to read what the first one already had.
-run_suite() {                        # run_suite <tree> <binary> <log> -> sets PASSED FAILED DRIFT
-  local tree="$1" bin="$2" log="$3"
-  ( cd "$tree" && "$bin" spec-test ) > "$log" 2>&1
+run_suite() {                        # run_suite <tree> <binary> <log> [target] -> sets PASSED FAILED DRIFT
+  local tree="$1" bin="$2" log="$3" target="${4:-}"
+  if [ -n "$target" ]; then
+    ( cd "$tree" && "$bin" spec-test "--target=$target" ) > "$log" 2>&1
+  else
+    ( cd "$tree" && "$bin" spec-test ) > "$log" 2>&1
+  fi
   SUITE_EXIT=$?
   local summary
   summary="$(grep -oE '^[0-9]+ passed, [0-9]+ failed' "$log" | tail -1)"
@@ -380,6 +384,60 @@ if [ "$BASE_FAILED" != "0" ]; then
   warn "⚠ THE BASE IS ALREADY RED ($BASE_FAILED failed). Whatever this rung did, it did not cause that."
   warn "  A pre-existing red still gets fixed — but it is not this rung's gate, and its own commit is"
   warn "  the right home for the fix."
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# ⭐⭐ THE OTHER LOCAL LANES — REPORTED, NEVER GATED. User ruling, 2026-08-24.
+#
+# Everything above measures the HOST lane and nothing else, so a rung that moves x64-linux or wasm
+# codegen passes the drift gate in silence. That is not hypothetical: BATCH44 re-minted x64-linux to
+# ZERO drift, and by BATCH46's merge base 538 fragments already differed — moved by something in
+# between that nobody measured, because nothing was looking. `cross-target-gate.sh` DOES run those
+# lanes, but it reads only PASS/FAIL, and drift is a `note:` that never touches an exit code.
+#
+# ⛔ REPORT ONLY. These deltas never set CODEGEN_MOVED, never demand a note and never die — that is
+#    the ruling, and it is the right shape: a second gate on a number this script cannot attribute
+#    would stop rungs over movement that belongs to somebody else, which is the failure the host
+#    delta already had to be taught to avoid.
+#
+# COST: the base half is cached by SHA exactly like the host's, and THIS rung's tip is the NEXT
+# rung's base — so a lane is measured once per commit of `main`, not once per rung.
+LOCAL_LANES=""
+command -v wsl.exe >/dev/null 2>&1 && LOCAL_LANES="$LOCAL_LANES x64-linux"
+[ -x "$REPO/vendor/wasmtime/wasmtime.exe" ] || [ -x "$REPO/vendor/wasmtime/wasmtime" ]   && LOCAL_LANES="$LOCAL_LANES wasm32-wasi"
+
+if [ -n "$LOCAL_LANES" ]; then
+  echo
+  echo "  other LOCAL lanes — reported, never gated (the host delta above is the gate):"
+  for lane in $LOCAL_LANES; do
+    lane_cache="$LOGDIR/rung-drift-$BASE_SHA-$lane.txt"
+    if [ -r "$lane_cache" ]; then
+      read -r lane_base < "$lane_cache"
+    else
+      if [ -e "$BASE_TREE" ]; then git worktree remove --force "$BASE_TREE" >/dev/null 2>&1; fi
+      if git worktree add --detach --quiet "$BASE_TREE" "$BASE_SHA" 2>/dev/null          && cp -r "$WORKTREE/bin" "$BASE_TREE/bin" 2>/dev/null          && build_tree "$BASE_TREE" "base" 0 2>/dev/null; then
+        run_suite "$BASE_TREE" "$(maxon_shv2_path "$BASE_TREE")" "$LOGDIR/rung-base-$lane.log" "$lane" || true
+        lane_base="$DRIFT"
+        printf '%s
+' "$lane_base" > "$lane_cache"
+      else
+        lane_base=""
+      fi
+      cleanup_base
+    fi
+    run_suite "$WORKTREE" "$SHV2" "$LOGDIR/rung-tip-$lane.log" "$lane" || true
+    lane_tip="$DRIFT"
+    if [ -n "$lane_base" ]; then
+      printf '    %-14s base %-6s tip %-6s delta %s
+' "$lane" "$lane_base" "$lane_tip" "$(( lane_tip - lane_base ))"
+    else
+      printf '    %-14s base UNMEASURED  tip %-6s (could not build the base for this lane)
+' "$lane" "$lane_tip"
+    fi
+  done
+  echo "    ⚠ a non-zero delta here is NOT a gate and NOT a failure — it is a lane this rung moved"
+  echo "      that the host delta cannot see. Say it in the rung report."
+  echo
 fi
 
 DRIFT_DELTA=$(( TIP_DRIFT - BASE_DRIFT ))
