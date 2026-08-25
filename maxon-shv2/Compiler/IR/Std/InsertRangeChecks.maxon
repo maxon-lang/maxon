@@ -1220,20 +1220,18 @@ end 'RangeCheckEmitter'
 // say a range check produced blocks a range check knows nothing about.
 let RangeCheckOkLabel = b"__rc_ok"
 
-// ⭐⭐ **THE BLOCK SPLIT, SHARED — AND SHARED BECAUSE THERE IS EXACTLY ONE RULE TO GET RIGHT.** A split
-// has to move the head block's whole EXIT onto the continuation — the terminator, the conditional branch
-// AND the outgoing edge arguments — and leave the head un-terminated for the caller to finish. Miss any
-// one of those three and the result is a block with two exits or a successor whose phis lose their
-// incoming values, neither of which any gate reads back. `InsertRangeChecks` needed it first and
+// ⭐⭐ **THE BLOCK SPLIT, SHARED — AND SHARED BECAUSE THERE IS EXACTLY ONE RULE TO GET RIGHT.** Split
+// `head` at `position`: ops before it stay in `head`, ops from it on move to the continuation — and the
+// continuation takes the head block's whole EXIT with them, the terminator, the conditional branch AND
+// the outgoing edge arguments, leaving the head un-terminated for the caller to finish. Miss any one of
+// those three and the result is a block with two exits or a successor whose phis lose their incoming
+// values, neither of which any gate reads back. `InsertRangeChecks` needed it first and
 // `InlineManagedPrimitives` (EC1) needs the identical thing, so it is a free function over `(module,
 // func)` rather than a method: a second copy would be that one rule written twice, in two passes that
 // split for different reasons and would learn about a change to it separately.
 //
 // The LABEL is the caller's, because a continuation belongs to the pass that minted it and the label
 // reaches the committed goldens.
-
-// Split `head` at `position` in place: ops before it stay in `head`, ops from it on move to the
-// continuation.
 //
 // ⚠ **WHY `InsertRangeChecks`' RETURN SITES DO NOT USE `splitChainEnd`, AND WHY NEITHER SPLIT CAN BE THE
 // OTHER.** A return site has no chain to extend (see `GuardChain`), and the block it splits can be a
