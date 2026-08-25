@@ -711,6 +711,20 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static StdI64 EmitPayloadAsSlotBits(IrBlock<StandardOp> block, StdValue payload) {
     switch (payload) {
+      // ⛔ ORDERED BEFORE THE `StdI64` ARM ON PURPOSE, BECAUSE `StdHeapPtr` DERIVES FROM IT
+      // (`StandardValues.cs:15`) AND WOULD OTHERWISE BE HANDED STRAIGHT BACK. The paragraph above
+      // says a managed payload must not come through here; this is what MAKES that true rather than
+      // merely stating it. A handle is not an SSA value, so returning one produced a `select`
+      // operand that aliased whatever Std value shared its id — a wrong NUMBER in the payload slot,
+      // silently, which is the defect this arm exists to stop from coming back through a second
+      // caller. The same hazard is written out one arm below for `StdU32` / `StdI32`.
+      case StdHeapPtr managed:
+        throw new InvalidOperationException(
+          $"union payload slot: a managed payload ('{managed.TypeName}') reached the scalar widener. "
+          + "An StdHeapPtr names the VARIABLE holding the pointer rather than being the pointer, so "
+          + "the caller has to load it from that variable — and take the union's reference to it — "
+          + "before any slot write. See LowerEnumFromNameAssociated.");
+
       case StdI64 alreadySlotWidth:
         return alreadySlotWidth;
 

@@ -297,11 +297,23 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(noMatchFlag);
     StdI64 currentErrorFlag = noMatchFlag.Result;
 
+    // How many payloads the CALL supplies. `Args[0]` is the name; the rest are the payloads, and
+    // `Args[1 + ai]` below reads them positionally.
+    int suppliedPayloadCount = tryCallOp.Args.Count - 1;
+
     foreach (var enumCase in enumType.Cases) {
       bool caseHasAssocValues = enumCase.AssociatedValues is { Count: > 0 };
 
-      // For dynamic name (no extra args), skip cases that need associated values
-      if (!hasExtraArgs && caseHasAssocValues) continue;
+      // ⛔ A CASE THIS CALL CANNOT POSSIBLY SELECT IS SKIPPED, AND SKIPPING IT ON ARITY IS WHAT
+      // KEEPS `Args[1 + ai]` IN BOUNDS. The parser holds the NAMED case to its own arity, so the
+      // one case that can match always has exactly `suppliedPayloadCount` payloads; every case with
+      // a different count is unreachable at run time whatever the name compares equal to. Asking
+      // only "were there extra args at all" walked those cases anyway and indexed past the end of
+      // the argument list: measured, a union carrying both `titled(t String)` and
+      // `pair(a String, b String)` turned `fromName("titled", s)` into
+      // `error E9001: Lowering function 'main' failed: Index was out of range` — a raw .NET
+      // exception with a three-frame trace printed at the user, for a program that is legal.
+      if (caseHasAssocValues && enumCase.AssociatedValues!.Count != suppliedPayloadCount) continue;
 
       var rdataLabel = $"__enum_fna_{enumType.Name}_{enumCase.Name}_{NextRdataId()}";
       var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, rdataLabel, block, _resultModule!);

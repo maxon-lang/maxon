@@ -4730,9 +4730,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
     _currentTypeName = null;
 
-    // hash() and equals() belong to the enum itself, or — for a union, whose own `hash`/`equals` are
-    // not synthesized at all (`ResolveAutoEquatableConformance`) — to its `.unionCases` companion.
-    var syntheticMemberOwner = isUnion ? UnionCasesCompanionOf(finalEnumType) : finalEnumType;
+    var syntheticMemberOwner = SyntheticMemberOwnerOf(finalEnumType);
 
     // ⚠ THE COMPANION'S VISIBILITY IS RECORDED FROM THE DECLARATION, NOT FROM THE MINT. Minting is
     // memoized in the type registry and a later pass reads the type back rather than re-minting, so
@@ -4796,6 +4794,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _typeRegistry[companionName] = companionType;
     return companionType;
   }
+
+  /// <summary>
+  /// WHOSE `hash`/`equals` a declaration synthesizes: the enum's own, or — for a union, whose own
+  /// `hash`/`equals` are not synthesized at all (`ResolveAutoEquatableConformance`) — its
+  /// `.unionCases` companion's.
+  ///
+  /// ⚠ ASKED IN ONE PLACE BECAUSE TWO PASSES ASK IT AND NOTHING WOULD MAKE TWO SPELLINGS AGREE.
+  /// <see cref="PreScanEnum"/> registers the STUB against this owner and <see cref="ParseEnumDecl"/>
+  /// builds the BODY against it, in different passes over the same declaration, and neither compares
+  /// its answer with the other's. Written twice, an edit to one gives either a hard
+  /// `Expected hash stub for …` out of the body builder, or — the silent direction, and the one this
+  /// whole mechanism was rebuilt for — a member REGISTERED WITH NO BODY, whose call returns whatever
+  /// the emitter placed next in `.text`.
+  /// </summary>
+  private IrEnumType SyntheticMemberOwnerOf(IrEnumType enumType) =>
+    enumType.IsUnion ? UnionCasesCompanionOf(enumType) : enumType;
 
   /// <summary>
   /// Parse struct literal fields for enum raw values, supporting nested struct literals.
@@ -4996,8 +5010,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   ///
   /// ⚠ <paramref name="reach"/> IS PASSED IN RATHER THAN LOOKED UP. The caller is `PreScanEnum`,
   /// which holds the declaration's modifiers; a table read here would answer for the enclosing
-  /// PARSER's view rather than for the declaration, and for a union's `.unionCases` companion — a
-  /// type no file declares — there is no table entry to read at all.
+  /// PARSER's view rather than for the declaration, and in the stdlib `ReachOfLocalType` short-
+  /// circuits to `Program` whatever the declaration says, so the two are not interchangeable.
+  ///
+  /// ⚠ AND THE TABLES ARE ONLY POPULATED FOR THE COMPANION BECAUSE THE CALLER FILLS THEM FIRST —
+  /// `PreScanEnum` adds both the union's name and its companion's to `_exportedTypes` /
+  /// `_moduleVisibleTypes` immediately ABOVE this call, so that the rebuild's `ReachOfLocalType`
+  /// (in `SynthesizeEnumHashAndEquals`) reaches the same answer this parameter carries. Move those
+  /// two adds back below this call and the stub goes file-private again while the rebuilt body does
+  /// not — one declaration, two reaches, decided by statement order.
   ///
   /// ⚠ <paramref name="enumName"/> IS THE MEMBERS' OWNER, WHICH FOR A UNION IS THE COMPANION AND NOT
   /// THE UNION. A union's own `hash`/`equals` are not synthesized (see `ResolveAutoEquatableConformance`).
@@ -7347,7 +7368,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // companion's. The companion is registered by the same declaration (see PreScanEnum), so this is
     // the one file that builds them: the full parse gives every file its own module, and two files
     // each building a body merge into `Duplicate function`.
-    var syntheticMemberOwner = enumType.IsUnion ? UnionCasesCompanionOf(enumType) : enumType;
+    var syntheticMemberOwner = SyntheticMemberOwnerOf(enumType);
     SynthesizeEnumHashAndEquals(module, syntheticMemberOwner.Name, syntheticMemberOwner);
 
     // Synthesize clone() for an auto-Cloneable union, the same place and on the same condition a

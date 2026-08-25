@@ -614,6 +614,60 @@ num7
 blank
 ```
 
+⛔ **EVERY `fromName` CASE ABOVE PASSES AN `.rdata` STRING LITERAL, AND NONE OF THEM CAN SEE THE RETAIN AT
+ALL.** A literal's record is image data the runtime never counts, so a union that writes the slot without
+taking a reference balances by accident. MEASURED on this tree: with the conditional `mm_incref` deleted from
+`LowerEnumFromNameAssociated`, all four cases above still PASS — the half of the ownership obligation they were
+written for is the one that must NOT retain on a case the runtime did not take, and nothing held the half that
+must retain on the case it did.
+
+⭐ **THE DISCRIMINATING PAYLOAD IS A HEAP RECORD THE CALLER STILL OWNS A COUNTED REFERENCE TO**, which a
+literal is not: an INTERPOLATED String and an Array literal bound to a local. Each half is separately
+sufficient — measured, either one alone dies as `mm_decref: refcount underflow (already zero)`, exit 1, with
+its own output already printed correctly, so the assertion is the exit code and not the text.
+
+<!-- test: union-payload.from-name-retains-a-payload-the-caller-still-holds -->
+```maxon
+typealias Small = int(0 to 1000)
+typealias SmallArray = Array with Small
+
+union Named
+	blank
+	titled(t String)
+	arrayed(xs SmallArray)
+end 'Named'
+
+function describe(n Named) returns String
+	return match n 'k'
+		blank gives "blank"
+		titled(t) gives t
+		arrayed(xs) gives "arrayed:{xs.count()}"
+	end 'k'
+end 'describe'
+
+function main() returns ExitCode
+	let n = 7
+	let kept = "a payload long enough to be a real heap allocation {n}"
+	let a = try Named.fromName("titled", kept) otherwise Named.blank
+	print("{describe(a)}\n")
+	print("{kept}\n")
+	let xs = [1, 2, 3]
+	let b = try Named.fromName("arrayed", xs) otherwise Named.blank
+	print("{describe(b)}\n")
+	print("{xs.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a payload long enough to be a real heap allocation 7
+a payload long enough to be a real heap allocation 7
+arrayed:3
+3
+```
+
 ### `.unionCases` has real `hash` and `equals`
 
 ⛔ **THE COMPANION IS A TYPE NO FILE DECLARES, AND FOR A LONG TIME THAT MEANT NO FILE BUILT ITS MEMBERS.** Its
