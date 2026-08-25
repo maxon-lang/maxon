@@ -7,7 +7,7 @@ public static partial class MaxonToStandardConversion {
   private static readonly HashSet<string> ThrowingManagedMemBuiltins = [
     "__managed_mem_get", "__managed_mem_set", "__managed_mem_remove",
     "__managed_mem_byte_at", "__managed_mem_set_byte",
-    "__managed_mem_grow", "__managed_mem_set_length",
+    "__managed_mem_grow", "__managed_mem_set_length", "__managed_mem_fill",
     "__managed_mem_shift_right", "__managed_mem_shift_left",
     "__managed_mem_swap",
     "__managed_mem_create", "__managed_mem_slice"

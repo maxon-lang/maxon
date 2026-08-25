@@ -252,7 +252,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'frobnicate' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'frobnicate' — shv2 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/fill/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-only-method-on-an-array-in-value-position -->

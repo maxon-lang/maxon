@@ -29,6 +29,15 @@ are the rules these two keep, and every one of them is observable from outside:
 - **Slots outside `[0, length)` still read ZERO.** A refill that SHRINKS erases what it vacates, so
   a later grow exposes zeroed slots rather than the previous occupants.
 
+Both are built on ONE buffer primitive — `managed.fill(from, count:, value:)`, which writes `value` into
+every slot of `[from, from + count)` and ANSWERS WHETHER IT DID. It applies to a TRIVIAL element (an int, a
+float, a bool, a byte, a ranged alias over one of those) and DECLINES for a MANAGED one, because a managed
+element's slot holds a reference that has to be taken and released per slot, and that ownership belongs to
+the store the compiler emits rather than to a bulk runtime loop. A caller that gets `false` back does the
+per-element loop itself; `refill` and `growFilled` are exactly that caller. The window is checked against
+the LIVE LENGTH, and `from < 0`, `count < 0` or `from + count > length` throws
+`__ManagedMemoryError.indexOutOfBounds`.
+
 ## Tests
 
 <!-- test: refill-packed-bool -->
@@ -362,4 +371,148 @@ end 'main'
 ```
 ```exitcode
 20
+```
+
+<!-- test: fill-detaches-from-a-buffer-someone-is-viewing -->
+### the buffer fill detaches from a buffer someone is viewing
+`refill` reaches `fill` only after `resize`, which has already detached — so this calls the primitive
+DIRECTLY, which is the only program in which the fill's own copy-on-write detach is the one doing the work.
+A slice is a zero-copy VIEW of the same bytes; filling in place would rewrite what the viewer sees.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
+	arr.push(4)
+	let view = try arr.slice(0, endIndex: 2) otherwise panic("slice: [0, 2) is inside a four-element array")
+	let applied = try arr.managed.fill(0, count: 4, value: 9) otherwise panic("fill: [0, 4) is exactly the live range")
+	if not applied 'aTrivialElementMustApply'
+		return 1
+	end 'aTrivialElementMustApply'
+	let v0 = try view.get(0) otherwise 0
+	let v1 = try view.get(1) otherwise 0
+	let a0 = try arr.get(0) otherwise 0
+	return v0 + v1 + a0
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: fill-declines-a-managed-element-and-writes-nothing -->
+### the buffer fill declines a managed element and writes nothing
+The answer `refill` reads. A `String` element's slot holds exactly one reference, and the retain/release
+per slot is the compiler's to emit at each store — so the runtime loop refuses the range outright rather
+than respelling that ownership. Nothing is written, nothing leaks (a leak here is exit 101), and the value
+it was handed is still the caller's to drop.
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.push("alpha")
+	arr.push("beta")
+	let applied = try arr.managed.fill(0, count: 2, value: "zeta") otherwise panic("fill: [0, 2) is exactly the live range")
+	if applied 'aManagedElementMustDecline'
+		return 1
+	end 'aManagedElementMustDecline'
+	let first = try arr.get(0) otherwise "??"
+	if first == "alpha" 'theSlotIsUntouched'
+		return 6
+	end 'theSlotIsUntouched'
+	return 2
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: fill-refuses-a-window-past-the-live-length -->
+### the buffer fill refuses a window past the live length
+The window is `[from, from + count)` and the bound is the LIVE LENGTH, not the capacity: a fill writes
+slots a reader is entitled to read back, so a window ending above the length would publish bytes nothing
+had length for.
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(3) otherwise return 2
+	let applied = try mm.fill(1, count: 3, value: 7) otherwise return 8
+	if applied 'itMustNotHaveApplied'
+		return 3
+	end 'itMustNotHaveApplied'
+	return 4
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: fill-refuses-a-negative-start -->
+### the buffer fill refuses a negative start
+`StdCmpPred` is signed, so `from + count > length` is FALSE for a negative `from` and reads as in range —
+the address it would then compute sits BEFORE the buffer. The negative test is its own compare.
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(3) otherwise return 2
+	let applied = try mm.fill(-1, count: 1, value: 7) otherwise return 8
+	if applied 'itMustNotHaveApplied'
+		return 3
+	end 'itMustNotHaveApplied'
+	return 4
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: fill-refuses-a-negative-count -->
+### the buffer fill refuses a negative count
+The other half of the same signed-compare hazard, and the one whose silent answer would be a LIE rather
+than a fault: `from + count` is below the length for every negative count, the loop then runs zero times,
+and the call would report that it had applied.
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(3) otherwise return 2
+	let applied = try mm.fill(0, count: -1, value: 7) otherwise return 8
+	if applied 'itMustNotHaveApplied'
+		return 3
+	end 'itMustNotHaveApplied'
+	return 4
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: fill-writes-only-its-own-window -->
+### the buffer fill writes only its own window
+`growFilled` reaches the primitive with a non-zero `from`, so the window's LOW end has to bind as well as
+its high one — a fill that started at 0 whatever it was asked would rewrite the prefix `growFilled` exists
+to preserve.
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(4) otherwise return 2
+	try mm.set(0, value: 5) otherwise return 3
+	let applied = try mm.fill(1, count: 3, value: 2) otherwise return 4
+	if not applied 'aTrivialElementMustApply'
+		return 5
+	end 'aTrivialElementMustApply'
+	var total = 0
+	var i = 0
+	while i < 4 'sum'
+		total = total + (try mm.get(i) otherwise return 6)
+		i = i + 1
+	end 'sum'
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+11
 ```

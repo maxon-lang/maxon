@@ -49,6 +49,7 @@ public static class LiteralCoverageAnalysisPass {
   private static readonly HashSet<string> MutatingBuiltinCallees = [
     "__managed_mem_set", "__managed_mem_set_byte", "__managed_mem_set_length",
     "__managed_mem_grow", "__managed_mem_shift_right", "__managed_mem_shift_left",
+    "__managed_mem_fill",
     "__managed_mem_swap", "__managed_mem_remove",
     "__managed_mem_append", "__managed_mem_clear",
   ];

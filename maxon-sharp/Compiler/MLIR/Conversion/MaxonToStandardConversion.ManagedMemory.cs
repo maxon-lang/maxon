@@ -637,22 +637,8 @@ public static partial class MaxonToStandardConversion {
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 
     if (isBitPacked) {
-      // Bit-packed bool: read-modify-write a single bit
-      // The value may be StdBool (i1) — convert to StdI64 (0 or 1) for EmitBitSet
-      var rawValue = valueMap[op.Value];
-      StdI64 value;
-      if (rawValue is StdBool boolVal) {
-        var oneConst = new StdConstI64Op(1);
-        block.AddOp(oneConst);
-        var zeroConst = new StdConstI64Op(0);
-        block.AddOp(zeroConst);
-        var selectOp = new StdSelectI64Op(boolVal, oneConst.Result, zeroConst.Result);
-        block.AddOp(selectOp);
-        value = selectOp.Result;
-      } else {
-        value = (StdI64)rawValue;
-      }
-      EmitBitSet(block, buffer, index, value);
+      // Bit-packed bool: read-modify-write a single bit.
+      EmitBitSet(block, buffer, index, ElementValueAsBitPayload(block, valueMap[op.Value]));
     } else if (op.IsStructElement) {
       var addr = ComputeElementAddress(block, buffer, index, elemSize);
       // Struct elements are heap pointers — release the old reference with field cleanup before overwriting.
@@ -679,6 +665,176 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(new StdBrOp(setMergeLabel));
       block = func.Body.AddBlock(setMergeLabel);
     }
+  }
+
+  /// <summary>
+  /// A bit-packed element's value as the {0,1} i64 payload EmitBitSet writes. A bool arrives as an
+  /// StdBool (i1) from an ordinary expression and as an StdI64 from an internal bit copy, and the
+  /// two spellings are the whole of what this normalizes. Shared by the single-slot store and the
+  /// range fill, so one of them cannot come to widen a bool differently from the other.
+  /// </summary>
+  private static StdI64 ElementValueAsBitPayload(IrBlock<StandardOp> block, StdValue rawValue) {
+    if (rawValue is not StdBool boolVal) return (StdI64)rawValue;
+    var oneConst = new StdConstI64Op(1);
+    block.AddOp(oneConst);
+    var zeroConst = new StdConstI64Op(0);
+    block.AddOp(zeroConst);
+    var selectOp = new StdSelectI64Op(boolVal, oneConst.Result, zeroConst.Result);
+    block.AddOp(selectOp);
+    return selectOp.Result;
+  }
+
+  /// <summary>
+  /// __managed_mem_fill(managed, start, count, value): write `value` into every slot of
+  /// [start, start + count) and answer WHETHER IT DID.
+  ///
+  /// The window is bounded by the LIVE LENGTH, not by the capacity the single-slot `set` is bounded
+  /// by (which exists so a staging write may land above the length before a setLength publishes it):
+  /// a fill writes a whole range a reader is entitled to read straight back. `start` below zero,
+  /// `count` below zero, or `start + count` above the length all throw indexOutOfBounds. The two
+  /// negative tests are their own compares because the sum test is signed - and the negative COUNT
+  /// is the worse of the pair, since the loop would simply run zero times and the call would report
+  /// that it had applied.
+  ///
+  /// A REFCOUNTED element DECLINES: the result is false and nothing is written. Its slot holds
+  /// exactly one reference, and releasing the occupant then retaining the new value is emitted per
+  /// store (LowerManagedMemSet's struct arm) - a bulk loop that respelled it would be that ownership
+  /// contract written twice, in a second place free to drift from the first. stdlib/Array.maxon's
+  /// refill/growFilled read the answer and keep their per-element loop as the arm this declined.
+  /// The self-hosted compiler decides the same thing at RUN time, off element_destroy@40, because
+  /// its shared generic Array body has no concrete element to decide from; here the element kind is
+  /// concrete after monomorphization, so the answer is a constant and no loop is emitted at all.
+  ///
+  /// The COW check runs ONCE for the whole range rather than per slot, and the buffer is loaded
+  /// after it - a detach replaces buffer@0.
+  /// </summary>
+  private static void LowerManagedMemFill(
+    MaxonManagedMemFillOp op,
+    IrFunction<StandardOp> func,
+    ref IrBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    MaxonValue? errorFlagValue = null) {
+    var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
+    var uid = IrContext.Current.NextId();
+
+    // The answer, in a slot because the declining path and the filling path are different blocks.
+    var appliedVar = $"__fill_applied_{uid}";
+    var notApplied = new StdConstI64Op(0);
+    block.AddOp(notApplied);
+    EmitStore(block, notApplied.Result, appliedVar, varTypes);
+
+    var start = (StdI64)valueMap[op.Start];
+    var count = (StdI64)valueMap[op.Count];
+    var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+    var stop = new StdAddI64Op(start, count);
+    block.AddOp(stop);
+    var zeroBound = new StdConstI64Op(0);
+    block.AddOp(zeroBound);
+    var negativeStart = new StdCmpI64Op("lt", start, zeroBound.Result);
+    block.AddOp(negativeStart);
+    var negativeCount = new StdCmpI64Op("lt", count, zeroBound.Result);
+    block.AddOp(negativeCount);
+    var pastEnd = new StdCmpI64Op("gt", stop.Result, length);
+    block.AddOp(pastEnd);
+    var negativeArg = new StdOrI1Op(negativeStart.Result, negativeCount.Result);
+    block.AddOp(negativeArg);
+    var isError = new StdOrI1Op(negativeArg.Result, pastEnd.Result);
+    block.AddOp(isError);
+
+    string? fillMergeLabel = null;
+    if (errorFlagValue != null) {
+      // __ManagedMemoryError.indexOutOfBounds (ordinal 0) -> flag 1
+      EmitBoundsCheckErrorFlag(block, isError.Result, 1, valueMap, varTypes, errorFlagValue);
+      var fillErrLabel = $"__fill_err_{uid}";
+      var fillOkLabel = $"__fill_ok_{uid}";
+      fillMergeLabel = $"__fill_merge_{uid}";
+      block.AddOp(new StdCondBrOp(isError.Result, fillErrLabel, fillOkLabel));
+      var fillErrBlock = func.Body.AddBlock(fillErrLabel);
+      fillErrBlock.AddOp(new StdBrOp(fillMergeLabel));
+      block = func.Body.AddBlock(fillOkLabel);
+    } else {
+      EmitPanicIf(block, isError.Result, "__mm_panic_index_oob");
+    }
+
+    if (!op.IsStructElement) {
+      var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
+      var isBitPacked = op.ElementKind == MaxonValueKind.Bool;
+
+      // Every loop-carried value goes through a slot, because the body re-reads it on each trip and
+      // this IR has no block parameters. They are spilled BEFORE the cow check, which is a runtime
+      // CALL - the append loop's stated reason, one member over.
+      var loopVar = $"__fill_i_{uid}";
+      EmitStore(block, start, loopVar, varTypes);
+      var stopVar = $"__fill_stop_{uid}";
+      EmitStore(block, stop.Result, stopVar, varTypes);
+      var elemSizeVar = $"__fill_elemsize_{uid}";
+      EmitStore(block, elemSize, elemSizeVar, varTypes);
+      var valueVar = $"__fill_value_{uid}";
+      EmitStore(block, isBitPacked ? ElementValueAsBitPayload(block, valueMap[op.Value]) : valueMap[op.Value], valueVar, varTypes);
+
+      EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: isBitPacked, isStructElement: false);
+
+      // The buffer is the one read that must come AFTER the detach: it is what a detach replaces.
+      var bufVar = $"__fill_buf_{uid}";
+      EmitStore(block, LoadManagedBuffer(block, managedVarName, varTypes), bufVar, varTypes);
+
+      var headerLabel = $"__fill_hdr_{uid}";
+      var bodyLabel = $"__fill_body_{uid}";
+      var exitLabel = $"__fill_exit_{uid}";
+      block.AddOp(new StdBrOp(headerLabel));
+
+      var headerBlock = func.Body.AddBlock(headerLabel);
+      var iHeader = (StdI64)EmitLoad(headerBlock, loopVar, varTypes);
+      var stopHeader = (StdI64)EmitLoad(headerBlock, stopVar, varTypes);
+      var more = new StdCmpI64Op("lt", iHeader, stopHeader);
+      headerBlock.AddOp(more);
+      headerBlock.AddOp(new StdCondBrOp(more.Result, bodyLabel, exitLabel));
+
+      var bodyBlock = func.Body.AddBlock(bodyLabel);
+      var iBody = (StdI64)EmitLoad(bodyBlock, loopVar, varTypes);
+      var bufBody = (StdI64)EmitLoad(bodyBlock, bufVar, varTypes);
+      var valueBody = EmitLoad(bodyBlock, valueVar, varTypes);
+      if (isBitPacked) {
+        EmitBitSet(bodyBlock, bufBody, iBody, (StdI64)valueBody);
+      } else {
+        var elemSizeBody = (StdI64)EmitLoad(bodyBlock, elemSizeVar, varTypes);
+        var addr = ComputeElementAddress(bodyBlock, bufBody, iBody, elemSizeBody);
+        // The precise narrow storage width, exactly as the single-slot store picks it: an
+        // element_size of 1 must not be written by an 8-byte store.
+        var elemType = op.ElementStorageType ?? GetManagedMemElementType(op.ElementKind, "LowerManagedMemFill");
+        bodyBlock.AddOp(new StdStoreIndirectOp(valueBody, addr, 0, elemType));
+      }
+      var oneStep = new StdConstI64Op(1);
+      bodyBlock.AddOp(oneStep);
+      var iNext = new StdAddI64Op(iBody, oneStep.Result);
+      bodyBlock.AddOp(iNext);
+      EmitStore(bodyBlock, iNext.Result, loopVar, varTypes);
+      bodyBlock.AddOp(new StdBrOp(headerLabel));
+
+      block = func.Body.AddBlock(exitLabel);
+      var didApply = new StdConstI64Op(1);
+      block.AddOp(didApply);
+      EmitStore(block, didApply.Result, appliedVar, varTypes);
+    }
+
+    if (fillMergeLabel != null) {
+      block.AddOp(new StdBrOp(fillMergeLabel));
+      block = func.Body.AddBlock(fillMergeLabel);
+      // The error path stored the flag and skipped the fill; re-read it in the merge, for
+      // LowerManagedMemGet's stated reason (a per-branch SSA value clobbers across blocks).
+      if (errorFlagValue != null) {
+        var mergedFlag = (StdI64)EmitLoad(block, "__error_flag", varTypes);
+        valueMap[errorFlagValue] = mergedFlag;
+      }
+    }
+
+    var appliedWord = (StdI64)EmitLoad(block, appliedVar, varTypes);
+    var zeroApplied = new StdConstI64Op(0);
+    block.AddOp(zeroApplied);
+    var appliedBool = new StdCmpI64Op("ne", appliedWord, zeroApplied.Result);
+    block.AddOp(appliedBool);
+    valueMap[op.Result] = appliedBool.Result;
   }
 
   /// <summary>
@@ -2257,6 +2413,17 @@ public static partial class MaxonToStandardConversion {
       case "__managed_mem_set_byte": {
         var setByteOp = new MaxonManagedMemByteSetOp(args[0], args[1], args[2]);
         LowerManagedMemByteSet(setByteOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+        return true;
+      }
+      case "__managed_mem_fill": {
+        var (fillElementKind, _, _, isFillStructElem, _, fillElementStorageType) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+        var fillOp = new MaxonManagedMemFillOp(args[0], args[1], args[2], args[3], fillElementKind) {
+          IsStructElement = isFillStructElem,
+          ElementStorageType = fillElementStorageType
+        };
+        LowerManagedMemFill(fillOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+        if (result != null && valueMap.TryGetValue(fillOp.Result, out var fillMapped))
+          valueMap[result] = fillMapped;
         return true;
       }
       case "__managed_mem_grow": {

@@ -1664,6 +1664,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       ["self", "index", "value"], [mm, IrType.I64, elem], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "grow",
       ["self", "newCapacity"], [mm, IrType.I64], null, throwsType: mmErr);
+    // fill(start, count, value): write `value` into every slot of [start, start + count) and ANSWER
+    // WHETHER IT DID. It applies to a trivial element and DECLINES (false, storing nothing) for a
+    // refcounted one, because a managed slot's per-store retain/release is emitted by the compiler
+    // and a bulk loop cannot respell it — stdlib/Array.maxon's refill/growFilled keep their
+    // per-element loop as the arm it declined. Neither reference declares this member: it exists
+    // because the self-hosted compiler keeps ONE shared generic Array body, in which that loop is a
+    // CALL per element (EC1). Here it lowers inline like every other buffer builtin, so the answer
+    // is what has to agree between the two compilers, not the code.
+    RegisterBuiltinMethod("__ManagedMemory", "fill",
+      ["self", "start", "count", "value"], [mm, IrType.I64, IrType.I64, elem], IrType.I1, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "shiftRight",
       ["self", "index", "count"], [mm, IrType.I64, IrType.I64], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "shiftLeft",
@@ -13129,7 +13139,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // String one and report the receiver as a `var` that is never reassigned.
       StringTypeName => methodName is StringSetByteMethodName,
       "__ManagedMemory" => methodName is "set" or "remove" or "clear" or "setLength" or "grow"
-        or "shiftRight" or "shiftLeft" or "swap" or "setByte" or "append",
+        or "shiftRight" or "shiftLeft" or "swap" or "setByte" or "append" or "fill",
       "__ManagedList" => methodName is "insertFirst" or "insertLast" or "insertAfter" or "insertBefore"
         or "reinsertFirst" or "reinsertLast" or "reinsertAfter" or "reinsertBefore"
         or "detach" or "remove" or "clear" or "cursorReset" or "cursorStart" or "cursorAdvance",
@@ -13179,6 +13189,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["__managed_mem_get"] = "get",
     ["__managed_mem_remove"] = "remove",
     ["__managed_mem_set"] = "set",
+    ["__managed_mem_fill"] = "fill",
     ["__managed_mem_grow"] = "grow",
     ["__managed_mem_shift_right"] = "shiftRight",
     ["__managed_mem_shift_left"] = "shiftLeft",
@@ -13397,6 +13408,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var newCap = args[1];
         EmitBuiltinTryCall("__managed_mem_grow", [selfValue, newCap], null, null, mmErr);
         return (true, null);
+      }
+      case "fill": {
+        var fillStart = args[1];
+        var fillCount = args[2];
+        var fillValue = args[3];
+        return (true, EmitBuiltinTryCall("__managed_mem_fill", [selfValue, fillStart, fillCount, fillValue],
+          MaxonValueKind.Bool, null, mmErr));
       }
       case "shiftRight": {
         var index = args[1];

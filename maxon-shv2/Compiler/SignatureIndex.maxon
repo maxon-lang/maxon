@@ -5887,6 +5887,22 @@ export let ManagedMemorySetByteMethod = b"setByte"
 export let ManagedMemoryLengthMethod = b"length"
 export let ManagedMemoryGrowMethod = b"grow"
 
+// ⭐⭐ **`fill(start, count:, value:)` — THE ONE MEMBER NEITHER REFERENCE DECLARES, AND THE ONE ADDED FOR A
+// MEASUREMENT rather than to match a table (EC1).** Both references give the buffer nineteen members and a
+// bulk element write is not among them, because in both of them `Array.refill`'s per-element store INLINES:
+// the bootstrap monomorphizes the body and the store becomes one `mov`. shv2 keeps ONE shared generic body
+// (⚖ user ruling, 2026-08-25), so the same source line is a CALL per element — measured at 21% of the
+// shv2-emitted compiler's own samples — and the fused member is what a shared body can reach instead.
+//
+// ⚠ Its `start` is the only parameter name here that is not read back from a reference or from the corpus,
+// for the same reason: nothing had written the member down. It is spelled to say what the OTHER two
+// parameters mean — a window `[start, start + count)` — where `index`/`offset` would each have claimed a
+// neighbouring member's noun (`ManagedMemoryIndexParamName` is a single slot's, `offset`'s is a BYTE).
+// ⚠ **AND IT IS NOT `from`, WHICH IS WHAT THE WINDOW WANTS TO BE CALLED: `from` IS A KEYWORD** (the lexer
+// hands it back as one, so `E2010: Expected identifier but got 'from'` refuses the parameter, the local and
+// any label spelled with it). The name a diagnostic prints has to be one the reader could type.
+export let ManagedMemoryFillMethod = b"fill"
+
 // ⭐ **`toCString()` — THE BUFFER'S NUL-TERMINATED VIEW**, and the corpus's only producer of a `cstring`
 // (`stdlib/String.maxon:195`, whose `cstr()` is its one caller). Named here beside its siblings rather than
 // at the arm, so the roster, the dispatch and the refusal all read one spelling.
@@ -6079,6 +6095,7 @@ export let ManagedMemoryNewLengthParamName = b"newLength"
 export let ManagedMemoryNewCapacityParamName = b"newCapacity"
 export let ManagedMemoryOffsetParamName = b"offset"
 export let ManagedMemoryIndexParamName = b"index"
+export let ManagedMemoryStartParamName = b"start"
 
 // ⚠ `Array.append`'s parameter carries this SAME label, so both append doors reach this one constant (through
 // `Parser.appendArgParamName`) rather than minting a second `b"other"` — one label, one spelling. It is in

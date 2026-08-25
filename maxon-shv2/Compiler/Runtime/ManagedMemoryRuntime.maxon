@@ -604,6 +604,25 @@ export let CursorRecordBytes = 16 as ParsedInt
 // element — is untouched.
 export let ManagedMemSetName = b"__managed_mem_set"
 
+// ⭐⭐ **`__managed_fill(arr, start, count, value) -> (applied, flag)` — ONE VALUE INTO EVERY SLOT OF
+// `[start, start + count)`, IN ONE CALL, AND IT SAYS WHETHER IT DID.** `stdlib/Array.maxon`'s
+// `refill`/`growFilled` are its callers and their per-element loop is the arm it declines.
+//
+// ⚠ **THE DECLINE IS THE CONTRACT AND NOT A GAP.** A MANAGED element's slot holds exactly one reference,
+// and taking and releasing one PER SLOT is the PARSER's obligation, emitted at each `managed.set`
+// (`Parser.moveElementIntoContainer` — `coOwnBorrowedOpaque` for the shared generic body's opaque `T`, W58).
+// A runtime loop cannot respell that: it holds a machine word, not a value it knows the ownership protocol
+// of, and the enclosing instance's `retainFunc@64` is the caller's descriptor rather than anything reachable
+// from an array record. So a non-zero `element_destroy@40` stores NOTHING and answers 0, the caller loops,
+// and the ownership stays in the one place that has ever emitted it.
+//
+// ⚠ **THE ARGUMENT IS THEREFORE BORROWED AT EVERY CALL SITE — the parser must NOT move the element in.**
+// A move-in for a managed element would take a reference the decline then never stores: a leak, on exactly
+// the path this entry exists to serve. `Parser.dispatchArrayMethod`'s `fill` arm TYPE-CHECKS the value
+// (`requireContainerElementType`) and converts a float to its bits (`containerElementWord`) and does no
+// more; the trivial element it does store owns nothing to begin with.
+export let ManagedFillName = b"__managed_fill"
+
 // The `__ManagedMemoryError` ordinals these members throw, as error FLAGS — positional facts about the case
 // order of the enum DECLARED at `stdlib/Builtins.maxon:152` (A1s), exactly as `ArrayErrorIndexOutOfBoundsFlag` is
 // about the still-synthesized `ArrayError`'s. DERIVED from the one bias rather than spelled 1/4/7/8.
@@ -860,7 +879,7 @@ end 'isThrowingArrayAccessorCallee'
 // declare ONE `throws` clause and propagate a buffer `set` and a buffer `get` through it; moving those two
 // needs buffer entries of their own (`get` carries the empty-slot arm) and is a rung, not a rename.
 export function isManagedMemoryMemberCallee(callee ByteArray) returns bool
-	return callee.equals(ManagedMemCreateName) or callee.equals(ManagedSetLengthName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedByteAtName) or callee.equals(ManagedMemGrowName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedMemSwapName) or callee.equals(ManagedMemShiftRightName) or callee.equals(ManagedMemShiftLeftName) or callee.equals(ManagedCursorCreateName)
+	return callee.equals(ManagedMemCreateName) or callee.equals(ManagedSetLengthName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedByteAtName) or callee.equals(ManagedMemGrowName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) or callee.equals(ManagedMemShiftRightName) or callee.equals(ManagedMemShiftLeftName) or callee.equals(ManagedCursorCreateName)
 end 'isManagedMemoryMemberCallee'
 
 // ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, read through
@@ -896,6 +915,9 @@ export function managedMemorySourceMethodName(callee ByteArray) returns ByteArra
 	if callee.equals(ManagedMemSetName) 'set'
 		return ArraySetMethod
 	end 'set'
+	if callee.equals(ManagedFillName) 'fill'
+		return ManagedMemoryFillMethod
+	end 'fill'
 	if callee.equals(ManagedMemSwapName) 'swap'
 		return ManagedMemorySwapMethod
 	end 'swap'
@@ -1067,6 +1089,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedByteAt(module)
 	buildManagedMemGrow(module)
 	buildManagedMemSet(module)
+	buildManagedFill(module)
 	buildManagedMemSwap(module)
 	buildManagedMemShiftRight(module)
 	buildManagedMemShiftLeft(module)
@@ -1597,7 +1620,7 @@ end 'emitLoadElemAndOkReturn'
 // Call `__managed_cow_detach(arr)` — the one obligation every in-place mutator owes before it touches the
 // buffer (see `buildManagedCowDetach` for the rule and for which mutators call this directly). The callee is
 // void, so the minted result is unread; it exists because a `call` op always defines a value.
-export function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
+function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
 	let detached = ids.mint()
 	module.appendOp(block, op: StdOp.call(detached, callee: ManagedCowDetachName, args: argsOf(arr)))
 end 'emitCowDetach'
@@ -2232,7 +2255,7 @@ end 'emitZeroElems'
 // is FALSE and the index reads as "in bounds", then `buffer + index·elementSize` addresses BEFORE the buffer
 // (an OOB heap read/write). This explicit guard is the ONE home of "reject a negative index" — shared by
 // `emitIndexOutOfRange` (get/set/remove) and `buildManagedSlice`, so the fact is written once.
-export function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
+function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: value, b: zero, pred: StdCmpPred.lt, ids: ids)
 end 'emitIsNegative'
@@ -3855,6 +3878,110 @@ function buildManagedMemSet(module StdModule)
 
 	module.functions.push(func)
 end 'buildManagedMemSet'
+
+// ⭐⭐ **`__managed_fill(arr, start, count, value) -> (applied, flag)` — THE FUSED WHOLE-WINDOW WRITE.** One
+// bounds check, ONE copy-on-write detach and one loop, where `stdlib/Array.maxon`'s `refill` used to make a
+// `__managed_mem_set` call — and so a `__managed_cow_detach` call, and so a whole stride decode — PER
+// ELEMENT. **MEASURED (EC0, 2026-08-25): `__managed_mem_set` is 21% of the shv2-emitted compiler's samples
+// and its hottest edge is `__managed_mem_set ← Array.refill ← augmentValue` at 17.6%.** See `ManagedFillName`
+// for the surface contract and for why the answer is a bool.
+//
+// ⚠ **IT REFUSES THREE WAYS AND THEY ARE THREE COMPARES, NOT ONE.** `StdCmpPred` is SIGNED
+// (`emitIsNegative`'s header), so `start + count > length` is FALSE for a negative `start` — the address would
+// then be computed BEFORE the buffer — and false for a negative `count` too, where the loop simply runs zero
+// times and the call would report that it had APPLIED. The second is the worse failure of the two: a wrong
+// answer rather than a fault.
+//
+// ⚠ **THE BOUND IS THE LIVE LENGTH, WHERE `__managed_mem_set`'s IS THE CAPACITY, AND THAT IS DELIBERATE.**
+// `emitBufferAccessGuard`'s header carries the ruling that gives the buffer's element WRITE a capacity bound:
+// it exists so a staging idiom can write `[length, capacity)` before a `setLength` publishes it. A fill is the
+// opposite shape — it writes a whole window a reader is entitled to read straight back — so a window ending
+// above the length would publish bytes nothing has a length for. `Array.refill` sets the length FIRST
+// (`resize`) and then fills, which is exactly the order this bound asks for.
+//
+// ⚠⚠ **THE DETACH IS THIS ENTRY'S OWN, AND ITS ONLY OBSERVABLE CALLER IS A DIRECT `managed.fill`.** Both
+// `stdlib` callers reach here past `__managed_set_length`, which detaches unconditionally — so under
+// `refill`/`growFilled` alone this call is provably a no-op and NO case could redden it. It stays because a
+// runtime entry has to be correct on its own (`buildManagedCowDetach`'s header: a mutator either grows or
+// detaches, and re-deriving a caller's detach at a call site is the drifting checklist that header rejects),
+// and `array-refill.fill-detaches-from-a-buffer-someone-is-viewing` is the program that makes it live: it
+// calls the member directly, with a slice viewing the buffer, and asserts the view keeps its bytes.
+//
+// ⚠ `buffer@0` and `element_size@24` are loaded AFTER the detach, never before — trap 1 in
+// `buildManagedCowDetach`: a detach REPLACES `buffer@0`, so a pointer read above it addresses the buffer the
+// record no longer owns.
+//
+// The store is `emitStoreElemAt`, which is every write accessor's, so the fill inherits the word and byte
+// fast arms and the sub-byte read-modify-write without knowing that any of them exist — an `Array with bool`
+// refill writes FIELDS through the same one call an `Array with Int` refill writes words through.
+function buildManagedFill(module StdModule)
+	var func = IrFunction.createFromStd(ManagedFillName, returnType: StdReturnType.value(valueTagToStdType(ValueTypeTag.boolean)), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkCount = module.addBlock(func, label: b"chkcount")
+	var checkHigh = module.addBlock(func, label: b"chkhigh")
+	var bad = module.addBlock(func, label: b"badrange")
+	var classify = module.addBlock(func, label: b"classify")
+	var declined = module.addBlock(func, label: b"declined")
+	var prepare = module.addBlock(func, label: b"prepare")
+	var header = module.addBlock(func, label: b"fillh")
+	var body = module.addBlock(func, label: b"fillb")
+	var applied = module.addBlock(func, label: b"applied")
+
+	emitParams(module, block: entry, count: 4)
+	let arr = 0 as ValueId
+	let start = 1 as ValueId
+	let count = 2 as ValueId
+	let value = 3 as ValueId
+
+	let startIsNegative = emitIsNegative(module, block: entry, value: start, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(startIsNegative, thenBlockId: bad.id, elseBlockId: checkCount.id))
+
+	let countIsNegative = emitIsNegative(module, block: checkCount, value: count, ids: ids)
+	module.setTerminator(checkCount, op: StdOp.condBranch(countIsNegative, thenBlockId: bad.id, elseBlockId: checkHigh.id))
+
+	// `stop` is computed HERE and read by the loop header below, which `checkHigh` dominates — the window's
+	// end is one addition whichever of the two asks for it.
+	let stop = emitBin(module, block: checkHigh, a: start, b: count, opcode: StdBinOpcode.add, ids: ids)
+	let length = emitLoadField(module, block: checkHigh, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let pastEnd = emitCmp(module, block: checkHigh, a: stop, b: length, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(checkHigh, op: StdOp.condBranch(pastEnd, thenBlockId: bad.id, elseBlockId: classify.id))
+
+	emitMemoryThrow(module, block: bad, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
+
+	// The element's OWNERSHIP, read out of the record rather than decided by the compiler: one compiled
+	// `__managed_fill` serves every array in the program, exactly as one `__managed_get` does.
+	let dtor = emitLoadField(module, block: classify, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
+	let trivialDtor = emitConst(module, block: classify, value: TrivialElementDestroy, ids: ids)
+	let elementIsManaged = emitCmp(module, block: classify, a: dtor, b: trivialDtor, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(classify, op: StdOp.condBranch(elementIsManaged, thenBlockId: declined.id, elseBlockId: prepare.id))
+
+	let notApplied = emitConst(module, block: declined, value: PredicateFalse, ids: ids)
+	emitOkReturn(module, block: declined, value: notApplied, ids: ids)
+
+	emitCowDetach(module, block: prepare, arr: arr, ids: ids)
+	let buffer = emitLoadField(module, block: prepare, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: prepare, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+	module.setTerminator(prepare, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	prepare.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+	let atEnd = emitCmp(module, block: header, a: i, b: stop, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: applied.id, elseBlockId: body.id))
+
+	var afterStore = emitStoreElemAt(module, func: func, cur: body, buffer: buffer, index: i, value: value, es: es, ids: ids)
+	let one = emitConst(module, block: afterStore, value: 1, ids: ids)
+	let iNext = emitBin(module, block: afterStore, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(afterStore, op: StdOp.branch(header.id))
+	afterStore.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	let didApply = emitConst(module, block: applied, value: PredicateTrue, ids: ids)
+	emitOkReturn(module, block: applied, value: didApply, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedFill'
 
 // ⭐ `__managed_mem_grow(arr, newCapacity)` — raise the capacity to EXACTLY `newCapacity`, or throw
 // `invalidCapacity`. VOID and throwing. v1's `__managed_mem_grow` (`stdlib/Internals.maxon:3485-3503`).

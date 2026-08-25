@@ -466,11 +466,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 			panic("Array.growFilled: setLength OOB — capacity just ensured for newLength")
 		end 'lenErr'
 
-		for i in existing upto newLength 'fill'
-			try managed.set(i, value) otherwise 'setErr'
-				panic("Array.growFilled: set OOB at {i} — length just set to newLength")
-			end 'setErr'
-		end 'fill'
+		fillPublished(existing, count: newLength - existing, value: value)
 	end 'growFilled'
 
 	/// Set the length to `newLength` and write `value` into EVERY entry of `[0, newLength)`.
@@ -488,12 +484,31 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	public function refill(newLength ElementCount, value Element)
 		resize(newLength)
 
-		for i in 0 upto newLength 'fill'
-			try managed.set(i, value) otherwise 'setErr'
-				panic("Array.refill: set OOB at {i} — length just set to newLength")
-			end 'setErr'
-		end 'fill'
+		fillPublished(0, count: newLength, value: value)
 	end 'refill'
+
+	/// Write `value` into every entry of `[start, start + count)`, which the CALLER has already
+	/// published — this only writes, it never changes the length.
+	///
+	/// `growFilled` and `refill` differ in the window and in nothing else, and this is where that
+	/// stops being two copies of one decision. The buffer's `fill` writes the whole window in one
+	/// call and ANSWERS WHETHER IT DID: it applies to a trivial element and DECLINES for a managed
+	/// one, whose slot holds exactly one reference — taking and releasing that reference is emitted
+	/// by the compiler at each store, and a bulk runtime loop cannot respell it. The per-element
+	/// loop below is the arm it declined, and it is the whole of what these two used to do.
+	function fillPublished(start ElementIndex, count ElementCount, value Element)
+		let applied = try managed.fill(start, count: count, value: value) otherwise 'fillErr'
+			panic("Array.fillPublished: fill OOB — the window is inside the length the caller just published")
+		end 'fillErr'
+
+		if not applied 'aManagedElement'
+			for i in start upto start + count 'fill'
+				try managed.set(i, value) otherwise 'setErr'
+					panic("Array.fillPublished: set OOB at {i} — the window is inside the published length")
+				end 'setErr'
+			end 'fill'
+		end 'aManagedElement'
+	end 'fillPublished'
 
 	// =========================================================================
 	// Iterable Interface

@@ -164,6 +164,7 @@ public enum MaxonOpKind {
   GlobalStore,
   ManagedMemGet,
   ManagedMemSet,
+  ManagedMemFill,
   ManagedMemCreate,
   ManagedMemGrow,
   ManagedMemSetLength,
@@ -1661,6 +1662,31 @@ public sealed class MaxonManagedMemSetLengthOp(MaxonValue managedStruct, MaxonVa
   public bool IsStructElement { get; init; }
   public override IReadOnlyList<MaxonValue> Results => [];
   public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, NewLength];
+}
+
+// Write one value into every slot of [Start, Start + Count), or answer that it did not. The Result is a
+// bool: TRUE when the fill applied, FALSE when the element is refcounted and the range was refused
+// outright — a managed slot's per-store release-then-retain is the compiler's to emit at each store
+// (LowerManagedMemSet's struct arm), and a bulk loop that respelled it would be that contract written
+// twice. stdlib/Array.maxon's refill/growFilled read the answer and keep their per-element loop as the
+// arm this declined. See LowerManagedMemFill.
+public sealed class MaxonManagedMemFillOp(MaxonValue managedStruct, MaxonValue start, MaxonValue count, MaxonValue value, MaxonValueKind elementKind) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedMemFill;
+  public override string Mnemonic => "maxon.managed_mem_fill";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public MaxonValue Start { get; } = start;
+  public MaxonValue Count { get; } = count;
+  public MaxonValue Value { get; } = value;
+  public MaxonValueKind ElementKind { get; } = elementKind;
+  /// True when elements are refcounted heap pointers (struct / string / union / array) — the case
+  /// this op declines rather than serves.
+  public bool IsStructElement { get; init; }
+  /// The precise narrow store width when the element has one (int(0..100) is a byte), so the fill
+  /// writes exactly the slot LowerManagedMemSet would have written and not the seven beyond it.
+  public IrType? ElementStorageType { get; init; }
+  public MaxonValue Result { get; } = MaxonValueKind.Bool.CreateValue();
+  public override IReadOnlyList<MaxonValue> Results => [Result];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, Start, Count, Value];
 }
 
 // Clear all elements from managed memory, decrementing struct element refcounts

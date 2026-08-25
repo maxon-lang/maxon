@@ -6096,7 +6096,11 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 	// `managed.clear()`, whose own receiver-write this same answer records one frame down. The four cases the
 	// `Array` spelling used to answer for — `Bag.wipe()` clearing its own field — are
 	// `BorrowCheck.StorageReachEdge`'s now, and they were a use-after-free until it existed.
-	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod) or name.equals(ManagedMemoryGrowMethod) or name.equals(ManagedMemorySwapMethod) or name.equals(ManagedMemoryShiftRightMethod) or name.equals(ManagedMemoryShiftLeftMethod) or name.equals(RemoveMethod) or name.equals(ClearMethod)) 'managedMemoryMutator'
+	// ⚠ **`fill` JOINED THEM AT EC1 AND IT WRITES NO `length@8` AT ALL** — it rewrites the ELEMENTS of a
+	// window a borrow may be looking at, which is `swap`'s reason exactly, plus a copy-on-write detach that
+	// can replace `buffer@0`. It is deliberately NOT on `bufferLengthWritingMemberNames`: a sized container's
+	// buffer may fill its own slots, because the count a fill leaves behind is the count it found.
+	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod) or name.equals(ManagedMemoryGrowMethod) or name.equals(ManagedMemoryFillMethod) or name.equals(ManagedMemorySwapMethod) or name.equals(ManagedMemoryShiftRightMethod) or name.equals(ManagedMemoryShiftLeftMethod) or name.equals(RemoveMethod) or name.equals(ClearMethod)) 'managedMemoryMutator'
 		return true
 	end 'managedMemoryMutator'
 
@@ -6205,6 +6209,7 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	names.push(ByteAtMethod)
 	names.push(ManagedMemoryElementSizeMethod)
 	names.push(ManagedMemoryGrowMethod)
+	names.push(ManagedMemoryFillMethod)
 	names.push(ManagedMemoryToCStringMethod)
 	names.push(ManagedMemoryMakeCharFromBytesMethod)
 	names.push(AppendMethod)
@@ -7262,17 +7267,25 @@ end 'rosterDriftMessage'
 // clause was the one half of each sentence no gate could check; `rosterRefusalSentence` carries what building
 // `elementSize` measured about it.
 function surfaceRosterProvider(surface MemberSurface) returns String
-	if surface == MemberSurface.buffer 'bufferSurface'
-		return "R4.4"
-	end 'bufferSurface'
-
 	if surface == MemberSurface.array 'arraySurface'
 		return "P1.7"
 	end 'arraySurface'
 
-	// The other four are shv2's own synthesized surfaces and say so with one arm rather than four identical
-	// ones — a fall-through is still impossible, which is the property the split arms existed for.
-	if surface == MemberSurface.string or surface == MemberSurface.character or surface == MemberSurface.stringIndex or surface == MemberSurface.cursor 'shv2sOwnSurface'
+	// ⛔⛔ **THE BUFFER'S ANSWER WAS `"R4.4"` AND HAD BEEN FALSE SINCE X-array-retire — THE EXACT ROT
+	// `rosterRefusalSentence` EXISTS TO REMOVE, IN THE HALF OF ITS OWN SENTENCE IT DID NOT DERIVE.** That
+	// function's header says the roster IS the whole claim precisely so that adding a member is the whole
+	// edit; a rung ID beside the rendered list is a second, unchecked claim about who put every name on
+	// it — and by the time this was found the list had gained `remove`/`swap`/`shiftRight`/`shiftLeft`
+	// (X-array-retire), `clear` (ARR4) and `fill` (EC1), none of them R4.4's. It joins the arm below
+	// because the answer that CANNOT rot is the true one: `__ManagedMemory` is a compiler builtin, so its
+	// surface is shv2's own, exactly as the four below are.
+	//
+	// ⚠ **THE `Array` ARM HAS THE IDENTICAL DEFECT AND IS DELIBERATELY UNTOUCHED HERE.** `"P1.7"` has been
+	// overtaken by ARR1/ARR2/ARR4/ARR5b/X-array-retire in the same way, but that surface answers for every
+	// `BuiltinArrayLiteral` conformer in the program and its sentence is pinned by a different set of
+	// `maxoncstderr` blocks — it is a wording change with its own blast radius, and reported as one rather
+	// than smuggled in beside a buffer member.
+	if surface == MemberSurface.buffer or surface == MemberSurface.string or surface == MemberSurface.character or surface == MemberSurface.stringIndex or surface == MemberSurface.cursor 'shv2sOwnSurface'
 		return "shv2"
 	end 'shv2sOwnSurface'
 
@@ -60963,6 +60976,45 @@ export type Parser
 			let newCapacity = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewCapacityParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ManagedMemGrowName, args: pairArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'grow'
+
+		// ⭐⭐ **`fill(start, count:, value:)` — THE WHOLE-WINDOW ELEMENT WRITE, AND THE ONE BUFFER MEMBER THAT
+		// ANSWERS A `bool` (EC1).** `stdlib/Array.maxon`'s `refill`/`growFilled` call it and keep their
+		// per-element loop as the arm it DECLINES; see `ManagedMemoryRuntime.ManagedFillName` for why a
+		// managed element is declined rather than served, and `buildManagedFill` for the window's bounds.
+		//
+		// ⚠⚠ **THE VALUE IS TYPE-CHECKED AND THEN LEFT ALONE — `moveElementIntoContainer` MUST NOT RUN HERE,
+		// AND CALLING IT WOULD BE A LEAK ON THE ONE PATH THIS MEMBER EXISTS FOR.** Every other element-store
+		// door moves the value in, because the container becomes its owner; this one stores it only when the
+		// element is TRIVIAL, which owns nothing. For a managed or opaque element the move-in would take a
+		// reference (`coOwnBorrowedOpaque` inside the shared `Array` body, W58) that the runtime's decline
+		// then never stores — and the value the caller still holds is the one the fallback loop is about to
+		// take its own references through.
+		//
+		// ⚠ `containerElementWord` still runs, and it is the half that is NOT ownership: a `float` element
+		// travels as its 64 bits, and the read back (`emitContainerElementAccessor`) reverses exactly this
+		// conversion. Skipping it would put a double in a slot every reader takes for a bit pattern.
+		//
+		// ⚠ **NO MANAGED-ELEMENT GATE, unlike `set`'s E3109.** That refusal is about a write landing in the
+		// UNOWNED staging region `[length, capacity)`; this window is bounded by the LIVE length and stores
+		// nothing at all for a managed element, so there is no ownership for it to get wrong — and `refill`
+		// on an `Array with String` is precisely the program that has to reach here.
+		//
+		// ⚠ It takes `emitRuntimeCall` rather than `emitArrayVoidCall` for the reason `setLength` states, and
+		// needs no `requireVoidMethodIsStatement`: the call HAS a value, and it is the answer the caller must
+		// read.
+		if isManagedMemory and methodTok.value.equals(ManagedMemoryFillMethod) 'fill'
+			try self.consume(TokenKind.leftParen)
+			let start = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryStartParamName, methodTok: methodTok)
+			try self.consumeArrayArgLabel(ManagedMemoryCountParamName, required: false)
+			let count = try self.parseBuiltinIntegerArg(func, paramName: ManagedMemoryCountParamName, methodTok: methodTok)
+			try self.consumeArrayArgLabel(ManagedMemoryValueParamName, required: false)
+			let valueStart = self.pos
+			let raw = try self.parseExpression(func, block: self.currentBlock)
+			let checked = try self.requireContainerElementType(func, giid: giid, value: raw, valueStart: valueStart, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			let element = self.containerElementWord(checked, giid: giid, range: SourceRange.ofToken(self.tokenAt(valueStart)))
+			return self.emitRuntimeCall(ManagedFillName, args: quadArgs(arr, second: start, third: count, fourth: element), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'fill'
 
 		// ⭐⭐ **THE THREE RELOCATORS — void, throwing, two integer arguments each, and BUFFER-SURFACE ONLY.**
 		// Neither reference gives `Array` any of these spellings: the corpus reaches them through
