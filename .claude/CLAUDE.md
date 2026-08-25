@@ -139,6 +139,19 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 
 The shv2 compiler binary is at `./maxon-shv2/.maxon/maxon-shv2.exe` (Windows) or `./maxon-shv2/.maxon/maxon-shv2` (Linux/macOS).
 
+**⭐ THE EMITTED-CODE INSTRUMENT: `scripts/self-host-ab.sh`.** A green suite and `scale-test` both measure
+the compiler's LOGIC, which every stage of the self-host chain shares byte for byte. The QUALITY OF THE
+CODE shv2 EMITS is a different question, and this is the one command that answers it: it builds stage-2
+(stage-1 compiling shv2) and stage-3 (stage-2 compiling shv2), `cmp`s them (the fixpoint gate — a
+difference is a MISCOMPILE), times both self-compiles, and runs `scale-test` on stage-1 and stage-2
+INTERLEAVED, printing the per-phase ratio table (allocations, bytes, CPU) of stage-2 over stage-1. Same
+logic in both binaries ⇒ any allocation ratio above 1.00 is a construct shv2's codegen allocates for and
+the bootstrap's does not. MEASURED 2026-08-25: stage-2 self-compiles in 5m01 against stage-1's 2m49
+(×1.8) with ×3.24 the allocations, 67% of the CPU gap in `regalloc` — the rungs that follow from it are
+the board's **`EC1`–`EC3`** rows in `maxon-shv2/PLAN.md`, each carrying its readings. `--profile` adds the
+function-level attribution through `scripts/sample_profile.py`, which reads shv2-emitted binaries too
+(no `.mxdbg` needed — their `__symtable` closes `.text`). ~15 min; writes only under `temp/selfhost/`.
+
 ### Self-hosted compiler (maxon-selfhosted) — DEPRECATED as a PRODUCT, not as a SOURCE
 
 **⭐ READ IT. It is 191,487 lines of working, debugged Maxon**, written against the same language and the

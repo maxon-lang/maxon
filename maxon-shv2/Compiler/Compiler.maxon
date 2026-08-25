@@ -1510,11 +1510,22 @@ let IrFileExtension = ".ir"
 // for a list is the first path the caller named). Deriving a directory build's name from a `build.maxon`
 // `build("...")` manifest grows at M2, when directory builds become the norm;
 // the M1 verification gate is a single-file build (`basic.maxon` → `basic.exe`).
+//
+// ⚠ An override that ALREADY carries the target's extension is used as it is. This appended it
+// unconditionally, so `-o stage2.exe` wrote `stage2.exe.exe` — measured 2026-08-25 while timing the
+// self-host chain, where the doubled name then had to be spelled back into every `cmp` and profile
+// command. The bare spelling (`-o stage2` → `stage2.exe`) is unchanged, and on a host whose extension
+// is empty the two spellings were always one.
 function resolveOutputPath(project Project, outputOverride String) returns FilePath throws CompileError
 	let ext = executableExtension(project.target)
 
 	if not outputOverride.isEmpty() 'hasOverride'
-		return try FilePath.from("{outputOverride}{ext}") otherwise panic("resolveOutputPath: invalid -o/--output path '{outputOverride}'")
+		var outputPath = "{outputOverride}{ext}"
+		if outputOverride.endsWith(ext) 'overrideCarriesExt'
+			outputPath = outputOverride
+		end 'overrideCarriesExt'
+
+		return try FilePath.from(outputPath) otherwise panic("resolveOutputPath: invalid -o/--output path '{outputOverride}'")
 	end 'hasOverride'
 
 	if File.exists(project.rootPath) 'singleFile'

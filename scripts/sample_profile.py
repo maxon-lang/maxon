@@ -2,9 +2,18 @@
 """Sampling profiler for Maxon-compiled executables (Windows x64).
 
 Launches the target process, samples every thread's RIP at a fixed rate, and
-resolves samples against the `.symtab` section the Maxon backend embeds in
-every binary (format: [u32 count][count x (u32 codeOffset, u32 nameOffset)]
-[NUL-terminated names], offsets relative to `.text`).
+resolves samples against the `__symtable` function table the Maxon backends
+embed in every binary (format: [u32 count][count x (u32 codeOffset,
+u32 nameOffset)][NUL-terminated names], offsets relative to `.text`).
+
+The two compilers put that table in different places, and this reads both:
+the C# bootstrap writes it into a `.symtab` section; shv2 has no `.symtab`
+and CLOSES `.text` with it (`X64Backend.maxon`, `buildSymbolTableBytes`).
+So a binary shv2 emitted — the stage-2 compiler of a self-host chain, which
+carries no `.mxdbg` and which `maxon profile` therefore refuses — profiles
+here exactly like a bootstrap-emitted one. That is the reason this script
+exists beside `maxon profile`: it is the only profiler that can see the
+code shv2's own codegen produced.
 
 Usage:
   python sample_profile.py --duration 40 --hz 200 [--top 40] -- <exe> [args...]
@@ -110,15 +119,19 @@ def load_symbols(path):
     """Return (text_rva, sorted list of code offsets, parallel list of names)."""
     data, sections = parse_pe_sections(path)
     text_rva = None
+    text_raw = None
     sym_raw = None
     for name, rva, raw_ptr, raw_size in sections:
         if name == ".text":
             text_rva = rva
+            text_raw = (raw_ptr, raw_size)
         elif name == ".symtab":
             sym_raw = (raw_ptr, raw_size)
-    if text_rva is None or sym_raw is None:
-        raise SystemExit("no .text/.symtab section — not a Maxon binary?")
-    raw_ptr, raw_size = sym_raw
+    if text_rva is None:
+        raise SystemExit("no .text section — not a Maxon binary?")
+    # A bootstrap-emitted binary carries the table in `.symtab`; an shv2-emitted
+    # one has no such section and the table is the tail of `.text` itself.
+    raw_ptr, raw_size = sym_raw if sym_raw is not None else text_raw
     sect = data[raw_ptr : raw_ptr + raw_size]
     blob = find_symtable_blob(sect)
     count = struct.unpack_from("<I", blob, 0)[0]
@@ -131,11 +144,19 @@ def load_symbols(path):
     return text_rva, offsets, names
 
 
+# How many leading entries must ascend before a candidate header is believed.
+# Two sufficed inside `.symtab`, whose other contents are text; a scan over
+# `.text` sees machine code, where a 4-byte-aligned word that happens to read
+# as a plausible count followed by one ascending pair is not rare.
+SYMTABLE_PROBE_ENTRIES = 64
+
+
 def find_symtable_blob(sect):
-    """The .symtab section concatenates every symdata blob (panic-message
-    strings, ...) with the function table (`__symtable`) somewhere inside.
-    Its header is self-identifying: entry 0's nameOffset == 4 + 8*count and
-    codeOffsets ascend. Scan 4-byte-aligned starts for that signature."""
+    """Locate the function table (`__symtable`) inside a section that holds
+    other things too — `.symtab` concatenates it with every symdata blob
+    (panic-message strings, ...), and shv2's `.text` precedes it with all the
+    code. Its header is self-identifying: entry 0's nameOffset == 4 + 8*count,
+    and codeOffsets ascend. Scan 4-byte-aligned starts for that signature."""
     for start in range(0, len(sect) - 12, 4):
         count = struct.unpack_from("<I", sect, start)[0]
         header = 4 + 8 * count
@@ -144,11 +165,18 @@ def find_symtable_blob(sect):
         first_code, first_name = struct.unpack_from("<II", sect, start + 4)
         if first_name != header or first_code > 0x10000:
             continue
-        second_code = struct.unpack_from("<I", sect, start + 12)[0]
-        if second_code < first_code:
+        prev_code = -1
+        ascending = True
+        for entry in range(min(count, SYMTABLE_PROBE_ENTRIES)):
+            code_off, name_off = struct.unpack_from("<II", sect, start + 4 + 8 * entry)
+            if code_off < prev_code or start + name_off >= len(sect):
+                ascending = False
+                break
+            prev_code = code_off
+        if not ascending:
             continue
         return sect[start:]
-    raise SystemExit("no __symtable blob found inside .symtab")
+    raise SystemExit("no __symtable blob found in .symtab or at the tail of .text")
 
 
 def thread_ids_of(pid):
