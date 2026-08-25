@@ -1242,9 +1242,27 @@ let RangeCheckOkLabel = b"__rc_ok"
 // because it repeats on the SAME source block, and that is exactly where moving the ops past the cut
 // becomes Θ(guards × block).
 //
-// ⚠ `InlineManagedPrimitives` splits at ONE position per call site and never repeats on a block it has
+// ⛔⛔ **`InlineManagedPrimitives` TAKES THIS HALF, AND THE REASON WRITTEN HERE UNTIL 2026-08-25 DID NOT
+// FOLLOW.** It said that pass "splits at ONE position per call site and never repeats on a block it has
 // already split — its continuation is what it scans next — so the quadratic that argument is about
-// cannot arise there, and it takes this half.
+// cannot arise there". The premise is true and the conclusion does not come from it: the continuation IS
+// the rest of that block, so K carve sites in a block of B ops would copy the tail K times,
+// Σ(B − pₖ) ≈ K·B/2 — the very shape `splitChainEnd` above exists to avoid, arrived at by a different
+// route. **A rationale that does not hold is worse than none: it is what a sixth primitive's author
+// would read as a licence.**
+//
+// ✅ **THE LINEARITY IS MEASURED** — `Testing/ladders/genmanagedsites.sh onefunc` puts the sites in ONE
+// straight-line block and reads ×1.99 ×1.99 ×2.00 allocations and ×2.07 ×2.10 ×2.06 bytes at
+// n = 32/64/128/256, where Σ(B − pₖ) would read ×4; its `spread` control holds the same site count one
+// per function and sits on the same curve. **What follows is the READING of the emission sites that
+// explains that, and it is a reading.** The three THROWING entries arrive as a `tryCall` whose error
+// flag is tested immediately, so the call is the LAST op in its block and this function copies ZERO ops;
+// the one
+// non-throwing carve (`__managed_get_unchecked`) is emitted once per `for`-in header, so its block holds
+// exactly one and its tail is copied exactly once; and `__managed_count` is rewritten in place and
+// carves nothing. ⇒ The product term is MEASURED-LINEAR-IN-PRACTICE, not absent. A primitive that
+// carves MID-block, or a pass that merges a throwing call's blocks, reinstates it with nothing in the
+// way — re-run that ladder then, and take `splitChainEnd` if it bends.
 export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position BlockOpPos, label ByteArray) returns IrBlock
 	var headBlock = head
 	var tailOps = OpIndexArray.create()
