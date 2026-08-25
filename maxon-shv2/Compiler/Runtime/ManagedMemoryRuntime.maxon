@@ -1614,6 +1614,9 @@ end 'emitCowDetach'
 //
 //   1. **INSIDE AN `es >= 0` ARM** the caller itself branched on — `emitStoreElemAt`'s byte arm and the byte
 //      arms of `__managed_move_elems` / `__managed_zero_elems`. The guard is three lines above the call.
+//      ⭐ **THE FOUR SINGLE-MEMORY-OP ARMS ARE THIS CASE AT ITS STRONGEST**: `emitStrideDispatch` reaches
+//      them only on `es == MachineWordBytes` or `es == ByteStringElementSize`, so the stride is not merely
+//      non-negative there, it is one exact positive number.
 //   2. **A MANAGED ELEMENT**, which is never packed by construction
 //      (`ProgramSignatures.arrayElementPackedBits` answers `NotSubBytePacked` for it before it reads
 //      anything else) — the destroy walk, the deep-clone walk, and the `_managed` slice/append the parser
@@ -1772,62 +1775,175 @@ function emitFieldPlacement(module StdModule, block IrBlock, index ValueId, es V
 	return PackedElementPlacement.create(byteOffset, shiftBits: shiftBits, widthMask: widthMask, byteSpan: byteSpan)
 end 'emitFieldPlacement'
 
+// ⭐⭐⭐ **THE TWO STRIDES A TARGET CAN MOVE IN ONE MEMORY OP, AND THE ONE HOME OF THAT LIST (EC1).**
+// Terminates `cur` with the two comparisons that route a WORD stride (`es == MachineWordBytes`) and a
+// single-BYTE stride (`es == ByteStringElementSize`) to their own arms, and every other stride — 2, 4, the
+// unset 0, and every NEGATIVE sub-byte width — to `otherArm`, which is the generic path unchanged.
+//
+// ⚠⚠ **WHY THOSE TWO AND NOT ALSO 2 AND 4: THE wasm LOWERING ADMITS EXACTLY A BYTE AND A WORD**
+// (`Targets/Wasm/StdToWasm.wasmMemAccessType` — `i1`/`u8` or `i64`/`f64`, everything between PANICS, and
+// `Targets/Shared/StdLoweringShared.accessWidthFor` draws the same line for the native backends). A 2- or
+// 4-byte element therefore has no single load/store to take, and it stays on the byte loop. That is a
+// deliberate SCOPE, not a residual: widening the tier's memory access to 16/32 bits is a change to those
+// two doors and to the `as`-cast signedness rule they defer to, and it belongs with that rule rather than
+// here. The two strides this DOES cover are every `int`, every pointer, every managed element and every
+// byte — which is the whole of the hot path the fast arms exist for.
+//
+// ⭐ **IT IS ONE FUNCTION BECAUSE THE LOAD AND THE STORE MUST NOT DISAGREE ABOUT THE LIST.** Each of them
+// having its own pair of comparisons would be one rule written twice, in the two halves of a round trip —
+// the shape `containerElementIsFloatWord` is single-homed for one tier up, and the shape
+// `buildManagedCowDetach`'s header calls a drifting checklist.
+function emitStrideDispatch(module StdModule, func IrFunction, cur IrBlock, es ValueId, wordArm BlockId, byteArm BlockId, otherArm BlockId, ids ValueMinter)
+	var checkByte = module.addBlock(func, label: b"esbyte")
+
+	let wordStride = emitConst(module, block: cur, value: MachineWordBytes as ParsedInt, ids: ids)
+	let isWord = emitCmp(module, block: cur, a: es, b: wordStride, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isWord, thenBlockId: wordArm, elseBlockId: checkByte.id))
+
+	// `ByteStringElementSize` is the checked 1 — the stride `ProgramSignatures.arrayElementSize` gives an
+	// `Array with Byte` and the one every String producer stamps — so this arm is spelled out of the same
+	// constant the producers are, never out of a second literal that could come to mean something else.
+	let byteStride = emitConst(module, block: checkByte, value: ByteStringElementSize, ids: ids)
+	let isByte = emitCmp(module, block: checkByte, a: es, b: byteStride, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkByte, op: StdOp.condBranch(isByte, thenBlockId: byteArm, elseBlockId: otherArm))
+end 'emitStrideDispatch'
+
+// One `loadIndirect` of the whole element at its slot, branching to `joinId` with what it read — the body
+// of both of `emitLoadElemAt`'s fast arms, which differ in nothing but the access WIDTH.
+//
+// ⚠ **IT MUST ANSWER EXACTLY WHAT THE GENERIC ARM ANSWERS, AND FOR BOTH WIDTHS IT DOES.** At `es == 8` the
+// generic arm assembles eight little-endian bytes, shifts by a `shiftBits` that is 0 and masks with an
+// all-ones `widthMask` — which is the i64 at that address. At `es == 1` it loads one `u8` (ZERO-extended:
+// `movzx` on x64, `ldrb` on arm64, `i32.load8_u` on wasm) and masks with `0xFF`, which is that same
+// zero-extended byte. The zero-extension is the half that carries a rule rather than an identity:
+// `SignatureIndex.arrayElementSize` and `LayoutDescriptor.rangedAliasPackedBits`' `low == 0` both rely on a
+// narrow slot arriving with nothing above its own bits, and the parser re-signs it from there.
+function emitSingleOpElementLoad(module StdModule, block IrBlock, joinId BlockId, buffer ValueId, index ValueId, es ValueId, accessType StdType, ids ValueMinter)
+	let slot = emitSlotAddr(module, block: block, buffer: buffer, index: index, elementSize: es, ids: ids)
+	let loaded = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(loaded, addrId: slot, offset: 0, valueType: accessType))
+	module.setTerminator(block, op: StdOp.branch(joinId))
+	block.branchEdges.push(BranchEdge.create(joinId, argIds: argsOf(loaded)))
+end 'emitSingleOpElementLoad'
+
 // ⭐⭐ **READ ELEMENT `index` OUT OF `buffer` — THE ONE ELEMENT LOAD, PACKED OR NOT.** Every read accessor
 // (`get`, `get_unchecked`, `first`, `last`, `pop`, `remove`) goes through here, replacing the
 // `emitSlotAddr` + `emitLoadElem` pair each used to spell for itself.
 //
-// It is BRANCHLESS: the same byte loop `emitLoadElem` already was, over the field's `byteSpan` rather than
-// a whole element, followed by a shift and a mask that are a no-op for a byte-strided element (`shiftBits`
-// 0, `widthMask` all-ones). So a machine-word array pays three ALU ops and reads exactly the bytes it read
-// before — no extra memory traffic, no branch to mispredict on the hottest read in the language.
+// ⭐⭐ **THE TWO COMMON STRIDES TAKE ONE MEMORY OP; EVERY OTHER STRIDE TAKES THE BRANCHLESS BYTE LOOP (EC1).**
+// The generic arm below is unchanged and is still the answer for a packed element, an unset stride and the
+// 2- and 4-byte widths: the same byte loop `emitLoadElem` always was, over the field's `byteSpan` rather
+// than a whole element, followed by a shift and a mask that are a no-op for a byte-strided element
+// (`shiftBits` 0, `widthMask` all-ones).
 //
-// ⭐ The value is ZERO-EXTENDED, which is what `LayoutDescriptor.rangedAliasPackedBits`'s `low == 0` rule
-// relies on: the mask leaves exactly the field's bits and nothing above them, so a zero-based range's value
-// survives the round trip unchanged.
+// ⚠ **WHAT CHANGED IS WHERE THAT ARITHMETIC IS PAID, AND IT WAS PAID BY EVERY ARRAY IN THE LANGUAGE.**
+// `emitFieldPlacement` is ~15 branchless ALU ops and the loop around it eight trips of
+// `load_u8`/`shl`/`bitOr`, so an in-bounds `get` on an `Array with Int` EXECUTED **180** x64 instructions
+// to move one word that one `mov` moves. It executes **33**; the matching `set` goes **167 → 52**. The
+// branchless shape was the right call while the alternative was a packed/byte `if` paying for itself on
+// every read; it is the wrong call once the winning arm is ONE instruction, because two compares are then
+// cheaper than the formula they skip. The MEASUREMENT that forced it: in the stage-2 self-compile profile
+// `__managed_get` is 10.8% and `__managed_mem_set` 21% of the whole compiler's time.
 //
-// `exit` is caller-owned and passed IN (the `emitLoadElem` shape). The returned value is defined in a join
-// block whose only successor is `exit`, so it dominates `exit` and needs no block argument there.
+// ⚠⚠ **THE FUNCTION'S STATIC SIZE GOES UP — 94 x64 instructions to 111, and `__managed_set` 155 to 175 —
+// AND THAT IS THE TRADE, NOT A REGRESSION.** The generic arm cannot be deleted: `element_size@24` is a
+// RUNTIME field and one compiled `__managed_get` serves every array in the program, so all three arms are
+// emitted and only one is walked. (Every number here is this tree's, read off
+// `--emit-ir-runtime=__managed_get,__managed_set` on a one-array program; the dynamic pair counts the
+// blocks an `es == 8` in-bounds trivial access actually enters, eight loop trips included.) A reader
+// diffing the emitted SIZE and finding it larger is looking at the arms that were added, not at a path that
+// got longer.
+//
+// ⭐ The value is ZERO-EXTENDED on every arm, which is what `LayoutDescriptor.rangedAliasPackedBits`'s
+// `low == 0` rule relies on: nothing above the field's own bits survives, so a zero-based range's value
+// makes the round trip unchanged. See `emitSingleOpElementLoad` for why each fast arm answers exactly what
+// the generic one does.
+//
+// `exit` is caller-owned and passed IN (the `emitLoadElem` shape). The returned value is the JOIN block's
+// own block argument, and that join's only successor is `exit` — so it dominates `exit` exactly as the
+// single `extract` block's value used to, and `exit` itself needs no argument.
 function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, buffer ValueId, index ValueId, es ValueId, ids ValueMinter) returns ValueId
-	let placement = emitFieldPlacement(module, block: cur, index: index, es: es, ids: ids)
-	let addr = emitBin(module, block: cur, a: buffer, b: placement.byteOffset, opcode: StdBinOpcode.add, ids: ids)
+	var wordArm = module.addBlock(func, label: b"ldword")
+	var byteArm = module.addBlock(func, label: b"ldbyte")
+	var generic = module.addBlock(func, label: b"ldgen")
+	var join = module.addBlock(func, label: b"ldjoin")
+
+	let value = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
+
+	emitStrideDispatch(module, func: func, cur: cur, es: es, wordArm: wordArm.id, byteArm: byteArm.id, otherArm: generic.id, ids: ids)
+
+	emitSingleOpElementLoad(module, block: wordArm, joinId: join.id, buffer: buffer, index: index, es: es, accessType: StdType.i64, ids: ids)
+	emitSingleOpElementLoad(module, block: byteArm, joinId: join.id, buffer: buffer, index: index, es: es, accessType: StdType.u8, ids: ids)
+
+	let placement = emitFieldPlacement(module, block: generic, index: index, es: es, ids: ids)
+	let addr = emitBin(module, block: generic, a: buffer, b: placement.byteOffset, opcode: StdBinOpcode.add, ids: ids)
 
 	var extract = module.addBlock(func, label: b"ldxtr")
-	let raw = emitLoadElem(module, func: func, cur: cur, exit: extract, addr: addr, size: placement.byteSpan, ids: ids)
+	let raw = emitLoadElem(module, func: func, cur: generic, exit: extract, addr: addr, size: placement.byteSpan, ids: ids)
 	let shifted = emitBin(module, block: extract, a: raw, b: placement.shiftBits, opcode: StdBinOpcode.shrLogical, ids: ids)
-	let value = emitBin(module, block: extract, a: shifted, b: placement.widthMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(extract, op: StdOp.branch(exit.id))
+	let extracted = emitBin(module, block: extract, a: shifted, b: placement.widthMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(extract, op: StdOp.branch(join.id))
+	extract.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(extracted)))
+
+	module.setTerminator(join, op: StdOp.branch(exit.id))
 
 	return value
 end 'emitLoadElemAt'
 
+// One `storeIndirect` of the whole element at its slot — the body of both of `emitStoreElemAt`'s fast arms,
+// `emitSingleOpElementLoad`'s mirror and its twin in every way that matters. At `es == 8` the generic byte
+// loop stores eight little-endian bytes, which IS the i64 at that address; at `es == 1` it stores the low
+// byte, which is what a `u8` store keeps (`i32.store8` on wasm, a byte-register `mov` natively).
+function emitSingleOpElementStore(module StdModule, block IrBlock, joinId BlockId, buffer ValueId, index ValueId, value ValueId, es ValueId, accessType StdType, ids ValueMinter)
+	let slot = emitSlotAddr(module, block: block, buffer: buffer, index: index, elementSize: es, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(slot, offset: 0, valueId: value, valueType: accessType))
+	module.setTerminator(block, op: StdOp.branch(joinId))
+end 'emitSingleOpElementStore'
+
 // ⭐⭐ **WRITE `value` INTO ELEMENT `index` — THE ONE ELEMENT STORE, AND THE FILE'S ONE PACKED/BYTE
 // BRANCH.** Every write accessor (`push`, `set`, `insert`, and the vacating erase) goes through here.
 //
-// ⚠⚠ **THIS ONE IS BRANCHED WHERE THE LOAD IS NOT, AND THE REASON IS MEMORY TRAFFIC RATHER THAN TASTE.** A
-// sub-byte field must PRESERVE the neighbours sharing its byte, so its write is a read-modify-write; a
-// byte-strided element owns every byte it touches and simply overwrites them. A unified formula exists —
-// `(old & ~(mask << shift)) | ((value & mask) << shift)` is correct for both, because a byte-strided
-// element's `~(mask << shift)` is zero — but it would make every `push` into an `Array with int` LOAD its
-// eight destination bytes before storing them, on the hottest array write there is, to compute a value that
-// is provably discarded. One compare and one branch is the cheaper honesty.
+// ⚠⚠ **THIS ONE IS BRANCHED WHERE THE LOAD'S GENERIC ARM IS NOT, AND THE REASON IS MEMORY TRAFFIC RATHER
+// THAN TASTE.** A sub-byte field must PRESERVE the neighbours sharing its byte, so its write is a
+// read-modify-write; a byte-strided element owns every byte it touches and simply overwrites them. A
+// unified formula exists — `(old & ~(mask << shift)) | ((value & mask) << shift)` is correct for both,
+// because a byte-strided element's `~(mask << shift)` is zero — but it would make every `push` into an
+// `Array with int` LOAD its eight destination bytes before storing them, on the hottest array write there
+// is, to compute a value that is provably discarded. One compare and one branch is the cheaper honesty.
 //
-// Threads `cur` and returns the join both arms reach.
+// ⭐⭐ **AND SINCE EC1 THE TWO COMMON STRIDES DO NOT REACH EITHER OF THOSE ARMS.** `emitStrideDispatch`
+// takes a WORD and a single BYTE to one `storeIndirect` apiece, ahead of the packed/byte split, for
+// `emitLoadElemAt`'s measured reason — the byte loop that follows is eight trips of
+// `shrLogical`/`store_u8` to move a word one `mov` moves, and `__managed_mem_set` was 21% of a self-compile.
+// The packed arm and the byte-loop arm below are untouched and are still what a 2- or 4-byte element, an
+// unset stride and every sub-byte width take.
+//
+// Threads `cur` and returns the join every arm reaches.
 function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter) returns IrBlock
+	var wordArm = module.addBlock(func, label: b"stword")
+	var byteArm = module.addBlock(func, label: b"stbyte")
+	var otherStride = module.addBlock(func, label: b"stother")
 	var packedArm = module.addBlock(func, label: b"stpk")
-	var byteArm = module.addBlock(func, label: b"stby")
+	var byteLoopArm = module.addBlock(func, label: b"stby")
 	let join = module.addBlock(func, label: b"stjoin")
 
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	let isPacked = emitCmp(module, block: cur, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteArm.id))
+	emitStrideDispatch(module, func: func, cur: cur, es: es, wordArm: wordArm.id, byteArm: byteArm.id, otherArm: otherStride.id, ids: ids)
+
+	emitSingleOpElementStore(module, block: wordArm, joinId: join.id, buffer: buffer, index: index, value: value, es: es, accessType: StdType.i64, ids: ids)
+	emitSingleOpElementStore(module, block: byteArm, joinId: join.id, buffer: buffer, index: index, value: value, es: es, accessType: StdType.u8, ids: ids)
+
+	let zero = emitConst(module, block: otherStride, value: 0, ids: ids)
+	let isPacked = emitCmp(module, block: otherStride, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(otherStride, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteLoopArm.id))
 
 	// packedArm: the shared straight-line read-modify-write of the one byte this field lives in.
 	emitPackedFieldStore(module, block: packedArm, buffer: buffer, index: index, value: value, es: es, ids: ids)
 	module.setTerminator(packedArm, op: StdOp.branch(join.id))
 
-	// byteArm: unchanged from before packing existed — the element owns its bytes outright.
-	let slot = emitSlotAddr(module, block: byteArm, buffer: buffer, index: index, elementSize: es, ids: ids)
-	var afterByteStore = emitStoreElem(module, func: func, cur: byteArm, addr: slot, value: value, size: es, ids: ids)
+	// byteLoopArm: unchanged from before packing existed — the element owns its bytes outright.
+	let slot = emitSlotAddr(module, block: byteLoopArm, buffer: buffer, index: index, elementSize: es, ids: ids)
+	var afterByteStore = emitStoreElem(module, func: func, cur: byteLoopArm, addr: slot, value: value, size: es, ids: ids)
 	module.setTerminator(afterByteStore, op: StdOp.branch(join.id))
 
 	return join
