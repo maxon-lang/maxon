@@ -39,6 +39,11 @@
 #   - full unfiltered shv2 suite: `failed: 0`      <- the gate is ZERO FAILURES, never a total
 #   - no memory leak (exit 101)
 #   - ZERO untracked goldens under specs-shv2/fragments/   <- a minted golden nobody committed
+#   - the SELF-COMPILE: shv2 builds maxon-shv2 with the branch's own binary, exit 0. It is the ONLY
+#     build that runs `checkUnusedExports` (E3092/E3093/E3094) — the bootstrap never does — so an
+#     `export` a rung adds and nothing outside its file reads is invisible to every other gate. Found
+#     2026-08-25 (EC1): a three-line contract commit broke the self-compile, the suite stayed 6673/0,
+#     and it was found only because a later agent happened to self-compile. ~3 min.
 #   - golden-drift delta vs the merge base: explained if non-zero
 #   - a row in docs/optimization-log.md, or an explicit --no-ladder-row reason
 #   - the C# suite + codegen neutrality, if the branch touched maxon-sharp/
@@ -335,6 +340,24 @@ UNTRACKED="$(git -C "$WORKTREE" ls-files --others --exclude-standard specs-shv2/
 [ -z "$UNTRACKED" ] || { echo "$UNTRACKED" | head -20; die "$(echo "$UNTRACKED" | wc -l | tr -d ' ') golden(s) were MINTED and never committed.
      \`git add\` them on the branch and commit, then re-run — a golden this rung created belongs to it."; }
 ok "no untracked goldens"
+
+# ⭐ THE SELF-COMPILE — the gate the suite is not. `checkUnusedExports` (E3092/E3093/E3094) runs only
+#   when shv2 compiles a program, and the only program that exercises every `export` in the compiler is
+#   the compiler itself; the bootstrap builds it without that pass. So a rung that adds an `export`
+#   nobody outside the file reads — or that shifts a type interner (the E3093 false findings of
+#   2026-08-25 were exactly that) — passes every gate above and breaks stage-2. This is also what
+#   `scripts/self-host-ab.sh`, the emitted-code instrument, needs green before it can measure anything.
+#   The output goes to LOGDIR and is discarded; only the exit code and the E-lines matter here.
+SELFCOMPILE_LOG="$LOGDIR/rung-selfcompile.log"
+( cd "$WORKTREE" && "$SHV2" build maxon-shv2 -o "$LOGDIR/rung-selfcompile" ) > "$SELFCOMPILE_LOG" 2>&1
+SELFCOMPILE_EXIT=$?
+if [ "$SELFCOMPILE_EXIT" != "0" ]; then
+  grep -nE 'error E[0-9]{4}' "$SELFCOMPILE_LOG" | head -20
+  die "the SELF-COMPILE exited $SELFCOMPILE_EXIT — shv2 cannot build itself on this branch. The full log is
+     $SELFCOMPILE_LOG. An E3092/E3093/E3094 here is a declaration more visible than its uses: narrow it
+     (or read UnusedExportCheck's interner note before believing a finding on a type the rung never touched)."
+fi
+ok "self-compile: shv2 builds itself (exit 0)"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 step "5/10  The golden-drift DELTA against the merge base"
