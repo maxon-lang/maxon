@@ -217,7 +217,7 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 		return
 	end 'nothingWiderThanAFile'
 
-	collectReferences(module, signatures: signatures, tracked: tracked)
+	collectReferences(module, signatures: signatures, tracked: tracked, moduleTypeNames: project.typeNames)
 	try collectFileTypeReferences(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	emitDiagnostics(project, tracked: tracked)
 end 'checkUnusedExports'
@@ -437,7 +437,7 @@ end 'seedBindings'
 // ⚠ **WHAT STANDS IN FOR v1'S `livenessRoots`:** nothing needs to. v1 pins witness-table entries and
 // function-backed enum case targets by hand because its IR loses the edge; shv2 emits a `functionRef` for
 // a function VALUE, so the same functions are reached by the ordinary walk below.
-function collectReferences(module MaxonModule, signatures ProgramSignatures, tracked TrackedDecls)
+function collectReferences(module MaxonModule, signatures ProgramSignatures, tracked TrackedDecls, moduleTypeNames TypeNameInterner)
 	for func in module.functions 'eachFunc'
 		let readerFilePath = func.sourceFilePath
 		if readerFilePath.toString().isEmpty() 'synthesizedReaderNamesNothingAnAuthorWrote'
@@ -445,7 +445,7 @@ function collectReferences(module MaxonModule, signatures ProgramSignatures, tra
 		end 'synthesizedReaderNamesNothingAnAuthorWrote'
 
 		let readerModuleDirectory = signatures.moduleDirectoryOf(readerFilePath)
-		noteSignatureTypes(func, signatures: signatures, tracked: tracked, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		noteSignatureTypes(func, signatures: signatures, tracked: tracked, moduleTypeNames: moduleTypeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 		noteBodyReferences(module, func: func, signatures: signatures, tracked: tracked, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'eachFunc'
 
@@ -458,9 +458,35 @@ end 'collectReferences'
 // `UnusedAlias` alive for its own file, and `specs/unused-export.md`'s
 // `error.unused-exported-typealias` is the case that pins it (the alias IS named, in-file, and is still
 // E3092 because nothing OUTSIDE names it).
-function noteSignatureTypes(func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, readerFilePath FilePath, readerModuleDirectory String)
+//
+// ⛔⛔ **THE TYPES IT WALKS ARE THE *PROJECT* INTERNER'S, AND RESOLVING THEM AGAINST THE SIGNATURE INDEX'S
+// WAS OPEN #56's FOURTH INSTANCE.** `ParseStaging.remapArtifact` rewrites every merged function's
+// `maxonParamTypes`/`maxonReturnType` through `project.typeNames`' fold, and `TypeResolution.resolveNamedType`
+// re-mints the surviving `structRef`/`interfaceRef` ids from that same table — so a signature's ids index
+// `project.typeNames` and NOTHING ELSE. The index folds a SECOND, independent per-file interner: its own
+// DECLARATION SWEEP's, which reads declarations and never bodies. A type named only in a BODY (an `as`
+// cast target) is therefore interned by one and not the other, and every name after it sits one id apart —
+// so the two tables agree only while two insertion orders coincide.
+//
+// ⛔ **WHAT THAT COST WAS A SUPPRESSED TRUE FINDING, NOT A FALSE ONE, AND THAT IS THE HALF NO GREEN CASE
+// COULD SEE.** A misresolved id credits WHATEVER NAME occupies that slot in the other table — a name the
+// reader never wrote — so a declaration nothing outside its file reaches is recorded as reached and its
+// E3092/3/4 never fires. (The mirror is harmless here: the name that LOSES the credit was, by construction,
+// written by that reader, and `collectFileTypeReferences` credits it from `usedTypeNames` anyway.)
+// **MEASURED on this compiler's own source:** 10,568 credit events resolved to a name the project table
+// does not hold there, over 426 distinct `(id, project name, index name)` triples, diverging from id 9 up.
+// Correcting the resolver turned 7 reported findings into 13, and every one of the 11 declaration findings
+// was TRUE — a census of the tree found no reference to any of them outside its declaring file. Adding a
+// single file that declares types (`IR/Std/InlineManagedPrimitives.maxon`) had moved the divergence point
+// and changed which declarations were being credited, which is how a lint whose answer depends on an
+// unrelated file was noticed at all. `specs-shv2/unused-export.md`'s
+// `error.unused-exported-type-when-the-two-interners-disagree` is the smallest program that shows it.
+// ⇒ Every producer in this file now hands the walk THE INTERNER ITS IDS WERE MINTED AGAINST, beside the
+// type. `ProgramSignatures.indexTypeNames` exists for exactly that, and its header carries #56's third
+// instance (`MmRuntime.installStructRuntimeEntries`, a tuple field at id 814 read as `InstantNanos`).
+function noteSignatureTypes(func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, moduleTypeNames TypeNameInterner, readerFilePath FilePath, readerModuleDirectory String)
 	for paramType in func.maxonParamTypes 'eachParam'
-		noteSignatureType(signatures, tracked: tracked, type: paramType, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		noteDeclaredType(signatures, tracked: tracked, type: paramType, typeNames: moduleTypeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'eachParam'
 
 	// A `void` return names no type. `unresolved` is the arm the walk below already drops, so it stands in
@@ -469,7 +495,7 @@ function noteSignatureTypes(func IrFunction, signatures ProgramSignatures, track
 		value(t) gives t
 		void gives MaxonType.unresolved
 	end 'ret'
-	noteSignatureType(signatures, tracked: tracked, type: returned, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	noteDeclaredType(signatures, tracked: tracked, type: returned, typeNames: moduleTypeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 
 	noteThrowsType(func, signatures: signatures, tracked: tracked, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 
@@ -655,7 +681,9 @@ end 'noteTypeNameTransitively'
 function noteStructFieldTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
 	match signatures.structOf(name) 'lookup'
 		undeclared then return
-		declared(layout) then noteComponentTypes(signatures, tracked: tracked, types: layout.fieldTypes, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		// A layout the SIGNATURE INDEX built, so its field-type ids are the index's own — see
+		// `noteSignatureTypes` for what resolving them anywhere else costs.
+		declared(layout) then noteComponentTypes(signatures, tracked: tracked, types: layout.fieldTypes, typeNames: signatures.indexTypeNames(), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 	end 'lookup'
 end 'noteStructFieldTypes'
 
@@ -682,16 +710,19 @@ function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls
 		noteTypeNameTransitively(signatures, tracked: tracked, name: layout.backingStructName, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 	end 'structBacked'
 
+	// The index's own layout again — `noteStructFieldTypes`' interner, for its reason. Taken once rather
+	// than per field: it is a handle to the index's table, and this is the innermost loop of the walk.
+	let payloadTypeNames = signatures.indexTypeNames()
 	for payloadFields in layout.casePayloads 'eachCase'
 		for field in payloadFields 'eachField'
-			noteComponentType(signatures, tracked: tracked, type: field.declaredType, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+			noteComponentType(signatures, tracked: tracked, type: field.declaredType, typeNames: payloadTypeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 		end 'eachField'
 	end 'eachCase'
 end 'noteEveryPayloadType'
 
-function noteComponentTypes(signatures ProgramSignatures, tracked TrackedDecls, types MaxonTypeArray, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+function noteComponentTypes(signatures ProgramSignatures, tracked TrackedDecls, types MaxonTypeArray, typeNames TypeNameInterner, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
 	for fieldType in types 'eachField'
-		noteComponentType(signatures, tracked: tracked, type: fieldType, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		noteComponentType(signatures, tracked: tracked, type: fieldType, typeNames: typeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 	end 'eachField'
 end 'noteComponentTypes'
 
@@ -703,12 +734,21 @@ end 'noteComponentTypes'
 //
 // ⭐ And a generic instance's TYPE ARGUMENTS are references in their own right: `Array with Item` names
 // `Item`, and nothing else in this walk would ever reach it.
-function noteComponentType(signatures ProgramSignatures, tracked TrackedDecls, type MaxonType, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+//
+// ⭐⭐ **`typeNames` IS WHICH NAME TABLE THE NAME-BEARING ARMS INDEX, AND IT IS A PARAMETER BECAUSE THE
+// CALLERS ARE IN TWO DIFFERENT SPACES.** A signature's types are the PROJECT interner's and a layout's are
+// the SIGNATURE INDEX's — see `noteSignatureTypes` for the measurement and for what a crossed pair costs.
+// It rides beside the type it resolves rather than being derived from `signatures`, which is the only
+// honest way for a walk with two entrances to say which space it was entered from.
+// (The two id-space arms below are unaffected: a `typeParameter`'s digest and a `GenericInstanceId` are
+// whole-program payloads, interner-independent by construction — `remapMaxonType` passes both through a
+// merge unchanged for exactly that reason.)
+function noteComponentType(signatures ProgramSignatures, tracked TrackedDecls, type MaxonType, typeNames TypeNameInterner, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
 	match type 'type'
-		named(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
-		structRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
-		interfaceRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
-		function(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		named(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		structRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		interfaceRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		function(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 		genericInstance(id) then noteInstanceArgs(signatures, tracked: tracked, id: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 		// A type PARAMETER's id is a digest, not a name, and the parameter itself names no declaration.
 		typeParameter then return
@@ -719,18 +759,22 @@ function noteComponentType(signatures ProgramSignatures, tracked TrackedDecls, t
 	end 'type'
 end 'noteComponentType'
 
+// ⚠ **A SUBSTITUTED INSTANCE ARGUMENT IS INTERNED IN THE INDEX**, whichever space the instance reference
+// itself arrived from — `ProgramSignatures.indexSpaceTypeName` is the door that says so, and its own panic
+// message is #56's third instance. So this hop RE-STATES the interner rather than forwarding its caller's.
 function noteInstanceArgs(signatures ProgramSignatures, tracked TrackedDecls, id GenericInstanceId, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+	let argTypeNames = signatures.indexTypeNames()
 	for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArg'
-		noteComponentType(signatures, tracked: tracked, type: signatures.substitutedInstanceArg(id, position: position), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+		noteComponentType(signatures, tracked: tracked, type: signatures.substitutedInstanceArg(id, position: position), typeNames: argTypeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 	end 'eachArg'
 end 'noteInstanceArgs'
 
-function noteComponentTypeName(signatures ProgramSignatures, tracked TrackedDecls, nameId TypeNameId, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
+function noteComponentTypeName(signatures ProgramSignatures, tracked TrackedDecls, nameId TypeNameId, typeNames TypeNameInterner, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
 	if nameId == UnnamedTypeId 'namesNothing'
 		return
 	end 'namesNothing'
 
-	let componentName = try signatures.typeNameOf(nameId) otherwise return
+	let componentName = try typeNames.nameOf(nameId) otherwise return
 	noteTypeNameTransitively(signatures, tracked: tracked, name: componentName, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 end 'noteComponentTypeName'
 
@@ -862,12 +906,18 @@ function noteEveryInitializerCallee(signatures ProgramSignatures, tracked Tracke
 	end 'eachCallee'
 end 'noteEveryInitializerCallee'
 
-// A declared signature type, walked with the same arm-correct rules the component walk uses — so a
-// parameter typed `Array with Item` credits `Item` exactly as a field of that type would.
-function noteSignatureType(signatures ProgramSignatures, tracked TrackedDecls, type MaxonType, readerFilePath FilePath, readerModuleDirectory String)
+// A type a DECLARATION states — a function's parameter or return, or a top-level slot's — walked with the
+// same arm-correct rules the component walk uses, so a parameter typed `Array with Item` credits `Item`
+// exactly as a field of that type would. It is what starts a fresh `visited` set: a declaration is where a
+// transitive walk begins, and a per-walk set is what `noteTypeName` states the reason for.
+//
+// ⚠ **ITS TWO CALLERS ARE IN DIFFERENT INTERNER SPACES**, which is why `typeNames` is a parameter here and
+// not a fact this function could know — `noteSignatureTypes` walks the PROJECT interner's types and
+// `noteSlotType` the signature index's own.
+function noteDeclaredType(signatures ProgramSignatures, tracked TrackedDecls, type MaxonType, typeNames TypeNameInterner, readerFilePath FilePath, readerModuleDirectory String)
 	var visited = VisitedTypeNameSet.create()
-	noteComponentType(signatures, tracked: tracked, type: type, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
-end 'noteSignatureType'
+	noteComponentType(signatures, tracked: tracked, type: type, typeNames: typeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+end 'noteDeclaredType'
 
 // Every declaration wearing the referenced name — see `TrackedDeclIndexMap` for why there can be more
 // than one and why crediting all of them is the safe direction.
@@ -883,6 +933,8 @@ end 'noteEveryClaimant'
 function noteSlotType(signatures ProgramSignatures, tracked TrackedDecls, index TopLevelDeclIndex, readerFilePath FilePath, readerModuleDirectory String)
 	match signatures.globalSlotType(index) 'slot'
 		notFound then return
-		found(_, valueType, _) then noteSignatureType(signatures, tracked: tracked, type: valueType, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		// `globalSlotType` ADOPTS the slot's type into the index's own interner — that is the whole reason
+		// it exists as its own door rather than taking a table — so the walk is told exactly that.
+		found(_, valueType, _) then noteDeclaredType(signatures, tracked: tracked, type: valueType, typeNames: signatures.indexTypeNames(), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'slot'
 end 'noteSlotType'

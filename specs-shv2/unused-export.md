@@ -900,6 +900,69 @@ end 'main'
 7
 ```
 
+## A finding may not depend on WHICH INTERNER an id is resolved in
+
+<!-- test: error.unused-exported-type-when-the-two-interners-disagree -->
+⛔⛔ **THE PROGRAM'S VERDICT MOVED WHEN AN UNRELATED FILE WAS ADDED, AND THIS IS THE SMALLEST PROGRAM
+THAT SHOWS WHY.** A merged function's `maxonParamTypes` carry ids minted against the PROJECT interner
+(`ParseStaging.remapArtifact`, then `TypeResolution.resolveNamedType`); the whole-program signature index
+folds a SECOND, independent per-file interner of its own. Resolving a signature's id against the index's
+table is right only while two insertion orders coincide.
+
+`aliases/casts.maxon` is what breaks the coincidence, and it needs one line to do it: `Narrow` is named ONLY
+in a BODY cast, so the real parse interns it (`parseTypeReference`) and the declaration sweep — which reads
+declarations and not bodies — does not. Every name interned after it therefore sits one id lower in the
+index's table than in the project's, and `read`'s `Holder` parameter resolves, in the index's table, to
+`Victim`: the very declaration nothing outside `records/` names. The finding was SUPPRESSED by a credit no
+file earned.
+
+⚠ **The order of the two declarations in `records/types.maxon` is load-bearing** — an off-by-one names the
+NEXT interned type, so `Victim` must be the one declared after `Holder`. Delete `aliases/casts.maxon` and the
+two tables agree again and the diagnostic returns, which is the control that identified the mechanism.
+```maxon
+// --- file: aliases/casts.maxon
+typealias Wide = int(i64.min to i64.max)
+typealias Narrow = int(0 to 100)
+
+export function clampish(v Wide) returns Wide
+	let n = v as Narrow
+	return n
+end 'clampish'
+
+// --- file: records/types.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Holder
+	export var n as Integer
+
+	export static function make() returns Holder
+		return Holder{n: 7}
+	end 'make'
+end 'Holder'
+
+export type Victim
+	export var q as Integer
+
+	export static function make() returns Victim
+		return Victim{q: 1}
+	end 'make'
+end 'Victim'
+
+// --- file: use/main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function read(h Holder) returns Integer
+	return h.n
+end 'read'
+
+function main() returns ExitCode
+	return read(Holder.make()) + clampish(0)
+end 'main'
+```
+```maxoncstderr
+error E3092: records/<fragment>:22:13: exported type 'Victim' is never referenced outside its declaring file
+```
+
 ## The audit needs two files the author wrote
 
 <!-- test: single-file-exports-are-not-flagged -->

@@ -13803,26 +13803,20 @@ export type ProgramSignatures
 		return try self.crossFileConstantReads.get(index) otherwise panic("ProgramSignatures.crossFileConstantReadAt: OOB at {index} — the caller walks this list's own count()")
 	end 'crossFileConstantReadAt'
 
-	// The top-level `let`/`var` arena, walked by `checkUnusedExports`. `declAt` is exported for the same
-	// reason: the check seeds from every declaration, so it needs the arena and not a by-name probe.
-	// The name behind an interned id. The interner is this index's, so the answer is only meaningful
-	// against it â which is why it is asked HERE rather than the table being handed out.
-	export function typeNameOf(id TypeNameId) returns ByteArray throws TypeNameInternerError
-		return try self.typeNames.nameOf(id)
-	end 'typeNameOf'
-
 	// ⭐ **THE TYPE A TOP-LEVEL SLOT HOLDS — for `checkUnusedExports`, because REFERENCING A BINDING USES
 	// ITS TYPE.** A file can write `db.sourceFiles.contains(key)` and name `db` and nothing else, while
 	// depending on `Database`, on the `EntryMap` it is made of and on the `Entry` inside that. MEASURED on
 	// `map-struct-bytearray/multi-file-struct-param-after-global-branch`, which reported all three.
 	//
 	// It supplies the interner rather than taking one, which is the whole reason it exists as its own
-	// door: `resolvedGlobalOf` adopts the type INTO the table it is handed, and the only table whose ids
-	// `typeNameOf` can answer for is this index's own.
+	// door: `resolvedGlobalOf` adopts the type INTO the table it is handed, and the caller must then walk
+	// the result against THAT table — `indexTypeNames` is how it says so.
 	export function globalSlotType(index TopLevelDeclIndex) returns TopLevelGlobalLookup
 		return self.resolvedGlobalOf(index, into: self.typeNames)
 	end 'globalSlotType'
 
+	// The top-level `let`/`var` arena, walked by `checkUnusedExports`. `declAt` is exported for the same
+	// reason: the check seeds from every declaration, so it needs the arena and not a by-name probe.
 	export function topLevelDeclCount() returns TopLevelDeclIndex
 		return self.decls.count()
 	end 'topLevelDeclCount'
