@@ -37,6 +37,16 @@
 // address at all — so it is reached only after `emitBufferNotOwned` and the `buffer != 0` test, in exactly
 // `__managed_cow_detach`'s own arm order. That ordering is a REQUIREMENT, not a preference.
 //
+// ⭐⭐ **SO THE ORDER IS SPENT ON THE ONE THING IT CAN BUY: THE MOST DISCRIMINATING TEST FIRST.** A fast
+// arm that ends up taking the call has paid for every guard ahead of the one that refused, ON TOP of the
+// call it was always going to make — so a family this pass cannot serve must be shown the door early or
+// this rung makes it SLOWER. Two tests refuse whole element types outright and both are two ops:
+// `element_size@24 != 8` refuses every byte-, narrow- and sub-byte-packed array (`ByteArray` is one of
+// this compiler's most used types), and, on the STORE path only, `element_destroy@40 != 0` refuses every
+// managed-element array, whose occupant is the runtime's to destroy. They go first; the bound and the
+// three copy-on-write arms, which refuse rarely, follow. MEASURED on the emitted code: a `ByteArray`
+// element access pays **4** instructions before reaching its call rather than 13.
+//
 // ⚠ **WHERE IT IS SCHEDULED, AND WHY IT IS NOT WHERE IT WAS FIRST PLANNED (EC1-b).** It runs AFTER
 // `insertRangeChecks` and before `pruneDeadBlockArgs`/`foldConstOperands`. Before the range checks it
 // CANNOT go: a range-check site is recorded as `(blockId, stdOpPos)` in the coordinate space
@@ -71,7 +81,7 @@ let WordElementStride = MachineWordBytes as ParsedInt
 // LABELS DOES rather than which guard sent control there.
 let InlineContLabel = b"__im_cont"
 let InlineSlowLabel = b"__im_slow"
-let InlineStrideLabel = b"__im_stride"
+let InlineBoundsLabel = b"__im_bounds"
 let InlineLoadLabel = b"__im_load"
 let InlineEmptyLabel = b"__im_empty"
 let InlineOwnedLabel = b"__im_owned"
@@ -332,16 +342,20 @@ type PrimitiveInliner
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 
 		var cur = self.blockAt(blockRef)
-		cur = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: frame.slow, next: InlineStrideLabel)
-		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineLoadLabel)
+		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineBoundsLabel)
+		cur = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: frame.slow, next: InlineLoadLabel)
 
 		let value = self.emitWordElementLoad(cur, arr: arr, index: index)
-		// ONE `const 0` serves the destructor test, the null test and the success flag: `NoErrorFlag` IS 0
-		// and so is "no per-element destructor", and `foldConstOperands` folds both compares into
-		// immediates afterwards, leaving the edge argument as its only reader.
+		// ⚠ THREE CONSTANTS THAT ARE ALL ZERO TODAY, AND THEY STAY THREE. "no error in flight", "no
+		// per-element destructor" and "an empty managed slot" are three different facts that happen to share
+		// a value; folding them into one `const 0` would make a change to any one of them silently rewrite
+		// the other two — the argument `MemoryIndexOutOfBoundsOrdinal` makes about not aliasing itself to
+		// `ArrayErrorIndexOutOfBoundsFlag`. It costs nothing: `foldConstOperands` folds both compares into
+		// immediates and DCEs their consts, leaving only the flag, whose reader is the edge below.
 		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
+		let noDestroy = emitConst(self.module, block: cur, value: TrivialElementDestroy, ids: self.valueIds())
 		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-		let managed = emitCmp(self.module, block: cur, a: destroy, b: noError, pred: StdCmpPred.ne, ids: self.valueIds())
+		let managed = emitCmp(self.module, block: cur, a: destroy, b: noDestroy, pred: StdCmpPred.ne, ids: self.valueIds())
 
 		var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel)
 		self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.cont.id))
@@ -349,7 +363,8 @@ type PrimitiveInliner
 
 		// `value` and `noError` are defined in `cur`, which dominates this block, so both are readable here
 		// and on this block's own edge to the continuation without a block arg of their own.
-		let isEmpty = emitCmp(self.module, block: checkEmpty, a: value, b: noError, pred: StdCmpPred.eq, ids: self.valueIds())
+		let emptySlot = emitConst(self.module, block: checkEmpty, value: EmptyManagedSlot, ids: self.valueIds())
+		let isEmpty = emitCmp(self.module, block: checkEmpty, a: value, b: emptySlot, pred: StdCmpPred.eq, ids: self.valueIds())
 		self.module.setTerminator(checkEmpty, op: StdOp.condBranch(isEmpty, thenBlockId: frame.slow.id, elseBlockId: frame.cont.id))
 		attachEdge(checkEmpty, targetId: frame.cont.id, argIds: twoArgs(value, second: noError))
 
@@ -381,6 +396,13 @@ type PrimitiveInliner
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 
 		var cur = self.blockAt(blockRef)
+		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineDestroyLabel)
+
+		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
+		let noDestroy = emitConst(self.module, block: cur, value: TrivialElementDestroy, ids: self.valueIds())
+		let managed = emitCmp(self.module, block: cur, a: destroy, b: noDestroy, pred: StdCmpPred.ne, ids: self.valueIds())
+		cur = self.guard(cur, refused: managed, slow: frame.slow, next: InlineBoundsLabel)
+
 		cur = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineOwnedLabel)
 
 		let notOwned = emitBufferNotOwned(self.module, block: cur, record: arr, ids: self.valueIds())
@@ -392,14 +414,7 @@ type PrimitiveInliner
 		cur = self.guard(cur, refused: unallocated, slow: frame.slow, next: InlineViewedLabel)
 
 		let viewed = emitIsSharedAllocation(self.module, block: cur, ptr: buffer, ids: self.valueIds())
-		cur = self.guard(cur, refused: viewed, slow: frame.slow, next: InlineStrideLabel)
-
-		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineDestroyLabel)
-
-		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-		let noDestroy = emitConst(self.module, block: cur, value: TrivialElementDestroy, ids: self.valueIds())
-		let managed = emitCmp(self.module, block: cur, a: destroy, b: noDestroy, pred: StdCmpPred.ne, ids: self.valueIds())
-		cur = self.guard(cur, refused: managed, slow: frame.slow, next: InlineStoreLabel)
+		cur = self.guard(cur, refused: viewed, slow: frame.slow, next: InlineStoreLabel)
 
 		let stride = emitConst(self.module, block: cur, value: WordElementStride, ids: self.valueIds())
 		let slot = emitSlotAddr(self.module, block: cur, buffer: buffer, index: index, elementSize: stride, ids: self.valueIds())
@@ -477,33 +492,49 @@ type PrimitiveInliner
 	// (`IrModule.ops` is append-only and retains what block-rebuilding passes replace), and it is why every
 	// reader asks `liveOpIndices` rather than scanning the array.
 	function openPlain(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns InlineFrame
-		let cont = self.carve(blockRef, pos: pos)
-		let contRef = self.lastBlockRef()
-		var slow = self.module.addBlock(self.func, label: InlineSlowLabel)
+		var frame = self.carveFrame(blockRef, pos: pos)
 		let slowResult = self.valueIds().mint()
-		self.module.appendOp(slow, op: StdOp.call(slowResult, callee: callee, args: args))
-		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
-		attachEdge(slow, targetId: cont.id, argIds: argsOf(slowResult))
-		attachBlockArgs(cont, valueIds: argsOf(resultId))
+		self.module.appendOp(frame.slow, op: StdOp.call(slowResult, callee: callee, args: args))
+		self.closeFrame(frame, carried: argsOf(resultId), slowCarried: argsOf(slowResult))
 
-		return InlineFrame.create(cont, contRef: contRef, slow: slow)
+		return frame
 	end 'openPlain'
 
 	// `openPlain`'s dual-register twin: a `tryCall` defines a VALUE and an ERROR FLAG, so both are minted
-	// fresh on the slow arm and both become continuation block args.
+	// fresh on the slow arm and both become continuation block args. It differs from its twin in exactly
+	// that — the op and the arity — which is why the carve and the wiring either side of it are shared.
 	function openThrowing(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns InlineFrame
-		let cont = self.carve(blockRef, pos: pos)
-		let contRef = self.lastBlockRef()
-		var slow = self.module.addBlock(self.func, label: InlineSlowLabel)
+		var frame = self.carveFrame(blockRef, pos: pos)
 		let slowResult = self.valueIds().mint()
 		let slowFlag = self.valueIds().mint()
-		self.module.appendOp(slow, op: StdOp.tryCall(slowResult, errorFlagId: slowFlag, callee: callee, args: args))
-		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
-		attachEdge(slow, targetId: cont.id, argIds: twoArgs(slowResult, second: slowFlag))
-		attachBlockArgs(cont, valueIds: twoArgs(resultId, second: errorFlagId))
+		self.module.appendOp(frame.slow, op: StdOp.tryCall(slowResult, errorFlagId: slowFlag, callee: callee, args: args))
+		self.closeFrame(frame, carried: twoArgs(resultId, second: errorFlagId), slowCarried: twoArgs(slowResult, second: slowFlag))
 
-		return InlineFrame.create(cont, contRef: contRef, slow: slow)
+		return frame
 	end 'openThrowing'
+
+	// The half of an opener that runs BEFORE the call is re-emitted: carve the site block and mint the
+	// block the moved call will live in. The returned frame's `slow` is EMPTY and un-terminated — the
+	// caller's next act is to append the call into it, which is the one thing the two openers do
+	// differently.
+	function carveFrame(blockRef BlockRef, pos BlockOpPos) returns InlineFrame
+		let cont = self.carve(blockRef, pos: pos)
+		// Read immediately: `carve` is the one moment the continuation is the function's last-registered
+		// block, and the `addBlock` on the next line ends it.
+		let contRef = self.lastBlockRef()
+		return InlineFrame.create(cont, contRef: contRef, slow: self.module.addBlock(self.func, label: InlineSlowLabel))
+	end 'carveFrame'
+
+	// The half that runs AFTER it: the slow arm branches to the continuation carrying its own fresh
+	// results, and the continuation takes the ORIGINAL ones as its block args. That pairing is the whole
+	// reason no op after the site has to change — every one of them still names the value it always did.
+	function closeFrame(frame InlineFrame, carried ValueIdArray, slowCarried ValueIdArray)
+		var slow = frame.slow
+		var cont = frame.cont
+		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
+		attachEdge(slow, targetId: cont.id, argIds: slowCarried)
+		attachBlockArgs(cont, valueIds: carried)
+	end 'closeFrame'
 
 	// Split the site block just PAST the call, then drop the call off the head — so the head holds the ops
 	// before it, the continuation holds the ops after it, and the call itself is held by neither.
@@ -557,28 +588,44 @@ function carvedTheBlock(outcome BlockExpansion) returns bool
 	end 'carved'
 end 'carvedTheBlock'
 
-// Give `pred` one more outgoing edge, carrying `argIds` to `targetId`.
+// Give `pred` its ONE outgoing edge, carrying `argIds` to `targetId`.
 //
-// ⚠ It REBUILDS `branchEdges` and field-assigns rather than pushing into whatever array the block holds,
+// ⚠ It builds a FRESH array and field-assigns rather than pushing into whatever array the block holds,
 // which is `IrBlock`'s stated rule and not a formality: the three tiers SHARE one phi model, and a Std
 // block's arrays can be the very arrays `queryAllModule` hands back on every cache hit — so an in-place
 // write corrupts the memo for every later compile of the project, silently, with nothing downstream that
 // re-reads the model to notice.
+//
+// ⚠ **AND IT REFUSES A BLOCK THAT ALREADY CARRIES ONE, WHICH IS THE DOCUMENTATION.** Every predecessor
+// this pass wires is a block it minted itself moments earlier, so a block arriving here with an edge is a
+// wiring bug rather than a case to merge into — and carrying the existing edges across "just in case"
+// would be generality no call site can reach and no test can redden.
 function attachEdge(pred IrBlock, targetId BlockId, argIds ValueIdArray)
 	var predBlock = pred
+	if predBlock.branchEdges.count() != 0 'alreadyWired'
+		panic("attachEdge: block '{String.from(predBlock.label)}' already carries {predBlock.branchEdges.count()} outgoing edge(s) — every predecessor this pass wires is one it minted in the same breath")
+	end 'alreadyWired'
+
 	var edges = BranchEdgeArray.create()
-	for edge in predBlock.branchEdges 'carryExisting'
-		edges.push(edge)
-	end 'carryExisting'
 	edges.push(BranchEdge.create(targetId, argIds: argIds))
 	predBlock.branchEdges = edges
 end 'attachEdge'
 
-// Give `block` the block args `valueIds` names, in order — the continuation half of the same rule
-// `attachEdge` follows, and the positional `blockArgs[k] ↔ edge.argIds[k]` pairing every predecessor this
-// pass wires must match. Every value these primitives carry is a machine word.
+// Give `block` the block args `valueIds` names, in order — the continuation half of the same two rules
+// `attachEdge` follows (a fresh array, and a block that carries none yet), and the positional
+// `blockArgs[k] ↔ edge.argIds[k]` pairing every predecessor this pass wires must match.
+//
+// Every value these five primitives carry is a MACHINE WORD, and that is exact rather than a default: all
+// five are declared `value(StdType.i64)` or void, so the `resultId` a call defined was already classed off
+// that declaration (`StdLoweringShared.calleeResultClass`), and a dual-register error flag is i64 on every
+// backend (`StdToWasm.recordTryCallDefs`). The arg TYPE is what picks a value's register file on x64/arm64
+// and its wasm valtype, so a wrong one here is a wrong register class, not a cosmetic mismatch.
 function attachBlockArgs(block IrBlock, valueIds ValueIdArray)
 	var target = block
+	if target.blockArgs.count() != 0 'alreadyHasArgs'
+		panic("attachBlockArgs: block '{String.from(target.label)}' already carries {target.blockArgs.count()} block arg(s) — a continuation this pass minted has none")
+	end 'alreadyHasArgs'
+
 	var blockArgs = IrBlockArgArray.create()
 	for valueId in valueIds 'each'
 		blockArgs.push(IrBlockArg.create(valueId, argType: StdType.i64))
@@ -596,6 +643,15 @@ end 'argAt'
 // the zero `__mm_alloc` leaves the record at, and `__managed_cow_detach`'s `checkShared` arm compares
 // against exactly it.
 let NoBufferAllocated = 0 as ParsedInt
+
+// An EMPTY managed slot — a slot inside `[0, length)` that a `resize` grew and nothing ever wrote. It is
+// zero because `__mm_alloc` zeroes and because every vacating operation erases on the way out (the
+// `[length, capacity)`-reads-ZERO invariant `ManagedMemoryRuntime` leans on), and it is what
+// `emitLoadElemAndOkReturn`'s null arm compares an element against before throwing `emptySlot`.
+//
+// ⚠ It is a MANAGED element's emptiness and nothing else's: a TRIVIAL element's 0 is a genuine value, which
+// is why the test below it is reached only past the `element_destroy@40` gate.
+let EmptyManagedSlot = 0 as ParsedInt
 
 // Classify one op. EXHAUSTIVE over `StdOp`: the two call variants are named and everything else is covered
 // by range arms, so a variant APPENDED past the end of the union fails to compile here until it is
