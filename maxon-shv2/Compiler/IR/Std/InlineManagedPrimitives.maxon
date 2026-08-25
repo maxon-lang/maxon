@@ -99,47 +99,6 @@ typealias InlinedSiteCount = int(0 to u64.max)
 // the same reason — the one operation that would write to it is the one that replaces it.
 let sharedUnseededMinter = ValueMinter.create(0)
 
-// The two NON-throwing primitives, reached as a plain `StdOp.call`.
-enum PlainPrimitive
-	// `__managed_count(arr) -> length@8`. The one member with no fast/slow split at all: a field load IS
-	// the whole body, so the call is REPLACED IN PLACE and no block is carved.
-	count
-	// `__managed_get_unchecked(arr, index) -> value` — the read a `for x in arr` header makes. No bounds
-	// check and no empty-slot check, because the loop header already owns both (`ManagedGetUncheckedName`).
-	uncheckedGet
-end 'PlainPrimitive'
-
-// The three THROWING ones, reached as an `StdOp.tryCall` over the dual-register `(value, flag)` ABI.
-enum ThrowingPrimitive
-	// `__managed_get(arr, index) -> (value, flag)` — the bounds-checked element read.
-	checkedGet
-	// `__managed_set(arr, index, value)` — the `Array` surface's LENGTH-bounded element write.
-	set
-	// `__managed_mem_set(arr, index, value)` — the `__ManagedMemory` surface's CAPACITY-bounded one. It
-	// differs from `set` in exactly one thing — the record field its index is checked against — which is
-	// why the two share an expander and a single `limitOffset`. ⚖ The capacity bound is the user ruling of
-	// 2026-07-30; see `ManagedMemSetName`.
-	memSet
-end 'ThrowingPrimitive'
-
-// What an op at a scanned position is. `notInlinable` is everything else in the module, including a call to
-// a `__managed_*` entry this pass does not expand.
-union ManagedCallSite
-	notInlinable
-	plain(kind PlainPrimitive, callee ByteArray, args ValueIdArray, resultId ValueId)
-	throwing(kind ThrowingPrimitive, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId)
-end 'ManagedCallSite'
-
-// What expanding at one position did to the block holding it.
-union BlockExpansion
-	// Nothing was carved: either the op is not a site, or it was a `__managed_count` rewritten in place.
-	// The scan of this block carries on.
-	noSite
-	// The block was CARVED: everything past the site now lives in this continuation, so the scan of the
-	// original block is over and the caller scans the continuation instead.
-	continuation(blockRef BlockRef)
-end 'BlockExpansion'
-
 // The two blocks every carved site has, held together because every expander wires both.
 type InlineFrame
 	// Takes the ORIGINAL result ids as its block args and holds every op that followed the call.
@@ -211,18 +170,11 @@ type PrimitiveInliner
 		return self.ids
 	end 'valueIds'
 
-	// ⭐⭐ **WHAT MAKES THIS WALK TERMINATE IS *WHICH* NEW BLOCK IT FOLLOWS.** An expansion appends three
-	// kinds of block: the GUARD CHAIN (which holds no call at all), the SLOW arm (which holds the very call
-	// just expanded) and the CONTINUATION (which holds the rest of the site block's ops, and so may hold
-	// the next call). Only the CONTINUATION is ever revisited, so the moved call is never rediscovered and
-	// the walk cannot cycle — which is why there is no "already expanded" marker column anywhere in this
-	// file, and why the outer loop's bound is SNAPSHOTTED: every block this pass appends is appended to the
-	// very array that loop is walking.
-	//
-	// ⚠ **AND THERE IS NO WORKLIST ARRAY, WHICH IS THE SAME FACT PAYING FOR ITSELF.** A carve hands back
-	// exactly one block to carry on in, so the queue is never longer than one and a chain of carves is a
-	// loop rather than a list — costing this pass ZERO allocations in the functions that hold no site at
-	// all, and those are most of them.
+	// ⭐ **THE BOUND IS SNAPSHOTTED, AND THAT IS WHAT KEEPS THIS LOOP OFF ITS OWN OUTPUT.** Every block an
+	// expansion appends — guard chain, slow arm, continuation — is appended to the very array this loop
+	// walks, so the count is taken once and none of them is re-entered from here. The CONTINUATIONS are
+	// revisited, by `expandChainFrom`, which is where the next site can only be; see its header for why
+	// following only those is what makes the walk terminate.
 	function run()
 		let originalBlockCount = self.func.blockRefs.count()
 		for i in 0 upto originalBlockCount 'eachBlock'
@@ -231,57 +183,113 @@ type PrimitiveInliner
 		end 'eachBlock'
 	end 'run'
 
-	// Expand every site reachable by carving forward from one original block: each carve leaves the rest of
-	// the ops in a continuation, which is where the next site can only be.
-	function expandChainFrom(blockRef BlockRef)
-		var current = blockRef
-		var carving = true
-		while carving 'chain'
-			match self.expandBlock(current) 'outcome'
-				noSite then carving = false
-				continuation(contRef) then current = contRef
-			end 'outcome'
-		end 'chain'
-	end 'expandChainFrom'
-
-	// Expand the sites in one block, left to right. A `__managed_count` is rewritten in place and the scan
-	// carries on past it; the four that need a branch END the scan, because everything after the call has
-	// moved to the continuation the caller carries on in.
+	// ⭐⭐ **WALK ONE ORIGINAL BLOCK AND EVERY CONTINUATION A CARVE LEAVES BEHIND IT, IN ONE LOOP** — a
+	// carve moves everything past the site into a continuation, so that continuation is where the next site
+	// can only be, and the scan restarts at its first op.
 	//
 	// ⚠ **IT WALKS `block.opRefs`, WHICH IS THE BODY HALF OF `IrModule.liveOpIndices`' OWN DESCENT — never
 	// the flat `module.ops`.** That array is append-only and full of orphans from every earlier pass; and a
 	// site needs its POSITION IN ITS BLOCK, which the flat array cannot give. A terminator is never a call,
 	// so the half this walk omits holds no site.
-	function expandBlock(blockRef BlockRef) returns BlockExpansion
+	//
+	// ⭐⭐ **WHAT MAKES THE WALK TERMINATE IS *WHICH* NEW BLOCK IT FOLLOWS.** An expansion appends three
+	// kinds of block: the GUARD CHAIN (which holds no call at all), the SLOW arm (which holds the very call
+	// just expanded) and the CONTINUATION (which holds the rest of the site block's ops, and so may hold the
+	// next call). Only the CONTINUATION is ever revisited, so the moved call is never rediscovered and the
+	// walk cannot cycle — which is why there is no "already expanded" marker column anywhere in this file,
+	// and why `run`'s bound is SNAPSHOTTED: every block this pass appends is appended to the very array that
+	// loop is walking. There is no worklist either: a carve hands back exactly ONE block to carry on in, so
+	// a chain of carves is this loop rather than a list, and a function with no site allocates nothing here.
+	function expandChainFrom(blockRef BlockRef)
+		var current = blockRef
 		var pos = 0 as BlockOpPos
-		while pos < self.blockAt(blockRef).opRefs.count() 'eachOp'
-			let outcome = self.expandAt(blockRef, pos: pos)
-			if carvedTheBlock(outcome) 'carved'
-				return outcome
-			end 'carved'
-			pos = pos + 1
+		while pos < self.blockAt(current).opRefs.count() 'eachOp'
+			let next = self.expandAt(current, pos: pos)
+			if next == current 'nothingCarved'
+				pos = pos + 1
+				continue
+			end 'nothingCarved'
+
+			current = next
+			pos = 0
 		end 'eachOp'
+	end 'expandChainFrom'
 
-		return BlockExpansion.noSite
-	end 'expandBlock'
+	// ⭐⭐ **ONE POSITION — AND THE ANSWER IS THE BLOCK THE SCAN CARRIES ON IN.** For everything that is not
+	// an expanded site (which is almost every op in the module) that block is the one it was handed, and the
+	// caller simply steps past the op; for a carve it is the CONTINUATION, and the caller restarts at its
+	// first op. A carve can never hand back the block it was given: its continuation comes from `addBlock`,
+	// which appends past every ref the function already had, so the two are told apart by identity and
+	// nothing has to be wrapped to say which happened.
+	//
+	// ⛔⛔ **AND THAT IS AN ALLOCATION DECISION, MEASURED.** This routine is called once per op in the whole
+	// module, and a PAYLOAD-BEARING union heap-boxes EVERY case, payload-free ones included (`Parser`'s
+	// `enumOf` note). The classification and the outcome used to be two such unions — a
+	// `ManagedCallSite.notInlinable` and a `BlockExpansion.noSite` minted and dropped at every op that is
+	// neither — which cost **2 allocations and 64 bytes per Std op in the program**: on a straight-line
+	// ladder holding ZERO expandable sites the phase read 594 / 1,106 / 2,130 / 4,178 allocations across a
+	// doubling program, which is the boxes and nothing else. `BlockRef` is an `int`, so this answer is a
+	// register. — MEASURED 2026-08-25, `Testing/ladders/genmanagedsites.sh nosites`.
+	//
+	// ⚠ The `StdOp` match is EXHAUSTIVE: the two call variants are named and everything else is covered by
+	// range arms, so a variant APPENDED past the end of the union fails to compile here until it is
+	// consciously placed — the band-append invariant working in the reviewer's favour.
+	//
+	// ⚠ `tryCall` is ALSO how an EXISTENTIAL-returning call is spelled (its second def is the paired witness
+	// table, not an error flag — `LowerMaxonToStd.appendDirectCall`). Dispatching on the callee NAME is what
+	// keeps the two apart: no `__managed_*` entry returns an interface.
+	function expandAt(blockRef BlockRef, pos BlockOpPos) returns BlockRef
+		match self.opAt(blockRef, pos: pos) 'op'
+			const to param then break 'op'
+			call(resultId, callee, args) then return self.expandPlainCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+			retVoid to rdataAddr then break 'op'
+			tryCall(resultId, errorFlagId, callee, args) then return self.expandThrowingCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+			errorReturn to osThreadCpuTicks then break 'op'
+		end 'op'
 
-	// One position: classify it, and route to the expander its shape names.
-	function expandAt(blockRef BlockRef, pos BlockOpPos) returns BlockExpansion
-		match classifySite(self.opAt(blockRef, pos: pos)) 'site'
-			notInlinable then break 'site'
-			plain(kind, callee, args, resultId) then return self.expandPlain(blockRef, pos: pos, kind: kind, callee: callee, args: args, resultId: resultId)
-			throwing(kind, callee, args, resultId, errorFlagId) then return self.expandThrowing(blockRef, pos: pos, kind: kind, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
-		end 'site'
-
-		return BlockExpansion.noSite
+		return blockRef
 	end 'expandAt'
 
-	function expandPlain(blockRef BlockRef, pos BlockOpPos, kind PlainPrimitive, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockExpansion
-		return match kind 'plain'
-			count gives self.rewriteCountInPlace(blockRef, pos: pos, args: args, resultId: resultId, callee: callee)
-			uncheckedGet gives self.expandUncheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
-		end 'plain'
-	end 'expandPlain'
+	// The two NON-throwing primitives. A `call` to anything else, `__managed_*` entries this pass does not
+	// expand included, leaves the scan where it was. What each expansion IS, and why, is at the expander
+	// it names.
+	//
+	// ⚠ **THE CALLEE'S NAME IS WHAT SURVIVES THE LOWERING, WHICH IS WHY BOTH ROSTERS DISPATCH ON IT.** A
+	// runtime callee reaches Std as a plain `ByteArray` on `call`/`tryCall` (`LowerMaxonToStd`'s
+	// `lowerRuntimeCall` / `appendThrowingCall`) — there is no tag left to match. The names compared
+	// against are the runtime's OWN exported constants and never literals, so this roster and the builders
+	// that emit those entries are one fact rather than two.
+	function expandPlainCall(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockRef
+		if callee.equals(ManagedCountName) 'count'
+			return self.rewriteCountInPlace(blockRef, pos: pos, args: args, resultId: resultId, callee: callee)
+		end 'count'
+		if callee.equals(ManagedGetUncheckedName) 'uncheckedGet'
+			return self.expandUncheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+		end 'uncheckedGet'
+
+		return blockRef
+	end 'expandPlainCall'
+
+	// The three THROWING ones, reached as an `StdOp.tryCall` over the dual-register `(value, flag)` ABI and
+	// told apart the same way.
+	//
+	// ⭐ `set` and `mem_set` differ in exactly ONE thing — the record field their index is bounded against —
+	// so they share an expander and the difference is this dispatch's `limitOffset` argument and nothing else.
+	// `guardIndexInRange` is where that field's two answers are stated; ⚖ the capacity bound is the user
+	// ruling of 2026-07-30, carried by `ManagedMemSetName`.
+	function expandThrowingCall(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockRef
+		if callee.equals(ManagedGetName) 'checkedGet'
+			return self.expandCheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+		end 'checkedGet'
+		if callee.equals(ManagedSetName) 'set'
+			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordLengthOffset)
+		end 'set'
+		if callee.equals(ManagedMemSetName) 'memSet'
+			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordCapacityOffset)
+		end 'memSet'
+
+		return blockRef
+	end 'expandThrowingCall'
 
 	// ⭐ `__managed_count(arr)` IS THE ONE MEMBER WITH NOTHING TO GUARD: its whole body is
 	// `loadIndirect i64 [arr + length@8]` (`buildManagedCount`), which is legal wherever the call was —
@@ -289,13 +297,13 @@ type PrimitiveInliner
 	// index, keeping `resultId`, and not one block or edge moves. `IrModule.ops` is indexed by
 	// `block.opRefs`, so an in-place replacement is invisible to every other reference in the function —
 	// the same discipline the register allocator's colorer states for itself.
-	function rewriteCountInPlace(blockRef BlockRef, pos BlockOpPos, args ValueIdArray, resultId ValueId, callee ByteArray) returns BlockExpansion
+	function rewriteCountInPlace(blockRef BlockRef, pos BlockOpPos, args ValueIdArray, resultId ValueId, callee ByteArray) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let opIdx = self.opIndexAt(blockRef, pos: pos)
 		try self.module.ops.set(opIdx, value: StdOp.loadIndirect(resultId, addrId: arr, offset: ManagedRecordLengthOffset, valueType: StdType.i64)) otherwise panic("rewriteCountInPlace: module.ops.set OOB at {opIdx}, which block {blockRef} of '{String.from(self.func.name)}' names at position {pos}")
 		self.expanded = self.expanded + 1
 
-		return BlockExpansion.noSite
+		return blockRef
 	end 'rewriteCountInPlace'
 
 	// `__managed_get_unchecked(arr, index) -> value`: the whole-word arm is a slot address and one load.
@@ -304,7 +312,7 @@ type PrimitiveInliner
 	// re-reads the length live on every trip and a managed array cannot hold an empty slot inside
 	// `[0, count)` (`ManagedGetUncheckedName`'s header states both, and names the parser rule the second
 	// rests on). Adding one here would be this pass deciding something, which it does not do.
-	function expandUncheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockExpansion
+	function expandUncheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
@@ -319,14 +327,6 @@ type PrimitiveInliner
 		return self.finish(frame)
 	end 'expandUncheckedGet'
 
-	function expandThrowing(blockRef BlockRef, pos BlockOpPos, kind ThrowingPrimitive, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockExpansion
-		return match kind 'throwing'
-			checkedGet gives self.expandCheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
-			set gives self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordLengthOffset)
-			memSet gives self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordCapacityOffset)
-		end 'throwing'
-	end 'expandThrowing'
-
 	// `__managed_get(arr, index) -> (value, flag)`. The fast arm is `buildManagedGet`'s success path with
 	// its two branches kept and its byte loop collapsed: in range, whole-word stride, and — for a MANAGED
 	// element only — a slot that is not empty.
@@ -336,7 +336,7 @@ type PrimitiveInliner
 	// `resize` grew and nothing wrote, and reading its fields would fault, so it throws `emptySlot`. Only
 	// that second case leaves for the slow arm, which is where the throw lives — so an array of Strings
 	// keeps the inline read for every slot that holds one.
-	function expandCheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockExpansion
+	function expandCheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
@@ -389,7 +389,7 @@ type PrimitiveInliner
 	// (`emitDestroyRejectedElement`). Both are the runtime's, both are gated on this field, and a fast arm
 	// that stored over an occupant would be a leak — measured at exit 101 when that call was missing from
 	// `__managed_set` itself (R4.6).
-	function expandElementStore(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, limitOffset ByteOffset) returns BlockExpansion
+	function expandElementStore(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, limitOffset ByteOffset) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 		let value = argAt(args, index: 2, callee: callee)
@@ -522,6 +522,15 @@ type PrimitiveInliner
 		// Read immediately: `carve` is the one moment the continuation is the function's last-registered
 		// block, and the `addBlock` on the next line ends it.
 		let contRef = self.lastBlockRef()
+		// ⚠ **CHECKED, NOT ASSUMED, BECAUSE `expandAt` NOW ANSWERS BY IDENTITY.** "The scan carries on in
+		// THIS block" and "the scan carries on in the continuation" are told apart by comparing the two
+		// refs, so a reordering that slipped an `addBlock` between the split and this read would hand the
+		// walk a guard or slow block — which holds the very call just expanded, and would be rediscovered
+		// forever. `InsertRangeChecks.extendGuardChain` states the same rule against the same hazard.
+		if self.blockAt(contRef).id != cont.id 'notTheContinuation'
+			panic("carveFrame: the last block registered in '{String.from(self.func.name)}' is not the continuation `splitBlockInPlace` returned — a block was appended between the split and this read")
+		end 'notTheContinuation'
+
 		return InlineFrame.create(cont, contRef: contRef, slow: self.module.addBlock(self.func, label: InlineSlowLabel))
 	end 'carveFrame'
 
@@ -550,9 +559,9 @@ type PrimitiveInliner
 	end 'carve'
 
 	// The outcome every carved expansion returns, plus the one counter bump they share.
-	function finish(frame InlineFrame) returns BlockExpansion
+	function finish(frame InlineFrame) returns BlockRef
 		self.expanded = self.expanded + 1
-		return BlockExpansion.continuation(frame.contRef)
+		return frame.contRef
 	end 'finish'
 
 	// --- block/op access ---
@@ -578,15 +587,6 @@ type PrimitiveInliner
 		return try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("PrimitiveInliner.lastBlockRef: '{String.from(self.func.name)}' has no blocks")
 	end 'lastBlockRef'
 end 'PrimitiveInliner'
-
-// Whether an outcome CARVED its block — i.e. everything past the site now lives in a continuation, so the
-// scan of the original block is over and the caller enqueues that continuation instead.
-function carvedTheBlock(outcome BlockExpansion) returns bool
-	return match outcome 'carved'
-		noSite gives false
-		continuation gives true
-	end 'carved'
-end 'carvedTheBlock'
 
 // Give `pred` its ONE outgoing edge, carrying `argIds` to `targetId`.
 //
@@ -652,53 +652,3 @@ let NoBufferAllocated = 0 as ParsedInt
 // ⚠ It is a MANAGED element's emptiness and nothing else's: a TRIVIAL element's 0 is a genuine value, which
 // is why the test below it is reached only past the `element_destroy@40` gate.
 let EmptyManagedSlot = 0 as ParsedInt
-
-// Classify one op. EXHAUSTIVE over `StdOp`: the two call variants are named and everything else is covered
-// by range arms, so a variant APPENDED past the end of the union fails to compile here until it is
-// consciously placed — the band-append invariant working in the reviewer's favour.
-//
-// ⚠ It matches on the callee's NAME because that is what survives the lowering: a runtime callee reaches
-// Std as a plain `ByteArray` on `call`/`tryCall` (`LowerMaxonToStd.lowerRuntimeCall` /
-// `appendThrowingCall`), and the names compared against are the runtime's own exported constants, never
-// literals — `ManagedGetName`, `ManagedGetUncheckedName`, `ManagedSetName`, `ManagedMemSetName`,
-// `ManagedCountName`.
-//
-// ⚠ `tryCall` is ALSO how an EXISTENTIAL-returning call is spelled (its second def is the paired witness
-// table, not an error flag — `LowerMaxonToStd.appendDirectCall`). Matching on the callee name is what keeps
-// the two apart: no `__managed_*` entry returns an interface.
-function classifySite(op StdOp) returns ManagedCallSite
-	return match op 'site'
-		const to param gives ManagedCallSite.notInlinable
-		call(resultId, callee, args) gives plainSite(callee, args: args, resultId: resultId)
-		retVoid to rdataAddr gives ManagedCallSite.notInlinable
-		tryCall(resultId, errorFlagId, callee, args) gives throwingSite(callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
-		errorReturn to osThreadCpuTicks gives ManagedCallSite.notInlinable
-	end 'site'
-end 'classifySite'
-
-// The two non-throwing primitives, by name.
-function plainSite(callee ByteArray, args ValueIdArray, resultId ValueId) returns ManagedCallSite
-	if callee.equals(ManagedCountName) 'count'
-		return ManagedCallSite.plain(PlainPrimitive.count, callee: callee, args: args, resultId: resultId)
-	end 'count'
-	if callee.equals(ManagedGetUncheckedName) 'uncheckedGet'
-		return ManagedCallSite.plain(PlainPrimitive.uncheckedGet, callee: callee, args: args, resultId: resultId)
-	end 'uncheckedGet'
-
-	return ManagedCallSite.notInlinable
-end 'plainSite'
-
-// The three throwing ones, by name.
-function throwingSite(callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns ManagedCallSite
-	if callee.equals(ManagedGetName) 'checkedGet'
-		return ManagedCallSite.throwing(ThrowingPrimitive.checkedGet, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
-	end 'checkedGet'
-	if callee.equals(ManagedSetName) 'set'
-		return ManagedCallSite.throwing(ThrowingPrimitive.set, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
-	end 'set'
-	if callee.equals(ManagedMemSetName) 'memSet'
-		return ManagedCallSite.throwing(ThrowingPrimitive.memSet, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
-	end 'memSet'
-
-	return ManagedCallSite.notInlinable
-end 'throwingSite'
