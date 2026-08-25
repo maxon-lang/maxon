@@ -1264,7 +1264,12 @@ end 'splitBlockInPlace'
 // The half of a split that is the same whichever way the ops are placed: mint the continuation and move
 // `head`'s EXIT onto it — the terminator, the conditional branch and the outgoing edge arguments —
 // leaving `head` un-terminated for the caller to finish.
-export function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label ByteArray) returns IrBlock
+//
+// ⚠ NOT exported, and that is a fact the SELF-COMPILE enforces rather than a preference: shv2's own
+// `checkUnusedExports` reports **E3092** on an `export` no other file names, and this half has exactly one
+// caller outside its own two — there isn't one. `splitBlockInPlace` above is the shared entry;
+// `splitChainEnd` reaches this directly because it places the ops itself.
+function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label ByteArray) returns IrBlock
 	var ok = module.addBlock(func, label: label)
 	var headBlock = head
 
