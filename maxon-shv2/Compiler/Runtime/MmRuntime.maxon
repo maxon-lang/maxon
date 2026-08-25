@@ -89,6 +89,51 @@ end 'boxPrefixBytes'
 // a smaller request would round up to it anyway and simply waste the difference.
 let ArenaBytes = 0x10000
 
+// ⭐⭐⭐ **THE SIZE-CLASSED FREE LISTS — WHAT MAKES A DEAD BOX'S BYTES REUSABLE.** Until these landed the
+// slab reclaimed NOTHING: `__mm_free` dropped the live count and poisoned the payload, and the memory sat
+// where it was until the process exited. A program's peak RSS was therefore its TOTAL allocation, not its
+// LIVE one, and that is a difference of orders of magnitude in anything long-running.
+//
+// ⛔⛔ **MEASURED, AND IT IS WHY THIS EXISTS.** The same 20-million-iteration allocate-and-drop loop, one
+// 3-field record per trip: **6.2 MB** peak built by the bootstrap (whose runtime reclaims), **971.4 MB**
+// built by shv2. On the compiler's own self-compile that read **11,861 MB against the bootstrap-built
+// compiler's 1,831 MB** — and a twelve-worker spec run exhausted the machine and its workers died silently,
+// which is the report this cures.
+//
+// **THE SHAPE.** One bucket per 16-byte size class up to `FreeListMaxClass` classes (a 256 KB payload), each
+// bucket a singly-linked LIFO stack threaded through the dead box's OWN payload — the first word of a freed
+// payload holds the next free box, which costs no metadata and is why the minimum class is 16 bytes.
+// `__mm_alloc` rounds its request UP to a class and stores THAT in the header, so `__mm_free` recovers the
+// class by a shift and every block in a bucket is exactly the size the bucket promises.
+//
+// ⚠ **A BLOCK LARGER THAN THE LAST CLASS IS NOT RECYCLED**, and neither is a zero-byte payload (it has no
+// word to thread the link through). Both fall through to the bump path exactly as before; the guard is a
+// range test on the class, so an out-of-range size can never index past the bucket array.
+//
+// ⚠⚠ **THE ZEROING CONTRACT IS WHAT MAKES REUSE SAFE, AND IT IS PAID ON THE WAY OUT, NOT THE WAY IN.**
+// `__mm_alloc` has always leaned on fresh slab memory being zero — it does not even write the refcount
+// (see its own note). A RECYCLED payload is poison, not zero, so the reuse path fills it with zero and
+// writes the refcount explicitly. This is the pairing `__mm_free`'s poison note predicted in so many words:
+// *"the day `__mm_free` returns a slot to a free list, the reused slot must be re-zeroed on the way out of
+// `__mm_alloc` (poison then zero), or the `[length, capacity)`-reads-zero invariant breaks."*
+//
+// ⚠ **A `--debugstream` BUILD DOES NOT RECYCLE.** Every box in a traced build carries a packed allocation
+// id stamped once at birth, and the trace reads a box's identity out of it; handing the same address back
+// under a second id is exactly the confusion the trace exists to remove. A traced build keeps the old bump
+// shape, which also keeps its recorded traces comparable across this change.
+//
+// ⚠ **THE RAW COLUMNS ARE UNMOVED AND `raw-live-equals-raw-total` STAYS GREEN.** They count what the SLAB
+// handed out, and nothing here returns a slab span — a recycled box never reaches `__slab_alloc` at all.
+// What changes is that far fewer allocations do.
+let FreeListGranularityShift = 4
+let FreeListGranularityMask = 15
+let FreeListMaxClass = 16384
+// `(FreeListMaxClass + 1)` buckets of 8 bytes: class 0 is never used (a zero payload cannot be threaded),
+// and the slot is kept so a class indexes its own bucket without an off-by-one adjustment on every path.
+let FreeListTableBytes = 131080
+// `& -16` as a positive-literal mask, because a Std const is written as it is read.
+let FreeListAlignMask = -16
+
 // The `.data` slots the runtime owns. All three are `__`-prefixed, which is what keeps them out of
 // the spec goldens (`TargetPrinter.isRuntimeFunction`'s twin for data) and what guarantees no user
 // name can collide — Maxon reserves `__` for compiler-internal names.
@@ -105,6 +150,10 @@ let ArenaBytes = 0x10000
 // outlives its last cross-file caller silently … so a retirement has to go looking for them by name"*.
 // These slots are the allocator's private state and reading them from another file was never intended.
 let SlabCursorLabel = b"__slab_cursor"
+// The bucket array's base, or 0 before the first free. It is committed lazily by
+// `__mm_free_lists_base` rather than reserved in `.data`, because `.data` slots are single words laid out
+// by `layOut` in an order this table may not depend on — the array has to be CONTIGUOUS to be indexed.
+let MmFreeListsLabel = b"__mm_free_lists"
 let SlabEndLabel = b"__slab_end"
 let MmAllocCountLabel = b"__mm_alloc_count"
 
@@ -169,6 +218,7 @@ export let MmRetainName = b"__mm_retain"
 export let MmAllocName = b"__mm_alloc"
 export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
+let MmFreeListsBaseName = b"__mm_free_lists_base"
 export let MmLeakCheckName = b"__mm_leak_check"
 
 // ⭐ **THE UNCOUNTED TWIN OF THE BUMP ALLOCATOR, BUILT ONLY IN A COUNTED BUILD, AND CALLED ONLY BY
@@ -474,6 +524,7 @@ end 'isSignaturelessCompilerCallee'
 export function runtimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 	out.push(DataSectionEntry.create(String.from(SlabCursorLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(MmFreeListsLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(SlabEndLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(MmAllocCountLabel), valueType: StdType.i64, value: 0))
 
@@ -540,6 +591,11 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesMmCounters 'boxSlab'
 		buildSlabAlloc(module, name: SlabAllocBoxName, countRaw: false)
 	end 'boxSlab'
+	// The bucket array's lazy committer, built only where something can recycle — a traced build keeps the
+	// old bump shape and would leave this function with no caller.
+	if not module.debugStream 'recyclingBuild'
+		buildMmFreeListsBase(module)
+	end 'recyclingBuild'
 	buildMmAlloc(module, usage: usage)
 	buildMmDecref(module)
 	buildMmFree(module)
@@ -1125,6 +1181,131 @@ function buildSlabAlloc(module StdModule, name ByteArray, countRaw bool)
 	module.functions.push(func)
 end 'buildSlabAlloc'
 
+// The payload size a request is actually served at — `size` rounded UP to the 16-byte granularity the
+// buckets are cut on. `(size + 15) & -16`, which is exact for a size already on the boundary and rounds a
+// zero request to zero (it has no class and is never recycled).
+function emitRoundedPayloadSize(module StdModule, block IrBlock, size ValueId, ids ValueMinter) returns ValueId
+	let mask = emitConst(module, block: block, value: FreeListGranularityMask, ids: ids)
+	let raised = emitBin(module, block: block, a: size, b: mask, opcode: StdBinOpcode.add, ids: ids)
+	let align = emitConst(module, block: block, value: FreeListAlignMask, ids: ids)
+	return emitBin(module, block: block, a: raised, b: align, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitRoundedPayloadSize'
+
+// Which bucket a rounded payload belongs to. The size IS the class times the granularity, so the class is
+// one shift — and `__mm_free` recovers it from the header the same way, which is why the header must hold
+// the ROUNDED size and not the caller's.
+function emitPayloadSizeClass(module StdModule, block IrBlock, rounded ValueId, ids ValueMinter) returns ValueId
+	let shift = emitConst(module, block: block, value: FreeListGranularityShift, ids: ids)
+	return emitBin(module, block: block, a: rounded, b: shift, opcode: StdBinOpcode.shr, ids: ids)
+end 'emitPayloadSizeClass'
+
+// ⭐⭐ **THE REUSE PATH: POP THIS CLASS'S BUCKET, OR FALL THROUGH TO `bump`.** Three guards, in order, each
+// one a branch that lands on `bump` when it fails — class in range low, class in range high, bucket
+// non-empty. The range pair is not decoration: `sizeClass` is derived from a caller's `size`, so without
+// it a large enough request would index PAST the bucket array and read whatever followed it as a pointer.
+//
+// ⚠ **THE PAYLOAD IS ZEROED AND THE REFCOUNT IS WRITTEN, because a recycled box is poison where a fresh
+// slab box is zero.** `__mm_alloc`'s own note explains why it never writes the refcount — the slab
+// guarantees zero, and re-establishing a guarantee the allocator already makes is the habit that let v1's
+// non-zeroing slab survive three bugs. That guarantee is exactly what recycling breaks, so this path
+// restores it here rather than asking every caller to cope.
+function emitReuseFromFreeList(module StdModule, func IrFunction, entry IrBlock, bump IrBlock, sizeClass ValueId, rounded ValueId, destructor ValueId, usage RuntimeUsage, ids ValueMinter)
+	var inRangeLow = module.addBlock(func, label: b"fllow")
+	var inRangeHigh = module.addBlock(func, label: b"flhigh")
+	var reuse = module.addBlock(func, label: b"flreuse")
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let tooSmall = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(tooSmall, lhs: sizeClass, rhs: zero, pred: StdCmpPred.le, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(tooSmall, thenBlockId: bump.id, elseBlockId: inRangeLow.id))
+
+	let maxClass = emitConst(module, block: inRangeLow, value: FreeListMaxClass, ids: ids)
+	let tooBig = ids.mint()
+	module.appendOp(inRangeLow, op: StdOp.cmp(tooBig, lhs: sizeClass, rhs: maxClass, pred: StdCmpPred.gt, operandType: StdType.i64))
+	module.setTerminator(inRangeLow, op: StdOp.condBranch(tooBig, thenBlockId: bump.id, elseBlockId: inRangeHigh.id))
+
+	let base = ids.mint()
+	module.appendOp(inRangeHigh, op: StdOp.call(base, callee: MmFreeListsBaseName, args: ValueIdArray.create()))
+	let slot = emitFreeListSlotAddr(module, block: inRangeHigh, base: base, sizeClass: sizeClass, ids: ids)
+	let head = ids.mint()
+	module.appendOp(inRangeHigh, op: StdOp.loadIndirect(head, addrId: slot, offset: 0, valueType: StdType.i64))
+	let empty = ids.mint()
+	module.appendOp(inRangeHigh, op: StdOp.cmp(empty, lhs: head, rhs: zero, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(inRangeHigh, op: StdOp.condBranch(empty, thenBlockId: bump.id, elseBlockId: reuse.id))
+
+	// POP. The link lives in the dead payload's first word, so unlinking is one load and one store.
+	let next = ids.mint()
+	module.appendOp(reuse, op: StdOp.loadIndirect(next, addrId: head, offset: 0, valueType: StdType.i64))
+	module.appendOp(reuse, op: StdOp.storeIndirect(slot, offset: 0, valueId: next, valueType: StdType.i64))
+
+	// The zeroing contract, restored over the whole class payload — which is `rounded` and not the caller's
+	// size, so the bytes past the request read zero exactly as a fresh slab box's do.
+	var cur = emitFillRange(module, func: func, cur: reuse, dest: head, byteCount: rounded, fillValue: 0, ids: ids)
+
+	let headerBase = emitHeaderBase(module, block: cur, ptr: head, ids: ids)
+	module.appendOp(cur, op: StdOp.storeIndirect(headerBase, offset: HeaderDestructorOffset, valueId: destructor, valueType: StdType.i64))
+	module.appendOp(cur, op: StdOp.storeIndirect(headerBase, offset: HeaderSizeOffset, valueId: rounded, valueType: StdType.i64))
+	let refZero = emitConst(module, block: cur, value: 0, ids: ids)
+	module.appendOp(cur, op: StdOp.storeIndirect(headerBase, offset: HeaderRefcountOffset, valueId: refZero, valueType: StdType.i64))
+
+	// The live count is every allocation's, recycled or not — it is what the leak gate reads. The TRACKED
+	// columns follow `__mm_alloc`'s own rule: a count per box, and BYTES as the payload served.
+	let one = emitConst(module, block: cur, value: 1, ids: ids)
+	_ = emitGlobalAccumulate(module, block: cur, label: MmAllocCountLabel, operand: one, opcode: StdBinOpcode.add, ids: ids)
+	if usage.usesMmCounters 'trackedColumns'
+		_ = emitGlobalAccumulate(module, block: cur, label: MmAllocTotalLabel, operand: one, opcode: StdBinOpcode.add, ids: ids)
+		_ = emitGlobalAccumulate(module, block: cur, label: MmAllocBytesLabel, operand: rounded, opcode: StdBinOpcode.add, ids: ids)
+	end 'trackedColumns'
+
+	module.setTerminator(cur, op: StdOp.ret(head))
+end 'emitReuseFromFreeList'
+
+// `__mm_free_lists_base() -> ptr` — the free-list bucket array, committed on first use.
+//
+// ⭐ **IT IS A FUNCTION RATHER THAN AN INLINE TEST AT EACH USE, and the reason is register pressure in the
+// two hottest bodies in the language.** `__mm_alloc` and `__mm_free` are on the path of every heap
+// operation a Maxon program performs; inlining a load, a compare, a branch and a page commit into both
+// would add blocks and live values to functions whose allocation the splitter already works hardest on.
+// A call keeps each body's own shape recognisable and puts the cold commit path in one place.
+//
+// The table is `FreeListTableBytes` of freshly committed pages, which the OS hands back ZEROED — so every
+// bucket starts empty and no initialisation loop is needed.
+function buildMmFreeListsBase(module StdModule)
+	var func = IrFunction.createFromStd(MmFreeListsBaseName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var commit = module.addBlock(func, label: b"commit")
+	var have = module.addBlock(func, label: b"have")
+
+	let tableAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(tableAddr, label: MmFreeListsLabel))
+	let current = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(current, addrId: tableAddr, offset: 0, valueType: StdType.i64))
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let uncommitted = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(uncommitted, lhs: current, rhs: zero, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(uncommitted, thenBlockId: commit.id, elseBlockId: have.id))
+
+	let tableBytes = emitConst(module, block: commit, value: FreeListTableBytes, ids: ids)
+	let base = ids.mint()
+	module.appendOp(commit, op: StdOp.osAllocPages(base, sizeId: tableBytes))
+	module.appendOp(commit, op: StdOp.storeIndirect(tableAddr, offset: 0, valueId: base, valueType: StdType.i64))
+	module.setTerminator(commit, op: StdOp.ret(base))
+
+	module.setTerminator(have, op: StdOp.ret(current))
+
+	module.functions.push(func)
+end 'buildMmFreeListsBase'
+
+// The bucket address for `class` — `base + class * 8`, the one place that arithmetic is spelled so the
+// alloc side and the free side cannot index the table differently.
+function emitFreeListSlotAddr(module StdModule, block IrBlock, base ValueId, sizeClass ValueId, ids ValueMinter) returns ValueId
+	let wordShift = emitConst(module, block: block, value: 3, ids: ids)
+	let offset = emitBin(module, block: block, a: sizeClass, b: wordShift, opcode: StdBinOpcode.shl, ids: ids)
+	return emitBin(module, block: block, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitFreeListSlotAddr'
+
 // `__mm_alloc(size, destructor) -> ptr` — a managed box: a header plus `size` bytes of payload.
 //
 // The returned pointer addresses the PAYLOAD, so a struct's field `i` is at `[ptr + i*8]` and the
@@ -1151,15 +1332,49 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	let destructor = 1 as ValueId
 	let tagIndex = 2 as ValueId
 
+	// ⭐⭐ **THE RECYCLED REQUEST IS SERVED BEFORE THE SLAB IS ASKED** (see `FreeListGranularityShift`'s
+	// header for what the buckets are and why). The bump body is unchanged and now lives in
+	// `emitBumpAllocBody`, reached with the block it is to fill: a traced build hands it `entry` and emits
+	// exactly what it always did, a recycling build hands it a `bump` block the reuse path branches to.
+	//
+	// ⚠ **THE ROUNDED SIZE IS WHAT GOES IN THE HEADER, and that is the whole protocol between the two
+	// sides.** `__mm_free` recovers a box's class by shifting the size it reads there, so a header holding
+	// the CALLER's size would return a 40-byte box to the 48-byte bucket and hand 48 bytes of promise over
+	// 40 bytes of memory. The counters keep reporting the caller's `size` — that is what
+	// `bytes-scale-with-the-request` pins, and it is the honest answer to "how much did this program ask
+	// for" whatever the allocator rounded it to.
+	//
+	// ⚠ **THE TWO ARMS DO NOT SHARE A BLOCK VARIABLE, AND THAT IS THE LANGUAGE'S RULE RATHER THAN A STYLE
+	// CHOICE.** `var bump = entry` binds a second name to the block and therefore MOVES it, so the reuse
+	// path's own use of `entry` two lines later is E3102 — measured, on this very function, by shv2
+	// compiling itself. The fork below hands each arm the block it fills and names it once.
+	if module.debugStream 'tracedBuildDoesNotRecycle'
+		emitBumpAllocBody(module, func: func, block: entry, size: size, sizeForBox: size, destructor: destructor, tagIndex: tagIndex, usage: usage, ids: ids)
+		module.functions.push(func)
+		return
+	end 'tracedBuildDoesNotRecycle'
+
+	var bump = module.addBlock(func, label: b"bump")
+	let rounded = emitRoundedPayloadSize(module, block: entry, size: size, ids: ids)
+	let sizeClass = emitPayloadSizeClass(module, block: entry, rounded: rounded, ids: ids)
+	emitReuseFromFreeList(module, func: func, entry: entry, bump: bump, sizeClass: sizeClass, rounded: rounded, destructor: destructor, usage: usage, ids: ids)
+	emitBumpAllocBody(module, func: func, block: bump, size: size, sizeForBox: rounded, destructor: destructor, tagIndex: tagIndex, usage: usage, ids: ids)
+	module.functions.push(func)
+end 'buildMmAlloc'
+
+// ⭐ **THE BUMP ALLOCATION — the body `__mm_alloc` has always had, now reached with the block it fills.**
+// `sizeForBox` is what the header records and what the slab is asked for; `size` is what the CALLER asked
+// for and what the byte counter reports. They are the same number in a traced build, which never rounds.
+function emitBumpAllocBody(module StdModule, func IrFunction, block IrBlock, size ValueId, sizeForBox ValueId, destructor ValueId, tagIndex ValueId, usage RuntimeUsage, ids ValueMinter)
 	let headerConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(headerConst, value: boxPrefixBytes(module.debugStream), valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.const(headerConst, value: boxPrefixBytes(module.debugStream), valueType: StdType.i64))
 	let total = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(total, lhs: size, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(block, op: StdOp.binOp(total, lhs: sizeForBox, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let allocation = ids.mint()
 	// ⚠ **THE UNCOUNTED SLAB ENTRY IN A COUNTED BUILD.** These bytes are about to be reported as a TRACKED
 	// box, and the two layers `PhaseProbe` sums must be disjoint — see `SlabAllocBoxName`.
 	let slabCallee = SlabAllocBoxName if usage.usesMmCounters else SlabAllocName
-	module.appendOp(entry, op: StdOp.call(allocation, callee: slabCallee, args: argsOf(total)))
+	module.appendOp(block, op: StdOp.call(allocation, callee: slabCallee, args: argsOf(total)))
 
 	// The DebugStream prefix word, when this build has one: `(alloc_id << 16) | tag_index`, stamped once
 	// here and read back by every later event on this box. `alloc_id` PRE-increments a monotonic counter,
@@ -1176,20 +1391,20 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	var base = allocation
 	var packedId = 0 as ValueId
 	if module.debugStream 'stampPackedId'
-		let one = emitConst(module, block: entry, value: 1, ids: ids)
-		let allocId = emitGlobalAccumulate(module, block: entry, label: DsAllocIdLabel, operand: one, opcode: StdBinOpcode.add, ids: ids)
-		let shift = emitConst(module, block: entry, value: DsMmPackedIdShift, ids: ids)
-		let shifted = emitBin(module, block: entry, a: allocId, b: shift, opcode: StdBinOpcode.shl, ids: ids)
-		packedId = emitBin(module, block: entry, a: shifted, b: tagIndex, opcode: StdBinOpcode.bitOr, ids: ids)
-		module.appendOp(entry, op: StdOp.storeIndirect(allocation, offset: 0, valueId: packedId, valueType: StdType.i64))
+		let one = emitConst(module, block: block, value: 1, ids: ids)
+		let allocId = emitGlobalAccumulate(module, block: block, label: DsAllocIdLabel, operand: one, opcode: StdBinOpcode.add, ids: ids)
+		let shift = emitConst(module, block: block, value: DsMmPackedIdShift, ids: ids)
+		let shifted = emitBin(module, block: block, a: allocId, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+		packedId = emitBin(module, block: block, a: shifted, b: tagIndex, opcode: StdBinOpcode.bitOr, ids: ids)
+		module.appendOp(block, op: StdOp.storeIndirect(allocation, offset: 0, valueId: packedId, valueType: StdType.i64))
 
-		let prefix = emitConst(module, block: entry, value: DebugStreamPackedIdBytes, ids: ids)
-		base = emitBin(module, block: entry, a: allocation, b: prefix, opcode: StdBinOpcode.add, ids: ids)
-		payloadOffset = emitConst(module, block: entry, value: HeaderBytes, ids: ids)
+		let prefix = emitConst(module, block: block, value: DebugStreamPackedIdBytes, ids: ids)
+		base = emitBin(module, block: block, a: allocation, b: prefix, opcode: StdBinOpcode.add, ids: ids)
+		payloadOffset = emitConst(module, block: block, value: HeaderBytes, ids: ids)
 	end 'stampPackedId'
 
-	module.appendOp(entry, op: StdOp.storeIndirect(base, offset: HeaderDestructorOffset, valueId: destructor, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(base, offset: HeaderSizeOffset, valueId: size, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(base, offset: HeaderDestructorOffset, valueId: destructor, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(base, offset: HeaderSizeOffset, valueId: sizeForBox, valueType: StdType.i64))
 	// ⭐ THE REFCOUNT IS NOT WRITTEN, AND ITS ABSENCE IS THE ZEROING CONTRACT DOING ITS JOB. The
 	// slab guarantees zeroed memory, and 0 is exactly the initial refcount this model wants (see
 	// `__mm_decref` — 0 means ONE owner). Storing it anyway would be the caller re-establishing a
@@ -1197,25 +1412,23 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	// slab survive three bugs: every call site "handled" it locally, so nobody fixed the allocator.
 	// If this line ever becomes necessary, the allocator is broken, not this function.
 
-	let oneConst = emitConst(module, block: entry, value: 1, ids: ids)
-	_ = emitGlobalAccumulate(module, block: entry, label: MmAllocCountLabel, operand: oneConst, opcode: StdBinOpcode.add, ids: ids)
+	let oneConst = emitConst(module, block: block, value: 1, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: MmAllocCountLabel, operand: oneConst, opcode: StdBinOpcode.add, ids: ids)
 
 	// The TRACKED traffic columns, in a build that reads them. `size` and not `total`: the figure is the
 	// payload the caller asked for, so it does not move when the header does and is identical across a
 	// traced and an untraced build (see `MmAllocTotalLabel`).
 	if usage.usesMmCounters 'trackedColumns'
-		_ = emitGlobalAccumulate(module, block: entry, label: MmAllocTotalLabel, operand: oneConst, opcode: StdBinOpcode.add, ids: ids)
-		_ = emitGlobalAccumulate(module, block: entry, label: MmAllocBytesLabel, operand: size, opcode: StdBinOpcode.add, ids: ids)
+		_ = emitGlobalAccumulate(module, block: block, label: MmAllocTotalLabel, operand: oneConst, opcode: StdBinOpcode.add, ids: ids)
+		_ = emitGlobalAccumulate(module, block: block, label: MmAllocBytesLabel, operand: size, opcode: StdBinOpcode.add, ids: ids)
 	end 'trackedColumns'
 
 	let payload = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(payload, lhs: base, rhs: payloadOffset, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(block, op: StdOp.binOp(payload, lhs: base, rhs: payloadOffset, opcode: StdBinOpcode.add, operandType: StdType.i64))
 
-	var out = emitMmAllocEvent(module, func: func, block: entry, packedId: packedId, size: size, ids: ids)
+	var out = emitMmAllocEvent(module, func: func, block: block, packedId: packedId, size: size, ids: ids)
 	module.setTerminator(out, op: StdOp.ret(payload))
-
-	module.functions.push(func)
-end 'buildMmAlloc'
+end 'emitBumpAllocBody'
 
 // ⭐ **THE ONE `__mm_alloc` CALL EMISSION, AND THE ONE PLACE ITS FLAG-DEPENDENT ARITY IS KNOWN.** Every
 // heap box the compiler builds — a String record, an array record, its element buffer, a list node, a
@@ -1597,7 +1810,47 @@ function buildMmFree(module StdModule)
 	let size = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(size, addrId: header, offset: HeaderSizeOffset, valueType: StdType.i64))
 	var afterPoison = emitFillRange(module, func: func, cur: entry, dest: ptr, byteCount: size, fillValue: PoisonByte, ids: ids)
-	module.setTerminator(afterPoison, op: StdOp.retVoid)
+
+	// ⭐⭐ **AND THEN THE BOX GOES ON ITS CLASS'S BUCKET, WHICH IS WHAT MAKES ITS BYTES REUSABLE.** The link
+	// overwrites the first word of the payload the poison just filled — deliberately AFTER it, so a box that
+	// is not recycled keeps a fully poisoned payload and a box that is has its link where the pop expects it.
+	// The reuse path zeroes the whole payload again on the way out, so neither the poison nor the link is
+	// ever visible to a caller.
+	//
+	// ⚠ **THE GUARDS ARE THE ALLOC SIDE'S, READ BACK.** `size` is the ROUNDED size `__mm_alloc` stored, so
+	// its class is exact and the same range test admits it — a box too small to hold a link (a zero payload)
+	// or too large for the table is simply not recycled, exactly as it was not served from a bucket.
+	if module.debugStream 'tracedBuildKeepsTheBumpShape'
+		module.setTerminator(afterPoison, op: StdOp.retVoid)
+		module.functions.push(func)
+		return
+	end 'tracedBuildKeepsTheBumpShape'
+
+	var checkHigh = module.addBlock(func, label: b"flhigh")
+	var push = module.addBlock(func, label: b"flpush")
+	var done = module.addBlock(func, label: b"fldone")
+
+	let sizeClass = emitPayloadSizeClass(module, block: afterPoison, rounded: size, ids: ids)
+	let zero = emitConst(module, block: afterPoison, value: 0, ids: ids)
+	let tooSmall = ids.mint()
+	module.appendOp(afterPoison, op: StdOp.cmp(tooSmall, lhs: sizeClass, rhs: zero, pred: StdCmpPred.le, operandType: StdType.i64))
+	module.setTerminator(afterPoison, op: StdOp.condBranch(tooSmall, thenBlockId: done.id, elseBlockId: checkHigh.id))
+
+	let maxClass = emitConst(module, block: checkHigh, value: FreeListMaxClass, ids: ids)
+	let tooBig = ids.mint()
+	module.appendOp(checkHigh, op: StdOp.cmp(tooBig, lhs: sizeClass, rhs: maxClass, pred: StdCmpPred.gt, operandType: StdType.i64))
+	module.setTerminator(checkHigh, op: StdOp.condBranch(tooBig, thenBlockId: done.id, elseBlockId: push.id))
+
+	let base = ids.mint()
+	module.appendOp(push, op: StdOp.call(base, callee: MmFreeListsBaseName, args: ValueIdArray.create()))
+	let slot = emitFreeListSlotAddr(module, block: push, base: base, sizeClass: sizeClass, ids: ids)
+	let head = ids.mint()
+	module.appendOp(push, op: StdOp.loadIndirect(head, addrId: slot, offset: 0, valueType: StdType.i64))
+	module.appendOp(push, op: StdOp.storeIndirect(ptr, offset: 0, valueId: head, valueType: StdType.i64))
+	module.appendOp(push, op: StdOp.storeIndirect(slot, offset: 0, valueId: ptr, valueType: StdType.i64))
+	module.setTerminator(push, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildMmFree'
