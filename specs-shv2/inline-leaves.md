@@ -20,7 +20,16 @@ stands BEFORE any splice, and memoised:
 - it contains **no op the dialect marks `isUnsupportedInInlineBody`** except the two PANIC ops, which
   have a rule of their own below — so an `errorReturn` (a throwing body) and every `os*` primitive
   refuse the callee;
-- it has **no more than 16 body ops** (over all its blocks, terminators counted, the `param` ops not);
+- it contains **no `/` or `mod`**. Those lower to `idiv`, which can FAULT (`i64.min / -1`, or a divisor
+  the compiler could not prove non-zero), and a hardware fault's backtrace is taken from where the
+  INSTRUCTION is. A panic OP has a slow arm this pass can re-issue the call through, so its frame
+  survives; a faulting instruction has nothing to re-issue, so the only way to keep its frame is not to
+  move it. `specs-shv2/safety.md`'s `integer-overflow-fault-from-int-min-over-minus-one` is what pins
+  this, and it is what caught the rule missing;
+- it has **no more than 24 body ops** (over all its blocks, terminators counted, the `param` ops not).
+  24 is measured rather than chosen: `regMaskContains` — the function this pass exists for — is 23 Std
+  ops, because a shift whose count the compiler cannot fold carries the 6-op saturation `THE SHIFT RULE`
+  emits at the Maxon tier, and its `int(0 to 63)` parameter adds a 9-op entry guard on top of that;
 - it takes **no by-reference parameter**, and it does not run user code on its caller's stack;
 - it is **not the caller** — a self-recursive function is refused, and a mutually recursive pair is
   already refused by the leaf rule.

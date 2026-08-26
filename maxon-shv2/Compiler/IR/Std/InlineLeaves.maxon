@@ -43,29 +43,45 @@
 // column's parameter half is a range rather than a search — and the `param` ops the copy skips are
 // CHECKED against that convention as they go by (`assertParamOpMatchesConvention`).
 
-// ⭐ **THE OP BUDGET, AND WHAT IT ADMITS.** Counted over all of a callee's blocks with terminators
-// included and `param` ops excluded — a `param` becomes the call's argument rather than an instruction.
+// ⭐ **THE OP BUDGET, AND WHAT IT ADMITS — MEASURED, at this tier, not guessed from the target dump.**
+// Counted over all of a callee's blocks with terminators included and `param` ops excluded (a `param`
+// becomes the call's argument rather than an instruction).
 //
-// 16 is chosen against a MEASURED body: `regMaskContains` at this tier is 15 ops (a two-bound entry
-// guard is 9 of them — two `const`/`cmp`/`condBranch` triples and one panic block — and the shift, the
-// mask, the compare and the return are the other 6). A budget of 12 would refuse the very function this
-// rung is for; the census's `<= 12` bucket is the one that reads 3,704 sites, and it does not contain
-// it. The pass reports what a budget of `ReportedLargerLeafBudget` would additionally admit, so the next
-// person to ask has the number instead of a guess.
-let MaxInlinedLeafOps = 16 as OpCount
+// ⛔⛔ **24, BECAUSE `regMaskContains` IS 23 STD OPS AND 16 REFUSED IT — the whole rung's headline
+// function, refused by its own budget.** The count is not the 15 a reading of its x64 body suggests, and
+// the difference is where THE SHIFT RULE lives: `Parser.emitGuardedShift` saturates a shift whose count
+// the compiler cannot fold, and it does so at the MAXON tier, in ops — 6 for the out-of-range mask plus 2
+// or 3 for the shift itself. So `((mask shr regNum) and 1) != 0` is 14 Std ops before its `int(0 to 63)`
+// entry guard adds 9. (EC6, the range-blind-shift row, is exactly the rung that deletes those 6: the
+// count's declared type ALREADY says `0 to 63`. When it lands, this budget can come back down.)
+//
+// MEASURED on the self-compile at 16 (2026-08-26): **3,016 sites inlined, 963 refused by size across 123
+// callees, of which 452 sites / 75 callees fit inside 24.** So 24 buys +15% sites — and among them the
+// 14 that carry 21.07% of the profile. 452 splices of ≤ 24 ops is ~11k extra Std ops against a module of
+// 1.34M, i.e. under 1%.
+//
+// The pass reports what `ReportedLargerLeafBudget` would additionally admit, so the next person to ask
+// has the number for THIS compile instead of a guess.
+let MaxInlinedLeafOps = 24 as OpCount
 
-// The second budget the pass MEASURES but does not use — reported beside the refusals so that "would 24
-// be better?" is answered from the compile being asked about rather than re-derived. It is deliberately
-// not a knob: two budgets that both took effect would be two rules.
-let ReportedLargerLeafBudget = 24 as OpCount
+// The second budget the pass MEASURES but does not use — reported beside the refusals so that "would a
+// bigger one be better?" is answered from the compile being asked about rather than re-derived. It is
+// deliberately not a knob: two budgets that both took effect would be two rules.
+let ReportedLargerLeafBudget = 32 as OpCount
 
 // The block labels this pass mints. They reach the committed goldens, so they are short and prefixed
 // `__il_` (inline-leaves — disjoint from `InsertRangeChecks`' `__rc_` and `InlineManagedPrimitives`'
-// `__im_`). A COPIED block keeps the callee block's own label instead: it IS that block, and the printer
-// disambiguates a repeated label within a function by id (`TargetPrinter.buildBlockPrintNames`), so
-// naming it after where it came from costs nothing and says more than `__il_body` would.
+// `__im_`).
+//
+// ⭐ **A COPIED block KEEPS THE CALLEE BLOCK'S OWN LABEL — except the ENTRY, and that exception is the
+// rule.** `__rc_ok`, `ifcont`, `whilehdr` are claims about a CONSTRUCT, and every one of them is still
+// true after the block is copied into another function; `entry` is a claim about a FUNCTION, and a copied
+// block is not the caller's entry. Left alone it put a second block called `entry` inside `main`
+// (MEASURED — `a-pure-leaf-is-inlined`'s golden read `entry` / `entry#0`, the printer disambiguating two
+// blocks of one name), which is exactly the label a reader trusts not to be ambiguous.
 let InlineContLabel = b"__il_cont"
 let InlineSlowLabel = b"__il_slow"
+let InlineBodyLabel = b"__il_body"
 
 typealias SiteCount = int(0 to u64.max)
 
@@ -93,23 +109,38 @@ enum LeafOpRole
 	// `osPanic` / `osPanicValue`. Its BLOCK is dropped and redirected to the slow arm, but only if the
 	// whole body is pure — see `mintSlowArm`.
 	panicking
-	// An op the dialect itself marks unsupported inside an inline body.
+	// An op the dialect itself marks unsupported inside an inline body — or one that can FAULT, which
+	// the dialect marks only in prose. See `leafOpRole`.
 	refusing
 end 'LeafOpRole'
 
 // ⭐ **THE ROLE OF ONE OP — one exhaustive `match`, and the TAIL of it reads the dialect's own flag.**
-// The seven variants named explicitly are the ones whose role is NOT derivable from
+// The variants named explicitly are the ones whose role is NOT derivable from
 // `isUnsupportedInInlineBody`: the five calls and `param` all carry `false` for it (a call is perfectly
-// representable inside a body — it just is not a LEAF's body), and the two panics carry `true` but are
-// handled rather than refused. Everything else answers off the flag, which is what gives that field its
-// first reader and means an op added with it set is refused here without this file learning its name.
+// representable inside a body — it just is not a LEAF's body), the two panics carry `true` but are
+// handled rather than refused, and `div`/`mod` carry `false` while being the only ops that can FAULT.
+// Everything else answers off the flag, which is what gives that field its first reader and means an op
+// added with it set is refused here without this file learning its name.
+//
+// ⛔⛔ **A DIVIDE REFUSES THE CALLEE, AND THE REASON IS THE PANIC RULE'S OWN — ONE CASE FURTHER OUT.**
+// `div`/`mod` lower to `idiv`, which raises `#DE` on divide-by-zero and on `i64.min / -1`; the fault
+// handler prints `panic: integer overflow` with a symbolized backtrace, and that backtrace is taken from
+// WHERE THE INSTRUCTION IS. A panic OP has a slow arm this pass can re-issue the call through, so its
+// frame survives; a faulting instruction has nothing to re-issue — moving it moves the frame, full stop.
+// MEASURED: `safety/integer-overflow-fault-from-int-min-over-minus-one` read `in main / in mrt_start`
+// where it pins `in divide / in main / in mrt_start`, because `divide` is a two-op leaf.
+// (`loadIndirect` can fault too — a null receiver — but the language promises no message and no trace
+// for that, and refusing every leaf that reads memory would refuse `Array.isEmpty` and `ValueMinter.mint`
+// along with it. The line is drawn where a DIAGNOSTIC is promised, which is exactly where a spec pins one.)
 //
 // ⚠ Every other variant is covered by a RANGE arm ending at the union's last member, so a variant
 // APPENDED past it fails to compile here until it is consciously placed — the band-append invariant
 // working in the reviewer's favour.
 function leafOpRole(op StdOp) returns LeafOpRole
 	match op 'kind'
-		const to ret then break 'kind'
+		const to cmpImm then break 'kind'
+		div to mod then return LeafOpRole.refusing
+		condBranch to ret then break 'kind'
 		param then return LeafOpRole.parameter
 		call then return LeafOpRole.calling
 		retVoid to rdataAddr then break 'kind'
@@ -281,7 +312,6 @@ function scanLeafBody(module StdModule, func IrFunction) returns LeafBodyScan
 	var ops = 0 as OpCount
 	var hasPanic = false
 	var hasStore = false
-	var refused = false
 	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
 		let blockRef = try func.blockRefs.get(blockIndex) otherwise panic("scanLeafBody: blockRefs.get OOB at {blockIndex} inside its own count")
 		let block = try module.blocks.get(blockRef) otherwise panic("scanLeafBody: blockRef {blockRef} of '{String.from(func.name)}' is not in module.blocks")
@@ -309,7 +339,10 @@ function scanLeafBody(module StdModule, func IrFunction) returns LeafBodyScan
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("scanLeafBody: op index {opIdx} named by a block of '{String.from(func.name)}' is not in module.ops")
-			match leafOpRole(op) 'role'
+			// Bound ONCE: this runs on every op of every function in the module, and the role is a `match`
+			// over a union with ninety variants.
+			let role = leafOpRole(op)
+			match role 'role'
 				// A parameter is the call's argument, not an instruction — it is neither counted nor copied.
 				parameter then break 'role'
 				// ⭐ THE STORE TEST READS THE DIALECT'S OWN FLAG, so a new memory op inherits the panic rule
@@ -317,14 +350,20 @@ function scanLeafBody(module StdModule, func IrFunction) returns LeafBodyScan
 				// records that it ends the process, which is precisely the effect the slow arm exists to let
 				// happen exactly once, and a refusing op's is moot.
 				body then hasStore = hasStore or op.rawValue.isStore
-				// A panic in the ENTRY block leaves nothing to inline — the head would branch to a block the
-				// splice does not copy — so it refuses rather than redirects.
-				panicking then refused = refused or blockIndex == 0
-				calling then refused = true
-				refusing then refused = true
+				panicking then hasPanic = true
+				// ⭐ **RETURNED FROM, NOT FLAGGED — a call is the commonest op there is, and this scan runs
+				// over the whole module.** Bailing at the first one is what keeps a 5,000-op function from
+				// being walked to the end to learn something its second op already said.
+				calling then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+				refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
 			end 'role'
-			hasPanic = hasPanic or leafOpRole(op) == LeafOpRole.panicking
-			ops = ops + countedBodyOps(op)
+			// A panic in the ENTRY block leaves nothing to inline — the head would branch to a block the
+			// splice does not copy — so it refuses rather than redirects.
+			if role == LeafOpRole.panicking and blockIndex == 0 'entryPanics'
+				return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+			end 'entryPanics'
+
+			ops = ops + countedBodyOps(role)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminated'
@@ -336,15 +375,14 @@ function scanLeafBody(module StdModule, func IrFunction) returns LeafBodyScan
 				parameter then panic("scanLeafBody: '{String.from(func.name)}' has a `param` op in a TERMINATOR slot")
 				panicking then panic("scanLeafBody: '{String.from(func.name)}' has a panic op in a TERMINATOR slot — a panic is a body op followed by an unreachable return (`InsertRangeChecks.emitPanicBlock`)")
 				body then break 'termRole'
-				calling then refused = true
-				refusing then refused = true
+				// A `tailCall`-shaped terminator or an `errorReturn` (a THROWING body's exit): both refuse,
+				// and the terminator is exactly where the throwing one is caught.
+				calling then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+				refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
 			end 'termRole'
 		end 'terminated'
 	end 'eachBlock'
 
-	if refused 'notALeaf'
-		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
-	end 'notALeaf'
 	if hasPanic and hasStore 'panicRule'
 		return LeafBodyScan.create(LeafVerdict.panicWithStore, opCount: ops)
 	end 'panicRule'
@@ -358,8 +396,8 @@ end 'scanLeafBody'
 // What one body op costs against the budget: everything but a `param`, which becomes the call site's
 // argument rather than an instruction. A panic op still counts — it is real code in the callee, and the
 // budget is about how much of that this pass is willing to duplicate.
-function countedBodyOps(op StdOp) returns OpCount
-	return 0 if leafOpRole(op) == LeafOpRole.parameter else 1
+function countedBodyOps(role LeafOpRole) returns OpCount
+	return 0 if role == LeafOpRole.parameter else 1
 end 'countedBodyOps'
 
 // The site census, accumulated across every caller — the pass's one report, and the number this rung is
@@ -755,14 +793,13 @@ type LeafInliner
 				continue
 			end 'panicBlock'
 
-			let fresh = self.module.addBlock(self.func, label: calleeBlock.label)
+			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if i == 0 else calleeBlock.label)
 			try blocks.blockSubst.set(calleeBlock.id, value: fresh.id) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
 			let freshRef = self.lastBlockRef()
 			blocks.copiedRefs.push(freshRef)
 			// Coverage follows the code: a copied block's source footprint is the CALLEE block's, which is
 			// where its ops were written. `addBlock` pushed an empty entry, parallel to `blocks`.
-			let sourceInfo = try self.module.blockSourceInfo.get(calleeBlockRef) otherwise panic("LeafInliner.mintCopiedBlocks: blockSourceInfo has no entry for blockRef {calleeBlockRef}")
-			try self.module.blockSourceInfo.set(freshRef, value: sourceInfo) otherwise panic("LeafInliner.mintCopiedBlocks: blockSourceInfo.set OOB at {freshRef}")
+			self.carryBlockSourceInfo(calleeBlockRef, to: freshRef)
 		end 'eachBlock'
 		return blocks
 	end 'mintCopiedBlocks'
@@ -869,13 +906,18 @@ type LeafInliner
 
 	function copyBlockOps(calleeBlock IrBlock, freshRef BlockRef, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction)
 		for opIdx in calleeBlock.opRefs 'eachOp'
-			let op = try self.module.ops.get(opIdx) otherwise panic("LeafInliner.copyBlockOps: op index {opIdx} named by a block of '{String.from(calleeFunc.name)}' is not in module.ops")
+			// ⚠ **THE OP IS READ THROUGH `opAtIndex` AND THE CLONE IS BOUND BEFORE THE APPEND, AND BOTH ARE
+			// E3070's DOING.** `self.module.ops.get(...)` inline here BORROWS `module`, and `appendOp`
+			// mutates it — the self-compile refuses that (`cannot mutate 'module' via 'appendOp' while it
+			// is borrowed`) where the bootstrap does not, so this shape is what the SELF-COMPILE gates.
+			let op = self.opAtIndex(opIdx, ofFunc: calleeFunc)
 			if leafOpRole(op) == LeafOpRole.parameter 'parameterOp'
 				assertParamOpMatchesConvention(op, calleeFunc: calleeFunc)
 				continue
 			end 'parameterOp'
 
-			self.module.appendOp(self.blockAt(freshRef), op: remapStdOpForClone(op, valueSubst: subst, blockSubst: blocks.blockSubst))
+			let cloned = remapStdOpForClone(op, valueSubst: subst, blockSubst: blocks.blockSubst)
+			self.module.appendOp(self.blockAt(freshRef), op: cloned)
 		end 'eachOp'
 	end 'copyBlockOps'
 
@@ -888,7 +930,7 @@ type LeafInliner
 			return
 		end 'oplessTerminator'
 
-		let term = try self.module.ops.get(calleeBlock.terminatorIndex()) otherwise panic("LeafInliner.copyBlockExit: terminator op of block '{String.from(calleeBlock.label)}' of '{String.from(calleeFunc.name)}' is not in module.ops")
+		let term = self.opAtIndex(calleeBlock.terminatorIndex(), ofFunc: calleeFunc)
 		match term 'exit'
 			const to mod then panic("LeafInliner.copyBlockExit: an arith op is in the terminator slot of '{String.from(calleeFunc.name)}'")
 			condBranch to branch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
@@ -933,7 +975,8 @@ type LeafInliner
 	// redirected: the slow arm declares no block args, and `branchEdges` is not a successor list, so an
 	// edge exists only where phis are carried.
 	function cloneExit(calleeBlock IrBlock, freshRef BlockRef, term StdOp, subst ValueIdArray, blocks SpliceBlocks)
-		self.module.setTerminator(self.blockAt(freshRef), op: remapStdOpForClone(term, valueSubst: subst, blockSubst: blocks.blockSubst))
+		let cloned = remapStdOpForClone(term, valueSubst: subst, blockSubst: blocks.blockSubst)
+		self.module.setTerminator(self.blockAt(freshRef), op: cloned)
 
 		var edges = BranchEdgeArray.create()
 		for edge in calleeBlock.branchEdges 'eachEdge'
@@ -971,7 +1014,7 @@ type LeafInliner
 	// if one ever reaches a terminator slot.
 	function blockHoldsAPanic(block IrBlock) returns bool
 		for opIdx in block.opRefs 'eachOp'
-			let op = try self.module.ops.get(opIdx) otherwise panic("LeafInliner.blockHoldsAPanic: op index {opIdx} named by block '{String.from(block.label)}' is not in module.ops")
+			let op = self.opAtIndex(opIdx, ofFunc: self.func)
 			if leafOpRole(op) == LeafOpRole.panicking 'panics'
 				return true
 			end 'panics'
@@ -987,8 +1030,24 @@ type LeafInliner
 
 	function opAt(blockRef BlockRef, pos BlockOpPos) returns StdOp
 		let opIdx = try self.blockAt(blockRef).opRefs.get(pos) otherwise panic("LeafInliner: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
-		return try self.module.ops.get(opIdx) otherwise panic("LeafInliner: op index {opIdx} named by block {blockRef} of '{String.from(self.func.name)}' is not in module.ops")
+		return self.opAtIndex(opIdx, ofFunc: self.func)
 	end 'opAt'
+
+	// ⚠ **EVERY OP READ ON A MUTATING PATH GOES THROUGH HERE, and that is E3070 rather than tidiness.**
+	// A `self.module.ops.get(...)` written inline borrows `module` for as long as the value lives, and
+	// this pass appends ops and blocks to `module` in the very next breath — which the SELF-COMPILE
+	// refuses and the bootstrap does not. Reading through a function ends the borrow at the return, the
+	// same discipline `PrimitiveInliner.opAt` follows.
+	function opAtIndex(opIdx OpIndex, ofFunc IrFunction) returns StdOp
+		return try self.module.ops.get(opIdx) otherwise panic("LeafInliner: op index {opIdx} named by a block of '{String.from(ofFunc.name)}' is not in module.ops")
+	end 'opAtIndex'
+
+	// A copied block's source footprint. Read and written in ONE call for `opAtIndex`'s reason: the read
+	// borrows `module` and the write mutates it.
+	function carryBlockSourceInfo(sourceRef BlockRef, to BlockRef)
+		let sourceInfo = try self.module.blockSourceInfo.get(sourceRef) otherwise panic("LeafInliner.carryBlockSourceInfo: blockSourceInfo has no entry for blockRef {sourceRef}")
+		try self.module.blockSourceInfo.set(to, value: sourceInfo) otherwise panic("LeafInliner.carryBlockSourceInfo: blockSourceInfo.set OOB at {to}")
+	end 'carryBlockSourceInfo'
 
 	// The `BlockRef` naming the block `IrModule.addBlock` (or `splitBlockInPlace`) registered LAST. Read
 	// IMMEDIATELY after the append it is about — a later read names a later block. Same discipline, and
