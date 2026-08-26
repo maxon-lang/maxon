@@ -37402,6 +37402,59 @@ export type Parser
 			return try self.absorbThrowingCursorSource(func, source: source, sourceOpFloor: sourceOpFloor, forTok: forTok)
 		end 'walksItself'
 
+		// ⭐⭐ **AN `Array` INSTANCE IS NOT REWRITTEN — THE LOOP WALKS ITS BUFFER WITH A COUNTER (EC3).** The
+		// rewrite above is what an `Iterable` needs because the loop cannot otherwise reach its elements; an
+		// `Array` is the one declared `Iterable` whose traversal the loop ALREADY BUILDS BETTER, and has since
+		// P1.8 slice A — `__managed_count` in the header, `__managed_get_unchecked` on an ordinal in the body,
+		// `idx + 1` in the step, all of it inline after `inlineManagedPrimitives`. Nothing here is new; what is
+		// new is that the corpus `Array` reaches it, which it stopped doing the day `Array` retired to
+		// `stdlib/Array.maxon` and acquired a `createIterator()` like every other container.
+		//
+		// ⚠ **THE COST THAT BOUGHT WAS TWO HEAP RECORDS PER LOOP ENTRY AND THREE CALLS PER TRIP** (EC3's
+		// measurement): `Array.createIterator` → an `ArrayIterator{raw}` box (`__mm_alloc`) plus
+		// `__managed_cursor_create` (a 16-byte record and an `__mm_incref` of the source), then `current()` +
+		// `__retain_type_param` + `advance()` per trip and two frees at the exit. **908 call sites in the
+		// shv2-emitted compiler against 0 in the bootstrap-emitted one**, and about HALF of all its allocation
+		// samples — for a traversal whose whole content is an integer the header already carries.
+		//
+		// ⚠ **IT IS THE `Array`'s ALONE AND DELIBERATELY NOT `Vector`'s, `List`'s or `Map`'s.** The claim being
+		// made is that the loop's own form is EQUIVALENT to what the declared cursor would have done, and that
+		// rests on `Array with T` and `__ManagedMemory with T` being ONE `GenericInstanceId` (W57): the array
+		// record IS the buffer the two runtime entries take, so no field is read and no value is minted. A
+		// `List`'s cursor holds a NODE between trips (its `get(i)` is O(n)) and a `Map`'s hands out a PAIR its
+		// record does not store — for those the declared cursor is not an overhead, it is the traversal.
+		//
+		// ⚠ **A SOURCE THAT DECLARES THE CURSOR PROTOCOL ITSELF STILL WINS**, because that test is above this
+		// one: `for x in arr.cursor()` / `arr.withIterator()` iterate an `ArrayIterator`, which is a different
+		// instance and resumes from where it stands (`array-cursor`, `with-iterator`).
+		//
+		// ⛔⛔ **AND IT IS THE ELEMENT-OWNS-NOTHING `Array`'s, WHICH IS NARROWER THAN EC3's ROW ASKED FOR —
+		// BECAUSE THE MANAGED HALF IS NOT A LOWERING CHANGE, IT IS AN OWNERSHIP RULING, AND IT DOES NOT
+		// SELF-COMPILE.** `containerElementOwnsNothing` is `emitContainerElementAccessor`'s OWN trivial test,
+		// asked here — which is exactly the condition under which the two forms cannot be told apart: a
+		// trivial element is a COPIED WORD, so it mints no E3070 borrow (that accessor returns before the
+		// borrow arm) and there is no ownership question for the two forms to answer differently.
+		//
+		// ⚠ **FOR A MANAGED OR OPAQUE ELEMENT THEY ANSWER IT DIFFERENTLY, AND THE COUNTER FORM'S ANSWER IS
+		// REFUSED BY THE COMPILER'S OWN SOURCE.** The cursor's `ArrayIterator.current()` hands back a `+1`
+		// (`coOwnBorrowedOpaque`); the counter form hands back a BORROW and enrols it against the source
+		// (P1.8 Slice A's user ruling, `emitContainerElementAccessor`'s ⭐ block). MEASURED at EC3 by routing
+		// the managed half here too and self-compiling: **32 E3070s, every one of them
+		// `for <x> in <record>.<field> … <call>(<record>, …)`** — `for func in module.functions` +
+		// `insertFrameForFunction(module, func: func)` in both prologue emitters, `for path in
+		// project.db.sourcePaths` + `queryParseOps(project, …)`, `for conformance in project.conformances` +
+		// `checkOneConformance(project, …)`, and 28 more across 12 files. The refusal is SOUND (the callee
+		// could clear the field the borrow points into, and E3070's subject is necessarily the whole base
+		// record) and it is what the runnable oracle ACCEPTS, because the oracle retains on element read.
+		//
+		// ⇒ **SO THE MANAGED HALF IS ITS OWN ROW**: it needs either a per-trip reference for the loop element
+		// (the oracle's answer — `promoteBorrowedToOwned` + `coOwnBorrowedOpaque` + `giveTemporaryScopeLifetime`,
+		// a fourth `BorrowLaunderDoor`) or those 32 loops restructured. Widening this gate without settling that
+		// is not a lowering improvement, it is a language change that stops the compiler compiling itself.
+		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) and self.containerElementOwnsNothing(self.valueNameId(source)) 'theLoopBuildsItsOwn'
+			return IterableIterationSource.notIterable
+		end 'theLoopBuildsItsOwn'
+
 		match try self.surfaceIterableFactory(surface, anchor: forTok) 'factory'
 			notDeclared then return IterableIterationSource.notIterable
 			infallible then return IterableIterationSource.cursor(try self.emitReceiverProtocolCall(surface, methodName: CreateIteratorMethodName, anchor: forTok, resultUsed: true), entrySeed: self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok)))
@@ -37481,10 +37534,11 @@ export type Parser
 	// ⭐ **WHAT A `for … in` MAY ITERATE.** An `Array` instance whose element read is a random-access index,
 	// which is what the counter lowering requires — plus the `Vector` whose record IS an array's, a
 	// `String`'s grapheme clusters, a `List`'s node chain, and any source supplying the cursor protocol,
-	// whether by DECLARING it or by REQUIRING it of what the value dispatches through. A corpus `Array` and
-	// a corpus `Map` both reach here as the CURSOR their own `createIterator()` returned, so they are
-	// admitted by the cursor arm and not by a container arm at all. Everything else is a clean E2015 naming
-	// the gap rather than a silent acceptance.
+	// whether by DECLARING it or by REQUIRING it of what the value dispatches through. A corpus `Map` reaches
+	// here as the CURSOR its own `createIterator()` returned and is admitted by the cursor arm rather than by
+	// a container arm at all; a corpus `Array` is the one declared iterable that does NOT (EC3 — see
+	// `materializeIterableIterationSource`) and is admitted by the `Array` arm below. Everything else is a
+	// clean E2015 naming the gap rather than a silent acceptance.
 	//
 	// ⚠ **`cursorSurface` ARRIVES RESOLVED, and is the same one `parseForStatement` will emit through.** This
 	// door and that fork must not resolve it twice: an existential's resolution is a walk of the interface's
@@ -37494,14 +37548,15 @@ export type Parser
 	// enumerates what shv2 iterates and ends "any type declaring the cursor protocol", which misdescribes a
 	// witness-dispatched receiver; that one refuses in its own words.
 	function requireIterableSource(source ValueId, cursorSurface MethodSurface, forTok Token) throws ParseError
-		// ⚠ **THIS ARM IS NOT THE CORPUS `Array`'S, AND SAYING SO WOULD BE THE STALEST STATEMENT IN THIS
-		// FILE.** `stdlib/Array.maxon` declares `createIterator()`, so a corpus array was already rewritten
-		// to its `ArrayIterator` by `materializeIterableIterationSource` and is admitted below by the cursor
-		// arm. What still arrives here as an `Array` INSTANCE is a program's own
-		// `type Array … implements BuiltinArrayLiteral` that declares NO cursor and no factory: the name is
-		// still served by the compiler (`isArrayBaseName` — an `Array`'s record IS its buffer), so the
-		// counter lowering can read `count`/`get` off it, and this is the only door that admits it.
-		// MEASURED: such a program emits `__managed_count` / `__managed_get_unchecked`, where the corpus array emits
+		// ⭐⭐ **THIS ARM IS THE CORPUS `Array`'S AGAIN (EC3), AND IT IS THE SAME TEST THE EXEMPTION UPSTREAM
+		// IS SPELLED WITH.** `stdlib/Array.maxon` declares `createIterator()`, so between the `Array` retirement
+		// and EC3 a corpus array was rewritten to its `ArrayIterator` before reaching here and was admitted by
+		// the cursor arm; `materializeIterableIterationSource` now declines that rewrite, because the counter
+		// lowering this arm licenses is strictly cheaper than the cursor it would have built. It also still
+		// admits a program's own `type Array … implements BuiltinArrayLiteral` that declares no cursor and no
+		// factory — the name is served by the compiler either way (`isArrayBaseName` — an `Array`'s record IS
+		// its buffer), which is exactly what lets `count`/`get` be read straight off the value.
+		// MEASURED: both spellings emit `__managed_count` / `__managed_get_unchecked` and neither emits
 		// `Array.createIterator` / `ArrayIterator.current`.
 		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
 			return
@@ -61722,6 +61777,23 @@ export type Parser
 		return receiver
 	end 'emitArrayVoidCall'
 
+	// ⭐⭐ **DOES AN ELEMENT OF THIS CONTAINER OWN NOTHING? — THE ONE TEST THAT DECIDES WHETHER READING ONE
+	// IS AN OWNERSHIP QUESTION AT ALL**, and the reason it is a function rather than a conjunction spelled at
+	// each asker. TWO doors ask it and they must not drift: the element accessor below returns a bare word
+	// and mints NO borrow when it is true, and `materializeIterableIterationSource` routes a `for … in` over
+	// an `Array` to the counter form when it is true — which is sound precisely BECAUSE the accessor answers
+	// the same way, so the counter form and the declared cursor become indistinguishable. A second spelling
+	// here would let one door call an element trivial while the other borrows it, which is a dangling
+	// reference rather than a disagreement.
+	//
+	// ⚠ **BOTH HALVES ARE LOAD-BEARING AND THE SECOND IS THE ONE THAT LOOKS REDUNDANT.**
+	// `containerElementIsManaged` reads the TAG and answers FALSE for a `typeParameter` — in a shared generic
+	// body that means *"no static answer"*, never *"owns nothing"* (W61, a measured use-after-free the whole
+	// suite was green over). So the opaque test is what keeps an `Array with Element` out of the trivial arm.
+	function containerElementOwnsNothing(giid GenericInstanceId) returns bool
+		return not self.signatures.containerElementIsManaged(giid) and not self.signatures.containerElementIsOpaque(giid)
+	end 'containerElementOwnsNothing'
+
 	// ⭐ **EMIT A MANAGED-AWARE ELEMENT ACCESSOR** (`get`/`first`, the `Array` cursor's two, and the `List`
 	// accessors — P1.7 slice 3 / 3b-vi-a).
 	//
@@ -61729,8 +61801,14 @@ export type Parser
 	// `enum-narrow-storage` MEASURED OTHERWISE. THERE ARE THREE DOORS, and each was found by a wrong answer
 	// the previous two did not cover.** This one carries the reads the COMPILER emits, and it used to carry
 	// `last`/`pop`/`remove` and the `for … in` element read as well — which is why the enumerations below
-	// still name them. Those are **CORPUS** members now (`stdlib/Array.maxon` is compiled, and iteration goes
-	// through the cursor surface), so they arrive as ordinary calls at `emitCall` and never reach here.
+	// still name them. `last`/`pop`/`remove` are **CORPUS** members now (`stdlib/Array.maxon` is compiled), so
+	// they arrive as ordinary calls at `emitCall` and never reach here.
+	//
+	// ⚠ **THE `for … in` READ IS BACK, FOR THE ELEMENTS THAT OWN NOTHING (EC3).** An `Array` whose element
+	// is a bare word is no longer rewritten to its cursor (`materializeIterableIterationSource`), so the loop
+	// reads `__managed_get_unchecked` through this door again and takes the trivial arm below. A MANAGED or
+	// OPAQUE element still goes through the cursor surface — that half is an ownership question and its
+	// measurement is written at the exemption.
 	//
 	// ⇒ all three exist because a corpus body is compiled ONCE against an opaque `Element`: it reads a slot
 	// with the shared, zero-extending element load and can know nothing the INSTANCE fixes. Where the value
@@ -61840,7 +61918,7 @@ export type Parser
 		// Array_int`, a false reject of a program both references accept. `containerSlotValueType` is the one
 		// function that answers "what type does an element READ as", and it answered here already for a
 		// managed element; a trivial one now asks the same question of the same function.
-		if not self.signatures.containerElementIsManaged(giid) and not self.signatures.containerElementIsOpaque(giid) 'trivial'
+		if self.containerElementOwnsNothing(giid) 'trivial'
 			let trivialType = self.containerSlotValueType(self.signatures.containerElementType(giid))
 			// ⭐ **A FLOAT ELEMENT COMES BACK AS ITS BITS AND IS REINTERPRETED HERE** — the read half of
 			// `containerElementWord`, and it may not simply TAG the call's result `float`: the runtime returns
@@ -61863,14 +61941,21 @@ export type Parser
 			//
 			// ⚠⚠ **THIS DOOR IS NOT ENOUGH ON ITS OWN, AND BELIEVING IT WAS COST TWO MEASURED WRONG ANSWERS.**
 			// This function's own header calls itself the door "every element read in the language uses", and
-			// that was true when `last`/`pop`/`remove` and the iteration read were compiler-emitted. They are
-			// CORPUS members now (`stdlib/Array.maxon`, and `for … in` goes through the cursor surface), and a
-			// corpus body is compiled ONCE against an opaque `Element` — so it cannot know the sign and this
-			// door never sees the call. MEASURED on a three-case `Signal { minus = -1 }`: `for s in a` summed
-			// to **256** where 0 is correct, and `a.pop()` answered **255** for `-1`, while `get`/`first`/
-			// `match` through here were right. The corpus half is `retypeOpaqueReturnValue`'s, off the SAME
-			// `narrowSignedSlotOf` question — see `emitNarrowSignedSlotRead` for why asking it twice is one
-			// derivation and not two.
+			// that was true when `last`/`pop`/`remove` and the iteration read were compiler-emitted. `last`/
+			// `pop`/`remove` are CORPUS members now (`stdlib/Array.maxon`) and a corpus body is compiled ONCE
+			// against an opaque `Element` — so it cannot know the sign and this door never sees those calls.
+			// MEASURED on a three-case `Signal { minus = -1 }`: `for s in a` summed to **256** where 0 is
+			// correct, and `a.pop()` answered **255** for `-1`, while `get`/`first`/`match` through here were
+			// right. The corpus half is `retypeOpaqueReturnValue`'s, off the SAME `narrowSignedSlotOf` question
+			// — see `emitNarrowSignedSlotRead` for why asking it twice is one derivation and not two.
+			//
+			// ⚠ **THE `for … in` HALF OF THAT MEASUREMENT CAME BACK THROUGH THIS DOOR AT EC3, AND IT CAME BACK
+			// EXACTLY WHERE IT MATTERS.** An `Array` whose element owns nothing is no longer rewritten to its
+			// cursor (`materializeIterableIterationSource`), so the iteration read is `parseForStatement`'s
+			// `__managed_get_unchecked` again — and a narrow signed enum IS such an element, so `for s in a` is
+			// sign-extended by this arm rather than by the corpus one. The corpus half above is unchanged and
+			// still load-bearing for `pop`/`last`/`remove`; both are the same question asked of the same
+			// function, which is why one becoming reachable again cannot make the two disagree.
 			return self.emitNarrowSignedSlotRead(slotValue, valueType: trivialType, range: range)
 		end 'trivial'
 
