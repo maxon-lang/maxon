@@ -1,0 +1,173 @@
+// Test: match-string.pattern-decodes-escapes
+typealias Choice = int(0 to 9)
+
+function pick(s String) returns Choice
+	match s 'pick'
+		"a\nb" then return 4
+		"\{" then return 2
+		default then return 1
+	end 'pick'
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick("a\nb")
+	let b = pick("\{")
+	return a + b
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @pick(s: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.jmp pick.pick_0.cmp0
+  pick_0.cmp0:
+    x64.lea rax, [rip+__static_lit_3]
+    x64.mov rcx, rax
+    x64.mov rdx, 32
+    x64.add rcx, rdx
+    x64.mov [rbp-16], rcx
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call stdlib.String.equals
+    x64.mov r8, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.test r8, r8
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov r9, [rbp-32]
+    x64.test r9, r9
+    x64.je pick.pick_0.cmp1
+  pick_0.case0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 4
+    x64.epilogue
+    x64.ret
+  pick_0.cmp1:
+    x64.lea rax, [rip+__static_lit_4]
+    x64.mov rcx, rax
+    x64.mov rdx, 32
+    x64.add rcx, rdx
+    x64.mov [rbp-24], rcx
+    x64.mov rbx, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call stdlib.String.equals
+    x64.mov r8, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.test r8, r8
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov r9, [rbp-32]
+    x64.test r9, r9
+    x64.je pick.pick_0.case2
+  pick_0.case1:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  pick_0.case2:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  pick_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea rax, [rip+__static_lit_3]
+    x64.mov rcx, rax
+    x64.mov rdx, 32
+    x64.add rcx, rdx
+    x64.mov [rbp-8], rcx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call pick
+    x64.lea rdi, [rip+__static_lit_4]
+    x64.mov r8, rdi
+    x64.mov r9, 32
+    x64.add r8, r9
+    x64.mov [rbp-16], r8
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call pick
+    x64.mov rcx, [rbp-24]
+    x64.mov edx, ecx
+    x64.mov ecx, eax
+    x64.add rdx, rcx
+    x64.xor eax, eax
+    x64.mov ecx, rdx
+    x64.mov ebx, 4294967295
+    x64.mov esi, rdx
+    x64.cmp rsi, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rdi, [rbp-16]
+    x64.mov [rbp-32], rcx
+    x64.mov [rbp-40], rdx
+    x64.mov [rbp-48], rsi
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

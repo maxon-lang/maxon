@@ -1,0 +1,93 @@
+// Test: match-string.pattern-decodes-escapes
+typealias Choice = int(0 to 9)
+
+function pick(s String) returns Choice
+	match s 'pick'
+		"a\nb" then return 4
+		"\{" then return 2
+		default then return 1
+	end 'pick'
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick("a\nb")
+	let b = pick("\{")
+	return a + b
+end 'main'
+---
+ExitCode: 6
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_2]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, matcharm#1
+    x64.jmp matchnext#2
+  matcharm#1:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext#2:
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, matcharm#3
+    x64.jmp matchnext#4
+  matcharm#3:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext#4:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_2]
+    x64.callDirect pick
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect pick
+    x64.leaRegRegReg r8, rbx, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

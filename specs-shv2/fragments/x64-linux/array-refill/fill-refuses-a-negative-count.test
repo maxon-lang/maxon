@@ -1,0 +1,102 @@
+// Test: fill-refuses-a-negative-count
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(3) otherwise return 2
+	let applied = try mm.fill(0, count: -1, value: 7) otherwise return 8
+	if applied 'itMustNotHaveApplied'
+		return 3
+	end 'itMustNotHaveApplied'
+	return 4
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __slab_cursor@0 = i64 0
+  __mm_free_lists@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 4
+    x64.movRegImm32 rdx, 8
+    x64.callDirect __managed_mem_create
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm rax, 18446744073709551615
+    x64.movRegImm32 r9, 7
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_fill
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  tryerr#6:
+    x64.movRegImm32 r12, 8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, itMustNotHaveApplied
+    x64.jmp ifcont
+  itMustNotHaveApplied:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

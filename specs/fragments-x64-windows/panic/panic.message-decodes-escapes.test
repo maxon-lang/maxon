@@ -1,0 +1,25 @@
+// Test: panic.message-decodes-escapes
+function main() returns ExitCode
+	panic("first\nsecond")
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic.message-decodes-escapes.test:3: first
+second
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  }
+}
+---
