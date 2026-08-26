@@ -1705,6 +1705,10 @@ end 'pruneRungSubtree'
 // Named here, beside the generator that defines them, so a rename cannot leave a caller behind.
 let SeedName = "scaleSeed"
 let OpaqueCalleeName = "scaleOpaque"
+// The BODY half of the opaque callee — see `seedSource`, which carries the argument for why the knob is
+// two functions rather than one. Named beside its wrapper so a rename cannot leave one of the pair
+// behind, exactly as the wrapper is named beside the generator that emits it.
+let OpaqueCoreCalleeName = "scaleOpaqueCore"
 
 // THE ORIGIN OF EVERY VALUE IN THE CORPUS, and the reason none of it folds away.
 //
@@ -1758,13 +1762,36 @@ function seedSource() returns String
 	out.append("\treturn acc\n")
 	out.append("end '{SeedName}'\n")
 	out.append("\n")
-	// A callee with a branch in it, so a call to it is neither trivially foldable nor free. Every
-	// pressured loop calls this ACROSS its live accumulators, which is what forces the spills.
-	out.append(driverHeader(OpaqueCalleeName))
+	// ⭐⭐ **TWO LEVELS, AND THE OUTER ONE EXISTS ONLY TO KEEP THE CALL.** `scaleOpaque` is what every
+	// pressured and float-spill loop calls ACROSS its live accumulators, and that call IS the knob — it
+	// is what forces the spills the splitter is measured on. A single-level `scaleOpaque` is a tiny LEAF
+	// (a branch and two returns, no call at all), so `inlineLeaves` splices it into every one of those
+	// loops and the pressure it was there to create disappears — the ladder would go on reporting a
+	// spill knob that no longer spills. That is this file's own recorded failure story, arriving for an
+	// INLINER instead of for a DCE.
+	//
+	// The cure keeps the knob honest without adding one: `scaleOpaque` CALLS `scaleOpaqueCore`, which
+	// carries the branchy body, so `scaleOpaque`'s own body holds a call and is not a leaf under the
+	// eligibility rule (which is decided PRE-SPLICE — one round, no cascade). `scaleOpaqueCore` IS a
+	// leaf and is spliced into `scaleOpaque`, which is what keeps the inliner itself MEASURED by this
+	// ladder rather than merely dodged by it.
+	//
+	// ⚠ **A CASCADING INLINER WOULD FLATTEN THIS AGAIN, and the fix then is not another wrapper.** Once
+	// `scaleOpaqueCore` is inlined, `scaleOpaque` is call-free; a second round would make it a leaf and
+	// splice it into the loops after all. The rung that adds a cascade re-derives this knob, and the
+	// honest shape then is a callee the inliner must refuse for a reason a cascade cannot dissolve (past
+	// the op budget, or holding a store and a panic) — not a deeper stack of levels.
+	out.append(exportedFunctionHeader(OpaqueCoreCalleeName, parameters: "a int"))
 	out.append("\tif a > {OpaqueBigThreshold} 'big'\n")
 	out.append("\t\treturn a - {OpaqueBigThreshold}\n")
 	out.append("\tend 'big'\n")
 	out.append("\treturn a + 1\n")
+	out.append("end '{OpaqueCoreCalleeName}'\n")
+	out.append("\n")
+	// The wrapper every pressured loop actually calls — see the note above for why it delegates rather
+	// than carrying the body. `opaqueCalleeValue` tracks the pair's answer, which is the CORE's.
+	out.append(driverHeader(OpaqueCalleeName))
+	out.append("\treturn {OpaqueCoreCalleeName}(a)\n")
 	out.append("end '{OpaqueCalleeName}'\n")
 	return out.build()
 end 'seedSource'
@@ -1773,8 +1800,9 @@ end 'seedSource'
 // takes by comparing against it, and the two must be the same number.
 let OpaqueBigThreshold = 100
 
-// What `scaleOpaque` hands back for `argument` — the tracked twin of the two-arm body emitted directly
-// above it, and the ONE place a caller's expectation of it is derived.
+// What `scaleOpaque` hands back for `argument` — the tracked twin of the two-arm body `scaleOpaqueCore`
+// carries, and the ONE place a caller's expectation of it is derived. It tracks the PAIR: the wrapper
+// returns its core's answer unchanged, so one tracker serves both and there is nothing extra to predict.
 //
 // ⚠ `scaleOpaque` is NOT a driver and deliberately does NOT witness itself: `main` never threads it, and
 // a self-witnessing callee would have to return its ARGUMENT, which is the one thing its two callers

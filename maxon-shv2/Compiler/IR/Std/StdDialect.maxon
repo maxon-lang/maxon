@@ -2313,11 +2313,13 @@ end 'insertUseCalleeAndArgs'
 // rewritten to (and `v` itself where nothing changes). The mirror of `collectStdOpUses`: it
 // rewrites exactly the operands that one reports, so the two cannot drift. DEFS are left alone
 // (a def is not a use), and so are branch-edge args — those live on the predecessor's `IrBlock`,
-// not on the op, so rewriting them is `substituteValuesInFunc`'s job — its ONLY caller, and the
-// reason this is file-private where `remappedValue` beside it is not: a pass that reached the op
-// rewrite directly could perform half the substitution, which is the failure that function's header
-// names. Exhaustive over StdOp with no bare `default`, for the same reason its twin is: a new variant
-// must be a COMPILE ERROR here rather than a silently-missed rewrite at every call site.
+// not on the op, so rewriting them is `substituteValuesInFunc`'s job — and the reason this is
+// file-private where `remappedValue` beside it is not: a pass that reached the op rewrite directly
+// could perform half the substitution, which is the failure that function's header names. Its two
+// callers are both in THIS file — `substituteValuesInFunc` below, and `remapStdOpForClone`, which
+// composes it with the DEF and BLOCK-TARGET halves a clone additionally needs. Exhaustive over StdOp
+// with no bare `default`, for the same reason its twin is: a new variant must be a COMPILE ERROR here
+// rather than a silently-missed rewrite at every call site.
 //
 // A COLUMN, NOT A (from, to) PAIR, and that is a performance contract rather than a convenience.
 // The pair form could only rewrite ONE value per walk, so a caller with k substitutions to make
@@ -2481,6 +2483,98 @@ function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArra
 	end 'each'
 	return out
 end 'remappedArgs'
+
+// ⭐⭐ **ONE COPIED OP, REWRITTEN INTO ANOTHER FUNCTION'S COORDINATES — uses, DEFS and BLOCK TARGETS.**
+// `inlineLeaves` copies a callee's body into a caller, where every one of those three is a different
+// number: a use and a def name the callee's `ValueId`s and a terminator names the callee's `BlockId`s,
+// and all three have to move at once or the copy names a mixture of two functions' value spaces.
+//
+// ⭐ **IT COMPOSES `remapStdOpUses` RATHER THAN RESTATING IT**, so the use half stays where the
+// `collectStdOpUses` mirror lives and a new variant is still a compile error in exactly one place. What
+// is added here is only what a clone needs beyond a substitution: the DEF fields (which `remapStdOpUses`
+// deliberately leaves alone — a def is not a use) and the branch targets.
+//
+// ⭐ **IT COVERS THE OPS AN INLINABLE LEAF MAY HOLD, AND PANICS ON EVERY OTHER — which is not a gap but
+// the eligibility rule's backstop.** `InlineLeaves.leafBodyVerdict` refuses a callee holding any call,
+// any `isUnsupportedInInlineBody` op, or a panic op (whose block is dropped rather than copied), so the
+// set that can reach here is closed: the arith band, the two branches, `switch`, the two returns, the
+// three address ops and the two indirect accesses. Writing arms for the other seventy would be
+// unreachable generality — and a `panic` naming the op is what a disagreement between the two rules
+// looks like, instead of a silently mis-cloned body. Every non-clonable variant is covered by a RANGE
+// arm ending at the union's last member, so a variant appended past it fails to compile here until it
+// is consciously placed.
+module function remapStdOpForClone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) returns StdOp
+	return remapClonedDefsAndTargets(remapStdOpUses(op, subst: valueSubst), valueSubst: valueSubst, blockSubst: blockSubst)
+end 'remapStdOpForClone'
+
+// The half `remapStdOpUses` does not do: the result ids an op DEFINES, and the block ids a terminator
+// names. Its operand fields arrive already rewritten, so they are bound and handed straight back.
+function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) returns StdOp
+	match op 'r'
+		const(resultId, value, valueType) then return StdOp.const(clonedValue(resultId, subst: valueSubst), value: value, valueType: valueType)
+		binOp(resultId, lhs, rhs, opcode, operandType) then return StdOp.binOp(clonedValue(resultId, subst: valueSubst), lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType)
+		unaryOp(resultId, operand, opcode, operandType) then return StdOp.unaryOp(clonedValue(resultId, subst: valueSubst), operand: operand, opcode: opcode, operandType: operandType)
+		cmp(resultId, lhs, rhs, pred, operandType) then return StdOp.cmp(clonedValue(resultId, subst: valueSubst), lhs: lhs, rhs: rhs, pred: pred, operandType: operandType)
+		binOpImm(resultId, lhs, imm, opcode, operandType) then return StdOp.binOpImm(clonedValue(resultId, subst: valueSubst), lhs: lhs, imm: imm, opcode: opcode, operandType: operandType)
+		cmpImm(resultId, lhs, imm, pred, operandType) then return StdOp.cmpImm(clonedValue(resultId, subst: valueSubst), lhs: lhs, imm: imm, pred: pred, operandType: operandType)
+		div(resultId, lhs, rhs, signedness) then return StdOp.div(clonedValue(resultId, subst: valueSubst), lhs: lhs, rhs: rhs, signedness: signedness)
+		mod(resultId, lhs, rhs, signedness) then return StdOp.mod(clonedValue(resultId, subst: valueSubst), lhs: lhs, rhs: rhs, signedness: signedness)
+		condBranch(condId, thenBlockId, elseBlockId) then return StdOp.condBranch(condId, thenBlockId: clonedBlock(thenBlockId, subst: blockSubst), elseBlockId: clonedBlock(elseBlockId, subst: blockSubst))
+		branch(targetBlockId) then return StdOp.branch(clonedBlock(targetBlockId, subst: blockSubst))
+		// A return DEFINES nothing and names no block: the splice replaces it with a branch to the
+		// continuation rather than cloning it, and it reaches here only through a body op scan.
+		ret then return op
+		// A `param` is never copied (its value is the call site's argument) and a call of any kind
+		// disqualifies the callee, so neither can reach a clone.
+		param to call then panic("remapStdOpForClone: a `param`/`call` op reached the cloner — `leafBodyVerdict` refuses a callee holding a call, and a splice maps a parameter to its argument instead of copying it")
+		retVoid then return op
+		globalAddr(resultId, label) then return StdOp.globalAddr(clonedValue(resultId, subst: valueSubst), label: label)
+		loadIndirect(resultId, addrId, offset, valueType) then return StdOp.loadIndirect(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
+		storeIndirect then return op
+		osAllocPages to osWriteStdout then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is marked `isUnsupportedInInlineBody`, which `leafBodyVerdict` refuses a callee for")
+		rdataAddr(resultId, label) then return StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: label)
+		tryCall to osExit then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a throwing call, a dual-register return or a process exit — each refused by `leafBodyVerdict`")
+		funcAddr(resultId, funcName) then return StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: funcName)
+		callIndirect then panic("remapStdOpForClone: an indirect call reached the cloner — `leafBodyVerdict` refuses a callee holding one")
+		osPanic to osFreePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a panic or an `isUnsupportedInInlineBody` system primitive — a panic BLOCK is redirected to the slow arm rather than copied, and the rest refuse the callee outright")
+		switch(subjectId, denseTargetBlockIds, defaultBlockId) then return StdOp.switch(subjectId, denseTargetBlockIds: clonedBlocks(denseTargetBlockIds, subst: blockSubst), defaultBlockId: clonedBlock(defaultBlockId, subst: blockSubst))
+		witnessCall to osThreadCpuTicks then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `leafBodyVerdict`")
+	end 'r'
+end 'remapClonedDefsAndTargets'
+
+// The refused op's own name, for the panics above — one place, so a message cannot go on naming a
+// variant that moved. It reports the two facts that decide admission (`isCall` is not one of them:
+// `param` carries it), leaving the reader to look the variant up by them rather than restating the
+// union here as a third roster of eighty names.
+function stdOpCloneRefusalName(op StdOp) returns String
+	return "op in category {op.rawValue.category.name}{" (isUnsupportedInInlineBody)" if op.rawValue.isUnsupportedInInlineBody else ""}"
+end 'stdOpCloneRefusalName'
+
+// A cloned op's value, through the splice's dense column. STRICT where `remappedValue` is lenient, and
+// the difference is the question: a substitution asks "is this one of the values I am folding?" and
+// answers "no" by identity, while a clone asks "what is this callee value called in the caller?" — a
+// question with no honest identity answer, because the two functions number their values independently.
+// The column covers `0 .. nextFreeValueId(callee)`, so an id outside it is a column built against a
+// different function.
+function clonedValue(v ValueId, subst ValueIdArray) returns ValueId
+	return try subst.get(v) otherwise panic("remapStdOpForClone: callee value {v} is outside the {subst.count()}-entry value column this splice built — the column is sized by the callee's own `nextFreeValueId`, so an id past it means the op belongs to another function")
+end 'clonedValue'
+
+// A cloned terminator's block target, through the splice's dense block column. Every callee block is
+// mapped: a copied block to its fresh caller block, a PANIC block to the splice's single slow arm.
+function clonedBlock(id BlockId, subst BlockIdArray) returns BlockId
+	return try subst.get(id) otherwise panic("remapStdOpForClone: callee block id {id} is outside the {subst.count()}-entry block column this splice built — the column is sized by the callee's own `nextBlockId`")
+end 'clonedBlock'
+
+// A dense `switch` table's whole target list, mapped. A jump table names MANY blocks and one default,
+// so a clone that reached only the default would leave every case arm branching into the callee.
+function clonedBlocks(ids BlockIdArray, subst BlockIdArray) returns BlockIdArray
+	var out = BlockIdArray.create()
+	for id in ids 'each'
+		out.push(clonedBlock(id, subst: subst))
+	end 'each'
+	return out
+end 'clonedBlocks'
 
 // Rewrite every READ in `func` that `subst` maps — in the ops, via `remapStdOpUses` above, and in the
 // BRANCH-EDGE args, which live on the predecessor's `IrBlock` rather than on any op and are therefore

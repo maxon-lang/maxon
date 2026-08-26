@@ -365,6 +365,85 @@ export type ValueOriginTable
 		self.paramOrigins.remapFunctionIndices(reached, newIndexOfOld: newIndexOfOld)
 	end 'remapFunctionIndices'
 
+	// ⭐⭐ **THE ROWS OF A CHOSEN FEW FUNCTIONS, GROUPED, IN ONE PASS — because `lookup` is a SCAN and a
+	// pass that asks it per value is a quadratic.** `inlineLeaves` copies a leaf callee's body into every
+	// caller that names it, and every value the copy defines needs the callee value's origin row so the
+	// E5001 diagnostic can still resolve it (`RegisterPressureDiagnostic.classifyValue` reaches RULE 3's
+	// panic on a value in NO table). Asked one row at a time that is `sites × rows` — thousands of splices
+	// against a table with one entry per value-producing op in the whole program.
+	//
+	// ⚠ **IT INDEXES ONLY THE FUNCTIONS `selected` NAMES, AND THAT IS THE COST DECISION.** The rows array
+	// would otherwise be a second copy of the whole table (one `OpIndex` per value in the program) for a
+	// consumer that reads a few hundred tiny functions' worth of it. `rowStarts` stays dense over the
+	// function space — it is one word per function, and a sparse map here would be a hash probe on the
+	// splice path.
+	export function indexRowsOfFunctions(selected BoolArray, funcCount FuncIndex) returns ValueOriginRowIndex
+		var rowStarts = OpIndexArray.create()
+		rowStarts.resize(funcCount + 1)
+		for i in 0 upto self.count() 'countEach'
+			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.indexRowsOfFunctions: funcIndices.get OOB at {i}")
+			if not isSelectedFunction(selected, funcIndex: f) 'notWanted'
+				continue
+			end 'notWanted'
+			// Counted into slot `f + 1`, so the prefix sum below turns the counts into starts in place.
+			let at = f + 1
+			let prior = try rowStarts.get(at) otherwise panic("ValueOriginTable.indexRowsOfFunctions: row {i} names function index {f}, which is outside the {funcCount}-function module this index was asked for")
+			try rowStarts.set(at, value: prior + 1) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.set OOB at {at}")
+		end 'countEach'
+
+		var total = 0 as OpCount
+		for f in 0 upto funcCount + 1 'prefixSum'
+			total = total + (try rowStarts.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.get OOB at {f}"))
+			try rowStarts.set(f, value: total) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.set OOB at {f}")
+		end 'prefixSum'
+
+		var rows = OpIndexArray.create()
+		rows.resize(total)
+		// A SEPARATE write cursor per function, so `rowStarts` survives the scatter intact — advancing
+		// `rowStarts` itself would leave every entry naming its function's END and the starts would have
+		// to be read back off the previous slot, which is the off-by-one this whole shape invites.
+		var cursor = OpIndexArray.create()
+		cursor.resize(funcCount)
+		for f in 0 upto funcCount 'seedCursor'
+			try cursor.set(f, value: try rowStarts.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.get OOB at {f}")) otherwise panic("ValueOriginTable.indexRowsOfFunctions: cursor.set OOB at {f}")
+		end 'seedCursor'
+		for i in 0 upto self.count() 'scatterEach'
+			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.indexRowsOfFunctions: funcIndices.get OOB at {i}")
+			if not isSelectedFunction(selected, funcIndex: f) 'notWanted'
+				continue
+			end 'notWanted'
+			let at = try cursor.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: cursor.get OOB at {f}")
+			try rows.set(at, value: i) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rows.set OOB at {at}")
+			try cursor.set(f, value: at + 1) otherwise panic("ValueOriginTable.indexRowsOfFunctions: cursor.set OOB at {f}")
+		end 'scatterEach'
+
+		return ValueOriginRowIndex.create(rowStarts, rows: rows)
+	end 'indexRowsOfFunctions'
+
+	// ⭐ **THE ORIGIN ROWS OF `fromFunc`, RE-FILED AGAINST `toFunc` UNDER `subst` — what an inlined body's
+	// fresh values need in order to stay resolvable by a diagnostic.** The op index is carried VERBATIM:
+	// it names the Maxon op in the CALLEE that defined the value, whose span is the callee's own source
+	// line — which is the honest answer for a copy of that op, and the same answer the out-of-line callee
+	// would have given.
+	//
+	// ⚠⚠ **A ROW OUTSIDE THE COLUMN IS SKIPPED, AND THAT IS THE MAXON-VS-STD ID SPACES RATHER THAN A
+	// BROKEN COLUMN.** This table is filed at the MAXON tier, one row per value-producing Maxon op; the
+	// column is sized by the callee's STD `nextFreeValueId`. The Std lowering passes ids through verbatim
+	// and mints ABOVE them, so the two agree for every value that survives — but a Maxon op the lowering
+	// does not materialize leaves its value id recorded here and defined by nothing at the Std tier, and
+	// if that id was the function's highest it sits past the Std bound. Such a row describes a value the
+	// splice did not copy because it does not exist to copy, so there is nothing to re-file.
+	// (MEASURED: it fires on `Array.clone` and on `Vector.count`'s callees.)
+	export function copyRows(index ValueOriginRowIndex, fromFunc FuncIndex, toFunc FuncIndex, subst ValueIdArray)
+		for k in index.firstRowOf(fromFunc) upto index.endRowOf(fromFunc) 'eachRow'
+			let row = index.rowAt(k)
+			let v = try self.valueIds.get(row) otherwise panic("ValueOriginTable.copyRows: valueIds.get OOB at row {row}")
+			let opIndex = try self.opIndices.get(row) otherwise panic("ValueOriginTable.copyRows: opIndices.get OOB at row {row}")
+			let cloned = try subst.get(v) otherwise continue
+			self.record(toFunc, valueId: cloned, opIndex: opIndex)
+		end 'eachRow'
+	end 'copyRows'
+
 	export function appendFrom(source ValueOriginTable, funcOffset FuncIndex, opOffset OpIndex)
 		for i in 0 upto source.count() 'each'
 			let f = try source.funcIndices.get(i) otherwise panic("ValueOriginTable.appendFrom: funcIndices.get OOB at {i}")
@@ -377,3 +456,38 @@ export type ValueOriginTable
 		self.paramOrigins.appendFrom(source.paramOrigins, funcOffset: funcOffset)
 	end 'appendFrom'
 end 'ValueOriginTable'
+
+// Is `funcIndex` one of the functions an index was asked to cover? A column shorter than the module is
+// answered `false` rather than refused: a caller that selected nothing beyond function K has no rows to
+// find past it, and reading the length as the answer is what lets the caller size its column by the
+// functions it cares about instead of by the module.
+function isSelectedFunction(selected BoolArray, funcIndex FuncIndex) returns bool
+	return try selected.get(funcIndex) otherwise false
+end 'isSelectedFunction'
+
+// The CSR `indexRowsOfFunctions` builds: `rows[rowStarts[f] .. rowStarts[f + 1])` are the origin-table
+// row indices of function `f`, for every `f` its `selected` column named (and an EMPTY range for every
+// other, which is what makes an unselected function safe to ask about rather than a panic).
+//
+// It is a row-index permutation and not a copy of the columns, so it costs one word per selected row and
+// stays honest if the table is appended to afterwards — which `copyRows` does, once per splice.
+export type ValueOriginRowIndex
+	var rowStarts as OpIndexArray
+	var rows as OpIndexArray
+
+	export static function create(rowStarts OpIndexArray, rows OpIndexArray) returns ValueOriginRowIndex
+		return Self{rowStarts: rowStarts, rows: rows}
+	end 'create'
+
+	export function firstRowOf(funcIndex FuncIndex) returns OpIndex
+		return try self.rowStarts.get(funcIndex) otherwise panic("ValueOriginRowIndex.firstRowOf: function index {funcIndex} is outside the {self.rowStarts.count() - 1}-function span this index was built over")
+	end 'firstRowOf'
+
+	export function endRowOf(funcIndex FuncIndex) returns OpIndex
+		return try self.rowStarts.get(funcIndex + 1) otherwise panic("ValueOriginRowIndex.endRowOf: function index {funcIndex} is outside the {self.rowStarts.count() - 1}-function span this index was built over")
+	end 'endRowOf'
+
+	export function rowAt(position OpIndex) returns OpIndex
+		return try self.rows.get(position) otherwise panic("ValueOriginRowIndex.rowAt: position {position} is outside the {self.rows.count()} indexed row(s)")
+	end 'rowAt'
+end 'ValueOriginRowIndex'

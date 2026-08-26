@@ -48,6 +48,23 @@ union PassKind
 	// the existing `pruneDeadBlockArgs to foldConstOperands` union range still names the three
 	// block-arg/const passes exactly.
 	insertRangeChecks
+	// Phase 3.44: Std → Std splicing of TINY LEAF callees into their direct call sites (EC5), leaving the
+	// callee where it is — and, for a leaf whose ranged-parameter guard can panic, leaving one slow arm
+	// per site that re-issues the original call so the panic still comes out of the callee's own frame.
+	//
+	// ⚠ **IT RUNS AFTER `insertRangeChecks` FOR THAT PASS'S OWN REASON, RESTATED HERE ONLY AS A
+	// POINTER**: a range-check site is a `(blockId, stdOpPos)` coordinate in the space `lowerMaxonToStd`
+	// left the block in, and this pass SPLITS blocks and removes ops from them. It also needs the guards
+	// to already EXIST — the panic rule is about a callee whose entry guard panics, and before
+	// `insertRangeChecks` no callee has one, so every ranged-parameter leaf would look store-free and
+	// panic-free and be copied WITH its guard emitted later into the callee alone.
+	//
+	// It runs BEFORE `inlineManagedPrimitives` because that pass carves the `__managed_*` fast paths into
+	// call sites, and a body carved that way is no longer a leaf — inlining first is what lets a tiny
+	// accessor reach its caller before the carve makes it unrecognizable. `promoteStackRecords` runs
+	// last, so no `stackRecordAddr` exists here (which is what its `isUnsupportedInInlineBody` would
+	// otherwise refuse a callee for).
+	inlineLeaves
 	// Phase 3.45: Std → Std expansion of the `__ManagedMemory` element primitives' FAST PATHS at their
 	// call sites (EC1), leaving the call itself — verbatim — as the slow arm every other case takes.
 	//
@@ -131,6 +148,9 @@ function classifyPass(pass PassKind) returns PassClassification
 		checkUnusedExports gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
 		insertRangeChecks gives PassClassification.perFunction
+		// WHOLE-MODULE by nature, like `promoteStackRecords`: the whole question is what the CALLEE's body
+		// contains, and a caller cannot be judged without every callee it names in view.
+		inlineLeaves gives PassClassification.wholeModule
 		// Intra-function by construction: a site is expanded entirely inside the block that holds it, and
 		// nothing about the callee's body is consulted — the body is not even in the module yet.
 		inlineManagedPrimitives gives PassClassification.perFunction
@@ -155,6 +175,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		checkUnusedExports gives CompilePhase.checkUnusedExports
 		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
 		insertRangeChecks gives CompilePhase.insertRangeChecks
+		inlineLeaves gives CompilePhase.inlineLeaves
 		inlineManagedPrimitives gives CompilePhase.inlineManagedPrimitives
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
@@ -171,6 +192,7 @@ function passKindToString(pass PassKind) returns String
 		checkUnusedExports gives "checkUnusedExports"
 		lowerMaxonToStd gives "lowerMaxonToStd"
 		insertRangeChecks gives "insertRangeChecks"
+		inlineLeaves gives "inlineLeaves"
 		inlineManagedPrimitives gives "inlineManagedPrimitives"
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
@@ -214,6 +236,7 @@ export function buildLoweringPasses() returns PassKindArray
 	var passes = PassKindArray.create()
 	passes.push(PassKind.lowerMaxonToStd)
 	passes.push(PassKind.insertRangeChecks)
+	passes.push(PassKind.inlineLeaves)
 	passes.push(PassKind.inlineManagedPrimitives)
 	passes.push(PassKind.pruneDeadBlockArgs)
 	passes.push(PassKind.elimTrivialBlockArgs)
@@ -371,6 +394,7 @@ export type PassPipeline
 			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
+			inlineLeaves then inlineLeaves(self.project, module: self.stdModule)
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)

@@ -307,6 +307,18 @@ export enum CompilePhase
 	// optimizer would move for two unrelated reasons — the grouping rule the `synthesizeBodies` comment
 	// states, applied one level down.
 	foldEmittedConstOperands
+	// The tiny-leaf call-site splice (`inlineLeaves`, EC5). APPENDED HERE rather than beside
+	// `insertRangeChecks`, between which and `inlineManagedPrimitives` it actually runs, for this enum's
+	// own reason — the ordinals are the `.metrics.tsv` wire format every trend row ever written is
+	// indexed by, so a member slotted into the middle would re-attribute every historical measurement to
+	// the wrong phase.
+	//
+	// Its OWN row, like every other Std pass: it is WHOLE-MODULE where its two neighbours are
+	// per-function (it reads callee bodies), and it is the one pass whose cost is expected to be paid
+	// back with interest by the phases after it — `regalloc` and `isel` see the leaf bodies as inline ops
+	// instead of as functions to allocate and emit. Billed into a neighbour, the cost and the saving
+	// would net off inside one number and neither would be readable.
+	inlineLeaves
 end 'CompilePhase'
 
 // Per-compile timing state, owned by `Project` (which is already threaded through

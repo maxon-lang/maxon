@@ -1,0 +1,142 @@
+// Test: a-pure-leaf-is-inlined
+typealias RegNum = int(0 to 63)
+typealias RegMask = int(0 to u64.max)
+
+function maskContains(mask RegMask, regNum RegNum) returns bool
+	return ((mask shr regNum) and 1) != 0
+end 'maskContains'
+
+function main() returns ExitCode
+	let mask = 5 as RegMask
+	var count = 0
+	var i = 0
+	while i < 8 'each'
+		if maskContains(mask, regNum: i as RegNum) 'set'
+			count = count + 1
+		end 'set'
+		i = i + 1
+	end 'each'
+	return count as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @maskContains {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 63
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rdx
+    x64.andRegImm32 rcx, rdx, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegReg rsi, rcx
+    x64.sarRegImm8 rsi, rcx, 63
+    x64.movRegReg rcx, rdx
+    x64.shrRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.andRegReg rax, rax, rsi
+    x64.andRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 5
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r13, 8
+    x64.jcc less, each
+    x64.jmp whileexit
+  each:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#7
+    x64.jmp __rc_chk#8
+  __rc_chk#8:
+    x64.cmpRegImm32 r13, 63
+    x64.jcc greater, __rc_panic#7
+    x64.jmp __rc_ok#6
+  __rc_panic#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#6:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect maskContains
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, set
+    x64.jmp critsplit
+  set:
+    x64.leaRegRegImm32 rax, r12, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, r12
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg r12, rax
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#10
+    x64.jmp __rc_chk#11
+  __rc_chk#11:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic#10
+    x64.jmp __rc_ok#9
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#9:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

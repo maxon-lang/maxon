@@ -53,9 +53,17 @@ array program links.
 ## Tests
 
 <!-- test: multiply-by-one-is-the-value -->
-`x * 1`. The operand is a call result so that nothing upstream of the fold can see the value: the
-parser's own constant folder settles `const * const`, and a case it could settle would pin the
+`x * 1`. The operand is written as a CALL, which is what keeps the PARSER's own constant folder off
+it: that folder settles `const * const` at the source level, and a case it could settle would pin the
 parser rather than this pass.
+
+⚠ **"NOTHING UPSTREAM OF THE FOLD CAN SEE THE VALUE" IS NO LONGER WHY, AND HAS NOT BEEN SINCE EC5.**
+`opaque` is a tiny leaf, so `inlineLeaves` splices its body into `main` before this pass runs and the
+operand IS a `const` by the time `foldConstOperands` sees it. What the call still buys is the half
+that matters: the fold under test is a **Std-tier** identity (`binOpImm` whose immediate is its
+opcode's identity element), and it is still the only thing that removes the op — the Std tier has no
+constant propagation, so a `const` operand folds into an IMMEDIATE here and nowhere else. The case
+pins the same rule it always did; only the sentence explaining the shape had stopped being true.
 
 ```maxon
 function opaque(n int) returns int

@@ -1,0 +1,69 @@
+// Test: two-returns
+typealias Integer = int(i64.min to i64.max)
+
+function pick(a Integer) returns Integer
+	if a > 10 'big'
+		return 4
+	end 'big'
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	return (pick(50) * 10 + pick(1)) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry#0:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 50
+    x64.jmp entry#6
+  entry#6:
+    x64.cmpRegImm32 rax, 10
+    x64.jcc greater, big#7
+    x64.jmp ifcont#8
+  big#7:
+    x64.movRegImm32 rax, 4
+    x64.jmp __il_cont#5
+  ifcont#8:
+    x64.movRegImm32 rax, 2
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.movRegImm32 rcx, 1
+    x64.jmp entry#9
+  entry#9:
+    x64.cmpRegImm32 rcx, 10
+    x64.jcc greater, big#10
+    x64.jmp ifcont#11
+  big#10:
+    x64.movRegImm32 rcx, 4
+    x64.jmp __il_cont#4
+  ifcont#11:
+    x64.movRegImm32 rcx, 2
+    x64.jmp __il_cont#4
+  __il_cont#4:
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,105 @@
+// Test: a-leaf-with-a-store-and-a-panic-stays-a-call
+typealias Integer = int(i64.min to i64.max)
+typealias Percent = int(0 to 100)
+
+type Meter
+	export var level as Integer
+
+	export static function create() returns Self
+		return Self{level: 0}
+	end 'create'
+
+	export function record(p Percent) returns Integer
+		self.level = self.level + p
+		return self.level
+	end 'record'
+end 'Meter'
+
+function main() returns ExitCode
+	var m = Meter.create()
+	let first = m.record(40 as Percent)
+	let second = m.record(2 as Percent)
+	return (second - first + 40) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __mm_free_lists@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @Meter.record {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 100
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 48
+    x64.leaRegSlot rbx, slot0
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rdx, 40
+    x64.movRegReg rcx, rbx
+    x64.callDirect Meter.record
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect Meter.record
+    x64.subRegReg r8, r8, r12
+    x64.leaRegRegImm32 r8, r8, 40
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
