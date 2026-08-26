@@ -29,13 +29,13 @@ are the rules these two keep, and every one of them is observable from outside:
 - **Slots outside `[0, length)` still read ZERO.** A refill that SHRINKS erases what it vacates, so
   a later grow exposes zeroed slots rather than the previous occupants.
 
-Both are built on ONE buffer primitive — `managed.fill(from, count:, value:)`, which writes `value` into
-every slot of `[from, from + count)` and ANSWERS WHETHER IT DID. It applies to a TRIVIAL element (an int, a
+Both are built on ONE buffer primitive — `managed.fill(start, count:, value:)`, which writes `value` into
+every slot of `[start, start + count)` and ANSWERS WHETHER IT DID. It applies to a TRIVIAL element (an int, a
 float, a bool, a byte, a ranged alias over one of those) and DECLINES for a MANAGED one, because a managed
 element's slot holds a reference that has to be taken and released per slot, and that ownership belongs to
 the store the compiler emits rather than to a bulk runtime loop. A caller that gets `false` back does the
 per-element loop itself; `refill` and `growFilled` are exactly that caller. The window is checked against
-the LIVE LENGTH, and `from < 0`, `count < 0` or `from + count > length` throws
+the LIVE LENGTH, and `start < 0`, `count < 0` or `start + count > length` throws
 `__ManagedMemoryError.indexOutOfBounds`.
 
 ## Tests
@@ -433,7 +433,7 @@ end 'main'
 
 <!-- test: fill-refuses-a-window-past-the-live-length -->
 ### the buffer fill refuses a window past the live length
-The window is `[from, from + count)` and the bound is the LIVE LENGTH, not the capacity: a fill writes
+The window is `[start, start + count)` and the bound is the LIVE LENGTH, not the capacity: a fill writes
 slots a reader is entitled to read back, so a window ending above the length would publish bytes nothing
 had length for.
 ```maxon
@@ -453,7 +453,7 @@ end 'main'
 
 <!-- test: fill-refuses-a-negative-start -->
 ### the buffer fill refuses a negative start
-`StdCmpPred` is signed, so `from + count > length` is FALSE for a negative `from` and reads as in range —
+`StdCmpPred` is signed, so `start + count > length` is FALSE for a negative `start` and reads as in range —
 the address it would then compute sits BEFORE the buffer. The negative test is its own compare.
 ```maxon
 function main() returns ExitCode
@@ -473,7 +473,7 @@ end 'main'
 <!-- test: fill-refuses-a-negative-count -->
 ### the buffer fill refuses a negative count
 The other half of the same signed-compare hazard, and the one whose silent answer would be a LIE rather
-than a fault: `from + count` is below the length for every negative count, the loop then runs zero times,
+than a fault: `start + count` is below the length for every negative count, the loop then runs zero times,
 and the call would report that it had applied.
 ```maxon
 function main() returns ExitCode
@@ -490,9 +490,33 @@ end 'main'
 8
 ```
 
+<!-- test: fill-refuses-a-window-whose-end-overflows -->
+### the buffer fill refuses a window whose end overflows
+The THIRD way a signed compare can read a wrong answer, and the one no negative ARGUMENT can produce:
+`start` and `count` are both non-negative here, so nothing above catches them, and `start + count` still
+lands outside `i64` — where it wraps to a NEGATIVE end, sits comfortably below the length, and passes a
+bare `start + count > length`. The loop then runs zero times because `i` already exceeds that end, and the
+call reports that it APPLIED while writing nothing — the same LIE the negative-count case is about,
+reached by arithmetic instead of by an argument. The window's end is asked through the one closed-range
+test (`emitBoundaryPositionOutOfRange`), whose negative disjunct IS this guard.
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(3) otherwise return 2
+	let applied = try mm.fill(1, count: 9223372036854775807, value: 7) otherwise return 8
+	if applied 'itMustNotHaveApplied'
+		return 3
+	end 'itMustNotHaveApplied'
+	return 4
+end 'main'
+```
+```exitcode
+8
+```
+
 <!-- test: fill-writes-only-its-own-window -->
 ### the buffer fill writes only its own window
-`growFilled` reaches the primitive with a non-zero `from`, so the window's LOW end has to bind as well as
+`growFilled` reaches the primitive with a non-zero `start`, so the window's LOW end has to bind as well as
 its high one — a fill that started at 0 whatever it was asked would rewrite the prefix `growFilled` exists
 to preserve.
 ```maxon

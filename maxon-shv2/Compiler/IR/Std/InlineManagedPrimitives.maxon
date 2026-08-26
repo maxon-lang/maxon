@@ -15,11 +15,15 @@
 // question, one tier down and shared by every backend.
 //
 // ⛔⛔ **THE PASS RE-DERIVES NOTHING. EVERY TEST IT EMITS IS THE RUNTIME'S OWN EXPORTED EMITTER** —
-// `emitIndexOutOfRange`, `emitBufferNotOwned`, `emitIsSharedAllocation`, `emitSlotAddr`, `emitLoadField`,
-// `emitCmp`, `emitConst`. A hand-copied arm is the drifting checklist `buildManagedCowDetach`'s header
-// rejects, and it has already been measured wrong once in this exact family: R4.4's hand-written
-// `capacity < 0` stood in for `__managed_cow_detach`'s TWO arms, so a `setByte` through the owner of a
-// VIEWED buffer wrote straight through the sharing — **198 where the answer is 110**
+// `emitIndexOutOfRange`, `emitElementIsManaged`, `emitBufferNotOwned`, `emitIsSharedAllocation`,
+// `emitSlotAddr`, `emitLoadField`, `emitCmp`, `emitConst`. ⚠ **`emitElementIsManaged` JOINED THAT LIST IN
+// REVIEW AND WAS THE ONE GAP IN IT**: the ownership gate — the single predicate whose answer licenses both
+// fast arms to skip the runtime — was the one test this file spelled out of primitives instead, in two
+// copies, against three more in the runtime. A hand-copied arm is the drifting checklist
+// `buildManagedCowDetach`'s header rejects, and it has already been measured wrong once in this exact
+// family: R4.4's hand-written `capacity < 0` stood in for `__managed_cow_detach`'s TWO arms, so a
+// `setByte` through the owner of a VIEWED buffer wrote straight through the sharing — **198 where the
+// answer is 110**
 // (`managed-memory-methods.set-byte-through-a-viewed-owner-detaches-first`). What this pass adds is the
 // ROUTING, never a predicate.
 //
@@ -347,15 +351,15 @@ type PrimitiveInliner
 
 		let value = self.emitWordElementLoad(cur, arr: arr, index: index)
 		// ⚠ THREE CONSTANTS THAT ARE ALL ZERO TODAY, AND THEY STAY THREE. "no error in flight", "no
-		// per-element destructor" and "an empty managed slot" are three different facts that happen to share
-		// a value; folding them into one `const 0` would make a change to any one of them silently rewrite
-		// the other two — the argument `MemoryIndexOutOfBoundsOrdinal` makes about not aliasing itself to
-		// `ArrayErrorIndexOutOfBoundsFlag`. It costs nothing: `foldConstOperands` folds both compares into
-		// immediates and DCEs their consts, leaving only the flag, whose reader is the edge below.
+		// per-element destructor" (inside `emitElementIsManaged`, which owns that one) and "an empty managed
+		// slot" are three different facts that happen to share a value; folding them into one `const 0` would
+		// make a change to any one of them silently rewrite the other two — the argument
+		// `MemoryIndexOutOfBoundsOrdinal` makes about not aliasing itself to `ArrayErrorIndexOutOfBoundsFlag`.
+		// It costs nothing: `foldConstOperands` folds both compares into immediates and DCEs their consts,
+		// leaving only the flag, whose reader is the edge below.
 		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
-		let noDestroy = emitConst(self.module, block: cur, value: TrivialElementDestroy, ids: self.valueIds())
 		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-		let managed = emitCmp(self.module, block: cur, a: destroy, b: noDestroy, pred: StdCmpPred.ne, ids: self.valueIds())
+		let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
 
 		var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel)
 		self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.cont.id))
@@ -399,8 +403,7 @@ type PrimitiveInliner
 		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineDestroyLabel)
 
 		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-		let noDestroy = emitConst(self.module, block: cur, value: TrivialElementDestroy, ids: self.valueIds())
-		let managed = emitCmp(self.module, block: cur, a: destroy, b: noDestroy, pred: StdCmpPred.ne, ids: self.valueIds())
+		let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
 		cur = self.guard(cur, refused: managed, slow: frame.slow, next: InlineBoundsLabel)
 
 		cur = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineOwnedLabel)
@@ -451,9 +454,16 @@ type PrimitiveInliner
 	// ⚠ `__managed_mem_set`'s runtime asks the same question as two separate tests (`emitIsNegative`, then
 	// `index >= capacity` inside `emitBufferAccessGuard`) rather than through this composition. The
 	// predicate is identical — a disjunction of the same two compares over the same two words — and asking
-	// it once here is the composition that already exists rather than a fourth spelling of it. A NON-OWNED
-	// record's `capacity@16` is negative and so passes this test; `emitBufferNotOwned` is what refuses it,
-	// one guard later, which is the same order `emitBufferAccessGuard` reaches its own detach in.
+	// it once here is the composition that already exists rather than a fourth spelling of it.
+	//
+	// ⚠ **A NON-OWNED RECORD LEAVES FOR THE SLOW ARM HERE, NOT AT `emitBufferNotOwned` ONE GUARD LATER, AND
+	// THIS LINE CLAIMED THE OPPOSITE UNTIL EC1's REVIEW.** Such a record carries a NEGATIVE `capacity@16`
+	// (the `BufferOwnership` encoding), and `index >= capacity` is therefore TRUE for every non-negative
+	// index while a negative index is caught by the other disjunct — so on the `mem_set` bound this test
+	// already refuses it, unconditionally. Nothing rests on which of the two refuses first (both go to the
+	// same slow arm, and the runtime detaches before it reads a capacity for real), but a reader deriving
+	// the ordering from the old sentence would be deriving it from something false. The `set` bound is
+	// `length@8`, which a view carries honestly, so THERE the refusal really is `emitBufferNotOwned`'s.
 	function guardIndexInRange(cur IrBlock, arr ValueId, index ValueId, limitOffset ByteOffset, slow IrBlock, next ByteArray) returns IrBlock
 		let limit = emitLoadField(self.module, block: cur, record: arr, offset: limitOffset, ids: self.valueIds())
 		let outOfRange = emitIndexOutOfRange(self.module, block: cur, index: index, length: limit, ids: self.valueIds())
@@ -518,6 +528,27 @@ type PrimitiveInliner
 	// caller's next act is to append the call into it, which is the one thing the two openers do
 	// differently.
 	function carveFrame(blockRef BlockRef, pos BlockOpPos) returns InlineFrame
+		// ⛔⛔ **THE MINTER IS SEEDED HERE, BEFORE THE CARVE, AND THAT ORDER IS LOAD-BEARING (EC1 review).**
+		// `nextFreeValueId` derives its floor from the function's LIVE ops (`IrModule.liveOpIndices`) and its
+		// block args — and the carve on the next line makes the call an ORPHAN, out of every `opRefs`, while
+		// the ids it defines do not become block args until `closeFrame` several lines later. For that whole
+		// gap the function's live set does not contain `resultId`/`errorFlagId`. Seeded inside it, a function
+		// whose managed call minted the HIGHEST ids in the function — `try xs.set(…) otherwise return` as the
+		// last statement of a void body mints nothing after the `tryCall` — hands the minter a floor at or
+		// below `resultId`, and the slow arm's fresh results come back as the very ids the continuation is
+		// about to take as block args: TWO DEFINITIONS OF ONE VALUE, which this tier does not refuse, no
+		// golden reads back, and the allocator would resolve by whatever its liveness happened to compute.
+		// Seeding first is the same one walk at the same one site per function, on a function that still
+		// holds the call. See `PrimitiveInliner.ids` for why the seeding is lazy at all.
+		//
+		// ⚠ **NOT OBSERVED, AND THAT IS RECORDED RATHER THAN ASSUMED.** A temporary probe comparing the
+		// pre- and post-carve floors ran over the shv2 SELF-COMPILE and 1,423 spec cases (`array`,
+		// `managed-memory`, `list`, `for-`, `vector`, `slice`) and fired ZERO times, and no hand-built
+		// program reached it either — every `tryCall`'s reconciliation mints ids after the call. So this is
+		// a coupling made explicit, not a defect repaired: the hazard is that NOTHING states the seeding
+		// depends on the call still being live, and the carve two lines down is what ends that.
+		_ = self.valueIds()
+
 		let cont = self.carve(blockRef, pos: pos)
 		// Read immediately: `carve` is the one moment the continuation is the function's last-registered
 		// block, and the `addBlock` on the next line ends it.

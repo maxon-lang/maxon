@@ -326,7 +326,7 @@ let ListNodeAllocName = b"__list_node_alloc"
 // and `insert` all call. Three copies of an O(n) chain walk is three places for "how far do I step" to drift.
 //
 // ⚠ **IT BOUNDS-CHECKS NOTHING AND CANNOT: it has no failure exit.** Every caller checks first (`get` and
-// `remove` through `emitIndexOutOfRange`, `insert` through `emitInsertPositionOutOfRange` plus its two
+// `remove` through `emitIndexOutOfRange`, `insert` through `emitBoundaryPositionOutOfRange` plus its two
 // end arms), and that check IS the guarantee that `index` hops from a non-empty head land on real nodes —
 // the licence `buildListGet` used to state for the walk it held inline.
 let ListNodeAtName = b"__list_node_at"
@@ -892,7 +892,7 @@ function buildListInsert(module StdModule)
 	let value = 2 as ValueId
 
 	let count = emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)
-	let outOfRange = emitInsertPositionOutOfRange(module, block: entry, position: index, length: count, ids: ids)
+	let outOfRange = emitBoundaryPositionOutOfRange(module, block: entry, position: index, length: count, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: inRange.id))
 
 	// ⛔⛔ **THE REFUSAL STILL OWNS THE ELEMENT IT WAS HANDED, AND SHIPPING THIS ARM WITHOUT THE DESTROY WAS

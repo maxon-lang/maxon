@@ -302,7 +302,7 @@ public static partial class MaxonToStandardConversion {
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
-    if (op.ResultKind == MaxonValueKind.Bool) {
+    if (ElementKindIsBitPacked(op.ResultKind)) {
       // Bit-packed bool: extract bit at index and normalize to a StdBool so
       // downstream consumers (cond_br, bool-typed assigns) see the right shape.
       valueMap[op.Result] = EmitBitGetAsBool(block, buffer, index);
@@ -451,14 +451,14 @@ public static partial class MaxonToStandardConversion {
     var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
 
     // COW check before mutation
-    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.ResultKind == MaxonValueKind.Bool,
+    EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: ElementKindIsBitPacked(op.ResultKind),
       isStructElement: op.IsStructElement);
 
     // Reload buffer/length after COW (COW may change the buffer pointer)
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var lengthAfterCow = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 
-    if (op.ResultKind == MaxonValueKind.Bool) {
+    if (ElementKindIsBitPacked(op.ResultKind)) {
       // Bit-packed bool: extract bit at index and widen to a StdBool for the caller.
       // The shift loop below reads bits via EmitBitGet on each iteration.
       valueMap[op.Result] = EmitBitGetAsBool(block, buffer, index);
@@ -610,7 +610,7 @@ public static partial class MaxonToStandardConversion {
     MaxonValue? errorFlagValue = null) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
     var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
-    var isBitPacked = op.ElementKind == MaxonValueKind.Bool;
+    var isBitPacked = ElementKindIsBitPacked(op.ElementKind);
     EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: isBitPacked,
       isStructElement: op.IsStructElement);
     // Check against capacity after COW (COW updates capacity from 0 to length)
@@ -666,6 +666,18 @@ public static partial class MaxonToStandardConversion {
       block = func.Body.AddBlock(setMergeLabel);
     }
   }
+
+  /// <summary>
+  /// Whether a managed element of this kind is stored as a BIT rather than as bytes of its own.
+  ///
+  /// Only bool is, and that one fact was written down SEVEN times in this file - once in
+  /// DeriveManagedElementInfo (which returns it) and six more in lowerings that re-derived it rather than
+  /// reading that answer, LowerManagedMemFill's included until EC1's review. What makes the duplication
+  /// dangerous rather than merely repetitive: a kind added to the packed side here and missed at one of
+  /// the others does not fail to compile, it takes the BYTE arm - a store that writes eight bytes over the
+  /// slot's neighbours, or a load that reads them. One predicate, one place to change.
+  /// </summary>
+  private static bool ElementKindIsBitPacked(MaxonValueKind kind) => kind == MaxonValueKind.Bool;
 
   /// <summary>
   /// A bit-packed element's value as the {0,1} i64 payload EmitBitSet writes. A bool arrives as an
@@ -735,11 +747,23 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(negativeStart);
     var negativeCount = new StdCmpI64Op("lt", count, zeroBound.Result);
     block.AddOp(negativeCount);
+    // The window's END is a BOUNDARY: it may legally equal the length, so this is "gt" and not "ge". Its
+    // second half is the OVERFLOW guard the sum above needs and did not have (EC1 review): start and count
+    // are non-negative past the two tests above, so their sum lands in [0, 2^64-2] — it either fits an i64
+    // or wraps NEGATIVE, never into a small positive. Without the "lt" a wrapped end reads as in range, the
+    // loop runs zero times because i is already >= stop, and the call answers APPLIED having written
+    // nothing. MEASURED before the fix on both compilers: fill(1, count: i64.max) on a length-3 buffer
+    // answered applied. The self-hosted runtime asks the identical pair through
+    // ManagedMemoryRuntime.emitBoundaryPositionOutOfRange, which is where that shape is single-homed.
     var pastEnd = new StdCmpI64Op("gt", stop.Result, length);
     block.AddOp(pastEnd);
+    var wrappedEnd = new StdCmpI64Op("lt", stop.Result, zeroBound.Result);
+    block.AddOp(wrappedEnd);
+    var badEnd = new StdOrI1Op(pastEnd.Result, wrappedEnd.Result);
+    block.AddOp(badEnd);
     var negativeArg = new StdOrI1Op(negativeStart.Result, negativeCount.Result);
     block.AddOp(negativeArg);
-    var isError = new StdOrI1Op(negativeArg.Result, pastEnd.Result);
+    var isError = new StdOrI1Op(negativeArg.Result, badEnd.Result);
     block.AddOp(isError);
 
     string? fillMergeLabel = null;
@@ -759,7 +783,7 @@ public static partial class MaxonToStandardConversion {
 
     if (!op.IsStructElement) {
       var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, IrType.I64, varTypes);
-      var isBitPacked = op.ElementKind == MaxonValueKind.Bool;
+      var isBitPacked = ElementKindIsBitPacked(op.ElementKind);
 
       // Every loop-carried value goes through a slot, because the body re-reads it on each trip and
       // this IR has no block parameters. They are spilled BEFORE the cow check, which is a runtime
@@ -2304,7 +2328,7 @@ public static partial class MaxonToStandardConversion {
       && typeInfo is IrStructType structType
       && structType.TypeParams.TryGetValue(IrStructType.ElementTypeParamName, out var elemType)) {
       var info = ManagedElementInfo.FromElementType(elemType);
-      return (info.Kind, null, info.Kind == MaxonValueKind.Bool,
+      return (info.Kind, null, ElementKindIsBitPacked(info.Kind),
               info.IsStructElement, info.StructElementTypeName, info.ElementStorageType);
     }
     // Bare __ManagedMemory with no Element type param (raw byte buffer)
@@ -2908,7 +2932,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     VarRegistry temps,
     string tempPrefix) {
-    if (resultKind == MaxonValueKind.Bool) {
+    if (ElementKindIsBitPacked(resultKind)) {
       // Bit-packed bool: extract bit at index and widen to a StdBool so callers
       // (cond_br, bool-typed assigns, bool-returning wrappers) see the right shape.
       valueMap[result] = EmitBitGetAsBool(block, buffer, index);

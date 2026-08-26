@@ -1489,8 +1489,7 @@ end 'emitElementDestructorCall'
 // `buffer` its element storage.
 function emitDestroyRangeIfManaged(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, start ValueId, stop ValueId, elementSize ValueId, ids ValueMinter) returns IrBlock
 	let dtor = emitLoadField(module, block: cur, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
-	let zeroDtor = emitConst(module, block: cur, value: 0, ids: ids)
-	let hasDtor = emitCmp(module, block: cur, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
+	let hasDtor = emitElementIsManaged(module, block: cur, destroy: dtor, ids: ids)
 	var walk = module.addBlock(func, label: b"mwalk")
 	let cont = module.addBlock(func, label: b"mcont")
 	module.setTerminator(cur, op: StdOp.condBranch(hasDtor, thenBlockId: walk.id, elseBlockId: cont.id))
@@ -1602,8 +1601,7 @@ function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock,
 
 	// checkDtor: a trivial element (destructor 0) skips the null-check; a managed one falls to checkNull.
 	let dtor = emitLoadField(module, block: checkDtor, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
-	let zeroDtor = emitConst(module, block: checkDtor, value: 0, ids: ids)
-	let managed = emitCmp(module, block: checkDtor, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
+	let managed = emitElementIsManaged(module, block: checkDtor, destroy: dtor, ids: ids)
 	module.setTerminator(checkDtor, op: StdOp.condBranch(managed, thenBlockId: checkNull.id, elseBlockId: ok.id))
 
 	// checkNull: a NULL managed slot is empty → throw; a live one returns ok.
@@ -2250,6 +2248,25 @@ function emitZeroElems(module StdModule, block IrBlock, buffer ValueId, start Va
 	module.appendOp(block, op: StdOp.call(zeroed, callee: ManagedZeroElemsName, args: fourArgs(buffer, second: start, third: count, fourth: es)))
 end 'emitZeroElems'
 
+// ⭐⭐ **DOES THIS RECORD'S ELEMENT OWN SOMETHING? — THE ONE HOME OF THE PER-SLOT-OWNERSHIP TEST.** `destroy`
+// is the record's `element_destroy@40`, already loaded by the caller (which usually needs the pointer
+// itself, to CALL); this answers the single question every ownership decision in the family turns on, and
+// `TrivialElementDestroy` is the one value that means "nothing to release".
+//
+// ⛔⛔ **IT IS A FUNCTION BECAUSE FIVE PLACES DECIDE OWNERSHIP BY IT AND NOTHING MADE THEM AGREE (EC1
+// review).** `emitDestroyRangeIfManaged` (destroy what a vacating write overwrites),
+// `emitLoadElemAndOkReturn` (a NULL slot is EMPTY for a managed element and a genuine 0 for a trivial one),
+// `buildManagedFill` (a managed element is DECLINED outright) and — one tier up, in a different file —
+// `InlineManagedPrimitives`' inline `get` and `set` arms, whose whole licence to skip the runtime rests on
+// this answer matching the runtime's. Two of those five spelled the constant as a bare `0`. A pass that
+// inlines a fast path on a predicate the runtime states elsewhere is precisely the drifting checklist
+// `buildManagedCowDetach`'s header rejects, and the failure mode is not a compile error: it is a store over
+// an occupant nobody released, which is a LEAK (exit 101).
+export function emitElementIsManaged(module StdModule, block IrBlock, destroy ValueId, ids ValueMinter) returns ValueId
+	let trivial = emitConst(module, block: block, value: TrivialElementDestroy, ids: ids)
+	return emitCmp(module, block: block, a: destroy, b: trivial, pred: StdCmpPred.ne, ids: ids)
+end 'emitElementIsManaged'
+
 // `value < 0` — the SIGNED-negative test. ⚠ shv2's `StdCmpPred` has NO unsigned compare, so a negative user
 // index slips past every at-or-over-length bounds test (`index >= length` / `end > length`): signed, `-1 >= 3`
 // is FALSE and the index reads as "in bounds", then `buffer + index·elementSize` addresses BEFORE the buffer
@@ -2278,22 +2295,36 @@ export function emitIndexOutOfRange(module StdModule, block IrBlock, index Value
 	return emitBin(module, block: block, a: negative, b: atOrOver, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitIndexOutOfRange'
 
-// ⭐ **THE INSERT-POSITION TWIN OF THE TEST ABOVE, AND THE ONE THING IT CHANGES IS THE CLOSED END.** An
-// ELEMENT index addresses `[0, length)`; an INSERTION POSITION addresses `[0, length]`, because
-// one-past-the-end IS the append — `/specs/list.md:insert` states it outright (*"Valid range is `[0, count]` —
-// passing `count` appends at the end"*) and `insert.out-of-bounds` pins the other side (`at > count` throws
-// and leaves the container unchanged).
+// ⭐ **THE CLOSED-END TWIN OF THE TEST ABOVE, AND THE ONE THING IT CHANGES IS THAT END.** An ELEMENT index
+// addresses `[0, length)`; a BOUNDARY — a position BETWEEN elements — addresses `[0, length]`, because
+// one-past-the-end is a legal place to stand. Two members ask it: an INSERTION POSITION, where
+// one-past-the-end IS the append (`/specs/list.md:insert` states it outright — *"Valid range is `[0, count]`
+// — passing `count` appends at the end"* — and `insert.out-of-bounds` pins the other side: `at > count`
+// throws and leaves the container unchanged), and a WINDOW'S END (`__managed_fill`'s `start + count`, which
+// may legally reach the length exactly).
 //
-// ⚠ It sits HERE, beside its half-open twin, rather than in its one caller (`ListRuntime.__list_insert`), for
-// exactly the reason that twin is exported to the same file: the NEGATIVE guard is the same guard, and
-// `emitIsNegative` is the single home of "reject a negative index" (see its header for the signed-compare
-// hazard it closes). A private copy in the list runtime would be that guard written down a second time, in
-// the file least likely to hear about a change to it.
-export function emitInsertPositionOutOfRange(module StdModule, block IrBlock, position ValueId, length ValueId, ids ValueMinter) returns ValueId
+// ⚠ **IT IS NAMED FOR THE PREDICATE AND NOT FOR EITHER CALLER (EC1 review).** It was
+// `emitInsertPositionOutOfRange` while `__list_insert` was its only caller, which made the name a statement
+// about that one member rather than about the question — and the second caller is not an insert.
+//
+// ⭐ **THE NEGATIVE DISJUNCT IS ALSO THE OVERFLOW GUARD FOR A COMPUTED BOUNDARY, WHICH IS WHY
+// `__managed_fill` CAN ASK ITS WINDOW'S END THROUGH THIS AND NOTHING ELSE.** `start + count` for two
+// NON-NEGATIVE operands lands in `[0, 2^64-2]`, so it either fits an `i64` or wraps into `[-2^63, -2]` —
+// never into a small positive number. A wrapped end is therefore NEGATIVE without exception, and this test
+// refuses it, where a bare `end > length` reads it as in range and the fill reports that it applied while
+// writing nothing (MEASURED: `mm.fill(1, count: i64.max, …)` on a length-3 buffer answered `applied` on
+// BOTH compilers).
+//
+// ⚠ It sits HERE, beside its half-open twin, rather than in a caller, for exactly the reason that twin is
+// exported: the NEGATIVE guard is the same guard, and `emitIsNegative` is the single home of "reject a
+// negative index" (see its header for the signed-compare hazard it closes). A private copy in the list
+// runtime would be that guard written down a second time, in the file least likely to hear about a change
+// to it.
+export function emitBoundaryPositionOutOfRange(module StdModule, block IrBlock, position ValueId, length ValueId, ids ValueMinter) returns ValueId
 	let negative = emitIsNegative(module, block: block, value: position, ids: ids)
 	let pastEnd = emitCmp(module, block: block, a: position, b: length, pred: StdCmpPred.gt, ids: ids)
 	return emitBin(module, block: block, a: negative, b: pastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
-end 'emitInsertPositionOutOfRange'
+end 'emitBoundaryPositionOutOfRange'
 
 // The `slice(start, end)` RANGE-violated boolean (0/1) — `end > length OR start > end OR start < 0 OR end < 0`,
 // the ONE home of the slice bounds rule shared by `__managed_slice` (trivial, COW) and `__managed_slice_managed`
@@ -3943,9 +3974,20 @@ function buildManagedFill(module StdModule)
 
 	// `stop` is computed HERE and read by the loop header below, which `checkHigh` dominates — the window's
 	// end is one addition whichever of the two asks for it.
+	//
+	// ⛔⛔ **THE HIGH GUARD IS `emitBoundaryPositionOutOfRange` AND NOT A BARE `stop > length`, BECAUSE THE
+	// ADDITION ABOVE CAN WRAP (EC1 review).** `start` and `count` are both non-negative by the two guards
+	// above, so their sum lands in `[0, 2^64-2]` — which either fits an `i64` or comes back NEGATIVE, never
+	// as a small positive. A bare `stop > length` reads a wrapped end as in range, the loop then runs zero
+	// times because `i >= stop` holds at once, and the call answers APPLIED having written nothing: a LIE,
+	// which is the failure `fill-refuses-a-negative-count`'s header calls the worse of the two. MEASURED on
+	// this tree before the fix — `mm.fill(1, count: 9223372036854775807, value: 7)` on a length-3 buffer
+	// answered `applied` on BOTH compilers, and `fill-refuses-a-window-whose-end-overflows` is the case.
+	// The shared test is the whole fix: its negative disjunct IS the overflow test, so the window's end is
+	// asked exactly what an insert position is asked, in one place.
 	let stop = emitBin(module, block: checkHigh, a: start, b: count, opcode: StdBinOpcode.add, ids: ids)
 	let length = emitLoadField(module, block: checkHigh, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let pastEnd = emitCmp(module, block: checkHigh, a: stop, b: length, pred: StdCmpPred.gt, ids: ids)
+	let pastEnd = emitBoundaryPositionOutOfRange(module, block: checkHigh, position: stop, length: length, ids: ids)
 	module.setTerminator(checkHigh, op: StdOp.condBranch(pastEnd, thenBlockId: bad.id, elseBlockId: classify.id))
 
 	emitMemoryThrow(module, block: bad, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
@@ -3953,8 +3995,7 @@ function buildManagedFill(module StdModule)
 	// The element's OWNERSHIP, read out of the record rather than decided by the compiler: one compiled
 	// `__managed_fill` serves every array in the program, exactly as one `__managed_get` does.
 	let dtor = emitLoadField(module, block: classify, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
-	let trivialDtor = emitConst(module, block: classify, value: TrivialElementDestroy, ids: ids)
-	let elementIsManaged = emitCmp(module, block: classify, a: dtor, b: trivialDtor, pred: StdCmpPred.ne, ids: ids)
+	let elementIsManaged = emitElementIsManaged(module, block: classify, destroy: dtor, ids: ids)
 	module.setTerminator(classify, op: StdOp.condBranch(elementIsManaged, thenBlockId: declined.id, elseBlockId: prepare.id))
 
 	let notApplied = emitConst(module, block: declined, value: PredicateFalse, ids: ids)
