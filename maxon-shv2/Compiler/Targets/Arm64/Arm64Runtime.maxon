@@ -83,6 +83,19 @@ end 'arm64OsCallKind'
 export let Arm64LinuxSyscallWrite = 64
 export let Arm64LinuxSyscallMmap = 222
 export let Arm64LinuxSyscallExitGroup = 94
+// F1a — the page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
+// backing while keeping the mapping. AArch64's numbers, NOT x86-64's (11 and 28 there — see the twin block in
+// `Targets/X64/X64LinuxRuntime.maxon`), which is the whole reason this table carries an arch prefix. There is
+// deliberately no recommit number: a `MADV_DONTNEED`ed page refaults on the next touch, so re-backing one is a
+// Windows-only call and arm64 emits nothing for it.
+export let Arm64LinuxSyscallMunmap = 215
+export let Arm64LinuxSyscallMadvise = 233
+// F2 — the per-thread identity word. `gettid` answers the calling thread's kernel thread id: per-thread
+// stable and never 0, which is exactly `StdOp.currentThreadToken`'s contract. It is asked instead of reading
+// `TPIDR_EL0` because shv2's Linux lane is a raw static binary with no libc, so nothing has written that
+// register and it reads 0 — the op's own header carries the full argument. 178 on AArch64, 186 on x86-64
+// (`X64LinuxRuntime`'s twin), which is exactly why these numbers wear the arch prefix.
+export let Arm64LinuxSyscallGettid = 178
 
 // Build `mrt_start` and return it as a `FunctionCodeChunk`. It bridges Maxon's `main` (AAPCS64,
 // ExitCode in x0) to the platform's process-exit primitive — which takes its code in x0 too, so the

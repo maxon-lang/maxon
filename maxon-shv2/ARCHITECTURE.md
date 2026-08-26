@@ -2631,14 +2631,36 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
    a real implementation would already do — not a one-line tweak. Say so, rather than let an author
    conclude the compiler is being arbitrary.
 
-## Allocator: the zeroing contract (Workstream R / slice R1) ⚠ NOT BUILT YET
+## The emitted allocator — three layers, one zeroing contract (Workstream R / S1–S6)
 
-shv2 emits its runtime natively (Workstream R), so the slab allocator is shv2's to
-*write*, not to inherit. This section is R1's spec. It is written down now because the
-guarantee below is cheap to build in and expensive to retrofit.
+shv2 emits its runtime natively, so the allocator is shv2's to *write*, not to inherit. It is
+**built**, in three files that stack, and the split is by the question each answers:
+
+| Layer | File | Answers |
+|---|---|---|
+| **Page arena** | `Compiler/Runtime/SlabArena.maxon` | *"where does an 8 KiB chunk come from, and when does it go back to the OS?"* — a bitmap chunk allocator over `osReservePages` reservations committed a granule at a time, the radix `page → mspan` reverse map, and (S6) the granule scavenger. |
+| **Object layer** | `Compiler/Runtime/SlabRuntime.maxon` (+ `SlabClasses.maxon` / `SlabClassTable.maxon`) | *"which slot of which span serves a 37-byte request, and where does it go when it dies?"* — Go's 68-class ladder, mspans, mcentral, an mcache at full shard width, and an OS-direct tier above 32 KiB. |
+| **Box layer** | `Compiler/Runtime/MmRuntime.maxon` | *"what does a MANAGED value's memory look like?"* — the 24-byte header (destructor · size · refcount), `__mm_incref`/`__mm_decref`, the destructor and deep-clone cascades, the leak gate. |
+
+⭐⭐ **THE BOX LAYER HAS NO ALLOCATOR OF ITS OWN, AND THAT IS THE WHOLE OF S4.** `__mm_alloc(size,
+destructor)` asks `__slab_alloc` for `header + size` bytes in ONE request and `__mm_free` gives that same
+pointer back to `__slab_free`; the span the slot came from knows its class, so the box layer computes no
+size class, keeps no bucket and holds no `.data` state but the live count the leak gate reads. Between S2
+and S4 it did carry a second, 16-byte-granular free-list allocator — a stopgap for the days when the layer
+beneath it reclaimed nothing — and that is gone: **two size-class ladders over one heap is not a cache, it
+is a fork.**
+
+Consequently the **header's `size` field holds the size the CALLER asked for**, not a rounded one. Its one
+reader is `__mm_free`'s poison range, which wants exactly the bytes the program could write.
+
+### The zeroing contract
 
 > **The allocator ALWAYS returns zeroed memory.** Zeroing is a property of the
 > allocator, not a thing each caller is trusted to remember.
+
+`__mm_alloc` leans on this so completely that it **does not write the refcount** — 0 is the born state
+(`owners - 1`), and re-establishing a guarantee the allocator already makes is the habit that hides an
+allocator bug inside every call site.
 
 **Why this is non-negotiable.** v1 shipped a non-zeroing slab and paid for it three
 separate times, each root-caused independently and each "fixed" by bolting a zeroing
@@ -2653,18 +2675,24 @@ fails DEADLY."* Every new raw-buffer call site was another chance to reopen the 
 
 ### The model is Go's
 
-| Go | shv2 R1 |
+| Go | shv2 |
 |---|---|
 | `mallocgc(size, typ, needzero bool)` | `__slab_alloc` (zeroes) + `__slab_alloc_raw` (does not) |
-| `if needzero && span.needzero != 0 { memclrNoHeapPointers(x, size) }` | same rule, same place |
+| `if needzero && span.needzero != 0 { memclrNoHeapPointers(x, size) }` | same rule, same place — but per SLOT, see below |
 | `mspan.freeindex` (bump cursor) | `mspan.bump_next` |
-| `memclrNoHeapPointers` | a `memzero` **size ladder** the backend emits (below) |
+| `memclrNoHeapPointers` | `StdOp.memFill`, a **size ladder** the backend emits (below) |
+
+⚠ **`needzero` is a BUILD-time argument here, not a runtime parameter.** v1 threads a flag through
+`__slab_alloc_needzero → __slab_alloc_class`, which puts a branch on the hot path of every allocation in the
+language and an extra argument in every call. shv2 builds two bodies from one builder
+(`buildSlabAllocClass(name, zeroed:)`), and `DeadFunctionElimination` means no program that uses one carries
+the other.
 
 A slot reaches a caller from one of two places, and they differ in whether the memory is
 dirty:
 
 - **the free list** — a recycled slot, still holding the previous occupant's bytes plus
-  the free-list link written into `slot[0]` when it was freed. **Must be memzeroed.**
+  the free-list link written into `slot[0]` when it was freed. **Must be memFilled with zero**, and is.
 - **the bump region** `[bump_next, bump_end)` — slots never handed out. Their pages came
   straight from fresh `VirtualAlloc`/`mmap`/`memory.grow`, which every target guarantees
   arrives **zeroed** (Go leans on exactly this: *"sysAlloc obtains a large chunk of
@@ -2677,39 +2705,46 @@ dirty:
 > memzeroed before it can be handed out. So building the free list up front is not merely
 > wasted work — **it is the thing that would force a memzero on every first-ever
 > allocation.** Leaving the region pristine is the *precondition* for any zero-elision at
-> all. **Do not build an eager intrusive free list.**
+> all. **Do not build an eager intrusive free list.** (v1 deleted its own `__slab_build_freelist`
+> for this reason; shv2 never had one.)
 
 This is finer-grained than Go, whose `needzero` is per-span: Go re-zeroes even never-used
 slots in a span that has seen one free; a per-slot cursor never pays for a slot that was
 never dirtied.
 
-**Invariants** (every mutation site must re-establish them):
+**Invariants** (every mutation site re-establishes them; `SlabRuntime.maxon`'s header restates them beside
+the code):
 ```
 INV-1  free_count == |free_list| + (bump_end - bump_next) / slot_size
 INV-2  bump_end   == base_addr + slot_size * total_slots      (derived, never stored)
 INV-3  every byte in [bump_next, bump_end) is ZERO
 ```
+INV-1 **traps** (`RuntimeAbort.slabSpanExhaustedPastItsEnd`): a `free_count > 0` with an empty free list and
+an exhausted bump region would hand out a slot past the span's end.
+
 The case a reviewer will not believe, so state it: a span can return to mcentral carrying
 **both** an unconsumed bump region **and** a populated free list (allocate 3 slots from a
 fresh 1024-slot span, free all 3 → `free_count == total_slots` → returned, holding 3
 free-list entries and 1021 virgin slots). Both survive; INV-1 holds.
 
-**Decommit/recommit is NOT zero.** If R1 gains a scavenger, recommitted pages must be
-re-zeroed: Windows `VirtualAlloc(MEM_COMMIT)` and Linux `MADV_DONTNEED` do zero, but
-macOS `MADV_FREE` does **not**, and a wasm no-op decommit leaves contents verbatim. Go
-guards this with a per-platform `needZeroAfterSysUnused()`; v1 takes the always-true
-branch (eager memzero on reback) because its reback is cold. Either is fine — silently
-assuming zero is not.
+### Poison-on-free, and the two passes it costs
 
-**If chunks are ever recycled, the chunk-free path must memzero them.** v1's self-hosted
-arena never recycles chunks, but the C# bootstrap's arena-large tier does — and there,
-`__slab_arena_free_chunks` MUST zero the run it releases, or the bump region's "already
-zero" assumption is false. This is the single easiest way to break the design.
+`__mm_free` overwrites the dead payload with `PoisonByte` (`0x3F`) before returning the slot. It is
+**unconditional and not a flag**: a use-after-free that reads bytes nothing overwrote returns exactly the
+value it wrote before the free and is invisible to every test, whereas `0x3F` reads as a conspicuous 63 and a
+word of it (`0x3F3F3F3F3F3F3F3F`) is a non-canonical x64 address that FAULTS when dereferenced.
+
+⚠⚠ **A RECYCLE THEREFORE COSTS TWO PASSES OVER THE SAME BYTES — poison at free, zero at alloc — and that
+is a STATED OPEN COST.** The halves live one layer apart because they are different obligations: the poison
+is a MANAGED-BOX discipline (it wants the caller's size and is meaningless for a green-thread stack), the
+zero is an ALLOCATOR obligation. Collapsing them means giving up either a debugging guarantee or a
+correctness one. A **virgin** slot pays neither, which is exactly what the bump region is for.
 
 ### `__slab_alloc_raw` — the escape hatch, and its audit rule
 
 Go's `needzero=false`. Keep the caller set as small as Go does (`rawbyteslice`,
-`rawstring`, `growslice`).
+`rawstring`, `growslice`). It has **no caller in shv2 today** and `DFE` drops it from every program; it is
+built so that admitting a caller is an argument against the rule below rather than an invented body.
 
 > `__slab_alloc_raw` may ONLY be used where the caller provably writes **every byte** of
 > the returned region before anything else can read it, **AND** the region is never walked
@@ -2723,13 +2758,106 @@ The canonical legitimate caller is `realloc`: allocate raw, `memcpy` the prefix,
 grown tail — together covering every byte. That is Go's `growslice`, and the tail-zero
 *is what makes the raw allocation safe*.
 
-### The `memzero` the backend must emit
+### The OS-direct tier — above `SlabMaxSmallSize`
 
-**Not one instruction — a SIZE LADDER.** The dominant caller zeroes a size-class slot
-(8/16/24/32/48/64…), and a naive `rep stosq` there is a large regression: it costs ~20–40
-cycles of startup before writing a byte, dwarfing the 1–4 plain stores an 8–32 byte slot
-needs. (ERMSB/FSRM improve throughput and short `rep stosb`; they do not remove
-`rep stosq`'s setup.)
+A request past 32 KiB is its own mapping, with its byte count and a magic word in a **16-byte prefix** — 16
+rather than 8 so the pointer handed back keeps the 16-byte alignment every record layout above assumes.
+
+⚠ **The prefix is not an optimization, it is the only place the length can live.** A free has to know how
+many bytes to hand back, and the `page → mspan` reverse map cannot answer: a map MISS *is* the OS-direct
+sentinel (`ArenaMapNoSpan`), so registering these pages would destroy the signal that identifies them.
+
+⛔ **v1's answer — a 512-entry array with a linear scan — is deliberately NOT ported: it has a CEILING.**
+Its `__slab_os_direct_alloc` exits with sentinel 134 once 512 mappings are live. shv2 routes every box above
+32 KiB here, so a program holding 513 large buffers would abort in the allocator for no reason of its own. A
+prefix has no ceiling and frees in O(1); the magic word recovers the fault v1 gets from failing to find a
+pointer in that array (a double free, or a pointer that was never ours — without it a bogus free reads user
+data as a byte count and unmaps an arbitrary region).
+
+### The scavenger — giving memory back (S6)
+
+**Since S6 there is one**, `__Builtins.scavengeMemory()`, and it answers the bytes it handed back. Three
+steps in one call, and the middle one is the whole design:
+
+| Step | What moves |
+|---|---|
+| **grace** | every span parked on an mcentral list is marked `SEEN_FREE`. Nothing is released. |
+| **release** | a span that was ALREADY `SEEN_FREE` is destroyed — reverse-map slots cleared, chunk run back to the arena's bitmap, mspan header onto the metadata free list. |
+| **decommit** | every 64 KiB commit granule whose chunks are now ALL free loses its physical backing (`osDecommitPages`) and its commit bit. |
+
+⭐⭐ **THE TWO-EPOCH GRACE (v1's, and it is what v1 got right).** A span that empties and refills between
+two calls is reset to `ACTIVE` by `__slab_refill`'s install, so it never reaches the release arm — the
+active working set is never released, never memzeroed and never decommitted. **The first call after a
+population is dropped therefore returns exactly 0**, and the second returns the bytes.
+
+⛔⛔ **THE DECOMMIT IS AT THE ARENA'S GRANULE, NOT AT THE SPAN — AND THIS IS WHERE v1 IS WRONG.** v1
+decommits a span's own footprint, `ceil(slotSize · totalSlots / 8192) · 8192` at the span's base. That range
+is 8 KiB-granular, and `madvise` gives it one of two answers on a 16 KiB-page lane (**arm64-macOS**):
+`EINVAL` for an unaligned base — a silent no-op, since nothing checks the result — or, for a base that
+happens to be aligned, a **length rounded up that throws away the first 8 KiB of the next span.** Green on
+x64 either way.
+
+⚠ **That pair is DERIVED from `madvise`'s documented contract and from the page sizes this tree already
+records, not MEASURED on a 16 KiB host** — v1 cannot be run at all (it does not build), and shv2 has no
+arm64-macOS runner here. What IS measured is that the granule form works, on x64-windows and on
+wasm32-wasi. The derivation is what decides the design; a lane that can run it should confirm the v1 shape
+fails there.
+
+shv2 releases the span's CHUNKS instead and decommits at the arena's 64 KiB commit granule,
+which is a whole multiple of every page size the lanes have. **Go answers the same question the same way**:
+its scavenger works on the page allocator's free runs, rounded to `physPageSize` with a
+`minPages = physPageSize / pageSize` floor (`mgcscavenge.go`), never on spans.
+
+⛔ **THE COMMIT WATERMARK HAD TO GO, AND ITS DELETION IS THE SCAVENGER'S PRECONDITION.** The arena used to
+record its committed region as one word — `[0, committedChunks)` — which is only expressible while commits
+go one way. A scavenger drops a granule wherever the chunks happen to have gone free, in the MIDDLE of that
+range, so the committed set stops being a prefix on the first call. It is a per-granule **commit bitmap**
+now: 16 words on the reserving lane, 1 on the other.
+
+⛔ **NO BACKGROUND SCAVENGER, and that is a property of this runtime rather than a preference.** Go's is a
+goroutine paced against the GC's heap goal at 1% of mutator time. shv2 has no GC and so no heap goal to
+pace against; its scheduler is single-M and cooperative with no timer to hang a background G on; and green
+threads exist on **one** of the lanes, so a scavenger built on them would not run in a wasm or POSIX
+program at all. What Go contributes and this does take is the shape *underneath* the pacing.
+
+⚠ **ON wasm32-wasi `osDecommitPages` EMITS NOTHING and the rest still runs.** Linear memory only grows, so
+there is no backing to drop — but the grace advances, the chunks go back to the arena, and any class can
+then reuse them instead of growing linear memory again. A documented no-op with an ISA reason, never a
+panic.
+
+### INV-4 — every chunk the arena hands out reads ZERO
+
+**Chunk recycling is the second way to break INV-3, and S6 is what made it reachable.** Before it, a chunk
+had only ever come from a fresh `osReservePages`/`osCommitPages`, which every lane zeroes. A recycled chunk
+holds the previous span's slots: poisoned payloads, and in each box header a **refcount**. `__slab_refill`
+cuts a span whose whole bump region is presumed zero, and `__mm_alloc` does not write the refcount because 0
+is the born state — so an unzeroed recycled chunk is a heap that frees boxes at the wrong time, with no
+diagnostic.
+
+> **INV-4 `__slab_arena_free_chunks` memzeroes the run it releases**, so every chunk
+> `__slab_arena_alloc_chunks` hands out reads zero — virgin or recycled, on every lane.
+
+⭐⭐ **THE ZERO IS WRITTEN ON THE RELEASE PATH, NOT RECOVERED FROM THE OS ON THE CLAIM PATH, AND THAT IS THE
+WHOLE DIFFERENCE.** What a recommitted page contains is four different answers — Windows
+`VirtualAlloc(MEM_COMMIT)` zeroes, Linux `MADV_DONTNEED` refaults zero, macOS `MADV_FREE` **may hand the
+same dirty page back**, and a wasm no-op decommit leaves the bytes verbatim. Go guards that with a
+per-platform `needZeroAfterSysUnused()`; v1 takes the always-true branch on reback. **shv2 needs neither**,
+because the zero is ours and is written into committed memory before any decommit can touch it: Darwin's
+dirty page is dirty with our zeroes, and wasm's verbatim bytes are the same zeroes.
+
+⛔ **THE FAILURE SHAPE THIS AVOIDS IS NAMED AT `StdOp.osDecommitPages`** — a future per-OS
+`pagesAreZeroAfterReback` flag, set false for macOS and forgotten for wasm, so **wasm and macOS break
+together while Windows and Linux stay green**, which is the least detectable outcome available. There is no
+such flag to write here; one unconditional `memFill`, no lane test, nothing for anyone to make conditional
+later. **Do not move the zero to the claim path to "save" it on virgin chunks** — that is the same
+conditional wearing a different name, and the virgin case is exactly the one the OS already paid for.
+
+### The `memzero` the backend emits (`StdOp.memFill`)
+
+**Not one instruction — a SIZE LADDER**, and that is why it is an op rather than a Std-IR loop. The dominant
+caller zeroes a size-class slot (8/16/24/32/48/64…), and a naive `rep stosq` there is a large regression: it
+costs ~20–40 cycles of startup before writing a byte, dwarfing the 1–4 plain stores an 8–32 byte slot needs.
+(ERMSB/FSRM improve throughput and short `rep stosb`; they do not remove `rep stosq`'s setup.)
 
 ```
 x64    <8 byte loop | 8..63 straight-line overlapping stores
@@ -2748,24 +2876,43 @@ cover any length in the band with straight-line code — no loop, and no ragged-
 handling for lengths that are not multiples of 8. Zeroing a byte twice is free; branching
 to decide whether to is not.
 
-**The memzero MUST be declared FLAG-CLOBBERING** — the size ladder `cmp`s the length to pick
-an arm, so it writes EFLAGS. As a Std-dialect op that means **`clobbersFlags: true`**. (v1's
-`memcpy` op declares its flags fact `false`, correct for a bare `rep movsb`; copying that
-metadata onto memzero lets the scheduler hoist a `cmp` feeding a `condBranch` across it — a
-silent miscompile.)
+⚠ **The size dispatch branches INSIDE the encoder, never between IR blocks.** `memFill` is a body op, and
+lowering panics if one ever appears as a block terminator — the ladder is one macro-op to every pass above
+the encoder.
+
+**`memFill` is declared FLAG-CLOBBERING** — the ladder `cmp`s the length to pick an arm, so it writes EFLAGS,
+and `StdOpMeta.clobbersFlags: true` is what stops `recordFusableCompare` hoisting a `cmp` feeding a
+`condBranch` across it. (v1's `memcpy` op declares its flags fact `false`, correct for a bare `rep movsb`;
+copying that metadata onto memzero would be a silent miscompile.)
 
 ⚠ **Do not go looking for a `setsFlags` on `TargetOpMeta` to declare this on — there isn't
 one, deliberately** (deleted 2026-07-14: 40 writes, 0 reads, and it *contradicted* the Std
-tier). The flags fact lives **once**, at the Std tier, as `StdOpMeta.clobbersFlags`, because
-its only consumer — `recordFusableCompare`'s compare/branch fusion — runs on StdOps **before**
-lowering, since its answer is what decides what the lowering emits. See the comment on
-`TargetOpMeta` for the full story; it is a worked example of this project's most expensive
-recurring bug, *one fact written down twice*.
+tier). The flags fact lives **once**, at the Std tier, because its only consumer —
+`recordFusableCompare`'s compare/branch fusion — runs on StdOps **before** lowering, since its answer is what
+decides what the lowering emits. See the comment on `TargetOpMeta` for the full story; it is a worked example
+of this project's most expensive recurring bug, *one fact written down twice*.
+
+### The two traffic layers, and why they must stay disjoint
+
+`PhaseProbe` **sums** the TRACKED columns (`__mm_alloc_*`, one per box) and the RAW ones
+(`__mm_raw_alloc_*`, what `__slab_alloc` handed out). `__mm_alloc` is itself a `__slab_alloc` caller, so
+counted naively every box would be reported twice and `totalAllocs()` would read exactly double. The fix is
+an **uncounted twin**, `__slab_alloc_box`, built from the same builder with `countRaw: false` and called only
+by `__mm_alloc`, and only in a build that reads the counters at all.
+
+There is deliberately **no `__slab_free_box`**: `__slab_free` credits no column on either route, so a twin
+would be a byte-for-byte copy under a second name. It grows one on the day a COUNTED `__slab_alloc` caller
+also frees (a green-thread stack returned at exit, say) — which is the day
+`builtins-mm-counters.md`'s `raw-live-equals-raw-total` goes red, which is why that case is pinned.
 
 The v1 implementation of all of the above is `stdlib/Internals.maxon` (the slab) and
 `maxon-selfhosted/Compiler/Targets/*/` (`emitX64MemzeroOp`, `arm64EmitMemzeroOp`,
-`emitMemzero`) — port the *design*, not the code, since shv2 hand-assembles where v1
-compiles Maxon source.
+`emitMemzero`). What was taken and what was left is recorded item by item in `SlabRuntime.maxon`'s and
+`SlabArena.maxon`'s headers — the multi-OS-thread apparatus (the global lock, the per-P remote-free
+MPSC queues, the `owning_p` gate) is absent because `__slab_shard_row` answers one row today, and that is a
+decision to revisit when green threads can run the allocator on more than one OS thread, not an omission.
+The **two-epoch scavenger** was on that list until S6 and is now taken — its GUARD verbatim, the mechanism
+underneath it deliberately not; see "The scavenger" above for the `madvise` alignment fact that decides it.
 
 ## Parallel driver
 

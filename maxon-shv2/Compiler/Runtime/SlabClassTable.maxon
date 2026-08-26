@@ -1,0 +1,283 @@
+// ⭐ **THE HAND-WRITTEN HALF OF THE SIZE-CLASS TABLE — the derivations and the check.**
+//
+// `SlabClasses.maxon` beside this file is GENERATED from Go's vendored table and holds nothing but the
+// two arrays that had to be copied. Everything computable lives here, and the split is deliberate: a
+// generated file that also carried logic could not be regenerated without re-reviewing the logic, so
+// the two would drift or the generator would stop being run. Data there, reasoning here.
+
+// Objects one span of `class` holds. DERIVED, never stored: `pages * 8192 / size`.
+//
+// ⚠ **THIS IS THE FACT v1 WRITES DOWN A SECOND TIME AND HOLDS TOGETHER WITH A COMMENT.** Its allocator
+// carries `__slab_class_size` AND `__slab_objs_per_span` as two hand-written 18-arm if-ladders, joined
+// by *"kept in lock-step with"*. Verified against Go's own header table for all 67 real classes: the
+// derivation reproduces its `objects` column exactly, so the second table buys nothing but a way to
+// disagree.
+function slabObjectsPerSpan(class SlabClassIndex) returns SlabObjectCount
+	return slabObjectsPerSpanIn(class, sizes: slabClassSizes(), pages: slabClassPages())
+end 'slabObjectsPerSpan'
+
+// ⚠ **THE TWO ARRAYS ARE PARAMETERS BECAUSE EVERY CALLER IS A LOOP OVER THE WHOLE LADDER.** The entry
+// point above loads them per call, which is right for the one-off question — and wrong 68 times over for
+// `checkSlabClassTable` and `slabClassGeometryTable`, which ask it once per class and were rebuilding
+// BOTH 68-element arrays each time: 9,248 pushes to answer 68 divisions, at every compile that touches
+// the heap. Splitting the load out of the arithmetic is what makes the sweep linear in the ladder rather
+// than quadratic in it.
+function slabObjectsPerSpanIn(class SlabClassIndex, sizes SlabClassSizeArray, pages SlabSpanPagesArray) returns SlabObjectCount
+	let size = try sizes.get(class) otherwise panic("slabObjectsPerSpan: class {class} is outside the table")
+	let np = try pages.get(class) otherwise panic("slabObjectsPerSpan: class {class} has no page count")
+
+	if size == 0 'sentinel'
+		// Class 0 allocates nothing, so it holds no objects. Answering 0 rather than dividing keeps the
+		// sentinel out of every caller's arithmetic instead of trapping inside it.
+		return 0
+	end 'sentinel'
+
+	// The guard above proves `size != 0`, but `SlabClassSize` includes 0 so the type cannot know it.
+	// `otherwise panic` is the project's form for a `try` that must not fail (E3057 demands one of the two).
+	return try ((np * SlabPageBytes) / size) otherwise panic("slabObjectsPerSpan: class {class} divided by zero past its own sentinel guard")
+end 'slabObjectsPerSpanIn'
+
+// How many objects a span can hold. Go's ceiling is 1024 (a 1-page span of 8-byte slots).
+typealias SlabObjectCount = int(0 to 1024)
+
+// ⭐ **THE LARGEST CHUNK RUN THE LADDER CAN MAKE `__slab_refill` ASK FOR.** Derived here rather than read off
+// `SlabSpanPages`' upper bound for this file's stated split — data in the generated table, reasoning in this
+// one — and derived through the SAME `ceil(slotSize · objects / SlabPageBytes)` the refill emits, so it is a
+// bound on the request the allocator actually makes rather than on the page count Go's table happens to
+// name. `SlabRuntime.checkSlabRuntimeGeometry` checks it against what an arena can serve on each lane.
+export function slabWidestSpanChunks() returns ParsedInt
+	let sizes = slabClassSizes()
+	let pages = slabClassPages()
+	var widest = 0
+
+	var idx = 0
+	for size in sizes 'eachClass'
+		let objects = slabObjectsPerSpanIn(idx as SlabClassIndex, sizes: sizes, pages: pages)
+		let chunks = ((size as ParsedInt) * objects + SlabPageBytes - 1) / SlabPageBytes
+		if chunks > widest 'newWidest'
+			widest = chunks
+		end 'newWidest'
+		idx = idx + 1
+	end 'eachClass'
+
+	return widest
+end 'slabWidestSpanChunks'
+
+// ⭐⭐ **THE CHECK, AND WHY A GENERATED TABLE STILL NEEDS ONE.** `scripts/gen-slab-classes.sh --check`
+// proves the checked-in table matches Go's; this proves the table is INTERNALLY COHERENT and is what
+// the layers above are entitled to assume. They answer different questions: the script catches a table
+// that drifted from its source, this catches a table whose source changed shape.
+//
+// It panics rather than returning a verdict — a broken class table cannot produce a working allocator,
+// so there is no caller who could sensibly continue.
+export function checkSlabClassTable()
+	let sizes = slabClassSizes()
+	let pages = slabClassPages()
+
+	if sizes.count() != pages.count() 'lengthMismatch'
+		panic("slab class table: {sizes.count()} sizes against {pages.count()} page counts")
+	end 'lengthMismatch'
+
+	// ONE FACT WRITTEN TWICE, by necessity: a shift and the value it produces. Asserted rather than
+	// trusted, because a page-size change would otherwise leave the two disagreeing silently and every
+	// span geometry downstream would be computed from whichever one that caller happened to read.
+	if (1 shl SlabPageShift) != SlabPageBytes 'pageShiftDisagrees'
+		panic("slab class table: 1 shl {SlabPageShift} is {1 shl SlabPageShift}, not {SlabPageBytes}")
+	end 'pageShiftDisagrees'
+
+	let first = try sizes.get(0) otherwise panic("slab class table: no class 0")
+	if first != 0 'sentinelNotZero'
+		panic("slab class table: class 0 is the sentinel and must be size 0, not {first}")
+	end 'sentinelNotZero'
+
+	let last = try sizes.get(sizes.count() - 1) otherwise panic("slab class table: no last class")
+	if last != SlabMaxSmallSize 'lastWrong'
+		panic("slab class table: last class is {last}, expected exactly {SlabMaxSmallSize}")
+	end 'lastWrong'
+
+	// ⚠ **NO WASTE BOUND IS ASSERTED HERE, AND THAT IS DELIBERATE.** The tempting check — "internal
+	// waste stays under 12.5%" — is FALSE OF GO'S OWN TABLE at the small end: its header records class
+	// 1 at **87.50%** max waste, because a 1-byte object still occupies an 8-byte slot. An earlier
+	// version of this file asserted the flat bound and panicked on the first rung. What IS invariant is
+	// monotonicity, alignment and non-empty spans, so those are what is checked.
+	var prev = 0
+	var idx = 0
+	for size in sizes 'eachClass'
+		if idx > 0 'realClass'
+			if size <= prev 'notAscending'
+				panic("slab class table: class {idx} is {size}, not above its predecessor {prev}")
+			end 'notAscending'
+
+			if (size mod SlabSmallSizeDiv) != 0 'notAligned'
+				panic("slab class table: class {idx} is {size}, not a multiple of {SlabSmallSizeDiv}")
+			end 'notAligned'
+
+			// A span must hold at least one object, or the class can never be served.
+			let objs = slabObjectsPerSpanIn(idx, sizes: sizes, pages: pages)
+			if objs < 1 'emptySpan'
+				panic("slab class table: class {idx} ({size} bytes) holds no objects in its span")
+			end 'emptySpan'
+
+			prev = size
+		end 'realClass'
+
+		idx = idx + 1
+	end 'eachClass'
+
+	// The two reverse lookups the allocator's O(1) class routing reads. They are DERIVED from the ladder
+	// above, so they belong to the same coherence question this function asks and are checked in the same
+	// place — a separate entry point would be a second door the day somebody forgets to call it.
+	//
+	// ⚠ The entries are BYTES, which is what makes each lookup a single indexed `u8` load. A ladder past 256
+	// classes would silently truncate every entry, so the width is asserted rather than assumed.
+	if slabClassCount() > SlabReverseTableEntryMax 'ladderPastAByte'
+		panic("slab class table: {slabClassCount()} classes do not fit the reverse tables' one-byte entries")
+	end 'ladderPastAByte'
+
+	checkSlabReverseTables()
+end 'checkSlabClassTable'
+
+// A reverse-table entry is one byte, so it can name class 0..255.
+let SlabReverseTableEntryMax = 256
+
+// ⭐ **THE LADDER'S LENGTH, DERIVED.** v1 writes it down beside the table as `SLAB_NUM_SIZE_CLASSES = 18`,
+// which is a hand-maintained count of a hand-written if-ladder — the shape a regenerated table invalidates
+// in silence. Every stride in `SlabRuntime.maxon` is computed from this, so a wider ladder widens the mcache
+// rows rather than leaving them addressing the old geometry.
+export function slabClassCount() returns SlabClassCount
+	return slabClassSizes().count() as SlabClassCount
+end 'slabClassCount'
+
+// The ladder holds the sentinel plus the real classes, so it is never empty; the upper bound is a byte's
+// worth, which is what one reverse-table entry can name.
+typealias SlabClassCount = int(1 to 256)
+
+// --- The two reverse lookups ---
+//
+// ⭐⭐ **DERIVED FROM THE LADDER, NOT TRANSCRIBED FROM GO.** Go ships `SizeToSizeClass8` (129 entries) and
+// `SizeToSizeClass128` (249) alongside its size table; `scripts/gen-slab-classes.sh` refuses to write
+// `SlabClasses.maxon` unless this derivation reproduces both EXACTLY (0/129 and 0/249 mismatches), so the
+// arrays are checked against their source without 378 more numbers being copied into the tree.
+//
+// The rule is one sentence per table, and it is the same sentence the allocator's routing implements:
+//   `SizeToSizeClass8[i]`   = the smallest class whose slot holds `i * SlabSmallSizeDiv` bytes
+//   `SizeToSizeClass128[i]` = the smallest class whose slot holds `SlabSmallSizeMax + i * SlabLargeSizeDiv`
+//
+// ⚠ **THE COUNTS ARE DERIVED TOO.** 129 is `SlabSmallSizeMax / SlabSmallSizeDiv + 1` and 249 is
+// `(SlabMaxSmallSize - SlabSmallSizeMax) / SlabLargeSizeDiv + 1`; written as literals they would be a third
+// copy of the ladder's shape.
+function slabSizeToClass8Entries() returns ParsedInt
+	return SlabSmallSizeMax / SlabSmallSizeDiv + 1
+end 'slabSizeToClass8Entries'
+
+function slabSizeToClass128Entries() returns ParsedInt
+	return (SlabMaxSmallSize - SlabSmallSizeMax) / SlabLargeSizeDiv + 1
+end 'slabSizeToClass128Entries'
+
+export function slabSizeToClass8Table() returns ByteArray
+	return slabReverseTable(slabSizeToClass8Entries(), base: 0, step: SlabSmallSizeDiv)
+end 'slabSizeToClass8Table'
+
+export function slabSizeToClass128Table() returns ByteArray
+	return slabReverseTable(slabSizeToClass128Entries(), base: SlabSmallSizeMax, step: SlabLargeSizeDiv)
+end 'slabSizeToClass128Table'
+
+// `entries` bytes, the `i`th naming the smallest class that holds `base + i * step` bytes. ONE emitter for
+// both tables: they differ only in where they start and how far they step, and writing them out twice is
+// how one of the two ends up stepping by the other's stride.
+function slabReverseTable(entries ParsedInt, base ParsedInt, step ParsedInt) returns ByteArray
+	let sizes = slabClassSizes()
+	var out = ByteArray.create()
+	out.reserve(entries)
+
+	for i in 0 upto entries 'eachEntry'
+		out.push(slabSmallestClassHolding(base + i * step, sizes: sizes))
+	end 'eachEntry'
+
+	return out
+end 'slabReverseTable'
+
+// The smallest class whose slot holds `want` bytes — the DEFINING property of both reverse tables, of
+// `__slab_class_index_for`'s answer and of `__slab_rounded_size`'s. Written once, so the derivation and the
+// check below cannot be two rules that merely happen to agree.
+//
+// ⚠ Class 0 (size 0) answers a `want` of 0, which is the sentinel and serves no allocation. That is the
+// honest answer to "the smallest class holding nothing"; `__slab_refill` is where such a request is refused,
+// because the hot path must not pay a compare for a case no caller has.
+function slabSmallestClassHolding(want ParsedInt, sizes SlabClassSizeArray) returns SlabClassIndex
+	var idx = 0
+	for size in sizes 'eachClass'
+		if size >= want 'fits'
+			return idx as SlabClassIndex
+		end 'fits'
+		idx = idx + 1
+	end 'eachClass'
+
+	panic("slab class table: {want} bytes exceeds the last class ({SlabMaxSmallSize}); the caller failed to route it to the OS-direct tier")
+end 'slabSmallestClassHolding'
+
+// ⭐⭐ **ONE PACKED WORD PER CLASS — `slot_size | (objects_per_span << 32)`.** Both are pure functions of
+// the class index, and an mspan stores only the index (`SlabRuntime`'s header states the trade), so a span's
+// geometry is ONE indexed `.rdata` load rather than two.
+export function slabClassGeometryTable() returns ByteArray
+	let sizes = slabClassSizes()
+	let pages = slabClassPages()
+	var out = ByteArray.create()
+	out.reserve(sizes.count() * SlabClassGeometryEntryBytes)
+
+	var idx = 0
+	for size in sizes 'eachClass'
+		writeQword(out, value: size + (slabObjectsPerSpanIn(idx as SlabClassIndex, sizes: sizes, pages: pages) shl SlabClassGeometryObjectShift))
+		idx = idx + 1
+	end 'eachClass'
+
+	return out
+end 'slabClassGeometryTable'
+
+// The packed entry's width and its field split, stated HERE because this is the producer.
+// `SlabRuntime.maxon`'s `SlabClassGeomSlotShift`/`SlabClassGeomSlotMask` are the consumer's half, and its
+// `checkSlabRuntimeGeometry` asserts the fields cannot overlap rather than leaving the two ends to agree by
+// memory.
+let SlabClassGeometryEntryBytes = 8
+let SlabClassGeometryObjectShift = 32
+
+// ⭐⭐ **THE REVERSE TABLES ARE CHECKED AGAINST THEIR OWN DEFINITION, ENTRY BY ENTRY.** The generator checks
+// them against GO; this checks them against the ladder that is actually checked in — the same split
+// `checkSlabClassTable` already makes between "a table that drifted from its source" and "a table whose
+// source changed shape". Two properties per entry, and between them they pin the answer: the named class
+// FITS the boundary, and the class below it does NOT — i.e. it is the smallest one that fits.
+function checkSlabReverseTables()
+	let large = slabSizeToClass128Table()
+	requireReverseTable(slabSizeToClass8Table(), what: "SizeToSizeClass8", base: 0, step: SlabSmallSizeDiv)
+	requireReverseTable(large, what: "SizeToSizeClass128", base: SlabSmallSizeMax, step: SlabLargeSizeDiv)
+
+	// The endpoint is the one fact a per-entry rule cannot state: the large table must REACH the ladder's
+	// last class, or the biggest small request would be served by a class that cannot hold it.
+	let lastEntry = try large.get(large.count() - 1) otherwise panic("slab reverse table: SizeToSizeClass128 is empty")
+	if lastEntry != slabClassCount() - 1 'largeTableMissesTheLastClass'
+		panic("slab reverse table: SizeToSizeClass128's last entry is class {lastEntry}, not the ladder's last class {slabClassCount() - 1}")
+	end 'largeTableMissesTheLastClass'
+end 'checkSlabReverseTables'
+
+// One reverse table against its defining rule. `base + i * step` is the request entry `i` answers for.
+function requireReverseTable(table ByteArray, what String, base ParsedInt, step ParsedInt)
+	let sizes = slabClassSizes()
+	var i = 0
+	for entry in table 'eachEntry'
+		let want = base + i * step
+		let size = try sizes.get(entry) otherwise panic("slab reverse table: {what}[{i}] names class {entry}, which is outside the ladder")
+
+		if size < want 'doesNotFit'
+			panic("slab reverse table: {what}[{i}] names class {entry} ({size} bytes) for a {want}-byte request, which it cannot hold")
+		end 'doesNotFit'
+
+		if entry > 0 'hasAPredecessor'
+			let below = try sizes.get(entry - 1) otherwise panic("slab reverse table: class {entry} has no predecessor")
+			if below >= want 'notTheSmallest'
+				panic("slab reverse table: {what}[{i}] names class {entry} for a {want}-byte request, but class {entry - 1} ({below} bytes) already holds it")
+			end 'notTheSmallest'
+		end 'hasAPredecessor'
+
+		i = i + 1
+	end 'eachEntry'
+end 'requireReverseTable'

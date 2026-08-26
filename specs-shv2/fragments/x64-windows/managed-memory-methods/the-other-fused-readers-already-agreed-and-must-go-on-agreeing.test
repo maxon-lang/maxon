@@ -23,9 +23,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Array.survey {
@@ -39,16 +40,11 @@ func @Array.survey {
     x64.pushReg r15
     x64.prologue 200
     x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_count
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r13
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
@@ -57,10 +53,10 @@ func @Array.survey {
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
   tryerr#2:
-    x64.movRegImm32 r13, 255
+    x64.movRegImm32 r14, 255
     x64.jmp trycont#3
   tryok#1:
-    x64.movRegReg r13, r8
+    x64.movRegReg r14, r8
     x64.jmp trycont#3
   trycont#3:
     x64.movRegImm32 rdx, 0
@@ -99,11 +95,11 @@ func @Array.survey {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot8, r8
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.movRegReg rdx, r8
     x64.callDirect __int_to_string
-    x64.movRegReg r14, r8
-    x64.storeSlotReg slot15, r14
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot15, r13
     x64.leaRegRdata rax, [rip + __str_rec_6]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot5, rcx
@@ -113,11 +109,11 @@ func @Array.survey {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot1, r8
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r14
     x64.movRegReg rdx, r8
     x64.callDirect __int_to_string
-    x64.movRegReg r13, r8
-    x64.storeSlotReg slot0, r13
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot0, r14
     x64.leaRegRdata rax, [rip + __str_rec_5]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot3, rcx
@@ -140,13 +136,13 @@ func @Array.survey {
     x64.leaRegRegReg rax, rbx, r12
     x64.loadRegSlot r12, slot16
     x64.leaRegRegReg rax, rax, r12
-    x64.leaRegRegReg rax, rax, r14
-    x64.loadRegSlot r14, slot14
-    x64.leaRegRegReg rax, rax, r14
     x64.leaRegRegReg rax, rax, r13
+    x64.loadRegSlot r13, slot14
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
     x64.leaRegRegReg rax, rax, r15
-    x64.loadRegSlot r13, slot20
-    x64.leaRegRegReg rax, rax, r13
+    x64.loadRegSlot r14, slot20
+    x64.leaRegRegReg rax, rax, r14
     x64.loadRegSlot rcx, slot13
     x64.leaRegRegReg rax, rax, rcx
     x64.storeSlotReg slot7, rax
@@ -181,12 +177,12 @@ func @Array.survey {
     x64.leaRegRegReg rbx, rbx, r15
     x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot5
-    x64.movRegReg rax, r14
+    x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, rbx, r14
+    x64.leaRegRegReg rbx, rbx, r13
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot r14, slot1
-    x64.movRegReg rdx, r14
+    x64.loadRegSlot r13, slot1
+    x64.movRegReg rdx, r13
     x64.loadRegSlot r15, slot0
     x64.movRegReg rax, r15
     x64.callDirect __str_copy
@@ -200,15 +196,15 @@ func @Array.survey {
     x64.movRegReg rcx, rbx
     x64.loadRegSlot r15, slot4
     x64.movRegReg rdx, r15
-    x64.movRegReg rax, r13
+    x64.movRegReg rax, r14
     x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, rbx, r13
+    x64.leaRegRegReg rbx, rbx, r14
     x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot6
-    x64.loadRegSlot r13, slot13
-    x64.movRegReg rax, r13
+    x64.loadRegSlot r14, slot13
+    x64.movRegReg rax, r14
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r13
+    x64.leaRegRegReg rax, rbx, r14
     x64.loadRegSlot rbx, slot12
     x64.loadRegSlot rax, slot19
     x64.storeBaseDispReg.word64 [rbx + 0], rax
@@ -222,7 +218,7 @@ func @Array.survey {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref

@@ -24,9 +24,10 @@ ExitCode: 0
 ---
 data {
   __data_m@0 = i64 0
-  __slab_cursor@8 = i64 0
-  __slab_end@16 = i64 0
-  __mm_alloc_count@24 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @Mixed.create {
@@ -40,9 +41,7 @@ func @Mixed.create {
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rax
-    x64.movRegReg rcx, rdx
-    x64.callDirect __managed_count
-    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 r13, [rdx + 8]
     x64.movRegImm32 rcx, 24
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -117,12 +116,12 @@ func @main {
     x64.callDirect __str_decref
     x64.leaRegGlobal rax, __data_m
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
-    x64.leaRegGlobal rax, __data_m
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r8, rbx, r8
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.leaRegGlobal rcx, __data_m
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r8, rax, rcx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

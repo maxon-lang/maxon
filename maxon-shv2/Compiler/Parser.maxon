@@ -4829,6 +4829,23 @@ let BuiltinsMmRawAllocTotalName = b"__Builtins.mmRawAllocTotal"
 let BuiltinsMmRawAllocLiveName = b"__Builtins.mmRawAllocLive"
 let BuiltinsMmRawAllocBytesName = b"__Builtins.mmRawAllocBytes"
 
+// ⭐⭐ **`__Builtins.scavengeMemory()` — THE ALLOCATOR'S RECLAMATION DOOR (S6).** It hands every idle span's
+// pages back to the operating system and ANSWERS THE BYTE COUNT, which is why it takes the
+// argumentless-INTEGER door beside the counters rather than the void one: the number is the only thing a
+// Maxon program can observe of the whole mechanism, and a `void` here would leave the scavenger with no
+// consequence any spec could name. v1's equivalent is `stdlib/Internals.scavengeMemory`, which is `void` and
+// which nothing can therefore test.
+//
+// ⚠ **TWO CALLS ARE NEEDED BEFORE ANY BYTE MOVES, AND THAT IS THE MECHANISM RATHER THAN A QUIRK** — a span
+// must stay idle across one whole pass before it is released, so the working set of a program that keeps
+// allocating is never decommitted. `specs-shv2/slab-scavenger.md` states it; `SlabRuntime.buildSlabScavenge`
+// implements it.
+let BuiltinsScavengeMemoryName = b"__Builtins.scavengeMemory"
+
+// It takes NOTHING. Its own constant rather than the counters' shared one for `CurrentProcessIdArity`'s
+// rule: the number is a fact about this intrinsic's contract, which is unrelated to theirs.
+let ScavengeMemoryArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.threadCpuTicks()` — THE FOURTH CLOCK, AND THE ONLY ONE THAT IS NOT A CLOCK.** The three
 // in `builtins-clock.md` measure WALL time, so a phase timed with any of them reports the machine it ran on;
 // this one advances only while the CALLING THREAD is scheduled. `PhaseProbe` brackets it beside the wall
@@ -70077,6 +70094,15 @@ export type Parser
 			if callee.equals(BuiltinsMmRawAllocBytesName) 'mmRawAllocBytes'
 				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocBytesName, runtimeName: MmCounterRawAllocBytesName, arity: MmCounterArity, calleeTok: anchor)
 			end 'mmRawAllocBytes'
+
+			// ⭐ **THE SCAVENGER**, beside the counters because it reads the same surface from the other end:
+			// they report what the allocator TOOK, this returns what it GAVE BACK. Same door again — an `int`
+			// answer, no arguments, nothing to own. What differs from the six above is not visible here and is
+			// not this file's: they lower to `.data` loads and this to a walk of every mcentral list and every
+			// arena bitmap. See `SlabRuntime`'s header.
+			if callee.equals(BuiltinsScavengeMemoryName) 'scavengeMemory'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsScavengeMemoryName, runtimeName: SlabScavengeName, arity: ScavengeMemoryArity, calleeTok: anchor)
+			end 'scavengeMemory'
 
 			// ⭐ **THE THREAD-COST CLOCK**, beside the counters `PhaseProbe` reads it with. Same door again — an
 			// `int` answer, no arguments, nothing to own. What differs from the six above is not visible here

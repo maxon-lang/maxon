@@ -50,8 +50,10 @@
 //     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
 //     cannot be cited about the next.
 // ⇒ **THE PICKING RULE ABOVE IS UNCHANGED AND STILL MEANS WHAT IT SAYS**: the next entry takes the next
-// FREE number above 70, which is now 82 — 77 went to `managedListNodeNotInThisChain` and 81 to
-// `managedListNodeElementMovedOut`, while 76 and 80 stay vacant for the reason this paragraph gives. Nothing here reserves a vacated number, because reserving one
+// FREE number above 70, which is now 89 — 77 went to `managedListNodeNotInThisChain`, 81 to
+// `managedListNodeElementMovedOut`, 82/83/84/88 to the slab ARENA's four (`SlabArena.maxon`) and 85/86/87 to
+// the slab OBJECT layer's three (`SlabRuntime.maxon`), while 76
+// and 80 stay vacant for the reason this paragraph gives. Nothing here reserves a vacated number, because reserving one
 // would be this space defending against a claimant that no longer exists — the very thing the paragraph
 // above rejects.
 export enum RuntimeAbort
@@ -132,6 +134,61 @@ export enum RuntimeAbort
 	// or make the read throw — is a semantic question `/specs/managed-list.md` does not answer and this abort
 	// does not decide; like `managedListNodeNotInThisChain` beside it, it only stops the corruption.
 	managedListNodeElementMovedOut = 81
+	// `__slab_assert_os_alloc`: an OS page call was REFUSED — the address space or the system commit limit is
+	// exhausted. Every caller stores INTO the pointer it just got, so without this guard the condition arrives
+	// as `mov %reg, (<garbage>)`: an opaque access violation, in the one failure a user is most likely to hit
+	// for a reason outside their own program. v1 spends 137 on the identical guard; the number is this
+	// registry's to pick, not v1's.
+	//
+	// ⚠ It guards THREE calls, not one — `osAllocPages` (the OS-direct tier), and F1c's `osReservePages` and
+	// `osCommitPages` (the arena) — and its test is `ptr <= 0` rather than `ptr == 0`, because a raw POSIX
+	// `mmap` reports failure as a small NEGATIVE errno where `VirtualAlloc` reports NULL. See the guard itself
+	// in `SlabArena.maxon` for why the sign catches both and no lane can answer a page base that is not
+	// positive.
+	slabOsAllocFailed = 82
+	// `__slab_arena_alloc_chunks`: a chunk-run request no arena can EVER satisfy — a count of 0 or less, or
+	// more chunks than an arena holds past its metadata. It is a COMPILER bug (a caller computed a span
+	// geometry wrong), and both directions are silent without the guard: v1's loop maps a fresh arena and
+	// rescans forever for a run that cannot fit, reporting out-of-memory for a request that was merely too
+	// large, while a 0-chunk request satisfies `runLen >= 0` before any bit is cleared and answers a chunk
+	// still marked FREE — which is then handed out a second time.
+	slabChunkRunUnsatisfiable = 83
+	// `__slab_arena_free_chunks`: a chunk range outside the arena. Below the metadata chunks it releases the
+	// arena's own bitmap into the pool; past the last chunk it writes beyond the bitmap into chunk 0's
+	// payload. Both corrupt the map that decides which chunks are free, so the fault surfaces later,
+	// somewhere else, as a chunk handed out twice — which is why it aborts here instead. A separate code
+	// from the one above, this registry's founding rule: two different faults in two different functions may
+	// not report one number.
+	slabChunkRangeOutOfArena = 84
+	// `__slab_refill`: a class whose span holds NO objects was asked for one. Only class 0 — the ladder's
+	// sentinel, size 0 — can answer that description, and the only request that reaches it is a ZERO-BYTE
+	// one. It is refused HERE, on the refill path, rather than in `__slab_class_index_for`, because the class
+	// lookup is on the hot path of every allocation in the language and this case has no caller: a mcache row
+	// for the sentinel class is always empty, so a zero-byte request always arrives here on the first try.
+	// Unguarded it computes a zero-chunk span and lands on `slabChunkRunUnsatisfiable`, which is a true
+	// statement about the arena and a misleading one about the fault.
+	slabClassServesNoObject = 85
+	// ⭐⭐ `__slab_alloc_class`: **INV-1 IS BROKEN.** The span reported free slots (`free_count > 0`), its
+	// free list was empty, and its virgin bump region was exhausted — so the three sources of a free slot
+	// disagree about how many there are. v1 traps at the identical point and states why: the alternative is
+	// handing out a slot PAST the span's last one, which writes into whatever the arena placed in the next
+	// chunk and surfaces later, somewhere else, as one slot owned by two objects.
+	slabSpanExhaustedPastItsEnd = 86
+	// `__slab_os_direct_free`: a pointer whose 16-byte prefix does not carry the allocator's magic word — a
+	// double free, or a pointer that never came from the OS-direct tier. It is the guard v1 gets out of
+	// FAILING TO FIND the pointer in its 512-entry tracking array (its sentinel exit 135); with the length
+	// carried in the mapping instead of in a side table there is nothing to search, so the same fault is
+	// caught by the stamp. Unguarded, the free reads user data as a byte count and hands it to `osFreePages`,
+	// which unmaps an arbitrary region of the process.
+	slabOsDirectPointerNotOurs = 87
+	// `__slab_arena_of`: an address that lies inside NO arena's reservation. Its one caller is the scavenger's
+	// span destruction, which needs an arena base to turn a span's page base into a chunk index — so reaching
+	// here means a span was registered whose pages did not come from the arena at all, which is a COMPILER
+	// bug rather than a program's. A sentinel would be worse than useless: every caller uses the answer as
+	// the base it subtracts from, so a 0 releases chunk `addr >> 13` of the arena at address 0, into a bitmap
+	// that is whatever sits at address 8. Separate from `slabChunkRangeOutOfArena` beside it, this registry's
+	// founding rule: that one is a bad RANGE inside a real arena, this one is no arena at all.
+	slabAddressOutsideEveryArena = 88
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

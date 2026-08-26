@@ -2291,8 +2291,8 @@ function buildManagedZeroElems(module StdModule)
 
 	let startAddr = emitSlotAddr(module, block: byteArm, buffer: buffer, index: start, elementSize: es, ids: ids)
 	let byteCount = emitElementByteLen(module, block: byteArm, count: count, es: es, ids: ids)
-	var afterByte = emitFillRange(module, func: func, cur: byteArm, dest: startAddr, byteCount: byteCount, fillValue: 0, ids: ids)
-	module.setTerminator(afterByte, op: StdOp.branch(done.id))
+	module.appendOp(byteArm, op: StdOp.memFill(startAddr, byteCountId: byteCount, value: 0))
+	module.setTerminator(byteArm, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
 	module.functions.push(func)
@@ -2663,13 +2663,19 @@ end 'emitViewRecordTail'
 //     it. ⚠ The release MUST follow the copy: a view whose parent has already dropped is the LAST owner of
 //     those bytes, so the decref frees them, and reading them afterwards is a use-after-free.
 //
-//     ⚠⚠ **AND NO TEST CAN CATCH A REVERSAL OF THAT ORDER — MEASURED, NOT ASSUMED.** Reversing it (release
-//     emitted before `emitForwardCopy`) was built and run during review: the suite stayed 1197/0, because
-//     `__mm_free` RECLAIMS NOTHING under the bump allocator (it only lowers the live count), so the freed
-//     bytes read back intact. The ordering is therefore a RULE this function keeps on its own, not one a
-//     gate protects — it is what makes the function still correct on the day `__mm_free` reuses memory, and
-//     that is the day it also becomes testable. Do not "simplify" the two halves back together; the split
-//     across the copy is the whole point of `base` being read at `detach` and spent at `afterCopy`.
+//     ⚠⚠ **NO TEST CATCHES A REVERSAL OF THAT ORDER — MEASURED TWICE, AND THE SECOND MEASUREMENT DELETED
+//     THE FIRST ONE'S REASON.** Reversing it (the release emitted before the copy) was built and run at
+//     P1.7: the suite stayed 1197/0, and the explanation recorded here was that *"`__mm_free` RECLAIMS
+//     NOTHING under the bump allocator, so the freed bytes read back intact"* — with the prediction that it
+//     *"becomes testable the day `__mm_free` reuses memory"*. That day came at S2–S4: there is no bump
+//     allocator, `__mm_free` returns the box to `__slab_free` for the next allocation to take, and the
+//     payload is POISONED with `0x3F` on the way out regardless. **Re-measured at S4 against exactly that
+//     allocator: `--filter=arrays` read 151 passed / 0 failed, `both-sides-detach-parent-first` among
+//     them**, against a compiler whose emitted code genuinely differed (same program, byte-different image),
+//     so the instrument was live. ⇒ The ordering is a RULE this function keeps on its own and NOT one a gate
+//     protects; the PREDICTION was wrong and WHY the reversal survives is now an open question rather than a
+//     date. Do not "simplify" the two halves back together, and do not re-derive the retired reason: the
+//     split across the copy is the whole point of `base` being read at `detach` and spent at `afterCopy`.
 //
 // The published `capacity@16` is `length` — the buffer holds exactly the live elements and no slack, which is
 // also what the reference compiler reports after it detaches (`b"hi"`, then `set`, then `capacity()` → 2) —

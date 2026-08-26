@@ -8,9 +8,10 @@ end 'main'
 ExitCode: 42
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -19,8 +20,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -38,7 +38,6 @@ func @main {
     x64.leaRegRdata r9, [rip + __layout_Array_int]
     x64.movRegReg rcx, rbx
     x64.callDirect Array.slice
-    x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -47,42 +46,37 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_count
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
+    x64.loadRegBaseDisp.word64 r12, [r8 + 8]
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 r13, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r13, rax
+    x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
+    x64.movRegReg r8, r12
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -113,10 +107,10 @@ func @Array.slice {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
+    x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.leaRegRegImm32 r10, rbx, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r14

@@ -98,6 +98,35 @@ let Arm64OpLsrv = 0x9AC02400
 let Arm64OpMsub = 0x9B008000
 let Arm64MsubRaShift = 10
 
+// --- F2: the ARMv8.0 exclusive-access pair, and the Darwin thread pointer ---
+//
+// ⭐⭐ **LDAXR/STLXR ARE A RESERVATION, NOT A LOCK, WHICH IS WHY EVERY USE IS A RETRY LOOP.** `LDAXR`
+// loads and marks the address as exclusively reserved for this core; `STLXR` stores ONLY IF the
+// reservation still holds and reports whether it did in its status register. Anything that can clear a
+// reservation — another core's store, an interrupt, even an unrelated exclusive access — makes the store
+// fail, so the loop must go round again. A single unretried STLXR is not an atomic operation; it is a
+// store that sometimes does nothing.
+//
+// The two are also the ORDERING: `LDAXR` is load-ACQUIRE and `STLXR` is store-RELEASE, which is what lets
+// `StdOp.atomicCas` promise a Treiber-stack publish needs no separate fence.
+//
+// `LDAXR Xt, [Xn]` — 64-bit, no offset form.
+let Arm64OpLdaxr = 0xC85FFC00
+// `STLXR Ws, Xt, [Xn]` — the STATUS register `Ws` sits in the Rs field at bit 16 (0 = stored, 1 = failed).
+// ⚠ `Ws` must differ from BOTH `Xt` and `Xn`; sharing them is CONSTRAINED UNPREDICTABLE. The two encoders
+// below hold that by construction — the status is always x17 and the other two are x16 or an allocatable
+// register, and x17 is in neither pool.
+let Arm64OpStlxr = 0xC800FC00
+let Arm64StlxrRsShift = 16
+// `MRS Xt, TPIDRRO_EL0` — the READ-ONLY thread ID register. On Darwin the kernel points it at the current
+// thread's TSD base and stores the CPU number in the low three bits, which is why the read is masked.
+// ⚠ NOT `TPIDR_EL0` (0xD53BD040): that is the writable one, and neither register is set at all on shv2's
+// raw-static Linux lane — see `StdOp.currentThreadToken` for what that lane does instead.
+let Arm64OpMrsTpidrro = 0xD53BD060
+// The CPU number Darwin packs into TPIDRRO_EL0's low bits, cleared by a shift-down/shift-up pair. Three
+// bits, so the thread pointer itself is 8-byte aligned — which is what makes the masking lossless.
+let Arm64ThreadPointerCpuBits = 3
+
 // MOV Xd, Xn is ORR Xd, XZR, Xn — the register move both files' `movRegReg` lowers to (GPR side).
 let Arm64OpMovReg = 0xAA0003E0
 
@@ -274,6 +303,9 @@ let Arm64OpStpOffX = 0xA9000000
 let Arm64OpLdpOffX = 0xA9400000
 let Arm64PairImm7Shift = 15
 let Arm64PairImm7Mask = 0x7F
+// The STP/LDP imm7 counts units of ONE transferred register (8 bytes for the X forms), not bytes — the
+// scale the frame record's offset and the fill ladder's pair displacements both divide by.
+let Arm64PairScaleBytes = 8
 
 // The STP pre-index / LDP post-index imm7 reaches -512..+504 (scaled by 8). The smaller bound
 // governs both so one threshold decides the compact-vs-split frame form (M1 trap: larger frames use
@@ -853,7 +885,7 @@ end 'arm64SlotDisplacement'
 // IP1 scratch instead (`arm64EmitWideFrameSlot`).
 function arm64EmitFrameSlot(code ByteArray, rt MachineWord, byteOffset MachineWord, unscaledOp MachineWord, scaledOp MachineWord)
 	if byteOffset < Arm64UnscaledSpillThreshold 'unscaled'
-		emitArm64Insn(code, insn: unscaledOp or ((byteOffset and Arm64UnscaledImm9Mask) shl Arm64UnscaledImm9Shift) or (Arm64Fp shl Arm64RnShift) or rt)
+		arm64EmitUnscaledMem(code, opcode: unscaledOp, rt: rt, baseReg: Arm64Fp, byteOffset: byteOffset as Imm32)
 	end 'unscaled' else if arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes as NonZeroWord) 'scaled'
 		arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Fp, byteOffset: byteOffset, scale: SpillSlotBytes)
 	end 'scaled' else 'wide'
@@ -892,6 +924,58 @@ function arm64EmitWideFrameSlot(code ByteArray, rt MachineWord, byteOffset Machi
 	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: Arm64Ip1, rn: Arm64Fp, imm: scratchBase)
 	arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Ip1, byteOffset: byteOffset - scratchBase, scale: SpillSlotBytes)
 end 'arm64EmitWideFrameSlot'
+
+// ⭐ **A SIGNED BYTE OFFSET AS ITS `bits`-WIDE TWO'S-COMPLEMENT FIELD, IN `scale`-BYTE UNITS.** The one
+// place the two signed-offset memory forms below turn an `Imm32` into the immediate their encoding carries:
+// STUR/LDUR's simm9 (scale 1, 9 bits) and STP/LDP's imm7 (scale 8 — one transferred register — 7 bits).
+//
+// ⛔⛔ **IT WORKS ON THE MAGNITUDE AND RE-APPLIES THE SIGN, AND THAT IS NOT STYLE — THE OBVIOUS SPELLING
+// FAILS AT RUN TIME IN THIS FILE.** `imm32ToWord((byteOffset / scale) as Imm32)` — divide the signed
+// offset, re-narrow, hand it on — dies on `imm32ToWord`'s OWN `Imm32` parameter bind for a legitimately
+// in-range NEGATIVE value. MEASURED on an `arm64-macos` emission: `byteOffset = -64` computes `units = -8`,
+// which PRINTS as `-8` on the line before, and the very next bind panics *"Range check failed: value
+// outside typealias 'Imm32'"*.
+//
+// ⚠ **IT COULD NOT BE REDUCED, AND THAT IS RECORDED HERE RATHER THAN GUESSED AT.** The identical chain in a
+// standalone program — an `Imm32` parameter narrowed from a wider sum, divided by a positive constant,
+// re-narrowed and passed to another `Imm32` parameter, with `imm32ToWord`'s body copied verbatim — runs
+// CORRECTLY for every one of those offsets. So the trigger is something about compiling THIS file, not
+// about the shape, and the underlying defect is reported separately instead of being explained by a
+// sentence nobody measured.
+//
+// Building the field out of `arm64AddSubImmMagnitude` — the idiom `arm64EmitCmpImm` already uses for a
+// signed immediate — never forms a negative intermediate at all, so it is correct today AND independent of
+// whatever that turns out to be.
+function arm64SignedMemField(byteOffset Imm32, scale NonZeroWord, modulus MachineWord) returns MachineWord
+	let units = arm64AddSubImmMagnitude(byteOffset) / scale
+	if byteOffset < 0 'negative'
+		return modulus - units
+	end 'negative'
+	return units
+end 'arm64SignedMemField'
+
+// The two's-complement wrap-arounds of the two fields: 2^9 for STUR/LDUR's simm9, 2^7 for STP/LDP's imm7.
+// Each is exactly `mask + 1`, stated as its own name because it is the MODULUS the sign is folded through,
+// not the mask that trims the result.
+let Arm64UnscaledImm9Modulus = 512
+let Arm64PairImm7Modulus = 128
+
+// An UNSCALED SIGNED-offset load/store `op Rt, [Xn, #simm9]` — the ±256-byte form. Two callers, and they
+// want it for opposite reasons: a small frame slot uses it because the scaled form's alignment rule is not
+// worth the check there, and the byte-fill ladder because the scaled form has NO SIGN and the ladder's tail
+// stores are anchored BACKWARD off the region's end. The offset counts BYTES, so its scale is 1.
+function arm64EmitUnscaledMem(code ByteArray, opcode MachineWord, rt MachineWord, baseReg MachineWord, byteOffset Imm32)
+	let field = arm64SignedMemField(byteOffset, scale: Arm64ByteAccessScale as NonZeroWord, modulus: Arm64UnscaledImm9Modulus)
+	emitArm64Insn(code, insn: opcode or ((field and Arm64UnscaledImm9Mask) shl Arm64UnscaledImm9Shift) or (baseReg shl Arm64RnShift) or rt)
+end 'arm64EmitUnscaledMem'
+
+// An STP/LDP with a SIGNED byte offset: `op Rt1, Rt2, [Xn, #imm7*8]`. The imm7 counts 8-byte units, which is
+// what `Arm64PairScaleBytes` divides out, and it is signed — the property that lets the fill ladder anchor a
+// pair store backward off the region's end, and the reason this is not folded into the scaled builder above.
+function arm64EmitPairOffset(code ByteArray, opcode MachineWord, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, byteOffset Imm32)
+	let field = arm64SignedMemField(byteOffset, scale: Arm64PairScaleBytes as NonZeroWord, modulus: Arm64PairImm7Modulus)
+	emitArm64Insn(code, insn: opcode or ((field and Arm64PairImm7Mask) shl Arm64PairImm7Shift) or (rt2 shl Arm64Rt2Shift) or (baseReg shl Arm64RnShift) or rt1)
+end 'arm64EmitPairOffset'
 
 // A scaled unsigned-offset load/store `op Rt, [Xn, #imm12*scale]`. The offset must be scale-aligned
 // and fit the 12-bit field — a spill/callee-save or data-field offset always is; a violation is a bug.
@@ -1054,27 +1138,54 @@ end 'Arm64BlockBranchFixup'
 
 export typealias Arm64BlockBranchFixupArray = Array with Arm64BlockBranchFixup
 
+// The four branch instructions with a PLACEHOLDER displacement, each returning its own chunk offset.
+//
+// ⚠ **THE PLACEHOLDER IS THE SHARED HALF, AND WHO RESOLVES IT IS THE DIFFERENCE.** A branch to a BLOCK
+// records a fixup and is patched by `arm64ResolveBlockBranches` once the block layout is known; a branch
+// inside ONE macro-op's instruction sequence has no block to name (the Std→Target lowerings cannot create
+// blocks — see `TargetOp.arm64MemFill`) and is patched by that encoder itself, against a byte offset in this
+// same buffer. Both spell the instruction here, once, so the two cannot come to disagree about its bytes.
+function arm64EmitLocalBranch(code ByteArray) returns CodeOffset
+	let site = code.count()
+	emitArm64Insn(code, insn: Arm64OpB)
+	return site
+end 'arm64EmitLocalBranch'
+
+function arm64EmitLocalCondBranch(code ByteArray, cond Arm64CondCode) returns CodeOffset
+	let site = code.count()
+	emitArm64Insn(code, insn: Arm64OpBcond or (cond.rawValue as MachineWord))
+	return site
+end 'arm64EmitLocalCondBranch'
+
+function arm64EmitLocalCbz(code ByteArray, reg MachineWord) returns CodeOffset
+	let site = code.count()
+	emitArm64Insn(code, insn: Arm64OpCbz or reg)
+	return site
+end 'arm64EmitLocalCbz'
+
+function arm64EmitLocalCbnz(code ByteArray, reg MachineWord) returns CodeOffset
+	let site = code.count()
+	emitArm64Insn(code, insn: Arm64OpCbnz or reg)
+	return site
+end 'arm64EmitLocalCbnz'
+
 // `b` to a block — placeholder imm26, fixup recorded.
 export function arm64EmitBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, targetBlock BlockId)
-	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: true))
-	emitArm64Insn(code, insn: Arm64OpB)
+	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalBranch(code), targetBlock: targetBlock, wide: true))
 end 'arm64EmitBranch'
 
 // `b.cond` to a block — placeholder imm19, condition in the low nibble.
 export function arm64EmitCondBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, cond Arm64CondCode, targetBlock BlockId)
-	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
-	emitArm64Insn(code, insn: Arm64OpBcond or (cond.rawValue as MachineWord))
+	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalCondBranch(code, cond: cond), targetBlock: targetBlock, wide: false))
 end 'arm64EmitCondBranch'
 
 // `cbz`/`cbnz Xt` to a block — a fused zero-test with no preceding compare, placeholder imm19.
 export function arm64EmitCbz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
-	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
-	emitArm64Insn(code, insn: Arm64OpCbz or reg)
+	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalCbz(code, reg: reg), targetBlock: targetBlock, wide: false))
 end 'arm64EmitCbz'
 
 function arm64EmitCbnz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
-	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
-	emitArm64Insn(code, insn: Arm64OpCbnz or reg)
+	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalCbnz(code, reg: reg), targetBlock: targetBlock, wide: false))
 end 'arm64EmitCbnz'
 
 // Patch every pending block branch to its target's chunk-local offset. A branch's displacement is
@@ -1270,6 +1381,17 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// `add destReg, x29, #slotDisp` — the ADDRESS of a frame slot, through the SAME
 		// `arm64SlotDisplacement` the spill/reload pair resolve their slots with.
 		leaRegSlot(destReg, slot) then arm64EmitSlotAddress(code, destReg: destReg, slot: slot)
+		// F1b: the byte-fill size ladder. The two operands are already in x0/x1 (the isel's pre-moves), so
+		// the op carries only the broadcast pattern — see `arm64EmitMemFill`.
+		arm64MemFill(fillByte) then arm64EmitMemFill(code, fillByte: fillByte)
+		x64MemFill then panic("emitArm64TargetOp: an x64 fill ladder reached the arm64 encoder — the x64 backend encodes `x64MemFill`")
+		// F2: the two LL/SC retry loops and the masked thread-pointer read. Each expands to a self-contained
+		// instruction sequence with locally patched branches — see `arm64EmitAtomicCas`.
+		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then arm64EmitAtomicCas(code, dest: arm64GprField(dest), addrReg: arm64GprField(addrReg), expectedReg: arm64GprField(expectedReg), replacementReg: arm64GprField(replacementReg))
+		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then arm64EmitAtomicRmw(code, dest: arm64GprField(dest), addrReg: arm64GprField(addrReg), operandReg: arm64GprField(operandReg), opcode: opcode)
+		arm64ThreadPointer(dest) then arm64EmitThreadPointer(code, dest: arm64GprField(dest))
+		// x64's atomics never reach the arm64 encoder, exactly as its fill ladder and jump table do not.
+		x64LockCmpxchg to x64TebSelfPointer then panic("emitArm64TargetOp: an x64-only atomic or TEB read reached the arm64 encoder — arm64's atomics are `arm64AtomicCas`/`arm64AtomicRmw` and its thread token is `arm64ThreadPointer`")
 	end 'emit'
 end 'emitArm64TargetOp'
 
@@ -1292,6 +1414,145 @@ function arm64EmitJumpTable(code ByteArray, rdataRelocs RdataRelocationArray, br
 	emitArm64Insn(code, insn: Arm64OpBr or (Arm64Ip1 shl Arm64RnShift))
 	jumpTables.push(JumpTablePending.create(String.from(tableLabel), caseTargets: caseTargets))
 end 'arm64EmitJumpTable'
+
+// --- F1b: the byte-fill SIZE LADDER (arm64) ---
+
+// The four FIXED registers `arm64EmitMemFill` owns — the first four AAPCS64 argument registers, which is
+// what the isel's pre-moves already use for a syscall's arguments. The isel puts the destination in the
+// cursor and the byte count in the count register (`lowerMemFill`); the ladder then writes all four.
+//
+// ⭐⭐ **DELIBERATELY NOT x16/x17, WHICH IS WHERE THIS BACKEND'S OTHER ENCODER-TIER SCRATCH LIVES.** Two
+// reasons, and either alone would decide it: the ladder needs FOUR registers and the IP pair is two, and
+// `arm64EmitWideFrameSlot`'s header records that x16 is straddled by isel-minted producer/consumer pairs, so
+// only x17 is safe there at all. x0..x3 are ALLOCATABLE instead — which means the clobber must be DECLARED,
+// and it is, on `TargetOp.arm64MemFill`'s `implicitDefs`, held equal to `arm64MemFillScratchMask()` by
+// `assertEncoderScratchMasks`. That is the same bargain x64's ladder makes, for the same reason.
+let Arm64MemFillCursor = 0  // x0 — advances through the region
+let Arm64MemFillCount = 1  // x1 — bytes remaining
+let Arm64MemFillEnd = 2  // x2 — pinned to the region's END, so every arm can anchor a backward store
+let Arm64MemFillPattern = 3  // x3 — the broadcast fill word
+
+// The two the ISEL pre-moves into, in the allocator's currency, so the isel and this encoder name ONE set of
+// registers rather than two spellings that could drift (the shape `Arm64Ip1RegNum` already takes).
+export let Arm64MemFillCursorRegNum = Arm64MemFillCursor as RegNum
+export let Arm64MemFillCountRegNum = Arm64MemFillCount as RegNum
+
+// The ladder's clobber, as the allocator's currency. `TargetOp.arm64MemFill`'s inline `implicitDefs` literal
+// is checked against this (`assertEncoderScratchMasks`).
+export function arm64MemFillScratchMask() returns RegMask
+	var mask = 0 as RegMask
+	mask = regMaskAdd(mask, regNum: Arm64MemFillCursorRegNum)
+	mask = regMaskAdd(mask, regNum: Arm64MemFillCountRegNum)
+	mask = regMaskAdd(mask, regNum: Arm64MemFillEnd as RegNum)
+	mask = regMaskAdd(mask, regNum: Arm64MemFillPattern as RegNum)
+	return mask
+end 'arm64MemFillScratchMask'
+
+// The ladder's band edges, in bytes — x64's, minus the `rep stosq` rung it has no analogue for. Each
+// straight-line band is covered by `edge / 16` overlapping STP pairs from EACH end, so the edge and the
+// store count are one number rather than two that could disagree.
+let Arm64MemFillWordBytes = 8  // one STR — the 8..15 band, too narrow for a pair to fit twice
+let Arm64MemFillPairBytes = 16  // one STP of the pattern pair: 16 bytes, a single micro-op
+let Arm64MemFillTwoPairBytes = 32
+// Bytes per iteration of the bulk loop (4 STP pairs), and the lower edge of the loop band. With no `rep`
+// analogue on this ISA the bulk loop IS the large path — there is no third arm above it.
+let Arm64MemFillLoopStride = 64
+
+// `count` consecutive `stp pattern, pattern` pairs (16 bytes each) from `[base + startOffset]` upward.
+//
+// ⭐ STP rather than STR: an STP retires as a SINGLE micro-op writing 16 bytes, so it halves the instruction
+// count at identical store bandwidth. And no `dc zva` anywhere in this ladder — it needs the block size read
+// from DCZID_EL0, wants 64-byte alignment, can be turned off by DCZID_EL0.DZP, and buys nothing at the 8..64
+// byte sizes that dominate the allocator's hot path.
+function arm64EmitFillPairRun(code ByteArray, baseReg MachineWord, startOffset Imm32, count MachineWord)
+	for i in 0 upto count 'pairs'
+		// ⚠ The cast brackets the WHOLE sum. `a + b as Imm32` casts only `b` — `as` binds tighter than `+` —
+		// which leaves the sum at whatever wider type the operands join to and pushes the narrowing onto the
+		// callee's parameter bind. Stated as its own `let` so the reading cannot be mistaken.
+		let byteOffset = (startOffset + i * Arm64MemFillPairBytes) as Imm32
+		arm64EmitPairOffset(code, opcode: Arm64OpStpOffX, rt1: Arm64MemFillPattern, rt2: Arm64MemFillPattern, baseReg: baseReg, byteOffset: byteOffset)
+	end 'pairs'
+end 'arm64EmitFillPairRun'
+
+// The OVERLAP trick, arm64's spelling — see `encodeMemFillOverlappingSpan` (x64) for the full argument. For
+// a length at least `spanBytes` and under twice it, `spanBytes/16` pairs forward from the cursor and
+// `spanBytes/16` pairs backward from the end cover the whole region with straight-line code, the middle
+// written twice and no ragged tail to test for.
+function arm64EmitFillOverlappingSpan(code ByteArray, spanBytes MachineWord)
+	let pairs = spanBytes / Arm64MemFillPairBytes
+	arm64EmitFillPairRun(code, baseReg: Arm64MemFillCursor, startOffset: 0, count: pairs)
+	arm64EmitFillPairRun(code, baseReg: Arm64MemFillEnd, startOffset: 0 - (spanBytes as Imm32), count: pairs)
+end 'arm64EmitFillOverlappingSpan'
+
+// ⭐⭐ **THE FILL LADDER, arm64.** The counterpart of `encodeX64MemFill` and the same shape — a size dispatch
+// inside ONE macro-op's encoder, with locally patched branches, because the Std→Target lowerings cannot
+// create blocks. The bands are ARCHITECTURE.md's:
+//
+//   < 8       byte loop
+//   8..15     one STR forward, one STUR backward off the end
+//   16..63    straight-line OVERLAPPING STP pairs, 1 or 2 from each end
+//   >= 64     4-pair (64 byte) store loop, then one overlapping 64-byte block
+//
+// x2 is pinned to the region's END before anything mutates x0/x1, and left alone.
+//
+// A count of 0 falls into the `< 8` arm and its `cbz` exits at once, writing nothing.
+function arm64EmitMemFill(code ByteArray, fillByte ParsedInt)
+	arm64EmitMovImm(code, rd: Arm64MemFillPattern, value: memFillPatternWord(fillByte))
+	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: Arm64MemFillEnd, rn: Arm64MemFillCursor, rm: Arm64MemFillCount)
+
+	// UNSIGNED (`lo`/`hs`) throughout — a byte count is a length, and a signed compare would send a
+	// >= 2^63 count down the wrong arm rather than simply being unreachable.
+	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillWordBytes)
+	let toByteLoop = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.lo)
+	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillPairBytes)
+	let toOneWord = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.lo)
+	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillTwoPairBytes)
+	let toOnePair = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.lo)
+	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
+	let toTwoPairs = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.lo)
+
+	// >= 64: whole 64-byte blocks, then ONE overlapping 64-byte block anchored at the end. The count is at
+	// least 64 on entry, so `[end-64, end)` is always inside the region and needs no remainder test.
+	let loopTop = code.count()
+	arm64EmitFillPairRun(code, baseReg: Arm64MemFillCursor, startOffset: 0, count: Arm64MemFillLoopStride / Arm64MemFillPairBytes)
+	arm64EmitAddImmSigned(code, rd: Arm64MemFillCursor, rn: Arm64MemFillCursor, imm: Arm64MemFillLoopStride)
+	arm64EmitSubImmSigned(code, rd: Arm64MemFillCount, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
+	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCondBranch(code, cond: Arm64CondCode.hs), targetOffset: loopTop)
+	arm64EmitFillPairRun(code, baseReg: Arm64MemFillEnd, startOffset: 0 - (Arm64MemFillLoopStride as Imm32), count: Arm64MemFillLoopStride / Arm64MemFillPairBytes)
+	let doneFromLoop = arm64EmitLocalBranch(code)
+
+	arm64PatchBranch19(code, codeOffset: toTwoPairs, targetOffset: code.count())
+	arm64EmitFillOverlappingSpan(code, spanBytes: Arm64MemFillTwoPairBytes)
+	let doneFromTwoPairs = arm64EmitLocalBranch(code)
+
+	arm64PatchBranch19(code, codeOffset: toOnePair, targetOffset: code.count())
+	arm64EmitFillOverlappingSpan(code, spanBytes: Arm64MemFillPairBytes)
+	let doneFromOnePair = arm64EmitLocalBranch(code)
+
+	// 8..15: one word from each end. A PAIR does not fit twice here, so this is the one band the STP run
+	// above cannot serve — hence the STR/STUR spelling, and hence `Arm64MemFillWordBytes` existing at all.
+	arm64PatchBranch19(code, codeOffset: toOneWord, targetOffset: code.count())
+	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitUnscaledMem(code, opcode: Arm64OpSturX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillEnd, byteOffset: 0 - (Arm64MemFillWordBytes as Imm32))
+	let doneFromOneWord = arm64EmitLocalBranch(code)
+
+	// 0..7: a byte loop. There is no whole word to anchor an overlap on, and this band is the rare one.
+	arm64PatchBranch19(code, codeOffset: toByteLoop, targetOffset: code.count())
+	let doneFromEmpty = arm64EmitLocalCbz(code, reg: Arm64MemFillCount)
+	let byteLoopTop = code.count()
+	arm64EmitScaledMem(code, opcode: Arm64OpStrB, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: Arm64ByteAccessScale)
+	arm64EmitAddImmSigned(code, rd: Arm64MemFillCursor, rn: Arm64MemFillCursor, imm: 1)
+	arm64EmitSubImmSigned(code, rd: Arm64MemFillCount, rn: Arm64MemFillCount, imm: 1)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64MemFillCount), targetOffset: byteLoopTop)
+
+	let done = code.count()
+	arm64PatchBranch26(code, codeOffset: doneFromLoop, targetOffset: done)
+	arm64PatchBranch26(code, codeOffset: doneFromTwoPairs, targetOffset: done)
+	arm64PatchBranch26(code, codeOffset: doneFromOnePair, targetOffset: done)
+	arm64PatchBranch26(code, codeOffset: doneFromOneWord, targetOffset: done)
+	arm64PatchBranch19(code, codeOffset: doneFromEmpty, targetOffset: done)
+end 'arm64EmitMemFill'
 
 // storeSlotReg / loadRegSlot are CLASS-AGNOSTIC (an 8-byte slot holds a GPR or an f64); the
 // instruction is chosen from the resolved register's file.
@@ -1317,6 +1578,110 @@ end 'arm64EmitStoreSlot'
 function arm64EmitSlotAddress(code ByteArray, destReg TargetVReg, slot SpillSlot)
 	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: arm64GprField(destReg), rn: Arm64Fp, imm: arm64SlotDisplacement(slot))
 end 'arm64EmitSlotAddress'
+
+// ==========================================================================
+// F2: the LL/SC atomics, and the Darwin thread pointer
+// ==========================================================================
+//
+// ⭐⭐ **THE TWO SEQUENCES SHARE ONE SAFETY ARGUMENT, AND IT IS ABOUT WHEN `Xd` IS WRITTEN.** A late def
+// may be coloured onto the register of a use that DIES at the op (`allocateDef`'s `dyingRegs`), so `Xd`
+// can legitimately BE `Xaddr` or an operand register. Both loops re-read every operand on every retry, so
+// each encoder keeps its whole working state in x16/x17 and touches `Xd` EXACTLY ONCE, at the end, after
+// the last read of every operand. `TargetDialect.arm64AtomicCas` states this as the op's contract; these
+// are the two encoders that must honour it.
+//
+// ⭐ **x16 AND x17, AND x16 IS SAFE HERE FOR `arm64EmitJumpTable`'s REASON.** `StdToArm64Conversion`'s
+// `Arm64Scratch` header gives the rule: x16 is unsafe only where something SPLICES a write to it between
+// an isel-minted x16 producer/consumer pair, and nothing a post-ISEL pass splices writes x16 (a wide frame
+// access deliberately folds into x17 instead — `arm64EmitWideFrameSlot`). These are isel-emitted macro-ops
+// that nothing splices and `opIsConstMaterialization` refuses to rematerialize, so no pair can span them.
+// Both are declared on the ops' `implicitDefs` and held equal to these registers by
+// `assertEncoderScratchMasks`.
+
+// The observed/running value of an LL/SC loop. x16 (IP0).
+let Arm64AtomicValue = Arm64Ip0
+// The STLXR status register. x17 (IP1) — distinct from `Arm64AtomicValue` and from every allocatable
+// register, which is what keeps the `Ws != Xt, Xn` constraint true by construction.
+let Arm64AtomicStatus = Arm64Ip1
+
+// `LDAXR x16, [Xn]` — the head of both loops.
+function arm64EmitLdaxr(code ByteArray, rn MachineWord)
+	emitArm64Insn(code, insn: Arm64OpLdaxr or (rn shl Arm64RnShift) or Arm64AtomicValue)
+end 'arm64EmitLdaxr'
+
+// `STLXR w17, Xt, [Xn]` — the tail of both loops, status into x17.
+function arm64EmitStlxr(code ByteArray, rt MachineWord, rn MachineWord)
+	emitArm64Insn(code, insn: Arm64OpStlxr or (Arm64AtomicStatus shl Arm64StlxrRsShift) or (rn shl Arm64RnShift) or rt)
+end 'arm64EmitStlxr'
+
+// `arm64AtomicCas(dest, addr, expected, replacement)`:
+//
+//   loop:  LDAXR x16, [Xaddr]        ; x16 = the observed word, load-acquire exclusive
+//          CMP   x16, Xexpected      ; sets the flags the closing CSET reads
+//          B.NE  exit                ; mismatch — leave the flags NE and bail without storing
+//          STLXR w17, Xrepl, [Xaddr] ; store-release exclusive; w17 = 0 iff it landed
+//          CBNZ  x17, loop           ; reservation lost — observe again
+//   exit:  CSET  Xd, EQ              ; 1 on the stored path, 0 on the mismatch path
+//
+// ⭐ **THE CSET READS THE `CMP`'s FLAGS ON BOTH PATHS, AND THAT IS WHY THERE IS NO SECOND COMPARE.**
+// Neither `STLXR` nor `CBNZ` writes NZCV, so the flags at `exit` are still the last `CMP`'s: EQ when the
+// loop fell through (matched, and the store landed) and NE when the `B.NE` was taken. v1's
+// `arm64EmitAtomicCasMem` records the same property; it is the whole reason the success boolean costs one
+// instruction rather than a re-load and a re-compare.
+//
+// ⚠ **A RETRY RE-READS `Xexpected`, NOT x16.** The comparand must be the caller's value on every trip —
+// re-comparing against the last observation would make the loop succeed against whatever it just saw.
+function arm64EmitAtomicCas(code ByteArray, dest MachineWord, addrReg MachineWord, expectedReg MachineWord, replacementReg MachineWord)
+	let loopTop = code.count()
+	arm64EmitLdaxr(code, rn: addrReg)
+	arm64EmitCmpReg(code, rn: Arm64AtomicValue, rm: expectedReg)
+	let toExit = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.ne)
+	arm64EmitStlxr(code, rt: replacementReg, rn: addrReg)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop)
+	arm64PatchBranch19(code, codeOffset: toExit, targetOffset: code.count())
+	arm64EmitCset(code, rd: dest, cond: Arm64CondCode.eq)
+end 'arm64EmitAtomicCas'
+
+// `arm64AtomicRmw(dest, addr, operand, opcode)`:
+//
+//   loop:  LDAXR x16, [Xaddr]        ; x16 = the prior word
+//          ADD   x16, x16, Xoperand  ; x16 = the new word
+//          STLXR w17, x16, [Xaddr]
+//          CBNZ  x17, loop
+//          SUB   Xd, x16, Xoperand   ; recover the PRIOR word — the op's stated result
+//
+// ⛔⛔ **THIS IS WHERE v1's arm64 `atomicXadd` GAVE UP AND SHIPPED A NON-ATOMIC LOAD-ADD-STORE**, because
+// it kept the prior value AND the new value AND the status live at once and so wanted a third scratch —
+// reaching for x18, the Apple platform register, which corrupted thread state and double-allocated slab
+// slots (`Arm64CodeEmitter.arm64EmitAtomicXaddMem` in `maxon-selfhosted`). Applying the operation's
+// INVERSE after the loop removes the third register entirely: only the RUNNING value need be live across
+// the store, and the prior one is one `SUB` away. Two scratches, a real reservation loop, x18 untouched.
+//
+// ⚠ The inverse is chosen by the opcode and MUST stay its true inverse — an appended `xchg` or `and` has
+// no inverse at all and needs a different sequence (keep the prior value in `Xd` and the new one in x16),
+// which is exactly what the exhaustive match here forces the next author to confront.
+function arm64EmitAtomicRmw(code ByteArray, dest MachineWord, addrReg MachineWord, operandReg MachineWord, opcode StdAtomicRmwOpcode)
+	let (applyOpcode, inverseOpcode) = match opcode 'op'
+		add gives (Arm64OpAdd, Arm64OpSub)
+	end 'op'
+	let loopTop = code.count()
+	arm64EmitLdaxr(code, rn: addrReg)
+	emitArm64Rrr(code, opcode: applyOpcode, rd: Arm64AtomicValue, rn: Arm64AtomicValue, rm: operandReg)
+	arm64EmitStlxr(code, rt: Arm64AtomicValue, rn: addrReg)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop)
+	emitArm64Rrr(code, opcode: inverseOpcode, rd: dest, rn: Arm64AtomicValue, rm: operandReg)
+end 'arm64EmitAtomicRmw'
+
+// `MRS Xd, TPIDRRO_EL0` then `LSR Xd,#3` / `LSL Xd,#3` — v1's owner token (`arm64GtOwnerToken`), the
+// Darwin thread pointer with the CPU number masked out of its low three bits.
+//
+// It needs no scratch at all: all three instructions read and write `dest`, so there is no operand for a
+// premature write to destroy — the property the two loops above have to work for.
+function arm64EmitThreadPointer(code ByteArray, dest MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMrsTpidrro or dest)
+	arm64EmitLsrImm(code, rd: dest, rn: dest, sh: Arm64ThreadPointerCpuBits)
+	arm64EmitLslImm(code, rd: dest, rn: dest, sh: Arm64ThreadPointerCpuBits)
+end 'arm64EmitThreadPointer'
 
 function arm64EmitLoadSlot(code ByteArray, destReg TargetVReg, slot SpillSlot)
 	let disp = arm64SlotDisplacement(slot)
@@ -1514,7 +1879,7 @@ function arm64EmitFrameRecordPair(code ByteArray, opcode MachineWord, offset Mac
 		panic("arm64EmitFrameRecordPair: frame-record offset {offset} exceeds the {Arm64FramePairIndexMax}-byte reach of the signed STP/LDP imm7 — the outgoing stack-argument region has outgrown it, and a masked immediate would place the frame record below sp")
 	end 'unencodable'
 
-	emitArm64Insn(code, insn: opcode or (((offset / 8) and Arm64PairImm7Mask) shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
+	arm64EmitPairOffset(code, opcode: opcode, rt1: Arm64Fp, rt2: Arm64Lr, baseReg: Arm64SpBaseField, byteOffset: offset as Imm32)
 end 'arm64EmitFrameRecordPair'
 
 // ADD x29, sp, #offset — point the frame pointer at the frame record, wherever in the frame it was put.

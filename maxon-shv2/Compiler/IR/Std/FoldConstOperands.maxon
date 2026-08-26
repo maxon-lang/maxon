@@ -249,6 +249,18 @@ function classifyFoldableDef(op StdOp, def StdFoldableDef)
 		// environment string, a SOCKET and a byte count the kernel chose are OS answers, never compile-time
 		// constants.
 		osHandleSetInherit to osThreadCpuTicks then def.recordNeither()
+		// F1a: the decommit defines no value at all, so there is no def for a later use to fold a constant out
+		// of — `recordNeither` is the only answer available, as it is for every result-less op here.
+		osDecommitPages then def.recordNeither()
+		// F1b: a fill defines no value either — its own fill BYTE is already a compile-time constant on the op,
+		// which is a different thing from a def a later use could fold.
+		memFill then def.recordNeither()
+		// F1c: both DO define a value, and it is an address the OS chose at RUN time — never a compile-time
+		// constant, exactly as `osAllocPages`'s page base is not.
+		osCommitPages to osReservePages then def.recordNeither()
+		// F2: all three define a value read out of memory or out of the machine at RUN time — a CAS's success
+		// boolean, an RMW's prior word, an OS thread's identity — so none is a compile-time constant.
+		atomicCas to currentThreadToken then def.recordNeither()
 	end 'c'
 end 'classifyFoldableDef'
 
@@ -505,6 +517,19 @@ function tryFold(op StdOp, constMap ConstValueMap) returns StdOp
 		// band, the machine query AND the thread-CPU read — are import calls too: every operand is an address,
 		// a handle or a length the caller computed, so none has an immediate form to fold into.
 		osHandleSetInherit to osThreadCpuTicks gives op
+		// F1a: the decommit's two operands are an ADDRESS and a LENGTH the caller computed, each moved into a
+		// fixed argument register by the isel. Neither has an immediate form to fold into.
+		osDecommitPages gives op
+		// F1b: a fill's two operands are an ADDRESS and a LENGTH the caller computed, and the isel moves each
+		// into a fixed physical register of the ladder's own — neither has an immediate form to fold into.
+		memFill gives op
+		// F1c: the same two kinds of operand reaching the same fixed argument registers — an address and a
+		// length, neither with an immediate form to fold into.
+		osCommitPages to osReservePages gives op
+		// F2: an atomic's operands are an ADDRESS and the words it compares and stores, and the ISAs' atomic
+		// forms take a register for each — `lock cmpxchg`/`lock xadd` have no immediate operand at all, and an
+		// LL/SC loop compares and stores registers. The thread token has no operand to fold.
+		atomicCas to currentThreadToken gives op
 	end 'f'
 end 'tryFold'
 

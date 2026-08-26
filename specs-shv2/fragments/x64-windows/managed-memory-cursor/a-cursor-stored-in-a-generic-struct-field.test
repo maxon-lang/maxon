@@ -45,9 +45,10 @@ end 'main'
 ExitCode: 62
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @SeqIterator.create {
@@ -176,12 +177,12 @@ func @main {
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
   tryerr#2:
+    x64.movRegImm32 r13, 99
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.movRegImm32 r12, 99
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -194,7 +195,7 @@ func @main {
     x64.leaRegRdata rdx, [rip + __layout_SeqIterator_Byte]
     x64.movRegReg rcx, r13
     x64.callDirect SeqIterator.current
-    x64.leaRegRegImm32 r12, r8, 0
+    x64.movRegReg r12, r8
     x64.movRegReg rcx, r13
     x64.callDirect SeqIterator.advance
     x64.cmpRegImm32 r10, 0

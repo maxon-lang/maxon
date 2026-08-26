@@ -318,11 +318,47 @@ static class BuildCache {
   /// <paramref name="extraKey"/> mean — they must be the same on both sides or the entry can never
   /// be hit.
   /// </summary>
-  public static void WriteCache(string projectDir, SourceFile[] onDiskSources, string outputPath,
-      CompileTarget target, string cacheName = ProjectCacheName, string extraKey = NoInMemorySources) {
+  /// <summary>
+  /// The inputs to record for a build that is ABOUT TO START. Capture this BEFORE compiling and hand
+  /// it to <see cref="WriteCache"/> when the build succeeds.
+  /// </summary>
+  /// <remarks>
+  /// ⛔⛔ CAPTURE BEFORE, NOT AFTER — READING THE MTIMES AT WRITE TIME WAS A FALSE-GREEN GENERATOR.
+  /// <see cref="WriteCache"/> used to call <see cref="SourceInputs.Current"/> itself, i.e. AFTER the
+  /// compile had finished. A source edited WHILE a build ran therefore had its POST-edit mtime recorded
+  /// as the version the binary was built from — when the binary had in fact been built from the
+  /// PRE-edit content. Every later build then compared the file's current mtime against a manifest
+  /// that already claimed it, found them equal, and reported success WITHOUT REBUILDING.
+  ///
+  /// MEASURED: 65 consecutive successful builds whose exe mtime never moved and whose behaviour was
+  /// the pre-edit source's. It cost an agent two false sabotage results — a sabotage that "did not go
+  /// red" because the sabotage was never compiled.
+  ///
+  /// ⚠ <c>spec-test</c>'s STALE guard structurally CANNOT catch this: it compares the binary's mtime
+  /// against the sources', and the binary genuinely IS newer than they are. The only sound external
+  /// check is to delete the manifest, rebuild, and compare the binary's HASH.
+  ///
+  /// Capturing first inverts the failure into the safe direction: a mid-build edit leaves the RECORDED
+  /// mtime BEHIND the file's, so the next build sees stale and rebuilds. A needless rebuild costs time;
+  /// a skipped one is a wrong answer that outlives the session.
+  /// </remarks>
+  internal static SourceInputs CaptureInputs(SourceFile[] onDiskSources, CompileTarget target)
+      => SourceInputs.Current(onDiskSources, target);
+
+  /// <summary>
+  /// Record that <paramref name="outputPath"/> is current for <paramref name="capturedInputs"/>. See
+  /// <see cref="IsCacheValid"/> for what the inputs and <paramref name="extraKey"/> mean — they must be
+  /// the same on both sides or the entry can never be hit.
+  /// </summary>
+  /// <param name="capturedInputs">
+  /// From <see cref="CaptureInputs"/>, taken BEFORE the compile. See its remarks for why this is a
+  /// parameter rather than something this method reads for itself.
+  /// </param>
+  internal static void WriteCache(string projectDir, SourceInputs capturedInputs, string outputPath,
+      string cacheName = ProjectCacheName, string extraKey = NoInMemorySources) {
     var manifest = new CacheManifest {
       Version = ManifestVersion,
-      Inputs = SourceInputs.Current(onDiskSources, target),
+      Inputs = capturedInputs,
       Flags = EmittedCodeFlags.Current,
       OutputPath = Path.GetFullPath(outputPath),
       ExtraKey = extraKey,

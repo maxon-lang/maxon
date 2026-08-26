@@ -1,0 +1,1602 @@
+// Runtime/SlabArena.maxon — ⭐⭐ **THE PAGE LAYER THE SLAB SITS ON.** Everything above it — size classes,
+// spans, free lists — allocates in CHUNKS, and this is what a chunk comes from and goes back to: a
+// bitmap-managed ARENA committed a granule at a time, a singly-linked list of them, and the
+// pointer→span reverse map a `free` needs to answer *"which span owns this address?"* without a header word
+// on every object.
+//
+// It is v1's `stdlib/Internals.maxon:204-325` and `:1020-1093` re-derived against shv2's tiers. What is
+// TAKEN from v1 is the mechanism — the bit-run arithmetic, the first-fit scan, the radix split, the
+// OS-allocation guard. What is NOT taken is recorded against each item below, because every one of those is
+// a decision and not an oversight.
+//
+// ⚠ **THE REVERSE MAP IS v1's SHAPE, NOT GO's, AND THE TWO ARE NOT INTERCHANGEABLE.** Go's `mheap.arenas`
+// is a TWO-level map over ARENA numbers (`arenaL1Bits`/`arenaL2Bits`, `malloc.go:279`), reaching per-page
+// metadata through the `heapArena` record it finds. This is a THREE-level map over the PAGE index, reaching
+// the span pointer directly. Go's is the better structure once an arena carries per-page metadata worth
+// grouping; ours carries none yet, so the extra indirection would buy a level and pay for a record.
+//
+// ⭐⭐ **WHERE A RESERVATION IS FREE, THE ARENA IS 64 MiB OF RESERVED ADDRESS SPACE AND 64 KiB OF COMMITTED
+// MEMORY — AND THOSE ARE TWO DIFFERENT NUMBERS FOR THE FIRST TIME (F1c).** v1 maps
+// `osAllocPages(0x4000000)` — 64 MiB COMMITTED, because
+// `osAllocPages` reserves and commits together on every lane — so porting it would have made a hello-world
+// resident in 64 MiB where the bump allocator was resident in 64 KiB. That is why this file shipped a 2 MiB
+// arena and named the missing op. `StdOp.osReservePages`/`StdOp.osCommitPages` are that op, so the arena is
+// now Go's shape: `__slab_arena_new` RESERVES the whole 64 MiB, commits the first `SlabArenaCommitGranuleBytes`
+// of it, and `__slab_arena_alloc_chunks` commits further granules as the first-fit scan reaches them. A
+// program that allocates one box is resident in one granule; the other 63.9 MiB costs address space, which
+// Windows does not charge and Linux does not back.
+//
+// ⭐⭐ **THAT SIZE IS NOT PICKED, IT IS THE REVERSE MAP'S BOTTOM LEVEL — WHICH IS WHAT THE 2 MiB ARENA COST US.**
+// An L3 table describes `ArenaMapLevelEntries` pages, i.e. 64 MiB of address space, and it is itself allocated
+// out of an arena. A 2 MiB arena landing in a 64 MiB region of its own therefore spent a 64 KiB table to
+// describe 2 MiB of heap — **3.1%**. At 64 MiB the arena and the table describe the same span, so the cost is
+// 8 chunks in 8192 (**0.1%**) when an arena starts on a 64 MiB boundary and 16 in 8192 (**0.2%**) when it
+// straddles two, which is the honest range rather than a fixed figure. See `ReservedArenaChunkCount`.
+//
+// ⛔⛔ **AND ON wasm32-wasi EVERY WORD OF THAT IS FALSE, WHICH IS WHY THE ARENA HAS TWO GEOMETRIES.** Linear
+// memory has no reservation: `memory.grow` takes the range AND backs it, so `osReservePages` IS
+// `osAllocPages` there (`StdToWasm.emitOsAllocPages` is the emitter BOTH ops route to, and its commit twin
+// answers the address it was handed), and the "free" 63.9 MiB is 63.9 MiB of charged linear memory.
+// **MEASURED with `scripts/peak-rss.sh --repeat 3`, two compilers built from ONE tree differing in ONE
+// constant, run under `vendor/wasmtime`:**
+//
+//   | program                        | 64 MiB arena | 512 KiB arena |
+//   |--------------------------------|-------------:|--------------:|
+//   | heap-touching hello-world      |    70.32 MiB |    **5.22 MiB** |
+//   | 32,768 live interpolated Strings |  67.36 MiB |   **11.10 MiB** |
+//
+// It was not a rounding error on that lane; at hello-world size it WAS the whole program — and the second
+// row is what says the small arena has not merely moved the cost, because a heap 32k objects deep still
+// fits in 11 MiB. The native lanes' emitted reservation is untouched at 67108864.
+//
+// ⭐⭐ **GO ANSWERS THIS WITH A PER-PLATFORM CONSTANT, AND HERE ONE OF ITS ROWS IS TAKEN AND ANOTHER IS
+// DELIBERATELY NOT — WHICH IS DECIDED BY THE REASON, NOT BY THE NUMBER.** `logHeapArenaBytes`
+// (`vendor/go/src/runtime/malloc.go:259`) is `(6+20)` = 64 MiB on 64-bit non-Windows-non-wasm-non-iOS,
+// `(2+20)` = 4 MiB on 64-bit Windows, 32-bit and iOS/arm64, and `(9+10)` = **512 KiB on wasm**. Go states
+// both reasons out loud at `:238`: Windows *"because all committed memory is charged to the process, even if
+// it's not touched"*, and wasm *"because some Wasm programs have very small heap, and everything in the Wasm
+// linear memory is charged."*
+//
+// **The wasm reason transfers exactly and the Windows one does not.** What Go commits per arena is its
+// `heapArena` record, whose bitmap and span array are PROPORTIONAL to the arena, so Windows' commit charge
+// bites it at 64 MiB. shv2's per-arena eager commit is `SlabArenaCommitGranuleBytes`, a CONSTANT — the
+// bitmap of a 64 MiB arena is 128 words, so all of this file's metadata is 1 KiB inside a single chunk
+// however large the arena grows. Windows therefore charges shv2 for one granule, and copying Go's 4 MiB
+// there would be a number taken without the fact that produced it.
+//
+// ⇒ The lane is asked as **`IrModule.hasPageReservation`**, which is the MECHANISM and not the target: what
+// this file needs to know is whether a reservation is free, and a field named `isWasm` would have had to be
+// re-read by every later consumer that meant something else by it. `Compiler.maxon` sets it beside
+// `debugStream`, at the seam where lowering has finished and nothing has been installed yet.
+//
+// ⚠ **THE ALIGNED ARENA GO USES IS ALSO DELIBERATELY NOT COPIED, AND THE PRICE OF COPYING IT IS MEASURED.**
+// `sysReserveAligned` (`vendor/go/src/runtime/mem.go:185`) over-reserves `size + align` and then either TRIMS
+// the unaligned ends (POSIX) or — since Windows cannot release part of a reservation — releases the whole
+// thing and re-reserves at the aligned address, retrying on a race. Two things stop that here, and neither is
+// effort: `osReservePages` takes a SIZE and no address hint, so the Windows half of Go's routine cannot be
+// spelled at all; and a trim cannot be emitted from this tier, because `osFreePages` means *release the whole
+// reservation* on Windows and *unmap this sub-range* on POSIX, and a target-neutral body cannot ask for one
+// and not the other. What it would buy is 0.2% → 0.1% of the map, plus `arenaBase == addr and -size`
+// — a THIRD answer to the "owning arena's base" question below, and the cheapest of the three. What it would
+// cost is a `size`-sized second reservation per arena, which on wasm is not address space at all but a second
+// arena's worth of charged memory — a DOUBLING of the lane the geometry above exists to shrink. ⇒
+// **FOLLOW-UP, NAMED: an address-hint operand on `osReservePages`** is what makes Go's routine expressible;
+// until something needs the mask, a straddling arena costs one extra 64 KiB table.
+//
+// ⚠ **THE CHUNK IS `SlabPageBytes` — GO'S 8 KiB PAGE — AND IT IS NOT SPELLED HERE.** `SlabClasses.maxon`
+// declares `SlabPageShift`/`SlabPageBytes` and `SlabClassTable.checkSlabClassTable` already asserts the two
+// agree; this file reads them. v1 writes the same number a second time and says so out loud — *"the
+// arena-map index math uses its own 13-bit page masks, kept as literals there — a distinct concern"* — and
+// it is not a distinct concern, it is 8192 written twice, which is how a page-size change silently leaves
+// the map indexing one geometry and the class table another.
+//
+// ⚠ **NO LOCK, AND THAT IS INHERITED RATHER THAN CHOSEN.** shv2's existing `__slab_alloc` bumps a `.data`
+// cursor with a plain load/store pair and no synchronization, so the layer beneath it adding one would buy
+// nothing while the layer above it stays racy. v1's SLOW PATH holds `__slab_lock` across the callers of
+// these (`__slab_alloc`'s refill, every `__slab_mcentral_*`), which is why it also needs `__slab_init_done`
+// and a separate `__slab_arena_init` entry point — to run the lock's initialization exactly once. ⇒
+// **FOLLOW-UP, NAMED: locking the whole slow path**, allocator and arena together, at the point green
+// threads can run these on more than one OS thread.
+//
+// ⚠ **AND THERE IS NO `__slab_init` / `__slab_init_done` HERE FOR A SECOND REASON THAT SURVIVES THE LOCK.**
+// The `.data` image IS the initialization, exactly as `MmRuntime`'s slab cursor's zero means "no arena yet":
+// `__slab_arena_list` starts 0, and the first `__slab_arena_alloc_chunks` reads 0, maps an arena and
+// retries. There is no state that can be observed before it is established, so there is nothing to guard.
+//
+// ✅ **THE OWNING ARENA'S BASE WAS "THE SCAVENGER'S DEBT" AND S6 PAID IT — BY ASKING RATHER THAN STORING.**
+// `__slab_arena_free_chunks` needs an arena base its caller does not hold, and the three candidates this
+// note used to list were all ways of RECORDING one at the moment a chunk run is handed out: a real out-value
+// on the alloc entry point, an arena level in the reverse map, or an arena-ALIGNED reservation the address
+// could be masked to. `__slab_arena_of` is a fourth and it stores nothing, on the observation that decides
+// between them — **the question is asked at DESTRUCTION and would have been answered at BIRTH**, and a span
+// is destroyed at most once and created at least once. See that function for the full argument, and for why
+// v1's hidden `.data` out-parameter is not ported.
+//
+// ⚠ The masked form is still the cheapest of all four and is still unreachable for the reason above: the
+// header's own note on `sysReserveAligned` records what an address-hint operand on `osReservePages` would
+// buy and what it would cost on the lane with no reservation.
+
+// --- Geometry ---
+//
+// ⭐ **ONE NUMBER IS CHOSEN PER LANE AND EVERYTHING ELSE IS DERIVED FROM IT.** The bitmap's width, the byte
+// count and the largest run a caller may ask for all follow from the chunk count. Stated the other way round
+// — a picked bitmap width beside a picked size — the two would be numbers kept in agreement by hand, which is
+// exactly how the 2 MiB arena came to cost 3.1% of itself in map tables. Written as a DERIVATION there is no
+// second number to disagree, so what is left to assert is that the derivation LOSES NOTHING on EITHER lane —
+// `checkSlabArenaGeometry`. (It is a shift and not a division because `/` at this tier answers a float, and
+// the shift's exactness is the thing being asserted anyway.)
+
+// ⭐⭐ **THE RESERVING LANE'S ARENA IS NOT PICKED EITHER — IT IS ONE BOTTOM-LEVEL MAP TABLE'S SPAN.** An L3
+// table describes `ArenaMapLevelEntries` pages, so one arena is exactly one table's worth of address space
+// and the map costs 0.1–0.2% of the heap it describes. Written as the identity rather than as 8192, the two
+// cannot drift.
+let ReservedArenaChunkCount = ArenaMapLevelEntries
+
+// ⭐⭐ **512 KiB WHERE A RESERVATION IS AN ALLOCATION — GO'S OWN wasm ROW, AND IT BREAKS THE COUPLING ABOVE
+// ON PURPOSE.** 64 chunks of 8 KiB is `logHeapArenaBytes = (9+10)` at `vendor/go/src/runtime/malloc.go:259`,
+// and it is the whole of the 70.32 → 5.22 MiB collapse the header measures. The 1:1 arena↔table match is
+// gone at this size — an L3 table still describes 64 MiB of address space while only 512 KiB of it is arena —
+// and the naive reading of that is a 12.5% map overhead.
+//
+// ⭐⭐ **IT IS ~0.1% INSTEAD, AND THE REASON IS A PROPERTY OF THE LANE THAT HAS NO RESERVATION IN THE FIRST
+// PLACE.** Linear memory is a SINGLE CONTIGUOUS REGION that only ever grows at the top: `memory.grow` hands
+// back the old end, so arena N+1 begins exactly where arena N stops. Successive arenas are therefore
+// ADJACENT, and ~128 of them fall inside one L3 table's span — the table is allocated once and shared, not
+// once per arena. The 12.5% figure is what SCATTERED arenas would cost, and this lane cannot scatter them.
+//
+// ⛔ **SO DO NOT "FIX" THE MISMATCH BY SHRINKING `ArenaMapLevelEntries`.** That level's width is an ADDRESS
+// SPLIT (`checkSlabArenaGeometry` asserts the four fields tile 48 bits); narrowing it to match this arena
+// would push bits into L2 and L1 and make every native lane's map deeper to describe a cost this lane does
+// not pay.
+let UnreservedArenaChunkCount = 64
+
+// An arena's chunk count. ⚠ **RANGED FROM 1 RATHER THAN LEFT A BARE `ParsedInt`, AND THAT IS LOAD-BEARING**:
+// `checkArenaMapCoupling` DIVIDES by it, and a type admitting 0 makes that a throwing divide (E3057) — the
+// range is where "an arena with no chunks is not a thing" is stated. The upper bound is `i64.max` and not the
+// tight `ArenaMapLevelEntries`, because a range bound must be a LITERAL: spelling 8192 here would be a second
+// copy of the map level, which is the duplication this whole geometry is written as a derivation to avoid.
+// The tight bound is asserted instead, with its reason, in `checkArenaMapCoupling`.
+typealias ArenaChunkCount = int(1 to i64.max)
+
+// ⭐ **EVERYTHING AN ARENA'S SIZE DECIDES, CARRIED TOGETHER SO THE PIECES CANNOT BE ASKED SEPARATELY.**
+// `buildSlabArenaNew` emits the reservation size and the bitmap's byte count; `buildSlabArenaAllocChunks`
+// and `buildSlabArenaFreeChunks` emit the scan bound. Handed the raw chunk count instead, each would derive
+// its own — and a builder deriving `bitmapWords` from one geometry while its neighbour derives the scan
+// bound from another is an allocator that hands one chunk out twice, with nothing to catch it.
+type SlabArenaGeometry
+	// Chunks in one arena. Every other figure here is derived from it.
+	export let chunkCount as ArenaChunkCount
+	// The bitmap that describes them, in machine words.
+	export let bitmapWords as ParsedInt
+	// ⭐⭐ **THE COMMIT GRANULES IN ONE ARENA — S6's replacement for the WATERMARK, and the reason it had to
+	// go.** A watermark says *"`[0, committedChunks)` is committed"*, which is only expressible while commits
+	// go one way. The scavenger decommits a granule wherever its chunks happen to have gone free, so the
+	// committed set stops being a prefix the moment it runs; a bitmap is the honest shape of the same fact,
+	// and it costs 16 words on the reserving lane against the watermark's one.
+	export let granuleCount as ParsedInt
+	// The bitmap that describes THOSE, in machine words. A CEILING, so the last word may describe fewer than
+	// 64 granules — the non-reserving lane has 8 — and every walk bounds itself by `granuleCount` rather than
+	// by the word count for exactly that reason.
+	export let commitBitmapWords as ParsedInt
+	// Where the commit bitmap sits in the metadata chunk: immediately past the chunk bitmap, whose width is
+	// itself derived. Carried rather than spelled, because a lane-dependent width means a lane-dependent
+	// offset, and an offset computed at each of its four use sites is four chances to describe a different
+	// table.
+	export let commitBitmapOffset as ByteOffset
+	// What `__slab_arena_new` asks `osReservePages` for.
+	export let bytes as ParsedInt
+	// ⭐ Which lane this geometry IS, carried rather than passed alongside. `checkArenaMapCoupling` asks a
+	// DIFFERENT question of each lane, and a geometry travelling beside a separate bool is a pair that can
+	// arrive mismatched — a 512 KiB arena checked against the reserving lane's rule would pass the wrong
+	// assertion and say nothing.
+	export let hasPageReservation as bool
+
+	// The lane's geometry, asked of the one fact that decides it — `IrModule.hasPageReservation`, which is
+	// the MECHANISM (is a reservation free?) rather than the target, for the reason its own header gives.
+	export static function forReservation(hasPageReservation bool) returns Self
+		if hasPageReservation 'reserves'
+			return Self.fromChunkCount(ReservedArenaChunkCount, hasPageReservation: hasPageReservation)
+		end 'reserves'
+
+		return Self.fromChunkCount(UnreservedArenaChunkCount, hasPageReservation: hasPageReservation)
+	end 'forReservation'
+
+	// The derivation, written once for both lanes so a new one cannot arrive with a hand-computed bitmap.
+	static function fromChunkCount(chunkCount ArenaChunkCount, hasPageReservation bool) returns Self
+		let bitmapWords = chunkCount shr BitmapBitsPerWordShift
+		let granuleCount = chunkCount shr SlabArenaCommitGranuleChunksShift
+		let commitBitmapWords = (granuleCount + BitmapBitsPerWordMask) shr BitmapBitsPerWordShift
+		let commitBitmapOffset = ((ArenaBitmapOffset as ParsedInt) + bitmapWords * ArenaWordBytes) as ByteOffset
+		return Self{chunkCount: chunkCount, bitmapWords: bitmapWords, granuleCount: granuleCount, commitBitmapWords: commitBitmapWords, commitBitmapOffset: commitBitmapOffset, bytes: chunkCount * SlabPageBytes, hasPageReservation: hasPageReservation}
+	end 'fromChunkCount'
+end 'SlabArenaGeometry'
+
+// A bitmap word is a machine word. The shift and the mask are the same fact three times over by necessity
+// (a count, the shift that divides by it, the mask that takes a remainder of it), so the pair that CAN be
+// derived is derived and the one that cannot is asserted — `checkSlabArenaGeometry`.
+let BitmapBitsPerWord = 64
+let BitmapBitsPerWordShift = 6
+let BitmapBitsPerWordMask = BitmapBitsPerWord - 1
+
+// A machine word, for the COMPILE-TIME size arithmetic here — the bitmap's byte count and each reverse-map
+// level's table size. The EMITTED `base + index · 8` is not spelled in this file at all: it is
+// `MmRuntime.emitWordSlotAddr`, exported at S2 precisely so a third copy of that arithmetic did not get
+// written, and `SlabRuntime`'s `WordBytes` records the same split one layer up. What stays private is the
+// LAYOUT constant, because a shared "8" is not a shared fact — these are strides of tables this file owns.
+let ArenaWordBytes = 8
+
+// ⭐⭐ **THE UNIT AN ARENA COMMITS IN, AND EVERY REASON FOR THE NUMBER IS A PLATFORM'S.** 64 KiB is Windows'
+// ALLOCATION GRANULARITY, it is a whole multiple of every page size the four lanes use — including
+// arm64-macOS's **16 KiB**, which is TWICE `SlabPageBytes` and is the constraint that decides this — and it is
+// exactly what `MmRuntime`'s arena commits today, so routing the allocator through this layer changes a
+// program's resident set by nothing.
+//
+// ⛔ **A CHUNK-GRANULARITY COMMIT WOULD BE A WRONG ANSWER ON arm64-macOS, NOT MERELY A SMALL ONE.** A chunk is
+// 8 KiB; `mmap` REFUSES an address or a length that is not page-aligned, and that lane's page is 16 KiB. So
+// the granule is not a batching optimization — it is what makes every committed range page-aligned on every
+// lane, which is why it is asserted below rather than tuned.
+let SlabArenaCommitGranuleBytes = 65536
+let SlabArenaCommitGranuleChunks = SlabArenaCommitGranuleBytes shr SlabPageShift
+
+// The two shifts the granule is REACHED by — `chunk >> chunksShift` is its granule, `granule << shift` is its
+// byte offset in the arena. A width and the shift that divides by it are ONE fact written twice by necessity,
+// so both are asserted against the widths above (`requireShiftMatchesWidth`) rather than trusted. They exist
+// because S6's commit bitmap and its scavenger index BY GRANULE, where the watermark they replaced only ever
+// compared chunk counts.
+let SlabArenaCommitGranuleChunksShift = 3
+let SlabArenaCommitGranuleShift = SlabPageShift + SlabArenaCommitGranuleChunksShift
+
+// ⭐ **THE WIDEST PAGE ANY LANE HAS, WHICH IS WHAT MAKES THE GRANULE ABOVE A CONSTRAINT RATHER THAN A TASTE.**
+// x64 is 4 KiB, **arm64-macOS is 16 KiB** — TWICE a chunk, which is the constraint the granule's own header
+// names — and **wasm32's `memory.grow` unit is 64 KiB**, the widest of the four. Every range this file
+// reserves or commits is a whole number of granules, so a granule that is not a whole number of the widest
+// page is a range `mmap` REFUSES on one lane and a `memory.grow` that silently rounds up on another.
+// Asserted rather than left in a comment, which is where the 16 KiB lived until the arena acquired a second
+// geometry to check it against.
+let LargestTargetPageBytes = 65536
+
+// ⭐ **CHUNK 0 IS THE ARENA'S OWN METADATA, so its bit is never free and it is never handed out.** That
+// costs one chunk in 8192 (0.01%) and buys two things: the metadata needs no second mapping, and a returned
+// chunk address is never the arena base, so the two can never be confused by a caller that holds one.
+let ArenaMetadataChunks = 1
+
+// A bitmap byte with every bit FREE. The fill takes a BYTE and broadcasts it, so the word-level `-1` this
+// file used to store is spelled as the byte that produces it — named rather than a bare `0xFF`, because
+// what makes it right is the polarity (a set bit means FREE), not the hex.
+let ArenaBitmapAllFreeByte = 0xFF
+
+// The metadata chunk's layout. `next` is the arena-list link — the list is prepended to, so the newest
+// arena is scanned first and a fresh one serves the request that grew it without a second walk. The two
+// bitmaps follow, the chunk one first at a fixed offset and the granule COMMIT one immediately past it at
+// the geometry's derived `commitBitmapOffset`.
+//
+// ⛔⛔ **THE `committedChunks` WATERMARK THAT USED TO SIT AT +8 IS GONE (S6), AND ITS DELETION IS THE
+// SCAVENGER'S PRECONDITION RATHER THAN A TIDY-UP.** One word said *"`[0, committedChunks)` is committed"*,
+// which is only true while commits go one way: `__slab_arena_alloc_chunks` raised it, nothing lowered it,
+// and every range it named was therefore strictly ABOVE everything the arena had ever handed out. **A
+// scavenger breaks that on its first call.** It decommits a granule wherever the chunks happen to have gone
+// free — in the MIDDLE of the range the watermark claims — so the committed set stops being a prefix, and
+// the watermark then reports a decommitted granule as committed and the next claim inside it hands the
+// caller pages Windows has made INACCESSIBLE. The bitmap is the same fact in the shape the scavenger needs;
+// it costs 16 words against the watermark's one on the reserving lane, and one word on the other.
+let ArenaNextOffset = 0 as ByteOffset
+let ArenaBitmapOffset = 8 as ByteOffset
+
+// --- The reverse map's geometry ---
+//
+// ⭐⭐ **THREE LEVELS OVER THE PAGE INDEX, AND THE SPLIT IS ARITHMETIC RATHER THAN TASTE.** An address is
+// `[ L1 | L2 | L3 | page offset ]`, and `checkSlabArenaGeometry` asserts the four widths sum to
+// `ArenaMapAddressBits` — so a change to any one of them fails the next compile instead of silently
+// indexing past a table. The bottom field is `SlabPageShift`, READ from the class table rather than spelled:
+// the L3 index IS the page index, which is the one place v1's duplicate 13 actually bites.
+//
+// 48 bits is the canonical user-address width shv2 must cover: x64 user mode is 47 bits and arm64 is 48, so
+// the mask is a no-op on every address a program can hold and a containment guarantee on any that is not.
+//
+// ⭐⭐ **THE RESERVING LANE'S ARENA IS SIZED TO THIS LEVEL, WHICH IS THE COUPLING THE 2 MiB ARENA BROKE.** An
+// L3 table covers `ArenaMapLevelEntries` pages — 64 MiB of address space — and `ReservedArenaChunkCount` IS
+// that entry count, so one arena is one table's span. v1's arena was 64 MiB too and the match was never
+// written down; here it is the DERIVATION, so the two cannot drift. An arena that starts on a 64 MiB boundary
+// spends one 64 KiB table (0.1% of the arena); one that straddles spends two (0.2%). The header says what an
+// ALIGNED reservation would buy and what it would cost.
+//
+// ⚠ **THE NON-RESERVING LANE IS 1:128 INSTEAD, AND `checkSlabArenaGeometry` CHECKS THAT RATIO RATHER THAN THE
+// IDENTITY.** `UnreservedArenaChunkCount` records why the cost is still ~0.1% there — successive arenas are
+// ADJACENT in linear memory, so one table serves many — and what the ratio must remain for that argument to
+// hold: a WHOLE number of arenas per table. An arena that did not divide the level would put one table's
+// entries under two arenas' worth of straddling, which is the 12.5% the contiguity is what avoids.
+let ArenaMapAddressBits = 48
+let ArenaMapLevelBits = 13
+let ArenaMapLevelEntries = 8192
+let ArenaMapLevelMask = ArenaMapLevelEntries - 1
+let ArenaMapL1Bits = 9
+let ArenaMapL1Entries = 512
+let ArenaMapL1Mask = ArenaMapL1Entries - 1
+let ArenaMapL2Shift = SlabPageShift + ArenaMapLevelBits
+let ArenaMapL1Shift = ArenaMapL2Shift + ArenaMapLevelBits
+
+// ⭐ **THE MISS ANSWER, NAMED.** `__slab_arena_map_get` answering 0 is not a defaulted return — it is the
+// OS-DIRECT SENTINEL, and the layer above reads it as *"this pointer was never registered as belonging to a
+// span, so it came straight from the OS and goes straight back"*. It is spelled here so the producer (the
+// three miss blocks) and the future consumer cannot disagree about which value carries that meaning.
+export let ArenaMapNoSpan = 0
+
+// --- Entry points ---
+
+// ⭐ **THE FAMILY BAND.** `usesSlabArena` is a `__slab_arena_` PREFIX test, deliberately narrower than
+// `__slab_`: `MmRuntime`'s `__slab_alloc` already lives in that wider band, and one prefix with two owners
+// is how a bit ends up set by a call that has nothing to do with it.
+let SlabArenaCallPrefix = b"__slab_arena_"
+
+let SlabArenaNewName = b"__slab_arena_new"
+export let SlabArenaAllocChunksName = b"__slab_arena_alloc_chunks"
+export let SlabArenaFreeChunksName = b"__slab_arena_free_chunks"
+export let SlabArenaOfName = b"__slab_arena_of"
+export let SlabArenaScavengeName = b"__slab_arena_scavenge"
+let SlabArenaMapEnsureName = b"__slab_arena_map_ensure"
+export let SlabArenaMapSetName = b"__slab_arena_map_set"
+export let SlabArenaMapGetName = b"__slab_arena_map_get"
+
+// ⚠ **THE OS-ALLOCATION GUARD KEEPS v1's NAME AND SO SITS OUTSIDE THE BAND ABOVE, WHICH IS CORRECT.** It
+// guards `osAllocPages` and not the arena — S2's OS-direct path is its second caller — and it is never
+// named by a Maxon-tier call, so it never needs to set a usage bit. Its installation is DECLARED by
+// `installSlabArena`, which installs the family as one closure; that is rule 2 of `RuntimeUsage`'s header
+// (a synthesized body's calls are declared, never discovered) and the same all-or-nothing shape
+// `installManagedMemoryRuntime` uses, with dead-function elimination taking the slack back.
+export let SlabAssertOsAllocName = b"__slab_assert_os_alloc"
+
+// The two `.data` words this family owns. Both `__`-prefixed, so no user name can collide and neither
+// reaches a spec golden. ⭐ Their zero initializer IS the initial state, not a default: `list == 0` means
+// "no arena mapped yet" and `map l1 == 0` means "nothing registered yet", and both are what the first call
+// on each path tests for.
+let SlabArenaListLabel = b"__slab_arena_list"
+let SlabArenaMapL1Label = b"__slab_arena_map_l1"
+
+// Does this callee belong to the arena family? The exact twin of `isClockRuntimeCallee` and
+// `isParallelBoundaryRuntimeCallee` — a prefix test, implying no other runtime floor: the bodies below call
+// each other and `osAllocPages`, and nothing else. Emphatically NOT `usesHeap`: the arena is BENEATH the
+// heap, and a program reaching it through the allocator carries the allocator for its own reasons.
+export function isSlabArenaRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: SlabArenaCallPrefix)
+end 'isSlabArenaRuntimeCallee'
+
+// The arena family's `.data` slots. The gate is asked HERE rather than at the call site, following
+// `clockRuntimeGlobals`: a condition spelled at both ends is a second place for the two to disagree, and
+// the loop over an empty array is exactly the no-op the absent `if` would have produced.
+export function slabArenaRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	if usage.usesSlabArena 'arenaSlots'
+		out.push(DataSectionEntry.create(String.from(SlabArenaListLabel), valueType: StdType.i64, value: 0))
+		out.push(DataSectionEntry.create(String.from(SlabArenaMapL1Label), valueType: StdType.i64, value: 0))
+	end 'arenaSlots'
+
+	return out
+end 'slabArenaRuntimeGlobals'
+
+// Install the page layer into the lowered Std module — the whole family or none of it, for the reason
+// `SlabAssertOsAllocName` states.
+//
+// ⭐ **THE GEOMETRY CHECK RUNS BEFORE THE GATE, AND THAT IS DELIBERATE.** The gate is now live — every heap
+// program reaches this layer through `__slab_alloc` (S2) — so the check would in fact run on most compiles.
+// It stays ahead of the gate anyway, because the compiles it must NOT skip are the heapless ones: a geometry
+// that stops satisfying its own rule has to fail the first compile after the change, and a check that only
+// runs when a program happens to allocate is a check that reports the breakage to whoever comes next. It is
+// two dozen integer comparisons against a compile that emits megabytes; there is nothing here worth a flag,
+// and a flag is what would let it stop running.
+//
+// ⭐ **AND IT CHECKS BOTH LANES' GEOMETRIES, NOT THIS BUILD'S.** `module.hasPageReservation` picks what gets
+// EMITTED, but a wasm-only breakage found only by a wasm compile is exactly the same skipped check one axis
+// over — and both geometries are compile-time constants, so checking the pair costs nothing and cannot be
+// dodged by which target happens to be building.
+export function installSlabArena(module StdModule, usage RuntimeUsage)
+	checkSlabArenaGeometry()
+
+	if not usage.usesSlabArena 'noArena'
+		return
+	end 'noArena'
+
+	let geometry = SlabArenaGeometry.forReservation(module.hasPageReservation)
+
+	buildSlabAssertOsAlloc(module)
+	buildSlabArenaNew(module, geometry: geometry)
+	buildSlabArenaAllocChunks(module, geometry: geometry)
+	buildSlabArenaFreeChunks(module, geometry: geometry)
+	buildSlabArenaOf(module, geometry: geometry)
+	buildSlabArenaScavenge(module, geometry: geometry)
+	buildSlabArenaMapEnsure(module)
+	buildSlabArenaMapSet(module)
+	buildSlabArenaMapGet(module)
+end 'installSlabArena'
+
+// ⭐⭐ **THE GEOMETRY IS INTERNALLY COHERENT — asserted, not trusted.** `checkSlabClassTable` beside it makes
+// the same argument for the size-class ladder and states it in full: a table whose source changed shape
+// produces a working-looking allocator that indexes past its own bounds. Every number below is either
+// derived from another or checked against the one it must agree with; the file declares nothing that agrees
+// with nothing.
+//
+// It panics rather than returning a verdict, for that check's reason: a broken arena geometry cannot
+// produce a working allocator, so there is no caller who could sensibly continue.
+function checkSlabArenaGeometry()
+	requireShiftMatchesWidth("bitmap word", shift: BitmapBitsPerWordShift, width: BitmapBitsPerWord)
+	requireShiftMatchesWidth("map level", shift: ArenaMapLevelBits, width: ArenaMapLevelEntries)
+	requireShiftMatchesWidth("map L1", shift: ArenaMapL1Bits, width: ArenaMapL1Entries)
+
+	// The commit granule is a whole number of chunks (so the shift that derives its chunk count loses
+	// nothing). A fact about the granule alone, so it is asked once rather than once per arena geometry.
+	if SlabArenaCommitGranuleChunks * SlabPageBytes != SlabArenaCommitGranuleBytes 'granuleNotWholeChunks'
+		panic("slab arena: a commit granule of {SlabArenaCommitGranuleBytes} bytes is not a whole number of {SlabPageBytes}-byte chunks")
+	end 'granuleNotWholeChunks'
+
+	// The two shifts a granule is reached by. `emitCommitGranulesFor` divides a CHUNK index by the first and
+	// `buildSlabArenaScavenge` multiplies a GRANULE index by the second, so a shift that stopped matching its
+	// width would commit one granule and decommit another.
+	requireShiftMatchesWidth("commit granule chunks", shift: SlabArenaCommitGranuleChunksShift, width: SlabArenaCommitGranuleChunks)
+	requireShiftMatchesWidth("commit granule bytes", shift: SlabArenaCommitGranuleShift, width: SlabArenaCommitGranuleBytes)
+
+	// ⭐⭐ **A GRANULE'S CHUNKS MUST ALL LIE IN ONE BITMAP WORD, which is what makes the scavenger's
+	// "is this granule entirely free?" ONE masked compare rather than a nested loop.** It holds with 56 bits
+	// of headroom today (8 chunks in a 64-bit word) and is asserted because widening the granule is exactly
+	// the change that would quietly turn that compare into a wrong answer about the granule's second half.
+	//
+	// ⚠ **`<=` IS THE WHOLE TEST ONLY BECAUSE BOTH ARE POWERS OF TWO, and that premise is established two
+	// lines up rather than assumed here.** A granule's first chunk is `g · granuleChunks`, so its bit
+	// position is `(g · granuleChunks) mod BitmapBitsPerWord`, which is a multiple of `granuleChunks` — and a
+	// field of `granuleChunks` bits starting at a multiple of `granuleChunks` fits inside the word exactly
+	// when `granuleChunks` DIVIDES the word width. `requireShiftMatchesWidth` above proves the granule is a
+	// power of two and this proves it is no wider than the word, and for two powers of two those two
+	// together are divisibility. A granule of, say, 24 chunks would pass `<=` and still straddle.
+	if SlabArenaCommitGranuleChunks > BitmapBitsPerWord 'granuleSpansBitmapWords'
+		panic("slab arena: a commit granule of {SlabArenaCommitGranuleChunks} chunks does not fit one {BitmapBitsPerWord}-bit bitmap word, so the scavenger's all-free test would miss the chunks past the first word")
+	end 'granuleSpansBitmapWords'
+
+	// ⭐ **AND THE GRANULE IS A WHOLE NUMBER OF THE WIDEST PAGE ANY LANE HAS.** Every range this file names to
+	// the OS is a whole number of granules, so this is what makes each one page-aligned everywhere at once —
+	// `mmap` REFUSES a length that is not, and `memory.grow` silently rounds one up.
+	if SlabArenaCommitGranuleBytes mod LargestTargetPageBytes != 0 'granuleSplitsAPage'
+		panic("slab arena: a commit granule of {SlabArenaCommitGranuleBytes} bytes is not a whole number of {LargestTargetPageBytes}-byte pages, so a committed range would split a page on the widest-page lane")
+	end 'granuleSplitsAPage'
+
+	// `__slab_arena_new` clears the metadata chunks' bits by storing `-(1 shl ArenaMetadataChunks)` into
+	// bitmap word 0, which is only the right answer while those bits all live in word 0. A fact about the
+	// metadata reservation and the word width, and about neither arena's size.
+	if ArenaMetadataChunks >= BitmapBitsPerWord 'metadataSpansWords'
+		panic("slab arena: {ArenaMetadataChunks} metadata chunks do not fit in one {BitmapBitsPerWord}-bit bitmap word")
+	end 'metadataSpansWords'
+
+	// `__slab_arena_new` commits ONE granule and then writes the metadata into it, so the metadata chunks must
+	// lie inside that first granule. Short, and the arena would initialise its own bitmap through a pointer
+	// into uncommitted — on Windows and on a `PROT_NONE` POSIX reservation alike, INACCESSIBLE — memory.
+	if SlabArenaCommitGranuleChunks < ArenaMetadataChunks 'metadataPastFirstGranule'
+		panic("slab arena: {ArenaMetadataChunks} metadata chunk(s) do not fit in the first commit granule of {SlabArenaCommitGranuleChunks} chunk(s)")
+	end 'metadataPastFirstGranule'
+
+	// The four fields of an address must TILE it. Short, and a page's worth of addresses at the top of the
+	// space would index nothing; long, and the L1 index would run past its table.
+	let mappedBits = SlabPageShift + ArenaMapLevelBits + ArenaMapLevelBits + ArenaMapL1Bits
+	if mappedBits != ArenaMapAddressBits 'addressBitsDisagree'
+		panic("slab arena map: {SlabPageShift} + {ArenaMapLevelBits} + {ArenaMapLevelBits} + {ArenaMapL1Bits} is {mappedBits} bits, not the {ArenaMapAddressBits} the map claims to cover")
+	end 'addressBitsDisagree'
+
+	checkArenaGeometryForLane(SlabArenaGeometry.forReservation(true))
+	checkArenaGeometryForLane(SlabArenaGeometry.forReservation(false))
+end 'checkSlabArenaGeometry'
+
+// ⭐⭐ **WHAT ONE LANE'S ARENA MUST SATISFY, ASKED OF BOTH — because a rule that stops applying to the lane
+// nobody happens to be compiling is the "check that never runs" one signature up, wearing a target's
+// clothes.** Every panic here names the lane, since the two geometries produce the same sentence with
+// different numbers and a reader who cannot tell them apart has to re-derive which arena broke.
+function checkArenaGeometryForLane(geometry SlabArenaGeometry)
+	let lane = arenaLaneName(geometry.hasPageReservation)
+
+	// The bitmap's width is the chunk count shifted down by a word's bit count, and a LOSSY shift would leave
+	// the top chunks with no bit at all — free forever, and handed out by nobody. The scan would still work,
+	// which is what makes it worth asserting.
+	if geometry.bitmapWords * BitmapBitsPerWord != geometry.chunkCount 'bitmapShort'
+		panic("slab arena ({lane}): {geometry.bitmapWords} bitmap words describe {geometry.bitmapWords * BitmapBitsPerWord} chunks, not the arena's {geometry.chunkCount}")
+	end 'bitmapShort'
+
+	// The granule is a whole divisor of the arena — without it, the last granule's commit would run past the
+	// reservation and the OS would refuse it, and the derived granule count would describe fewer chunks than
+	// the arena has. (That the granule is itself a whole number of chunks is asked of the granule alone, one
+	// signature up.)
+	if geometry.granuleCount * SlabArenaCommitGranuleChunks != geometry.chunkCount 'granuleOverrunsArena'
+		panic("slab arena ({lane}): {geometry.granuleCount} commit granules describe {geometry.granuleCount * SlabArenaCommitGranuleChunks} chunks, not the arena's {geometry.chunkCount}")
+	end 'granuleOverrunsArena'
+
+	// The commit bitmap is a CEILING, so it may describe MORE granules than the arena has — never fewer, which
+	// would leave the top granules with no commit bit and the claim path re-committing a live range on every
+	// call that reached them.
+	if geometry.commitBitmapWords * BitmapBitsPerWord < geometry.granuleCount 'commitBitmapShort'
+		panic("slab arena ({lane}): {geometry.commitBitmapWords} commit-bitmap words describe {geometry.commitBitmapWords * BitmapBitsPerWord} granules, fewer than the arena's {geometry.granuleCount}")
+	end 'commitBitmapShort'
+
+	// ⭐⭐ **THE SMALLEST ARENA MUST STILL SATISFY THE LARGEST RUN THIS FILE ASKS OF ITSELF, AND SHRINKING AN
+	// ARENA IS EXACTLY HOW THAT STOPS BEING TRUE.** The reverse map's level tables are allocated out of an
+	// arena, and an L2/L3 level is the biggest single request the page layer makes. An arena too small for it
+	// does not fail to compile: `__slab_arena_alloc_chunks` REFUSES the request at run time with
+	// `slabChunkRunUnsatisfiable`, on one lane, in a build whose native twin is perfect. It subsumes the
+	// weaker "an arena has any payload chunks at all", which is why that is not asked separately.
+	let largestMapTableRun = arenaChunksFor(ArenaMapLevelEntries * ArenaWordBytes)
+	if largestMapTableRun > geometry.chunkCount - ArenaMetadataChunks 'mapTableRunUnsatisfiable'
+		panic("slab arena ({lane}): a {largestMapTableRun}-chunk reverse-map level does not fit the {geometry.chunkCount - ArenaMetadataChunks} chunks an arena has after its {ArenaMetadataChunks} metadata chunk(s), so `__slab_arena_map_ensure` would abort on the first lookup")
+	end 'mapTableRunUnsatisfiable'
+
+	// The list link and the two bitmaps are the whole of the metadata chunk — the commit bitmap is last, so
+	// its end is what can overflow — and nothing may silently start overlapping the payload of chunk 0 if
+	// either widens.
+	let metadataBytes = (geometry.commitBitmapOffset as ParsedInt) + geometry.commitBitmapWords * ArenaWordBytes
+	if metadataBytes > ArenaMetadataChunks * SlabPageBytes 'metadataOverflowsChunk'
+		panic("slab arena ({lane}): {metadataBytes} bytes of metadata do not fit in {ArenaMetadataChunks} chunk(s) of {SlabPageBytes}")
+	end 'metadataOverflowsChunk'
+
+	checkArenaMapCoupling(geometry.chunkCount, hasPageReservation: geometry.hasPageReservation, lane: lane)
+end 'checkArenaGeometryForLane'
+
+// ⭐⭐ **THE ARENA↔MAP-TABLE RATIO, WHICH IS THE ONE INVARIANT THE TWO LANES DO NOT SHARE — SO IT IS ASKED AS
+// TWO RULES RATHER THAN AS ONE THAT HOLDS VACUOUSLY.** Where a reservation is free the arena IS one L3
+// table's span (the identity `ReservedArenaChunkCount` is written as), and the map costs 0.1–0.2%. Where it
+// is not, the arena is deliberately SMALLER than a table and what has to hold instead is that a whole number
+// of them tile one — which is what makes `UnreservedArenaChunkCount`'s contiguity argument arithmetic rather
+// than a hope. Collapsing the pair into the weaker rule would let the reserving lane silently shrink to an
+// eighth of its table and lose the 0.1% without anything noticing.
+//
+// ⚠ **IT TAKES THE CHUNK COUNT RATHER THAN THE GEOMETRY, AND THAT IS THE BOOTSTRAP'S RULE AND NOT A STYLE
+// CHOICE.** The `mod` needs a divisor whose type excludes 0. shv2 reads that off `ArenaChunkCount` through a
+// FIELD access and is satisfied; the C# bootstrap — which is what compiles this file — is not, and answers
+// E3057 for `ArenaMapLevelEntries mod geometry.chunkCount` while accepting the identical expression when the
+// same ranged value arrives as a PARAMETER. Passing the field through a parameter is what makes the two
+// compilers agree, so do not "simplify" this back to taking the geometry until they do.
+function checkArenaMapCoupling(chunkCount ArenaChunkCount, hasPageReservation bool, lane String)
+	if not hasPageReservation 'tilesATable'
+		if ArenaMapLevelEntries mod chunkCount != 0 'arenaStraddlesTables'
+			panic("slab arena ({lane}): an L3 table's {ArenaMapLevelEntries} pages are not a whole number of {chunkCount}-chunk arenas, so adjacent arenas would straddle tables and the map's cost is not the ~0.1% `UnreservedArenaChunkCount` claims")
+		end 'arenaStraddlesTables'
+
+		return
+	end 'tilesATable'
+
+	if chunkCount != ArenaMapLevelEntries 'arenaIsNotOneTable'
+		panic("slab arena ({lane}): an arena of {chunkCount} chunks is not one L3 table's {ArenaMapLevelEntries} pages, so a table would describe more address space than the arena it was allocated for")
+	end 'arenaIsNotOneTable'
+end 'checkArenaMapCoupling'
+
+// Which arena a panic above is talking about. The two geometries produce the same sentences with different
+// numbers, and "512 KiB, not 64 MiB" is only readable once the reader is told which one was expected.
+function arenaLaneName(hasPageReservation bool) returns String
+	if hasPageReservation 'reserves'
+		return "reserving lanes"
+	end 'reserves'
+
+	return "the non-reserving lane"
+end 'arenaLaneName'
+
+// A width and the shift that divides by it are ONE fact written twice, by necessity — this file has four
+// such pairs, and the emitted code reaches each pair through whichever half its own expression happened to
+// name. `checkSlabClassTable` asserts exactly this about `SlabPageShift`/`SlabPageBytes` and states the
+// reason in full: a change to one half leaves the other silently describing a different geometry.
+function requireShiftMatchesWidth(what String, shift ParsedInt, width ParsedInt)
+	let produced = 1 shl shift
+	if produced != width 'disagrees'
+		panic("slab arena: {what}: 1 shl {shift} is {produced}, not {width}")
+	end 'disagrees'
+end 'requireShiftMatchesWidth'
+
+// Chunks a byte count occupies, rounded up. The reverse map's three table sizes are the only caller, and
+// they are compile-time constants — this runs in the COMPILER, so the runtime pays a `const` and no divide.
+function arenaChunksFor(bytes ParsedInt) returns ParsedInt
+	return (bytes + SlabPageBytes - 1) / SlabPageBytes
+end 'arenaChunksFor'
+
+// ⭐ **THE LARGEST RUN `__slab_arena_alloc_chunks` CAN EVER SATISFY ON A LANE.** Exported because the OBJECT
+// layer is what makes the requests that have to fit — a span's chunk run and the allocator's own state
+// region — and it had no way to ask. `checkSlabRuntimeGeometry` asks it of BOTH lanes for
+// `checkArenaGeometryForLane`'s reason: a request too large is refused at RUN TIME with
+// `slabChunkRunUnsatisfiable`, on one lane, in a build whose native twin is perfect.
+export function slabArenaAllocatableChunks(hasPageReservation bool) returns ParsedInt
+	return SlabArenaGeometry.forReservation(hasPageReservation).chunkCount - ArenaMetadataChunks
+end 'slabArenaAllocatableChunks'
+
+// `__slab_assert_os_alloc(ptr) -> ptr` — surface a refused OS page call as a clean abort, and hand the
+// pointer on when it was not refused.
+//
+// ⭐ **WHY IT EXISTS AT ALL.** Every caller in this file stores INTO the pointer it just got back, so a
+// failure that is not caught here arrives as `mov %reg, (<garbage>)`: an opaque access violation with no
+// attribution, in the one condition a user is most likely to hit for a reason outside their own program. v1
+// names the same guard and the same argument. It guards all three page calls this file makes — the
+// reservation, the commit, and (through `SlabRuntime`) an OS-direct allocation — which is why its answer is
+// its argument: a guard that hands the value on cannot be forgotten at a call site.
+//
+// ⛔⛔ **THE TEST IS `ptr <= 0`, AND `ptr == 0` WAS A WINDOWS-ONLY TEST WEARING A PORTABLE ONE'S CLOTHES.**
+// `VirtualAlloc` answers NULL on failure, so 0 is right there. A RAW POSIX SYSCALL DOES NOT: `mmap` answers
+// a small NEGATIVE ERRNO in the result register (−ENOMEM is −12), which the `== 0` test waves through as a
+// valid base — and the caller then stores metadata to address −12. Testing the SIGN catches every one of
+// them at once, and costs the same single compare, because no lane can answer a legitimate page base that is
+// zero or negative: user-space addresses are positive on all three native lanes, and wasm's `memory.grow`
+// base is past the module's own `.data`.
+function buildSlabAssertOsAlloc(module StdModule)
+	var func = IrFunction.createFromStd(SlabAssertOsAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oom = module.addBlock(func, label: b"oom")
+	var ok = module.addBlock(func, label: b"ok")
+
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	let lowestFailureAnswer = emitConst(module, block: entry, value: 0, ids: ids)
+	let failed = emitCmp(module, block: entry, a: ptr, b: lowestFailureAnswer, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(failed, thenBlockId: oom.id, elseBlockId: ok.id))
+
+	emitRuntimeAbort(module, func: func, block: oom, abort: RuntimeAbort.slabOsAllocFailed, ids: ids)
+
+	module.setTerminator(ok, op: StdOp.ret(ptr))
+
+	module.functions.push(func)
+end 'buildSlabAssertOsAlloc'
+
+// `__slab_arena_new() -> arenaBase` — map an arena, initialise its metadata and bitmap, prepend it to the
+// arena list, and answer its base.
+//
+// ⭐⭐ **v1 HAS THIS BODY TWICE, VERBATIM** — once as `__slab_arena_init` and once inside the `grow` branch
+// of `__slab_arena_alloc_chunks`, including the `-2` qword-0 constant and the `1 upto 128` fill. Two copies
+// of a bitmap initializer is two chances to leave an arena's chunk 0 marked FREE, which hands the metadata
+// out as payload and corrupts the arena that owns it. It is written once here and called from both.
+//
+// ⭐ **THE BITMAP FILL IS ONE `memFill`, AND THE ALTERNATIVES ARE BOTH WORSE AT THIS SIZE.** v1 emits a
+// RUNTIME loop over its 128 words. An earlier draft of this file unrolled the loop in the COMPILER instead,
+// which was right at four words and is 128 emitted stores now that the arena is sized to the map's bottom
+// level. `StdOp.memFill` (F1b) is neither: one op, lowering to the backend's own size ladder, and the count
+// stays derived — which is what let the arena acquire a SECOND size without this line changing at all.
+//
+// ⚠ The fill writes ONES — `ArenaBitmapAllFreeByte` — because a set bit means FREE here, and a freshly
+// committed mapping is ZERO. That is the one place the zeroing contract works against this file rather than
+// for it, and it is why the fill is not merely skipped.
+//
+// The mapping is fresh, so every byte of it is zero (see `SlabRuntime`'s header, which states the contract
+// this layer's chunks are the source of): the `next` link needs no explicit 0 when the list is empty, but it
+// is written anyway because the list head is usually NOT 0 and the same store serves both cases.
+//
+// ⭐⭐ **IT RESERVES THE WHOLE ARENA AND COMMITS ONE GRANULE (F1c).** The reservation is the arena; the commit
+// is what makes the metadata chunk writable. Everything past the first granule stays
+// reserved-and-inaccessible until `__slab_arena_alloc_chunks` hands out a chunk that reaches it, which is the
+// whole reason a 64 MiB arena is affordable on a lane that has reservations — and, where there is no such
+// thing, exactly the reason the arena is 512 KiB instead. See the header.
+function buildSlabArenaNew(module StdModule, geometry SlabArenaGeometry)
+	var func = IrFunction.createFromStd(SlabArenaNewName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	let requested = emitConst(module, block: entry, value: geometry.bytes, ids: ids)
+	let raw = ids.mint()
+	module.appendOp(entry, op: StdOp.osReservePages(raw, sizeId: requested))
+	let base = ids.mint()
+	module.appendOp(entry, op: StdOp.call(base, callee: SlabAssertOsAllocName, args: argsOf(raw)))
+
+	// The first granule, before ANY store below: the metadata chunk is inside it (asserted by
+	// `checkSlabArenaGeometry`), and until it is committed the arena's own base is not writable.
+	let firstGranule = emitConst(module, block: entry, value: SlabArenaCommitGranuleBytes, ids: ids)
+	emitGuardedCommit(module, block: entry, base: base, byteCount: firstGranule, ids: ids)
+
+	// Prepend: `new.next = head; head = new`. The head address is read once and used twice — ordinary SSA,
+	// and `globalAddr` is pure, so the allocator may rematerialize it rather than keep it live.
+	let headAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(headAddr, label: SlabArenaListLabel))
+	let oldHead = emitLoadField(module, block: entry, record: headAddr, offset: 0, ids: ids)
+	emitStoreField(module, block: entry, record: base, offset: ArenaNextOffset, value: oldHead)
+
+	let bitmapOffset = emitConst(module, block: entry, value: ArenaBitmapOffset as ParsedInt, ids: ids)
+	let bitmapAddr = emitBin(module, block: entry, a: base, b: bitmapOffset, opcode: StdBinOpcode.add, ids: ids)
+	let bitmapBytes = emitConst(module, block: entry, value: geometry.bitmapWords * ArenaWordBytes, ids: ids)
+	module.appendOp(entry, op: StdOp.memFill(bitmapAddr, byteCountId: bitmapBytes, value: ArenaBitmapAllFreeByte))
+
+	// `-(1 shl k)` is the all-ones mask with its low `k` bits cleared — the metadata chunks marked USED, every
+	// other chunk in word 0 free. It lands AFTER the fill, which wrote that word all-free a moment ago.
+	let firstWord = emitConst(module, block: entry, value: 0 - (1 shl ArenaMetadataChunks), ids: ids)
+	emitStoreField(module, block: entry, record: base, offset: ArenaBitmapOffset, value: firstWord)
+
+	// ⭐ **GRANULE 0 IS COMMITTED AND EVERY OTHER GRANULE IS NOT, WHICH IS WHAT THE FRESH MAPPING ALREADY
+	// SAYS.** The commit bitmap sits past the chunk bitmap the fill above stopped at, so it is still the
+	// reservation's own zeroes — and a zero bit MEANS "not committed". Only the one bit the commit two dozen
+	// lines up actually made true has to be written, exactly as the arena-list head's zero is its own
+	// initialisation.
+	let firstGranuleCommitted = emitConst(module, block: entry, value: 1, ids: ids)
+	emitStoreField(module, block: entry, record: base, offset: geometry.commitBitmapOffset, value: firstGranuleCommitted)
+
+	emitStoreField(module, block: entry, record: headAddr, offset: 0, value: base)
+	module.setTerminator(entry, op: StdOp.ret(base))
+
+	module.functions.push(func)
+end 'buildSlabArenaNew'
+
+// `__slab_arena_alloc_chunks(numChunks) -> base` — first-fit over the arena list's bitmaps: find a run of
+// `numChunks` consecutive free chunks, mark them used, and answer the address of the first. When no arena
+// has room, map a fresh one and scan that.
+//
+// ⭐ **THE UNSATISFIABLE REQUEST IS REFUSED, WHICH v1 DOES NOT DO.** Its loop grows a fresh arena and
+// rescans forever for a run no arena can ever hold, mapping memory until the OS refuses — an out-of-memory
+// abort reported for a request that was simply too large. A count outside `[1, chunks - metadata]` is a
+// COMPILER bug (a caller computed a span geometry wrong), and 0 is the quietest of them: the run test
+// `runLen >= 0` succeeds before any bit is cleared, so the answer is a chunk that is still marked FREE and
+// will be handed out a second time.
+//
+// ⭐ **THE ALL-USED WORD IS SKIPPED WHOLE.** A bitmap word of 0 has no free bit, so no run can start inside
+// it and any run in progress ends at it — 64 bit tests collapse to one compare. It is what makes scanning a
+// FULL arena, which is the case the list walk repeats for every arena it passes, cost `bitmapWords` loads
+// instead of `chunkCount`. The test is asked only at a word boundary, so it costs one compare per 64 chunks
+// on the path where it does not fire.
+//
+// ⚠ **THE WALK IS STILL O(arenas × chunks) PER CALL AND THAT IS A KNOWN SHAPE, NOT A HIDDEN ONE.** Go
+// replaces it with a radix summary tree (`pageAlloc`) precisely because a linear list of bitmaps is the
+// wrong data structure once arenas are many. It is left linear here because a chunk run is allocated ONCE
+// PER SPAN and a span serves many objects, so the constant is amortised over the layer above — and because
+// the summary tree is a data-structure rung, not a page-layer one.
+//
+// ⚠ **WHICH IS WHY THE ARENA'S SIZE IS A TRADE AND NOT A WIN, IN EITHER DIRECTION — MEASURE THE PRODUCT, NOT
+// THE ROW.** F1c multiplied the per-arena reject cost by 32 (4 word loads → 128) and divided the arena count
+// a heap of a given size needs by the same 32; the non-reserving lane's 512 KiB arena divides the reject cost
+// by 128 (128 → 1) and multiplies the arena count by 128. **In both directions the PRODUCT — the work to walk
+// a full heap — is unchanged**, which is what makes the geometry a memory decision rather than a speed one.
+// The summary tree is what changes the product.
+//
+// ⭐ **AND THE CLAIM COMMITS WHAT IT REACHES.** The bits are marked used, then `emitCommitGranulesFor` backs
+// every granule the run touches that is not backed already. It is one load, one shift and one test per
+// granule on the path where nothing needs committing — and a run is one to three granules, a span being at
+// most ten chunks — which is every call after the first that reaches a granule.
+function buildSlabArenaAllocChunks(module StdModule, geometry SlabArenaGeometry)
+	var func = IrFunction.createFromStd(SlabArenaAllocChunksName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkHigh = module.addBlock(func, label: b"checkhigh")
+	var badRequest = module.addBlock(func, label: b"badreq")
+	var start = module.addBlock(func, label: b"start")
+	var arenaLoop = module.addBlock(func, label: b"arenaloop")
+	var grow = module.addBlock(func, label: b"grow")
+	var nextArena = module.addBlock(func, label: b"nextarena")
+	var scanStart = module.addBlock(func, label: b"scanstart")
+	var scanHeader = module.addBlock(func, label: b"scanh")
+	var loadWord = module.addBlock(func, label: b"loadword")
+	var maybeSkip = module.addBlock(func, label: b"maybeskip")
+	var skipWord = module.addBlock(func, label: b"skipword")
+	var testBit = module.addBlock(func, label: b"testbit")
+	var breakRun = module.addBlock(func, label: b"breakrun")
+	var extendRun = module.addBlock(func, label: b"extendrun")
+	var newRun = module.addBlock(func, label: b"newrun")
+	var growRun = module.addBlock(func, label: b"growrun")
+	var checkRun = module.addBlock(func, label: b"checkrun")
+	var resumeScan = module.addBlock(func, label: b"resumescan")
+	var claim = module.addBlock(func, label: b"claim")
+
+	emitParams(module, block: entry, count: 1)
+	let numChunks = 0 as ValueId
+
+	let minRun = emitConst(module, block: entry, value: 1, ids: ids)
+	let tooSmall = emitCmp(module, block: entry, a: numChunks, b: minRun, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(tooSmall, thenBlockId: badRequest.id, elseBlockId: checkHigh.id))
+
+	let maxRun = emitConst(module, block: checkHigh, value: geometry.chunkCount - ArenaMetadataChunks, ids: ids)
+	let tooBig = emitCmp(module, block: checkHigh, a: numChunks, b: maxRun, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(checkHigh, op: StdOp.condBranch(tooBig, thenBlockId: badRequest.id, elseBlockId: start.id))
+
+	emitRuntimeAbort(module, func: func, block: badRequest, abort: RuntimeAbort.slabChunkRunUnsatisfiable, ids: ids)
+
+	let headAddr = ids.mint()
+	module.appendOp(start, op: StdOp.globalAddr(headAddr, label: SlabArenaListLabel))
+	let head = emitLoadField(module, block: start, record: headAddr, offset: 0, ids: ids)
+	module.setTerminator(start, op: StdOp.branch(arenaLoop.id))
+	start.branchEdges.push(BranchEdge.create(arenaLoop.id, argIds: argsOf(head)))
+
+	// The arena under the scan. Every block below reaches it by DOMINANCE, so only the three back edges
+	// (the list walk, the grow retry, the initial entry) carry it.
+	let arena = ids.mint()
+	arenaLoop.blockArgs.push(IrBlockArg.create(arena, argType: StdType.i64))
+
+	let noArena = emitConst(module, block: arenaLoop, value: 0, ids: ids)
+	let exhausted = emitCmp(module, block: arenaLoop, a: arena, b: noArena, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(arenaLoop, op: StdOp.condBranch(exhausted, thenBlockId: grow.id, elseBlockId: scanStart.id))
+
+	// Grow: map a fresh arena and rescan against IT. `__slab_arena_new` prepends, so the retry starts at the
+	// arena that was just mapped rather than re-walking the ones that had no room.
+	let fresh = ids.mint()
+	module.appendOp(grow, op: StdOp.call(fresh, callee: SlabArenaNewName, args: ValueIdArray.create()))
+	module.setTerminator(grow, op: StdOp.branch(arenaLoop.id))
+	grow.branchEdges.push(BranchEdge.create(arenaLoop.id, argIds: argsOf(fresh)))
+
+	let following = emitLoadField(module, block: nextArena, record: arena, offset: ArenaNextOffset, ids: ids)
+	module.setTerminator(nextArena, op: StdOp.branch(arenaLoop.id))
+	nextArena.branchEdges.push(BranchEdge.create(arenaLoop.id, argIds: argsOf(following)))
+
+	let firstChunk = emitConst(module, block: scanStart, value: ArenaMetadataChunks, ids: ids)
+	let noRun = emitConst(module, block: scanStart, value: 0, ids: ids)
+	module.setTerminator(scanStart, op: StdOp.branch(scanHeader.id))
+	scanStart.branchEdges.push(BranchEdge.create(scanHeader.id, argIds: threeArgs(firstChunk, second: noRun, third: noRun)))
+
+	// The scan's three carried values: the chunk under test, the length of the free run ending just before
+	// it, and where that run started. `runStart` is meaningful only while `runLen > 0`, which is why the
+	// break and skip edges leave it alone rather than inventing a value for it.
+	let chunk = ids.mint()
+	let runLen = ids.mint()
+	let runStart = ids.mint()
+	scanHeader.blockArgs.push(IrBlockArg.create(chunk, argType: StdType.i64))
+	scanHeader.blockArgs.push(IrBlockArg.create(runLen, argType: StdType.i64))
+	scanHeader.blockArgs.push(IrBlockArg.create(runStart, argType: StdType.i64))
+
+	let chunkLimit = emitConst(module, block: scanHeader, value: geometry.chunkCount, ids: ids)
+	let scanned = emitCmp(module, block: scanHeader, a: chunk, b: chunkLimit, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(scanHeader, op: StdOp.condBranch(scanned, thenBlockId: nextArena.id, elseBlockId: loadWord.id))
+
+	let wordAddr = emitBitmapWordAddr(module, block: loadWord, arenaBase: arena, bitIndex: chunk, ids: ids)
+	let word = emitLoadField(module, block: loadWord, record: wordAddr, offset: ArenaBitmapOffset, ids: ids)
+	let bitPos = emitBitPosition(module, block: loadWord, bitIndex: chunk, ids: ids)
+	let atWordStart = emitCmp(module, block: loadWord, a: bitPos, b: noRun, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(loadWord, op: StdOp.condBranch(atWordStart, thenBlockId: maybeSkip.id, elseBlockId: testBit.id))
+
+	let wordFull = emitCmp(module, block: maybeSkip, a: word, b: noRun, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(maybeSkip, op: StdOp.condBranch(wordFull, thenBlockId: skipWord.id, elseBlockId: testBit.id))
+
+	let wordWidth = emitConst(module, block: skipWord, value: BitmapBitsPerWord, ids: ids)
+	let pastWord = emitBin(module, block: skipWord, a: chunk, b: wordWidth, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(skipWord, op: StdOp.branch(scanHeader.id))
+	skipWord.branchEdges.push(BranchEdge.create(scanHeader.id, argIds: threeArgs(pastWord, second: noRun, third: runStart)))
+
+	let bit = emitSelectBit(module, block: testBit, word: word, bitPos: bitPos, ids: ids)
+	let oneBit = emitConst(module, block: testBit, value: 1, ids: ids)
+	let isFree = emitCmp(module, block: testBit, a: bit, b: noRun, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(testBit, op: StdOp.condBranch(isFree, thenBlockId: extendRun.id, elseBlockId: breakRun.id))
+
+	let afterUsed = emitBin(module, block: breakRun, a: chunk, b: oneBit, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(breakRun, op: StdOp.branch(scanHeader.id))
+	breakRun.branchEdges.push(BranchEdge.create(scanHeader.id, argIds: threeArgs(afterUsed, second: noRun, third: runStart)))
+
+	let runIsNew = emitCmp(module, block: extendRun, a: runLen, b: noRun, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(extendRun, op: StdOp.condBranch(runIsNew, thenBlockId: newRun.id, elseBlockId: growRun.id))
+
+	let afterFirst = emitBin(module, block: newRun, a: chunk, b: oneBit, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(newRun, op: StdOp.branch(checkRun.id))
+	newRun.branchEdges.push(BranchEdge.create(checkRun.id, argIds: threeArgs(afterFirst, second: oneBit, third: chunk)))
+
+	let longerRun = emitBin(module, block: growRun, a: runLen, b: oneBit, opcode: StdBinOpcode.add, ids: ids)
+	let afterNext = emitBin(module, block: growRun, a: chunk, b: oneBit, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(growRun, op: StdOp.branch(checkRun.id))
+	growRun.branchEdges.push(BranchEdge.create(checkRun.id, argIds: threeArgs(afterNext, second: longerRun, third: runStart)))
+
+	let nextChunk = ids.mint()
+	let currentLen = ids.mint()
+	let currentStart = ids.mint()
+	checkRun.blockArgs.push(IrBlockArg.create(nextChunk, argType: StdType.i64))
+	checkRun.blockArgs.push(IrBlockArg.create(currentLen, argType: StdType.i64))
+	checkRun.blockArgs.push(IrBlockArg.create(currentStart, argType: StdType.i64))
+
+	let longEnough = emitCmp(module, block: checkRun, a: currentLen, b: numChunks, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(checkRun, op: StdOp.condBranch(longEnough, thenBlockId: claim.id, elseBlockId: resumeScan.id))
+
+	// The scan continues through an unconditional branch rather than off `checkRun`'s conditional, so that
+	// every edge carrying block arguments leaves a single-successor block. Same shape at every other
+	// arg-carrying edge in this function.
+	module.setTerminator(resumeScan, op: StdOp.branch(scanHeader.id))
+	resumeScan.branchEdges.push(BranchEdge.create(scanHeader.id, argIds: threeArgs(nextChunk, second: currentLen, third: currentStart)))
+
+	// The run's END is computed ONCE here and read by both halves of the claim — the bit walk's bound and the
+	// commit's watermark test are the same address, and computing it twice is how the two come to disagree
+	// about where a run stops.
+	let pastRun = emitBin(module, block: claim, a: currentStart, b: numChunks, opcode: StdBinOpcode.add, ids: ids)
+	var claimed = emitBitRunUpdate(module, func: func, cur: claim, arenaBase: arena, firstChunk: currentStart, pastChunk: pastRun, mode: SlabBitRun.claim, ids: ids)
+
+	// The run is the caller's now, but the arena only RESERVED its address space, and the scavenger may since
+	// have dropped the backing of any granule the run lands in — so every granule it touches has to be backed
+	// before the caller writes into it.
+	var backed = emitCommitGranulesFor(module, func: func, cur: claimed, arenaBase: arena, firstChunk: currentStart, pastChunk: pastRun, geometry: geometry, ids: ids)
+
+	let pageShift = emitConst(module, block: backed, value: SlabPageShift, ids: ids)
+	let runOffset = emitBin(module, block: backed, a: currentStart, b: pageShift, opcode: StdBinOpcode.shl, ids: ids)
+	let runBase = emitBin(module, block: backed, a: arena, b: runOffset, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(backed, op: StdOp.ret(runBase))
+
+	module.functions.push(func)
+end 'buildSlabArenaAllocChunks'
+
+// `__slab_arena_free_chunks(arenaBase, chunkIndex, numChunks)` — ZERO a chunk run and mark it free again.
+//
+// ⭐ **THE RANGE IS CHECKED, WHICH v1 DOES NOT DO.** An index below the metadata chunks would free the
+// arena's own bitmap into the pool; one past the end writes past the bitmap into chunk 0's payload. Both
+// are silent — the corruption surfaces later, somewhere else, as a chunk handed out twice.
+//
+// ⭐⭐⭐ **INV-4 IS ESTABLISHED HERE AND NOWHERE ELSE: EVERY CHUNK `__slab_arena_alloc_chunks` HANDS OUT
+// READS ZERO.** Before S6 that was true for a reason nobody had to write down — a chunk had only ever come
+// from a fresh `osReservePages`/`osCommitPages`, which every lane zeroes. The scavenger recycles chunks, and
+// a recycled chunk holds the previous span's slots: poisoned payloads, and in each box header a REFCOUNT.
+// `__slab_refill` cuts a span whose whole bump region is presumed zero (INV-3) and `__mm_alloc` does not
+// write the refcount because 0 is the born state — so an unzeroed recycled chunk is a heap that frees boxes
+// at the wrong time, with no diagnostic.
+//
+// ⛔⛔ **THE ZERO IS WRITTEN ON THE RELEASE PATH, NOT RECOVERED FROM THE OS ON THE CLAIM PATH, AND THAT IS
+// THE WHOLE DIFFERENCE BETWEEN THIS AND THE TRAP `StdOp.osDecommitPages` WARNS ABOUT.** What a recommitted
+// page contains is FOUR different answers (Windows zeroes, Linux refaults zero, Darwin's `MADV_FREE` may
+// return the SAME DIRTY PAGE, wasm keeps the bytes verbatim), and the failure shape that op names is a
+// future `pagesAreZeroAfterReback` flag set false for macOS and forgotten for wasm. **There is no such flag
+// to write here**: the zero is ours, written into committed memory BEFORE any decommit can touch it, so
+// every one of those four answers gives the chunk back holding zeroes — Darwin's dirty page is dirty with
+// OUR zeroes, and wasm's verbatim bytes are the same zeroes. One unconditional `memFill`, no lane test, and
+// nothing for anyone to make conditional later.
+//
+// ⚠ **IT IS SAFE TO WRITE, WHICH IS NOT OBVIOUS.** The run is being RELEASED, so it was CLAIMED, so
+// `emitCommitGranulesFor` backed every granule it touches and the scavenger cannot have dropped one (a
+// granule holding a claimed chunk is not fully free). The range is therefore committed at this instant on
+// every lane.
+function buildSlabArenaFreeChunks(module StdModule, geometry SlabArenaGeometry)
+	var func = IrFunction.createFromStd(SlabArenaFreeChunksName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkCount = module.addBlock(func, label: b"checkcount")
+	var checkHigh = module.addBlock(func, label: b"checkhigh")
+	var badRange = module.addBlock(func, label: b"badrange")
+	var release = module.addBlock(func, label: b"release")
+
+	emitParams(module, block: entry, count: 3)
+	let arenaBase = 0 as ValueId
+	let chunkIndex = 1 as ValueId
+	let numChunks = 2 as ValueId
+
+	let firstAllocatable = emitConst(module, block: entry, value: ArenaMetadataChunks, ids: ids)
+	let belowArena = emitCmp(module, block: entry, a: chunkIndex, b: firstAllocatable, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(belowArena, thenBlockId: badRange.id, elseBlockId: checkCount.id))
+
+	let minRun = emitConst(module, block: checkCount, value: 1, ids: ids)
+	let emptyRun = emitCmp(module, block: checkCount, a: numChunks, b: minRun, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(checkCount, op: StdOp.condBranch(emptyRun, thenBlockId: badRange.id, elseBlockId: checkHigh.id))
+
+	let pastRun = emitBin(module, block: checkHigh, a: chunkIndex, b: numChunks, opcode: StdBinOpcode.add, ids: ids)
+	let chunkLimit = emitConst(module, block: checkHigh, value: geometry.chunkCount, ids: ids)
+	let aboveArena = emitCmp(module, block: checkHigh, a: pastRun, b: chunkLimit, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(checkHigh, op: StdOp.condBranch(aboveArena, thenBlockId: badRange.id, elseBlockId: release.id))
+
+	emitRuntimeAbort(module, func: func, block: badRange, abort: RuntimeAbort.slabChunkRangeOutOfArena, ids: ids)
+
+	// INV-4: the run reads zero from here on, whatever happens to its backing afterwards. It lands BEFORE the
+	// bits are cleared, so no concurrent claim can ever observe a free-but-dirty chunk.
+	let pageShift = emitConst(module, block: release, value: SlabPageShift, ids: ids)
+	let runOffset = emitBin(module, block: release, a: chunkIndex, b: pageShift, opcode: StdBinOpcode.shl, ids: ids)
+	let runBase = emitBin(module, block: release, a: arenaBase, b: runOffset, opcode: StdBinOpcode.add, ids: ids)
+	let runBytes = emitBin(module, block: release, a: numChunks, b: pageShift, opcode: StdBinOpcode.shl, ids: ids)
+	module.appendOp(release, op: StdOp.memFill(runBase, byteCountId: runBytes, value: 0))
+
+	// `pastRun` is the value `checkHigh` already computed for the range test — the same end, read again rather
+	// than derived a second time.
+	var released = emitBitRunUpdate(module, func: func, cur: release, arenaBase: arenaBase, firstChunk: chunkIndex, pastChunk: pastRun, mode: SlabBitRun.release, ids: ids)
+	module.setTerminator(released, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSlabArenaFreeChunks'
+
+// `__slab_arena_of(addr) -> arenaBase` — which arena's reservation contains `addr`.
+//
+// ⭐⭐ **THIS IS THE ANSWER TO THE QUESTION THIS FILE'S HEADER LEFT OPEN AS "THE SCAVENGER'S DEBT", AND IT
+// STORES NOTHING.** `__slab_arena_free_chunks` needs an arena base its caller does not hold: a span records
+// where its chunk run STARTS, not which arena it was cut from. The three candidates the header named were a
+// real out-value on the alloc entry point, an arena level in the reverse map, and an aligned reservation the
+// address could be masked to. This is a fourth, and it wins on the fact that decides between them — **it is
+// asked at DESTRUCTION, not at BIRTH.** A span is destroyed at most once and created at least once, so a
+// lookup here is strictly rarer than a field written there, and the field would have cost the mspan record
+// its LAST free word (`MspanScavStateOffset` takes it) and pushed the header to 128 bytes.
+//
+// ⛔ **v1 STORES IT, AND THE MECHANISM IS WHY THAT IS NOT PORTED**: `__slab_arena_alloc_chunks` there writes
+// the arena it served from into a `.data` word (`__slab_arena_last_base`) that its caller reads on the very
+// next line — a hidden out-parameter, which makes a function's answer depend on a global the same call
+// wrote, and which this file's no-lock note says is exactly the shape that stops working the day two OS
+// threads reach the allocator.
+//
+// ⚠ **IT IS A LINEAR WALK AND THAT COSTS NOTHING IT DID NOT ALREADY COST.** The walk is over the arena list,
+// which is the same list `__slab_arena_alloc_chunks` walks — and that one walks the arenas AND their
+// bitmaps. Every address handed here came out of a chunk run whose allocation had just paid strictly more.
+//
+// ⚠ It ABORTS rather than answering a sentinel for an address in no arena: every caller is about to use the
+// answer as a base to compute a chunk index from, and a 0 there would release chunk `addr >> 13` of the
+// arena at address 0.
+function buildSlabArenaOf(module StdModule, geometry SlabArenaGeometry)
+	var func = IrFunction.createFromStd(SlabArenaOfName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var walk = module.addBlock(func, label: b"walk")
+	var missing = module.addBlock(func, label: b"missing")
+	var testLow = module.addBlock(func, label: b"testlow")
+	var testHigh = module.addBlock(func, label: b"testhigh")
+	var found = module.addBlock(func, label: b"found")
+	var advance = module.addBlock(func, label: b"nextarena")
+
+	emitParams(module, block: entry, count: 1)
+	let addr = 0 as ValueId
+
+	let headAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(headAddr, label: SlabArenaListLabel))
+	let head = emitLoadField(module, block: entry, record: headAddr, offset: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(walk.id))
+	entry.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(head)))
+
+	let arena = ids.mint()
+	walk.blockArgs.push(IrBlockArg.create(arena, argType: StdType.i64))
+
+	let noArena = emitConst(module, block: walk, value: 0, ids: ids)
+	let exhausted = emitCmp(module, block: walk, a: arena, b: noArena, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(walk, op: StdOp.condBranch(exhausted, thenBlockId: missing.id, elseBlockId: testLow.id))
+
+	emitRuntimeAbort(module, func: func, block: missing, abort: RuntimeAbort.slabAddressOutsideEveryArena, ids: ids)
+
+	let below = emitCmp(module, block: testLow, a: addr, b: arena, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(testLow, op: StdOp.condBranch(below, thenBlockId: advance.id, elseBlockId: testHigh.id))
+
+	let arenaBytes = emitConst(module, block: testHigh, value: geometry.bytes, ids: ids)
+	let limit = emitBin(module, block: testHigh, a: arena, b: arenaBytes, opcode: StdBinOpcode.add, ids: ids)
+	let above = emitCmp(module, block: testHigh, a: addr, b: limit, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(testHigh, op: StdOp.condBranch(above, thenBlockId: advance.id, elseBlockId: found.id))
+
+	module.setTerminator(found, op: StdOp.ret(arena))
+
+	let following = emitLoadField(module, block: advance, record: arena, offset: ArenaNextOffset, ids: ids)
+	module.setTerminator(advance, op: StdOp.branch(walk.id))
+	advance.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(following)))
+
+	module.functions.push(func)
+end 'buildSlabArenaOf'
+
+// `__slab_arena_scavenge() -> bytesDecommitted` — drop the physical backing of every commit granule, in
+// every arena, whose chunks are ALL free, and answer how many bytes that was.
+//
+// ⭐⭐ **THE UNIT IS THE GRANULE AND NOT THE SPAN, AND THAT IS A CORRECTNESS ARGUMENT RATHER THAN A
+// BATCHING ONE — IT IS ALSO WHERE THIS DIVERGES FROM v1 MOST SHARPLY.** v1's scavenger decommits a SPAN's
+// own footprint, which is chunk-granular: `ceil(slotSize · totalSlots / 8192) · 8192`, at the span's base.
+// **On a 16 KiB-page lane that range is neither aligned nor a whole number of pages**, and `madvise` answers
+// one of two things to it — `EINVAL` for a base that is not page-aligned (a silent no-op, since nothing
+// checks), or, for a base that happens to be aligned, a LENGTH ROUNDED UP that throws away the first 8 KiB
+// of the NEXT span. arm64-macOS's page is 16 KiB, exactly twice a chunk. ⇒ a per-span decommit is a no-op
+// or a corruption there, and green on x64 either way.
+//
+// The commit granule is 64 KiB precisely because it is a whole multiple of every page size these lanes have
+// (`SlabArenaCommitGranuleBytes`), so a granule-aligned range of whole granules is legal on all of them from
+// one target-neutral body. **Go answers the same question the same way** — its scavenger works on the PAGE
+// ALLOCATOR's free runs and rounds them to `physPageSize`, with a `minPages = physPageSize / pageSize`
+// floor (`vendor/go/src/runtime/mgcscavenge.go:749`) — rather than on spans.
+//
+// ⭐ **A GRANULE IS RELEASED ONLY WHEN EVERY CHUNK IN IT IS FREE**, which is what keeps the arena's own
+// metadata, the allocator's state region and the reverse-map level tables backed: each of those is a CLAIMED
+// chunk, and one claimed chunk in a granule is enough. Granule 0 can therefore never be released at all —
+// it holds the metadata chunk — which is checked by nothing because it needs no check.
+//
+// ⚠ **ON wasm32-wasi `osDecommitPages` EMITS NOTHING, and this body still runs in full.** Linear memory only
+// grows, so there is no backing to drop; the granule's commit bit still clears and is still re-set by the
+// next claim that reaches it, and the chunks are still reusable by any class. That is a documented no-op
+// with an ISA reason, and the byte count it answers is the bytes it handed back — on that lane, the bytes
+// nothing was listening to.
+//
+// ⚠ **THE WALK IS O(arenas × granules) PER CALL, WHICH IS LINEAR IN THE HEAP AND IS THE SHAPE TO KEEP.** One
+// granule is 64 KiB, so a 1 GiB heap is 16,384 iterations of four instructions. Go replaces the equivalent
+// with a radix summary tree because its scavenger runs CONTINUOUSLY on a background goroutine; this one runs
+// when a program asks, and a summary tree is a data-structure rung rather than a scavenger one — the same
+// judgement `__slab_arena_alloc_chunks` records about its own linear scan.
+function buildSlabArenaScavenge(module StdModule, geometry SlabArenaGeometry)
+	var func = IrFunction.createFromStd(SlabArenaScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var arenaLoop = module.addBlock(func, label: b"arenaloop")
+	var finish = module.addBlock(func, label: b"finish")
+	var granuleStart = module.addBlock(func, label: b"granulestart")
+	var granuleLoop = module.addBlock(func, label: b"granuleloop")
+	var nextArena = module.addBlock(func, label: b"nextarena")
+	var testCommit = module.addBlock(func, label: b"testcommit")
+	var skipUncommitted = module.addBlock(func, label: b"skipuncommitted")
+	var testFree = module.addBlock(func, label: b"testfree")
+	var skipInUse = module.addBlock(func, label: b"skipinuse")
+	var release = module.addBlock(func, label: b"release")
+
+	let headAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(headAddr, label: SlabArenaListLabel))
+	let head = emitLoadField(module, block: entry, record: headAddr, offset: 0, ids: ids)
+	let nothing = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(arenaLoop.id))
+	entry.branchEdges.push(BranchEdge.create(arenaLoop.id, argIds: twoArgs(head, second: nothing)))
+
+	// The arena under the sweep and the bytes released so far. Every block below reaches both by DOMINANCE,
+	// so only the two back edges carry them.
+	let arena = ids.mint()
+	let released = ids.mint()
+	arenaLoop.blockArgs.push(IrBlockArg.create(arena, argType: StdType.i64))
+	arenaLoop.blockArgs.push(IrBlockArg.create(released, argType: StdType.i64))
+
+	let noArena = emitConst(module, block: arenaLoop, value: 0, ids: ids)
+	let exhausted = emitCmp(module, block: arenaLoop, a: arena, b: noArena, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(arenaLoop, op: StdOp.condBranch(exhausted, thenBlockId: finish.id, elseBlockId: granuleStart.id))
+
+	module.setTerminator(finish, op: StdOp.ret(released))
+
+	let firstGranule = emitConst(module, block: granuleStart, value: 0, ids: ids)
+	module.setTerminator(granuleStart, op: StdOp.branch(granuleLoop.id))
+	granuleStart.branchEdges.push(BranchEdge.create(granuleLoop.id, argIds: twoArgs(firstGranule, second: released)))
+
+	let granule = ids.mint()
+	let running = ids.mint()
+	granuleLoop.blockArgs.push(IrBlockArg.create(granule, argType: StdType.i64))
+	granuleLoop.blockArgs.push(IrBlockArg.create(running, argType: StdType.i64))
+
+	let granuleLimit = emitConst(module, block: granuleLoop, value: geometry.granuleCount, ids: ids)
+	let swept = emitCmp(module, block: granuleLoop, a: granule, b: granuleLimit, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(granuleLoop, op: StdOp.condBranch(swept, thenBlockId: nextArena.id, elseBlockId: testCommit.id))
+
+	let following = emitLoadField(module, block: nextArena, record: arena, offset: ArenaNextOffset, ids: ids)
+	module.setTerminator(nextArena, op: StdOp.branch(arenaLoop.id))
+	nextArena.branchEdges.push(BranchEdge.create(arenaLoop.id, argIds: twoArgs(following, second: running)))
+
+	// The successor granule is computed ONCE here, where it dominates all three continuations, rather than at
+	// each of them — three `+ 1`s over one loop variable is three chances for one of them to be wrong.
+	let one = emitConst(module, block: testCommit, value: 1, ids: ids)
+	let nextGranule = emitBin(module, block: testCommit, a: granule, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let commitWordAddr = emitBitmapWordAddr(module, block: testCommit, arenaBase: arena, bitIndex: granule, ids: ids)
+	let commitWord = emitLoadField(module, block: testCommit, record: commitWordAddr, offset: geometry.commitBitmapOffset, ids: ids)
+	let commitBitPos = emitBitPosition(module, block: testCommit, bitIndex: granule, ids: ids)
+	let commitBit = emitSelectBit(module, block: testCommit, word: commitWord, bitPos: commitBitPos, ids: ids)
+	let zero = emitConst(module, block: testCommit, value: 0, ids: ids)
+	let notBacked = emitCmp(module, block: testCommit, a: commitBit, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(testCommit, op: StdOp.condBranch(notBacked, thenBlockId: skipUncommitted.id, elseBlockId: testFree.id))
+
+	module.setTerminator(skipUncommitted, op: StdOp.branch(granuleLoop.id))
+	skipUncommitted.branchEdges.push(BranchEdge.create(granuleLoop.id, argIds: twoArgs(nextGranule, second: running)))
+
+	// Is every chunk of this granule free? ONE masked read, because a granule's chunks are asserted to fit
+	// inside one bitmap word (`checkSlabArenaGeometry`).
+	let granuleChunksShift = emitConst(module, block: testFree, value: SlabArenaCommitGranuleChunksShift, ids: ids)
+	let granuleFirstChunk = emitBin(module, block: testFree, a: granule, b: granuleChunksShift, opcode: StdBinOpcode.shl, ids: ids)
+	let chunkWordAddr = emitBitmapWordAddr(module, block: testFree, arenaBase: arena, bitIndex: granuleFirstChunk, ids: ids)
+	let chunkWord = emitLoadField(module, block: testFree, record: chunkWordAddr, offset: ArenaBitmapOffset, ids: ids)
+	let chunkBitPos = emitBitPosition(module, block: testFree, bitIndex: granuleFirstChunk, ids: ids)
+	let chunkField = emitSelectField(module, block: testFree, word: chunkWord, bitPos: chunkBitPos, width: SlabArenaCommitGranuleChunks, ids: ids)
+	let allFreeField = emitConst(module, block: testFree, value: (1 shl SlabArenaCommitGranuleChunks) - 1, ids: ids)
+	let inUse = emitCmp(module, block: testFree, a: chunkField, b: allFreeField, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(testFree, op: StdOp.condBranch(inUse, thenBlockId: skipInUse.id, elseBlockId: release.id))
+
+	module.setTerminator(skipInUse, op: StdOp.branch(granuleLoop.id))
+	skipInUse.branchEdges.push(BranchEdge.create(granuleLoop.id, argIds: twoArgs(nextGranule, second: running)))
+
+	let granuleShift = emitConst(module, block: release, value: SlabArenaCommitGranuleShift, ids: ids)
+	let granuleOffset = emitBin(module, block: release, a: granule, b: granuleShift, opcode: StdBinOpcode.shl, ids: ids)
+	let granuleBase = emitBin(module, block: release, a: arena, b: granuleOffset, opcode: StdBinOpcode.add, ids: ids)
+	let granuleBytes = emitConst(module, block: release, value: SlabArenaCommitGranuleBytes, ids: ids)
+	module.appendOp(release, op: StdOp.osDecommitPages(granuleBase, sizeId: granuleBytes))
+
+	// The bit falls only after the OS has been told, so a granule can never be marked unbacked while its pages
+	// are still resident — the direction that matters, since the opposite marking is what a claim reads.
+	// `not mask` is `mask xor -1`: the Std tier has no integer complement, and the all-ones constant is the
+	// same answer (`emitBitRunUpdate` spells the identical trick).
+	let commitMask = emitBitMask(module, block: release, bitPos: commitBitPos, ids: ids)
+	let allOnes = emitConst(module, block: release, value: -1, ids: ids)
+	let clearMask = emitBin(module, block: release, a: commitMask, b: allOnes, opcode: StdBinOpcode.bitXor, ids: ids)
+	let lowered = emitBin(module, block: release, a: commitWord, b: clearMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitStoreField(module, block: release, record: commitWordAddr, offset: geometry.commitBitmapOffset, value: lowered)
+
+	let grownTotal = emitBin(module, block: release, a: running, b: granuleBytes, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(release, op: StdOp.branch(granuleLoop.id))
+	release.branchEdges.push(BranchEdge.create(granuleLoop.id, argIds: twoArgs(nextGranule, second: grownTotal)))
+
+	module.functions.push(func)
+end 'buildSlabArenaScavenge'
+
+// ⭐⭐ **WHICH DIRECTION A BIT RUN MOVES.** The allocate side and the release side are the SAME qword-and-bit
+// arithmetic with opposite operators, and v1 writes the loop out twice — once inside
+// `__slab_arena_alloc_chunks`'s `haveRun` branch and once as the whole of `__slab_arena_free_chunks`. Two
+// copies of an index computation over one bitmap is exactly the pair that drifts: change the metadata
+// reservation on one side and the two stop describing the same map.
+//
+// It is an enum rather than a bare `StdBinOpcode` parameter because the opcode is not the only thing that
+// differs — the OPERAND's polarity does too (set a bit, or clear its complement) — and a caller handed two
+// independent knobs can set them inconsistently. One name, both facts derived from it.
+enum SlabBitRun
+	// The chunks become USED: `word = word bitAnd not bit`.
+	claim
+	// The chunks become FREE: `word = word bitOr bit`.
+	release
+end 'SlabBitRun'
+
+// Walk `[firstChunk, pastChunk)` and move each chunk's bit in `arenaBase`'s bitmap. Creates its own loop
+// blocks off `cur` and answers the block execution continues in, so a caller threads it like any other
+// loop-emitting builder in this file.
+//
+// ⭐ **IT TAKES THE RUN'S END, NOT ITS LENGTH, BECAUSE BOTH CALLERS ALREADY HOLD THE END.** `free_chunks`
+// computes it for its range check and `alloc_chunks` for its commit watermark, so a `count` parameter would
+// have made this function derive a third time what its callers had both derived already — three expressions
+// that must agree about where a run stops.
+//
+// ⚠ A run may cross a bitmap-word boundary, which is why the word address is recomputed per bit rather than
+// hoisted: a run of 64 chunks spans two words, and 10 pages of a large span can span two as well.
+function emitBitRunUpdate(module StdModule, func IrFunction, cur IrBlock, arenaBase ValueId, firstChunk ValueId, pastChunk ValueId, mode SlabBitRun, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"bitrunh")
+	var body = module.addBlock(func, label: b"bitrunb")
+	let done = module.addBlock(func, label: b"bitrund")
+
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let chunk = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(chunk, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(firstChunk)))
+
+	let atEnd = emitCmp(module, block: header, a: chunk, b: pastChunk, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let wordAddr = emitBitmapWordAddr(module, block: body, arenaBase: arenaBase, bitIndex: chunk, ids: ids)
+	let word = emitLoadField(module, block: body, record: wordAddr, offset: ArenaBitmapOffset, ids: ids)
+	let one = emitConst(module, block: body, value: 1, ids: ids)
+	let bitPos = emitBitPosition(module, block: body, bitIndex: chunk, ids: ids)
+	let bit = emitBitMask(module, block: body, bitPos: bitPos, ids: ids)
+
+	// `not bit` as `bit xor -1`: the Std tier has no integer bitwise-complement opcode, and the all-ones
+	// two's-complement constant is the same answer. v1 spells the same trick and says so.
+	let operand = match mode 'polarity'
+		claim gives emitBin(module, block: body, a: bit, b: emitConst(module, block: body, value: -1, ids: ids), opcode: StdBinOpcode.bitXor, ids: ids)
+		release gives bit
+	end 'polarity'
+	let opcode = match mode 'combine'
+		claim gives StdBinOpcode.bitAnd
+		release gives StdBinOpcode.bitOr
+	end 'combine'
+
+	let updated = emitBin(module, block: body, a: word, b: operand, opcode: opcode, ids: ids)
+	emitStoreField(module, block: body, record: wordAddr, offset: ArenaBitmapOffset, value: updated)
+
+	let nextChunk = emitBin(module, block: body, a: chunk, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(nextChunk)))
+
+	return done
+end 'emitBitRunUpdate'
+
+// Back every commit granule the chunk run `[firstChunk, pastChunk)` touches that is not backed already, and
+// record each one in `arenaBase`'s commit bitmap. Creates its own blocks off `cur` and answers the block
+// execution continues in, exactly as `emitBitRunUpdate` does, so a caller threads it the same way.
+//
+// ⭐⭐ **THE COMMIT BIT IS WHY A COMMIT CAN NEVER LAND ON A LIVE RANGE, AND THAT IS A CORRECTNESS ARGUMENT
+// RATHER THAN AN OPTIMIZATION.** `StdOp.osCommitPages` DESTROYS the contents of the range it commits on the
+// three POSIX lanes (it is an `mmap(MAP_FIXED)` there) and preserves them on Windows — so a re-commit of a
+// range holding data is a silent data loss on three lanes and green on the one most likely to be tested. A
+// granule whose bit is SET is skipped, and its bit is set exactly while its pages are backed: raised here
+// once, cleared only by `__slab_arena_scavenge` and only for a granule whose every chunk is FREE. So the
+// range committed here is always one whose contents nobody holds.
+//
+// ⛔ **IT REPLACED A WATERMARK, WHICH COULD NOT SURVIVE A SCAVENGER.** The old shape committed
+// `[committedChunks, target)` — strictly above everything ever handed out, because the mark only rose — and
+// that argument dies the moment something LOWERS the committed set in the middle. See `ArenaNextOffset`.
+//
+// ⭐ **THE UNIT IS THE GRANULE, NOT THE RUN.** Committing exactly the run would name ranges that are not
+// page-aligned on arm64-macOS, whose page is 16 KiB — TWICE a chunk. `SlabArenaCommitGranuleBytes` says both
+// why the number is what it is and why this is not a tuning knob; the same fact is what makes the
+// scavenger's decommit legal on every lane.
+function emitCommitGranulesFor(module StdModule, func IrFunction, cur IrBlock, arenaBase ValueId, firstChunk ValueId, pastChunk ValueId, geometry SlabArenaGeometry, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"commith")
+	var test = module.addBlock(func, label: b"committ")
+	var commit = module.addBlock(func, label: b"commitc")
+	var advance = module.addBlock(func, label: b"commita")
+	let done = module.addBlock(func, label: b"committed")
+
+	// The run's first and LAST granule — last rather than one-past, because `pastChunk` is one past the run
+	// and `(pastChunk - 1) >> shift` is the granule the final chunk actually lives in. A one-past-the-end
+	// granule index would commit a granule the run never reaches whenever the run ended on a boundary.
+	let granuleChunksShift = emitConst(module, block: cur, value: SlabArenaCommitGranuleChunksShift, ids: ids)
+	let firstGranule = emitBin(module, block: cur, a: firstChunk, b: granuleChunksShift, opcode: StdBinOpcode.shr, ids: ids)
+	let one = emitConst(module, block: cur, value: 1, ids: ids)
+	let lastChunk = emitBin(module, block: cur, a: pastChunk, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	let lastGranule = emitBin(module, block: cur, a: lastChunk, b: granuleChunksShift, opcode: StdBinOpcode.shr, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let granule = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(granule, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(firstGranule)))
+
+	let past = emitCmp(module, block: header, a: granule, b: lastGranule, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(past, thenBlockId: done.id, elseBlockId: test.id))
+
+	let wordAddr = emitBitmapWordAddr(module, block: test, arenaBase: arenaBase, bitIndex: granule, ids: ids)
+	let word = emitLoadField(module, block: test, record: wordAddr, offset: geometry.commitBitmapOffset, ids: ids)
+	let bitPos = emitBitPosition(module, block: test, bitIndex: granule, ids: ids)
+	let bit = emitSelectBit(module, block: test, word: word, bitPos: bitPos, ids: ids)
+	let unbacked = emitConst(module, block: test, value: 0, ids: ids)
+	let backed = emitCmp(module, block: test, a: bit, b: unbacked, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(test, op: StdOp.condBranch(backed, thenBlockId: advance.id, elseBlockId: commit.id))
+
+	let granuleShift = emitConst(module, block: commit, value: SlabArenaCommitGranuleShift, ids: ids)
+	let granuleOffset = emitBin(module, block: commit, a: granule, b: granuleShift, opcode: StdBinOpcode.shl, ids: ids)
+	let granuleBase = emitBin(module, block: commit, a: arenaBase, b: granuleOffset, opcode: StdBinOpcode.add, ids: ids)
+	let granuleBytes = emitConst(module, block: commit, value: SlabArenaCommitGranuleBytes, ids: ids)
+	emitGuardedCommit(module, block: commit, base: granuleBase, byteCount: granuleBytes, ids: ids)
+
+	// The bit is raised only after the OS has agreed, so a refused commit aborts inside the guard rather than
+	// leaving the arena claiming pages it does not have.
+	let setBit = emitBitMask(module, block: commit, bitPos: bitPos, ids: ids)
+	let raised = emitBin(module, block: commit, a: word, b: setBit, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitStoreField(module, block: commit, record: wordAddr, offset: geometry.commitBitmapOffset, value: raised)
+	module.setTerminator(commit, op: StdOp.branch(advance.id))
+
+	let nextGranule = emitBin(module, block: advance, a: granule, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(advance, op: StdOp.branch(header.id))
+	advance.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(nextGranule)))
+
+	return done
+end 'emitCommitGranulesFor'
+
+// Commit `byteCount` bytes at `base`, and abort cleanly if the OS refuses. Both of this file's commits go
+// through it, so the check cannot be present at one site and missing at the other — which is the failure it
+// exists to prevent, since an uncommitted page is INACCESSIBLE on Windows and on a `PROT_NONE` POSIX
+// reservation alike, and the very next instruction at either site is a store.
+//
+// ⚠ The guard's ANSWER is its argument, and both callers already hold that address — what they want from it
+// is its REFUSAL. Its result id is therefore minted inline at the call and never bound to a name, which is
+// how this tier spells a discarded result (`SlabRuntime`'s `__slab_os_direct_free` call does the same); a
+// named local nothing reads would read as an oversight rather than as a decision.
+function emitGuardedCommit(module StdModule, block IrBlock, base ValueId, byteCount ValueId, ids ValueMinter)
+	let committed = ids.mint()
+	module.appendOp(block, op: StdOp.osCommitPages(committed, addrId: base, sizeId: byteCount))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SlabAssertOsAllocName, args: argsOf(committed)))
+end 'emitGuardedCommit'
+
+// The address of the bitmap word holding `bitIndex`'s bit, MINUS the table's own offset — every caller loads
+// and stores through that offset, so folding it into the addressing mode is one instruction saved per
+// access and one place each bitmap's position is expressed.
+//
+// ⚠ **IT SERVES BOTH BITMAPS, AND THE TABLE IS THE CALLER'S TO NAME.** The chunk bitmap's bit index is a
+// CHUNK and the commit bitmap's is a GRANULE; the word arithmetic is identical, and the only thing that
+// differs is the offset the caller loads through (`ArenaBitmapOffset` or `geometry.commitBitmapOffset`).
+// Writing the shift out a second time for the second table is exactly the drift `emitBitRunUpdate` exists
+// to prevent one level up.
+function emitBitmapWordAddr(module StdModule, block IrBlock, arenaBase ValueId, bitIndex ValueId, ids ValueMinter) returns ValueId
+	let wordShift = emitConst(module, block: block, value: BitmapBitsPerWordShift, ids: ids)
+	let wordIndex = emitBin(module, block: block, a: bitIndex, b: wordShift, opcode: StdBinOpcode.shr, ids: ids)
+	return emitWordSlotAddr(module, block: block, base: arenaBase, index: wordIndex, ids: ids)
+end 'emitBitmapWordAddr'
+
+// `bitIndex` within its bitmap word — the twin of the address above, so the two halves of one index cannot
+// be computed against different word widths.
+function emitBitPosition(module StdModule, block IrBlock, bitIndex ValueId, ids ValueMinter) returns ValueId
+	let mask = emitConst(module, block: block, value: BitmapBitsPerWordMask, ids: ids)
+	return emitBin(module, block: block, a: bitIndex, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitBitPosition'
+
+// `(word shr bitPos) and 1` — one bit of a bitmap word, as 0 or 1. Three sites read a single bit (the
+// first-fit scan, the commit test, the scavenger's commit test) and a fourth reads a MASKED FIELD of one
+// (`emitSelectField`); spelled per site they are four places for the shift and the mask to disagree about
+// which end of the word a bit lives at.
+function emitSelectBit(module StdModule, block IrBlock, word ValueId, bitPos ValueId, ids ValueMinter) returns ValueId
+	return emitSelectField(module, block: block, word: word, bitPos: bitPos, width: 1, ids: ids)
+end 'emitSelectBit'
+
+// `(word shr bitPos) and ((1 shl width) - 1)` — `width` CONSECUTIVE bits of a bitmap word starting at
+// `bitPos`. The scavenger's *"is every chunk of this granule free?"* is exactly this read against
+// `SlabArenaCommitGranuleChunks` bits, which is why the single-bit form above is written as the width-1 case
+// of it rather than beside it.
+function emitSelectField(module StdModule, block IrBlock, word ValueId, bitPos ValueId, width ParsedInt, ids ValueMinter) returns ValueId
+	let selected = emitBin(module, block: block, a: word, b: bitPos, opcode: StdBinOpcode.shr, ids: ids)
+	let mask = emitConst(module, block: block, value: (1 shl width) - 1, ids: ids)
+	return emitBin(module, block: block, a: selected, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitSelectField'
+
+// `1 shl bitPos` — the single-bit mask a set or a clear combines with. Its two callers set a commit bit and
+// clear one, and a mask derived twice is the pair that ends up naming different bits.
+function emitBitMask(module StdModule, block IrBlock, bitPos ValueId, ids ValueMinter) returns ValueId
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	return emitBin(module, block: block, a: one, b: bitPos, opcode: StdBinOpcode.shl, ids: ids)
+end 'emitBitMask'
+
+// `__slab_arena_map_ensure(addr) -> slotAddr` — the address of the reverse map's slot for the page holding
+// `addr`, lazy-allocating whichever of the three levels do not exist yet.
+//
+// ⭐⭐ **IT ANSWERS THE SLOT, WHERE v1's ANSWERS NOTHING AND ITS CALLER RE-WALKS.** `__slab_arena_map_set`
+// there runs `__slab_arena_map_ensure(pageAddr)` and then repeats the whole L1→L2→spans chain by hand to
+// reach the slot the ensure had just been standing on — two walks, two copies of the index arithmetic, and
+// two places for a shift to be wrong. Here the walk happens once and hands back where it ended.
+//
+// ⭐ **THE THREE LEVELS ARE ONE EMITTER CALLED THREE TIMES** (`emitLazyMapLevel`), which is what makes them
+// three levels of one map rather than three near-identical blocks that must be edited together. The only
+// per-level facts are the slot the pointer lives in and how many entries the table holds.
+function buildSlabArenaMapEnsure(module StdModule)
+	var func = IrFunction.createFromStd(SlabArenaMapEnsureName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	// The three merge blocks are created HERE rather than inside the emitter, because a caller that owns the
+	// block can go on emitting into it — an emitter that CREATED it could only hand it back inside a pair
+	// with the table base, and a block reached through an immutable field cannot be appended to (E3019).
+	var atL1 = module.addBlock(func, label: b"l1")
+	var atL2 = module.addBlock(func, label: b"l2")
+	var atL3 = module.addBlock(func, label: b"l3")
+
+	emitParams(module, block: entry, count: 1)
+	let addr = 0 as ValueId
+
+	let l1SlotAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(l1SlotAddr, label: SlabArenaMapL1Label))
+
+	let l1Base = emitLazyMapLevel(module, func: func, cur: entry, slotAddr: l1SlotAddr, entryCount: ArenaMapL1Entries, have: atL1, ids: ids)
+	let l2SlotAddr = emitMapSlotAddr(module, block: atL1, tableBase: l1Base, addr: addr, shift: ArenaMapL1Shift, mask: ArenaMapL1Mask, ids: ids)
+
+	let l2Base = emitLazyMapLevel(module, func: func, cur: atL1, slotAddr: l2SlotAddr, entryCount: ArenaMapLevelEntries, have: atL2, ids: ids)
+	let l3SlotAddr = emitMapSlotAddr(module, block: atL2, tableBase: l2Base, addr: addr, shift: ArenaMapL2Shift, mask: ArenaMapLevelMask, ids: ids)
+
+	let l3Base = emitLazyMapLevel(module, func: func, cur: atL2, slotAddr: l3SlotAddr, entryCount: ArenaMapLevelEntries, have: atL3, ids: ids)
+	let pageSlotAddr = emitMapSlotAddr(module, block: atL3, tableBase: l3Base, addr: addr, shift: SlabPageShift, mask: ArenaMapLevelMask, ids: ids)
+
+	module.setTerminator(atL3, op: StdOp.ret(pageSlotAddr))
+
+	module.functions.push(func)
+end 'buildSlabArenaMapEnsure'
+
+// Emit "load the table pointer at `slotAddr`; if it is 0, allocate and zero a table of `entryCount` words
+// and publish it", merging both paths into `have`. Answers the ValueId of `have`'s block argument — the
+// table's base address, which the caller then indexes.
+//
+// ⚠⚠ **THE ZEROING IS NOT OPTIONAL AND IT IS NOT PAID FOR BY THE OS.** A chunk from
+// `__slab_arena_alloc_chunks` is fresh OS memory ONLY the first time it is handed out; the scan is first-fit
+// over a bitmap, so a freed low chunk is reused before a virgin high one. An unzeroed level table reads a
+// dead chunk's bytes as a table pointer, and the next `map_get` follows it. This is the same debt
+// `MmRuntime`'s free-list note names — *"a slot returned to a free list holds the previous occupant's
+// bytes"* — one layer down.
+//
+// ⚠ **FOLLOW-UP, NAMED: a per-arena virgin high-water mark.** ARCHITECTURE.md's zeroing contract describes
+// exactly this at the SLOT level (`mspan.bump_next`: memory above the cursor has never been handed out and
+// is therefore already zero). The chunk level has no such cursor yet, so every table is zeroed even when
+// its chunk is provably untouched — a 512- or 8192-word loop run at most a handful of times per program.
+function emitLazyMapLevel(module StdModule, func IrFunction, cur IrBlock, slotAddr ValueId, entryCount ParsedInt, have IrBlock, ids ValueMinter) returns ValueId
+	var allocate = module.addBlock(func, label: mapLevelLabel(have.label, part: b"new"))
+	var existing = module.addBlock(func, label: mapLevelLabel(have.label, part: b"had"))
+
+	let current = emitLoadField(module, block: cur, record: slotAddr, offset: 0, ids: ids)
+	let absent = emitConst(module, block: cur, value: 0, ids: ids)
+	let missing = emitCmp(module, block: cur, a: current, b: absent, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(missing, thenBlockId: allocate.id, elseBlockId: existing.id))
+
+	module.setTerminator(existing, op: StdOp.branch(have.id))
+	existing.branchEdges.push(BranchEdge.create(have.id, argIds: argsOf(current)))
+
+	let chunks = emitConst(module, block: allocate, value: arenaChunksFor(entryCount * ArenaWordBytes), ids: ids)
+	let table = ids.mint()
+	module.appendOp(allocate, op: StdOp.call(table, callee: SlabArenaAllocChunksName, args: argsOf(chunks)))
+	// ⭐ **ONE `memFill`, NOT A LOOP — AND THIS FILE'S PREMISE CHANGED UNDER IT MID-FLIGHT.** An earlier
+	// draft zeroed the table with a hand-built Std-IR word loop, justified against the per-byte fill loop
+	// then in the tree on the grounds that a word stride is eight times fewer iterations. **`StdOp.memFill`
+	// landed in the same wave and retired both sides of that argument**: it is ONE op lowering to the
+	// backend's size ladder (`rep stosq` on x64 at this size, a single `memory.fill` on wasm), so a 64 KiB
+	// L2 table costs one instruction sequence rather than 8,192 loop iterations.
+	//
+	// The old builder is DELETED rather than left beside it. Two ways to zero a range is exactly the
+	// duplication `emitBitRunUpdate` exists to prevent one level up, and a helper kept "in case" is how
+	// the second one acquires a caller.
+	let tableBytes = emitConst(module, block: allocate, value: entryCount * ArenaWordBytes, ids: ids)
+	module.appendOp(allocate, op: StdOp.memFill(table, byteCountId: tableBytes, value: 0))
+	emitStoreField(module, block: allocate, record: slotAddr, offset: 0, value: table)
+	module.setTerminator(allocate, op: StdOp.branch(have.id))
+	allocate.branchEdges.push(BranchEdge.create(have.id, argIds: argsOf(table)))
+
+	let base = ids.mint()
+	have.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
+
+	return base
+end 'emitLazyMapLevel'
+
+// One level's two private block labels — `newl2`, `hadl2`, derived from the merge block the caller named.
+// Three calls of one emitter would otherwise put six identically-labelled blocks in
+// `__slab_arena_map_ensure`; a label is not a block IDENTITY, so nothing breaks, but a disassembly of the
+// one function that walks all three levels becomes unreadable.
+function mapLevelLabel(name ByteArray, part ByteArray) returns ByteArray
+	return "{String.from(part)}{String.from(name)}".toByteArray()
+end 'mapLevelLabel'
+
+// The address of one map slot: `tableBase + ((addr shr shift) and mask) * 8`. ONE spelling, shared by the
+// SIX index computations — `ensure` indexes L1, L2 and L3, and `get` repeats all three — which is what
+// makes "the L2 index is bits 26..38" a single statement rather than six. (The L1 TABLE's own address is a
+// `globalAddr` in both, not an index, which is why there are six and not eight.)
+function emitMapSlotAddr(module StdModule, block IrBlock, tableBase ValueId, addr ValueId, shift ParsedInt, mask ParsedInt, ids ValueMinter) returns ValueId
+	let shiftConst = emitConst(module, block: block, value: shift, ids: ids)
+	let raw = emitBin(module, block: block, a: addr, b: shiftConst, opcode: StdBinOpcode.shr, ids: ids)
+	let maskConst = emitConst(module, block: block, value: mask, ids: ids)
+	let index = emitBin(module, block: block, a: raw, b: maskConst, opcode: StdBinOpcode.bitAnd, ids: ids)
+	return emitWordSlotAddr(module, block: block, base: tableBase, index: index, ids: ids)
+end 'emitMapSlotAddr'
+
+// `__slab_arena_map_set(base, numPages, span)` — register `span` as the owner of every page in
+// `[base, base + numPages * SlabPageBytes)`.
+//
+// ⚠ **EVERY PAGE OF A MULTI-PAGE SPAN GETS ITS OWN SLOT, HOLDING THE SAME POINTER.** That is what makes
+// `__slab_arena_map_get` answer for a pointer anywhere INSIDE the span rather than only at its base — which
+// is the whole question a `free` asks.
+function buildSlabArenaMapSet(module StdModule)
+	var func = IrFunction.createFromStd(SlabArenaMapSetName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"pageh")
+	var body = module.addBlock(func, label: b"pageb")
+	var done = module.addBlock(func, label: b"paged")
+
+	emitParams(module, block: entry, count: 3)
+	let base = 0 as ValueId
+	let numPages = 1 as ValueId
+	let span = 2 as ValueId
+
+	let first = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+
+	let page = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(page, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(first)))
+
+	let atEnd = emitCmp(module, block: header, a: page, b: numPages, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let pageShift = emitConst(module, block: body, value: SlabPageShift, ids: ids)
+	let pageOffset = emitBin(module, block: body, a: page, b: pageShift, opcode: StdBinOpcode.shl, ids: ids)
+	let pageAddr = emitBin(module, block: body, a: base, b: pageOffset, opcode: StdBinOpcode.add, ids: ids)
+	let slot = ids.mint()
+	module.appendOp(body, op: StdOp.call(slot, callee: SlabArenaMapEnsureName, args: argsOf(pageAddr)))
+	emitStoreField(module, block: body, record: slot, offset: 0, value: span)
+
+	let one = emitConst(module, block: body, value: 1, ids: ids)
+	let nextPage = emitBin(module, block: body, a: page, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(nextPage)))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSlabArenaMapSet'
+
+// `__slab_arena_map_get(ptr) -> span` — the span registered for the page holding `ptr`, or `ArenaMapNoSpan`.
+//
+// ⭐⭐ **THE MISS IS AN ANSWER, NOT A DEFAULT.** Three levels can be absent, and every one of them means the
+// same thing: nothing registered this address, so it did not come from a span — it came straight from the
+// OS and the layer above releases it that way. `ArenaMapNoSpan` names that meaning so the three miss edges
+// and the consumer cannot disagree about it. This is the one place in this file a zero return is not a
+// sentinel standing in for a failure, and it is spelled out because it reads exactly like one.
+//
+// It takes no lock and needs none even once the mutation paths take one: a published level pointer is never
+// overwritten, so a reader either sees 0 or sees a fully zeroed table.
+function buildSlabArenaMapGet(module StdModule)
+	var func = IrFunction.createFromStd(SlabArenaMapGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var atL2 = module.addBlock(func, label: b"atl2")
+	var atL3 = module.addBlock(func, label: b"atl3")
+	var atPage = module.addBlock(func, label: b"atpage")
+	var miss = module.addBlock(func, label: b"miss")
+
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	let l1SlotAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(l1SlotAddr, label: SlabArenaMapL1Label))
+	let l1 = emitLoadField(module, block: entry, record: l1SlotAddr, offset: 0, ids: ids)
+	emitBranchOnPresent(module, block: entry, pointer: l1, present: atL2, absent: miss, ids: ids)
+
+	let l2SlotAddr = emitMapSlotAddr(module, block: atL2, tableBase: l1, addr: ptr, shift: ArenaMapL1Shift, mask: ArenaMapL1Mask, ids: ids)
+	let l2 = emitLoadField(module, block: atL2, record: l2SlotAddr, offset: 0, ids: ids)
+	emitBranchOnPresent(module, block: atL2, pointer: l2, present: atL3, absent: miss, ids: ids)
+
+	let l3SlotAddr = emitMapSlotAddr(module, block: atL3, tableBase: l2, addr: ptr, shift: ArenaMapL2Shift, mask: ArenaMapLevelMask, ids: ids)
+	let l3 = emitLoadField(module, block: atL3, record: l3SlotAddr, offset: 0, ids: ids)
+	emitBranchOnPresent(module, block: atL3, pointer: l3, present: atPage, absent: miss, ids: ids)
+
+	let pageSlotAddr = emitMapSlotAddr(module, block: atPage, tableBase: l3, addr: ptr, shift: SlabPageShift, mask: ArenaMapLevelMask, ids: ids)
+	let span = emitLoadField(module, block: atPage, record: pageSlotAddr, offset: 0, ids: ids)
+	module.setTerminator(atPage, op: StdOp.ret(span))
+
+	emitConstReturn(module, block: miss, value: ArenaMapNoSpan, ids: ids)
+
+	module.functions.push(func)
+end 'buildSlabArenaMapGet'
+
+// Continue into `present` when `pointer` is non-zero, else into `absent`. The lookup's three level tests are
+// the same three ops, and writing them out per level is how one of the three ends up comparing the wrong
+// value.
+function emitBranchOnPresent(module StdModule, block IrBlock, pointer ValueId, present IrBlock, absent IrBlock, ids ValueMinter)
+	let none = emitConst(module, block: block, value: 0, ids: ids)
+	let uncommitted = emitCmp(module, block: block, a: pointer, b: none, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(uncommitted, thenBlockId: absent.id, elseBlockId: present.id))
+end 'emitBranchOnPresent'

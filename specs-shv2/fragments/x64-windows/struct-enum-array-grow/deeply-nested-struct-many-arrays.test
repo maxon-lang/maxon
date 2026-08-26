@@ -42,9 +42,10 @@ end 'main'
 ExitCode: 4
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Inner.create {
@@ -194,12 +195,11 @@ func @main {
     x64.movRegImm32 rdx, 100
     x64.callDirect __managed_push
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
-    x64.callDirect __managed_count
-    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r13, r13, r8
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r13, rax, rcx
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Outer
     x64.movRegReg rcx, rbx

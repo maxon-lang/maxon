@@ -161,13 +161,14 @@ export let IoParkedNormalDone = 4
 // `__gt_promise_drop` (result NOT consumed) — see `emitGtReleaserCall` for why those two differ and what
 // each failure mode costs.
 //
-// ⚠⚠ **IT DEPENDS ON THE WHOLE-STRUCT MEMZERO ON `__gt_spawn`'s RECYCLE ARM, AND THAT IS A THIRD REASON
-// THAT MEMZERO IS A CORRECTNESS TRAP RATHER THAN AN OPTIMIZATION.** A struct popped off the free-list lives
-// OUTSIDE the always-zeroing slab (see `buildGtSpawn`'s header), so without the memzero a spawn of a
-// releaser-free callee would INHERIT the previous tenant's releaser and release that tenant's arguments —
-// out of a recycled struct's stale argument slots, which is a wild free rather than a leak. The zero is
-// what makes "no releaser" the default state of every GT rather than a state the spawn must remember to
-// restore.
+// ⚠⚠ **IT DEPENDS ON A SPAWNED STRUCT ARRIVING ZEROED, AND THAT IS A CORRECTNESS TRAP RATHER THAN AN
+// OPTIMIZATION.** Without it, a spawn of a releaser-free callee would INHERIT the previous tenant's releaser
+// and release that tenant's arguments out of stale argument slots — a wild free rather than a leak. The zero
+// is what makes "no releaser" the default state of every GT rather than a state the spawn must remember to
+// restore. ⚠ **WHO GUARANTEES IT CHANGED AT S3 AND THE OBLIGATION DID NOT.** It used to be `__gt_spawn`'s own
+// whole-struct memzero, because a struct popped off the private free-list lived OUTSIDE the always-zeroing
+// slab; the struct now comes from `__slab_alloc`, whose zeroing contract covers the whole slot on both of its
+// arms. A change that ever gave this runtime a non-zeroing allocation door would have to re-establish it here.
 //
 // It sits at 0xB0 — where the inline argument region used to start — so every field of the authoritative
 // GtLayout (0x00–0xA8) stays byte-identical and the multi-M / arm64 ports still graft on without moving a
@@ -193,22 +194,42 @@ export let GtOffReleaser = 0xB0
 // argument region, which is shv2's own invention and grafts onto nothing.
 let GtOffTraceId = 0xB8
 
-// ⭐ THE INLINE ARGUMENT REGION (P1.5-B1c #87). MaxAsyncArgs i64 slots living at the END of the GT struct,
-// so a spawn needs NO separate `__slab_alloc`'d argument buffer — `__gt_spawn` sets `gt.argBuf` (0x48) to a
-// SELF-POINTER `gt + GtOffArgInline`, and the trampoline dereferences that self-pointer exactly as it read a
-// separate buffer (X64GtRuntime:155 is byte-identical). This DIVERGES from both references — v1
-// (`Arm64MacosGreenThread.maxon:2613-2616`) and the bootstrap (`ARM64CodeEmitter.Runtime.cs:4188-4194`) keep
-// the arg buffer a separate `__slab_alloc` and `__slab_free` it at run-completion — because shv2's slab has NO
-// free path (`MmRuntime.__slab_alloc` is a pure bump allocator). Inlining reclaims the arg region for free when
-// the struct is recycled onto the free-list, and it is SAFE because the region is DEAD by completion: the
-// trampoline reads all MaxAsyncArgs slots into registers at run-start and never touches them again.
+// ⭐ **THE ONE-SHOT READ'S ACROSS-THE-PARK SCRATCH, OR 0 (S3).** `__gt_io_read` issues an overlapped
+// `ReadFile` into a region the completion thread keeps writing while the green thread is suspended, so that
+// region — alone among the eight the probe allocates — outlives the function's own straight-line code. The
+// normal path frees it the moment the yielding read returns and clears this slot; the DROP path frees it
+// through this slot, because `__gt_promise_drop` cancels a read whose frame it can never return to.
 //
-// ⚠ **IT HAS BEEN PUSHED DOWN TWICE AND THE BOUND IS NOW 0xC0.** The reserved header ends where this region
-// begins, so that end is `GtOffArgInline` itself: 0xB0 became the `releaser` and 0xB8 the trace id, moving
-// the region 0xB0 → 0xB8 → 0xC0. What each move preserved is the PORT PROPERTY: every field of the
-// authoritative GtLayout (0x00–0xA8) is still byte-identical, so the multi-M / arm64 ports graft on without
-// moving one, and only shv2's own region — which grafts onto nothing — slid. (Slice 1b's pipe-ownership
-// marker rides io_handle's spare low bit — see `GtOffIoHandle` — so it did NOT need a field here.)
+// ⚠ **IT IS A FIELD WHERE THE PIPE-OWNERSHIP MARKER WAS A BIT, AND THE DIFFERENCE IS THAT A POINTER HAS NO
+// SPARE BIT.** `GtOffIoHandle`'s note records declining a field for that marker — kernel HANDLEs are
+// 4-aligned, so bit 0 carried it for nothing. There is no such room here: the alternative to eight bytes on
+// the struct is ~4.1 KB abandoned per dropped in-flight read, which is the debt this rung exists to close and
+// not a cheaper place to put it. A STREAMING read leaves the slot 0 (its buffer belongs to the handle table
+// and `subpRelease` is its sole owner), so the cancel arm frees exactly what the probe allocated.
+let GtOffIoScratch = 0xC0
+
+// ⭐ THE INLINE ARGUMENT REGION (P1.5-B1c #87). MaxAsyncArgs i64 slots living at the END of the GT struct,
+// so a spawn needs NO separate argument buffer — `__gt_spawn` sets `gt.argBuf` (0x48) to a SELF-POINTER
+// `gt + GtOffArgInline`, and the trampoline dereferences that self-pointer exactly as it read a separate
+// buffer (X64GtRuntime:155 is byte-identical). It DIVERGES from both references — v1
+// (`Arm64MacosGreenThread.maxon:2613-2616`) and the bootstrap (`ARM64CodeEmitter.Runtime.cs:4188-4194`) give
+// the arg buffer its own `__slab_alloc` and `__slab_free` it at run-completion.
+//
+// ⚠⚠ **THE REASON THIS FILE USED TO GIVE FOR THE DIVERGENCE HAS EXPIRED; THE DIVERGENCE HAS NOT (S3).** It
+// read *"shv2's slab has NO free path … Inlining reclaims the arg region for free"*, and the slab has one
+// now. What KEEPS the region inline is the argument that was always the better one: a separate buffer is a
+// SECOND allocation and a SECOND lifetime per spawn, and the second lifetime is the expensive half — the
+// releaser reads these slots at the AWAIT or the DROP (see the warning below), long after the thread has
+// finished, so a separately allocated buffer would have to be freed by whichever of `__gt_await`,
+// `__gt_try_await` and `__gt_promise_drop` got there, on every arm of each. Inline, the arg region's lifetime
+// IS the struct's, and the one `__slab_free` in `emitGtStructReclaim` ends both. Retiring it to match the
+// references would buy an allocation and a free per spawn and three more free sites, for nothing.
+//
+// ⚠ **IT HAS BEEN PUSHED DOWN THREE TIMES AND THE BOUND IS NOW 0xC8.** The reserved header ends where this
+// region begins, so that end is `GtOffArgInline` itself: 0xB0 became the `releaser`, 0xB8 the trace id and
+// 0xC0 the io scratch, moving the region 0xB0 → 0xB8 → 0xC0 → 0xC8. What each move preserved is the PORT
+// PROPERTY: every field of the authoritative GtLayout (0x00–0xA8) is still byte-identical, so the multi-M /
+// arm64 ports graft on without moving one, and only shv2's own region — which grafts onto nothing — slid.
 //
 // ⚠ **THE ARGUMENT SLOTS ARE NOT DEAD BY COMPLETION ANY MORE.** The "dead by completion" claim above is about
 // the TRAMPOLINE, which still reads each slot exactly once at run-start. A2 gave the slots a SECOND reader —
@@ -216,9 +237,9 @@ let GtOffTraceId = 0xB8
 // at the drop, after the GT is finished. Nothing between the spawn's stores and that read writes the region
 // (the trampoline only loads it), so the values are still there; but a future change that reused the region
 // as scratch would now be a wild free, not merely a mis-loaded argument.
-export let GtOffArgInline = 0xC0
+export let GtOffArgInline = 0xC8
 
-// 0xF0 = 240 bytes = 0xC0 header + ArgBufBytes (0x30) inline arg region. The header words 0x60–0xA0 remain
+// 0xF8 = 248 bytes = 0xC8 header + ArgBufBytes (0x30) inline arg region. The header words 0x60–0xA0 remain
 // RESERVED (the reference's io_result/io_handle/cancel/tib fields), slab-zeroed and unused until the
 // subprocess/IOCP slice fills them. Must be a multiple of 8 (whole-word fields).
 let GtStructSize = GtOffArgInline + ArgBufBytes
@@ -362,8 +383,8 @@ let DwordMask = 0xFFFFFFFF as ParsedInt
 
 // The 8-byte slab slot `GetExitCodeProcess` writes the child's DWORD exit code into; the runtime reads it back
 // with a full i64 load, so the high dword must be clean. `GetExitCodeProcess` writes only the low DWORD, so the
-// `reap` block STORES 0 to the whole slot before the call (P1.5-B1c #92 makes this pre-zero load-bearing: the
-// slot is now REUSED across calls, so a prior call's exit code could dirty the high half without it).
+// slot must arrive with its high half already zero — which a fresh `__slab_alloc` slot does. #92's reused slot
+// needed an explicit `store 0` in `reap` to re-establish that; S3's per-call slot does not.
 let ExitCodeSlotBytes = 8
 let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
 
@@ -374,8 +395,9 @@ let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator
 // RECOVERS rather than dying. The two paths:
 //
 //   * `RunProcessError.spawnFailed` — `__gt_process_run` when `CreateProcessA` FAILS (a command whose first token
-//     is not a runnable executable). On failure CreateProcessA leaves the slab-zeroed PROCESS_INFORMATION
-//     untouched, so `hProcess == 0` detects it — and the runtime MUST NOT park on a null handle, which would
+//     is not a runnable executable). On failure CreateProcessA leaves the PROCESS_INFORMATION untouched, and
+//     the call's is a freshly zeroed slot, so `hProcess == 0` detects it — and the runtime MUST NOT park on a
+//     null handle, which would
 //     busy-spin the netpoll forever (WaitForMultipleObjects on a NULL handle returns WAIT_FAILED immediately, so
 //     the poll never fires). Throwing hands the caller a catchable error instead of the seed's old hard abort.
 //   * `RunProcessError.storeOverflow` — `__gt_proc_add` reports the process store is FULL (a program parks more
@@ -790,7 +812,8 @@ export let IoCompletionLoopName = b"__io_completion_loop"
 
 // --- `.data` globals (all i64, zero-initialized) ---
 // The zero image IS the initial state: no current GT, an empty run queue, init not yet run — exactly as
-// MmRuntime's zeroed slab cursor means "no arena yet". So there is nothing to run before `main`.
+// `__slab_state`'s zero means "the allocator has committed no region yet". So there is nothing to run before
+// `main`.
 // EXPORTED because the syscall shim (X64GtRuntime, a Target-tier hand-assembled chunk) loads the running GT
 // from it to gate the stack switch and to restore the TIB after the call. One label, named once, shared by
 // the Std drivers that own the slot and the shim that reads it.
@@ -815,23 +838,35 @@ export let GtSystemStackTopLabel = b"__gt_system_stack_top"
 // by alloc+free churn rather than a recycle. (A same-size 2 KB free-list for stack reuse is a pure optimization left
 // to a later pass.)
 //
-// ⭐ THE GT STRUCT free-list (P1.5-B1c #87). The struct — unlike the variable-sized stack — is a FIXED GtStructSize,
-// so a free-list is size-safe: `__gt_await`/`__gt_try_await` PUSH the AWAITED promise's struct onto
-// `__gt_free_list_head` (a `.data` LIFO, linked through the now-idle `GtOffNext` run-queue slot) once its result is
-// read, and `__gt_spawn` POPS one before falling back to a fresh `__slab_alloc` — so a spawn/await loop reuses ONE
-// struct rather than bump-leaking one per iteration (the slab has no free path).
+// ⛔⛔ **THE GT STRUCT FREE-LIST IS GONE TOO (S3), AND IT WENT FOR THE STACK LIST'S REASON ONE LEVEL UP.**
+// `__gt_free_list_head` was a `.data` LIFO threaded through the idle `GtOffNext` slot: `__gt_await` pushed a
+// finished struct onto it and `__gt_spawn` popped one before falling back to `__slab_alloc`. It was v1's
+// `next`-linked recycle MINUS its per-P sharding and MINUS its 64-cap-then-`__slab_free` overflow — and that
+// second subtraction is the tell. v1 caps the list and frees the excess; shv2 could not, because
+// `__slab_alloc` was a bump cursor with no free path, so an uncapped list that never freed was *"the natural
+// fit"*. The slab has a free path now, so the list is a private allocator for one fixed size sitting on top of
+// a general one: `__gt_spawn` takes a struct from `__slab_alloc` and `emitGtStructReclaim` gives it back to
+// `__mm_raw_free`, and the memory a finished green thread held is available to every other size class in the
+// program instead of to the next spawn alone.
 //
-// ⭐ RECLAIM AT THE AWAITER, NOT AT COMPLETION. A GT can complete as a SIDE EFFECT of driving a DIFFERENT await
-// (`__gt_drive_until` runs whatever is on the run queue), yet its struct still holds its result and is still
-// referenced by a live, un-awaited promise. Reclaiming at completion would recycle that struct out from under the
-// pending `await`, so an out-of-order await would read a REUSED struct (a wrong answer, not a crash). So only the
-// AWAITER reclaims, exactly as v1 (`Arm64MacosGreenThread.maxon`) and the bootstrap do — the awaited reclaim is then
-// unconditional and structural, and per-await linearity (double-await is a compile error) makes it exactly once.
-// This is v1's `next`-linked LIFO recycle MINUS its per-P sharding (single-M ⇒ ONE global head) and its
-// 64-cap-then-`__slab_free` overflow (shv2 has no `__slab_free` ⇒ an uncapped free-list that never frees is the
-// natural fit). A run-but-never-AWAITED GT's struct is never reclaimed (OPEN #88 — its family also leaks the
-// never-run GT's seed stack); this rung closes the AWAITED-GT struct+arg-buffer leak (#87).
-let GtFreeListHeadLabel = b"__gt_free_list_head"
+// ⭐⭐ **AND THE WHOLE-STRUCT MEMZERO WENT WITH IT WITHOUT LOSING THE TRAP IT EXISTED FOR.** A struct popped
+// off that list lived OUTSIDE the always-zeroing slab, so the pop arm had to memzero it word by word or a
+// recycled GT would inherit its predecessor's `status`/`waiter`/`io_*`/`threw`/`releaser` — v1 fixed exactly
+// this class of bug (a spurious pipe-read abort, `Arm64MacosGreenThread.maxon:2376-2404`) the same way, and
+// the bootstrap's field-by-field re-init is the weaker version. `__slab_alloc` now supplies that guarantee
+// for both arms of its own hot path: a recycled slot is memset over its WHOLE slot size (which is `>=`
+// `GtStructSize`, so no field of the struct is missed) and a virgin one still holds the OS's zeroes
+// (`SlabRuntime.buildSlabAllocClass`). The trap is answered by the allocator's zeroing contract rather than by
+// a loop this file maintains — one guarantee instead of two that could disagree.
+//
+// ⭐ RECLAIM AT THE AWAITER, NOT AT COMPLETION — unchanged, and the reason is about the PROMISE, not about
+// where the memory goes. A GT can complete as a SIDE EFFECT of driving a DIFFERENT await (`__gt_drive_until`
+// runs whatever is on the run queue), yet its struct still holds its result and is still referenced by a live,
+// un-awaited promise. Reclaiming at completion would free that struct out from under the pending `await`, so
+// an out-of-order await would read a FREED struct — and now that the slot goes back to a span where any
+// allocation can take it, that is a use-after-free rather than the read of a reused GT it used to be. So only
+// the AWAITER reclaims, exactly as v1 and the bootstrap do; per-await linearity (double-await is a compile
+// error) makes it exactly once, and `__gt_promise_drop` is the dual for a promise nobody awaits.
 
 // ⭐ **THE GREEN-THREAD LIVE COUNT — the leak gate for slab-invisible GT structs (P1.5-B2 #88).** A GT
 // struct + its seed stack are `__slab_alloc`/`osAllocPages` allocations, INVISIBLE to `__mm_alloc_count`,
@@ -897,9 +932,20 @@ let IoPendingLabel = b"__io_pending"
 let CriticalSectionWords = 5
 let CriticalSectionSlotBytes = 8
 
-// The `.data` slab-region size the read buffer / scratch structs are `__slab_alloc`'d per read (see `__gt_io_read`).
-// A read buffer big enough for one line of child stdout; the probe reads `cmd /c echo hello` (~7 bytes).
-let IoReadBufferBytes = 4096
+// ⭐⭐ **THE ONE-SHOT READ'S ACROSS-THE-PARK SCRATCH — ONE REGION, TWO USES.** `__gt_io_read` needs a read
+// buffer big enough for one line of child stdout (the probe reads `cmd /c echo hello`, ~7 bytes) AND an
+// 8-byte slot for `ReadFile`'s transferred-byte out-param, and both must survive the park. They are ONE
+// allocation because that is what makes them ONE free and ONE pointer on the GT (`GtOffIoScratch`): a second
+// region would need a second field for the drop path to reach, for eight bytes.
+//
+// ⚠ **THE OUT-SLOT IS FIRST SO THE WHOLE REGION IS EXACTLY A SIZE CLASS.** Adding the slot to a round 4096
+// would push the request into the next class up and waste most of the difference; taking it OUT of 4096
+// leaves the request exact and costs the buffer eight bytes it does not need.
+let IoReadScratchBytes = 4096
+let IoReadBytesOutOffset = 0 as ByteOffset
+let IoReadBytesOutBytes = 8
+let IoReadBufferOffset = IoReadBytesOutBytes
+let IoReadBufferBytes = IoReadScratchBytes - IoReadBytesOutBytes
 
 // SECURITY_ATTRIBUTES: nLength=24 @0, lpSecurityDescriptor=0 @8, bInheritHandle=1 @16 — the inheritable SA the
 // child WRITE end (CreateFileW) is opened with, so CreateProcessA(bInheritHandles=TRUE) passes it to the child.
@@ -950,26 +996,23 @@ let NibbleMask = 0xF
 // The global pipe-name uniquifier counter's `.data` slot (main-thread-only increment, single-M).
 let IoPipeSeqLabel = b"__io_pipe_seq"
 
-// ⭐ P1.5-B1c #92 — the REUSABLE subprocess scratch buffers. `__gt_process_run` used to `__slab_alloc` four
-// scratch buffers PER CALL (STARTUPINFOA, PROCESS_INFORMATION, the mutable cmdline copy, the exit-code slot),
-// none reclaimed — ~150 B leaked per call. The fixed-size three (startup 0x68, procInfo 0x18, exit-code 8) are
-// now allocated ONCE in `__gt_init` and reused every call; each is written+consumed in a NON-YIELDING single-M
-// window (the STARTUPINFOA/PROCESS_INFORMATION reads finish before the GT parks at `parkSwitch`; the exit-code
-// slot is used only in the post-resume `reap` block), so no two concurrent `__gt_process_run` calls' scratch can
-// coexist. This mirrors the reference's STACK-FRAME scratch (v1 `X64Backend.maxon:4930-4958`, auto-reclaimed on
-// return); shv2's `__gt_process_run` is builder-built Std with no addressable stack local, so a reused one-time
-// global — exactly the timer-heap / proc-array pattern already in `__gt_init` — is the shv2-appropriate form.
-let GtStartupBaseLabel = b"__gt_startup_base"
-let GtProcInfoBaseLabel = b"__gt_procinfo_base"
-let GtExitCodeBaseLabel = b"__gt_exitcode_base"
-
-// The mutable cmdline copy is VARIABLE-sized, so it is a GROW-ON-DEMAND global (base + capacity) rather than a
-// one-time init alloc: `__gt_process_run` reuses the buffer when `cmdlineLen + 1 <= cap`, else `__slab_alloc`s a
-// bigger one and updates both. The old buffer bump-"leaks", but only when a strictly-longer command than any
-// before appears — bounded by the number of distinct increasing lengths, not per-call (a spawn-loop of one
-// command allocates it ONCE). Both 0 until the first `__gt_process_run` grows the buffer.
-let GtCmdlineBufBaseLabel = b"__gt_cmdline_buf_base"
-let GtCmdlineBufCapLabel = b"__gt_cmdline_buf_cap"
+// ⛔⛔ **THE REUSABLE SUBPROCESS SCRATCH BUFFERS ARE GONE (S3) — `__gt_process_run` ALLOCATES ITS OWN AND
+// FREES THEM, WHICH IS WHAT #92 WANTED AND COULD NOT HAVE.** #92 found four PER-CALL `__slab_alloc`s that
+// reclaimed nothing (~150 B leaked per call) and answered with REUSE, because reuse was the only reclamation
+// a bump cursor could offer: the three fixed-size buffers (STARTUPINFOA 0x68, PROCESS_INFORMATION 0x18,
+// exit-code 8) moved into `__gt_init`, and the variable cmdline copy became a grow-on-demand global that
+// abandoned its predecessor whenever a longer command appeared.
+//
+// ⚠⚠ **AND REUSE BOUGHT AN OBLIGATION THE PROBE NEXT DOOR COULD NOT MEET.** Sharing one buffer across calls
+// is safe only under an argument about the code — that a call writes and consumes its scratch inside a window
+// with no yield in it — which `__gt_io_read` explicitly could NOT make (*"a read YIELDS, so a concurrent read
+// must not share scratch"*), so the two neighbours ended up with two different scratch disciplines for one
+// need. Per-call allocation is the discipline that needs no argument at all, and with a free path it costs
+// four slab requests against a `CreateProcessA`. It also deletes three re-zeroing stores that existed ONLY
+// because a reused buffer arrives dirty: `hProcess` (the spawn-failure sentinel), the exit-code slot's high
+// DWORD and the cmdline's NUL terminator are all supplied again by the allocator's zeroing contract, exactly
+// as they were before #92 — and each of those three was a place a reader could be handed the previous call's
+// answer. Five `.data` slots and ~30 lines of `__gt_init` go with them.
 
 // The prefix every GT runtime entry point shares — the "does this program spawn a green thread?" test.
 let GtRuntimeCallPrefix = b"__gt_"
@@ -1362,17 +1405,12 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	out.push(DataSectionEntry.create(String.from(GtProcCountLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtProcHandlesBaseLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtProcGtsBaseLabel), valueType: StdType.i64, value: 0))
-	// P1.5-B1c #87: the GT-struct free-list head (push at await, pop at spawn).
-	out.push(DataSectionEntry.create(String.from(GtFreeListHeadLabel), valueType: StdType.i64, value: 0))
-	// P1.5-B2 #88: the green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit.
+	// P1.5-B2 #88: the green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit. It is
+	// the ONE `.data` word this family still owns for memory bookkeeping: S3 retired the GT-struct free-list
+	// head and the five subprocess scratch slots beside it, because a runtime with a free path needs no
+	// private pool. This counter is NOT of that family and does not go with them — it counts GREEN THREADS,
+	// which the `__mm` gate cannot see whatever the allocator does with their memory.
 	out.push(DataSectionEntry.create(String.from(GtLiveCountLabel), valueType: StdType.i64, value: 0))
-	// P1.5-B1c #92: the reusable subprocess scratch bases (startup/procInfo/exit-code) + the grow-on-demand
-	// cmdline-copy buffer's base and capacity.
-	out.push(DataSectionEntry.create(String.from(GtStartupBaseLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(GtProcInfoBaseLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(GtExitCodeBaseLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(GtCmdlineBufBaseLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(GtCmdlineBufCapLabel), valueType: StdType.i64, value: 0))
 	return out
 end 'gtRuntimeGlobals'
 
@@ -1398,7 +1436,7 @@ end 'ioRuntimeGlobals'
 // substrate: `__io_init` seeds the completion port/thread/event/lock in `__gt_init`, the run-queue mutations take the
 // CRITICAL_SECTION that excludes the completion thread's cross-thread `__gt_enqueue`, the netpoll wakes on the event,
 // and `__gt_io_read` is built. A non-IOCP GT program stays byte-identical (no lock, no event wait, no io functions).
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesIocp bool, usesStreaming bool)
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesIocp bool, usesStreaming bool, rawFree ByteArray)
 	// The tag records exist only in a traced build; an untraced one registers no rdata and emits no calls.
 	let tags = GtTraceTags.register(globalData) if asyncTrace else GtTraceTags.none()
 
@@ -1416,13 +1454,13 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtEnqueue(module)
 	buildGtDequeue(module)
 	buildGtNowNs(module)
-	buildGtTimerAdd(module)
+	buildGtTimerAdd(module, rawFree: rawFree)
 	buildGtTimerEarliest(module)
 	buildGtTimerCheck(module, usesIocp: usesIocp)
 	buildGtDriveUntil(module, usesIocp: usesIocp)
-	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags)
-	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true, asyncTrace: asyncTrace, tags: tags)
-	buildGtPromiseDrop(module, usesIocp: usesIocp)
+	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags, rawFree: rawFree)
+	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true, asyncTrace: asyncTrace, tags: tags, rawFree: rawFree)
+	buildGtPromiseDrop(module, usesIocp: usesIocp, rawFree: rawFree)
 	// The non-blocking PEEK, beside the two blocking drivers it exists as the alternative to. See
 	// `buildGtIsComplete` for why it is unconditional where `__proc_pid` is bit-gated.
 	buildGtIsComplete(module)
@@ -1434,12 +1472,12 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// dependency order like the rest of this list.
 	buildGtResched(module)
 	buildGtIoPark(module)
-	buildGtProcessRun(module)
+	buildGtProcessRun(module, rawFree: rawFree)
 
 	if usesIocp 'io'
 		buildIoInit(module)
 		buildSubpYieldRead(module)
-		buildGtIoRead(module)
+		buildGtIoRead(module, rawFree: rawFree)
 	end 'io'
 
 	// The streaming subprocess API (slice 1b) rides the same IOCP substrate (`usesStreaming` implies `usesIocp`),
@@ -1566,35 +1604,10 @@ function buildGtInit(module StdModule, usesIocp bool, asyncTrace bool)
 	let sysStackTopAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(sysStackTopAddr, label: GtSystemStackTopLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(sysStackTopAddr, offset: 0, valueId: sysStackTop, valueType: StdType.i64))
-	// P1.5-B1c #92: the three FIXED-size subprocess scratch buffers, `__slab_alloc`'d ONCE here and reused by
-	// every `__gt_process_run` (they were per-call allocs that leaked ~150 B/call). STARTUPINFOA's `cb` field is
-	// set here once — CreateProcessA only READS the struct, so the single init store holds for every call — and
-	// the rest stay slab-zeroed. PROCESS_INFORMATION's `hProcess` (the spawn-failure sentinel) and the exit-code
-	// slot are re-cleaned per call at their use site in `__gt_process_run`. Allocated unconditionally like the
-	// timer heap / proc arrays above (a pure-async program that never runs a subprocess pays ~0x88 one-time bytes,
-	// the same over-provisioning those regions already make). The variable cmdline copy is grown on demand there.
-	let startupSizeConst = ids.mint()
-	module.appendOp(doInit, op: StdOp.const(startupSizeConst, value: StartupInfoSize, valueType: StdType.i64))
-	let startupBase = ids.mint()
-	module.appendOp(doInit, op: StdOp.call(startupBase, callee: SlabAllocName, args: argsOf(startupSizeConst)))
-	module.appendOp(doInit, op: StdOp.storeIndirect(startupBase, offset: StartupInfoCbOffset, valueId: startupSizeConst, valueType: StdType.i64))
-	let startupBaseAddr = ids.mint()
-	module.appendOp(doInit, op: StdOp.globalAddr(startupBaseAddr, label: GtStartupBaseLabel))
-	module.appendOp(doInit, op: StdOp.storeIndirect(startupBaseAddr, offset: 0, valueId: startupBase, valueType: StdType.i64))
-	let procInfoSizeConst = ids.mint()
-	module.appendOp(doInit, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize, valueType: StdType.i64))
-	let procInfoBase = ids.mint()
-	module.appendOp(doInit, op: StdOp.call(procInfoBase, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
-	let procInfoBaseAddr = ids.mint()
-	module.appendOp(doInit, op: StdOp.globalAddr(procInfoBaseAddr, label: GtProcInfoBaseLabel))
-	module.appendOp(doInit, op: StdOp.storeIndirect(procInfoBaseAddr, offset: 0, valueId: procInfoBase, valueType: StdType.i64))
-	let exitCodeSizeConst = ids.mint()
-	module.appendOp(doInit, op: StdOp.const(exitCodeSizeConst, value: ExitCodeSlotBytes, valueType: StdType.i64))
-	let exitCodeBase = ids.mint()
-	module.appendOp(doInit, op: StdOp.call(exitCodeBase, callee: SlabAllocName, args: argsOf(exitCodeSizeConst)))
-	let exitCodeBaseAddr = ids.mint()
-	module.appendOp(doInit, op: StdOp.globalAddr(exitCodeBaseAddr, label: GtExitCodeBaseLabel))
-	module.appendOp(doInit, op: StdOp.storeIndirect(exitCodeBaseAddr, offset: 0, valueId: exitCodeBase, valueType: StdType.i64))
+	// ⭐ **NO SUBPROCESS SCRATCH IS TAKEN HERE ANY MORE (S3).** Until this rung, three fixed-size buffers were
+	// allocated at scheduler init and reused by every `__gt_process_run` — the #92 workaround for a slab with
+	// no free path, which every pure-async program that never ran a subprocess paid ~0x88 bytes for. Each call
+	// now takes its own and hands them back, so there is nothing to seed and nothing to over-provision.
 	// __gt_init_done = 1.
 	let oneConst = ids.mint()
 	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
@@ -1612,96 +1625,50 @@ function buildGtInit(module StdModule, usesIocp bool, asyncTrace bool)
 	module.functions.push(func)
 end 'buildGtInit'
 
-// `__gt_spawn(funcPtr) -> gt` — create a ready green thread and enqueue it. Obtains a GT struct (a recycled one
-// off the free-list, else a fresh `__slab_alloc`), commits its seed stack, lays the initial context-switch frame
-// so the first switch-in `ret`s into the trampoline, points `gt.argBuf` at the struct's OWN inline arg region,
-// and enqueues the GT. Returns the GT pointer as the promise handle.
+// `__gt_spawn(funcPtr) -> gt` — create a ready green thread and enqueue it. Takes a GT struct from
+// `__slab_alloc`, commits its seed stack, lays the initial context-switch frame so the first switch-in `ret`s
+// into the trampoline, points `gt.argBuf` at the struct's OWN inline arg region, and enqueues the GT. Returns
+// the GT pointer as the promise handle.
 //
-// ⭐ P1.5-B1c #87 — THE ARG BUFFER IS NO LONGER A PARAMETER. It lives INLINE at `gt + GtOffArgInline` (the slots
+// ⭐ P1.5-B1c #87 — THE ARG BUFFER IS NOT A PARAMETER. It lives INLINE at `gt + GtOffArgInline` (the slots
 // the lowering fills after this returns, safe because a spawned GT does not run until awaited); `gt.argBuf` is
-// set to that self-pointer, which the trampoline dereferences exactly as it read a separate buffer. So the
-// separate per-spawn `__slab_alloc`'d arg buffer — and its leak — is gone. `argCount` is still not a parameter:
-// the region is a fixed MaxAsyncArgs slots and the trampoline loads all of them (see the header).
+// set to that self-pointer, which the trampoline dereferences exactly as it read a separate buffer. See
+// `GtOffArgInline` for why the region stays inline now that a separate buffer COULD be freed.
 //
-// ⭐ P1.5-B1c #87 — REUSE A COMPLETED STRUCT. If `__gt_free_list_head` is non-null, POP it and WHOLE-STRUCT
-// MEMZERO it before re-init; else fall back to a fresh `__slab_alloc` (already slab-zeroed, so it skips the
-// memzero). The zero-on-recycle is a CORRECTNESS TRAP, not an optimization: a free-list struct lives OUTSIDE the
-// always-zeroing slab, so a recycled one still carries its previous tenant's status/result/waiter/io_*/threw/tib
-// fields — v1 fixed exactly this class of bug (a spurious pipe-read abort, `Arm64MacosGreenThread.maxon:2376-2404`)
-// with a whole-struct memzero on the recycle arm; the bootstrap's field-by-field re-init is the WEAKER version.
+// ⭐⭐ **ONE ALLOCATOR CALL, AND THE ZEROING IS THE ALLOCATOR'S CONTRACT (S3).** This used to branch on
+// `__gt_free_list_head`, popping a recycled struct and memzeroing it word by word before re-init, because such
+// a struct lived OUTSIDE the always-zeroing slab and would otherwise carry its previous tenant's
+// status/result/waiter/io_*/threw/releaser — v1 fixed exactly that class of bug (a spurious pipe-read abort,
+// `Arm64MacosGreenThread.maxon:2376-2404`) the same way. `__slab_alloc` answers both arms of it itself: a
+// recycled slot is memset over its whole slot size, a virgin one still holds the OS's zeroes. So the branch,
+// the loop and the list are gone and the trap they guarded is answered ONCE, by the allocator, for every
+// caller rather than by each caller that remembers.
 //
 // It does NOT run the GT — a spawned GT runs only when a driver (`__gt_await`) dequeues and switches into it.
 function buildGtSpawn(module StdModule, usesIocp bool, asyncTrace bool, tags GtTraceTags)
 	var func = IrFunction.createFromStd(GtSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var freshAlloc = module.addBlock(func, label: b"freshalloc")
-	var reuse = module.addBlock(func, label: b"reuse")
-	var zeroHdr = module.addBlock(func, label: b"zerohdr")
-	var zeroBody = module.addBlock(func, label: b"zerobody")
-	var initBlock = module.addBlock(func, label: b"init")
+	var initBlock = module.addBlock(func, label: b"entry")
 
-	emitParams(module, block: entry, count: 1)
+	emitParams(module, block: initBlock, count: 1)
 	let funcPtr = 0 as ValueId
 
 	// Lazy one-time scheduler init. A void call still mints an (unread) result id, as `__mm_decref`'s
 	// `__mm_free` call does.
 	let initResult = ids.mint()
-	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
+	module.appendOp(initBlock, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
 
-	// Reuse a completed struct if the free-list is non-empty, else allocate a fresh (already-zeroed) one.
+	// gt = __slab_alloc(GtStructSize). Zeroed over the whole SLOT, which is at least `GtStructSize`, so
+	// `status` is `ready`, every pointer field is null and there is nothing here to clear.
 	let structSize = ids.mint()
-	module.appendOp(entry, op: StdOp.const(structSize, value: GtStructSize, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	let freeHeadAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(freeHeadAddr, label: GtFreeListHeadLabel))
-	let freeHead = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(freeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
-	let freeEmpty = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(freeEmpty, lhs: freeHead, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(freeEmpty, thenBlockId: freshAlloc.id, elseBlockId: reuse.id))
-
-	// freshAlloc: gt = __slab_alloc(GtStructSize) — slab-zeroed, so no memzero needed → init(gtFresh).
-	let gtFresh = ids.mint()
-	module.appendOp(freshAlloc, op: StdOp.call(gtFresh, callee: SlabAllocName, args: argsOf(structSize)))
-	module.setTerminator(freshAlloc, op: StdOp.branch(initBlock.id))
-	freshAlloc.branchEdges.push(BranchEdge.create(initBlock.id, argIds: argsOf(gtFresh)))
-
-	// reuse: pop the head off the free-list (`__gt_free_list_head = freeHead.next`), then whole-struct memzero it.
-	let poppedNext = ids.mint()
-	module.appendOp(reuse, op: StdOp.loadIndirect(poppedNext, addrId: freeHead, offset: GtOffNext, valueType: StdType.i64))
-	module.appendOp(reuse, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: poppedNext, valueType: StdType.i64))
-	module.setTerminator(reuse, op: StdOp.branch(zeroHdr.id))
-	reuse.branchEdges.push(BranchEdge.create(zeroHdr.id, argIds: argsOf(zeroConst)))
-
-	// zeroHdr(off): if off >= GtStructSize → init(freeHead) (whole struct now zeroed), else zero the word at `off`.
-	let off = ids.mint()
-	zeroHdr.blockArgs.push(IrBlockArg.create(off, argType: StdType.i64))
-	let zeroDone = ids.mint()
-	module.appendOp(zeroHdr, op: StdOp.cmp(zeroDone, lhs: off, rhs: structSize, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(zeroHdr, op: StdOp.condBranch(zeroDone, thenBlockId: initBlock.id, elseBlockId: zeroBody.id))
-	zeroHdr.branchEdges.push(BranchEdge.create(initBlock.id, argIds: argsOf(freeHead)))
-
-	// zeroBody: *(freeHead + off) = 0 ; off += 8 → zeroHdr.
-	let slotAddr = ids.mint()
-	module.appendOp(zeroBody, op: StdOp.binOp(slotAddr, lhs: freeHead, rhs: off, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(zeroBody, op: StdOp.storeIndirect(slotAddr, offset: 0, valueId: zeroConst, valueType: StdType.i64))
-	let wordBytesConst = ids.mint()
-	module.appendOp(zeroBody, op: StdOp.const(wordBytesConst, value: GtArgSlotBytes, valueType: StdType.i64))
-	let offNext = ids.mint()
-	module.appendOp(zeroBody, op: StdOp.binOp(offNext, lhs: off, rhs: wordBytesConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(zeroBody, op: StdOp.branch(zeroHdr.id))
-	zeroBody.branchEdges.push(BranchEdge.create(zeroHdr.id, argIds: argsOf(offNext)))
-
-	// init(gt): the shared init for both the fresh and recycled struct — now guaranteed zeroed either way.
+	module.appendOp(initBlock, op: StdOp.const(structSize, value: GtStructSize, valueType: StdType.i64))
 	let gt = ids.mint()
-	initBlock.blockArgs.push(IrBlockArg.create(gt, argType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.call(gt, callee: SlabAllocName, args: argsOf(structSize)))
 
 	// gt.argBuf = gt + GtOffArgInline — a SELF-POINTER into this struct's own inline arg region (P1.5-B1c #87).
 	// The trampoline reads `gt.argBuf` as a pointer and loads the slots from there, so pointing it at the inline
-	// region makes the buffer part of the struct — reclaimed for free when the struct is recycled.
+	// region makes the buffer part of the struct — one allocation, one lifetime, one free.
 	let argInlineOffConst = ids.mint()
 	module.appendOp(initBlock, op: StdOp.const(argInlineOffConst, value: GtOffArgInline, valueType: StdType.i64))
 	let argInlinePtr = ids.mint()
@@ -1930,9 +1897,14 @@ end 'buildGtNowNs'
 // to report it anyway (`stdlib/Sleep.maxon` declares it with no `throws` clause). ⇒ **The store DOUBLES**: a
 // fresh `__slab_alloc`, the live entries copied across, the base and capacity republished.
 //
-// ⚠ **THE OLD BLOCK LEAKS, AND THAT IS BOUNDED AND DELIBERATE.** `__slab_alloc` is a pure bump allocator with
-// no free path, so each doubling abandons the previous region — total waste under 2x the final store, paid
-// only by a program that actually parks that many threads.
+// ⭐ **AND THE OLD BLOCK IS RELEASED (S3).** This note used to read *"the old block LEAKS, and that is bounded
+// and deliberate — `__slab_alloc` is a pure bump allocator with no free path"*. It has one, so the doubling
+// hands the previous region straight back and a store that has grown k times holds exactly its current
+// capacity rather than twice it. The free is AFTER the copy, which is the whole of the ordering it needs: the
+// live entries are read out of the old region and written into the new one before either is given up, and
+// nothing else in the runtime holds a pointer into the store (`__gt_timer_check` re-reads
+// `__gt_timer_heap_base` on every poll, which is what makes the base a `.data` word rather than a value
+// anybody caches).
 //
 // ⛔ **AN ABORT WAS TRIED HERE FIRST AND IS THE WRONG SHAPE — MEASURED.** A `mrt_panic` at this site printed its
 // message and stack trace correctly and then died of an ACCESS VIOLATION (`0xC0000005`) instead of
@@ -1940,7 +1912,7 @@ end 'buildGtNowNs'
 // frames deep inside the `__gt_` runtime on a green thread's 2 KB stack (`GtStackSize`), and `mrt_panic`'s walk
 // and formatting overflow it — a plain `panic()` from a green thread one frame under the trampoline exits 1
 // correctly, so the defect is the DEPTH, not the green thread. Growing needs no abort and so cannot meet it.
-function buildGtTimerAdd(module StdModule)
+function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(GtTimerAddName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
@@ -1986,6 +1958,10 @@ function buildGtTimerAdd(module StdModule)
 	var copied = emitForwardCopy(module, func: func, cur: grow, dest: newBase, src: oldBase, byteCount: liveBytes, ids: ids)
 	module.appendOp(copied, op: StdOp.storeIndirect(growBaseAddr, offset: 0, valueId: newBase, valueType: StdType.i64))
 	module.appendOp(copied, op: StdOp.storeIndirect(capAddr, offset: 0, valueId: newCapacity, valueType: StdType.i64))
+	// The republished base is what every reader consults, so the old region is unreachable the instant the
+	// store above lands — and on the FIRST grow `oldBase` is a real `__gt_init` region, never null, because the
+	// store is allocated eagerly there rather than lazily here.
+	module.appendOp(copied, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(oldBase)))
 	module.setTerminator(copied, op: StdOp.branch(doAdd.id))
 
 	let heapBaseAddr = ids.mint()
@@ -2491,7 +2467,7 @@ end 'buildGtDriveUntil'
 // is `completed`, then extract the awaited scalar. Since P1.5 mid-body-yield, the drive loop is factored out
 // (`__gt_drive_until`) and shared with a top-level `__gt_sleep`, so the two await drivers differ ONLY in the
 // exit terminator (a plain `ret` vs the dual-register `errorReturn` for `try await`).
-function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asyncTrace bool, tags GtTraceTags)
+function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asyncTrace bool, tags GtTraceTags, rawFree ByteArray)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -2570,31 +2546,47 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asy
 	// exactly here. See `Runtime/AsyncReleaser.maxon` for the other call site and for what skipping it costs.
 	var exit = emitGtReleaserCall(module, func: func, ids: ids, startBlock: cur, gt: promise, resultDisposition: AsyncResultDisposition.consumedByAwaiter)
 	// ⭐ P1.5-B1c #87 — RECLAIM the awaited promise's struct HERE, in the awaiter, NOT at completion. The struct
-	// holds `result`/`threw` until this await reads them (result loaded above; threw below), so it is dead only
-	// AFTER an await — and an await is the one point that proves the promise is finished with. Reclaiming at
-	// COMPLETION (in `__gt_drive_until`) was wrong: a GT can complete as a side effect of driving a DIFFERENT await
-	// (out-of-order await), and its struct is then still owned by a live, un-awaited promise — pushing it early let
-	// the next `async` pop-and-alias it (a silent wrong answer). This is v1's discipline: the awaiter recycles the
-	// GT (`Arm64MacosGreenThread.maxon:2987-3005`), not the completing thread. The STACK is a separate lifetime,
-	// freed at completion in `__gt_drive_until` (the GT has already switched off it), which stays correct. Linearity
-	// (E3100) forbids a second await of the same promise, so a struct is pushed at most once — no double-free. The
-	// reclaim (P1.5-B2 #88: decrement `__gt_live_count`, then push the struct LIFO through the idle `GtOffNext`
-	// slot) is the SHARED `emitGtStructReclaim`, one home for "a finished GT's struct returns to the pool" across
-	// this awaited reclaim and `__gt_promise_drop`'s un-awaited one. It writes `GtOffNext` (0x38) and the count
-	// only — disjoint from `result`@0x28 and `threw`@0x58 — so doing it before the throwing branch reads `threw`
-	// is safe. A completed GT is off every run/timer/proc queue, so the idle `next` slot is free for the LIFO link.
-	emitGtStructReclaim(module, block: exit, ids: ids, gt: promise)
-
-	if throwing 'throwingExit'
-		let threw = ids.mint()
-		module.appendOp(exit, op: StdOp.loadIndirect(threw, addrId: promise, offset: GtOffThrew, valueType: StdType.i64))
-		module.setTerminator(exit, op: StdOp.errorReturn(result, errorFlagId: threw))
-	end 'throwingExit' else 'plainExit'
-		module.setTerminator(exit, op: StdOp.ret(result))
-	end 'plainExit'
+	// holds `result`/`threw` until this await reads them, so it is dead only AFTER an await — and an await is
+	// the one point that proves the promise is finished with. Reclaiming at COMPLETION (in `__gt_drive_until`)
+	// was wrong: a GT can complete as a side effect of driving a DIFFERENT await (out-of-order await), and its
+	// struct is then still owned by a live, un-awaited promise. This is v1's discipline: the awaiter recycles
+	// the GT (`Arm64MacosGreenThread.maxon:2987-3005`), not the completing thread. The STACK is a separate
+	// lifetime, freed at completion in `__gt_drive_until` (the GT has already switched off it), which stays
+	// correct. Linearity (E3100) forbids a second await of the same promise, so a struct is released at most
+	// once — no double free.
+	//
+	// ⛔⛔ **EVERY READ OF THE STRUCT MUST PRECEDE THE RECLAIM, AND SINCE S3 THAT IS A USE-AFTER-FREE RATHER
+	// THAN A HAZARD IN WAITING.** The reclaim used to push the struct onto a private LIFO, writing `GtOffNext`
+	// and nothing else — so this file could state, and did, that reclaiming BEFORE the throwing branch loaded
+	// `threw`@0x58 was *"safe"* because the two offsets are disjoint. It hands the slot to the allocator now,
+	// which threads its span's free list through the slot's first word and may serve the slot to the very next
+	// request. `awaitExitTerminator` is what makes the ordering unmissable: it performs the `threw` load and
+	// hands back the terminator, so the last read of the struct is over before the reclaim is emitted, and a
+	// future exit that needs another field has one place to add it.
+	let exitTerminator = awaitExitTerminator(module, block: exit, promise: promise, result: result, throwing: throwing, ids: ids)
+	emitGtStructReclaim(module, block: exit, ids: ids, gt: promise, rawFree: rawFree)
+	module.setTerminator(exit, op: exitTerminator)
 
 	module.functions.push(func)
 end 'buildGtAwaitDriver'
+
+// ⭐⭐ **THE AWAIT DRIVER'S EXIT, BUILT BEFORE THE STRUCT IS RELEASED.** The two drivers differ in exactly
+// one thing — a `try await` also carries the error flag the trampoline captured into `promise.threw`, which is
+// what makes `__gt_try_await` a throwing function to the backend — and that difference is a LOAD out of a
+// struct the caller is about to hand back to the allocator. Emitting the load here and returning the
+// terminator is what keeps the read and the release in that order at the one site that could get it wrong.
+//
+// `__gt_await` never reads `threw`: a throwing promise is only ever `try await`ed (E3057), so a non-throwing
+// thunk's garbage R10 never reaches a reader, and the plain driver emits no load at all.
+function awaitExitTerminator(module StdModule, block IrBlock, promise ValueId, result ValueId, throwing bool, ids ValueMinter) returns StdOp
+	if not throwing 'plainExit'
+		return StdOp.ret(result)
+	end 'plainExit'
+
+	let threw = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(threw, addrId: promise, offset: GtOffThrew, valueType: StdType.i64))
+	return StdOp.errorReturn(result, errorFlagId: threw)
+end 'awaitExitTerminator'
 
 // ⭐⭐ **CALL THIS GT'S PER-CALLEE RELEASER, IF IT HAS ONE, AND THEN CLEAR THE WORD** — the ONE emitter for
 // both release sites (`__gt_await`/`__gt_try_await` and `__gt_promise_drop`), so the null guard, the
@@ -2632,13 +2624,22 @@ function emitGtReleaserCall(module StdModule, func IrFunction, ids ValueMinter, 
 	return cont
 end 'emitGtReleaserCall'
 
-// ⭐ **RETURN A FINISHED GT'S STRUCT TO THE POOL — the ONE home of the reclaim (P1.5-B1c #87 / B2 #88).**
-// Decrement the live count (`__gt_live_count`) and push the struct onto the free-list LIFO through the now-
-// idle `GtOffNext` slot (a finished GT is off every run/timer/proc queue). Shared by the `__gt_await` tail
-// (an AWAITED GT) and every arm of `__gt_promise_drop` (an UN-AWAITED, dropped GT), so "how a GT struct is
-// recycled AND how the leak count is balanced" is one fact, not one per reclaim site. The caller has
-// already freed (or intentionally kept, for a `completed` GT) the STACK — this touches only the struct.
-function emitGtStructReclaim(module StdModule, block IrBlock, ids ValueMinter, gt ValueId)
+// ⭐ **RETURN A FINISHED GT'S STRUCT TO THE ALLOCATOR — the ONE home of the reclaim (P1.5-B1c #87 / B2 #88).**
+// Decrement the live count (`__gt_live_count`) and hand the struct back through the counted free door. Shared
+// by the `__gt_await` tail (an AWAITED GT) and every arm of `__gt_promise_drop` (an UN-AWAITED, dropped GT),
+// so "how a GT struct is released AND how the leak count is balanced" is one fact, not one per reclaim site.
+// The caller has already freed (or intentionally kept, for a `completed` GT) the STACK — this touches only
+// the struct.
+//
+// ⚠⚠ **THE TWO NUMBERS ARE NOT ONE NUMBER, AND THIS IS THE SITE THAT PROVES IT.** `__gt_live_count` counts
+// GREEN THREADS and the raw column the free door debits counts SLAB REGIONS, and they must stay separate for
+// the reason the counter's own header gives: a GT's seed STACK is `osAllocPages`, never a slab slot, so no
+// allocator column can see a spawned-but-never-reclaimed thread. `__gt_live_count` is the ONLY instrument
+// that can, and its exit assertion reports its own abort code.
+//
+// ⚠ **IT IS THE LAST READ OF `gt`.** `__slab_free` threads its span's free list through the slot's FIRST
+// word — `GtOffSp` — so the struct is not readable after this returns, and every caller's arm ends here.
+function emitGtStructReclaim(module StdModule, block IrBlock, ids ValueMinter, gt ValueId, rawFree ByteArray)
 	// __gt_live_count -= 1 (the leak gate's balance — one down per reclaim, matching `__gt_spawn`'s +1).
 	let countAddr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(countAddr, label: GtLiveCountLabel))
@@ -2649,13 +2650,8 @@ function emitGtStructReclaim(module StdModule, block IrBlock, ids ValueMinter, g
 	let lowered = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(lowered, lhs: count, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	module.appendOp(block, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: lowered, valueType: StdType.i64))
-	// gt.next = __gt_free_list_head ; __gt_free_list_head = gt.
-	let freeHeadAddr = ids.mint()
-	module.appendOp(block, op: StdOp.globalAddr(freeHeadAddr, label: GtFreeListHeadLabel))
-	let oldFreeHead = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(oldFreeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.storeIndirect(gt, offset: GtOffNext, valueId: oldFreeHead, valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: gt, valueType: StdType.i64))
+	// The struct goes back to the span it came from.
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(gt)))
 end 'emitGtStructReclaim'
 
 // ⭐⭐ **DOES A GT'S ALREADY-LOADED STATUS WORD EQUAL `want`? — the ONE spelling of the comparison three
@@ -2731,11 +2727,11 @@ end 'buildGtIsComplete'
 //     DRAINS the completion (a cross-thread abandon/drain handshake through `ioParked`, so the completion thread is
 //     provably DONE with the GT), closes the read handle, and decrements `__io_pending` — only THEN frees.
 //
-// Every arm ends at the shared struct reclaim (`emitGtStructReclaim` — decrement the live count, push onto the
-// free-list). For a timer/proc park "deregister" is an array/queue splice; for an in-flight read it is the
-// cancel/drain handshake above — the one in-flight OS I/O shv2 now has, and the trap the earlier "no OVERLAPPED to
-// abort" note missed.
-function buildGtPromiseDrop(module StdModule, usesIocp bool)
+// Every arm ends at the shared struct reclaim (`emitGtStructReclaim` — decrement the live count, hand the
+// struct back to the allocator). For a timer/proc park "deregister" is an array/queue splice; for an in-flight
+// read it is the cancel/drain handshake above — the one in-flight OS I/O shv2 now has, and the trap the
+// earlier "no OVERLAPPED to abort" note missed.
+function buildGtPromiseDrop(module StdModule, usesIocp bool, rawFree ByteArray)
 	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -2749,8 +2745,9 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool)
 	// ⭐ **THE RELEASE SITS BETWEEN EVERY ARM AND THE RECLAIM (A2).** Every arm reaches it — a `completed` GT
 	// that nobody awaited, a `ready` one that never ran, a `waiting` one abandoned mid-body — because the
 	// spawn took a reference to each managed argument on ALL of those paths and no await will ever give it
-	// back. It must precede `reclaim`, which pushes the struct onto the free list where the next `__gt_spawn`
-	// may pop and memzero it.
+	// back. It must precede `reclaim`, which hands the struct to the allocator — after which the slot may be
+	// serving anybody, so a release ordered the other way would read the arguments out of somebody else's
+	// memory.
 	var release = module.addBlock(func, label: b"releasearm")
 	var reclaim = module.addBlock(func, label: b"reclaim")
 
@@ -2795,7 +2792,7 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool)
 		let isInFlightRead = ids.mint()
 		module.appendOp(waitingArm, op: StdOp.cmp(isInFlightRead, lhs: ioParked, rhs: ioZeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
 		module.setTerminator(waitingArm, op: StdOp.condBranch(isInFlightRead, thenBlockId: ioArm.id, elseBlockId: waitingTimer.id))
-		emitGtIoCancelArm(module, func: func, ids: ids, startBlock: ioArm, gt: gt, cont: freeStack)
+		emitGtIoCancelArm(module, func: func, ids: ids, startBlock: ioArm, gt: gt, cont: freeStack, rawFree: rawFree)
 		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingTimer, gt: gt, cont: waitingProc)
 		emitGtProcStoreRemove(module, func: func, ids: ids, startBlock: waitingProc, gt: gt, cont: freeStack)
 	end 'ioAware' else 'timerProcOnly'
@@ -2814,7 +2811,13 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool)
 	module.appendOp(freeStack, op: StdOp.cmp(stackNull, lhs: stackBase, rhs: stackZero, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(freeStack, op: StdOp.condBranch(stackNull, thenBlockId: release.id, elseBlockId: doFree.id))
 
-	module.appendOp(doFree, op: StdOp.osFreePages(stackBase))
+	// ⭐ **THE LENGTH COMES OUT OF THE STRUCT, NOT FROM THE `GtStackSize` SEED CONSTANT.** The relocating morestack
+	// GROWS a GT's stack and writes the new length back to `gt.stackSize` (`X64GtRuntime.__gt_morestack`), so the
+	// seed would under-free every stack that ever grew. ⚠ x64-windows — the only lane that runs this today —
+	// IGNORES the operand (`MEM_RELEASE` demands `dwSize == 0`), so getting it wrong here would be invisible until
+	// the first POSIX green-thread lane, which is exactly why it is taken from the authoritative field now.
+	let stackSize = emitLoadField(module, block: doFree, record: gt, offset: GtOffStackSize, ids: ids)
+	module.appendOp(doFree, op: StdOp.osFreePages(stackBase, sizeId: stackSize))
 	module.setTerminator(doFree, op: StdOp.branch(release.id))
 
 	// release: hand back the reference the spawn took to every managed argument, AND — this being
@@ -2825,8 +2828,8 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool)
 	// entry and so inherits it. See `Runtime/AsyncReleaser.maxon` for the asymmetry with `__gt_await`.
 	module.setTerminator(emitGtReleaserCall(module, func: func, ids: ids, startBlock: release, gt: gt, resultDisposition: AsyncResultDisposition.ownedByThisDrop), op: StdOp.branch(reclaim.id))
 
-	// reclaim: struct back to the free-list + one off the live count, shared by every arm.
-	emitGtStructReclaim(module, block: reclaim, ids: ids, gt: gt)
+	// reclaim: struct back to the allocator + one off the live count, shared by every arm.
+	emitGtStructReclaim(module, block: reclaim, ids: ids, gt: gt, rawFree: rawFree)
 	module.setTerminator(reclaim, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -2856,7 +2859,7 @@ end 'buildGtPromiseDrop'
 // the next `subpReadLine(h)` (CancelIoEx cancels only the pending op, consuming nothing), and `subpRelease` is
 // its sole closer (no double-close). The lock-serialized `ioParked` read here versus the completion thread's
 // `ioParked` read there is what makes the free decision mutually exclusive.
-function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
+function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock, rawFree ByteArray)
 	var ioAbandon = module.addBlock(func, label: b"ioabandon")
 	var ioDrainSpin = module.addBlock(func, label: b"iodrainspin")
 	var ioDrainLoop = module.addBlock(func, label: b"iodrainloop")
@@ -2865,6 +2868,7 @@ function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, s
 	var ioCleanup = module.addBlock(func, label: b"iocleanup")
 	var ioClosePipe = module.addBlock(func, label: b"ioclosepipe")
 	var ioPendingDec = module.addBlock(func, label: b"iopendingdec")
+	var ioFreeScratch = module.addBlock(func, label: b"iofreescratch")
 
 	// startBlock: split gt.io_handle into its ownership tag + real handle ; ovl = gt + GtOffOverlapped ;
 	// Enter __io_lock ; branch on ioParked == 4. io_handle's spare low bit carries pipe ownership (yield_read
@@ -2945,7 +2949,25 @@ function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, s
 	let pendingLowered = ids.mint()
 	module.appendOp(ioPendingDec, op: StdOp.binOp(pendingLowered, lhs: pendingCur, rhs: pendingOneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	module.appendOp(ioPendingDec, op: StdOp.storeIndirect(pendingAddr, offset: 0, valueId: pendingLowered, valueType: StdType.i64))
-	module.setTerminator(ioPendingDec, op: StdOp.branch(cont.id))
+	// ⭐ **AND THE ABANDONED READ'S BUFFER GOES BACK.** `__gt_io_read` published it to `gt.ioScratch` before
+	// issuing the read and will never return to free it — this is the only site that can. It runs AFTER the
+	// drain handshake above, which is what proves the completion thread has finished writing into it. A
+	// STREAMING read leaves the slot 0 (its buffer belongs to the handle table), so the guard is what tells the
+	// two apart.
+	let scratch = ids.mint()
+	module.appendOp(ioPendingDec, op: StdOp.loadIndirect(scratch, addrId: gt, offset: GtOffIoScratch, valueType: StdType.i64))
+	let noScratch = ids.mint()
+	module.appendOp(ioPendingDec, op: StdOp.const(noScratch, value: 0, valueType: StdType.i64))
+	let hasScratch = ids.mint()
+	module.appendOp(ioPendingDec, op: StdOp.cmp(hasScratch, lhs: scratch, rhs: noScratch, pred: StdCmpPred.ne, operandType: StdType.i64))
+	module.setTerminator(ioPendingDec, op: StdOp.condBranch(hasScratch, thenBlockId: ioFreeScratch.id, elseBlockId: cont.id))
+
+	// No clear afterwards, which is the opposite of what `__gt_io_read` does with the same slot and for the
+	// opposite reason: that function's GT goes on running, while every path out of here reaches
+	// `emitGtStructReclaim` and releases the struct itself. A store into a record about to be freed would be
+	// the kind of tidiness that reads as a live invariant.
+	module.appendOp(ioFreeScratch, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(scratch)))
+	module.setTerminator(ioFreeScratch, op: StdOp.branch(cont.id))
 end 'emitGtIoCancelArm'
 
 // Splice `gt` out of the FIFO run queue (head/tail linked through `GtOffNext`), then branch to `cont`. Used
@@ -3450,9 +3472,13 @@ function emitGtRunOne(module StdModule, run IrBlock, recycle IrBlock, freeStack 
 	module.appendOp(recycle, op: StdOp.cmp(gStackNull, lhs: gStackBase, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(recycle, op: StdOp.condBranch(gStackNull, thenBlockId: continuation.id, elseBlockId: freeStack.id))
 
-	// freeStack: release g's completed stack (whatever size the morestack grew it to — `VirtualFree(MEM_RELEASE)`
-	// frees the whole reservation from its base). This bounds a spawn/await loop's stacks by alloc+free churn.
-	module.appendOp(freeStack, op: StdOp.osFreePages(gStackBase))
+	// freeStack: release g's completed stack, whatever size the morestack grew it to. This bounds a spawn/await
+	// loop's stacks by alloc+free churn. The length is read from `g.stackSize` rather than from `GtStackSize` for
+	// the reason `buildGtPromiseDrop`'s twin site states in full: the morestack writes the grown length back there,
+	// and the one lane that runs this today ignores the operand entirely, so a seed constant would have looked
+	// correct here for as long as x64-windows stayed the only green-thread target.
+	let gStackSize = emitLoadField(module, block: freeStack, record: g, offset: GtOffStackSize, ids: ids)
+	module.appendOp(freeStack, op: StdOp.osFreePages(gStackBase, sizeId: gStackSize))
 	module.setTerminator(freeStack, op: StdOp.branch(continuation.id))
 end 'emitGtRunOne'
 
@@ -3959,24 +3985,11 @@ end 'buildGtProcCheck'
 // `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`, and a full process store propagates
 // `__gt_proc_add`'s `storeOverflow` flag verbatim (`(0, flag)`). The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
-function buildGtProcessRun(module StdModule)
+function buildGtProcessRun(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(RunProcessErrorTypeName))
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var growCmBuf = module.addBlock(func, label: b"growcmbuf")
-	var reuseCmBuf = module.addBlock(func, label: b"reusecmbuf")
-	var haveCmBuf = module.addBlock(func, label: b"havecmbuf")
-	var copyHdr = module.addBlock(func, label: b"copyhdr")
-	var copyBody = module.addBlock(func, label: b"copybody")
-	var afterCopy = module.addBlock(func, label: b"aftercopy")
-	var spawnFailed = module.addBlock(func, label: b"spawnfailed")
-	var spawnOk = module.addBlock(func, label: b"spawnok")
-	var overflowReturn = module.addBlock(func, label: b"overflowreturn")
-	var parkOk = module.addBlock(func, label: b"parkok")
-	var selfDrive = module.addBlock(func, label: b"selfdrive")
-	var parkSwitch = module.addBlock(func, label: b"parkswitch")
-	var reap = module.addBlock(func, label: b"reap")
 
 	emitParams(module, block: entry, count: 1)
 	let strPtr = 0 as ValueId
@@ -3990,93 +4003,50 @@ function buildGtProcessRun(module StdModule)
 	module.appendOp(entry, op: StdOp.loadIndirect(cmdlinePtr, addrId: strPtr, offset: StringBufferOffset, valueType: StdType.i64))
 	let cmdlineLen = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(cmdlineLen, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
 
-	// P1.5-B1c #92: the STARTUPINFOA and PROCESS_INFORMATION scratch are the ONE-TIME reusable buffers `__gt_init`
-	// allocated — load their bases rather than `__slab_alloc` fresh ones per call. `startup.cb` was set once in
-	// init (CreateProcessA only reads it). PROCESS_INFORMATION is REUSED, so its `hProcess` must be RE-ZEROED here:
-	// CreateProcessA leaves the struct UNTOUCHED on failure, so a stale non-zero handle from a prior successful
-	// spawn would make the `hProcess == 0` failure sentinel below read a FAILED spawn as "spawned OK" and park on a
-	// dead handle. Zeroing hProcess restores the fresh-slab invariant the sentinel relies on.
-	let startupBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(startupBaseAddr, label: GtStartupBaseLabel))
+	// ⭐ **THE THREE PRE-SPAWN SCRATCH REGIONS, PER CALL (S3).** STARTUPINFOA, PROCESS_INFORMATION and the
+	// MUTABLE NUL-terminated command line (CreateProcessA may write to `lpCommandLine`, and the `.rdata` String
+	// blob is neither writable nor NUL-terminated). All three are dead by `afterCopy`, which is where they are
+	// released — so nothing here survives the park, and two concurrent `__gt_process_run` calls share nothing.
+	//
+	// ⭐ **AND THREE RE-ZEROING STORES ARE GONE WITH THE REUSE THAT NEEDED THEM.** `startup.cb` is the only
+	// field CreateProcessA reads that is not zero; `procInfo.hProcess` is the spawn-failure sentinel and must be
+	// 0 going in; `cmBuf[cmdlineLen]` is the command line's terminator. A reused buffer arrives holding the
+	// previous call's bytes and had to have each of those written again — a fresh slot arrives zeroed and does
+	// not.
+	let startupSizeConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(startupSizeConst, value: StartupInfoSize, valueType: StdType.i64))
 	let startupPtr = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(startupPtr, addrId: startupBaseAddr, offset: 0, valueType: StdType.i64))
-	let procInfoBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(procInfoBaseAddr, label: GtProcInfoBaseLabel))
+	module.appendOp(entry, op: StdOp.call(startupPtr, callee: SlabAllocName, args: argsOf(startupSizeConst)))
+	module.appendOp(entry, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoCbOffset, valueId: startupSizeConst, valueType: StdType.i64))
+	let procInfoSizeConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize, valueType: StdType.i64))
 	let procInfoPtr = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(procInfoPtr, addrId: procInfoBaseAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(procInfoPtr, offset: ProcInfoHProcessOffset, valueId: zeroConst, valueType: StdType.i64))
-
-	// The MUTABLE, NUL-terminated cmdline copy (CreateProcessA may write to lpCommandLine, and the .rdata String
-	// blob is neither writable nor NUL-terminated) is the GROW-ON-DEMAND reusable buffer: reuse it when
-	// `cmdlineLen + 1 <= cap`, else `__slab_alloc` a bigger one and update base+cap (the old one bump-"leaks", but
-	// only when a strictly-longer command than any before appears — bounded, not per-call). The trailing byte is
-	// the buffer's NUL: a freshly grown slab buffer is zeroed there; on REUSE the copy loop writes exactly
-	// `cmdlineLen` bytes and the byte at `cmBuf[cmdlineLen]` still holds the prior (shorter-or-equal) command's NUL
-	// or slab zero — so it is re-zeroed here to guarantee the terminator regardless of the previous tenant.
+	module.appendOp(entry, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
 	let oneConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(oneConst, value: TrailingNulBytes, valueType: StdType.i64))
 	let cmBufSize = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(cmBufSize, lhs: cmdlineLen, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let cmBufBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(cmBufBaseAddr, label: GtCmdlineBufBaseLabel))
-	let cmBufCapAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(cmBufCapAddr, label: GtCmdlineBufCapLabel))
-	let cmBufCap = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(cmBufCap, addrId: cmBufCapAddr, offset: 0, valueType: StdType.i64))
-	let needGrow = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(needGrow, lhs: cmBufSize, rhs: cmBufCap, pred: StdCmpPred.gt, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(needGrow, thenBlockId: growCmBuf.id, elseBlockId: reuseCmBuf.id))
-
-	// growCmBuf: the buffer is too small (or first use, cap 0) — allocate `cmBufSize`, publish base+cap → haveCmBuf.
-	let grownBuf = ids.mint()
-	module.appendOp(growCmBuf, op: StdOp.call(grownBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
-	module.appendOp(growCmBuf, op: StdOp.storeIndirect(cmBufBaseAddr, offset: 0, valueId: grownBuf, valueType: StdType.i64))
-	module.appendOp(growCmBuf, op: StdOp.storeIndirect(cmBufCapAddr, offset: 0, valueId: cmBufSize, valueType: StdType.i64))
-	module.setTerminator(growCmBuf, op: StdOp.branch(haveCmBuf.id))
-	growCmBuf.branchEdges.push(BranchEdge.create(haveCmBuf.id, argIds: argsOf(grownBuf)))
-
-	// reuseCmBuf: the existing buffer is big enough — reuse its base → haveCmBuf.
-	let reusedBuf = ids.mint()
-	module.appendOp(reuseCmBuf, op: StdOp.loadIndirect(reusedBuf, addrId: cmBufBaseAddr, offset: 0, valueType: StdType.i64))
-	module.setTerminator(reuseCmBuf, op: StdOp.branch(haveCmBuf.id))
-	reuseCmBuf.branchEdges.push(BranchEdge.create(haveCmBuf.id, argIds: argsOf(reusedBuf)))
-
-	// haveCmBuf(cmBuf): the reusable cmdline buffer (grown or reused) → re-zero its NUL terminator, then copy.
 	let cmBuf = ids.mint()
-	haveCmBuf.blockArgs.push(IrBlockArg.create(cmBuf, argType: StdType.i64))
-	let nulAddr = ids.mint()
-	module.appendOp(haveCmBuf, op: StdOp.binOp(nulAddr, lhs: cmBuf, rhs: cmdlineLen, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(haveCmBuf, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: zeroConst, valueType: StdType.u8))
-	module.setTerminator(haveCmBuf, op: StdOp.branch(copyHdr.id))
-	haveCmBuf.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(zeroConst)))
+	module.appendOp(entry, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
 
-	// copyHdr(i): the byte-copy loop guard. cmdlines are short, so a byte loop is well within budget.
-	let i = ids.mint()
-	copyHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let atEnd = ids.mint()
-	module.appendOp(copyHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: cmdlineLen, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(copyHdr, op: StdOp.condBranch(atEnd, thenBlockId: afterCopy.id, elseBlockId: copyBody.id))
+	// ⭐ **THE COPY IS `emitForwardCopy`, NOT A THIRD HAND-ROLLED BYTE LOOP.** This function and
+	// `__gt_io_read` each carried their own header+body copy blocks, byte for byte the loop
+	// `ManagedMemoryRuntime.emitForwardCopy` already exports and that `__gt_timer_add` two hundred lines up
+	// already calls. Three spellings of one loop is three places a bound can be got wrong.
+	var afterCopy = emitForwardCopy(module, func: func, cur: entry, dest: cmBuf, src: cmdlinePtr, byteCount: cmdlineLen, ids: ids)
 
-	// copyBody: cmBuf[i] = (u8) cmdlinePtr[i] ; loop to copyHdr(i+1). A u8 load/store — one command byte.
-	let srcAddr = ids.mint()
-	module.appendOp(copyBody, op: StdOp.binOp(srcAddr, lhs: cmdlinePtr, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let srcByte = ids.mint()
-	module.appendOp(copyBody, op: StdOp.loadIndirect(srcByte, addrId: srcAddr, offset: 0, valueType: StdType.u8))
-	let dstAddr = ids.mint()
-	module.appendOp(copyBody, op: StdOp.binOp(dstAddr, lhs: cmBuf, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(copyBody, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: srcByte, valueType: StdType.u8))
-	let oneStep = ids.mint()
-	module.appendOp(copyBody, op: StdOp.const(oneStep, value: 1, valueType: StdType.i64))
-	let iNext = ids.mint()
-	module.appendOp(copyBody, op: StdOp.binOp(iNext, lhs: i, rhs: oneStep, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(copyBody, op: StdOp.branch(copyHdr.id))
-	copyBody.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(iNext)))
+	var spawnFailed = module.addBlock(func, label: b"spawnfailed")
+	var spawnOk = module.addBlock(func, label: b"spawnok")
+	var overflowReturn = module.addBlock(func, label: b"overflowreturn")
+	var parkOk = module.addBlock(func, label: b"parkok")
+	var selfDrive = module.addBlock(func, label: b"selfdrive")
+	var parkSwitch = module.addBlock(func, label: b"parkswitch")
+	var reap = module.addBlock(func, label: b"reap")
 
-	// afterCopy: spawn the child. On FAILURE (`hProcess == 0` — CreateProcessA left the slab-zeroed
-	// PROCESS_INFORMATION untouched) → `spawnFailed` (throw, never park on a null handle). On success → `spawnOk`.
+	// afterCopy: spawn the child. On FAILURE (`hProcess == 0` — CreateProcessA leaves the PROCESS_INFORMATION
+	// untouched, and this call's is a fresh, zeroed slot) → `spawnFailed` (throw, never park on a null handle).
+	// On success → `spawnOk`.
 	// `runProcess(cmd)` configures nothing: NULL `lpCurrentDirectory` inherits the parent's working directory
 	// and 0 `dwCreationFlags` asks for no special creation — the exact two values this op's isel used to hard-zero
 	// before `stdlib/Subprocess.maxon`'s `Configuration` gave a caller something to say there.
@@ -4084,6 +4054,17 @@ function buildGtProcessRun(module StdModule)
 	module.appendOp(afterCopy, op: StdOp.osProcessSpawn(cmBuf, cwdPtrId: spawnDefaultsConst, creationFlagsId: spawnDefaultsConst, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
+	let hThread = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
+	// ⚠ **BOTH HANDLES COME OUT BEFORE THE RECORD GOES BACK, AND THAT IS WHY THE RELEASE IS HERE RATHER THAN
+	// ON EACH ARM.** CreateProcessA has read the STARTUPINFOA and the command line and written the
+	// PROCESS_INFORMATION, so all three regions are dead at this point on EVERY path below — the throw, the
+	// overflow throw and the park alike. Freeing once, before the branch, is what keeps the three arms from
+	// each needing their own copy of it, and `hThread` is read here for the same reason (on the failure path it
+	// is the slot's zero, which that arm never looks at).
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(cmBuf)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(startupPtr)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(procInfoPtr)))
 	let spawnZeroConst = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.const(spawnZeroConst, value: 0, valueType: StdType.i64))
 	let spawnFailedCmp = ids.mint()
@@ -4102,8 +4083,6 @@ function buildGtProcessRun(module StdModule)
 	// spawnOk: close the (unneeded) thread handle, then park the current GT on the process. `__gt_proc_add` returns
 	// `NoErrorFlag` (parked) or the `storeOverflow` flag (store full, nothing appended) — on overflow →
 	// `overflowReturn` (throw), else → `parkOk` (hand control to the scheduler).
-	let hThread = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
 	// selfGt = __gt_current_gt ; park it on the child (`__gt_proc_add` sets status=waiting, io_handle=hProcess).
 	let curAddr = ids.mint()
@@ -4136,24 +4115,23 @@ function buildGtProcessRun(module StdModule)
 	// reap: the child has exited. Reload hProcess from `selfGt.io_handle` (its durable home across the yield — the
 	// value in a register cannot be assumed to survive an arbitrary number of intervening switches), then read the
 	// exit code and close the handle. GetExitCodeProcess(hProcess, codePtr) ; code = codePtr[0] (i64 read).
-	// ⭐ P1.5-B1c #92: codePtr is the ONE-TIME reusable exit-code slot (`__gt_exitcode_base`), not a per-call
-	// `__slab_alloc`. THE PRE-ZERO IS WHY THE i64 READ IS CLEAN: GetExitCodeProcess writes only the low DWORD (4
-	// bytes) of the 8-byte slot, so on a REUSED slot a prior call's low DWORD and any dirty high DWORD must be
-	// cleared first for an i64 load to yield exactly this child's code (a full-word load is the only wide memory
-	// form — a u32 read would need an `as` cast the runtime builder cannot spell). The fresh-slab zeroing that used
-	// to satisfy this is now an explicit `store 0` before the call, since the slot is reused across calls.
+	// ⭐ **THE EXIT-CODE SLOT IS TAKEN HERE, AFTER THE PARK, AND GIVEN BACK BEFORE THE RETURN (S3)** — so no
+	// scratch of this call's is alive while the green thread is suspended, and the slot cannot be shared with
+	// another call's reap. THE ZEROING IS WHY THE i64 READ IS CLEAN: GetExitCodeProcess writes only the low
+	// DWORD (4 bytes) of the 8-byte slot, so the high DWORD must already be zero for a full-word load to yield
+	// exactly this child's code (a full-word load is the only wide memory form — a u32 read would need an `as`
+	// cast the runtime builder cannot spell). A fresh slab slot supplies that; the explicit `store 0` that stood
+	// here existed only because #92's slot was reused across calls.
 	let reapHandle = ids.mint()
 	module.appendOp(reap, op: StdOp.loadIndirect(reapHandle, addrId: selfGt, offset: GtOffIoHandle, valueType: StdType.i64))
-	let codeBaseAddr = ids.mint()
-	module.appendOp(reap, op: StdOp.globalAddr(codeBaseAddr, label: GtExitCodeBaseLabel))
+	let codeSizeConst = ids.mint()
+	module.appendOp(reap, op: StdOp.const(codeSizeConst, value: ExitCodeSlotBytes, valueType: StdType.i64))
 	let codePtr = ids.mint()
-	module.appendOp(reap, op: StdOp.loadIndirect(codePtr, addrId: codeBaseAddr, offset: 0, valueType: StdType.i64))
-	let codeZeroConst = ids.mint()
-	module.appendOp(reap, op: StdOp.const(codeZeroConst, value: 0, valueType: StdType.i64))
-	module.appendOp(reap, op: StdOp.storeIndirect(codePtr, offset: 0, valueId: codeZeroConst, valueType: StdType.i64))
+	module.appendOp(reap, op: StdOp.call(codePtr, callee: SlabAllocName, args: argsOf(codeSizeConst)))
 	module.appendOp(reap, op: StdOp.osProcessExitCode(reapHandle, codePtrId: codePtr))
 	let code = ids.mint()
 	module.appendOp(reap, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
+	module.appendOp(reap, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(codePtr)))
 	module.appendOp(reap, op: StdOp.osCloseHandle(reapHandle))
 	// A THROWING function's successful exit still writes BOTH registers (P1.5 #93) — the child's exit code in the
 	// primary, `NoErrorFlag` in the flag — so the `try` caller reads flag 0 and takes the success path.
@@ -4373,20 +4351,28 @@ end 'buildPipeName'
 // probe). Spawns the Windows child named by the command String with its stdout redirected to a fresh overlapped pipe,
 // issues an overlapped ReadFile that YIELDS the green thread (via the IOCP completion thread) when the read is pending,
 // and returns the byte count. The command String is BORROWED (buffer/length read like `__print_string`); ownership
-// stays with the caller. Per-read buffers are `__slab_alloc`'d fresh (concurrency-safe; slab-invisible to the `__mm`
-// leak gate) rather than the #92 one-time reuse `__gt_process_run` uses — a read YIELDS, so a concurrent read must not
-// share scratch. On any spawn/pipe failure the read returns 0 (an environment error the slice-1a probe treats as EOF).
-function buildGtIoRead(module StdModule)
+// stays with the caller. On any spawn/pipe failure the read returns 0 (an environment error the slice-1a probe treats
+// as EOF).
+//
+// ⭐⭐ **EVERY REGION IT TAKES, IT GIVES BACK (S3) — THE ~4.2 KB-PER-CALL DEBT.** Per-call allocation was
+// always the right shape here (a read YIELDS, so two concurrent reads must not share scratch, which is exactly
+// what `__gt_process_run`'s #92 reuse could not offer), and what was missing was the other half: nothing was
+// released, so N reads held N × ~4.2 KB for the process lifetime. The regions now split cleanly in two:
+//
+//   • SIX are dead inside straight-line code — the pipe name, the SECURITY_ATTRIBUTES, the two-handle
+//     out-param block, the command line, the STARTUPINFOA and the PROCESS_INFORMATION. Each is freed at the
+//     point its last reader finishes, BEFORE the branch that could throw the call away, so no arm carries a
+//     copy of the release.
+//   • ONE survives the park — the read scratch, which the completion thread is writing into while the green
+//     thread is suspended. It is freed after the yielding read returns, and its pointer is published to
+//     `gt.ioScratch` so `__gt_promise_drop`'s cancel arm can free it on the path this function never returns
+//     from.
+function buildGtIoRead(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(IoReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var afterName = module.addBlock(func, label: b"aftername")
-	var copyHdr = module.addBlock(func, label: b"copyhdr")
-	var copyBody = module.addBlock(func, label: b"copybody")
-	var afterCopy = module.addBlock(func, label: b"aftercopy")
-	var spawnFail = module.addBlock(func, label: b"spawnfail")
-	var spawnOk = module.addBlock(func, label: b"spawnok")
 
 	emitParams(module, block: entry, count: 1)
 	let strPtr = 0 as ValueId
@@ -4430,6 +4416,13 @@ function buildGtIoRead(module StdModule)
 	module.appendOp(afterName, op: StdOp.loadIndirect(readEnd, addrId: readPtr, offset: 0, valueType: StdType.i64))
 	let writeEnd = ids.mint()
 	module.appendOp(afterName, op: StdOp.loadIndirect(writeEnd, addrId: writePtr, offset: 0, valueType: StdType.i64))
+	// The pipe exists and both ends are in registers, so the three regions that described it are dead: the
+	// name has been resolved to a kernel object, the SECURITY_ATTRIBUTES was read by the create, and the
+	// out-param block has been emptied. `writePtr` is an interior pointer INTO `readPtr`'s block and so is not
+	// freed separately — the block is one allocation with two slots.
+	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(namePtr)))
+	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(saPtr)))
+	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(readPtr)))
 	// The mutable NUL-terminated cmdline copy (CreateProcessA may write to lpCommandLine; the .rdata String blob is
 	// neither writable nor NUL-terminated).
 	let cmdlinePtr = ids.mint()
@@ -4442,35 +4435,16 @@ function buildGtIoRead(module StdModule)
 	module.appendOp(afterName, op: StdOp.binOp(cmBufSize, lhs: cmdlineLen, rhs: cmBufNulConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let cmBuf = ids.mint()
 	module.appendOp(afterName, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
-	module.setTerminator(afterName, op: StdOp.branch(copyHdr.id))
-	afterName.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(zeroConst)))
 
-	// copyHdr(i): copy the borrowed command bytes into the mutable buffer (cmdlines are short — a byte loop is fine).
-	let ci = ids.mint()
-	copyHdr.blockArgs.push(IrBlockArg.create(ci, argType: StdType.i64))
-	let atCopyEnd = ids.mint()
-	module.appendOp(copyHdr, op: StdOp.cmp(atCopyEnd, lhs: ci, rhs: cmdlineLen, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(copyHdr, op: StdOp.condBranch(atCopyEnd, thenBlockId: afterCopy.id, elseBlockId: copyBody.id))
+	// The shared byte-copy loop — see `__gt_process_run`, which reaches the same helper for the same reason.
+	var afterCopy = emitForwardCopy(module, func: func, cur: afterName, dest: cmBuf, src: cmdlinePtr, byteCount: cmdlineLen, ids: ids)
 
-	// copyBody: cmBuf[i] = (u8) cmdlinePtr[i] ; i+1 → copyHdr.
-	let srcAddr = ids.mint()
-	module.appendOp(copyBody, op: StdOp.binOp(srcAddr, lhs: cmdlinePtr, rhs: ci, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let srcByte = ids.mint()
-	module.appendOp(copyBody, op: StdOp.loadIndirect(srcByte, addrId: srcAddr, offset: 0, valueType: StdType.u8))
-	let dstAddr = ids.mint()
-	module.appendOp(copyBody, op: StdOp.binOp(dstAddr, lhs: cmBuf, rhs: ci, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(copyBody, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: srcByte, valueType: StdType.u8))
-	let ciOne = ids.mint()
-	module.appendOp(copyBody, op: StdOp.const(ciOne, value: 1, valueType: StdType.i64))
-	let ciNext = ids.mint()
-	module.appendOp(copyBody, op: StdOp.binOp(ciNext, lhs: ci, rhs: ciOne, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(copyBody, op: StdOp.branch(copyHdr.id))
-	copyBody.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(ciNext)))
+	var spawnFail = module.addBlock(func, label: b"spawnfail")
+	var spawnOk = module.addBlock(func, label: b"spawnok")
 
-	// afterCopy: NUL-terminate the cmdline; build STARTUPINFOA (stdout/stderr → pipe write end); spawn (inherit).
-	let nulAddr = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.binOp(nulAddr, lhs: cmBuf, rhs: cmdlineLen, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(afterCopy, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: zeroConst, valueType: StdType.u8))
+	// afterCopy: build STARTUPINFOA (stdout/stderr → pipe write end) and spawn (inherit). The command line
+	// needs no explicit NUL store: `cmBuf` is `cmdlineLen + TrailingNulBytes` of a freshly zeroed slot and the
+	// copy loop writes exactly `cmdlineLen` bytes, so the terminator is the allocator's zero.
 	let startupSizeConst = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.const(startupSizeConst, value: StartupInfoSize as ParsedInt, valueType: StdType.i64))
 	let startupPtr = ids.mint()
@@ -4492,6 +4466,15 @@ function buildGtIoRead(module StdModule)
 	module.appendOp(afterCopy, op: StdOp.osProcessSpawnInherit(cmBuf, cwdPtrId: probeSpawnDefaults, creationFlagsId: probeSpawnDefaults, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
+	let hThread = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
+	// CreateProcessA has read the command line and the STARTUPINFOA and written the PROCESS_INFORMATION, so
+	// all three are dead on BOTH arms below — released once, before the branch, exactly as
+	// `__gt_process_run` does it. On the failure path `hThread` is the fresh slot's zero, which that arm never
+	// reads.
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(cmBuf)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(startupPtr)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(procInfoPtr)))
 	let spawnFailed = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.cmp(spawnFailed, lhs: hProcess, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailed, thenBlockId: spawnFail.id, elseBlockId: spawnOk.id))
@@ -4505,27 +4488,45 @@ function buildGtIoRead(module StdModule)
 	// PARENT's copy of the write end (so the pipe reaches EOF once the child's inherited copy closes). Then issue the
 	// overlapped read against the OVERLAPPED embedded in the GT struct (zeroed first — a dirty hEvent low bit would
 	// suppress the completion packet).
-	let hThread = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hProcess))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(writeEnd))
+	// The ONE region that outlives this function's straight-line code: the read buffer the completion thread
+	// writes into while we are parked, with `ReadFile`'s byte-count out-slot in its first word. Its pointer is
+	// published to `gt.ioScratch` BEFORE the read is issued, so a promise dropped mid-read has something to
+	// free; `selfGt` is loaded once here and reused after the resume, exactly as `__gt_process_run` carries its
+	// own GT across a park.
+	let scratchSizeConst = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.const(scratchSizeConst, value: IoReadScratchBytes as ParsedInt, valueType: StdType.i64))
+	let scratch = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
+	let readBufOffConst = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.const(readBufOffConst, value: IoReadBufferOffset as ParsedInt, valueType: StdType.i64))
+	let readBuf = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.binOp(readBuf, lhs: scratch, rhs: readBufOffConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let readBufSizeConst = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.const(readBufSizeConst, value: IoReadBufferBytes as ParsedInt, valueType: StdType.i64))
-	let readBuf = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.call(readBuf, callee: SlabAllocName, args: argsOf(readBufSizeConst)))
-	let bytesOutSizeConst = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.const(bytesOutSizeConst, value: 8, valueType: StdType.i64))
 	let bytesOutPtr = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.call(bytesOutPtr, callee: SlabAllocName, args: argsOf(bytesOutSizeConst)))
+	module.appendOp(spawnOk, op: StdOp.binOp(bytesOutPtr, lhs: scratch, rhs: emitConst(module, block: spawnOk, value: IoReadBytesOutOffset as ParsedInt, ids: ids), opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let curGtAddr = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.globalAddr(curGtAddr, label: GtCurrentGtLabel))
+	let selfGt = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.loadIndirect(selfGt, addrId: curGtAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.storeIndirect(selfGt, offset: GtOffIoScratch, valueId: scratch, valueType: StdType.i64))
 	// The yielding overlapped read — the shared `__gt_subp_yield_read`, which owns the cross-thread park/resume
 	// handshake the streaming reader also uses (one copy of the completion-thread coordination). It returns the byte
-	// count, 0 on EOF/error (the slice-1a probe treats an environment error as EOF). The probe keeps its per-CALL
-	// `__slab_alloc` (its accepted debt); the streaming API allocs the buffer per HANDLE and reuses it across reads.
+	// count, 0 on EOF/error (the slice-1a probe treats an environment error as EOF). The streaming API allocs its
+	// buffer per HANDLE and reuses it across reads, so it leaves `ioScratch` at 0 and the cancel arm frees nothing.
 	let ownsPipeConst = emitConst(module, block: spawnOk, value: 1, ids: ids)
 	let bytesRead = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.call(bytesRead, callee: SubpYieldReadName, args: fiveArgs(readEnd, second: readBuf, third: readBufSizeConst, fourth: bytesOutPtr, fifth: ownsPipeConst)))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
+	// The read is over — the completion thread is done with the buffer, so the slot is cleared FIRST and then
+	// released. Clearing first is what stops a later drop of this same (recycled) GT from freeing a region the
+	// allocator has already handed to somebody else.
+	let clearedScratch = emitConst(module, block: spawnOk, value: 0, ids: ids)
+	module.appendOp(spawnOk, op: StdOp.storeIndirect(selfGt, offset: GtOffIoScratch, valueId: clearedScratch, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(scratch)))
 	module.setTerminator(spawnOk, op: StdOp.ret(bytesRead))
 
 	module.functions.push(func)
@@ -4540,8 +4541,17 @@ end 'buildGtIoRead'
 // Single-M cooperative scheduling makes the table MAIN-THREAD-ONLY — the IOCP completion thread only ever touches
 // the parked GT (via the OVERLAPPED), never the table — so the table needs no lock (1a's rule: keep per-handle
 // state GT-local). A slot's OS handles are closed at release; its reusable line/write buffers PERSIST across
-// release+respawn (a spawn reuses a free slot's buffers), so a spawn/read/release loop is memory-bounded — the fix
-// for slice 1a's per-READ `__slab_alloc` that never freed (shv2's slab has no free, so REUSE, not free, is the fix).
+// release+respawn (a spawn reuses a free slot's buffers), so a spawn/read/release loop is memory-bounded.
+//
+// ⚠⚠ **THAT PERSISTENCE IS NOT THE #92-STYLE WORKAROUND IT LOOKS LIKE, AND ITS OWN NOTE USED TO SAY IT WAS.**
+// The note read *"shv2's slab has no free, so REUSE, not free, is the fix"*, and S3 retired every reuse
+// mechanism that rested on that — but not this one, because it rests on something else that is still true:
+// **`__gt_subp_release` does NOT cancel or drain a parked overlapped read.** It closes the pipe handles and
+// clears `inUse`, and the slot GENERATION is what makes a still-parked reader harmless when the slot is
+// respawned. A reader parked at that moment has handed the completion thread a pointer INTO `bufPtr`, so
+// freeing the buffer at release would be a cross-thread use-after-free rather than a reclamation. Freeing here
+// needs a cancel/drain handshake first — the one `emitGtIoCancelArm` performs for a DROPPED reader — and that
+// is a change to what release means, not a change to where memory goes.
 //
 // Each stream (stdout/stderr) carries a growable line buffer holding unconsumed bytes; a read appends a chunk into
 // it (the yielding overlapped read the streaming reader shares with the probe), the reader returns through the

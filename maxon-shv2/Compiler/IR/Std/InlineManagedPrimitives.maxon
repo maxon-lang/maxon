@@ -266,7 +266,11 @@ type PrimitiveInliner
 			call(resultId, callee, args) then return self.expandPlainCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
 			retVoid to rdataAddr then break 'op'
 			tryCall(resultId, errorFlagId, callee, args) then return self.expandThrowingCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
-			errorReturn to osThreadCpuTicks then break 'op'
+			// ⚠ Extended past `osThreadCpuTicks` when the allocator rung appended seven ops (memFill, the
+			// reserve/commit/decommit family, and the atomics). None is a CALL, so none can be a managed
+			// primitive to expand — this pass dispatches on a callee NAME and they have none. Placed
+			// consciously, which is what the band-append invariant asked for.
+			errorReturn to currentThreadToken then break 'op'
 		end 'op'
 
 		return blockRef

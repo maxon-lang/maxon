@@ -1,0 +1,197 @@
+// ⭐⭐ **GO'S SIZE-CLASS TABLE. GENERATED — DO NOT EDIT BY HAND.**
+//
+// Regenerate with `scripts/gen-slab-classes.sh`; check with `--check`. The source of truth is the
+// VENDORED Go runtime at `vendor/go/src/internal/runtime/gc/sizeclasses.go`, which is itself generated
+// by `mksizeclasses.go`.
+//
+// ⛔⛔ **THE LADDER CANNOT BE RE-DERIVED FROM A WASTE BOUND, AND THIS FILE ONCE TRIED.** The obvious
+// rule — "step by the largest power of two at most `prev/8`, bounding internal waste at 12.5%" —
+// produces **80 classes against Go's 68**. It agrees in the small sizes and diverges completely above
+// 4096 (it gives 4608, 5120, 5632 where Go gives 4864, 5376, 6144). The reason is that Go bounds a
+// SECOND term this rule cannot see: the TAIL WASTED when a class is laid into a whole number of pages,
+// which is why `SlabClassPages` below ranges 1..10 rather than being constant. ⇒ The table is TAKEN.
+//
+// ⚠ **AND THE 12.5% BOUND DOES NOT HOLD AT THE SMALL END — GO'S OWN HEADER SAYS SO.** Class 1 (8
+// bytes) carries a `max waste` of **87.50%**, because a 1-byte object still occupies an 8-byte slot
+// and 8 is the smallest step there is. Any check asserting a flat 12.5% panics on the first rung.
+//
+// **ONLY TWO ARRAYS ARE COPIED FROM GO; THE REST IS DERIVED AND THE DERIVATION IS VERIFIED.**
+//   • `slabClassSizes` / `slabClassPages` — copied.
+//   • the two reverse lookups — DERIVED here, and the generator refuses to write this file unless the
+//     derivation reproduces Go's own `SizeToSizeClass8`/`SizeToSizeClass128` EXACTLY (0/129 and 0/249).
+//   • objects per span — DERIVED as `pages * 8192 / size`, cross-checked against Go's header table.
+// That is 136 numbers taken instead of 514, and every derived one is checked against its source.
+//
+// Source: Go (version unrecorded), 67 classes.
+
+// A class's slot size in bytes. Class 0 is Go's sentinel (size 0) and serves no allocation; it is kept
+// so a class id indexes its own slot with no off-by-one on any path.
+export typealias SlabClassSize = int(0 to 32768)
+// A class id. The range is the table's own bound, so a value that escaped the ladder cannot be stored.
+export typealias SlabClassIndex = int(0 to 67)
+// Pages in one span of a class. Go's table spans 1..10; 0 belongs to the sentinel class alone.
+export typealias SlabSpanPages = int(0 to 10)
+export typealias SlabClassSizeArray = Array with SlabClassSize
+export typealias SlabSpanPagesArray = Array with SlabSpanPages
+
+// Requests above this go OS-direct: one mapping each, released whole.
+export let SlabMaxSmallSize = 32768
+// The boundary between the two reverse-lookup tables, and their strides.
+export let SlabSmallSizeMax = 1024
+export let SlabSmallSizeDiv = 8
+export let SlabLargeSizeDiv = 128
+// One page. `SlabPageShift` and `SlabPageBytes` are ONE fact written twice by necessity (a shift and
+// its value); `checkSlabClassTable` asserts they agree rather than trusting the pair.
+export let SlabPageShift = 13
+export let SlabPageBytes = 8192
+
+// Slot size per class. Go's `SizeClassToSize`, verbatim.
+export function slabClassSizes() returns SlabClassSizeArray
+	var out = SlabClassSizeArray.create()
+	out.reserve(68)
+	out.push(0)
+	out.push(8)
+	out.push(16)
+	out.push(24)
+	out.push(32)
+	out.push(48)
+	out.push(64)
+	out.push(80)
+	out.push(96)
+	out.push(112)
+	out.push(128)
+	out.push(144)
+	out.push(160)
+	out.push(176)
+	out.push(192)
+	out.push(208)
+	out.push(224)
+	out.push(240)
+	out.push(256)
+	out.push(288)
+	out.push(320)
+	out.push(352)
+	out.push(384)
+	out.push(416)
+	out.push(448)
+	out.push(480)
+	out.push(512)
+	out.push(576)
+	out.push(640)
+	out.push(704)
+	out.push(768)
+	out.push(896)
+	out.push(1024)
+	out.push(1152)
+	out.push(1280)
+	out.push(1408)
+	out.push(1536)
+	out.push(1792)
+	out.push(2048)
+	out.push(2304)
+	out.push(2688)
+	out.push(3072)
+	out.push(3200)
+	out.push(3456)
+	out.push(4096)
+	out.push(4864)
+	out.push(5376)
+	out.push(6144)
+	out.push(6528)
+	out.push(6784)
+	out.push(6912)
+	out.push(8192)
+	out.push(9472)
+	out.push(9728)
+	out.push(10240)
+	out.push(10880)
+	out.push(12288)
+	out.push(13568)
+	out.push(14336)
+	out.push(16384)
+	out.push(18432)
+	out.push(19072)
+	out.push(20480)
+	out.push(21760)
+	out.push(24576)
+	out.push(27264)
+	out.push(28672)
+	out.push(32768)
+	return out
+end 'slabClassSizes'
+
+// Pages per span per class. Go's `SizeClassToNPages`, verbatim. It is NOT constant, and that
+// variation IS the tail-waste term the header above says a waste bound alone cannot see.
+export function slabClassPages() returns SlabSpanPagesArray
+	var out = SlabSpanPagesArray.create()
+	out.reserve(68)
+	out.push(0)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(1)
+	out.push(2)
+	out.push(1)
+	out.push(2)
+	out.push(1)
+	out.push(2)
+	out.push(1)
+	out.push(3)
+	out.push(2)
+	out.push(3)
+	out.push(1)
+	out.push(3)
+	out.push(2)
+	out.push(3)
+	out.push(4)
+	out.push(5)
+	out.push(6)
+	out.push(1)
+	out.push(7)
+	out.push(6)
+	out.push(5)
+	out.push(4)
+	out.push(3)
+	out.push(5)
+	out.push(7)
+	out.push(2)
+	out.push(9)
+	out.push(7)
+	out.push(5)
+	out.push(8)
+	out.push(3)
+	out.push(10)
+	out.push(7)
+	out.push(4)
+	return out
+end 'slabClassPages'

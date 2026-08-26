@@ -56,6 +56,19 @@ end 'x64OsCallKind'
 export let X64LinuxSyscallWrite = 1
 export let X64LinuxSyscallMmap = 9
 export let X64LinuxSyscallExitGroup = 231
+// F1a — the page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
+// backing while keeping the mapping. Both carry the arch prefix for the reason above: they are 215 and 233 on
+// AArch64 (`Arm64Runtime`'s twin block), so an unprefixed name is the collision that already miscompiled this
+// backend once. There is deliberately NO recommit number — a `MADV_DONTNEED`ed page refaults on the next touch,
+// so re-backing one is a Windows-only call (see `lowerOsRecommitPages`).
+export let X64LinuxSyscallMunmap = 11
+export let X64LinuxSyscallMadvise = 28
+// F2 — the per-thread identity word. `gettid` answers the calling thread's kernel thread id, which is
+// per-thread stable and never 0, i.e. exactly `StdOp.currentThreadToken`'s contract. It is asked instead of
+// reading `fs:[0]` because shv2's Linux lane is a raw static binary with no libc, so nothing has set FS base
+// and that load would dereference address 0 — the op's own header carries the full argument. 186 on x86-64,
+// 178 on AArch64 (`Arm64Runtime`'s twin), which is exactly why these numbers wear the arch prefix.
+export let X64LinuxSyscallGettid = 186
 
 // --- Linux mmap parameters ---
 //

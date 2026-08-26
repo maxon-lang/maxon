@@ -41,39 +41,34 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-  __gt_current_gt@24 = i64 0
-  __gt_run_queue_head@32 = i64 0
-  __gt_run_queue_tail@40 = i64 0
-  __gt_init_done@48 = i64 0
-  __gt_system_stack_top@56 = i64 0
-  __gt_timer_count@64 = i64 0
-  __gt_timer_heap_base@72 = i64 0
-  __gt_timer_capacity@80 = i64 0
-  __gt_trace_counter@88 = i64 0
-  __gt_trace_digits@96 = i64 0
-  __gt_clock_ticks@104 = i64 0
-  __gt_clock_freq@112 = i64 0
-  __gt_proc_count@120 = i64 0
-  __gt_proc_handles_base@128 = i64 0
-  __gt_proc_gts_base@136 = i64 0
-  __gt_free_list_head@144 = i64 0
-  __gt_live_count@152 = i64 0
-  __gt_startup_base@160 = i64 0
-  __gt_procinfo_base@168 = i64 0
-  __gt_exitcode_base@176 = i64 0
-  __gt_cmdline_buf_base@184 = i64 0
-  __gt_cmdline_buf_cap@192 = i64 0
-  __io_iocp@200 = i64 0
-  __io_done_event@208 = i64 0
-  __io_lock@216 = i64 0
-  __io_init_done@224 = i64 0
-  __io_pending@232 = i64 0
-  __io_pipe_seq@240 = i64 0
-  __subp_table@248 = i64 0
-  __subp_last_error@256 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __gt_current_gt@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_system_stack_top@40 = i64 0
+  __gt_timer_count@48 = i64 0
+  __gt_timer_heap_base@56 = i64 0
+  __gt_timer_capacity@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_trace_digits@80 = i64 0
+  __gt_clock_ticks@88 = i64 0
+  __gt_clock_freq@96 = i64 0
+  __gt_proc_count@104 = i64 0
+  __gt_proc_handles_base@112 = i64 0
+  __gt_proc_gts_base@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __io_iocp@136 = i64 0
+  __io_done_event@144 = i64 0
+  __io_lock@152 = i64 0
+  __io_init_done@160 = i64 0
+  __io_pending@168 = i64 0
+  __io_pipe_seq@176 = i64 0
+  __subp_table@184 = i64 0
+  __subp_last_error@192 = i64 0
+  __slab_arena_list@200 = i64 0
+  __slab_arena_map_l1@208 = i64 0
+  __slab_state@216 = i64 0
 }
 
 func @appendToken {
@@ -89,9 +84,7 @@ func @appendToken {
     x64.movRegReg rcx, rdx
     x64.callDirect String.toByteArray
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_count
-    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 r13, [r12 + 8]
     x64.movRegImm32 r14, 0
     x64.jmp forhdr
   forhdr:
@@ -99,10 +92,70 @@ func @appendToken {
     x64.jcc less, byteLoop
     x64.jmp forexit
   byteLoop:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word
+    x64.jmp __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg less, rcx
+    x64.cmpRegReg r14, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow
+    x64.jmp __im_load#13
+  __im_load#13:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.imulRegRegImm32 rcx, r14, 8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte
+    x64.jmp __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg less, rcx
+    x64.cmpRegReg r14, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow
+    x64.jmp __im_load#14
+  __im_load#14:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_loaded:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 40]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __im_empty
+    x64.jmp critsplit#16
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+    x64.jmp critsplit#17
+  critsplit#17:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  critsplit#16:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  __im_slow:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rdx, r8
+    x64.movRegReg rcx, r10
+    x64.jmp __im_cont
+  __im_cont:
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
@@ -117,7 +170,6 @@ func @appendToken {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.jmp forstep
   forstep:
@@ -252,17 +304,18 @@ func @main {
     x64.jcc notEqual, twoDistinctProcesses
     x64.jmp critsplit#14
   twoDistinctProcesses:
-    x64.leaRegRegImm32 rax, rax, 4
+    x64.leaRegRegImm32 r12, rax, 4
     x64.jmp ifcont#8
   critsplit#14:
+    x64.movRegReg r12, rax
     x64.jmp ifcont#8
   ifcont#8:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg rax, rcx
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -278,7 +331,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r12, rax, 0
     x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
@@ -359,9 +411,7 @@ func @String.byteLength {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __managed_count
-    x64.epilogue 32
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

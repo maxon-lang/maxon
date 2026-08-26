@@ -1378,6 +1378,11 @@ function opIsCondBranch(op TargetOp) returns bool
 		arm64FmovGprFp to arm64FmovFpGpr gives false
 		// A frame address is a body op, not a branch.
 		leaRegSlot gives false
+		// F1b: a fill ladder is a body op, not a branch — its branches are internal to its own encoding.
+		x64MemFill to arm64MemFill gives false
+		// F2: every atomic is a body op, not a branch — the arm64 retry loop's branches are internal to its own
+		// encoding, exactly as the fill ladder's are.
+		x64LockCmpxchg to arm64ThreadPointer gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1414,6 +1419,10 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		arm64FmovGprFp to arm64FmovFpGpr gives false
 		// A frame address is a body op, not a branch.
 		leaRegSlot gives false
+		// F1b: a fill ladder is a body op, not a branch — its branches are internal to its own encoding.
+		x64MemFill to arm64MemFill gives false
+		// F2: every atomic is a body op, not a branch.
+		x64LockCmpxchg to arm64ThreadPointer gives false
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
@@ -1464,6 +1473,8 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a stack-argument body op as its terminator")
 			arm64FmovGprFp to arm64FmovFpGpr then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an arm64 general↔vector `fmov` (a bit reinterpretation) body op as its terminator")
 			leaRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a `leaRegSlot` (a frame address) body op as its terminator")
+			x64MemFill to arm64MemFill then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a fill ladder body op as its terminator")
+			x64LockCmpxchg to arm64ThreadPointer then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an atomic or a thread-token read as its terminator")
 			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
 			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
@@ -3219,6 +3230,10 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 			arm64FmovGprFp to arm64FmovFpGpr then break 'capture'
 			// Not a `movRegReg`, so never an entry param capture.
 			leaRegSlot then break 'capture'
+			// F1b: not a `movRegReg`, so never an entry param capture.
+			x64MemFill to arm64MemFill then break 'capture'
+			// F2: not a `movRegReg`, so never an entry param capture.
+			x64LockCmpxchg to arm64ThreadPointer then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3932,6 +3947,12 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// ever be handed the slot this op names. Calling it a `spillStore` would tell the residency model
 		// that a value lives there and let a later reload read a record as if it were that value.
 		leaRegSlot gives OpSlotRole.touchesNoSlot
+		// F1b: a fill ladder touches no stack SLOT — it writes a heap region through a register the isel loaded.
+		x64MemFill to arm64MemFill gives OpSlotRole.touchesNoSlot
+		// F2: an atomic touches no stack SLOT — it reads and writes the word its address operand names, which is
+		// a heap or global address the isel handed it, and the two thread-token reads touch no memory the
+		// residency model tracks at all.
+		x64LockCmpxchg to arm64ThreadPointer gives OpSlotRole.touchesNoSlot
 	end 'k'
 end 'deriveSlotRole'
 

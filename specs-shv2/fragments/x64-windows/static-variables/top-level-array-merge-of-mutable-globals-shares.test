@@ -13,9 +13,10 @@ ExitCode: 5
 data {
   __data_P@0 = i64 0
   __data_Q@8 = i64 0
-  __slab_cursor@16 = i64 0
-  __slab_end@24 = i64 0
-  __mm_alloc_count@32 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
 }
 
 func @main {
@@ -26,9 +27,9 @@ func @main {
     x64.pushReg r12
     x64.prologue 32
     x64.leaRegGlobal rax, __data_Q
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __managed_count
-    x64.cmpRegImm32 r8, 2
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 2
     x64.jcc equal, ternarytrue
     x64.jmp ternaryfalse
   ternarytrue:
@@ -46,13 +47,12 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.leaRegGlobal rax, __data_P
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __managed_count
-    x64.movRegReg r12, r8
-    x64.leaRegGlobal rax, __data_Q
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r12, r12, r8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.leaRegGlobal rcx, __data_Q
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r12, rax, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0

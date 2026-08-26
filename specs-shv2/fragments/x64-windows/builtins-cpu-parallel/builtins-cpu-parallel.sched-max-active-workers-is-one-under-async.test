@@ -20,31 +20,26 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-  __gt_current_gt@24 = i64 0
-  __gt_run_queue_head@32 = i64 0
-  __gt_run_queue_tail@40 = i64 0
-  __gt_init_done@48 = i64 0
-  __gt_system_stack_top@56 = i64 0
-  __gt_timer_count@64 = i64 0
-  __gt_timer_heap_base@72 = i64 0
-  __gt_timer_capacity@80 = i64 0
-  __gt_trace_counter@88 = i64 0
-  __gt_trace_digits@96 = i64 0
-  __gt_clock_ticks@104 = i64 0
-  __gt_clock_freq@112 = i64 0
-  __gt_proc_count@120 = i64 0
-  __gt_proc_handles_base@128 = i64 0
-  __gt_proc_gts_base@136 = i64 0
-  __gt_free_list_head@144 = i64 0
-  __gt_live_count@152 = i64 0
-  __gt_startup_base@160 = i64 0
-  __gt_procinfo_base@168 = i64 0
-  __gt_exitcode_base@176 = i64 0
-  __gt_cmdline_buf_base@184 = i64 0
-  __gt_cmdline_buf_cap@192 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __gt_current_gt@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_system_stack_top@40 = i64 0
+  __gt_timer_count@48 = i64 0
+  __gt_timer_heap_base@56 = i64 0
+  __gt_timer_capacity@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_trace_digits@80 = i64 0
+  __gt_clock_ticks@88 = i64 0
+  __gt_clock_freq@96 = i64 0
+  __gt_proc_count@104 = i64 0
+  __gt_proc_handles_base@112 = i64 0
+  __gt_proc_gts_base@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __slab_arena_list@136 = i64 0
+  __slab_arena_map_l1@144 = i64 0
+  __slab_state@152 = i64 0
 }
 
 func @work {
@@ -108,12 +103,12 @@ func @main {
     x64.leaRegFunc rcx, [rip + work]
     x64.callDirect __gt_spawn
     x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 192], rbx
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
     x64.movRegImm32 rbx, 2
     x64.leaRegFunc rcx, [rip + work]
     x64.callDirect __gt_spawn
     x64.movRegReg r13, r8
-    x64.storeBaseDispReg.word64 [r13 + 192], rbx
+    x64.storeBaseDispReg.word64 [r13 + 200], rbx
     x64.movRegReg rcx, r12
     x64.callDirect __gt_await
     x64.movRegReg rbx, r8
@@ -126,17 +121,18 @@ func @main {
     x64.jcc equal, stillSingleM
     x64.jmp critsplit
   stillSingleM:
-    x64.leaRegRegImm32 rax, rax, 2
+    x64.leaRegRegImm32 r8, rax, 2
     x64.jmp ifcont
   critsplit:
+    x64.movRegReg r8, rax
     x64.jmp ifcont
   ifcont:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg rax, rcx
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -150,7 +146,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r8, rax, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

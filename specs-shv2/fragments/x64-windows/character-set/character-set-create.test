@@ -8,9 +8,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -89,18 +90,13 @@ func @Character.equals {
     x64.prologue 56
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
     x64.movRegReg rcx, r12
     x64.callDirect __str_bytes_view
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r14
-    x64.callDirect __managed_count
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r14
+    x64.loadRegBaseDisp.word64 r14, [r8 + 8]
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
-    x64.cmpRegReg r13, r15
+    x64.cmpRegReg r13, r14
     x64.jcc notEqual, length_check
     x64.jmp ifcont#2
   length_check:
@@ -153,8 +149,6 @@ func @Character.equals {
     x64.jcc notEqual, tryerr#10
     x64.jmp tryok#9
   tryerr#10:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -213,9 +207,7 @@ func @Character.hash {
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 5381
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
     x64.movRegImm32 r14, 0
     x64.jmp forhdr
   forhdr:

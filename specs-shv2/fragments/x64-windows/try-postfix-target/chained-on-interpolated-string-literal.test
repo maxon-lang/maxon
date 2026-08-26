@@ -8,9 +8,10 @@ end 'main'
 ExitCode: 4
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -82,9 +83,10 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
+    x64.movRegImm32 rbx, 9
     x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
-    x64.movRegImm32 r8, 9
+    x64.movRegReg r8, rbx
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
@@ -1437,8 +1439,7 @@ func @graphemeStateUpdate {
     x64.popReg rbp
     x64.ret
   __rc_ok#17:
-    x64.movRegImm32 rcx, 0
-    x64.leaRegRegImm32 r13, rcx, 0
+    x64.movRegImm32 r13, 0
     x64.cmpRegImm32 r12, 6
     x64.jcc equal, ri_update
     x64.jmp critsplit#23
@@ -2023,9 +2024,7 @@ func @String.byteLength {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __managed_count
-    x64.epilogue 32
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

@@ -60,17 +60,18 @@ func @main {
     x64.jcc greater, cpuAdvanced
     x64.jmp critsplit#13
   cpuAdvanced:
-    x64.leaRegRegImm32 rax, rax, 3
+    x64.leaRegRegImm32 r8, rax, 3
     x64.jmp ifcont#8
   critsplit#13:
+    x64.movRegReg r8, rax
     x64.jmp ifcont#8
   ifcont#8:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg rax, rcx
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -83,7 +84,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r8, rax, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

@@ -35,9 +35,10 @@ end 'main'
 ExitCode: unpinned
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Blk.create {
@@ -112,15 +113,14 @@ func @main {
     x64.callDirect __managed_push
     x64.movRegReg rcx, r13
     x64.callDirect cloneBlk
-    x64.movRegReg r14, r8
-    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r12, r12, r8
-    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r12, r12, r8
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r12, rax, rcx
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Blk
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Blk

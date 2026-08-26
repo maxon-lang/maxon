@@ -418,9 +418,26 @@ export type RuntimeUsage
 	// stay its own: it is the sole producer of `QueryThreadCycleTime`, whose OPTIONAL TRAILING BAND
 	// (`PeWriter.isOptionalTrailingImport`) is emitted when it is set.
 	export var usesThreadCpuTicks as bool
+	// ⭐⭐ **THE PROGRAM REACHES THE SLAB'S PAGE LAYER** — the chunk arena, its bitmap and the pointer→span
+	// reverse map (`SlabArena.maxon`). Its own bit, and the one here that declares the LEAST: the family
+	// calls only itself and `osAllocPages`, so it pulls in no heap, no scheduler and no leak gate. It is
+	// emphatically NOT folded into `usesHeap` — the arena sits BENEATH the allocator, and a heap program
+	// carries the allocator for its own reasons; folding would install the whole page layer, and lay out its
+	// two `.data` words, in every program that allocates a single box.
+	//
+	// ⭐ **IT IS DECLARED FROM `usesHeap`, NOT DISCOVERED (`closeSlabNeeds`).** S2 routed `__slab_alloc`
+	// through the arena — spans are cut from its chunks and `__slab_free` asks its reverse map who owns a
+	// pointer — and every one of those calls lives in a SYNTHESIZED Std body, which is rule 2 of this file's
+	// header: what a synthesized body calls is declared, never discovered, because the Maxon-module walk
+	// structurally cannot see it. The prefix test below still answers for a call the walk CAN see, and no
+	// such call exists today; it is the door, not the producer.
+	//
+	// ⚠ It stays a bit of its OWN rather than being folded into `usesHeap` at every reader, because that is
+	// what keeps the two `.data` slots and the whole page layer out of a program that reaches neither.
+	export var usesSlabArena as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -446,6 +463,23 @@ export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionN
 	end 'eachFunc'
 	return usage
 end 'scanRuntimeUsage'
+
+// ⭐ **WHAT THE ALLOCATOR NEEDS UNDERNEATH IT, DECLARED IN ONE PLACE.** A program that touches the heap
+// carries `__slab_alloc`, which cuts spans out of the chunk arena, registers each span in the pointer→span
+// reverse map, and asks that map who owns a pointer on every `__slab_free`. None of those calls exists in
+// the Maxon module — they are emitted into synthesized Std bodies long after the walk — so the dependency is
+// DECLARED here rather than discovered, which is rule 2 of this file's header.
+//
+// ⚠ It is a CLOSURE over the whole usage record rather than an arm inside `recordCallUsage`, because
+// `usesHeap` has more than a dozen producers and two of them (`--async-trace`, `--debugstream`) run in
+// `Compiler.compileToCodeResult` AFTER the walk has finished. An arm would answer for the walk's producers
+// and silently miss the flags' — a program that allocates only through a trace would then emit
+// `__slab_arena_alloc_chunks` calls into a module carrying neither the function nor its `.data` slots.
+export function closeSlabNeeds(usage RuntimeUsage)
+	if usage.usesHeap 'allocatorNeedsTheArena'
+		usage.usesSlabArena = true
+	end 'allocatorNeedsTheArena'
+end 'closeSlabNeeds'
 
 function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures FuncSignatureMap)
 	match op 'op'
@@ -586,6 +620,13 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isClockRuntimeCallee(callee) 'wallClock'
 		usage.usesWallClock = true
 	end 'wallClock'
+	// A `__slab_arena_*` call carries the slab's PAGE LAYER and nothing else — the arena, its bitmap and the
+	// reverse map call each other and `osAllocPages`, and that is the whole of it. Like the wall clock above
+	// it declares no transitive dependency; unlike it, nothing emits such a call yet (see `usesSlabArena`),
+	// so this arm is what will answer for the first producer rather than something that answers today.
+	if isSlabArenaRuntimeCallee(callee) 'slabArena'
+		usage.usesSlabArena = true
+	end 'slabArena'
 	// R4.1: a `__mf_*` call. It carries `usesHeap` with it, unlike the clock above — the open allocates a
 	// NUL-terminated scratch copy of the path and the handle box, and frees the scratch.
 	//
@@ -671,6 +712,21 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isMmCounterCallee(callee) 'mmCounters'
 		usage.usesMmCounters = true
 	end 'mmCounters'
+	// ⭐⭐ **THE SCAVENGER (S6) — THE ONE BUILTIN HERE THAT SETS A BIT AND OWNS NONE.** `__slab_scavenge` walks
+	// every mcentral list and every arena bitmap, so a program whose ONLY heap contact is
+	// `__Builtins.scavengeMemory()` still needs the whole allocator and everything under it — which is what
+	// `usesHeap` installs, and which the `__mm_` prefix test at the top of this function cannot answer for a
+	// `__slab_` name.
+	//
+	// ⚠ **IT HAS NO BIT OF ITS OWN, AND THAT IS THE DISCIPLINE RATHER THAN AN EXCEPTION TO IT.** Every bit in
+	// this record exists to GATE something a program that does not ask for it must not carry — an import, a
+	// `.data` slot, per-allocation maintenance. The scavenger's family gates nothing: it is built inside
+	// `installSlabRuntime` behind `usesHeap` like every other body there, and `DeadFunctionElimination` drops
+	// all five functions from every program that never calls it. A bit nothing reads would be a field to keep
+	// in step with a fact already fully expressed.
+	if callee.equals(SlabScavengeName) 'scavenge'
+		usage.usesHeap = true
+	end 'scavenge'
 	// The THREAD-CPU clock. It carries nothing beside itself, exactly as the wall clock two families up does
 	// and for the identical reason: `__thread_cpu_ticks`'s Std body reads one `.data` word through one Win32
 	// import and returns it, calling nothing this Maxon-module scan cannot see.

@@ -438,6 +438,19 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// real-miscompile trap `leaRegGlobal`/`leaRegRdata` document: the prologue would never save that
 		// register and the function would silently clobber its CALLER's.
 		leaRegSlot(d, _) gives physRegBit(d)
+		// F1b: a fill ladder names no virtual register, and its four fixed ones (rax/rcx/rdx/rdi) are all
+		// CALLER-saved, so the prologue owes them nothing — an empty mask is the right answer, not a gap.
+		x64MemFill to arm64MemFill gives 0
+		// F2: every x64 atomic operand is an ORDINARY coloured register that CAN land in a callee-saved one, so
+		// each must be counted — the same real-miscompile trap `leaRegSlot` documents one line up. The CAS's
+		// implicit RAX is deliberately absent: rax is caller-saved, so the prologue owes it nothing.
+		x64LockCmpxchg(a, s) gives physRegBit(a) or physRegBit(s)
+		x64LockXadd(d, s, a) gives physRegBit(d) or physRegBit(s) or physRegBit(a)
+		x64LockAdd(a, s) gives physRegBit(a) or physRegBit(s)
+		x64TebSelfPointer(d) gives physRegBit(d)
+		// arm64-only ops, 0 for the reason the arm64 arms above give. Their x16/x17 scratch is outside every
+		// allocatable pool and callee-saved of nothing, so there is nothing to count there either.
+		arm64AtomicCas to arm64ThreadPointer gives 0
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -586,5 +599,9 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		arm64FmovGprFp to arm64FmovFpGpr gives false
 		// A frame address is a body op, never a `ret`.
 		leaRegSlot gives false
+		// F1b: a fill ladder is a body op, never a `ret` — its branches are internal to its own encoding.
+		x64MemFill to arm64MemFill gives false
+		// F2: every atomic is a body op, never a `ret`.
+		x64LockCmpxchg to arm64ThreadPointer gives false
 	end 'check'
 end 'blockEndsWithReturn'

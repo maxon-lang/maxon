@@ -539,9 +539,17 @@ let DsLockLabel = b"__ds_lock"
 export let DsAllocIdLabel = b"__mm_alloc_id"
 
 // The bytes `__ds_init` asks `__slab_alloc` for: the CRITICAL_SECTION (5 words, matching `GtRuntime`'s
-// own reading of the structure) and the scratch buffer `GetEnvironmentVariableA` writes the segment name
-// into. Both are one-shot and never reclaimed — the same arrangement `__io_lock`'s region has, and the
-// bump allocator has no free list to return them to.
+// own reading of the structure) and the scratch buffer `GetEnvironmentVariableA` writes the segment name into.
+//
+// ⚠⚠ **THEY ARE NOT THE SAME KIND OF ONE-SHOT, AND THIS NOTE USED TO SAY THEY WERE (S3).** It read *"both
+// are one-shot and never reclaimed — the bump allocator has no free list to return them to"*, which is now
+// false about the allocator and was always false about one of the two:
+//
+//   • the CRITICAL_SECTION is LIVE for the whole process, because every event site enters and leaves it until
+//     `__ds_shutdown` and there is no later moment at which nothing can be emitting. Never freeing it is not a
+//     leak, it is its lifetime — the same reading `__io_lock`'s region has.
+//   • the ENV BUFFER is dead the instant `OpenFileMappingA` has resolved the name into a handle, which happens
+//     inside `__ds_init`'s own entry block. It is freed there.
 let DsCriticalSectionBytes = 40
 // The monitor names its segments `maxon_ds_<pid>_<8 hex>`; 512 bytes is two orders of magnitude of head
 // room and one slab bump.
@@ -592,7 +600,7 @@ end 'buildCarriesDebugStream'
 // A producer that read it unconditionally would put a `globalAddr` for a slot the image does not have into
 // every scalar program's trace runtime, and the backend panics at the relocation rather than at the read.
 // See `emitStoreLogIdentity`.
-export function installDebugStreamRuntime(module StdModule, globalData GlobalDataTable, usesGt bool)
+export function installDebugStreamRuntime(module StdModule, globalData GlobalDataTable, usesGt bool, rawFree ByteArray)
 	let envNameLabel = globalData.registerRdataConstant(DsEnvNameRdataPrefix, bytes: cString(DsActivationEnvVar))
 	// ⚠ **BOTH TABLES, END TO END, IN ONE IMAGE.** The monitor scans the section for each magic rather than
 	// indexing to a known offset, so their ORDER carries nothing and neither needs a label of its own. The
@@ -603,7 +611,7 @@ export function installDebugStreamRuntime(module StdModule, globalData GlobalDat
 	symdata.append(debugStreamNameBlob(DsStrBlobMagic, names: globalData.debugStreamNames.names))
 	globalData.symdataImage = symdata
 
-	buildDsInit(module, envNameLabel: envNameLabel.toByteArray())
+	buildDsInit(module, envNameLabel: envNameLabel.toByteArray(), rawFree: rawFree)
 	buildDsShutdown(module)
 	buildDsReserve(module)
 	buildDsCommit(module)
@@ -643,7 +651,7 @@ end 'cString'
 // as readable, so writing v2 entries into it hands it our UNCOMMITTED payloads — reintroducing, silently,
 // the exact torn read the commit bit closes. An empty trace is a visibly missing instrument; a wrong one
 // is not.
-function buildDsInit(module StdModule, envNameLabel ByteArray)
+function buildDsInit(module StdModule, envNameLabel ByteArray, rawFree ByteArray)
 	var func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -653,10 +661,10 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	var attach = module.addBlock(func, label: b"attach")
 	var dark = module.addBlock(func, label: b"dark")
 
-	// The two one-shot scratch regions. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing
-	// contract), which is what lets the env lookup below need no "was it set?" branch: an absent variable
-	// leaves the buffer naming the EMPTY string, and `OpenFileMappingA("")` fails exactly as a missing
-	// segment does.
+	// The two scratch regions. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing contract),
+	// which is what lets the env lookup below need no "was it set?" branch: an absent variable leaves the
+	// buffer naming the EMPTY string, and `OpenFileMappingA("")` fails exactly as a missing segment does. The
+	// lock outlives this function; the env buffer does not — see `DsCriticalSectionBytes`.
 	let lockSize = emitConst(module, block: entry, value: DsCriticalSectionBytes, ids: ids)
 	let lock = ids.mint()
 	module.appendOp(entry, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockSize)))
@@ -676,8 +684,11 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	let base = ids.mint()
 	module.appendOp(entry, op: StdOp.osMapNamedSegment(base, handleId: handle, sizeId: segmentBytes))
 	// The section handle has done its job the moment the view exists; the VIEW keeps the pages alive.
-	// Closing a NULL handle is a harmless FALSE, which is why the failed-open path needs no arm here.
+	// Closing a NULL handle is a harmless FALSE, which is why the failed-open path needs no arm here. The name
+	// buffer is spent for the same reason — the open resolved it — and it is released here rather than on each
+	// of the four exits below, all of which pass through this block.
 	module.appendOp(entry, op: StdOp.osCloseHandle(handle))
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(envBuf)))
 	let mapped = emitCmp(module, block: entry, a: base, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(mapped, thenBlockId: checkMagic.id, elseBlockId: dark.id))
 
@@ -1306,7 +1317,8 @@ end 'buildDsEmitLogText'
 // backend panics at the relocation rather than quietly emitting dead code. So the gate lives at each
 // caller, where the arguments are built, and reaching here means the build is traced.
 //
-// It SPLITS `block` — the caller continues in the block this returns, exactly as `emitFillRange` does.
+// It SPLITS `block` — the caller continues in the block this returns, exactly as `emitPackedElementZero`
+// (`ManagedMemoryRuntime`) does.
 export function emitMmEvent(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, packedId ValueId, value ValueId, ids ValueMinter) returns IrBlock
 	var emit = module.addBlock(func, label: b"dsEmit")
 	let resume = module.addBlock(func, label: b"dsResume")

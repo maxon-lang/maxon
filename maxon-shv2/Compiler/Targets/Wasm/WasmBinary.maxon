@@ -309,6 +309,16 @@ let opI32Store8 = 0x3A
 let opMemoryGrow = 0x40
 let wasmMemoryGrowMemZero = 0x00
 
+// The BULK-MEMORY band (F1b). These ride a `0xFC` prefix followed by a ULEB sub-opcode, which is why they
+// are not simply two more single-byte opcodes above.
+//
+// ⚠ The operand shapes in this family DIFFER: `memory.copy` (sub-opcode 10) carries TWO memory indices
+// (dst, src) and `memory.fill` (11) carries ONE. Getting that wrong is a module-VALIDATION failure rather
+// than a silent miscompile — noted here because only `fill` exists today and the neighbour is the trap.
+let opBulkMemoryPrefix = 0xFC
+let opBulkMemoryFill = 11
+let wasmBulkMemoryMemZero = 0x00
+
 // A memarg's `align` is the log2 of the access's byte width — the NATURAL alignment. It is a
 // hint only: it never changes semantics (a wasm load/store is defined at any address, aligned or
 // not) and validation requires only that it not EXCEED the natural alignment, so the natural
@@ -730,6 +740,20 @@ export type WasmBody
 		self.buf.push(opMemoryGrow)
 		self.buf.push(wasmMemoryGrowMemZero)
 	end 'memoryGrow'
+
+	// `memory.fill(dest, value, length)` — write `length` copies of `value`'s low byte at `dest` in linear
+	// memory 0. All three operands are i32 and already on the stack in that order.
+	//
+	// ⭐⭐ **ONE INSTRUCTION, AND `StdOp.memFill` DELIBERATELY DOES NOT UNROLL SMALL CONSTANT SIZES HERE THE
+	// WAY THE NATIVE BACKENDS DO.** On wasm every `i64.store` is bounds-checked INDEPENDENTLY by the engine,
+	// whereas one `memory.fill` is a single check plus an engine-tuned memset that already special-cases
+	// short lengths. Hand-unrolling would very likely be SLOWER — the opposite of the conclusion x64 and
+	// arm64 reach from the same op, which is why the size ladder is per-target rather than shared.
+	export function memoryFill()
+		self.buf.push(opBulkMemoryPrefix)
+		writeUleb128(self.buf, value: opBulkMemoryFill)
+		self.buf.push(wasmBulkMemoryMemZero)
+	end 'memoryFill'
 
 	// The raw instruction bytes — NO local declarations, NO trailing `end`. addFunction frames
 	// the complete body around this stream.

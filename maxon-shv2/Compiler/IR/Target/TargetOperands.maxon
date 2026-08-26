@@ -449,6 +449,37 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64FmovFpGpr(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		// A frame address: ONE plain def, no use — its `slot` is a frame index, not a register.
 		leaRegSlot(destReg, _) then pushDef(buf, vreg: destReg)
+		// ⭐ F1b: the two fill ladders have NO OPERANDS AT ALL, and that is the model, not an omission.
+		// Their destination and byte count arrive in FIXED PHYSICAL registers that the isel pre-moved into
+		// (exactly as a call's arguments do), and every register they touch is declared on `implicitDefs` —
+		// so there is nothing here for the allocator to colour. The only field either carries is a constant
+		// fill pattern, which is an immediate and never a register.
+		x64MemFill to arm64MemFill then break 'operands'
+		// F2 — the atomics. Unlike the fill ladders one line up, these DO have operands: nothing is pre-moved
+		// into a fixed register except the CAS's comparand, which x86 pins to RAX and which therefore rides
+		// `x64LockCmpxchg`'s implicit mask rather than an operand slot.
+		//
+		// `lock cmpxchg` reads its address and its stored word and defines no VIRTUAL value — its answer is
+		// ZF, materialized by the `setccReg` the isel emits after it. `pushCmpOperands` is exactly that shape
+		// (two reads, no def), which is why it is reused here rather than a fourth two-use helper written.
+		x64LockCmpxchg(addrReg, srcReg) then pushCmpOperands(buf, lhs: addrReg, rhs: srcReg)
+		// `lock xadd` is TWO-ADDRESS: its register operand carries the addend IN and the prior value OUT, so
+		// `dest` must land in `src`'s register — a reuse-def over operand 0, with the allocator supplying the
+		// copy only when `src` outlives the op. Same model as `subRegReg`/`negReg`.
+		x64LockXadd(dest, src, addrReg) then pushReuseBinOperands(buf, dest: dest, lhs: src, rhs: addrReg)
+		// `lock add` is the discarding form: two reads, NO def at all — which is the whole register saving it
+		// exists for (see `x64AtomicAdd`).
+		x64LockAdd(addrReg, srcReg) then pushCmpOperands(buf, lhs: addrReg, rhs: srcReg)
+		// The two thread-identity reads: ONE plain def, no use. Their input is the OS thread they run on — a
+		// segment-relative address on Windows and a system register on Darwin, neither of which is an operand.
+		x64TebSelfPointer(dest) then pushDef(buf, vreg: dest)
+		arm64ThreadPointer(dest) then pushDef(buf, vreg: dest)
+		// The arm64 LL/SC macro-ops: every operand stays VIRTUAL (the loop reads them wherever they were
+		// coloured) and the result is a PLAIN def, never a reuse — see `TargetDialect.arm64AtomicCas` for why
+		// the encoders must write that def LAST, which is what makes a plain def safe when it aliases a dying
+		// use's register.
+		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then pushDefThreeUse(buf, dest: dest, a: addrReg, b: expectedReg, c: replacementReg)
+		arm64AtomicRmw(dest, addrReg, operandReg, _) then pushDefTwoUse(buf, dest: dest, a: addrReg, b: operandReg)
 	end 'operands'
 end 'targetOpOperands'
 

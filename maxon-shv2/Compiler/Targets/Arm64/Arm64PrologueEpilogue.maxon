@@ -136,6 +136,12 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				// no frame-size term (`arm64SlotDisplacement`) — unlike an incoming stack argument, whose
 				// displacement depends on the frame this pass has just sized.
 				leaRegSlot then break 'o'
+				// F1b: a fill ladder names no frame fact at all — its two operands are already in fixed physical
+				// registers and its only field is a constant byte, so there is nothing for this pass to resolve.
+				x64MemFill to arm64MemFill then break 'o'
+				// F2: an atomic names no frame fact — its operands are ordinary coloured registers and its scratch is
+				// the encoder's, so there is nothing for this pass to resolve.
+				x64LockCmpxchg to arm64ThreadPointer then break 'o'
 			end 'o'
 		end 'eachOp'
 
@@ -282,6 +288,15 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// Its dest can be coloured into a callee-saved register, so it MUST be counted — the same
 		// real-miscompile trap every other register-naming arm here documents.
 		leaRegSlot gives arm64MaskFromOperands(op, buf: buf)
+		// F1b: a fill ladder has NO operands (see `targetOpOperands`), so the shared operand model correctly
+		// reports an empty mask. Its four fixed registers are x0..x3, all caller-saved, so the prologue owes
+		// them nothing — and reading them through the same door keeps that a derivation rather than a claim.
+		x64MemFill to arm64MemFill gives arm64MaskFromOperands(op, buf: buf)
+		// F2: every atomic operand can be coloured into a callee-saved register, so all of them MUST be counted —
+		// read through the shared operand model like every other arm here, which is what keeps the answer a
+		// derivation rather than a second hand-written operand list. The x16/x17 encoder scratch is deliberately
+		// absent: it is outside the allocatable pool and callee-saved of nothing.
+		x64LockCmpxchg to arm64ThreadPointer gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -311,7 +326,7 @@ end 'arm64VRegBit'
 // A physical arm64 operand from a colored `RegNum`. `TargetVReg.physical` takes the neutral number
 // directly (the callee-saved registers this pass names are already `RegNum`s), so no enum round-trip
 // is needed.
-function arm64PhysVReg(reg RegNum) returns TargetVReg
+export function arm64PhysVReg(reg RegNum) returns TargetVReg
 	return TargetVReg.physical(reg)
 end 'arm64PhysVReg'
 
@@ -348,5 +363,9 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		arm64FmovGprFp to arm64FmovFpGpr gives false
 		// A frame address is a body op, never an `arm64Ret`.
 		leaRegSlot gives false
+		// F1b: a fill ladder is a body op, never an `arm64Ret` — its branches are internal to its own encoding.
+		x64MemFill to arm64MemFill gives false
+		// F2: every atomic is a body op, never an `arm64Ret`.
+		x64LockCmpxchg to arm64ThreadPointer gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

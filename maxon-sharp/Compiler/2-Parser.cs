@@ -26947,10 +26947,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// <see cref="GetShiftOperandOptimalType"/>); otherwise fall back to the value scan. A missed name
   /// only ever costs a needless `try` (safe over-strictness) or a 64-bit signed divide where a
   /// narrower one would have served — never an unsafe bare divide, and never a narrowed one.
-  private string? OperandRangedTypeName(ExprResult operandExpr, MaxonValue operand) =>
-    operandExpr is ExprResult.VarRef v && RangedOptimalTypeOf(v.Info.StructTypeName) is not null
-      ? v.Info.StructTypeName
-      : RangedTypeNameOfValue(operand);
+  private string? OperandRangedTypeName(ExprResult operandExpr, MaxonValue operand) => operandExpr switch {
+    ExprResult.VarRef v when RangedOptimalTypeOf(v.Info.StructTypeName) is not null => v.Info.StructTypeName,
+    // ⛔ A FIELD ACCESS ALREADY CARRIES ITS DECLARED RANGED NAME and this function used to ignore it,
+    // falling through to the value scan — which cannot recover a FIELD's declaration the way it can a
+    // variable's. MEASURED: `8192 mod h.d`, with `h.d` declared `int(1 to i64.max)`, was refused with
+    // E3057 *"...or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`)"* — advice the
+    // code had already followed — while the SAME ranged type as a PARAMETER was accepted. A
+    // self-refuting diagnostic.
+    //
+    // ⚠ It also constrained shv2's own source, because the bootstrap compiles it: shv2 accepts both
+    // spellings, so shv2 could not use a shape shv2 itself allows.
+    ExprResult.Direct d when d.RangedTypeName is not null => d.RangedTypeName,
+    _ => RangedTypeNameOfValue(operand),
+  };
 
   /// A possibly-zero divide is a throwing operation and, like any throwing call, must sit in a `try`
   /// (reusing E3057 — the error TYPE is a synthesized enum, not a new diagnostic code). Inside an

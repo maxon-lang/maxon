@@ -40,9 +40,10 @@ end 'main'
 ExitCode: 6
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Holder.create {
@@ -75,21 +76,17 @@ func @seed {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 40
     x64.leaRegRdata rcx, [rip + __str_rec_1]
     x64.callDirect String.toByteArray
     x64.movRegReg rcx, r8
     x64.callDirect Holder.create
-    x64.movRegReg rbx, r8
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect __managed_count
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Holder
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -141,10 +138,9 @@ func @main {
     x64.callDirect Bag.create
     x64.movRegReg r12, r8
     x64.callDirect seed
-    x64.movRegReg r13, r8
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r13, r13, r8
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.leaRegRegReg r13, r8, rax
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -201,8 +197,6 @@ func @String.toByteArray {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -233,9 +227,7 @@ func @String.byteLength {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __managed_count
-    x64.epilogue 32
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

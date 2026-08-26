@@ -122,6 +122,32 @@ export type IrModule uses Op
 	// which is the price of one generic container that `debugStream` already records.
 	export var asyncTraceTags as GtTraceTags = GtTraceTags.none()
 
+	// ⭐⭐ **CAN THIS MODULE'S TARGET RESERVE ADDRESS SPACE WITHOUT PAYING FOR IT?** True on the three
+	// native lanes, where a reservation takes a range and backs none of it — Windows does not charge a
+	// `MEM_RESERVE`, and Linux does not fault in a `PROT_NONE` mapping. FALSE on wasm32-wasi, where linear
+	// memory has no reservation at all: `memory.grow` takes the range AND backs it, so `osReservePages` IS
+	// `osAllocPages` there. The slab's page layer reads it to pick its arena geometry — 64 MiB of reserved
+	// address space where a reservation is free, 512 KiB of real memory where it is not — which is the split
+	// Go makes for the same reason at `vendor/go/src/runtime/malloc.go:259`.
+	//
+	// ⚠ **IT IS NAMED FOR THE MECHANISM AND NOT FOR THE TARGET, AND THAT IS THE POINT.** `isWasm` would
+	// answer this question today and would then have to be RE-READ by every later consumer that actually
+	// cares about something else — a stack-switching strategy, an atomics floor, a page size — until one
+	// name stood for four unrelated facts and no consumer could be changed without auditing the others.
+	// What `SlabArena` asks is whether a reservation is free; that is what the field says.
+	//
+	// It is a FIELD for `debugStream`'s reason a few declarations up, and this is the honest place for it:
+	// it is not per-call-site information but a property of the WHOLE emitted module, set once by the driver
+	// and true of every function in it alike. The alternative is a `target` parameter on the Std-tier runtime
+	// installs — which `SlabArena`'s header named as the blocker when this was still a follow-up, because
+	// those builders are handed a module and a usage set and nothing else. Adding the target to them would
+	// hand every runtime in the tree a knob it has no business reading, to answer one question about pages.
+	//
+	// ⚠ It defaults to TRUE, which is the geometry every lane already had, so every `IrModule.create()` site
+	// is unchanged and the three native lanes are byte-identical. The Maxon and Target modules carry the
+	// field and neither reads it, which is the price of one generic container.
+	export var hasPageReservation as bool = true
+
 	export static function create() returns Self
 		return Self{}
 	end 'create'

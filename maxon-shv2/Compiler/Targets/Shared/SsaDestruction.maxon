@@ -354,6 +354,10 @@ function isCaptureMove(op TargetOp) returns bool
 		arm64FmovGprFp to arm64FmovFpGpr gives false
 		// A frame address is not a `movRegReg`, so it is not a call-result capture move.
 		leaRegSlot gives false
+		// F1b: a fill ladder is not a `movRegReg`, so it is not a call-result capture move.
+		x64MemFill to arm64MemFill gives false
+		// F2: no atomic is a `movRegReg`, so none is a call-result capture move.
+		x64LockCmpxchg to arm64ThreadPointer gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -517,6 +521,10 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		arm64FmovGprFp to arm64FmovFpGpr then return false
 		// Not a move at all, so never a physical self-move.
 		leaRegSlot then return false
+		// F1b: not a move at all, so never a physical self-move.
+		x64MemFill to arm64MemFill then return false
+		// F2: not a move at all, so never a physical self-move.
+		x64LockCmpxchg to arm64ThreadPointer then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -796,6 +804,8 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 		arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("retargetTerminatorOp: a stack-argument op is a body op, not a terminator")
 		arm64FmovGprFp to arm64FmovFpGpr then panic("retargetTerminatorOp: an arm64 general↔vector `fmov` (a bit reinterpretation) is a body op, not a terminator")
 		leaRegSlot then panic("retargetTerminatorOp: a `leaRegSlot` (a frame address) is a body op, not a terminator")
+		x64MemFill to arm64MemFill then panic("retargetTerminatorOp: a fill ladder is a body op, not a terminator — its branches are internal to its own encoding and name no block")
+		x64LockCmpxchg to arm64ThreadPointer then panic("retargetTerminatorOp: an atomic or a thread-token read is a body op, not a terminator — the arm64 retry loop's branches are internal to its own encoding and name no block")
 		// A jump table is a multiway terminator: redirect EVERY case slot (and the default) that names
 		// `oldTarget` — a range/`or` arm fills several slots with one block, so the split of that single
 		// CFG edge redirects all of them through the one split block.

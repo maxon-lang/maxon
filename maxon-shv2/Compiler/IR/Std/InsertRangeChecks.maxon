@@ -1202,6 +1202,14 @@ type RangeCheckEmitter
 				// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
 				// band, the machine query AND the thread-CPU read — are import calls too.
 				osHandleSetInherit to osThreadCpuTicks then break 'c'
+				// F1a: the decommit defines nothing, so it can never define a negated int constant.
+				osDecommitPages then break 'c'
+				// F1b: a fill defines nothing, so it can never define a negated int constant.
+				memFill then break 'c'
+				// F1c: a reserve and a commit define a page base the OS chose, never a negated int constant.
+				osCommitPages to osReservePages then break 'c'
+				// F2: all three define a value the machine produces at run time, never a negated int constant.
+				atomicCas to currentThreadToken then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1429,6 +1437,14 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
 		// band, the machine query AND the thread-CPU read — are import calls too.
 		osHandleSetInherit to osThreadCpuTicks gives false
+		// F1a: the decommit is a body op, never the `ret` this asks about.
+		osDecommitPages gives false
+		// F1b: a fill is a body op, never the `ret` this asks about.
+		memFill gives false
+		// F1c: a reserve and a commit are body ops too, never the `ret` this asks about.
+		osCommitPages to osReservePages gives false
+		// F2: the two atomics and the thread token are body ops, never the `ret` this asks about.
+		atomicCas to currentThreadToken gives false
 	end 'term'
 end 'retMatchesValue'
 

@@ -768,9 +768,11 @@ class Program {
         return 0;
       }
 
+      // Captured BEFORE the compile — see BuildCache.CaptureInputs for why after is a false green.
+      var capturedInputs = BuildCache.CaptureInputs(fileSources, target);
       var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(path, emitIr, dumpStages);
       var result = CompileAndReportResult(fileSources, outputPath, irOutputPath, dumpStagesBasePath, target);
-      if (result == 0 && useCache) BuildCache.WriteCache(projectDir, fileSources, outputPath, target);
+      if (result == 0 && useCache) BuildCache.WriteCache(projectDir, capturedInputs, outputPath);
       return result;
     }
 
@@ -845,11 +847,13 @@ class Program {
         // means lives in ONE place; `maxon test` compiles its binary under the same rule.
         using (Compiler.InternalCompileScope.Enter()) {
           if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, cacheName: "build-runner"))) {
-            // Don't emit IR/dump-stages for the internal build-runner — those flags are for the user's project.
+            // Captured BEFORE the compile — see BuildCache.CaptureInputs.
+            var runnerInputs = BuildCache.CaptureInputs(buildSources, target);
+            // Do not emit IR/dump-stages for the internal build-runner — those flags are for the user's project.
             var compileResult = CompileAndReportResult(buildSources, runPath, irOutputPath: null,
                 dumpStagesBasePath: null, target, entryFunction: "build");
             if (compileResult != 0) return compileResult;
-            if (useCache) BuildCache.WriteCache(path, buildSources, runPath, target, cacheName: "build-runner");
+            if (useCache) BuildCache.WriteCache(path, runnerInputs, runPath, cacheName: "build-runner");
           }
         }
 
@@ -897,10 +901,12 @@ class Program {
           return 0;
         }
 
+        // Captured BEFORE the compile — see BuildCache.CaptureInputs.
+        var projInputs = BuildCache.CaptureInputs(allSources, target);
         var (irOut, dumpBase) = GetOutputPaths(outputPath, emitIr, dumpStages);
         var result = CompileAndReportResult(projectSources, outputPath, irOut,
             dumpBase, target);
-        if (result == 0 && useCache) BuildCache.WriteCache(path, allSources, outputPath, target);
+        if (result == 0 && useCache) BuildCache.WriteCache(path, projInputs, outputPath);
         return result;
       }
     }
@@ -921,9 +927,11 @@ class Program {
         return 0;
       }
 
+      // Captured BEFORE the compile — see BuildCache.CaptureInputs.
+      var dirInputs = BuildCache.CaptureInputs(sources, target);
       var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
       var result = CompileAndReportResult(sources, outputPath, irOutputPath, dumpStagesBasePath, target);
-      if (result == 0 && useCache) BuildCache.WriteCache(path, sources, outputPath, target);
+      if (result == 0 && useCache) BuildCache.WriteCache(path, dirInputs, outputPath);
       return result;
     }
   }
@@ -1040,11 +1048,13 @@ class Program {
     if (useCache && BuildCache.IsCacheValid(directory, sources, outputPath, target, cacheName: cacheName)) {
       Console.WriteLine($"Using cached build runner for '{cliName}'");
     } else {
+      // Captured BEFORE the compile — see BuildCache.CaptureInputs.
+      var runInputs = BuildCache.CaptureInputs(sources, target);
       var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
       var compileResult = CompileAndReportResult(sources, outputPath, irOutputPath,
           dumpStagesBasePath, target, entryFunction: functionName);
       if (compileResult != 0) return compileResult;
-      if (useCache) BuildCache.WriteCache(directory, sources, outputPath, target, cacheName: cacheName);
+      if (useCache) BuildCache.WriteCache(directory, runInputs, outputPath, cacheName: cacheName);
     }
 
     return RunExecutable(outputPath, forwardedArgs);

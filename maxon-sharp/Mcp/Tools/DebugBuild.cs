@@ -118,12 +118,14 @@ internal static class DebugBuild {
         // image is refused by the OS, which is the honest answer to "replace the file I am running".
         if (BuildCache.IsCacheValid(projectDir, sources, outputPath, target)) return outputPath;
 
+        // Captured BEFORE the compile — see BuildCache.CaptureInputs.
+        var debugInputs = BuildCache.CaptureInputs(sources, target);
         var result = new Compiler.Compiler().Compile(sources, outputPath, irOutputPath: null,
           dumpStagesBasePath: null, target: target);
         if (!result.Success)
           throw new McpBuildException(string.Join(Environment.NewLine, result.Errors.Select(e => e.Format())));
 
-        BuildCache.WriteCache(projectDir, sources, outputPath, target);
+        BuildCache.WriteCache(projectDir, debugInputs, outputPath);
       } finally {
         Compiler.Compiler.DebugInfo = previousDebugInfo;
         Compiler.Compiler.DebugStream = previousDebugStream;

@@ -4912,6 +4912,11 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// A frame address is not a CONSTANT materialization: `constDefInfo` reconstructs a def from an
 		// immediate it carries, and this op carries a slot index, not the value it produces.
 		leaRegSlot gives false
+		// F1b: a fill ladder DEFINES NOTHING, so there is no def for this pass to rematerialize.
+		x64MemFill to arm64MemFill gives false
+		// F2: every atomic READS MEMORY (or, for the two thread-token reads, the OS thread's own state), so no
+		// def here can be rebuilt from an immediate this pass carries. Not rematerializable.
+		x64LockCmpxchg to arm64ThreadPointer gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -5738,6 +5743,10 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
 		arm64FmovGprFp to arm64FmovFpGpr panic("constDefInfo: def is not a constant materialization")
 		leaRegSlot panic("constDefInfo: def is not a constant materialization")
+		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
+		x64MemFill to arm64MemFill panic("constDefInfo: def is not a constant materialization")
+		// `opIsConstMaterialization` answers false for every atomic, so none reaches here; named rather than swallowed.
+		x64LockCmpxchg to arm64ThreadPointer panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -5970,6 +5979,17 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		leaRegSlot(destReg, slot) then return TargetOp.leaRegSlot(substituteVReg(destReg, from: from, to: to), slot: slot)
+		// F1b: a fill ladder carries no virtual register, so there is nothing to substitute — returned verbatim.
+		x64MemFill to arm64MemFill then return op
+		// F2: every virtual operand of every atomic substitutes; the RMW's opcode is not a register and rides
+		// through, exactly as a jump table's block-id table does.
+		x64LockCmpxchg(addrReg, srcReg) then return TargetOp.x64LockCmpxchg(substituteVReg(addrReg, from: from, to: to), srcReg: substituteVReg(srcReg, from: from, to: to))
+		x64LockXadd(dest, src, addrReg) then return TargetOp.x64LockXadd(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), addrReg: substituteVReg(addrReg, from: from, to: to))
+		x64LockAdd(addrReg, srcReg) then return TargetOp.x64LockAdd(substituteVReg(addrReg, from: from, to: to), srcReg: substituteVReg(srcReg, from: from, to: to))
+		x64TebSelfPointer(dest) then return TargetOp.x64TebSelfPointer(substituteVReg(dest, from: from, to: to))
+		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then return TargetOp.arm64AtomicCas(substituteVReg(dest, from: from, to: to), addrReg: substituteVReg(addrReg, from: from, to: to), expectedReg: substituteVReg(expectedReg, from: from, to: to), replacementReg: substituteVReg(replacementReg, from: from, to: to))
+		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then return TargetOp.arm64AtomicRmw(substituteVReg(dest, from: from, to: to), addrReg: substituteVReg(addrReg, from: from, to: to), operandReg: substituteVReg(operandReg, from: from, to: to), opcode: opcode)
+		arm64ThreadPointer(dest) then return TargetOp.arm64ThreadPointer(substituteVReg(dest, from: from, to: to))
 	end 'rewrite'
 end 'substituteValueInOp'
 

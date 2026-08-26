@@ -90,15 +90,21 @@ digit, bytes to within 8 (the two runtimes' record layouts are their own busines
 a runtime's private business; the sum is the number `PhaseProbe` reads, and it is the same fact
 under both compilers.
 
-### `mmRawAllocLive` and `mmRawAllocTotal` are ONE number in shv2
+### `mmRawAllocLive` and `mmRawAllocTotal` are TWO numbers — since S3
 
-`__mm_free` reclaims nothing (shv2's allocator has no free list and no size classes) and nothing
-anywhere returns a slab span, so a live count over a population that is never reduced IS the
-cumulative count. Both entry points read one `.data` word.
+They read two `.data` words. `mmRawAllocTotal` is cumulative and only ever rises; `mmRawAllocLive`
+rises with each credited allocation and FALLS when a counted `__slab_alloc` caller hands its region
+back. `__mm_alloc`'s boxes move neither column: they come from the UNCOUNTED twin `__slab_alloc_box`
+and are reported by the tracked layer instead, because the two layers must stay disjoint (see *The
+layers must be DISJOINT* above).
 
-⚠ **That is a READING of this runtime, not a shortcut.** The bootstrap answers 14 and 1 for the
-same program, because it has `mm_raw_free`. `raw-live-equals-raw-total` below is what goes red the
-day shv2 grows a free list, which is why it is pinned.
+⚠ **THEY WERE ONE WORD UNTIL S3, AND THE SPLIT IS THE DAY THE OLD READING PREDICTED.** The single
+slot was correct while the population the raw columns credit — the green-thread structs and tables,
+the subprocess scratch, the DebugStream ring — released nothing, so a live count over it *was* the
+cumulative count. S3 retired the three hand-rolled reuse mechanisms those callers had grown while
+`__slab_alloc` had no free path, and from that commit a counted caller frees. The bootstrap has
+answered 14 and 1 for the same program all along, because it has `mm_raw_free`;
+`raw-live-falls-below-raw-total` below is what now pins shv2 to the same shape.
 
 ### They are maintained only in a build that READS them
 
@@ -318,7 +324,7 @@ two intrinsics is wired to the other's slot.
 
 ✅ **SABOTAGE-VERIFIED.** With the raw columns' maintenance removed from `__slab_alloc`, this case
 went RED (exit **3** against the pinned 8 — only the `before == 0` half survived) and so did
-`raw-live-equals-raw-total` (exit **6** against 7), while every tracked-layer case stayed GREEN.
+`raw-live-falls-below-raw-total` (exit **6** against 7), while every tracked-layer case stayed GREEN.
 ```maxon
 function work(n ExitCode) returns ExitCode
 	__Builtins.parallelBoundary()
@@ -349,21 +355,25 @@ end 'main'
 8
 ```
 
-<!-- test: builtins-mm-counters.raw-live-equals-raw-total -->
+<!-- test: builtins-mm-counters.raw-live-falls-below-raw-total -->
 <!-- targets: x64-windows -->
-**THE CASE THAT PINS shv2's SLAB TO WHAT IT ACTUALLY IS.** Nothing returns a slab span, so every
-raw allocation ever made is still live and the two raw columns are one number. It is asserted only
-where there is something to compare — after a spawn, so the count is non-zero — because
-`0 == 0` would hold against a runtime that reclaimed everything, and against one that maintained no
-raw counter at all.
+**THE CASE THAT PINS shv2's SLAB TO WHAT IT ACTUALLY IS — AND THE DAY IT PREDICTED HAS COME.** It
+used to assert `live == total`, on the grounds that the population the raw columns credit was
+disjoint from the population anything released. S3 ended that: the green-thread scheduler now hands
+its GT structs, its per-read scratch and its subprocess scratch back to `__slab_free`, so a
+spawn/await window credits the cumulative column and then gives the slot up. The two columns are two
+numbers, exactly as the bootstrap's are (14 cumulative against 1 live for the array program in the
+differential table above).
 
-✅ **THAT GUARD IS WHY THE CASE CATCHES ANYTHING**, and it was MEASURED: under the sabotage that
-removes the raw columns' maintenance, the `live == total` half still held (`0 == 0`) and only the
-`total > 0` half failed — exit 6 against the pinned 7.
+It is asserted only where there is something to compare — after a spawn, so the count is non-zero —
+because `0 < 0` is false and `0 == 0` was true, and neither says anything about a runtime that
+maintains no raw counter at all.
 
-⚠ **IT MOVES THE DAY A FREE LIST LANDS**, and the bootstrap already answers differently for the
-same shape (14 cumulative against 1 live for the array program in the differential table above). A
-spec that pins today's runtime is how the day it stops being true gets noticed.
+✅ **RED BEFORE GREEN, MEASURED.** Against the pre-S3 compiler this case answers **3** (`total > 0`
+held, `live < total` did not) — a green-thread struct went onto a private `.data` free list rather
+than back to the allocator, so nothing the columns credit was ever released. ⚠ Under the older
+sabotage that removes the raw columns' maintenance entirely, the `total > 0` half fails instead, so
+the two halves fail for opposite reasons and neither can carry the case alone.
 ```maxon
 function work(n ExitCode) returns ExitCode
 	__Builtins.parallelBoundary()
@@ -379,9 +389,9 @@ function main() returns ExitCode
 	if total > 0 'somethingToCompare'
 		score = score + 1
 	end 'somethingToCompare'
-	if live == total 'nothingReclaimsASlabSpan'
+	if live < total 'theAwaitedStructWentBackToItsSpan'
 		score = score + 4
-	end 'nothingReclaimsASlabSpan'
+	end 'theAwaitedStructWentBackToItsSpan'
 	return score as ExitCode
 end 'main'
 ```

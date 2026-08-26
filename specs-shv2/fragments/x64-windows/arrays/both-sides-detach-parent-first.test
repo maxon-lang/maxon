@@ -16,9 +16,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -66,9 +67,94 @@ func @main {
   tryok#1:
     x64.movRegImm32 rdx, 1
     x64.movRegImm32 rax, 91
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.cmpRegImm32 rcx, 8
+    x64.jcc equal, __im_word#24
+    x64.jmp __im_stride#26
+  __im_word#24:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#23
+    x64.jmp __im_bounds#27
+  __im_bounds#27:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rsi
+    x64.cmpRegImm32 rcx, 1
+    x64.setccReg lessEqual, rcx
+    x64.orRegReg rsi, rsi, rcx
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#23
+    x64.jmp __im_owned#28
+  __im_owned#28:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#23
+    x64.jmp __im_buffer#29
+  __im_buffer#29:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#23
+    x64.jmp __im_viewed#30
+  __im_viewed#30:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#23
+    x64.jmp __im_store#31
+  __im_store#31:
+    x64.imulRegRegImm32 rdx, rdx, 8
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont#22
+  __im_stride#26:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, __im_byte#25
+    x64.jmp __im_slow#23
+  __im_byte#25:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#23
+    x64.jmp __im_bounds#32
+  __im_bounds#32:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rsi
+    x64.cmpRegImm32 rcx, 1
+    x64.setccReg lessEqual, rcx
+    x64.orRegReg rsi, rsi, rcx
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#23
+    x64.jmp __im_owned#33
+  __im_owned#33:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#23
+    x64.jmp __im_buffer#34
+  __im_buffer#34:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#23
+    x64.jmp __im_viewed#35
+  __im_viewed#35:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#23
+    x64.jmp __im_store#36
+  __im_store#36:
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.storeBaseDispReg.byte [rcx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont#22
+  __im_slow#23:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rax, r10
+    x64.jmp __im_cont#22
+  __im_cont#22:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, tryerr#4
     x64.jmp tryok#3
   tryerr#4:
@@ -85,9 +171,94 @@ func @main {
   tryok#3:
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 92
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 24]
+    x64.cmpRegImm32 rcx, 8
+    x64.jcc equal, __im_word#39
+    x64.jmp __im_stride#41
+  __im_word#39:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#38
+    x64.jmp __im_bounds#42
+  __im_bounds#42:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rsi
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg lessEqual, rcx
+    x64.orRegReg rsi, rsi, rcx
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#38
+    x64.jmp __im_owned#43
+  __im_owned#43:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#38
+    x64.jmp __im_buffer#44
+  __im_buffer#44:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#38
+    x64.jmp __im_viewed#45
+  __im_viewed#45:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#38
+    x64.jmp __im_store#46
+  __im_store#46:
+    x64.imulRegRegImm32 rdx, rdx, 8
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont#37
+  __im_stride#41:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, __im_byte#40
+    x64.jmp __im_slow#38
+  __im_byte#40:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#38
+    x64.jmp __im_bounds#47
+  __im_bounds#47:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rsi
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg lessEqual, rcx
+    x64.orRegReg rsi, rsi, rcx
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#38
+    x64.jmp __im_owned#48
+  __im_owned#48:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#38
+    x64.jmp __im_buffer#49
+  __im_buffer#49:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#38
+    x64.jmp __im_viewed#50
+  __im_viewed#50:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#38
+    x64.jmp __im_store#51
+  __im_store#51:
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.storeBaseDispReg.byte [rcx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont#37
+  __im_slow#38:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_set
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rax, r10
+    x64.jmp __im_cont#37
+  __im_cont#37:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, tryerr#6
     x64.jmp tryok#5
   tryerr#6:
@@ -103,64 +274,237 @@ func @main {
     x64.ret
   tryok#5:
     x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word#54
+    x64.jmp __im_stride#56
+  __im_word#54:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#53
+    x64.jmp __im_load#58
+  __im_load#58:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.imulRegRegImm32 rcx, rdx, 8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#57
+  __im_stride#56:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte#55
+    x64.jmp __im_slow#53
+  __im_byte#55:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#53
+    x64.jmp __im_load#59
+  __im_load#59:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded#57
+  __im_loaded#57:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_empty#60
+    x64.jmp critsplit#81
+  __im_empty#60:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#53
+    x64.jmp critsplit#82
+  critsplit#82:
+    x64.jmp __im_cont#52
+  critsplit#81:
+    x64.jmp __im_cont#52
+  __im_slow#53:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+    x64.jmp __im_cont#52
+  __im_cont#52:
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, tryerr#8
     x64.jmp tryok#7
   tryerr#8:
     x64.movRegImm32 r13, 0
     x64.jmp trycont#9
   tryok#7:
-    x64.movRegReg r13, r8
+    x64.movRegReg r13, rax
     x64.jmp trycont#9
   trycont#9:
     x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word#63
+    x64.jmp __im_stride#65
+  __im_word#63:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rcx
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#62
+    x64.jmp __im_load#67
+  __im_load#67:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.imulRegRegImm32 rcx, rdx, 8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#66
+  __im_stride#65:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte#64
+    x64.jmp __im_slow#62
+  __im_byte#64:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rcx
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#62
+    x64.jmp __im_load#68
+  __im_load#68:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded#66
+  __im_loaded#66:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_empty#69
+    x64.jmp critsplit#83
+  __im_empty#69:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#62
+    x64.jmp critsplit#84
+  critsplit#84:
+    x64.jmp __im_cont#61
+  critsplit#83:
+    x64.jmp __im_cont#61
+  __im_slow#62:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+    x64.jmp __im_cont#61
+  __im_cont#61:
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, tryerr#11
     x64.jmp tryok#10
   tryerr#11:
     x64.movRegImm32 r14, 0
     x64.jmp trycont#12
   tryok#10:
-    x64.movRegReg r14, r8
+    x64.movRegReg r14, rax
     x64.jmp trycont#12
   trycont#12:
     x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word#72
+    x64.jmp __im_stride#74
+  __im_word#72:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rcx
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#71
+    x64.jmp __im_load#76
+  __im_load#76:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.imulRegRegImm32 rcx, rdx, 8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#75
+  __im_stride#74:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte#73
+    x64.jmp __im_slow#71
+  __im_byte#73:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rcx
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#71
+    x64.jmp __im_load#77
+  __im_load#77:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded#75
+  __im_loaded#75:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_empty#78
+    x64.jmp critsplit#85
+  __im_empty#78:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#71
+    x64.jmp critsplit#86
+  critsplit#86:
+    x64.jmp __im_cont#70
+  critsplit#85:
+    x64.jmp __im_cont#70
+  __im_slow#71:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+    x64.jmp __im_cont#70
+  __im_cont#70:
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, tryerr#14
     x64.jmp tryok#13
   tryerr#14:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#15
   tryok#13:
-    x64.movRegReg rax, r8
     x64.jmp trycont#15
   trycont#15:
     x64.cmpRegImm32 r13, 92
     x64.movRegImm32 rcx, 0
     x64.jcc equal, andrhs#16
-    x64.jmp critsplit#22
+    x64.jmp critsplit#79
   andrhs#16:
     x64.cmpRegImm32 r14, 30
     x64.setccReg equal, rcx
     x64.jmp scmerge#17
-  critsplit#22:
+  critsplit#79:
     x64.jmp scmerge#17
   scmerge#17:
     x64.movRegImm32 rdx, 0
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, andrhs#18
-    x64.jmp critsplit#23
+    x64.jmp critsplit#80
   andrhs#18:
     x64.cmpRegImm32 rax, 91
     x64.setccReg equal, rax
     x64.jmp scmerge#19
-  critsplit#23:
+  critsplit#80:
     x64.movRegReg rax, rdx
     x64.jmp scmerge#19
   scmerge#19:
@@ -221,10 +565,10 @@ func @Array.slice {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
+    x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.leaRegRegImm32 r10, rbx, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r14

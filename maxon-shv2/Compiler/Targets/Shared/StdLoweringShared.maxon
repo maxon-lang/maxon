@@ -1,8 +1,8 @@
 // StdLoweringShared — the TARGET-INDEPENDENT half of the Std → Target lowering, shared by BOTH
 // `StdToX64Conversion` and `StdToArm64Conversion` so the one fact each answers has ONE home.
 //
-// Two things live here, and both are target-independent by construction — they read only a Std TYPE,
-// never an ISA:
+// Three things live here, and all are target-independent by construction — they read a Std TYPE or a Std
+// op's own CONSTANT, never an ISA:
 //   • the memory-access DOORS (`accessWidthFor`, `memoryDisplacement`) — a Std type / byte offset
 //     mapped to the neutral `X64AccessWidth` and the `Imm32` displacement the shared `loadRegBaseDisp`
 //     / `storeBaseDispReg` ops carry (the ENCODER that consumes them is per-ISA; the width is not).
@@ -10,6 +10,12 @@
 //     lands in. It is produced HERE because this is the last pass that can see a Std type: the Target
 //     tier carries none (see `ValueClassColumn` in TargetDialect), and the allocator downstream
 //     colours within a class it can no longer derive.
+//   • `StdOp.memFill`'s FILL CONSTANT, in the two shapes a backend can want it (`memFillByte` and its
+//     broadcast `memFillPatternWord`) — arithmetic on the op's own immediate, naming no ISA.
+//
+// ⚠ Its third reader is the WASM backend, which is outside the "both native isels" the paragraph below
+// argues about: `OsOutputStream` and `memFillByte` are both read there. The argument is unchanged — a fact
+// derivable from a Std type or a Std constant belongs in one place — but the reader set is three, not two.
 //
 // ⭐ WHY SHARED AND NOT FORKED: a value's class is what its type says, IDENTICALLY for x64 and arm64.
 // When this walk was forked, the two copies had already drifted — the x64 copy skips the target-only
@@ -61,6 +67,34 @@ export function posixStreamFd(stream OsOutputStream) returns ParsedInt
 		standardError gives StderrFd
 	end 's'
 end 'posixStreamFd'
+
+// The BROADCAST of `StdOp.memFill`'s constant fill byte across a full 64-bit word — `byte × 0x0101…01`, so
+// one register serves every store width the ladder uses: the whole word for a qword store / an arm64 `stp`
+// pair, and its LOW BYTE for the sub-8-byte loop and for `rep stosq`'s implicit source.
+//
+// ⭐ **THIS IS THE POINT OF `memFill`'s VALUE BEING A COMPILE-TIME CONSTANT.** The multiply happens HERE, in
+// the compiler, and the backends receive an immediate. Had the fill value been a `ValueId`, every fill would
+// have had to widen the byte at RUNTIME — an `imul` by `0x0101010101010101` (or three shift-or pairs on
+// arm64) ahead of a sequence whose whole purpose is to be a handful of stores.
+//
+// It lives HERE for `buildValueClassColumns`'s reason: it reads a byte and answers a word, naming no ISA.
+// Its callers are the two native ENCODERS, which materialize the answer into the register their ladder
+// stores from; wasm needs none of it — `memory.fill` takes the byte itself, via `memFillByte` below.
+export function memFillPatternWord(value ParsedInt) returns MachineWord
+	return (memFillByte(value) as MachineWord) * FillByteBroadcast
+end 'memFillPatternWord'
+
+// The LOW BYTE of that same constant — what wasm's `memory.fill` takes directly, since it replicates the
+// byte itself rather than a word. ⚠ Only the low byte is ever meaningful, exactly as the per-byte
+// `storeIndirect u8` loop `memFill` replaced used only the low byte of its constant: the mask is the op's
+// CONTRACT, not defensiveness, and it is stated once here so the broadcast and the byte cannot disagree
+// about which bits the fill value has.
+export function memFillByte(value ParsedInt) returns ParsedInt
+	return value and FillByteMask
+end 'memFillByte'
+
+let FillByteMask = 0xFF
+let FillByteBroadcast = 0x0101010101010101 as MachineWord
 
 // ⭐ THE ONE DOOR from a Std type to a memory-access WIDTH. `i1`/`u8` are one byte, `i64`/`f64` the
 // full word; those are what the language can put behind a load/store today. Every other type panics
@@ -656,6 +690,21 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// The thread-CPU read defines NOTHING — `QueryThreadCycleTime` answers through its out-param, so there
 		// is no result to class, exactly as there is none for the wall-clock read.
 		osThreadCpuTicks then break 'result'
+		// F1a: the decommit defines no value — it answers only a discarded BOOL — so, like the page release
+		// above, there is no result to class.
+		osDecommitPages then break 'result'
+		// F1b: a fill defines no value — it is a store — so there is no result to class.
+		memFill then break 'result'
+		// F1c: a reservation's base and a commit's base are addresses, so both are integers — classed exactly as
+		// `osAllocPages`'s page base is, and never float-classed.
+		osCommitPages(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osReservePages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// F2: a CAS's success boolean, an RMW's prior word and a thread's identity token are all INTEGERS —
+		// GPR-classed, never float-classed. An atomic reads and writes a 64-bit machine word by definition;
+		// there is no float atomic at this tier (see `StdOp.atomicRmw` on why there is no width field either).
+		atomicCas(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		atomicRmw(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		currentThreadToken(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 

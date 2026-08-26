@@ -40,9 +40,10 @@ end 'main'
 ExitCode: 10
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Box.contains {
@@ -155,18 +156,18 @@ func @main {
     x64.jcc notEqual, d
     x64.jmp critsplit#21
   d:
-    x64.leaRegRegImm32 rax, r13, 100
+    x64.leaRegRegImm32 r8, r13, 100
     x64.jmp ifcont#12
   critsplit#21:
-    x64.movRegReg rax, r13
+    x64.movRegReg r8, r13
     x64.jmp ifcont#12
   ifcont#12:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg rax, rcx
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -180,7 +181,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r8, rax, 0
     x64.epilogue 56
     x64.popReg r13
     x64.popReg r12

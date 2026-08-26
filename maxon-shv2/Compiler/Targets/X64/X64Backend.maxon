@@ -162,6 +162,23 @@ let OpcodePopBase = 0x58  // pop r64  (58+r) — the mirror of push
 // ModR/M, no REX and no operands. The number goes in eax (loaded by the shared `encodeMovRegImm32`).
 let OpcodeSyscallSecondByte = 0x05
 
+// --- F2: atomics and the thread-identity read ---
+//
+// `LOCK` (F0) is an instruction PREFIX, not an opcode: it makes the read-modify-write memory operation
+// that follows indivisible against every other core. Only a small set of instructions accept it, and all
+// three atomics below are in it.
+let LockPrefix = 0xF0
+let OpcodeCmpxchgRmReg = 0xB1  // cmpxchg r/m64, r64 (0F B1 /r) — reg field = the SOURCE stored on a match
+let OpcodeXaddRmReg = 0xC1  // xadd r/m64, r64 (0F C1 /r) — reg field = the addend IN and the prior value OUT
+// The displacement every atomic's `[base]` operand carries. An atomic names an ADDRESS and nothing else —
+// `StdOp.atomicCas`/`atomicRmw` have no field-offset operand, unlike `loadIndirect`/`storeIndirect` — so
+// this is the only value it can take, and it is named rather than a bare 0 so that stays visible.
+let AtomicWordDisp = 0 as Imm32
+// The TEB self-pointer's offset within the Win64 TEB — `NtCurrentTeb()` reads `gs:[0x30]`. The pointer is
+// established by the OS before a thread's first instruction and is never null, which is what makes it a
+// legal answer to `StdOp.currentThreadToken`. Exported because `TargetPrinter` renders it in a golden.
+export let WindowsTebSelfPointerOffset = 0x30
+
 // --- SSE opcodes (all TWO-byte: the 0F escape, then this byte, under a mandatory prefix) ---
 //
 // The prefix is not optional decoration — see `SseMandatoryPrefix`. Each comment states the
@@ -1105,35 +1122,55 @@ end 'ChunkRel32Fixup'
 
 export typealias ChunkRel32FixupArray = Array with ChunkRel32Fixup
 
-// `jmp rel32` to a block. The 4-byte displacement is left zero and a fixup records its
-// offset; `resolveChunkRel32Fixups` patches it once the target's chunk offset is known.
-export function encodeJmp(code ByteArray, rel32Fixups ChunkRel32FixupArray, targetBlockId BlockId)
-	code.push(OpcodeJmpRel32)
-	rel32Fixups.push(ChunkRel32Fixup.create(code.count(), targetLabel: targetBlockId, site: PatchSite.x64BlockJumpRel32))
-	writeDword(code, value: 0)
-end 'encodeJmp'
-
-// `jcc rel32` to a block (0F 80+cc). `cond.rawValue` is the condition nibble; the
-// displacement is a fixup like `encodeJmp`.
-export function encodeJcc(code ByteArray, rel32Fixups ChunkRel32FixupArray, cond X64CondCode, targetBlockId BlockId)
-	code.push(TwoByteOpcodeEscape)
-	code.push(OpcodeJccRel32Base or (cond.rawValue as MachineWord))
-	rel32Fixups.push(ChunkRel32Fixup.create(code.count(), targetLabel: targetBlockId, site: PatchSite.x64BlockJumpRel32))
-	writeDword(code, value: 0)
-end 'encodeJcc'
-
-// `jcc rel32` BACKWARD to a byte offset ALREADY EMITTED into this same buffer — the one branch in
-// the backend whose target needs no fixup, because it is not a BLOCK: the stack probe's page walk
-// is emitted as a unit, so the encoder is still holding its own loop label. The displacement still
-// goes through `patchChunkRel32`, so the "measured from the end of the 4-byte field" convention and
-// the ±2 GiB guard are the shared ones rather than a second copy of the arithmetic.
-function encodeJccBackward(code ByteArray, cond X64CondCode, targetOffset CodeOffset)
+// `jcc rel32` / `jmp rel32` with a PLACEHOLDER displacement, each returning the chunk offset of its
+// 4-byte field. The ONE spelling of each instruction's bytes, and the base of all four emitters below.
+//
+// ⚠ **THE PLACEHOLDER IS THE SHARED HALF, AND WHO RESOLVES IT IS THE DIFFERENCE.** A branch to a BLOCK
+// records a `ChunkRel32Fixup` and is patched by `resolveChunkRel32Fixups` once the block layout is known;
+// a branch INSIDE one macro-op's instruction sequence has no block to name — the Std→Target lowerings
+// cannot create blocks at all (see `TargetOp.x64MemFill`) — and is patched by that encoder itself against
+// a byte offset in this same buffer. Both go on to `patchChunkRel32`, so the "measured from the end of the
+// 4-byte field" convention and the ±2 GiB guard are the shared ones rather than a second copy.
+function encodeJccPlaceholder(code ByteArray, cond X64CondCode) returns CodeOffset
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeJccRel32Base or (cond.rawValue as MachineWord))
 	let dispOffset = code.count()
 	writeDword(code, value: 0)
-	patchChunkRel32(code, codeOffset: dispOffset, targetOffset: targetOffset, what: PatchSite.x64StackProbeRel32)
+	return dispOffset
+end 'encodeJccPlaceholder'
+
+function encodeJmpPlaceholder(code ByteArray) returns CodeOffset
+	code.push(OpcodeJmpRel32)
+	let dispOffset = code.count()
+	writeDword(code, value: 0)
+	return dispOffset
+end 'encodeJmpPlaceholder'
+
+// `jmp rel32` to a block. The displacement is left zero and a fixup records its offset;
+// `resolveChunkRel32Fixups` patches it once the target's chunk offset is known.
+export function encodeJmp(code ByteArray, rel32Fixups ChunkRel32FixupArray, targetBlockId BlockId)
+	rel32Fixups.push(ChunkRel32Fixup.create(encodeJmpPlaceholder(code), targetLabel: targetBlockId, site: PatchSite.x64BlockJumpRel32))
+end 'encodeJmp'
+
+// `jcc rel32` to a block (0F 80+cc). `cond.rawValue` is the condition nibble; the displacement is a
+// fixup like `encodeJmp`'s.
+export function encodeJcc(code ByteArray, rel32Fixups ChunkRel32FixupArray, cond X64CondCode, targetBlockId BlockId)
+	rel32Fixups.push(ChunkRel32Fixup.create(encodeJccPlaceholder(code, cond: cond), targetLabel: targetBlockId, site: PatchSite.x64BlockJumpRel32))
+end 'encodeJcc'
+
+// `jcc rel32` BACKWARD to a byte offset ALREADY EMITTED into this same buffer — a branch whose target
+// needs no fixup, because it is not a BLOCK: the stack probe's page walk and the fill ladder's store loop
+// are each emitted as a unit, so the encoder is still holding its own loop label. `what` names the caller,
+// so an out-of-reach displacement accuses the instruction that actually overflowed.
+function encodeJccBackward(code ByteArray, cond X64CondCode, targetOffset CodeOffset, what PatchSite)
+	patchChunkRel32(code, codeOffset: encodeJccPlaceholder(code, cond: cond), targetOffset: targetOffset, what: what)
 end 'encodeJccBackward'
+
+// Point a forward branch recorded by a placeholder emitter at the CURRENT end of `code` — the FORWARD twin
+// of `encodeJccBackward`, and the other half of what a macro-op containing a size dispatch needs.
+function patchLocalForwardBranch(code ByteArray, dispOffset CodeOffset, what PatchSite)
+	patchChunkRel32(code, codeOffset: dispOffset, targetOffset: code.count(), what: what)
+end 'patchLocalForwardBranch'
 
 // --- The dense-match jump table (x64) ---
 
@@ -1190,6 +1227,167 @@ function assertJumpTableIndexReg(indexReg X64Register)
 		panic("encodeX64JumpTable: the biased index was colored to r{regNumber(indexReg)}, a jump-table scratch register (r10/r11) — `x64JumpTable`'s implicitDefs (r10|r11) must forbid the index those registers (`forbidOperandsFromImplicit`)")
 	end 'aliasesScratch'
 end 'assertJumpTableIndexReg'
+
+// --- F1b: the byte-fill SIZE LADDER (x64) ---
+
+// The four FIXED registers `encodeX64MemFill` owns. The ISEL pre-moves the destination into the cursor and
+// the byte count into the count register (`lowerMemFill`); the ladder then writes all four — it advances the
+// cursor, decrements the count, pins the region's END so every arm can anchor a backward store on it, and
+// holds the broadcast fill pattern.
+//
+// ⛔ **rdi AND rcx ARE THE TWO `rep stosq` DEMANDS, AND rax IS ITS IMPLICIT SOURCE** — those three are the
+// instruction's, not a choice. rdx is the free one, and it takes the end.
+//
+// ⚠⚠ **ALL FOUR ARE ALLOCATABLE IN shv2, WHICH IS NOT TRUE OF THE v1 LADDER THIS PORTS.** v1's ABI makes
+// rsi/rdi CALLEE-saved, so v1's memzero could pin rdi with nothing to declare; shv2's makes them ARGUMENT
+// registers (`X64GtRuntime`: "the one place shv2's ABI diverges from v1's"), so a live value genuinely can be
+// coloured into rdi and the clobber MUST be declared. It is — on `TargetOp.x64MemFill`'s `implicitDefs` —
+// and `assertEncoderScratchMasks` holds that literal equal to `x64MemFillScratchMask()` below, so the two cannot
+// drift apart the way only a comment would have kept them together.
+export let MemFillCursorReg = X64Register.rdi
+export let MemFillCountReg = X64Register.rcx
+let MemFillEndReg = X64Register.rdx
+let MemFillPatternReg = X64Register.rax
+
+// The ladder's clobber, as the allocator's currency. `TargetOp.x64MemFill`'s inline `implicitDefs` literal is
+// checked against this (`assertEncoderScratchMasks`), which is what makes the four `let`s above the ONE statement
+// of which registers the fill destroys.
+export function x64MemFillScratchMask() returns RegMask
+	return regMaskOf(MemFillCursorReg) or regMaskOf(MemFillCountReg) or regMaskOf(MemFillEndReg) or regMaskOf(MemFillPatternReg)
+end 'x64MemFillScratchMask'
+
+// The ladder's band edges, in bytes. Each straight-line band is covered by `edge / 8` overlapping qword
+// stores from EACH end, so the edge and the store count are one number rather than two that could disagree.
+let MemFillQwordBytes = 8  // one qword store — the smallest width the overlap trick can anchor on
+let MemFillTwoQwordBytes = 16
+let MemFillFourQwordBytes = 32
+// Bytes per iteration of the bulk store loop (8 qwords), and the lower edge of the loop band.
+let MemFillLoopStride = 64
+// Where `rep stosq` starts paying. Its ~20-40 cycles of startup dwarf the 1-8 plain stores a small
+// size-class slot needs, and the dominant caller of this op zeroes exactly such a slot — so the ladder exists
+// precisely to keep short fills away from it. (ERMSB/FSRM improve throughput and short `rep stosb`; they do
+// not remove `rep stosq`'s setup.)
+let MemFillRepThreshold = 256
+let MemFillQwordShift = 3  // log2(MemFillQwordBytes) — bytes → qwords, for `rep stosq`'s count
+
+let RepPrefix = 0xF3
+let OpcodeStosq = 0xAB  // stos m64, RAX (REX.W AB) — store RAX at [RDI], advancing RDI
+
+// `rep stosq` — store RAX into [RDI] and advance, RCX times. The one x64 instruction that IS a memory fill,
+// and the ladder's arm from `MemFillRepThreshold` bytes up. DF is 0 by ABI on entry to and exit from every
+// function and nothing in this backend ever sets it, so the store direction is forward.
+function encodeRepStosq(code ByteArray)
+	code.push(RepPrefix)
+	// REX.W with no extended register — `emitRex`'s `wide` path emits exactly the 0x48 the instruction needs.
+	emitRex(code, wide: true, regField: MemFillPatternReg, rmField: MemFillPatternReg)
+	code.push(OpcodeStosq)
+end 'encodeRepStosq'
+
+// `count` consecutive qword stores of the fill pattern, from `[base + startDisp]` upward.
+function encodeMemFillQwordRun(code ByteArray, base X64Register, startDisp Imm32, count MachineWord)
+	for i in 0 upto count 'stores'
+		// ⚠ The cast brackets the WHOLE sum — `a + b as Imm32` casts only `b`, `as` binding tighter than `+`.
+		// Stated as its own `let` so the reading cannot be mistaken (the arm64 twin says the same).
+		let disp = (startDisp + i * MemFillQwordBytes) as Imm32
+		encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: MemFillPatternReg)
+	end 'stores'
+end 'encodeMemFillQwordRun'
+
+// ⭐ **THE OVERLAP TRICK, WHICH IS WHAT MAKES EVERY STRAIGHT-LINE BAND STRAIGHT-LINE.** For a length known to
+// be at least `spanBytes` and less than twice it, write `spanBytes/8` qwords FORWARD from the cursor and
+// `spanBytes/8` qwords BACKWARD from the end. Together they cover the whole region for ANY length in the
+// band, with the middle written twice — so there is no loop and, crucially, no ragged-tail handling for a
+// length that is not a multiple of 8. Zeroing a byte twice is free; branching to decide whether to is not.
+function encodeMemFillOverlappingSpan(code ByteArray, spanBytes MachineWord)
+	let qwords = spanBytes / MemFillQwordBytes
+	encodeMemFillQwordRun(code, base: MemFillCursorReg, startDisp: 0, count: qwords)
+	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: 0 - (spanBytes as Imm32), count: qwords)
+end 'encodeMemFillOverlappingSpan'
+
+// ⭐⭐ **THE FILL LADDER.** Fill `rcx` bytes at `rdi` with `fillByte`, choosing an instruction
+// sequence by SIZE — which is the whole reason `StdOp.memFill` is an op rather than the per-byte Std-IR loop
+// it replaced. The bands are ARCHITECTURE.md's ("The `memzero` the backend must emit"), and v1's
+// `emitX64MemzeroOp` is where the shape was first debugged:
+//
+//   < 8       byte loop (rare — only a sub-qword fill reaches it)
+//   8..63     straight-line OVERLAPPING stores, 1/2/4 qwords from each end
+//   64..255   8-qword store loop, then one overlapping 64-byte block
+//   >= 256    `rep stosq`, then one overlapping qword for the 0..7 ragged bytes
+//
+// `rdx` is pinned to the region's END up front, before anything mutates `rdi`/`rcx`, and left alone — that is
+// what lets every arm anchor its backward stores without recomputing anything.
+//
+// A count of 0 falls into the `< 8` arm and exits on its first test, writing nothing.
+function encodeX64MemFill(code ByteArray, fillByte ParsedInt)
+	encodeMovRegImm64(code, dest: MemFillPatternReg, value: memFillPatternWord(fillByte))
+	// end = cursor + count, computed BEFORE the ladder touches either.
+	encodeLeaRegRegReg(code, dest: MemFillEndReg, base: MemFillCursorReg, index: MemFillCountReg)
+
+	// The band dispatch. UNSIGNED throughout — a byte count is a length, never negative, and a signed
+	// compare would send a >= 2^63 count (which no allocation can produce) down the wrong arm rather than
+	// simply being unreachable.
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillQwordBytes)
+	let toByteLoop = encodeJccPlaceholder(code, cond: X64CondCode.below)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillTwoQwordBytes)
+	let toOneQword = encodeJccPlaceholder(code, cond: X64CondCode.below)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillFourQwordBytes)
+	let toTwoQwords = encodeJccPlaceholder(code, cond: X64CondCode.below)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillLoopStride)
+	let toFourQwords = encodeJccPlaceholder(code, cond: X64CondCode.below)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillRepThreshold)
+	let toRep = encodeJccPlaceholder(code, cond: X64CondCode.aboveEqual)
+
+	// 64..255: whole 64-byte blocks, then ONE overlapping 64-byte block anchored at the end. The count is
+	// at least 64 on entry, so `[end-64, end)` is always inside the region and needs no remainder test.
+	let loopTop = code.count()
+	encodeMemFillQwordRun(code, base: MemFillCursorReg, startDisp: 0, count: MemFillLoopStride / MemFillQwordBytes)
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: MemFillCursorReg, imm: MemFillLoopStride)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: MemFillCountReg, imm: MemFillLoopStride)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillLoopStride)
+	encodeJccBackward(code, cond: X64CondCode.aboveEqual, targetOffset: loopTop, what: PatchSite.x64MemFillRel32)
+	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: 0 - (MemFillLoopStride as Imm32), count: MemFillLoopStride / MemFillQwordBytes)
+	let doneFromLoop = encodeJmpPlaceholder(code)
+
+	// >= 256: `rep stosq` over the whole qword count, then one overlapping qword covering the 0..7 bytes the
+	// qword count truncated away. The count is at least 256 here, so `[end-8, end)` is inside the region.
+	patchLocalForwardBranch(code, dispOffset: toRep, what: PatchSite.x64MemFillRel32)
+	encodeGrp2RegImm8(code, ext: Grp2ExtShr, reg: MemFillCountReg, count: MemFillQwordShift)
+	encodeRepStosq(code)
+	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: 0 - (MemFillQwordBytes as Imm32), count: 1)
+	let doneFromRep = encodeJmpPlaceholder(code)
+
+	patchLocalForwardBranch(code, dispOffset: toFourQwords, what: PatchSite.x64MemFillRel32)
+	encodeMemFillOverlappingSpan(code, spanBytes: MemFillFourQwordBytes)
+	let doneFromFour = encodeJmpPlaceholder(code)
+
+	patchLocalForwardBranch(code, dispOffset: toTwoQwords, what: PatchSite.x64MemFillRel32)
+	encodeMemFillOverlappingSpan(code, spanBytes: MemFillTwoQwordBytes)
+	let doneFromTwo = encodeJmpPlaceholder(code)
+
+	patchLocalForwardBranch(code, dispOffset: toOneQword, what: PatchSite.x64MemFillRel32)
+	encodeMemFillOverlappingSpan(code, spanBytes: MemFillQwordBytes)
+	let doneFromOne = encodeJmpPlaceholder(code)
+
+	// 0..7: a byte loop. The overlap trick needs a whole qword to anchor on and there is none here — and
+	// this band is the rare one, reached only by a fill narrower than a word (a two-byte literal's buffer, a
+	// single ranged element's vacated slot).
+	patchLocalForwardBranch(code, dispOffset: toByteLoop, what: PatchSite.x64MemFillRel32)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: 0)
+	let doneFromEmpty = encodeJccPlaceholder(code, cond: X64CondCode.equal)
+	let byteLoopTop = code.count()
+	encodeStoreBaseDispReg8(code, base: MemFillCursorReg, disp: 0, srcReg: MemFillPatternReg)
+	// The cursor advance FIRST: it writes flags, and the count decrement below is what the `jnz` reads.
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: MemFillCursorReg, imm: 1)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: MemFillCountReg, imm: 1)
+	encodeJccBackward(code, cond: X64CondCode.notEqual, targetOffset: byteLoopTop, what: PatchSite.x64MemFillRel32)
+
+	patchLocalForwardBranch(code, dispOffset: doneFromLoop, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromRep, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromFour, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromTwo, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromOne, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromEmpty, what: PatchSite.x64MemFillRel32)
+end 'encodeX64MemFill'
 
 // The bytes of `lea dest, [rip + disp32]` (REX.W 8D /r, mod=00 rm=101) UP TO — not
 // including — the disp32 field. Split out because its two consumers file their fixup in
@@ -1489,7 +1687,7 @@ function encodeStackProbe(code ByteArray, stackSize StackSize)
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
 	// UNSIGNED `ja`: these are addresses, and a stack near the top of the address space would read
 	// as negative under a signed compare.
-	encodeJccBackward(code, cond: X64CondCode.above, targetOffset: walkStart)
+	encodeJccBackward(code, cond: X64CondCode.above, targetOffset: walkStart, what: PatchSite.x64StackProbeRel32)
 
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
 end 'encodeStackProbe'
@@ -1584,6 +1782,29 @@ export function encodeX64Syscall(code ByteArray, number MachineWord)
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeSyscallSecondByte)
 end 'encodeX64Syscall'
+
+// ==========================================================================
+// F2: the atomics, and the Windows per-thread identity word
+// ==========================================================================
+
+// `lock <op> [addrReg], srcReg` — the ONE byte shape all three x64 atomics share: the LOCK prefix, then
+// an ordinary `r/m64, r64` memory form whose r/m is a bare `[base]`. `cmpxchg` and `xadd` live behind the
+// two-byte escape and `add` does not, which is the whole of `twoByteEscape`.
+//
+// ⭐ It goes through `encodeModRmBaseDisp` rather than assembling its own ModR/M, which is what buys the
+// rsp/r12 SIB and rbp/r13 zero-disp8 traps for free — an address operand coloured into rbp would
+// otherwise encode as RIP-RELATIVE and read a constant from the code stream instead of the word the
+// program named. A displacement of 0 is the only one these ops have: an atomic names an ADDRESS, and
+// `StdOp.atomicCas`/`atomicRmw` carry no field offset (unlike `loadIndirect`/`storeIndirect`).
+//
+// ⚠ **THE LOCK PREFIX IS NOT DECORATION AND IT IS NOT AN OPTIMIZATION TO DROP.** Without it `xadd`/`add`
+// are read-modify-write sequences another core can interleave with, and `cmpxchg`'s compare-and-store is
+// not one indivisible step. On a single-core machine the difference is invisible; the day multi-M lands it
+// is a lost counter or a lost queue node.
+function encodeLockedMemReg(code ByteArray, twoByteEscape bool, opcode MachineWord, addrReg X64Register, srcReg X64Register)
+	code.push(LockPrefix)
+	encodeModRmBaseDisp(code, twoByteEscape: twoByteEscape, opcode: opcode, regField: srcReg, base: addrReg, disp: AtomicWordDisp, wide: true)
+end 'encodeLockedMemReg'
 
 // Resolve a colored operand to its physical register. A virtual reg here is an
 // allocator bug (register allocation must run before emission).
@@ -1780,6 +2001,10 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// `jumpTables` (resolved after the block loop). The arm64 jump table never reaches the x64 encoder.
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then encodeX64JumpTable(code, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, indexReg: resolveGpr(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		arm64JumpTable then panic("emitTargetOp: an arm64 jump table reached the x64 encoder — the arm64 backend encodes `arm64JumpTable`")
+		// F1b: the byte-fill size ladder. Its two operands are already in rdi/rcx (the isel's pre-moves), so
+		// the op carries only the broadcast pattern — see `encodeX64MemFill`.
+		x64MemFill(fillByte) then encodeX64MemFill(code, fillByte: fillByte)
+		arm64MemFill then panic("emitTargetOp: an arm64 fill ladder reached the x64 encoder — the arm64 backend encodes `arm64MemFill`")
 		// P1.5-A1: a function's address (`lea dest, [rip+disp32]` + a `.text` CallFixup — the existing
 		// `encodeLeaRegFuncAddr`, until now called only by the runtime stubs), and a register-indirect
 		// call (`FF /2`, mod=11 — `call reg`). `encodeModRmExtDirect` emits `REX.W FF /2`; REX.W is IGNORED
@@ -1806,6 +2031,21 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// `slotDisplacement` the spill/reload pair above resolve their slots with, so a promoted record and
 		// a spill can never disagree about where slot `k` is.
 		leaRegSlot(destReg, slot) then encodeLeaRegRegImm32(code, dest: resolveGpr(destReg), base: X64Register.rsp, disp: slotDisplacement(spillBaseDisp, slot: slot))
+		// F2 — the three locked memory forms and the TEB read. The CAS's comparand is NOT an operand here:
+		// x86 pins it to RAX, and the isel's `movRegReg rax, expected` put it there (see
+		// `TargetDialect.x64LockCmpxchg`'s implicit pair).
+		x64LockCmpxchg(addrReg, srcReg) then encodeLockedMemReg(code, twoByteEscape: true, opcode: OpcodeCmpxchgRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(srcReg))
+		// `lock xadd`'s register operand is BOTH its addend and its result, so the byte shape names `dest` —
+		// which the reuse-def has already put in `src`'s register.
+		x64LockXadd(dest, _, addrReg) then encodeLockedMemReg(code, twoByteEscape: true, opcode: OpcodeXaddRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(dest))
+		x64LockAdd(addrReg, srcReg) then encodeLockedMemReg(code, twoByteEscape: false, opcode: OpcodeAddRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(srcReg))
+		// The TEB self-pointer read IS `encodeMovRegGsAbs` at the self-pointer's offset — the SAME absolute
+		// GS form the GT context switch reads NT_TIB StackBase/StackLimit through, so the segment-addressing
+		// bytes (prefix, REX, the no-base SIB) are stated once rather than a second time here.
+		x64TebSelfPointer(dest) then encodeMovRegGsAbs(code, dest: resolveGpr(dest), disp: WindowsTebSelfPointerOffset)
+		// The arm64 atomics never reach this encoder (`buildBackend` dispatches on `target.cpu`), exactly as
+		// the arm64 `fmov` pair above does not — x64's own atomics are the three locked forms one line up.
+		arm64AtomicCas to arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd` and its thread token is `x64TebSelfPointer`")
 	end 'emit'
 end 'emitTargetOp'
 

@@ -130,6 +130,36 @@ export let VirtualAllocPageReadWrite = 0x4  // PAGE_READWRITE
 export let VirtualFreeMemRelease = 0x8000  // MEM_RELEASE
 export let VirtualFreeSizeMustBeZero = 0x0  // dwSize is 0 for a MEM_RELEASE (release the whole reservation)
 
+// F1a — the DECOMMIT half of `VirtualFree`, and the COMMIT-only half of `VirtualAlloc`.
+//
+// ⚠⚠ **`MEM_DECOMMIT` TAKES THE REAL `dwSize`, WHICH IS THE OPPOSITE RULE FROM `MEM_RELEASE` ONE LINE UP.** A
+// release frees the WHOLE reservation and demands `dwSize == 0`; a decommit drops the backing of the SUB-RANGE
+// it is given and keeps the reservation, so a zero there would decommit nothing at all. The two constants sit
+// together precisely so the pair of rules is read together.
+let VirtualFreeMemDecommit = 0x4000  // MEM_DECOMMIT — drop the physical backing, KEEP the reservation.
+
+// `MEM_COMMIT` ALONE, deliberately NOT the `MEM_COMMIT|MEM_RESERVE` pair `osAllocPages` uses: the address space
+// is already the caller's — reserved by `osReservePages`, or reserved-and-then-decommitted — so a commit asks
+// only for pages, never for address space. Windows zero-fills what it newly commits; `StdDialect.osCommitPages`
+// says why no caller may rely on that, since the other three lanes answer differently.
+let VirtualAllocCommitOnly = 0x1000  // MEM_COMMIT
+
+// F1c — the RESERVE half of `VirtualAlloc`, and the protection a reservation carries.
+//
+// ⚠⚠ **`MEM_RESERVE` ALONE IS THE ONE ALLOCATION TYPE THAT COSTS NO COMMIT CHARGE**, which is the entire
+// reason the op exists: Windows charges every committed byte to the process whether or not it is touched
+// (Go's own reason for shrinking its Windows heap arena — `vendor/go/src/runtime/malloc.go:259`), and a
+// reservation is charged nothing but address space.
+//
+// ⭐ `PAGE_NOACCESS` rather than `PAGE_READWRITE`, which is where this DIVERGES from Go's `sysReserveOS`
+// (`mem_windows.go:118` passes `PAGE_READWRITE`). Neither is wrong — for `MEM_RESERVE` the protection is only
+// the initial page protection of a region that has no pages yet, and a touch of reserved-uncommitted memory
+// faults under either. `PAGE_NOACCESS` is chosen so that the WINDOWS lane says the same thing the three POSIX
+// lanes say: a reservation permits nothing (`PosixMmap.MmapProtNone`), and the commit is what grants access.
+// One reservation state described one way, rather than a lane that reads as writable and a lane that does not.
+let VirtualAllocReserveOnly = 0x2000  // MEM_RESERVE — take the address space, commit nothing.
+let VirtualAllocPageNoAccess = 0x1  // PAGE_NOACCESS — a reservation permits nothing until it is committed.
+
 // `GetStdHandle(STD_OUTPUT_HANDLE)` — the handle `osWriteStdout` writes to (P1.2 wave A). The
 // parameter is a DWORD, so the 32-bit `mov` (which zero-extends) puts exactly (DWORD)-11 in ECX.
 let StdOutputHandle = 0xFFFFFFF5  // (DWORD)-11 — GetStdHandle's STD_OUTPUT_HANDLE
@@ -717,6 +747,18 @@ let FloatConstantLabelPrefix = "__fconst_"
 // slice, shared by every split, rather than a fresh allocation per branch on the lowering's path.
 let FloatOrderedLabel = b"fordered"
 
+// The x86 instruction an atomic ADD lowers to, chosen by the fate of its PRIOR value (F2). Two
+// instructions do the same atomic update and differ only in whether they hand the old word back:
+// `lock xadd` does and needs its addend IN the destination (a two-address form, hence a reuse-def),
+// `lock add` does not and needs no destination at all. See `lowerAtomicRmw` for why the discarding
+// form is worth a second path — it is a saved REGISTER on the refcount path, not a saved byte.
+function x64AtomicAdd(resultId ValueId, addrId ValueId, operandId ValueId, priorValueIsRead bool) returns TargetOp
+	if not priorValueIsRead 'priorValueDiscarded'
+		return TargetOp.x64LockAdd(TargetVReg.virtual(addrId), srcReg: TargetVReg.virtual(operandId))
+	end 'priorValueDiscarded'
+	return TargetOp.x64LockXadd(TargetVReg.virtual(resultId), src: TargetVReg.virtual(operandId), addrReg: TargetVReg.virtual(addrId))
+end 'x64AtomicAdd'
+
 // `globalData` is threaded in because a float CONSTANT is `.rdata` content, and `.rdata` is
 // resolved at concat time against this same table — the one the `.data` globals already live in.
 // Registering here (where the constant is first seen) and resolving there (where sections are laid
@@ -900,6 +942,21 @@ type StdToX64Lowering
 			// ⛔ A ws2_32 call with a fifth argument (`WSARecv`, `WSASend`) would belong on its OWN arm with
 			// a reserved slot count, never in here.
 			osEnvRead to osThreadCpuTicks gives 0
+			// F1a: `VirtualFree(MEM_DECOMMIT)` is three register arguments — inside the Win64 register file's
+			// capacity — so it reserves no outgoing stack space. Its Linux twin is a three-argument syscall,
+			// which never uses the stack at all.
+			osDecommitPages gives 0
+			// F1b: the byte fill calls nothing at all — it is a store ladder emitted inline — so there is no
+			// outgoing-argument region for it to reserve.
+			memFill gives 0
+			// F1c: `VirtualAlloc` is four register arguments — exactly the Win64 register file's capacity — and
+			// the Linux `mmap` is a SIX-argument syscall, which passes all six in registers and never uses the
+			// stack. So neither the reserve nor the commit reserves outgoing stack space.
+			osCommitPages to osReservePages gives 0
+			// F2: the two atomics are single inline instructions and reserve nothing. The thread token is one
+			// inline load on Windows, and on Linux a ZERO-argument `gettid` syscall — a syscall never touches
+			// the stack, so the largest of the three still reserves no outgoing-argument region.
+			atomicCas to currentThreadToken gives 0
 			const to param gives 0
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
@@ -1139,6 +1196,14 @@ type StdToX64Lowering
 				stackRecordAddr then break 'term'
 				osOpenNamedSegment to osTickCountMs then break 'term'
 				osHandleSetInherit to osThreadCpuTicks then break 'term'
+				// F1a: a decommit is a body op, never a terminator — nothing to fuse.
+				osDecommitPages then break 'term'
+				// F1b: a byte fill is a body op, never a terminator — nothing to fuse.
+				memFill then break 'term'
+				// F1c: a reserve and a commit are body ops, never terminators — nothing to fuse.
+				osCommitPages to osReservePages then break 'term'
+				// F2: the two atomics and the thread token are value-producing body ops, never terminators.
+				atomicCas to currentThreadToken then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1220,6 +1285,23 @@ type StdToX64Lowering
 				stackRecordAddr then break 'isTheCompare'
 				osOpenNamedSegment to osTickCountMs then break 'isTheCompare'
 				osHandleSetInherit to osThreadCpuTicks then break 'isTheCompare'
+				// F1a: a decommit declares `clobbersFlags: true` (it lowers to a call or a syscall), so it CAN
+				// land here as the last flag-writer before a branch; like a `call`, it is not the compare, so the
+				// scan stops and records no fusion (declining is always safe).
+				osDecommitPages then break 'isTheCompare'
+				// ⛔ F1b: the fill ladder `cmp`s the length to pick its arm, so it declares `clobbersFlags: true`
+				// and CAN land here as the last flag-writer before a branch — which is precisely the hazard that
+				// declaration exists to prevent. It is not the compare, so the scan stops and fuses nothing.
+				memFill then break 'isTheCompare'
+				// F1c: the reserve and the commit are calls or syscalls, so either can be the last flag-writer
+				// before a branch; like a `call`, neither is the compare, so the scan stops.
+				osCommitPages to osReservePages then break 'isTheCompare'
+				// ⛔ F2: all three declare `clobbersFlags: true` and every one of them CAN be the last
+				// flag-writer before a branch — `lock cmpxchg` sets ZF (that IS its answer), `lock xadd` sets the
+				// arithmetic flags, and the Linux thread token is a syscall. None is the compare, so the scan
+				// stops and fuses nothing; declining is always safe, and fusing across any of them would read
+				// flags the atomic has since overwritten.
+				atomicCas to currentThreadToken then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1347,8 +1429,10 @@ type StdToX64Lowering
 			osWaitHandles(handleArrayPtrId, countId, timeoutMsId) then self.lowerOsWaitHandles(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstBlock: dstBlock)
 			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
-			// P1.5-B1a′ relocating morestack: release a completed GT's (possibly grown) stack.
-			osFreePages(addrId) then self.lowerOsFreePages(addrId, dstBlock: dstBlock)
+			// P1.5-B1a′ relocating morestack: release a completed GT's (possibly grown) stack. F1a widened this to
+			// the full page-lifecycle trio, which is NOT x64-windows-gated: `osAllocPages` runs on every lane, so
+			// its free/decommit/recommit twins must too.
+			osFreePages(addrId, sizeId) then self.lowerOsFreePages(addrId, sizeId: sizeId, dstBlock: dstBlock)
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
 			switch then panic("lowerStdToX64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 			// P1.7a slice 2a: the fused witness call — arg moves then a memory-indirect `call [witnessAddr + off]`.
@@ -1403,6 +1487,21 @@ type StdToX64Lowering
 			// A promoted record's address: `lea dest, [rsp + slotDisp]`, the frame-slot mirror of `globalAddr`'s
 			// `lea [rip + disp]`. The slot's displacement is not known until the encoder (see `TargetOp.leaRegSlot`).
 			stackRecordAddr(resultId, slot) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegSlot(TargetVReg.virtual(resultId), slot: slot))
+			// F1a: the decommit twin of the page release above. Both routes are real on this backend —
+			// `VirtualFree(MEM_DECOMMIT)` and `madvise(MADV_DONTNEED)` — so neither is gated.
+			osDecommitPages(addrId, sizeId) then self.lowerOsDecommitPages(addrId, sizeId: sizeId, dstBlock: dstBlock)
+			// F1b: the byte fill's size ladder — two pre-moves and the macro-op that IS the dispatch.
+			memFill(destId, byteCountId, value) then self.lowerMemFill(destId, byteCountId: byteCountId, value: value, dstBlock: dstBlock)
+			// F1c: the two halves of the reserve/commit split. Both routes are real on both OSes this backend
+			// serves, so neither is gated — see the two lowerings for what each OS is actually asked.
+			osCommitPages(resultId, addrId, sizeId) then self.lowerOsCommitPages(resultId, addrId: addrId, sizeId: sizeId, dstBlock: dstBlock)
+			osReservePages(resultId, sizeId) then self.lowerOsReservePages(resultId, sizeId: sizeId, dstBlock: dstBlock)
+			// F2: the atomics and the per-thread identity word. Neither atomic is OS-routed — a `lock` prefix is
+			// the ISA's, not the platform's — while the token IS, because only one of the two OSes here has a
+			// thread-pointer register a raw static binary may read (see `lowerCurrentThreadToken`).
+			atomicCas(resultId, addrId, expectedId, replacementId) then self.lowerAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId, dstBlock: dstBlock)
+			atomicRmw(resultId, addrId, operandId, opcode) then self.lowerAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+			currentThreadToken(resultId) then self.lowerCurrentThreadToken(resultId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1461,6 +1560,15 @@ type StdToX64Lowering
 			osOpenNamedSegment to osTickCountMs then panic("lowerStdToX64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 			osCpuCount then panic("lowerStdToX64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
 			osThreadCpuTicks then panic("lowerStdToX64: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
+			// F1a: a decommit is a body op, exactly as the page release above is — a page-lifecycle op transfers
+			// control nowhere.
+			osDecommitPages then panic("lowerStdToX64: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
+			memFill then panic("lowerStdToX64: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
+			// F1c: a reserve and a commit are value-producing body ops, for the decommit's reason.
+			osCommitPages to osReservePages then panic("lowerStdToX64: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
+			// F2: all three are value-producing body ops. The arm64 CAS/RMW retry loop BRANCHES, but it does so
+			// inside one macro-op's encoder, never between IR blocks — the same division `memFill` states above.
+			atomicCas to currentThreadToken then panic("lowerStdToX64: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2414,29 +2522,270 @@ type StdToX64Lowering
 		end 'route'
 	end 'lowerOsCloseHandle'
 
-	// Lower `osFreePages(addr)` to `VirtualFree(addr, 0, MEM_RELEASE)` through the IAT — args rcx/rdx/r8, result
-	// ignored. The green-thread scheduler releases a completed GT's (possibly grown) stack here.
+	// Lower `osFreePages(addr, size)` — release a whole page region an earlier `osAllocPages` committed. Two
+	// routes, and the two OSes want DIFFERENT THINGS from the same op: Windows wants the base and forbids a size,
+	// POSIX requires both. Both discard the answer — a failed release leaves a caller nothing to do, exactly as
+	// `lowerOsCloseHandle` discards `CloseHandle`'s BOOL.
 	//
-	// ⭐ x64-WINDOWS ONLY, like the whole green-thread substrate: `osFreePages` is emitted ONLY inside
-	// `__gt_drive_until`, which never lowers on a non-x64-windows target (its subprocess/clock ops reject first),
-	// so a `munmap`/`memory`-shrink path here would be untested dead code no test could reach. The syscall route
-	// rejects, exactly like the five subprocess ops and the two sleep ops.
-	function lowerOsFreePages(addrId ValueId, dstBlock IrBlock)
+	// ⭐ **THE SYSCALL ROUTE USED TO PANIC, AND THE VOCABULARY WAS THE REASON.** `osFreePages` carried the base
+	// ALONE (`MEM_RELEASE` needs nothing else), and there is no `munmap` spelling that takes one — so the refusal
+	// stated a fact about the OP rather than about Linux. F1a gave it a length; this is the lowering that was
+	// available all along.
+	function lowerOsFreePages(addrId ValueId, sizeId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsFreePagesWin64(addrId, dstBlock: dstBlock)
-			syscall then panic("lowerOsFreePages: VirtualFree is x64-windows only — the green-thread substrate (the only `osFreePages` producer) is x64-windows-gated at this rung")
+			syscall then self.lowerOsFreePagesLinux(addrId, sizeId: sizeId, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsFreePages'
 
-	// Win64: `VirtualFree(lpAddress = addr, dwSize = 0, dwFreeType = MEM_RELEASE)`, args rcx/rdx/r8. `addr` — the
-	// ONE operand — is not live across the call (the completion path is done with the freed stack), so it moves
-	// forward soundly under the allocator's per-arg-register def liveness, exactly as `lowerOsCloseHandle`'s does.
+	// Win64: `VirtualFree(lpAddress = addr, dwSize = 0, dwFreeType = MEM_RELEASE)`, args rcx/rdx/r8. `addr` is
+	// not live across the call (the completion path is done with the freed stack), so it moves forward soundly
+	// under the allocator's per-arg-register def liveness, exactly as `lowerOsCloseHandle`'s does.
+	//
+	// ⚠⚠ **THE `size` OPERAND IS READ BY NOTHING ON THIS LANE, AND THAT IS THE API'S RULE, NOT AN OVERSIGHT** —
+	// which is why this function does not take one. `MEM_RELEASE` releases the WHOLE reservation from its base
+	// and REQUIRES `dwSize == 0`; passing the real length makes `VirtualFree` return FALSE and leak the region.
+	// The op still carries the size because the four POSIX lanes cannot be lowered without it (see
+	// `StdDialect.osFreePages`), so a producer always states it and this one target throws it away.
 	function lowerOsFreePagesWin64(addrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(addrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: VirtualFreeSizeMustBeZero))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualFreeMemRelease))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualFree)))
 	end 'lowerOsFreePagesWin64'
+
+	// Linux: `munmap(addr, len)`, args in the syscall ABI registers rdi/rsi. The kernel's `int` answer lands in
+	// RAX and is discarded, exactly as the Win64 route discards `VirtualFree`'s BOOL. The two operands move
+	// forward in order for `lowerOsAllocPagesLinux`'s reason: each physical arg-register def is forbidden to a
+	// value live across it, so neither can be coloured to a register the other's move has already clobbered.
+	function lowerOsFreePagesLinux(addrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(addrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallMunmap))
+	end 'lowerOsFreePagesLinux'
+
+	// Lower `osDecommitPages(addr, size)` — drop the range's physical backing and KEEP its reservation, so the
+	// base stays valid and a later `osCommitPages` can re-back it in place. Unlike the release above, BOTH
+	// routes read the size: a decommit is always about a sub-range.
+	//
+	// ⚠ The two routes do not promise the same CONTENTS on the next touch (Windows re-commits zeros; Linux
+	// refaults a zero page; the Darwin lane this file does not serve may hand back a dirty one).
+	// `StdDialect.osDecommitPages` carries that obligation for all four lanes at once.
+	function lowerOsDecommitPages(addrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsDecommitPagesWin64(addrId, sizeId: sizeId, dstBlock: dstBlock)
+			syscall then self.lowerOsDecommitPagesLinux(addrId, sizeId: sizeId, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsDecommitPages'
+
+	// Win64: `VirtualFree(lpAddress = addr, dwSize = size, dwFreeType = MEM_DECOMMIT)`, args rcx/rdx/r8 — the
+	// SAME entry point as the release, with the two arguments that decide which of the two operations it is.
+	function lowerOsDecommitPagesWin64(addrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(addrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualFreeMemDecommit))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualFree)))
+	end 'lowerOsDecommitPagesWin64'
+
+	// Linux: `madvise(addr, len, MADV_DONTNEED)`, args rdi/rsi/rdx. On a MAP_ANONYMOUS|MAP_PRIVATE mapping —
+	// which is the only kind `osAllocPages` makes — this drops the pages and the next touch refaults a ZERO one,
+	// so the mapping survives and its contents do not. The `int` answer in RAX is discarded, like `munmap`'s.
+	function lowerOsDecommitPagesLinux(addrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(addrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: MadviseDontNeedLinux))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallMadvise))
+	end 'lowerOsDecommitPagesLinux'
+
+	// Lower `osReservePages(size)` — take `size` bytes of address space with NO access and NO backing (F1c).
+	//
+	// ⭐ **IT IS `osAllocPages` WITH TWO ARGUMENTS CHANGED, AND THOSE TWO ARGUMENTS ARE THE WHOLE FEATURE.** On
+	// Win64 the allocation type drops `MEM_COMMIT` and the protection becomes `PAGE_NOACCESS`; on Linux the
+	// protection becomes `PROT_NONE`. Everything else — the NULL base, the register placement, the RAX capture —
+	// is the page source's, unchanged, which is why this needs no new import and no new syscall number.
+	//
+	// The single live operand (`size`) moves forward soundly for `lowerOsAllocPages`'s reason: each physical
+	// arg-register def is forbidden by liveness to a value live across it.
+	function lowerOsReservePages(resultId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsReservePagesWin64(sizeId, dstBlock: dstBlock)
+			syscall then self.lowerOsReservePagesLinux(sizeId, dstBlock: dstBlock)
+		end 'route'
+		// RAX, for `lowerOsAllocPages`'s reason: both `VirtualAlloc` and the `mmap` syscall answer there, where
+		// Maxon's own ABI would answer in R8.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
+	end 'lowerOsReservePages'
+
+	// Win64: `VirtualAlloc(NULL, size, MEM_RESERVE, PAGE_NOACCESS)`, args rcx/rdx/r8/r9 — the allocation call
+	// `lowerOsAllocPagesWin64` makes, with the two flag words that make it a reservation.
+	function lowerOsReservePagesWin64(sizeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: VirtualAllocLetOsChooseBase))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualAllocReserveOnly))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: VirtualAllocPageNoAccess))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualAlloc)))
+	end 'lowerOsReservePagesWin64'
+
+	// Linux: `mmap(NULL, size, PROT_NONE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)` — Go's `sysReserveOS`
+	// (`vendor/go/src/runtime/mem_linux.go:163`) verbatim, and `lowerOsAllocPagesLinux`'s six arguments with one
+	// protection word changed.
+	function lowerOsReservePagesLinux(sizeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: MmapKernelChoosesBase))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: MmapProtNone))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r10), value: MmapAnonPrivateLinux))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r8), value: MmapAnonFd))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r9), value: MmapNoOffset))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallMmap))
+	end 'lowerOsReservePagesLinux'
+
+	// Lower `osCommitPages(addr, size)` — make `[addr, addr + size)` readable, writable and backed (F1c).
+	//
+	// ⭐⭐ **THE TWO OSes DO GENUINELY DIFFERENT THINGS HERE, AND THAT IS THE OP'S REASON FOR EXISTING.** Windows
+	// has a commit state, so this is `VirtualAlloc` over an address it already reserved. Linux has none — a
+	// mapping IS the commitment — so a commit is a `MAP_FIXED` re-map of the sub-range, which is Go's `sysMapOS`
+	// (`mem_linux.go:172`) verbatim. Both answer the base in RAX, or a failure the caller's guard reads:
+	// `VirtualAlloc` answers NULL, and the raw `mmap` syscall answers a small negative errno.
+	//
+	// ⛔ The `MAP_FIXED` route DESTROYS whatever was mapped in the range. `StdDialect.osCommitPages` carries that
+	// obligation for all four lanes at once; nothing here may soften it.
+	function lowerOsCommitPages(resultId ValueId, addrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsCommitPagesWin64(addrId, sizeId: sizeId, dstBlock: dstBlock)
+			syscall then self.lowerOsCommitPagesLinux(addrId, sizeId: sizeId, dstBlock: dstBlock)
+		end 'route'
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
+	end 'lowerOsCommitPages'
+
+	// Win64: `VirtualAlloc(lpAddress = addr, dwSize = size, flAllocationType = MEM_COMMIT,
+	// flProtect = PAGE_READWRITE)`, args rcx/rdx/r8/r9. The base is NAMED here where `lowerOsAllocPagesWin64`
+	// passes NULL — that is the whole difference between "give me pages anywhere" and "back these pages".
+	function lowerOsCommitPagesWin64(addrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(addrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualAllocCommitOnly))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: VirtualAllocPageReadWrite))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualAlloc)))
+	end 'lowerOsCommitPagesWin64'
+
+	// Linux: `mmap(addr, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE|MAP_FIXED, -1, 0)`. `MAP_FIXED` is
+	// what makes the answer the address that was asked for rather than one the kernel picked, and it is ORed into
+	// the anon-private word HERE — the one site on this backend that materializes that immediate — so the Linux
+	// flag word stays stated once (`PosixMmap.MmapAnonPrivateLinux`).
+	function lowerOsCommitPagesLinux(addrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(addrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: MmapProtReadWrite))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r10), value: MmapAnonPrivateLinux or MmapFixed))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r8), value: MmapAnonFd))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r9), value: MmapNoOffset))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallMmap))
+	end 'lowerOsCommitPagesLinux'
+
+	// Lower `memFill(dest, byteCount, value)` — the destination and the length into the two registers the
+	// size ladder reads, then the macro-op that IS the ladder. NOT OS-routed and not target-gated: a byte
+	// fill is arithmetic and stores, so this is the same sequence on every x64 OS.
+	//
+	// The pre-move shape every OS-call lowering in this file uses, and it is sound for their reason: each
+	// physical arg-register def is forbidden to a value live across it, so the count cannot be coloured into
+	// the cursor register that the first move has already clobbered, and the ladder's own `implicitDefs`
+	// closes the window at exactly the op that consumes them (`sweepEstablishedRegisters`).
+	//
+	// ⭐ The fill BYTE is moved nowhere. It is a compile-time constant, broadcast across the word HERE and
+	// carried on the op as an immediate the encoder materialises — which is the entire reason `StdOp.memFill`
+	// takes a `ParsedInt` rather than a third `ValueId` (see that op, and `memFillPatternWord`).
+	function lowerMemFill(destId ValueId, byteCountId ValueId, value ParsedInt, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(MemFillCursorReg), srcReg: TargetVReg.virtual(destId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(MemFillCountReg), srcReg: TargetVReg.virtual(byteCountId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64MemFill(memFillByte(value)))
+	end 'lowerMemFill'
+
+	// Lower `atomicCas(result, addr, expected, replacement)` (F2) — the three-instruction x86 sequence:
+	//   mov rax, expected           ; the comparand into the accumulator cmpxchg reads implicitly
+	//   lock cmpxchg [addr], repl   ; ZF=1 + store on a match, else ZF=0 and rax = the observed word
+	//   setz result                 ; result = 1 on success / 0 on failure — the op's stated contract
+	//
+	// ⭐ **THE SHAPE IS `lowerDivMod`'s, AND FOR THE IDENTICAL REASON.** cmpxchg pins its comparand to RAX
+	// exactly as `idiv` pins its dividend, so the value is moved into the physical register first and the
+	// remaining operands stay VIRTUAL — the allocator keeps them out of RAX because
+	// `x64LockCmpxchg`'s `implicitUses`/`implicitDefs` name it (`forbidOperandsFromImplicit` covers even an
+	// operand that DIES here, which `applyForbidden` alone would miss).
+	//
+	// ⚠ **shv2's THIRD INTEGER ARGUMENT REGISTER IS RAX**, so a CAS whose `expected` arrived as argument 3
+	// is already in the accumulator and this `mov` self-elides through the ordinary coalescer. There is
+	// deliberately no hand-detection of that case: the implicit pair is what makes it safe, and a special
+	// case would be a second, weaker statement of the same fact.
+	//
+	// ⚠ **NOTHING MAY BE SPLICED BETWEEN THE PRE-MOVE AND THE CAS, AND THAT IS THE ESTABLISHED-REGISTER
+	// WINDOW rather than adjacency.** The `mov rax, …` writes a PHYSICAL register the next op consumes, and
+	// `sweepEstablishedRegisters` closes that window at the op whose `implicitDefs` name it — which is why
+	// `x64LockCmpxchg` must declare RAX as a DEF and not only as a use. It is the identical arrangement
+	// `lowerDivMod` and every OS-call argument pre-move in this file already rest on.
+	//
+	// ⚠ **AND NOTHING MAY BE SPLICED BETWEEN THE CAS AND THE `setcc`**, which reads ZF. The only ops a
+	// post-ISEL pass splices are `mov`-shaped — a spill store, a reload, a rematerialized constant — and
+	// none of them writes flags (see `TargetOpMeta`'s header on where the flags fact lives). The
+	// `cmp`+`setccReg` pair `lowerCmp` emits rests on exactly this, one op family over.
+	//
+	// `setccReg` zero-extends its byte result to the full register (see the op), so the boolean is a clean
+	// 0/1 with no separate `movzx`.
+	function lowerAtomicCas(resultId ValueId, addrId ValueId, expectedId ValueId, replacementId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rax), srcReg: TargetVReg.virtual(expectedId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64LockCmpxchg(TargetVReg.virtual(addrId), srcReg: TargetVReg.virtual(replacementId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(TargetVReg.virtual(resultId), cond: X64CondCode.equal))
+	end 'lowerAtomicCas'
+
+	// Lower `atomicRmw(result, addr, operand, opcode)` (F2). Two shapes, chosen by whether anything READS
+	// the prior value:
+	//   result read     → `lock xadd [addr], result`, `result` a reuse-def over `operand` so the allocator
+	//                     supplies the copy into the destination xadd's two-address form requires.
+	//   result unread   → `lock add [addr], operand` — the same atomic update with no destination at all.
+	//
+	// ⭐⭐ **THE UNREAD SHAPE IS A REGISTER SAVING, NOT A CODE-SIZE ONE, AND THAT IS WHY IT IS WORTH A
+	// SECOND PATH.** `atomicInc`/`atomicDec` — the reason `StdAtomicRmwOpcode` exists rather than three
+	// variants — are `atomicRmw(_, addr, ±1, add)`: a result nothing reads. Through `lock xadd` that
+	// result is still a DEF, so it takes a real register (`TargetLiveness.addOpTransientPressure`'s
+	// DEAD-DEF transient: *"a def that is live at NO program point still gets a real register"*) plus the
+	// allocator's copy into it, on the path a refcount update runs everywhere. `lock add` reads two
+	// registers and writes none.
+	//
+	// The deadness question is `self.valuesReadFromRegisters`, the per-function census this backend already
+	// computes for `materializeCompareIfRead` — the same shape, the same set, no new analysis.
+	//
+	// ⚠ **`lock inc`/`lock dec` ARE NOT EMITTED, AND THE MISSING PIECE IS NAMED.** They would additionally
+	// fold a ±1 operand into the opcode, dropping the `mov reg, 1` that materializes it. That needs a
+	// Std-tier CONSTANT query — "is the value behind `operandId` the literal 1?" — and this isel has none:
+	// constants reach it only pre-folded into `binOpImm`/`cmpImm` operand forms, and `atomicRmw` has no
+	// immediate form to fold into. Adding one is a Std-tier `atomicRmwImm` variant plus a `FoldConstOperands`
+	// arm, which is dialect vocabulary this rung deliberately does not add ahead of a measured consumer.
+	function lowerAtomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode, dstBlock IrBlock)
+		let priorValueIsRead = self.valuesReadFromRegisters.contains(resultId)
+		let insn = match opcode 'op'
+			add gives x64AtomicAdd(resultId, addrId: addrId, operandId: operandId, priorValueIsRead: priorValueIsRead)
+		end 'op'
+		self.targetModule.appendOp(dstBlock, op: insn)
+	end 'lowerAtomicRmw'
+
+	// Lower `currentThreadToken(result)` (F2) — the one member of this family with a genuine OS split, so it
+	// is routed through the same `x64OsCallKind` door every OS-dependent lowering in this file uses.
+	//
+	// Windows: `mov result, gs:[0x30]`, the TEB self-pointer. One instruction, no call, no setup.
+	// Linux: the `gettid` syscall, whose answer lands in RAX like every other syscall's — see
+	// `StdOp.currentThreadToken` for why a raw static Linux binary cannot read `fs:[0]` instead, and
+	// `X64LinuxSyscallGettid` for the number.
+	function lowerCurrentThreadToken(resultId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.targetModule.appendOp(dstBlock, op: TargetOp.x64TebSelfPointer(TargetVReg.virtual(resultId)))
+			syscall then self.lowerCurrentThreadTokenLinux(resultId, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerCurrentThreadToken'
+
+	// `gettid()` — a ZERO-argument syscall, so there is nothing to marshal; only the answer is captured out
+	// of RAX, exactly as `lowerOsAllocPages` captures `mmap`'s.
+	function lowerCurrentThreadTokenLinux(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallGettid))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
+	end 'lowerCurrentThreadTokenLinux'
 
 	// Lower `osWaitHandle(handle, timeoutMs)` to `WaitForSingleObject(handle, timeoutMs)` — args rcx/rdx — and
 	// CAPTURE the wait result from RAX (the one subprocess op whose result is read: `__gt_proc_check` polls with
@@ -3485,6 +3834,14 @@ type StdToX64Lowering
 			stackRecordAddr gives false
 			osOpenNamedSegment to osTickCountMs gives false
 			osHandleSetInherit to osThreadCpuTicks gives false
+			// F1a: a decommit is never a terminator, let alone a float-equality condBranch.
+			osDecommitPages gives false
+			// F1b: nor is a byte fill.
+			memFill gives false
+			// F1c: nor is a page reserve or commit.
+			osCommitPages to osReservePages gives false
+			// F2: nor is an atomic or a thread-token read.
+			atomicCas to currentThreadToken gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3638,6 +3995,10 @@ type StdToX64Lowering
 			osSocketStartup to osSocketClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a socket host primitive, not a condBranch")
 			osCpuCount panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCpuCount`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osThreadCpuTicks panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osThreadCpuTicks`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osDecommitPages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osDecommitPages`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osCommitPages to osReservePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a page reserve or commit, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			memFill panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `memFill`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			atomicCas to currentThreadToken panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an atomic or a thread-token read, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

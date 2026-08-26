@@ -33,7 +33,7 @@ func @main {
     x64.prologue 32
     x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.callDirect opaque
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r8, 0
     x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.movsdRegRip xmm2, [rip + __fconst_1]
     x64.ucomisdRegReg xmm0, xmm2
@@ -41,18 +41,18 @@ func @main {
     x64.setccReg parity, rdx
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rsi
+    x64.setccReg equal, rax
     x64.divsdRegReg xmm1, xmm1, xmm0
-    x64.cmpRegImm32 rsi, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRegImm32 rax, rsi, -1
+    x64.leaRegRegImm32 rax, rax, -1
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, matcharm
     x64.jmp matchdead
   matcharm:
-    x64.movRegImm32 rax, 42
+    x64.movRegImm32 r8, 42
     x64.jmp matchcont
   matchcont:
     x64.jmp trycont
@@ -60,12 +60,12 @@ func @main {
   tryok:
     x64.jmp trycont
   trycont:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg rax, rcx
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -76,7 +76,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r8, rax, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

@@ -56,9 +56,10 @@ end 'main'
 ExitCode: 6
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Item.create {
@@ -281,28 +282,26 @@ func @main {
     x64.movRegReg rcx, r14
     x64.movRegImm32 rdx, 5
     x64.callDirect Item.create
-    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r8
     x64.jmp trycont
   tryok#3:
-    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r8
     x64.jmp trycont
   trycont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.leaRegRegReg r13, r8, rax
-    x64.movRegReg rcx, r12
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.leaRegRegReg r12, rax, rdx
     x64.callDirect __destruct_Item
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_Reader
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 r13, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r13, rax
+    x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -318,7 +317,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, r13
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

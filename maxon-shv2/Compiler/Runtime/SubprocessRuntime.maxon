@@ -144,11 +144,15 @@ let WcBytesOut = 120 as ByteOffset  // the yielding read's out-word
 let WcBytes = 128 as ParsedInt
 
 // ⭐ **THE RESULT STRUCT `subprocessWaitCollect` ANSWERS A POINTER TO**, and the six `subprocessResult*`
-// readers decode. It is `__mm_alloc`'d rather than slab, and so are the two captured buffers it owns, because
-// `subprocessResultRelease` must genuinely give the memory back: a program that runs a child in a loop would
-// otherwise grow the slab by the size of every child's output for ever, and the slab has no free.
-// ⚠ That also puts all three under the LEAK GATE — a spec that forgets `subprocessResultRelease` exits 101,
-// which is exactly the discipline this API's `release` contract asks for.
+// readers decode. It is `__mm_alloc`'d rather than slab, and so are the two captured buffers it owns.
+//
+// ⚠ **THE REASON THIS NOTE GAVE HAS EXPIRED; THE CHOICE HAS NOT, AND THE SURVIVING REASON WAS ALWAYS THE
+// BETTER ONE (S3).** It read *"a program that runs a child in a loop would otherwise grow the slab by the
+// size of every child's output for ever, and the slab has no free"* — the slab has a free path now, so that
+// sentence no longer distinguishes anything. What still does is the LEAK GATE: an `__mm_alloc` box is
+// counted, so a spec that forgets `subprocessResultRelease` exits 101, which is exactly the discipline this
+// API's `release` contract asks for. A slab region carries no header and no count, and a forgotten release
+// of one is silent.
 let ResStatus = 0 as ByteOffset
 let ResCode = 8 as ByteOffset
 let ResDuration = 16 as ByteOffset

@@ -540,32 +540,57 @@ function assertArm64CallClobbers(pool RegMask)
 	assertOneCallClobber(TargetOp.arm64Syscall(0), name: "arm64Syscall", pool: pool, calleeWitness: 19, calleeName: "x19")
 end 'assertArm64CallClobbers'
 
-// The jump-table ops' `implicitDefs` scratch mask against the registers the ENCODER actually clobbers —
-// r10/r11 (`JumpTableBaseReg`/`JumpTableEntryReg`, x64) or x16/x17 (`Arm64Ip0`/`Arm64Ip1`, arm64). The
-// one-fact-one-place guard the op's header promises: the inline `TargetOpMeta` literal (0xC00 / 0x30000)
-// is what `forbidOperandsFromImplicit` keeps the index off, and the encoder is what actually writes those
-// registers — a drift between them is a silent miscompile (the index colored onto a scratch register the
-// encoder then clobbers before reading), so it is asserted equal here, per target, exactly as the call
-// clobbers are.
-function assertJumpTableScratch(target Target)
+// ⭐⭐ **EVERY MACRO-OP WHOSE ENCODER WRITES FIXED REGISTERS, AGAINST THE `implicitDefs` LITERAL THAT IS
+// WHAT KEEPS A LIVE VALUE OUT OF THEM.** Three families now answer here — the jump tables (r10/r11 on x64,
+// x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3) and F2's arm64 LL/SC atomics
+// (x16/x17) — and they share ONE guard because they share one hazard, stated once: the inline
+// `TargetOpMeta` literal is what `forbidOperandsFromImplicit` and the liveness clobber census read, the
+// ENCODER is what actually writes those registers, and a drift between the two is a silent miscompile — a
+// live value coloured onto a register the encoder then destroys. It was two byte-identical helpers and two
+// per-target dispatchers; the only thing that differed was the sentence in the panic, which is now a
+// parameter.
+//
+// ⛔ **THE FILL LADDER's x64 HALF IS THE ONE THAT WOULD BITE.** rdi is an ARGUMENT register in shv2's ABI
+// (it is callee-saved in v1's, from which that ladder's design is ported), so it is allocatable and a live
+// value genuinely can land there. Nothing else would notice. The jump-table and atomic scratches are
+// outside every allocatable pool, so their declaration DOCUMENTS the encoder's use rather than reserving
+// anything — which is exactly why it can drift unnoticed without a check like this one.
+function assertEncoderScratchMasks(target Target)
 	match target.cpu 'cpu'
-		x64 then assertOneJumpTableScratch(TargetOp.x64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "x64JumpTable", expected: regMaskOf(X64Register.r10) or regMaskOf(X64Register.r11))
-		arm64 then assertOneJumpTableScratch(TargetOp.arm64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "arm64JumpTable", expected: regMaskAdd(regMaskAdd(0 as RegMask, regNum: Arm64Ip0Reg), regNum: Arm64Ip1Reg))
+		x64 then assertX64EncoderScratchMasks()
+		arm64 then assertArm64EncoderScratchMasks()
 		wasm32 then break 'cpu'
 	end 'cpu'
-end 'assertJumpTableScratch'
+end 'assertEncoderScratchMasks'
+
+function assertX64EncoderScratchMasks()
+	assertEncoderScratchMask(TargetOp.x64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "x64JumpTable", expected: regMaskOf(X64Register.r10) or regMaskOf(X64Register.r11), hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
+	assertEncoderScratchMask(TargetOp.x64MemFill(0), name: "x64MemFill", expected: x64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
+end 'assertX64EncoderScratchMasks'
+
+function assertArm64EncoderScratchMasks()
+	let ipPair = regMaskAdd(regMaskAdd(0 as RegMask, regNum: Arm64Ip0Reg), regNum: Arm64Ip1Reg)
+	assertEncoderScratchMask(TargetOp.arm64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "arm64JumpTable", expected: ipPair, hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
+	assertEncoderScratchMask(TargetOp.arm64MemFill(0), name: "arm64MemFill", expected: arm64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
+	// F2: both LL/SC loops keep their observed value in x16 and their store status in x17 — the SAME IP pair
+	// the jump table uses, which is why one `let` serves all three.
+	assertEncoderScratchMask(TargetOp.arm64AtomicCas(TargetVReg.virtual(0), addrReg: TargetVReg.virtual(0), expectedReg: TargetVReg.virtual(0), replacementReg: TargetVReg.virtual(0)), name: "arm64AtomicCas", expected: ipPair, hazard: "an operand of the retry loop could be colored onto a register the loop clobbers before its last read")
+	assertEncoderScratchMask(TargetOp.arm64AtomicRmw(TargetVReg.virtual(0), addrReg: TargetVReg.virtual(0), operandReg: TargetVReg.virtual(0), opcode: StdAtomicRmwOpcode.add), name: "arm64AtomicRmw", expected: ipPair, hazard: "an operand of the retry loop could be colored onto a register the loop clobbers before its last read")
+end 'assertArm64EncoderScratchMasks'
+
+// `hazard` names what a drift would actually COST, because a union case cannot name itself and a panic
+// that says only "masks differ" sends the reader to the right line with the wrong question.
+function assertEncoderScratchMask(op TargetOp, name String, expected RegMask, hazard String)
+	let clobber = op.rawValue.implicitDefs
+	if clobber != expected 'drift'
+		panic("assertEncoderScratchMasks: {name} implicitDefs {clobber} != the encoder's fixed registers {expected} — TargetDialect.{name}'s inline scratch mask and its encoder drifted apart, so {hazard}")
+	end 'drift'
+end 'assertEncoderScratchMask'
 
 // The arm64 IP0/IP1 scratch register numbers (x16/x17), named here beside the assertion that reads them so
 // this file states the scratch pair once rather than reaching into `Arm64Backend`'s encoder constants.
 let Arm64Ip0Reg = 16 as RegNum
 let Arm64Ip1Reg = 17 as RegNum
-
-function assertOneJumpTableScratch(op TargetOp, name String, expected RegMask)
-	let clobber = op.rawValue.implicitDefs
-	if clobber != expected 'drift'
-		panic("assertJumpTableScratch: {name} implicitDefs {clobber} != the encoder's scratch registers {expected} — TargetDialect.{name}'s inline scratch mask and the jump-table encoder's fixed registers drifted apart, so the biased index could be colored onto a register the encoder clobbers")
-	end 'drift'
-end 'assertOneJumpTableScratch'
 
 // One call op's clobber mask against its ABI's caller-saved `pool`, and against a `calleeWitness`
 // register that must NOT be clobbered (a shipped v1 bug clobbered a callee-saved register —
@@ -861,7 +886,7 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// AFTER `assertRegClassCountMatches`, which is the fact its per-class loop walks: a drifted class
 	// count would make this report an empty file rather than the miscount that produced it.
 	assertVolatilitySplitsEveryClass(pool, callerSaved: callerSaved, file: file, target: target)
-	assertJumpTableScratch(target)
+	assertEncoderScratchMasks(target)
 
 	// The stats object is the PROJECT's, not a fresh one: its sub-phase timers are a
 	// breakdown of the `regalloc` phase `buildBackend` measures around this call, and the
@@ -1341,6 +1366,12 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		arm64FmovGprFp to arm64FmovFpGpr then break 'hint'
 		// A frame address is not a copy — it has no source register to want the same colour as.
 		leaRegSlot then break 'hint'
+		// F1b: a fill ladder has no operands at all, so there is no pair of them to hint together.
+		x64MemFill to arm64MemFill then break 'hint'
+		// F2: no atomic is a MOVE. `lock xadd`'s reuse-def is not a hint either — a reuse is a CONSTRAINT the
+		// colorer honours through `allocateReuseDef`, and `collectReuseHints` reads it off the operand model;
+		// adding a copy hint here would be the same fact stated twice, in the weaker place.
+		x64LockCmpxchg to arm64ThreadPointer then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -2302,6 +2333,18 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		leaRegSlot(destReg, slot) then return TargetOp.leaRegSlot(colorVRegWith(destReg, alloc: alloc), slot: slot)
+		// F1b: a fill ladder carries NO virtual register to colour — its operands arrived in fixed physical
+		// registers before it and its only field is a constant — so it is returned verbatim.
+		x64MemFill to arm64MemFill then return op
+		// F2: every virtual operand of every atomic is coloured from its own value. The CAS's comparand is NOT
+		// among them — x86 pins it to RAX, so it arrives in a `movRegReg` above and rides `implicitUses` here.
+		x64LockCmpxchg(addrReg, srcReg) then return TargetOp.x64LockCmpxchg(colorVRegWith(addrReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
+		x64LockXadd(dest, src, addrReg) then return TargetOp.x64LockXadd(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc))
+		x64LockAdd(addrReg, srcReg) then return TargetOp.x64LockAdd(colorVRegWith(addrReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
+		x64TebSelfPointer(dest) then return TargetOp.x64TebSelfPointer(colorVRegWith(dest, alloc: alloc))
+		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then return TargetOp.arm64AtomicCas(colorVRegWith(dest, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc), expectedReg: colorVRegWith(expectedReg, alloc: alloc), replacementReg: colorVRegWith(replacementReg, alloc: alloc))
+		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then return TargetOp.arm64AtomicRmw(colorVRegWith(dest, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc), operandReg: colorVRegWith(operandReg, alloc: alloc), opcode: opcode)
+		arm64ThreadPointer(dest) then return TargetOp.arm64ThreadPointer(colorVRegWith(dest, alloc: alloc))
 	end 'rewrite'
 end 'colorTargetOp'
 

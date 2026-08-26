@@ -38,9 +38,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Alpha.create {
@@ -163,24 +164,22 @@ func @forkTemp {
     x64.leaRegRdata rdx, [rip + __layout_Box_Alpha]
     x64.movRegReg rcx, rbx
     x64.callDirect Box.fetch
-    x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Box_Alpha
     x64.movRegImm32 rcx, 1
     x64.callDirect Alpha.create
-    x64.movRegReg rcx, r8
+    x64.movRegReg r12, r8
     x64.jmp trycont
   tryok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Box_Alpha
-    x64.movRegReg rcx, r12
+    x64.movRegReg r12, r8
     x64.jmp trycont
   trycont:
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Box_Alpha
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 32

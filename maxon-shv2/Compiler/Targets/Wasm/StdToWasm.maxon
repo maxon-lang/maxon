@@ -148,6 +148,17 @@ let WasmPageSizeMask = 0xFFFF as ByteCount
 // traps.
 let WasmMemoryGrowOom = -1 as ParsedInt
 
+// F2 — the atomic word's memarg offset. An atomic names the address it operates on and nothing else:
+// unlike `loadIndirect`/`storeIndirect`, whose Std op carries a field displacement, `StdOp.atomicCas` and
+// `StdOp.atomicRmw` have no offset field at all, so the memarg is always zero. Named rather than a bare 0
+// so the reason it can never be anything else is stated where the instruction is written.
+let WasmAtomicWordOffset = 0 as Wasm32Index
+
+// F2 — the token `currentThreadToken` answers on a lane with exactly one thread. It is `1` because the op's
+// contract is "per-OS-thread stable and NON-ZERO"; the value is otherwise arbitrary, and that is precisely
+// why it is named rather than spelled as a bare literal at the emitter.
+let WasmSingleThreadToken = 1 as ParsedInt
+
 // The minimum page count a memory must declare to hold a `.data` image ending at `base +
 // dataSize`, rounded up to whole 64 KiB pages. `base` is a positive constant, so the count is
 // always at least one — the WASI `run` skeleton requires a memory export whether or not the
@@ -694,6 +705,17 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
 		// band, the machine query AND the thread-CPU read — makes no wasm call either: it is x64-windows only.
 		osHandleSetInherit to osThreadCpuTicks then break 'k'
+		// F1a: the decommit makes no call of ANY kind on this lane — it emits nothing at all (see `emitBodyOp`),
+		// so there is no signature to intern.
+		osDecommitPages then break 'k'
+		// F1b: a byte fill is ONE `memory.fill` instruction — no call, so no signature to intern.
+		memFill then break 'k'
+		// F1c: the reserve is `memory.grow` and the commit is a local copy — instructions, not calls, so neither
+		// has a signature to intern either.
+		osCommitPages to osReservePages then break 'k'
+		// F2: the two atomics and the thread token are plain instruction sequences on this lane — no call, so no
+		// signature to intern.
+		atomicCas to currentThreadToken then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1292,6 +1314,19 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// The thread-CPU read DEFINES nothing — its answer lands in the caller's out-param word, exactly as
 		// the wall-clock read's does, so there is no value to class.
 		osThreadCpuTicks then break 'def'
+		// F1a: the decommit defines no value on any target, so there is never a valtype to record.
+		osDecommitPages then break 'def'
+		// F1b: a fill defines no value either — it is a store.
+		memFill then break 'def'
+		// F1c: both define a page BASE — an i64, exactly as `osAllocPages` does, because the Std tier carries every
+		// address at the machine width and this lane narrows to i32 only where an instruction demands one.
+		osCommitPages(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osReservePages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		// F2: a CAS's success boolean, an RMW's prior word and a thread token are all i64 — the width every
+		// machine word carries at the Std tier, narrowed to i32 only where an instruction demands one.
+		atomicCas(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		atomicRmw(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		currentThreadToken(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 	end 'def'
 end 'recordDefValtype'
 
@@ -1513,6 +1548,10 @@ type WasmFuncEmitter
 			osSocketStartup to osSocketClose then panic("emitStraightLineTerminator: a socket host primitive is a body op, never a terminator")
 			osCpuCount then panic("emitStraightLineTerminator: an `osCpuCount` is a body op, never a terminator")
 			osThreadCpuTicks then panic("emitStraightLineTerminator: an `osThreadCpuTicks` is a body op, never a terminator")
+			osDecommitPages then panic("emitStraightLineTerminator: an `osDecommitPages` is a body op, never a terminator")
+			osCommitPages to osReservePages then panic("emitStraightLineTerminator: a page reserve or commit is a body op, never a terminator")
+			memFill then panic("emitStraightLineTerminator: a `memFill` is a body op, never a terminator")
+			atomicCas to currentThreadToken then panic("emitStraightLineTerminator: an atomic or a thread-token read is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1598,6 +1637,10 @@ type WasmFuncEmitter
 			osSocketStartup to osSocketClose then panic("emitDispatcherTerminator: a socket host primitive is a body op, never a terminator")
 			osCpuCount then panic("emitDispatcherTerminator: an `osCpuCount` is a body op, never a terminator")
 			osThreadCpuTicks then panic("emitDispatcherTerminator: an `osThreadCpuTicks` is a body op, never a terminator")
+			osDecommitPages then panic("emitDispatcherTerminator: an `osDecommitPages` is a body op, never a terminator")
+			osCommitPages to osReservePages then panic("emitDispatcherTerminator: a page reserve or commit is a body op, never a terminator")
+			memFill then panic("emitDispatcherTerminator: a `memFill` is a body op, never a terminator")
+			atomicCas to currentThreadToken then panic("emitDispatcherTerminator: an atomic or a thread-token read is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1648,10 +1691,40 @@ type WasmFuncEmitter
 			// P1.5 subprocess: CreateProcessA and the wait/handle imports are x64-windows only, and an
 			// `async runProcess` program is spec-gated to x64-windows, so none reaches the wasm emitter.
 			osProcessSpawn to osWaitHandle then panic("emitBodyOp: the P1.5 subprocess ops are x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
-			// P1.5-B1a′ `osFreePages` (the relocating morestack's page release) is x64-windows only — it is emitted
-			// ONLY inside the x64-windows-gated green-thread substrate, so it never reaches the wasm emitter; and
-			// wasm linear memory cannot be shrunk anyway (`memory.grow` only grows).
-			osFreePages then panic("emitBodyOp: `osFreePages` is x64-windows only (and wasm linear memory cannot shrink) — the green-thread substrate is x64-windows-gated at this rung")
+			// ⭐⭐ **F1a: THE THREE PAGE-LIFECYCLE OPS ARE PERMANENTLY INERT HERE — CORRECT NO-OPS, NOT STUBS AND NOT
+			// GATES.** wasm linear memory only ever GROWS: `memory.grow` is the whole instruction set for it, there
+			// is no shrink, no decommit and nothing to re-back. So "give this region back" translates to the EMPTY
+			// instruction sequence, which is the honest lowering of a request the ISA cannot represent, and a
+			// program that decommits simply keeps its bytes.
+			//
+			// ⛔ THIS IS SPELLED DIFFERENTLY FROM ITS NEIGHBOURS ON PURPOSE, and the arm it replaces welded the two
+			// spellings together: it said `osFreePages` was x64-windows-gated (TEMPORARY — the green-thread
+			// substrate will grow other lanes) AND that linear memory cannot shrink (PERMANENT — an ISA fact). Two
+			// reasons of opposite lifetime in one message means the day the gate lifts, whoever reads it cannot tell
+			// which half still holds. The split `osStdHandle` / `osExecutablePath` make a few arms down is the
+			// model, and this is the same distinction: a WILL-NEVER, not a NOT-YET.
+			//
+			// ⚠ Emitting NOTHING is also stack-correct: this backend pushes operands explicitly per emitter
+			// (`pushOperandAt`), so an op that emits no instruction leaves the wasm operand stack exactly as it
+			// found it. There is no operand to drop.
+			osFreePages then break 'body'
+			osDecommitPages then break 'body'
+			// F1b: the byte fill — ONE `memory.fill`, and this lane's whole size ladder. See `emitMemFill`.
+			memFill(destId, byteCountId, value) then self.emitMemFill(destId, byteCountId: byteCountId, value: value)
+			// ⭐⭐ **F1c: THERE IS NO RESERVATION ON THIS LANE, SO A RESERVE *IS* AN ALLOCATION AND A COMMIT IS A
+			// COPY — AND BOTH ARE THE HONEST TRANSLATION RATHER THAN A STUB.** Linear memory is one contiguous
+			// region whose only instruction is `memory.grow`, which takes the address range AND backs it in the
+			// same step: there is no state between "not there" and "there" for a reservation to occupy. So
+			// `osReservePages` routes to the SAME emitter `osAllocPages` does — not a copy of it, the same one —
+			// and `osCommitPages` answers the address it was handed, because the pages it names are already
+			// backed by the grow that "reserved" them.
+			//
+			// ⛔ THE PRICE IS REAL AND IT IS THE ARENA'S, NOT THIS EMITTER'S: a wasm reservation is CHARGED, so an
+			// arena sized for a 64-bit address space is that many bytes of linear memory. Go answers the same
+			// problem with a per-platform arena size (512 KiB on wasm, `vendor/go/src/runtime/malloc.go:259`);
+			// see `SlabArena`'s header for why shv2 cannot yet and what the follow-up is.
+			osCommitPages(resultId, addrId, _) then self.emitOsCommitPages(resultId, addrId: addrId)
+			osReservePages(resultId, sizeId) then self.emitOsAllocPages(resultId, sizeId: sizeId)
 			// The dense-match jump table is ALWAYS a block terminator, never a body op.
 			switch then panic("emitBodyOp: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 			// P1.7a slice 2b-iv-B: constrained-type-parameter dispatch. The witness table's method slot holds a
@@ -1719,8 +1792,73 @@ type WasmFuncEmitter
 			// return, so it lowers on this target through `const`/`ret` like any other function.
 			osCpuCount then panic("emitBodyOp: `osCpuCount` is x64-windows only — WASI reports no processor count, and SemanticCheck refuses such a program on wasm at its own source span (E3104)")
 			osThreadCpuTicks then panic("emitBodyOp: `osThreadCpuTicks` is x64-windows only — WASI exposes no per-thread CPU clock, and SemanticCheck refuses such a program on wasm at its own source span (E3104)")
+			// F2: the atomics and the per-thread identity word — all three lower, and NONE is a stub.
+			atomicCas(resultId, addrId, expectedId, replacementId) then self.emitAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId)
+			atomicRmw(resultId, addrId, operandId, opcode) then self.emitAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode)
+			currentThreadToken(resultId) then self.emitCurrentThreadToken(resultId)
 		end 'body'
 	end 'emitBodyOp'
+
+	// ----------------------------------------------------------------------
+	// F2: the atomics and the thread token, on a lane with exactly ONE thread
+	// ----------------------------------------------------------------------
+	//
+	// ⭐⭐ **A PLAIN LOAD/COMPARE/STORE IS THE CORRECT LOWERING HERE, NOT A STUB, AND THE REASON IS
+	// STRUCTURAL RATHER THAN "not implemented yet".** A `wasm32-wasi` PREVIEW-2 COMPONENT HAS ONE THREAD BY
+	// CONSTRUCTION: there is no `wasi:threads`, no shared memory and no way for a component to create a
+	// second thread, so no other agent can observe or interleave with these sequences. Atomicity is the
+	// property "no other thread sees a torn intermediate state"; with no other thread, an ordinary load and
+	// store already has it, and the `atomics` proposal's `i64.atomic.rmw.*` would encode a guarantee that
+	// costs a fence to buy something nothing can contend for. ⇒ if this lane ever gains real threads, THESE
+	// are the three emitters that must change, and the change is a real one — do not read the plain
+	// instructions as an oversight already made.
+	//
+	// `atomicCas(result, addr, expected, replacement)` → load, compare, and store only on a match.
+	// `result` is the SUCCESS BOOLEAN (1/0), never the prior value — see `StdOp.atomicCas`.
+	function emitAtomicCas(resultId ValueId, addrId ValueId, expectedId ValueId, replacementId ValueId)
+		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
+		self.body.i64Load(WasmAtomicWordOffset)
+		self.pushOperandAt(expectedId, targetVt: WasmValType.i64)
+		self.body.i64Eq()
+		self.body.beginIf()
+		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
+		self.pushOperandAt(replacementId, targetVt: WasmValType.i64)
+		self.body.i64Store(WasmAtomicWordOffset)
+		self.body.i64Const(AtomicCasSucceeded)
+		self.body.localSet(resultId as Wasm32Index)
+		self.body.elseClause()
+		self.body.i64Const(AtomicCasFailed)
+		self.body.localSet(resultId as Wasm32Index)
+		self.body.endOp()
+	end 'emitAtomicCas'
+
+	// `atomicRmw(result, addr, operand, opcode)` → `result = *addr` then `*addr = result <op> operand`.
+	// `result` is the PRIOR value, so it is captured BEFORE the update and then re-read as the update's
+	// left operand — which is also why this needs no scratch local of its own.
+	function emitAtomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode)
+		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
+		self.body.i64Load(WasmAtomicWordOffset)
+		self.body.localSet(resultId as Wasm32Index)
+		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
+		self.body.localGet(resultId as Wasm32Index)
+		self.pushOperandAt(operandId, targetVt: WasmValType.i64)
+		match opcode 'op'
+			add then self.body.i64Add()
+		end 'op'
+		self.body.i64Store(WasmAtomicWordOffset)
+	end 'emitAtomicRmw'
+
+	// `currentThreadToken(result)` → the constant 1.
+	//
+	// ⭐ **THE CONSTANT SATISFIES THE WHOLE CONTRACT, WHICH IS WHY IT IS AN ANSWER AND NOT A PLACEHOLDER.**
+	// The op promises a value that is per-OS-thread stable and NON-ZERO (`StdOp.currentThreadToken`); with
+	// exactly one thread, a fixed non-zero word is stable across every call and distinct from every other
+	// thread's token vacuously. A caller comparing two tokens for identity gets the right answer, and a
+	// caller testing "is this lock owned" gets the right answer.
+	function emitCurrentThreadToken(resultId ValueId)
+		self.body.i64Const(WasmSingleThreadToken)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitCurrentThreadToken'
 
 	function emitConst(resultId ValueId, value ParsedInt, valueType StdType)
 		if stdTypeIsFloat(valueType) 'float'
@@ -2453,6 +2591,26 @@ type WasmFuncEmitter
 	// `ret`/call args). A byte store is the STRING-BUILDER path: an i64 char stored as one byte
 	// (StringRuntime:921) is wrapped to i32 here, then written by `i32.store8`. Defines nothing, so
 	// no `local.set`.
+	// `memFill` → ONE `memory.fill`: push the destination as an i32, the constant fill byte as an i32, the
+	// length as an i32, then the instruction. Defines nothing, so no `local.set`.
+	//
+	// ⭐⭐ **THIS LANE'S SIZE LADDER IS THE ENGINE'S, AND THAT IS THE RIGHT ANSWER RATHER THAN A GAP.** x64 and
+	// arm64 dispatch on the length because a straight-line run of stores beats a call-shaped bulk primitive at
+	// the small sizes the allocator actually asks for. On wasm the trade INVERTS: each `i64.store` is
+	// bounds-checked independently, while one `memory.fill` is a single check plus an engine-tuned memset that
+	// already special-cases short lengths. So unrolling here would very likely be SLOWER — see
+	// `WasmBody.memoryFill`, and ARCHITECTURE.md → "The `memzero` the backend must emit", which states the
+	// three targets' ladders side by side for exactly this reason.
+	//
+	// ⚠ The fill byte reaches wasm as a BYTE, not as the 64-bit broadcast the two native isels compute:
+	// `memory.fill` takes the value it replicates, so `memFillPatternWord` has no caller on this lane.
+	function emitMemFill(destId ValueId, byteCountId ValueId, value ParsedInt)
+		self.pushOperandAt(destId, targetVt: WasmValType.i32)
+		self.body.i32Const(memFillByte(value) as Imm32)
+		self.pushOperandAt(byteCountId, targetVt: WasmValType.i32)
+		self.body.memoryFill()
+	end 'emitMemFill'
+
 	function emitStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType)
 		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
 		let storeVt = wasmMemAccessType(valueType, what: "storeIndirect")
@@ -2522,6 +2680,18 @@ type WasmFuncEmitter
 		self.body.i64Shl()
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitOsAllocPages'
+
+	// `osCommitPages(addr, size) -> addr` — the address, unchanged. The range was backed by the `memory.grow`
+	// that answered it (see the `osReservePages` arm in `emitBodyOp`), so there is nothing to ask the machine
+	// for and the op's whole content on this lane is its ANSWER: a commit that cannot fail reports the base it
+	// was given, which is what every caller's guard then finds valid.
+	//
+	// `sizeId` is deliberately not read here — the three native lanes need it to name a sub-range, and this one
+	// has no sub-range to name.
+	function emitOsCommitPages(resultId ValueId, addrId ValueId)
+		self.pushOperandAt(addrId, targetVt: WasmValType.i64)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitOsCommitPages'
 
 	// `osWriteStdout`/`osWriteStderr(result, buf, len)` → the WASI-Preview2 stream write. Stack-balanced:
 	// the stream accessor pushes the i32 handle; the buffer address and the byte length are each wrapped
@@ -2952,6 +3122,10 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osSocketStartup to osSocketClose then panic("decideDispatcher: a socket host primitive is a body op, never a terminator")
 		osCpuCount then panic("decideDispatcher: an `osCpuCount` is a body op, never a terminator")
 		osThreadCpuTicks then panic("decideDispatcher: an `osThreadCpuTicks` is a body op, never a terminator")
+		osDecommitPages then panic("decideDispatcher: an `osDecommitPages` is a body op, never a terminator")
+		osCommitPages to osReservePages then panic("decideDispatcher: a page reserve or commit is a body op, never a terminator")
+		memFill then panic("decideDispatcher: a `memFill` is a body op, never a terminator")
+		atomicCas to currentThreadToken then panic("decideDispatcher: an atomic or a thread-token read is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

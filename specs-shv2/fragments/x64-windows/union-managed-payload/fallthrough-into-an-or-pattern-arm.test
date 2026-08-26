@@ -20,9 +20,10 @@ end 'main'
 ExitCode: 10
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -59,15 +60,15 @@ func @main {
   critsplit#11:
     x64.jmp matcharm#2
   matcharm#2:
-    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegImm32 rbx, rax, 1
     x64.jmp matchcont
   matchcont:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg rax, rcx
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -79,7 +80,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 rbx, rax, 0
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx

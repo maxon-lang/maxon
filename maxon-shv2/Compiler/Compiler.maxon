@@ -695,6 +695,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		usage.usesStrCopy = true
 	end 'debugStreamLogRuntimeNeeds'
 	usage.usesManagedGlobals = usesManagedGlobals
+	// ⭐ **THE HEAP NOW CARRIES THE ARENA WITH IT, AND THAT DECLARATION IS WHAT OPENS `usesSlabArena`.**
+	// `__slab_alloc` cuts its spans out of the chunk arena and `__slab_free` asks the reverse map who owns a
+	// pointer — both from SYNTHESIZED Std bodies the Maxon-module walk above structurally cannot see, which
+	// is rule 2 of `RuntimeUsage`'s header (a synthesized body's calls are DECLARED, never discovered). It
+	// sits here rather than inside `scanRuntimeUsage` because the two arms above can still turn `usesHeap`
+	// ON after the walk has finished, and a closure that ran before them would miss exactly those programs.
+	closeSlabNeeds(usage)
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
 	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
 	// SYNTHESIZED Std bodies the Maxon-module scan above cannot see. Close the needed-destructor set over that
@@ -768,6 +775,16 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// (`clockRuntimeGlobals`) — a gate spelled here as well would be a second copy of that condition, and
 	// the loop over an empty array is exactly the no-op the absent `if` would have produced.
 	for entry in clockRuntimeGlobals(usage) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// The slab's PAGE-LAYER slots — the arena list head and the reverse map's L1 pointer — and the OBJECT
+	// layer's one slot, the pointer to its lazily-committed state region. Like the two clocks above, each
+	// gate rides inside its producer (`slabArenaRuntimeGlobals` asks `usesSlabArena`, `slabRuntimeGlobals`
+	// asks `usesHeap`) rather than being spelled a second time here.
+	for entry in slabArenaRuntimeGlobals(usage) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	for entry in slabRuntimeGlobals(usage) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
 	// The DebugStream producer's six `.data` slots ride the FLAG rather than a usage bit — nothing in a
@@ -856,6 +873,17 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// three neighbours. `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of
 	// kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesThreadCpuTicks = usage.usesThreadCpuTicks
+	// ⭐⭐ **AND WHETHER A RESERVATION IS FREE ON THIS TARGET**, which is what picks the slab arena's
+	// geometry (see `IrModule.hasPageReservation`). It sits on the same seam as its four neighbours for the
+	// same measured reason — `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag written any earlier
+	// lands on a module that is thrown away — and the symptom here would be an arena emitting its bitmap
+	// width from one geometry and its scan bound from another.
+	//
+	// ⚠ It is the FULL condition and not a usage bit, for `debugStream`'s reason above: the field means what
+	// its own header says, so it is answered from the TARGET, which is the only thing that knows. wasm32's
+	// `memory.grow` takes a range and BACKS it, so a reservation there is an allocation; every native lane
+	// reserves address space the OS neither charges nor faults in.
+	pipeline.stdModule.hasPageReservation = project.target.cpu != CpuArch.wasm32
 
 	// Where the APPENDED band begins. Every install below and every synthesizer under
 	// `synthesizeBodies` pushes onto `functions`, so this index is the boundary between what the
@@ -890,12 +918,26 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	if usage.usesHeap 'installMm'
 		installMmRuntime(pipeline.stdModule, usage: usage)
 	end 'installMm'
+
+	// The slab's PAGE LAYER (`__slab_arena_*` + `__slab_assert_os_alloc`) — the chunk arena the spans above
+	// it are cut from, installed the same already-lowered way on its OWN `usesSlabArena` bit. It sits
+	// beside the allocator because it is the layer BENEATH it, and the call is unconditional for a second
+	// reason: `installSlabArena` also runs the arena-geometry check, which must not be gated on an install
+	// (see its header).
+	installSlabArena(pipeline.stdModule, usage: usage)
+
+	// The slab's OBJECT LAYER (`__slab_alloc`/`__slab_free`, the size classes, the spans and the mcache) —
+	// the allocator `__mm_alloc` takes its boxes from. Unconditional for `installSlabArena`'s reason (it
+	// runs the record-layout and size-class checks ahead of its own `usesHeap` gate), and it takes
+	// `globalData` because it REGISTERS as well as emits: its three `.rdata` tables must be in the table
+	// before the backend lays that section out, exactly as `installUnicodeCategoryRuntime`'s two are.
+	installSlabRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage)
 	// The green-thread scheduler (`__gt_init`/`__gt_spawn`/`__gt_enqueue`/`__gt_dequeue`/`__gt_await`),
 	// installed the same way — already-lowered Std, appended after the pipeline (see this block's header for
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming)
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming, rawFree: rawSlabFreeCallee(usage))
 	end 'installGt'
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline, see this block's header — but it is
@@ -1113,7 +1155,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// ⚠ Gated on the module's own armed flag — `buildCarriesDebugStream`, set above — rather than on a
 	// second spelling of the same conjunction.
 	if pipeline.stdModule.debugStream 'installDebugStream'
-		installDebugStreamRuntime(pipeline.stdModule, globalData: project.globalData, usesGt: usage.usesGt)
+		installDebugStreamRuntime(pipeline.stdModule, globalData: project.globalData, usesGt: usage.usesGt, rawFree: rawSlabFreeCallee(usage))
 	end 'installDebugStream'
 
 	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)

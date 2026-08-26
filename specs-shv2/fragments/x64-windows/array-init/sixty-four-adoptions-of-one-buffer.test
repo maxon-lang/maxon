@@ -21,9 +21,10 @@ end 'main'
 ExitCode: 3
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -33,8 +34,7 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegImm32 rcx, 4
     x64.movRegImm32 rdx, 1
     x64.callDirect __managed_mem_create
@@ -44,8 +44,7 @@ func @main {
     x64.jmp tryok#1
   tryerr#2:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -63,8 +62,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -81,12 +79,10 @@ func @main {
   spin:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r14
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r13, r13, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.leaRegRegReg r13, r13, rax
     x64.leaRegRegImm32 r12, r12, 1
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.jmp whilehdr
   whileexit:
@@ -98,17 +94,14 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -121,8 +114,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -132,8 +124,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

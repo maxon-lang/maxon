@@ -1,0 +1,1339 @@
+// Runtime/SlabRuntime.maxon — ⭐⭐ **THE OBJECT LAYER: SIZE CLASSES, SPANS, AND THE HYBRID FREE LIST.**
+// `SlabArena.maxon` beneath this file answers *"where does an 8 KiB chunk come from?"*; this file answers
+// *"which slot of which span serves a 37-byte request, and where does it go when it dies?"*. Together they
+// replace the bump allocator `MmRuntime.buildSlabAlloc` used to be — a cursor that never reclaimed a byte.
+//
+// It is v1's `stdlib/Internals.maxon:109-1348` re-derived against shv2's tiers, minus everything that only
+// exists because v1 runs on many OS threads (the global lock, the per-P remote-free MPSC queues, the
+// `owning_p` gate). shv2's slab has ONE shard today — `__slab_shard_row` is a one-`ret` constant — so those
+// would be machinery guarding a race that cannot happen. What is TAKEN is recorded against each item; what
+// is NOT taken is recorded too, because every one of those is a decision.
+//
+// ⚠ **THE TWO-EPOCH SCAVENGER WAS ON THAT "NOT TAKEN" LIST AND S6 TOOK IT — but only the GUARD, not the
+// mechanism it guards.** v1 decommits a SPAN's own footprint and keeps the span; shv2 destroys the span,
+// gives its chunks back to the arena, and decommits at the arena's 64 KiB commit granule. The reason is not
+// taste: a span's footprint is 8 KiB-granular, `madvise` refuses an address that is not page-aligned, and
+// arm64-macOS's page is 16 KiB — see `SlabArena.buildSlabArenaScavenge` for the two ways v1's shape goes
+// wrong there and for why Go answers the same question at the page layer too.
+//
+// ⭐⭐ **THE CENTREPIECE: A SPAN CARRIES BOTH A FREE LIST AND A VIRGIN BUMP REGION.**
+// A slot reaches a caller from one of two places, and they differ in whether the memory is DIRTY:
+//
+//   * the FREE LIST — a RECYCLED slot. It holds the previous occupant's bytes plus the link written into
+//     its first word when it was freed, so it MUST be zeroed before the caller sees it.
+//   * the BUMP REGION `[bump_next, bump_end)` — slots that have NEVER been handed out. Their pages came
+//     straight from `__slab_arena_alloc_chunks`, i.e. fresh `VirtualAlloc`/`mmap` address space, which
+//     every target shv2 emits guarantees arrives ZEROED. They cost NOTHING to hand out.
+//
+// ⛔⛔ **THIS IS WHY THERE IS NO `__slab_build_freelist`, AND v1 DELETED ITS OWN.** Threading an intrusive
+// free list through a fresh span writes a next-pointer into slot[0] of EVERY slot, which DIRTIES every one
+// of them — so building the list up front was not merely wasted work, it was the thing that would FORCE a
+// memzero on every first-ever allocation. **Leaving the region pristine is the precondition for any
+// zero-elision at all.** It is FINER-GRAINED than Go, whose `needzero` is per-SPAN: Go re-zeroes even
+// never-used slots in a span that has seen a single free, while this cursor is per-SLOT.
+//
+// **THE THREE INVARIANTS. Every mutation site below re-establishes them:**
+//   INV-1  free_count == |free_list| + (bump_end - bump_next) / slot_size
+//   INV-2  bump_end   == base_addr + slot_size * total_slots   (DERIVED, never stored)
+//   INV-3  every byte in [bump_next, bump_end) is ZERO
+//
+// **INV-1 TRAPS** (`RuntimeAbort.slabSpanExhaustedPastItsEnd`): a `free_count > 0` with an empty free list
+// and an exhausted bump region would hand out a slot PAST the span's end, silently corrupting whatever the
+// arena placed in the next chunk. v1 traps at the same point and for the same reason.
+//
+// ⭐ The case that looks wrong and is not: a span may be returned to mcentral carrying BOTH an unconsumed
+// bump region AND a populated free list. (Take 3 slots from a fresh 1024-slot span, free all 3 →
+// `free_count == 1024 == total_slots` → returned, holding 3 free-list entries and 1021 never-used slots.)
+// Both survive in the mspan and the next taker keeps using both; INV-1 holds throughout.
+//
+// ⚠ **NO LOCK, AND IT IS INHERITED RATHER THAN CHOSEN** — `SlabArena.maxon`'s header states the same for
+// the layer below and names the follow-up (lock the whole slow path when green threads can run these on
+// more than one OS thread). Everything in this file is single-writer today because `__slab_shard_row`
+// answers one row.
+
+// --- The mspan record ---
+//
+// ⭐⭐ **THE CLASS IS STORED ONCE. v1 STORES IT THREE TIMES.** Its mspan carries `slot_size` (+0x08),
+// `class_idx` (+0x28) AND `total_slots` (+0x30), with `slot_size == __slab_class_size(class_idx)` and
+// `total_slots == __slab_objs_per_span(class_idx)` — two derived facts written down beside the fact they
+// derive from, held together by a comment (*"kept in lock-step with"*). Here only `class_idx` is stored and
+// the geometry is read from the `.rdata` table below.
+//
+// ⚠ **THAT IS A TRADE TO MEASURE, NOT A WIN.** The hot path used to reach `slot_size` with ONE load from a
+// record it already holds; it now costs one load of `class_idx` plus one indexed `.rdata` load — and the
+// `.rdata` line is shared by every span of every class, so it is the same cache line for the whole program
+// where the per-span copies were not. Which of those dominates is a measurement nobody here has taken; what
+// IS certain is that two numbers that cannot disagree have replaced three that could.
+let MspanBaseAddrOffset = 0 as ByteOffset
+let MspanFreeListOffset = 8 as ByteOffset
+let MspanFreeCountOffset = 16 as ByteOffset
+let MspanNextSpanOffset = 24 as ByteOffset
+let MspanClassIdxOffset = 32 as ByteOffset
+let MspanBumpNextOffset = 40 as ByteOffset
+
+// ⭐ **WHICH mcache ROW HOLDS THIS SPAN, OR `-1`.** It is an INDEX over a fact the mcache already holds,
+// not a second copy of one: deriving it means SEARCHING the 256 rows, which is exactly what v1's
+// `__slab_mcentral_return_span` does — a 256-iteration load-and-compare loop run every time a span empties.
+// One word turns that search into a load.
+//
+// ⚠ It is emphatically NOT the same shape as the three class copies above. `slot_size` is a pure FUNCTION
+// of `class_idx` with a table to read it out of; a cached row is the inverse of a pointer stored elsewhere,
+// and inverting it has no table.
+let MspanCachedShardOffset = 48 as ByteOffset
+
+// ⭐⭐ **THE TWO-EPOCH GRACE GUARD (S6) — ONE WORD, AND IT IS WHAT KEEPS AN ACTIVE WORKING SET RESIDENT.**
+// The scavenger only destroys a span it has already SEEN idle on an mcentral list once before, so a span
+// that empties and refills between two calls never reaches the release path and pays neither the chunk-free
+// memzero nor a syscall. Without it a workload that cycles a population pays both, per cycle, forever.
+// v1 carries the identical guard at its own `+0x48` and records the same reason.
+let MspanScavStateOffset = 56 as ByteOffset
+
+// ⭐ **THE STATES, AND WHY THERE ARE TWO WHERE v1 HAS THREE.** v1's third is `DECOMMITTED`: it drops a span's
+// pages and KEEPS the span, so a later reuse has to re-back it (`__slab_reback_span`). shv2 releases the
+// span's CHUNKS instead — to the arena, where any class can take them and where whole granules become
+// decommittable — and a span with no chunks is not a state, it is gone. So the machine is
+// `ACTIVE → SEEN_FREE → destroyed`, and the terminal transition has no value to store because it has no
+// record to store one in.
+//
+// ⚠ **`ACTIVE` IS 0, WHICH IS NOT AN ACCIDENT AND IS NOT LOAD-BEARING EITHER.** `__slab_refill` writes it
+// explicitly on both paths (see the `install` block), because a recycled mspan header holds STALE DATA
+// rather than zero — the rule `buildSlabMetaAlloc` states in full.
+let MspanScavActive = 0
+let MspanScavSeenFree = 1
+
+// One mspan header's slot in the metadata slab. The record occupies 0x00..0x40 exactly, and 64 keeps
+// successive headers 16-byte aligned inside the 8 KiB metadata chunk. `checkSlabRuntimeGeometry` asserts the
+// record fits rather than trusting this number — v1's own comment warns that a stale value here silently
+// OVERLAPS adjacent mspan headers, and S6's grace word took the last free slot, so the next field to be
+// added is the one that has to move this constant.
+let MspanSlotBytes = 64
+
+// A span that is in no mcache row. `-1` rather than 0, because 0 is a real row index.
+let MspanNotCached = -1
+
+// --- Sharding ---
+//
+// ⭐⭐ **THE mcache IS BUILT AT FULL SHARD WIDTH THOUGH ONLY ONE ROW IS EVER USED, AND THAT IS THE POINT.**
+// The STRUCTURE is real — 256 rows of one span pointer per class — while the SELECTOR is degenerate, so the
+// day green threads give each P its own row is a change to ONE FUNCTION BODY (`__slab_shard_row`) rather
+// than a change to the layout every address in this file is computed from. The rows cost 256 × 68 × 8 =
+// 139,264 bytes of an arena that is committed in whole 2 MiB units either way (`SlabArena.maxon`), so the
+// width is paid for out of chunks the process already owns.
+let SlabMaxShards = 256
+
+// ⭐⭐ **ROW 255 IS THE RAW-THREAD ROW, AND A NEGATIVE ID MAPS TO IT — NOT TO 0.** v1 records the measured
+// consequence of the other choice: a raw OS thread sharing row 0 with P[0] races that P's LOCKLESS pop and
+// hands one slab slot to both, which is heap corruption with no diagnostic. The reservation costs one row
+// in 256 and it is what makes "no live P" a state of its own rather than an alias for the first one.
+let SlabRawShardRow = SlabMaxShards - 1
+
+// --- The `.rdata` tables ---
+//
+// ⭐⭐ **ONE PACKED WORD PER CLASS: `slot_size | (objects_per_span << 32)`.** Both numbers are pure
+// functions of the class index (`SlabClassTable`), and the hot path wants `slot_size` on every allocation
+// while `objects_per_span` is wanted only by INV-1's guard and by the fully-free test. Packing them into
+// ONE 8-byte entry makes the span geometry ONE indexed load instead of two, which is the whole of what the
+// "store `class_idx` alone" decision costs.
+//
+// ⚠ **THE SHIFT IS 32 AND NOT THE 16 THE WIDTHS WOULD ALLOW.** A slot size needs 16 bits (32768) and an
+// object count 11 (1024), so both would fit either side of a 16-bit split — and then the day a class ladder
+// grows past 65535 the two fields would silently overlap. At 32 the fields have 4× the headroom their
+// domains need and the extraction masks read as what they are.
+let SlabClassGeomSlotShift = 32
+let SlabClassGeomSlotMask = 0xFFFFFFFF
+
+let SlabSizeToClass8Label = "__slab_size_to_class8"
+let SlabSizeToClass128Label = "__slab_size_to_class128"
+let SlabClassGeomLabel = "__slab_class_geom"
+
+// ⭐ **THE TWO REVERSE LOOKUPS' DIVISORS, AS SHIFTS.** `SlabClasses.maxon` states the divisors
+// (`SlabSmallSizeDiv` 8, `SlabLargeSizeDiv` 128); the emitted code divides by them, and a divide by a power
+// of two is a shift. A width and the shift that divides by it are ONE fact written twice by necessity, so
+// `checkSlabRuntimeGeometry` asserts the pair agrees — the rule `SlabArena.requireShiftMatchesWidth` states
+// in full for its own four pairs.
+let SlabSmallSizeDivShift = 3
+let SlabLargeSizeDivShift = 7
+
+// ⭐ **THE SMALL TABLE'S UPPER BOUND, WHICH IS GO'S AND IS NOT `SlabSmallSizeMax`.** Go routes
+// `size <= smallSizeMax - smallSizeDiv` (1016) through the 8-stepped table and everything above it through
+// the 128-stepped one, because index `(1024+7)/8 == 128` is the 8-table's LAST entry and the 128-table's
+// entry 0 already answers for 1017..1024. Written as the derivation rather than as 1016 so a changed
+// divisor moves it.
+let SlabSmallTableMaxSize = SlabSmallSizeMax - SlabSmallSizeDiv
+
+// --- The one `.data` word this family owns ---
+//
+// ⭐ **ALL OF THE ALLOCATOR'S MUTABLE STATE LIVES BEHIND ONE POINTER.** `.data` slots are laid out into
+// every heap program's image and are rendered into every golden fragment, so each one is a cost paid by
+// every program that allocates a single box. The mcentral heads, the mcache rows and the metadata slab's
+// bump cursor are all ARRAYS or PAIRS — none of them can live in a `.data` word anyway (`layOut` orders
+// single words in an order this table may not depend on) — so they share one lazily-committed region and
+// this word is its base. Zero means "not yet committed", which is the state the `.data` image already
+// expresses; there is nothing to initialise and so nothing to guard.
+let SlabStateLabel = b"__slab_state"
+
+// The region's fixed head, then the two arrays. `SlabStateMcentralOffset` onwards are DERIVED from the
+// class count so a regenerated ladder moves them rather than leaving a stale stride behind.
+//
+// ⭐ **`metaFree` IS S6's, AND IT EXISTS BECAUSE SOMETHING FINALLY DESTROYS SPANS.** `buildSlabMetaAlloc`'s
+// note used to say a free list here would be "a structure with no producer"; the scavenger is that producer,
+// and without it every span it destroys would leak its 64-byte header for the life of the process.
+let SlabStateMetaBumpOffset = 0 as ByteOffset
+let SlabStateMetaEndOffset = 8 as ByteOffset
+let SlabStateMetaFreeOffset = 16 as ByteOffset
+let SlabStateMcentralOffset = 24 as ByteOffset
+
+// --- Entry points ---
+
+// The public allocator door. `MmRuntime` owns the two names because `__mm_alloc` chooses between them (the
+// counted one and its uncounted twin), and the choice is that file's to make.
+
+// ⭐ **THE NON-ZEROING DOOR — Go's `mallocgc(…, needzero: false)`.**
+//
+// ⚠⚠ **AUDIT RULE — read this before adding a caller.** `__slab_alloc_raw` may ONLY be used where the
+// caller provably writes EVERY BYTE of the returned region before anything else can read it, AND the region
+// is never walked as MANAGED POINTERS. A region is "walked as managed pointers" if an element walk, a
+// hash-table teardown or an `array.set` old-occupant decref will ever run over it; such a buffer MUST come
+// from `__slab_alloc`. A non-zeroed slot read as a pointer and decref'd is exactly the bug the zeroing
+// contract exists to prevent, and v1 records it happening (a sparsely-filled hash table whose unwritten
+// slots held the previous occupant's garbage, decref'd as if live).
+//
+// ⚠ **IT HAS NO CALLER IN shv2 TODAY, AND SO COSTS NOTHING**: `DeadFunctionElimination` runs after every
+// `install*Runtime` and drops it from every program. It is built anyway for the reason `SlabArena.maxon`
+// built the page layer before anything was wired to it — the door and its audit rule exist before the first
+// caller has to invent them, and the ZEROING is a build-time argument (`emitSlabAllocClass`'s `zeroed`), so
+// admitting a caller is an argument rather than a body.
+let SlabAllocRawName = b"__slab_alloc_raw"
+export let SlabFreeName = b"__slab_free"
+
+let SlabAllocClassName = b"__slab_alloc_class"
+let SlabAllocClassRawName = b"__slab_alloc_class_raw"
+let SlabClassIndexForName = b"__slab_class_index_for"
+let SlabRoundedSizeName = b"__slab_rounded_size"
+let SlabShardRowName = b"__slab_shard_row"
+let SlabStateName = b"__slab_state_base"
+let SlabMetaAllocName = b"__slab_meta_alloc"
+let SlabMetaFreeName = b"__slab_meta_free"
+let SlabRefillName = b"__slab_refill"
+let SlabSpanReturnName = b"__slab_span_return"
+let SlabSpanDestroyName = b"__slab_span_destroy"
+let SlabOsDirectAllocName = b"__slab_os_direct_alloc"
+let SlabOsDirectFreeName = b"__slab_os_direct_free"
+
+// ⭐ **THE SCAVENGER'S PUBLIC DOOR.** `__Builtins.scavengeMemory()` lowers straight to it and reads its
+// answer — the bytes this call handed back to the OS. Exported because `RuntimeUsage` matches the callee to
+// decide whether the program carries the allocator at all: a program whose ONLY heap contact is this call
+// still needs every layer under it.
+export let SlabScavengeName = b"__slab_scavenge"
+
+// --- The OS-direct tier ---
+//
+// ⭐⭐ **ABOVE `SlabMaxSmallSize` A REQUEST IS ITS OWN MAPPING, AND ITS SIZE RIDES IN A 16-BYTE PREFIX.**
+// A free has to know how many bytes to hand back, and the pointer→span reverse map cannot answer: a map
+// MISS *is* the OS-direct sentinel (`SlabArena.ArenaMapNoSpan`), so registering these pages would destroy
+// the very signal that identifies them.
+//
+// ⛔⛔ **v1's ANSWER IS A 512-ENTRY ARRAY WITH A LINEAR SCAN, AND IT IS NOT PORTED — IT HAS A CEILING.**
+// `__slab_os_direct_alloc` there exits with sentinel 134 once 512 mappings are live, and
+// `__slab_os_direct_free` walks the array comparing pointers. The ceiling is the fatal half: shv2's
+// `__mm_alloc` routes every box above 32 KiB here, and a program holding 513 large buffers would abort in
+// the ALLOCATOR for no reason of its own. A prefix word has no ceiling, frees in O(1), and costs 16 bytes
+// on an allocation that is at least 32 KiB — under 0.05%.
+//
+// The prefix is 16 bytes rather than 8 so the pointer handed back keeps 16-byte alignment, which is what
+// every record layout above this file assumes.
+let OsDirectPrefixBytes = 16
+let OsDirectTotalBytesOffset = 0 as ByteOffset
+let OsDirectMagicOffset = 8 as ByteOffset
+
+// ⭐ **THE GUARD v1 GETS FROM ITS ARRAY SEARCH, RECOVERED IN ONE COMPARE.** Its `__slab_os_direct_free`
+// exits 135 when a pointer is not in the tracking array — a double free, or a pointer that was never ours.
+// With no array to search there is nothing to miss, so the same fault is caught by a magic word the
+// allocator stamps and the free checks. Without it a bogus free reads user data as a byte count and hands
+// it to `osFreePages`, which unmaps an arbitrary region.
+//
+// `"SLABOSD!"` read as a little-endian machine word. Any value would do; a legible one makes a memory dump
+// readable, which is the only thing this constant is ever looked at in.
+let OsDirectMagic = 0x2144534F42414C53
+
+// --- Installation ---
+
+// Install the object layer. Gated by `usesHeap` at the call site (`Compiler.compileToCodeResult`) exactly
+// as `installMmRuntime` is, because this IS the allocator that file's boxes come from.
+//
+// ⚠ It takes `globalData` because it REGISTERS as well as emits: the three `.rdata` tables must be in the
+// table before the backend lays the section out. They are registered here rather than at their reader for
+// `installUnicodeCategoryRuntime`'s reason — a `rdataAddr` naming a label nothing registered is a link
+// failure, so the register and the emit belong to one call.
+export function installSlabRuntime(module StdModule, globalData GlobalDataTable, usage RuntimeUsage)
+	if not usage.usesHeap 'noAllocator'
+		return
+	end 'noAllocator'
+
+	// ⭐⭐ **THE GEOMETRY CHECK SITS BEHIND THE GATE, WHICH IS THE OPPOSITE OF `installSlabArena`'s
+	// PLACEMENT — AND THE ARGUMENT THAT PUT IT THERE IS EXACTLY WHAT DOES NOT APPLY HERE.** That check is
+	// ahead of its gate because NOTHING set `usesSlabArena` when it was written: behind the gate it would
+	// have been a check that never ran, which is this project's own recurring failure wearing a different
+	// name. This bit is `usesHeap`, which every program that allocates a single box sets — so the check
+	// runs constantly, and running it for the handful that allocate NOTHING buys nothing: a program with no
+	// allocator carries no size-class table, no reverse lookup and no span, so no geometry of theirs can be
+	// wrong for it.
+	//
+	// ⚠ It is not free, either. It builds both reverse tables and walks the ladder, which is why it is worth
+	// asking who it protects rather than running it at every compile in the suite by reflex.
+	checkSlabRuntimeGeometry()
+
+	_ = globalData.registerRdataConstantLabeled(SlabSizeToClass8Label, bytes: slabSizeToClass8Table())
+	_ = globalData.registerRdataConstantLabeled(SlabSizeToClass128Label, bytes: slabSizeToClass128Table())
+	_ = globalData.registerRdataConstantLabeled(SlabClassGeomLabel, bytes: slabClassGeometryTable())
+
+	buildSlabStateBase(module)
+	buildSlabShardRow(module)
+	buildSlabClassIndexFor(module)
+	buildSlabRoundedSize(module)
+	buildSlabMetaAlloc(module)
+	buildSlabMetaFree(module)
+	buildSlabRefill(module)
+	buildSlabAllocClass(module, name: SlabAllocClassName, zeroed: true)
+	buildSlabAllocClass(module, name: SlabAllocClassRawName, zeroed: false)
+	buildSlabAllocEntry(module, name: SlabAllocName, countRaw: usage.usesMmCounters, classCallee: SlabAllocClassName)
+	buildSlabAllocEntry(module, name: SlabAllocRawName, countRaw: usage.usesMmCounters, classCallee: SlabAllocClassRawName)
+	// The uncounted twin, in a counted build only — the one `__slab_alloc` caller whose bytes are already
+	// reported as a TRACKED box (see `MmRuntime.SlabAllocBoxName`).
+	if usage.usesMmCounters 'boxTwin'
+		buildSlabAllocEntry(module, name: SlabAllocBoxName, countRaw: false, classCallee: SlabAllocClassName)
+	end 'boxTwin'
+	buildSlabSpanReturn(module)
+	buildSlabSpanDestroy(module)
+	buildSlabScavenge(module)
+	buildSlabFree(module)
+	buildSlabOsDirectAlloc(module)
+	buildSlabOsDirectFree(module)
+end 'installSlabRuntime'
+
+// The one `.data` slot the object layer owns. The gate rides inside the producer, following
+// `clockRuntimeGlobals`/`slabArenaRuntimeGlobals`: a condition spelled at both ends is a second place for
+// the two to disagree, and the loop over an empty array is the no-op the absent `if` would have produced.
+export function slabRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	if usage.usesHeap 'allocatorState'
+		out.push(DataSectionEntry.create(String.from(SlabStateLabel), valueType: StdType.i64, value: 0))
+	end 'allocatorState'
+
+	return out
+end 'slabRuntimeGlobals'
+
+// ⭐⭐ **THE RECORD LAYOUT IS INTERNALLY COHERENT — asserted, not trusted.** `checkSlabClassTable` and
+// `checkSlabArenaGeometry` make the same argument for the ladder and the arena, and state it in full: a
+// table whose source changed shape produces a working-LOOKING allocator that indexes past its own bounds.
+// It panics rather than returning a verdict, for those checks' reason — a broken layout cannot produce a
+// working allocator, so no caller could sensibly continue.
+function checkSlabRuntimeGeometry()
+	// Reading the ladder here is what makes the derived strides below statements about THIS table rather
+	// than about whatever table happened to be generated when they were written.
+	checkSlabClassTable()
+
+	if (1 shl SlabSmallSizeDivShift) != SlabSmallSizeDiv 'smallDivShiftDisagrees'
+		panic("slab runtime: 1 shl {SlabSmallSizeDivShift} is {1 shl SlabSmallSizeDivShift}, not the small-table divisor {SlabSmallSizeDiv}")
+	end 'smallDivShiftDisagrees'
+
+	if (1 shl SlabLargeSizeDivShift) != SlabLargeSizeDiv 'largeDivShiftDisagrees'
+		panic("slab runtime: 1 shl {SlabLargeSizeDivShift} is {1 shl SlabLargeSizeDivShift}, not the large-table divisor {SlabLargeSizeDiv}")
+	end 'largeDivShiftDisagrees'
+
+	// The mspan record must fit its metadata slot, or successive headers overlap — v1's own warning about
+	// the same constant, checked here instead of restated.
+	let recordBytes = (MspanCachedShardOffset as ParsedInt) + WordBytes
+	if recordBytes > MspanSlotBytes 'recordOverflowsSlot'
+		panic("slab runtime: an mspan record is {recordBytes} bytes and its metadata slot is {MspanSlotBytes}")
+	end 'recordOverflowsSlot'
+
+	// The metadata slab hands slots out of ONE chunk at a time, so a slot larger than a chunk could never be
+	// served and the bump would loop forever asking for fresh chunks.
+	if MspanSlotBytes > SlabPageBytes 'slotOverflowsChunk'
+		panic("slab runtime: an mspan slot is {MspanSlotBytes} bytes and a metadata chunk is {SlabPageBytes}")
+	end 'slotOverflowsChunk'
+
+	// The packed geometry word must actually hold both fields. `SlabMaxSmallSize` is the widest slot size
+	// and `SlabPageBytes / SlabSmallSizeDiv` bounds the object count (the smallest class in a one-page span).
+	if SlabMaxSmallSize > SlabClassGeomSlotMask 'slotSizeOverflowsField'
+		panic("slab runtime: a slot size of {SlabMaxSmallSize} does not fit the packed geometry's low field (mask {SlabClassGeomSlotMask})")
+	end 'slotSizeOverflowsField'
+
+	// The state region's own arithmetic: the two arrays must not overlap, and the whole must fit the chunk
+	// run committed for it.
+	if slabStateMcacheOffset() <= SlabStateMcentralOffset 'arraysOverlap'
+		panic("slab runtime: the mcache starts at {slabStateMcacheOffset()}, not past the mcentral heads at {SlabStateMcentralOffset}")
+	end 'arraysOverlap'
+
+	if slabStateBytes() > slabStateChunks() * SlabPageBytes 'stateOverflowsChunks'
+		panic("slab runtime: {slabStateBytes()} bytes of allocator state do not fit {slabStateChunks()} chunk(s) of {SlabPageBytes}")
+	end 'stateOverflowsChunks'
+
+	// ⭐⭐ **AND THE TWO REQUESTS THIS FILE MAKES OF THE PAGE LAYER MUST BE SATISFIABLE ON BOTH LANES — the
+	// bound that was MISSING until S6.** `slabStateChunks()` is 18 chunks and the non-reserving arena has 63
+	// allocatable ones; nothing asserted the pair, so raising `SlabMaxShards` or regenerating a longer class
+	// ladder would abort **at run time, on wasm only, in a build whose native twin is perfect**, with
+	// `slabChunkRunUnsatisfiable` — a true statement about the arena and a baffling one about the change that
+	// caused it. It is asked of BOTH lanes for `checkArenaGeometryForLane`'s stated reason: a rule that only
+	// holds for whichever target happens to be compiling is the check that never runs.
+	requireArenaCanServe("the allocator's state region", chunks: slabStateChunks())
+
+	// The other request is a SPAN's chunk run, whose largest is the widest class's page count — Go's table
+	// tops out at 10. `__slab_refill` computes it as `ceil(slotSize · totalSlots / SlabPageBytes)` at run
+	// time; the bound is what says every value that formula can produce is one the arena will serve.
+	requireArenaCanServe("the widest class's span", chunks: slabWidestSpanChunks())
+end 'checkSlabRuntimeGeometry'
+
+// A chunk run this file will ask `__slab_arena_alloc_chunks` for, checked against what an arena can serve on
+// each lane. One helper rather than two pairs of `if`s, so a third request cannot arrive checked against one
+// geometry only.
+function requireArenaCanServe(what String, chunks ParsedInt)
+	requireArenaCanServeOnLane(what, chunks: chunks, hasPageReservation: true)
+	requireArenaCanServeOnLane(what, chunks: chunks, hasPageReservation: false)
+end 'requireArenaCanServe'
+
+function requireArenaCanServeOnLane(what String, chunks ParsedInt, hasPageReservation bool)
+	let available = slabArenaAllocatableChunks(hasPageReservation)
+	if chunks > available 'unsatisfiable'
+		panic("slab runtime: {what} needs {chunks} chunk(s) and an arena on {arenaLaneLabel(hasPageReservation)} has {available} after its metadata, so `__slab_arena_alloc_chunks` would abort at run time")
+	end 'unsatisfiable'
+end 'requireArenaCanServeOnLane'
+
+// Which lane a bound above is talking about. The two produce the same sentence with different numbers, and
+// "18 against 63" is only readable once the reader is told which arena was expected — `SlabArena`'s own
+// `arenaLaneName` makes the identical argument about its identical pair of panics.
+function arenaLaneLabel(hasPageReservation bool) returns String
+	if hasPageReservation 'reserves'
+		return "a reserving lane"
+	end 'reserves'
+
+	return "the non-reserving lane"
+end 'arenaLaneLabel'
+
+
+// A machine word, for the COMPILE-TIME size arithmetic below — the mspan record's width, the mcache row's
+// stride, and where the state region's second array starts. The EMITTED `base + index · 8` is not spelled
+// here at all: it is `MmRuntime.emitWordSlotAddr`, exported at S2 precisely so a third copy of that
+// arithmetic did not get written. What stays private is the LAYOUT constant, because a shared "8" is not a
+// shared fact — these are strides of tables this file owns.
+let WordBytes = 8
+
+// One mcache row: one span pointer per class. DERIVED from the class count, which is v1's
+// `SLAB_MCACHE_ROW_STRIDE = 144` written as what it is instead of as a number a regenerated ladder
+// invalidates in silence.
+function slabMcacheRowStride() returns ParsedInt
+	return slabClassCount() * WordBytes
+end 'slabMcacheRowStride'
+
+function slabStateMcacheOffset() returns ParsedInt
+	return SlabStateMcentralOffset + slabClassCount() * WordBytes
+end 'slabStateMcacheOffset'
+
+function slabStateBytes() returns ParsedInt
+	return slabStateMcacheOffset() + SlabMaxShards * slabMcacheRowStride()
+end 'slabStateBytes'
+
+function slabStateChunks() returns ParsedInt
+	return (slabStateBytes() + SlabPageBytes - 1) / SlabPageBytes
+end 'slabStateChunks'
+
+// --- Shared emitters ---
+
+// ⭐⭐ **THE ONE PLACE THE SMALL/LARGE BOUNDARY IS SPELLED.** v1 says of its `__slab_rounded_size` that it
+// *"mirrors the two routing arms of `__slab_alloc` exactly"* — which is one fact written twice, and the
+// failure mode is a sizing function that reports a class for a request the allocator sends to the OS. Both
+// callers branch through here, so they cannot disagree about where the boundary is.
+function emitSlabSizeRouting(module StdModule, block IrBlock, size ValueId, osDirect IrBlock, small IrBlock, ids ValueMinter)
+	let maxSmall = emitConst(module, block: block, value: SlabMaxSmallSize, ids: ids)
+	let isLarge = emitCmp(module, block: block, a: size, b: maxSmall, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(isLarge, thenBlockId: osDirect.id, elseBlockId: small.id))
+end 'emitSlabSizeRouting'
+
+// `(bytes + SlabPageBytes - 1) and -SlabPageBytes` — a byte count rounded up to a whole page. The OS-direct
+// allocation and the sizing function are its two callers, and they are the SAME two the routing above
+// serves: the page alignment is the other half of the fact those two must agree on.
+function emitPageAlignUp(module StdModule, block IrBlock, bytes ValueId, ids ValueMinter) returns ValueId
+	let bump = emitConst(module, block: block, value: SlabPageBytes - 1, ids: ids)
+	let raised = emitBin(module, block: block, a: bytes, b: bump, opcode: StdBinOpcode.add, ids: ids)
+	let mask = emitConst(module, block: block, value: 0 - SlabPageBytes, ids: ids)
+	return emitBin(module, block: block, a: raised, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitPageAlignUp'
+
+// The packed geometry word for `classIdx` — ONE indexed `.rdata` load, which is the whole of what storing
+// `class_idx` alone costs. See `SlabClassGeomSlotShift`.
+function emitClassGeometry(module StdModule, block IrBlock, classIdx ValueId, ids ValueMinter) returns ValueId
+	let base = ids.mint()
+	module.appendOp(block, op: StdOp.rdataAddr(base, label: SlabClassGeomLabel.toByteArray()))
+	return emitWordSlotLoad(module, block: block, base: base, index: classIdx, ids: ids)
+end 'emitClassGeometry'
+
+function emitGeomSlotSize(module StdModule, block IrBlock, geom ValueId, ids ValueMinter) returns ValueId
+	let mask = emitConst(module, block: block, value: SlabClassGeomSlotMask, ids: ids)
+	return emitBin(module, block: block, a: geom, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitGeomSlotSize'
+
+function emitGeomTotalSlots(module StdModule, block IrBlock, geom ValueId, ids ValueMinter) returns ValueId
+	let shift = emitConst(module, block: block, value: SlabClassGeomSlotShift, ids: ids)
+	return emitBin(module, block: block, a: geom, b: shift, opcode: StdBinOpcode.shr, ids: ids)
+end 'emitGeomTotalSlots'
+
+// The address of `state`'s word-indexed slot at `arrayOffset + index * 8` — the mcentral head for a class,
+// and (with the row folded into `index`) an mcache entry. Both arrays are word-indexed off one base, so the
+// arithmetic is written once and the callers differ only in what they index by.
+function emitStateSlotAddr(module StdModule, block IrBlock, state ValueId, arrayOffset ParsedInt, index ValueId, ids ValueMinter) returns ValueId
+	let arrayBase = emitConst(module, block: block, value: arrayOffset, ids: ids)
+	let fromBase = emitBin(module, block: block, a: state, b: arrayBase, opcode: StdBinOpcode.add, ids: ids)
+	return emitWordSlotAddr(module, block: block, base: fromBase, index: index, ids: ids)
+end 'emitStateSlotAddr'
+
+// `ceil(slotSize * totalSlots / SlabPageBytes)` — the chunks a span's slot region occupies.
+//
+// ⭐ **ONE SPELLING, BECAUSE THE CUT AND THE DESTRUCTION MUST AGREE TO THE CHUNK.** `__slab_refill` computes
+// it to ask the arena for a run and to register that many pages in the reverse map; `__slab_span_destroy`
+// computes it to hand the same run back and to unregister the same pages. Spelled twice, a span could be
+// released one chunk short — leaving a chunk claimed forever — or one chunk long, releasing a chunk that
+// belongs to its neighbour.
+function emitSpanChunkCount(module StdModule, block IrBlock, slotSize ValueId, totalSlots ValueId, ids ValueMinter) returns ValueId
+	let dataBytes = emitBin(module, block: block, a: slotSize, b: totalSlots, opcode: StdBinOpcode.mul, ids: ids)
+	let pageBump = emitConst(module, block: block, value: SlabPageBytes - 1, ids: ids)
+	let raised = emitBin(module, block: block, a: dataBytes, b: pageBump, opcode: StdBinOpcode.add, ids: ids)
+	let pageShift = emitConst(module, block: block, value: SlabPageShift, ids: ids)
+	return emitBin(module, block: block, a: raised, b: pageShift, opcode: StdBinOpcode.shr, ids: ids)
+end 'emitSpanChunkCount'
+
+// The mcache entry `mcache[row][classIdx]`. `row * stride` is a MULTIPLY rather than a shift because the
+// stride is `classCount * 8` and the class count is Go's 68, which is not a power of two — v1's 144 was not
+// either, and it spells the same multiply.
+function emitMcacheSlotAddr(module StdModule, block IrBlock, state ValueId, row ValueId, classIdx ValueId, ids ValueMinter) returns ValueId
+	let stride = emitConst(module, block: block, value: slabMcacheRowStride(), ids: ids)
+	let rowOffset = emitBin(module, block: block, a: row, b: stride, opcode: StdBinOpcode.mul, ids: ids)
+	let rowBase = emitBin(module, block: block, a: state, b: rowOffset, opcode: StdBinOpcode.add, ids: ids)
+	return emitStateSlotAddr(module, block: block, state: rowBase, arrayOffset: slabStateMcacheOffset(), index: classIdx, ids: ids)
+end 'emitMcacheSlotAddr'
+
+// --- The bodies ---
+
+// `__slab_state_base() -> base` — the allocator's mutable state, committed on first use.
+//
+// ⭐ **THE REGION IS CHUNKS FROM THE ARENA, NOT A FRESH `osAllocPages`.** This sits ON the arena, so taking
+// its chunks out of a mapping the process has already committed costs no additional commit at all. (The
+// free-list table `MmRuntime` carried until S4 went straight to the OS instead, because it sat beneath
+// nothing and had no arena to ask.)
+//
+// ⚠ **THE ZEROING IS NOT OPTIONAL AND THE ARENA'S OWN CONTRACT IS WHY.** A chunk is fresh OS memory only
+// the first time it is handed out — the arena's scan is first-fit over a bitmap, so a freed low chunk is
+// reused before a virgin high one. `SlabArena.emitLazyMapLevel` zeroes its level tables for exactly this
+// reason and states it; an unzeroed mcache reads a dead chunk's bytes as a span pointer.
+function buildSlabStateBase(module StdModule)
+	var func = IrFunction.createFromStd(SlabStateName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var commit = module.addBlock(func, label: b"commit")
+	var have = module.addBlock(func, label: b"have")
+
+	let stateAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(stateAddr, label: SlabStateLabel))
+	let current = emitLoadField(module, block: entry, record: stateAddr, offset: 0, ids: ids)
+	let absent = emitConst(module, block: entry, value: 0, ids: ids)
+	let uncommitted = emitCmp(module, block: entry, a: current, b: absent, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(uncommitted, thenBlockId: commit.id, elseBlockId: have.id))
+
+	let chunks = emitConst(module, block: commit, value: slabStateChunks(), ids: ids)
+	let base = ids.mint()
+	module.appendOp(commit, op: StdOp.call(base, callee: SlabArenaAllocChunksName, args: argsOf(chunks)))
+	let stateBytes = emitConst(module, block: commit, value: slabStateBytes(), ids: ids)
+	module.appendOp(commit, op: StdOp.memFill(base, byteCountId: stateBytes, value: 0))
+	emitStoreField(module, block: commit, record: stateAddr, offset: 0, value: base)
+	module.setTerminator(commit, op: StdOp.ret(base))
+
+	module.setTerminator(have, op: StdOp.ret(current))
+
+	module.functions.push(func)
+end 'buildSlabStateBase'
+
+// `__slab_shard_row() -> row` — which mcache row this thread allocates out of.
+//
+// ⭐⭐ **ONE `ret` OF A CONSTANT, AND THAT IS THE ACCURATE STATE RATHER THAN A STUB.** shv2 has no
+// scheduler-visible P at the allocator, so every allocation belongs to the RAW-thread row — the row v1
+// reserves for exactly this case, and `SlabRawShardRow`'s note records what sharing row 0 instead cost it.
+// The day a P id is available, THIS BODY clamps it (`< 0` to `SlabRawShardRow`, `>= SlabMaxShards` to the
+// last row, otherwise itself) and nothing else in the file moves — which is the whole reason the row is
+// reached through a function rather than folded into the two address computations that want it.
+function buildSlabShardRow(module StdModule)
+	var func = IrFunction.createFromStd(SlabShardRowName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitConstReturn(module, block: entry, value: SlabRawShardRow, ids: ids)
+
+	module.functions.push(func)
+end 'buildSlabShardRow'
+
+// `__slab_class_index_for(size) -> classIdx` — the smallest class whose slot holds `size` bytes, in O(1).
+//
+// ⛔⛔ **v1 SCANS THE LADDER AND THAT DOES NOT PORT.** Its `__slab_class_index_for` walks up to 18 classes
+// per allocation calling `__slab_class_size` — itself an 18-arm if-ladder — so a 1 KiB request costs ~15
+// compares before a byte is served, on the hot path of every allocation in the language. Go answers the
+// same question with TWO reverse tables and one indexed byte load, which is what this emits.
+//
+// ⚠ **THE TWO TABLES ARE DERIVED, NOT TRANSCRIBED** (`SlabClassTable.slabSizeToClass8Table`), and their
+// defining property is asserted at build time.
+//
+// ⚠ **A CALLER MUST HAVE ROUTED `size > SlabMaxSmallSize` AWAY** — `emitSlabSizeRouting` is what does it.
+// A request of 0 reaches class 0, the ladder's sentinel, whose span holds no objects; `__slab_refill`'s
+// guard is where that is caught, on the COLD path, so the hot path pays nothing for a case no caller has.
+function buildSlabClassIndexFor(module StdModule)
+	var func = IrFunction.createFromStd(SlabClassIndexForName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var smallTable = module.addBlock(func, label: b"small")
+	var largeTable = module.addBlock(func, label: b"large")
+
+	emitParams(module, block: entry, count: 1)
+	let size = 0 as ValueId
+
+	let tableBoundary = emitConst(module, block: entry, value: SlabSmallTableMaxSize, ids: ids)
+	let aboveSmallTable = emitCmp(module, block: entry, a: size, b: tableBoundary, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(aboveSmallTable, thenBlockId: largeTable.id, elseBlockId: smallTable.id))
+
+	emitReverseTableLookup(module, block: smallTable, size: size, subtract: 0, divShift: SlabSmallSizeDivShift, divisor: SlabSmallSizeDiv, label: SlabSizeToClass8Label, ids: ids)
+	emitReverseTableLookup(module, block: largeTable, size: size, subtract: SlabSmallSizeMax, divShift: SlabLargeSizeDivShift, divisor: SlabLargeSizeDiv, label: SlabSizeToClass128Label, ids: ids)
+
+	module.functions.push(func)
+end 'buildSlabClassIndexFor'
+
+// One reverse-table read and its `ret`: `table[ceil((size - subtract) / divisor)]`. Both arms are the same
+// four ops over different constants, which is why they are one emitter — writing them out twice is how one
+// of the two ends up dividing by the other's stride.
+//
+// The rounding is `(x + divisor - 1) shr divShift`, and it is exact for both arms because every value
+// reaching either is positive: the small arm sees `size <= 1016` and the large arm sees `size >= 1017`, so
+// `size - 1024 + 127 >= 120`.
+function emitReverseTableLookup(module StdModule, block IrBlock, size ValueId, subtract ParsedInt, divShift ParsedInt, divisor ParsedInt, label String, ids ValueMinter)
+	let bias = emitConst(module, block: block, value: divisor - 1 - subtract, ids: ids)
+	let raised = emitBin(module, block: block, a: size, b: bias, opcode: StdBinOpcode.add, ids: ids)
+	let shift = emitConst(module, block: block, value: divShift, ids: ids)
+	let index = emitBin(module, block: block, a: raised, b: shift, opcode: StdBinOpcode.shr, ids: ids)
+
+	let base = ids.mint()
+	module.appendOp(block, op: StdOp.rdataAddr(base, label: label.toByteArray()))
+	let class = emitLoadByteIndexed(module, block: block, base: base, index: index, ids: ids)
+	module.setTerminator(block, op: StdOp.ret(class))
+end 'emitReverseTableLookup'
+
+// `__slab_rounded_size(size) -> bytes` — the number of bytes `__slab_alloc(size)` actually serves.
+//
+// ⭐ **IT SHARES THE ROUTING WITH THE ALLOCATOR (`emitSlabSizeRouting`) AND THE PAGE ALIGNMENT WITH THE
+// OS-DIRECT PATH (`emitPageAlignUp`)**, which is the whole of what v1's *"mirrors the two routing arms of
+// `__slab_alloc` exactly"* was asking for and not getting.
+//
+// ⚠ **IT HAS NO CALLER IN shv2 TODAY, AND SINCE S4 THERE IS ONE WAITING FOR IT.** v1's caller is the
+// inline-small-array capacity reclaim, which turns a class's slack into spare elements. shv2's array records
+// have no such path yet — but now that every managed box is a slab slot, the slack between an array's
+// requested bytes and the class that serves them is real and measurable, so the reclaim is a question this
+// compiler can finally ask. `DFE` drops the function from every program until something does, so it costs
+// nothing emitted, and the reason it is here rather than absent is the shared emitters above — they are what
+// makes the sizing answer and the allocator's routing one fact rather than two that must be kept in step.
+function buildSlabRoundedSize(module StdModule)
+	var func = IrFunction.createFromStd(SlabRoundedSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var osDirect = module.addBlock(func, label: b"osdirect")
+	var small = module.addBlock(func, label: b"small")
+
+	emitParams(module, block: entry, count: 1)
+	let size = 0 as ValueId
+
+	emitSlabSizeRouting(module, block: entry, size: size, osDirect: osDirect, small: small, ids: ids)
+
+	// The OS-direct answer is the mapping's payload: the request plus the size prefix, rounded to a page,
+	// less the prefix again — the bytes a caller may actually use.
+	let prefix = emitConst(module, block: osDirect, value: OsDirectPrefixBytes, ids: ids)
+	let withPrefix = emitBin(module, block: osDirect, a: size, b: prefix, opcode: StdBinOpcode.add, ids: ids)
+	let mapped = emitPageAlignUp(module, block: osDirect, bytes: withPrefix, ids: ids)
+	let usable = emitBin(module, block: osDirect, a: mapped, b: prefix, opcode: StdBinOpcode.sub, ids: ids)
+	module.setTerminator(osDirect, op: StdOp.ret(usable))
+
+	let class = ids.mint()
+	module.appendOp(small, op: StdOp.call(class, callee: SlabClassIndexForName, args: argsOf(size)))
+	let geom = emitClassGeometry(module, block: small, classIdx: class, ids: ids)
+	module.setTerminator(small, op: StdOp.ret(emitGeomSlotSize(module, block: small, geom: geom, ids: ids)))
+
+	module.functions.push(func)
+end 'buildSlabRoundedSize'
+
+// `__slab_meta_alloc() -> span` — one mspan header, off the free list if there is one and off the metadata
+// slab's bump cursor otherwise.
+//
+// ⭐ **THE FREE LIST IS S6's, AND IT HAS A PRODUCER NOW.** This note used to say a free list here would be
+// "a structure with no producer", which was exactly right while nothing destroyed a span — a fully-free span
+// parked in mcentral and was reused. The scavenger destroys one, and without a list to put its header on,
+// every span the scavenger reclaims would leak 64 bytes of metadata slab for the life of the process. It is
+// v1's `__slab_meta_free`, arriving for v1's reason at the rung that creates it.
+//
+// ⚠⚠ **THE SLOT IS NOT ASSUMED ZERO, AND THE FREE LIST IS WHY THAT RULE FINALLY BITES.** `__slab_refill`
+// writes every mspan field regardless — v1's rule stated in full: *"an uninitialised field here is STALE
+// DATA, not zero"* — which is what keeps this function free of any zeroing at all. A recycled header carries
+// the previous span's fields AND the list link this file wrote over its first word, so a refill that left
+// ONE field unwritten would produce a span describing a chunk run that belongs to somebody else.
+function buildSlabMetaAlloc(module StdModule)
+	var func = IrFunction.createFromStd(SlabMetaAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var recycled = module.addBlock(func, label: b"recycled")
+	var bumpPath = module.addBlock(func, label: b"bump")
+	var take = module.addBlock(func, label: b"take")
+	var fresh = module.addBlock(func, label: b"fresh")
+
+	let state = ids.mint()
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+
+	// POP FIRST. A recycled header is warm and costs one load; the bump path is what runs while the metadata
+	// slab is still growing, which is every program that never scavenges.
+	let listHead = emitLoadField(module, block: entry, record: state, offset: SlabStateMetaFreeOffset, ids: ids)
+	let noneFree = emitConst(module, block: entry, value: 0, ids: ids)
+	let listEmpty = emitCmp(module, block: entry, a: listHead, b: noneFree, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(listEmpty, thenBlockId: bumpPath.id, elseBlockId: recycled.id))
+
+	// The link lives in the dead header's FIRST word — `base_addr`, which `__slab_refill` overwrites — so
+	// unlinking is one load and one store and the slot needs no clearing.
+	let following = emitLoadField(module, block: recycled, record: listHead, offset: MspanBaseAddrOffset, ids: ids)
+	emitStoreField(module, block: recycled, record: state, offset: SlabStateMetaFreeOffset, value: following)
+	module.setTerminator(recycled, op: StdOp.ret(listHead))
+
+	let bump = emitLoadField(module, block: bumpPath, record: state, offset: SlabStateMetaBumpOffset, ids: ids)
+	let slotBytes = emitConst(module, block: bumpPath, value: MspanSlotBytes, ids: ids)
+	let advanced = emitBin(module, block: bumpPath, a: bump, b: slotBytes, opcode: StdBinOpcode.add, ids: ids)
+	let limit = emitLoadField(module, block: bumpPath, record: state, offset: SlabStateMetaEndOffset, ids: ids)
+	// The initial state is `bump == 0` and `limit == 0`, so the first call fails this test and takes the
+	// fresh-chunk arm — the `.data` zero IS the initialisation, exactly as it is for the arena list head.
+	let fits = emitCmp(module, block: bumpPath, a: advanced, b: limit, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(bumpPath, op: StdOp.condBranch(fits, thenBlockId: take.id, elseBlockId: fresh.id))
+
+	emitStoreField(module, block: take, record: state, offset: SlabStateMetaBumpOffset, value: advanced)
+	module.setTerminator(take, op: StdOp.ret(bump))
+
+	let one = emitConst(module, block: fresh, value: 1, ids: ids)
+	let chunk = ids.mint()
+	module.appendOp(fresh, op: StdOp.call(chunk, callee: SlabArenaAllocChunksName, args: argsOf(one)))
+	let firstFree = emitBin(module, block: fresh, a: chunk, b: slotBytes, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: fresh, record: state, offset: SlabStateMetaBumpOffset, value: firstFree)
+	let chunkBytes = emitConst(module, block: fresh, value: SlabPageBytes, ids: ids)
+	let chunkEnd = emitBin(module, block: fresh, a: chunk, b: chunkBytes, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: fresh, record: state, offset: SlabStateMetaEndOffset, value: chunkEnd)
+	module.setTerminator(fresh, op: StdOp.ret(chunk))
+
+	module.functions.push(func)
+end 'buildSlabMetaAlloc'
+
+// `__slab_meta_free(span)` — put a destroyed span's header back on the metadata free list.
+//
+// The link goes in the header's FIRST word (`base_addr`), which is the field `__slab_refill` overwrites
+// first on the way back out — so the list costs no storage of its own and a recycled header needs no
+// clearing. The same trick the SPAN free list plays with a dead slot's first word, one layer up.
+//
+// ⚠ **THE HEADER'S CHUNK IS NEVER RELEASED, ONLY ITS SLOTS ARE REUSED.** The metadata slab bump-allocates
+// out of whole chunks and this list hands the SLOTS back; the chunks themselves stay claimed for the life of
+// the process. That is deliberate: a metadata chunk holds up to 128 headers belonging to unrelated spans, so
+// it can only be released when every one of them is dead, which is a second free-list-of-chunks problem for
+// a structure that is 0.8% of the heap it describes.
+function buildSlabMetaFree(module StdModule)
+	var func = IrFunction.createFromStd(SlabMetaFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let span = 0 as ValueId
+
+	let state = ids.mint()
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	let head = emitLoadField(module, block: entry, record: state, offset: SlabStateMetaFreeOffset, ids: ids)
+	emitStoreField(module, block: entry, record: span, offset: MspanBaseAddrOffset, value: head)
+	emitStoreField(module, block: entry, record: state, offset: SlabStateMetaFreeOffset, value: span)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSlabMetaFree'
+
+// `__slab_refill(classIdx) -> span` — put a span with free slots in this row's mcache entry, and answer it.
+//
+// Two tiers, v1's: take the head of `mcentral[classIdx]` if there is one, else cut a fresh span out of the
+// arena. Both ends install into the mcache and stamp the span's cached row.
+//
+// ⭐ **THE FRESH SPAN IS ENTIRELY VIRGIN AND THAT IS THE WHOLE POINT** — empty free list, bump cursor at
+// the base, `free_count == total_slots`. `pageBase` came from `__slab_arena_alloc_chunks`, so every byte in
+// it is zero and every slot can be handed out with NO memzero. See the header: do NOT thread a free list
+// through it.
+function buildSlabRefill(module StdModule)
+	var func = IrFunction.createFromStd(SlabRefillName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var takePartial = module.addBlock(func, label: b"partial")
+	var grow = module.addBlock(func, label: b"grow")
+	var emptyClass = module.addBlock(func, label: b"emptyclass")
+	var cut = module.addBlock(func, label: b"cut")
+	var install = module.addBlock(func, label: b"install")
+
+	emitParams(module, block: entry, count: 1)
+	let classIdx = 0 as ValueId
+
+	let state = ids.mint()
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	let row = ids.mint()
+	module.appendOp(entry, op: StdOp.call(row, callee: SlabShardRowName, args: ValueIdArray.create()))
+	let mcentralSlot = emitStateSlotAddr(module, block: entry, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
+	let mcacheSlot = emitMcacheSlotAddr(module, block: entry, state: state, row: row, classIdx: classIdx, ids: ids)
+	let partial = emitLoadField(module, block: entry, record: mcentralSlot, offset: 0, ids: ids)
+	let none = emitConst(module, block: entry, value: 0, ids: ids)
+	let noPartial = emitCmp(module, block: entry, a: partial, b: none, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(noPartial, thenBlockId: grow.id, elseBlockId: takePartial.id))
+
+	// Unlink the head. Its free list and its unconsumed bump region both survive the park (see the header's
+	// "the case that looks wrong"), so there is nothing here to rebuild.
+	let following = emitLoadField(module, block: takePartial, record: partial, offset: MspanNextSpanOffset, ids: ids)
+	emitStoreField(module, block: takePartial, record: mcentralSlot, offset: 0, value: following)
+	emitStoreField(module, block: takePartial, record: partial, offset: MspanNextSpanOffset, value: none)
+	module.setTerminator(takePartial, op: StdOp.branch(install.id))
+	takePartial.branchEdges.push(BranchEdge.create(install.id, argIds: argsOf(partial)))
+
+	let geom = emitClassGeometry(module, block: grow, classIdx: classIdx, ids: ids)
+	let slotSize = emitGeomSlotSize(module, block: grow, geom: geom, ids: ids)
+	let totalSlots = emitGeomTotalSlots(module, block: grow, geom: geom, ids: ids)
+	// Class 0 is the ladder's sentinel: size 0, no objects. Only a zero-byte request reaches it, and it can
+	// only reach it through the class lookup, so this is where such a request is refused — on the COLD path,
+	// which is why `__slab_class_index_for` needs no guard of its own.
+	let oneSlot = emitConst(module, block: grow, value: 1, ids: ids)
+	let servesNothing = emitCmp(module, block: grow, a: totalSlots, b: oneSlot, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(grow, op: StdOp.condBranch(servesNothing, thenBlockId: emptyClass.id, elseBlockId: cut.id))
+
+	emitRuntimeAbort(module, func: func, block: emptyClass, abort: RuntimeAbort.slabClassServesNoObject, ids: ids)
+
+	let numChunks = emitSpanChunkCount(module, block: cut, slotSize: slotSize, totalSlots: totalSlots, ids: ids)
+	let pageBase = ids.mint()
+	module.appendOp(cut, op: StdOp.call(pageBase, callee: SlabArenaAllocChunksName, args: argsOf(numChunks)))
+
+	let span = ids.mint()
+	module.appendOp(cut, op: StdOp.call(span, callee: SlabMetaAllocName, args: ValueIdArray.create()))
+	emitStoreField(module, block: cut, record: span, offset: MspanBaseAddrOffset, value: pageBase)
+	emitStoreField(module, block: cut, record: span, offset: MspanFreeListOffset, value: none)
+	emitStoreField(module, block: cut, record: span, offset: MspanFreeCountOffset, value: totalSlots)
+	emitStoreField(module, block: cut, record: span, offset: MspanNextSpanOffset, value: none)
+	emitStoreField(module, block: cut, record: span, offset: MspanClassIdxOffset, value: classIdx)
+	emitStoreField(module, block: cut, record: span, offset: MspanBumpNextOffset, value: pageBase)
+
+	// Every page of the run maps to this span, which is what lets a free of a pointer anywhere INSIDE it
+	// find its owner (`SlabArena.buildSlabArenaMapSet`). Chunks and pages are the same 8 KiB unit.
+	module.appendOp(cut, op: StdOp.call(ids.mint(), callee: SlabArenaMapSetName, args: threeArgs(pageBase, second: numChunks, third: span)))
+	module.setTerminator(cut, op: StdOp.branch(install.id))
+	cut.branchEdges.push(BranchEdge.create(install.id, argIds: argsOf(span)))
+
+	let installed = ids.mint()
+	install.blockArgs.push(IrBlockArg.create(installed, argType: StdType.i64))
+	emitStoreField(module, block: install, record: mcacheSlot, offset: 0, value: installed)
+	emitStoreField(module, block: install, record: installed, offset: MspanCachedShardOffset, value: row)
+
+	// ⭐ **THE GRACE RESETS HERE, AT THE ONE PLACE BOTH PATHS MEET** — a span taken off mcentral was almost
+	// certainly `SEEN_FREE` (that is what the scavenger left it as), and a span cut from a fresh chunk run is
+	// in a header that may be RECYCLED and hold whatever the previous occupant's state was. One store answers
+	// both, and putting it in either arm instead would leave the other arm to be remembered.
+	let active = emitConst(module, block: install, value: MspanScavActive, ids: ids)
+	emitStoreField(module, block: install, record: installed, offset: MspanScavStateOffset, value: active)
+	module.setTerminator(install, op: StdOp.ret(installed))
+
+	module.functions.push(func)
+end 'buildSlabRefill'
+
+// `__slab_alloc_class(classIdx) -> slot` — the hot path: pop a slot from this row's cached span.
+//
+// ⭐⭐ **THE TWO ARMS ARE THE DESIGN.** A RECYCLED slot comes off the free list and is DIRTY, so the
+// zeroing build fills it; a VIRGIN slot is carved off the bump cursor and still holds the OS's zeroes, so it
+// costs nothing at any size class. That asymmetry is the whole reason the bump region exists — see the
+// file header, and v1's own deletion of `__slab_build_freelist`.
+//
+// ⭐ **`zeroed` IS A BUILD-TIME ARGUMENT, NOT A RUNTIME `needzero` PARAMETER.** v1 threads a flag through
+// `__slab_alloc_needzero` → `__slab_alloc_class`, which puts a branch on the hot path of every allocation in
+// the language and an extra argument in every call. Two bodies from one builder cost code size in a program
+// that uses both — and `DFE` means no program that uses one carries the other.
+function buildSlabAllocClass(module StdModule, name ByteArray, zeroed bool)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkDepleted = module.addBlock(func, label: b"depleted")
+	var refill = module.addBlock(func, label: b"refill")
+	var ready = module.addBlock(func, label: b"ready")
+	var recycled = module.addBlock(func, label: b"recycled")
+	var virgin = module.addBlock(func, label: b"virgin")
+	var handOut = module.addBlock(func, label: b"handout")
+	var pastEnd = module.addBlock(func, label: b"pastend")
+	var consumed = module.addBlock(func, label: b"consumed")
+	var evict = module.addBlock(func, label: b"evict")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 1)
+	let classIdx = 0 as ValueId
+
+	let state = ids.mint()
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	let row = ids.mint()
+	module.appendOp(entry, op: StdOp.call(row, callee: SlabShardRowName, args: ValueIdArray.create()))
+	let mcacheSlot = emitMcacheSlotAddr(module, block: entry, state: state, row: row, classIdx: classIdx, ids: ids)
+	let cached = emitLoadField(module, block: entry, record: mcacheSlot, offset: 0, ids: ids)
+	let none = emitConst(module, block: entry, value: 0, ids: ids)
+	let noSpan = emitCmp(module, block: entry, a: cached, b: none, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(noSpan, thenBlockId: refill.id, elseBlockId: checkDepleted.id))
+
+	// A span whose last slot went out is evicted below, so a cached span with `free_count == 0` can only be
+	// one this row never consumed from — it is still a miss, and testing it costs one load either way.
+	//
+	// ⚠ **THIS EDGE CARRIES A BLOCK ARGUMENT OFF A CONDITIONAL, WHICH `SlabArena.maxon` DELIBERATELY NEVER
+	// DOES — and the divergence is deliberate, not an oversight.** That file routes every arg-carrying edge
+	// through an extra single-successor block, on the stated grounds that it keeps the edge safe. It is safe
+	// either way: `splitCriticalEdges` runs before coloring and splits exactly this shape (a pred with two
+	// successors into a succ with two predecessors), so the extra block is BUILT rather than written. Writing
+	// it by hand duplicates a pass, and a hand-written one is a second place for the edge's arguments to be
+	// wrong.
+	let freeCount = emitLoadField(module, block: checkDepleted, record: cached, offset: MspanFreeCountOffset, ids: ids)
+	let drained = emitCmp(module, block: checkDepleted, a: freeCount, b: none, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkDepleted, op: StdOp.condBranch(drained, thenBlockId: refill.id, elseBlockId: ready.id))
+	checkDepleted.branchEdges.push(BranchEdge.create(ready.id, argIds: argsOf(cached)))
+
+	let fresh = ids.mint()
+	module.appendOp(refill, op: StdOp.call(fresh, callee: SlabRefillName, args: argsOf(classIdx)))
+	module.setTerminator(refill, op: StdOp.branch(ready.id))
+	refill.branchEdges.push(BranchEdge.create(ready.id, argIds: argsOf(fresh)))
+
+	let span = ids.mint()
+	ready.blockArgs.push(IrBlockArg.create(span, argType: StdType.i64))
+
+	let geom = emitClassGeometry(module, block: ready, classIdx: classIdx, ids: ids)
+	let slotSize = emitGeomSlotSize(module, block: ready, geom: geom, ids: ids)
+	let freeList = emitLoadField(module, block: ready, record: span, offset: MspanFreeListOffset, ids: ids)
+	let listEmpty = emitCmp(module, block: ready, a: freeList, b: none, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(ready, op: StdOp.condBranch(listEmpty, thenBlockId: virgin.id, elseBlockId: recycled.id))
+
+	// POP. The link lives in the dead slot's first word, so unlinking is one load and one store — and the
+	// fill that follows subsumes the link, which is why there is no separate first-word clear.
+	let following = emitLoadField(module, block: recycled, record: freeList, offset: 0, ids: ids)
+	emitStoreField(module, block: recycled, record: span, offset: MspanFreeListOffset, value: following)
+	if zeroed 'restoreTheZeroingContract'
+		module.appendOp(recycled, op: StdOp.memFill(freeList, byteCountId: slotSize, value: 0))
+	end 'restoreTheZeroingContract'
+	module.setTerminator(recycled, op: StdOp.branch(consumed.id))
+	recycled.branchEdges.push(BranchEdge.create(consumed.id, argIds: argsOf(freeList)))
+
+	// CARVE. INV-2 says `bump_end == base_addr + slot_size * total_slots`, derived here rather than stored;
+	// INV-1 says `free_count > 0` with an empty free list implies `bump_next < bump_end`.
+	let bumpNext = emitLoadField(module, block: virgin, record: span, offset: MspanBumpNextOffset, ids: ids)
+	let totalSlots = emitGeomTotalSlots(module, block: virgin, geom: geom, ids: ids)
+	let regionBytes = emitBin(module, block: virgin, a: slotSize, b: totalSlots, opcode: StdBinOpcode.mul, ids: ids)
+	let baseAddr = emitLoadField(module, block: virgin, record: span, offset: MspanBaseAddrOffset, ids: ids)
+	let bumpEnd = emitBin(module, block: virgin, a: baseAddr, b: regionBytes, opcode: StdBinOpcode.add, ids: ids)
+	// ⚠ **INV-1 TRAPS LOUDLY.** Handing out a slot past the span's end writes into whatever the arena placed
+	// in the next chunk, and the corruption surfaces somewhere else, much later, as a slot handed out twice.
+	let exhausted = emitCmp(module, block: virgin, a: bumpNext, b: bumpEnd, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(virgin, op: StdOp.condBranch(exhausted, thenBlockId: pastEnd.id, elseBlockId: handOut.id))
+
+	emitRuntimeAbort(module, func: func, block: pastEnd, abort: RuntimeAbort.slabSpanExhaustedPastItsEnd, ids: ids)
+
+	let nextBump = emitBin(module, block: handOut, a: bumpNext, b: slotSize, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: handOut, record: span, offset: MspanBumpNextOffset, value: nextBump)
+	module.setTerminator(handOut, op: StdOp.branch(consumed.id))
+	handOut.branchEdges.push(BranchEdge.create(consumed.id, argIds: argsOf(bumpNext)))
+
+	let slot = ids.mint()
+	consumed.blockArgs.push(IrBlockArg.create(slot, argType: StdType.i64))
+
+	// Both arms consumed exactly one slot, which is the other half of INV-1.
+	let live = emitLoadField(module, block: consumed, record: span, offset: MspanFreeCountOffset, ids: ids)
+	let one = emitConst(module, block: consumed, value: 1, ids: ids)
+	let remaining = emitBin(module, block: consumed, a: live, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: consumed, record: span, offset: MspanFreeCountOffset, value: remaining)
+	let drainedNow = emitCmp(module, block: consumed, a: remaining, b: none, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(consumed, op: StdOp.condBranch(drainedNow, thenBlockId: evict.id, elseBlockId: done.id))
+
+	// Drop a drained span from the mcache so the next call refills cleanly, and clear the span's own record
+	// of the row — the pair is what makes `__slab_span_return`'s eviction one load instead of a search.
+	emitStoreField(module, block: evict, record: mcacheSlot, offset: 0, value: none)
+	let notCached = emitConst(module, block: evict, value: MspanNotCached, ids: ids)
+	emitStoreField(module, block: evict, record: span, offset: MspanCachedShardOffset, value: notCached)
+	module.setTerminator(evict, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.ret(slot))
+
+	module.functions.push(func)
+end 'buildSlabAllocClass'
+
+// `__slab_alloc(size) -> ptr` and its two siblings — the public doors.
+//
+// ⭐ **`countRaw` DECIDES WHETHER THIS BODY MAINTAINS THE RAW TRAFFIC COLUMNS**, which is what lets one
+// builder serve `__slab_alloc` and its uncounted twin `__slab_alloc_box`; `classCallee` decides whether a
+// recycled slot is zeroed. Both are BUILD-time, so neither costs a branch or an argument at run time.
+//
+// The columns are credited in the entry block — before the routing, because the request is counted whichever
+// tier serves it and `size` is the number either way.
+function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, classCallee ByteArray)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var osDirect = module.addBlock(func, label: b"osdirect")
+	var small = module.addBlock(func, label: b"small")
+
+	emitParams(module, block: entry, count: 1)
+	let size = 0 as ValueId
+
+	if countRaw 'rawColumns'
+		emitRawTrafficCredit(module, block: entry, bytes: size, ids: ids)
+	end 'rawColumns'
+
+	emitSlabSizeRouting(module, block: entry, size: size, osDirect: osDirect, small: small, ids: ids)
+
+	let mapped = ids.mint()
+	module.appendOp(osDirect, op: StdOp.call(mapped, callee: SlabOsDirectAllocName, args: argsOf(size)))
+	module.setTerminator(osDirect, op: StdOp.ret(mapped))
+
+	let class = ids.mint()
+	module.appendOp(small, op: StdOp.call(class, callee: SlabClassIndexForName, args: argsOf(size)))
+	let slot = ids.mint()
+	module.appendOp(small, op: StdOp.call(slot, callee: classCallee, args: argsOf(class)))
+	module.setTerminator(small, op: StdOp.ret(slot))
+
+	module.functions.push(func)
+end 'buildSlabAllocEntry'
+
+// `__slab_span_return(span)` — park a fully-emptied span on its class's mcentral list so a later refill can
+// take it back.
+//
+// ⛔⛔ **v1 WALKS ALL 256 mcache ROWS HERE AND THAT DOES NOT PORT.** Its `__slab_mcentral_return_span` runs
+// a 256-iteration load-and-compare loop NULLing any row still pointing at the span — every time a span
+// empties, for a question the span itself can answer in one load. `MspanCachedShardOffset` is that load;
+// the loop is what it replaces, and the eviction it performs is exactly as complete.
+//
+// ⚠ **THE FREE LIST AND THE BUMP CURSOR ARE LEFT ALONE.** A parked span keeps both, and the next taker
+// keeps using both — see the file header's "the case that looks wrong". Resetting either here would either
+// lose recycled slots or, worse, re-virginise a region that is no longer zero and break INV-3.
+//
+// ⚠ **AND SO IS THE SCAVENGE GRACE STATE**, which is `ACTIVE` by the time a span gets here because
+// `__slab_refill`'s install wrote it when this span was handed out. Writing it a second time here would be
+// the same fact stated at two sites, and the site that would eventually go missing is this one — a span can
+// reach mcentral only through the install that already answered.
+function buildSlabSpanReturn(module StdModule)
+	var func = IrFunction.createFromStd(SlabSpanReturnName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var evict = module.addBlock(func, label: b"evict")
+	var park = module.addBlock(func, label: b"park")
+
+	emitParams(module, block: entry, count: 1)
+	let span = 0 as ValueId
+
+	let state = ids.mint()
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	let classIdx = emitLoadField(module, block: entry, record: span, offset: MspanClassIdxOffset, ids: ids)
+	let mcentralSlot = emitStateSlotAddr(module, block: entry, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
+	let cachedRow = emitLoadField(module, block: entry, record: span, offset: MspanCachedShardOffset, ids: ids)
+	let unowned = emitConst(module, block: entry, value: 0, ids: ids)
+	let notCachedAnywhere = emitCmp(module, block: entry, a: cachedRow, b: unowned, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(notCachedAnywhere, thenBlockId: park.id, elseBlockId: evict.id))
+
+	let mcacheSlot = emitMcacheSlotAddr(module, block: evict, state: state, row: cachedRow, classIdx: classIdx, ids: ids)
+	emitStoreField(module, block: evict, record: mcacheSlot, offset: 0, value: unowned)
+	let notCached = emitConst(module, block: evict, value: MspanNotCached, ids: ids)
+	emitStoreField(module, block: evict, record: span, offset: MspanCachedShardOffset, value: notCached)
+	module.setTerminator(evict, op: StdOp.branch(park.id))
+
+	let head = emitLoadField(module, block: park, record: mcentralSlot, offset: 0, ids: ids)
+	emitStoreField(module, block: park, record: span, offset: MspanNextSpanOffset, value: head)
+	emitStoreField(module, block: park, record: mcentralSlot, offset: 0, value: span)
+	module.setTerminator(park, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSlabSpanReturn'
+
+// `__slab_span_destroy(span)` — take a span apart: unregister its pages, hand its chunk run back to the
+// arena, and put its header on the metadata free list.
+//
+// ⚠ **THE CALLER MUST HAVE UNLINKED IT FROM ITS MCENTRAL LIST ALREADY**, and must have established that no
+// slot in it is live. `__slab_scavenge` is the only caller and both facts are structural there: a span on an
+// mcentral list is fully free by construction (`__slab_span_return` only ever parks an emptied one, and
+// `__slab_refill` removes one before handing it to a caller), and the scavenger detaches the whole list
+// before it walks.
+//
+// ⭐ **THE REVERSE MAP IS CLEARED, AND IT IS NOT MERELY TIDINESS.** Left registered, a stale slot points at
+// an mspan header that `__slab_meta_free` is about to recycle for an unrelated span at an unrelated address
+// — so a `__slab_free` of a dangling pointer into the released region would push that pointer onto a LIVE
+// span's free list and hand it out as a slot. Cleared, the same free takes the map's MISS route and hits
+// `slabOsDirectPointerNotOurs`: a named abort instead of silent heap corruption. `__slab_arena_map_set` with
+// `ArenaMapNoSpan` is the clear, because "no span owns this page" is exactly what a fresh slot says.
+function buildSlabSpanDestroy(module StdModule)
+	var func = IrFunction.createFromStd(SlabSpanDestroyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let span = 0 as ValueId
+
+	let classIdx = emitLoadField(module, block: entry, record: span, offset: MspanClassIdxOffset, ids: ids)
+	let geom = emitClassGeometry(module, block: entry, classIdx: classIdx, ids: ids)
+	let slotSize = emitGeomSlotSize(module, block: entry, geom: geom, ids: ids)
+	let totalSlots = emitGeomTotalSlots(module, block: entry, geom: geom, ids: ids)
+	let numChunks = emitSpanChunkCount(module, block: entry, slotSize: slotSize, totalSlots: totalSlots, ids: ids)
+	let pageBase = emitLoadField(module, block: entry, record: span, offset: MspanBaseAddrOffset, ids: ids)
+
+	let unowned = emitConst(module, block: entry, value: ArenaMapNoSpan, ids: ids)
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SlabArenaMapSetName, args: threeArgs(pageBase, second: numChunks, third: unowned)))
+
+	// The arena is ASKED rather than remembered — see `SlabArena.__slab_arena_of` for why a stored field
+	// would have cost the mspan record its last word to answer a question only a destruction asks.
+	let arenaBase = ids.mint()
+	module.appendOp(entry, op: StdOp.call(arenaBase, callee: SlabArenaOfName, args: argsOf(pageBase)))
+	let byteOffset = emitBin(module, block: entry, a: pageBase, b: arenaBase, opcode: StdBinOpcode.sub, ids: ids)
+	let pageShift = emitConst(module, block: entry, value: SlabPageShift, ids: ids)
+	let chunkIndex = emitBin(module, block: entry, a: byteOffset, b: pageShift, opcode: StdBinOpcode.shr, ids: ids)
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SlabArenaFreeChunksName, args: threeArgs(arenaBase, second: chunkIndex, third: numChunks)))
+
+	// LAST, because everything above reads the header it hands back.
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SlabMetaFreeName, args: argsOf(span)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSlabSpanDestroy'
+
+// `__slab_scavenge() -> bytesDecommitted` — the whole reclamation pass, and the public door
+// `__Builtins.scavengeMemory()` lowers to.
+//
+// **Three steps, in one call:** every idle span on every mcentral list is marked `SEEN_FREE`; every span
+// that was ALREADY `SEEN_FREE` is destroyed, returning its chunks to the arena; and then
+// `__slab_arena_scavenge` drops the backing of every commit granule those releases have left entirely free.
+// The answer is that last step's byte count — the only number this layer can honestly report, because
+// whether the pages left the RESIDENT SET is the OS's answer and not the allocator's.
+//
+// ⭐⭐ **THE TWO-EPOCH GRACE IS THE WHOLE POINT AND IT IS WHY NOTHING COMES BACK ON THE FIRST CALL.** A span
+// that empties and refills between two scavenges is reset to `ACTIVE` by `__slab_refill`'s install, so it
+// never reaches the destroy arm — the active working set is never released, never memzeroed and never
+// decommitted. v1 states the identical argument for the identical guard. A caller that wants memory back
+// after a burst therefore calls this TWICE, which the spec says out loud.
+//
+// ⛔ **NO BACKGROUND SCAVENGER, AND THAT IS A PROPERTY OF THIS RUNTIME RATHER THAN A PREFERENCE.** Go's is a
+// goroutine paced against the GC's heap goal at 1% of mutator time (`mgcscavenge.go`), and neither half of
+// that is reachable here: shv2 has no GC and so no heap goal to pace against, its scheduler is single-M and
+// cooperative with no timer to hang a background G on, and green threads exist on ONE of the five lanes
+// (`GtRuntime`), so a scavenger built on them would not run in a wasm or POSIX program at all. What Go's
+// design contributes and this does take is the SHAPE UNDERNEATH the pacing — release at the page layer, in
+// physical-page-aligned units, gated on a run having stayed idle — which is `__slab_arena_scavenge`.
+//
+// ⭐ **THE LIST IS DETACHED AND REBUILT RATHER THAN SPLICED.** Removing a span from the middle of a singly
+// linked list needs a `prev` carried through the walk, and a `prev` that is not updated on exactly the
+// surviving arm is how a walk drops the rest of its own list. Taking the whole list, walking it and pushing
+// the survivors onto a fresh head has no such variable. It reverses the order, which nothing depends on:
+// mcentral is a pool, not a queue.
+function buildSlabScavenge(module StdModule)
+	var func = IrFunction.createFromStd(SlabScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var classLoop = module.addBlock(func, label: b"classloop")
+	var arenas = module.addBlock(func, label: b"arenas")
+	var classStart = module.addBlock(func, label: b"classstart")
+	var spanLoop = module.addBlock(func, label: b"spanloop")
+	var spanBody = module.addBlock(func, label: b"spanbody")
+	var markSeen = module.addBlock(func, label: b"markseen")
+	var destroy = module.addBlock(func, label: b"destroy")
+	var classDone = module.addBlock(func, label: b"classdone")
+
+	let state = ids.mint()
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	let firstClass = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(classLoop.id))
+	entry.branchEdges.push(BranchEdge.create(classLoop.id, argIds: argsOf(firstClass)))
+
+	let classIdx = ids.mint()
+	classLoop.blockArgs.push(IrBlockArg.create(classIdx, argType: StdType.i64))
+
+	let classCount = emitConst(module, block: classLoop, value: slabClassCount(), ids: ids)
+	let swept = emitCmp(module, block: classLoop, a: classIdx, b: classCount, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(classLoop, op: StdOp.condBranch(swept, thenBlockId: arenas.id, elseBlockId: classStart.id))
+
+	let decommitted = ids.mint()
+	module.appendOp(arenas, op: StdOp.call(decommitted, callee: SlabArenaScavengeName, args: ValueIdArray.create()))
+	module.setTerminator(arenas, op: StdOp.ret(decommitted))
+
+	let mcentralSlot = emitStateSlotAddr(module, block: classStart, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
+	let head = emitLoadField(module, block: classStart, record: mcentralSlot, offset: 0, ids: ids)
+	let empty = emitConst(module, block: classStart, value: 0, ids: ids)
+	emitStoreField(module, block: classStart, record: mcentralSlot, offset: 0, value: empty)
+	module.setTerminator(classStart, op: StdOp.branch(spanLoop.id))
+	classStart.branchEdges.push(BranchEdge.create(spanLoop.id, argIds: twoArgs(head, second: empty)))
+
+	// The span under the walk, and the head of the list being rebuilt out of the ones that survive it.
+	let span = ids.mint()
+	let kept = ids.mint()
+	spanLoop.blockArgs.push(IrBlockArg.create(span, argType: StdType.i64))
+	spanLoop.blockArgs.push(IrBlockArg.create(kept, argType: StdType.i64))
+
+	let none = emitConst(module, block: spanLoop, value: 0, ids: ids)
+	let walked = emitCmp(module, block: spanLoop, a: span, b: none, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(spanLoop, op: StdOp.condBranch(walked, thenBlockId: classDone.id, elseBlockId: spanBody.id))
+	spanLoop.branchEdges.push(BranchEdge.create(classDone.id, argIds: argsOf(kept)))
+
+	// The successor is read BEFORE either arm, because the destroy arm hands the header to the metadata free
+	// list, which writes its own link over the span's first word — and a walk that read `next` afterwards
+	// would follow the free list instead of the mcentral one.
+	let following = emitLoadField(module, block: spanBody, record: span, offset: MspanNextSpanOffset, ids: ids)
+	let scavState = emitLoadField(module, block: spanBody, record: span, offset: MspanScavStateOffset, ids: ids)
+	let active = emitConst(module, block: spanBody, value: MspanScavActive, ids: ids)
+	let firstSeen = emitCmp(module, block: spanBody, a: scavState, b: active, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(spanBody, op: StdOp.condBranch(firstSeen, thenBlockId: markSeen.id, elseBlockId: destroy.id))
+
+	let seenFree = emitConst(module, block: markSeen, value: MspanScavSeenFree, ids: ids)
+	emitStoreField(module, block: markSeen, record: span, offset: MspanScavStateOffset, value: seenFree)
+	emitStoreField(module, block: markSeen, record: span, offset: MspanNextSpanOffset, value: kept)
+	module.setTerminator(markSeen, op: StdOp.branch(spanLoop.id))
+	markSeen.branchEdges.push(BranchEdge.create(spanLoop.id, argIds: twoArgs(following, second: span)))
+
+	module.appendOp(destroy, op: StdOp.call(ids.mint(), callee: SlabSpanDestroyName, args: argsOf(span)))
+	module.setTerminator(destroy, op: StdOp.branch(spanLoop.id))
+	destroy.branchEdges.push(BranchEdge.create(spanLoop.id, argIds: twoArgs(following, second: kept)))
+
+	let survivors = ids.mint()
+	classDone.blockArgs.push(IrBlockArg.create(survivors, argType: StdType.i64))
+	emitStoreField(module, block: classDone, record: mcentralSlot, offset: 0, value: survivors)
+	let one = emitConst(module, block: classDone, value: 1, ids: ids)
+	let nextClass = emitBin(module, block: classDone, a: classIdx, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(classDone, op: StdOp.branch(classLoop.id))
+	classDone.branchEdges.push(BranchEdge.create(classLoop.id, argIds: argsOf(nextClass)))
+
+	module.functions.push(func)
+end 'buildSlabScavenge'
+
+// `__slab_free(ptr)` — return a slot to its span, or a mapping to the OS.
+//
+// ⭐⭐ **THE ROUTING IS ONE QUESTION: DOES THE REVERSE MAP KNOW THIS PAGE?** A hit names the owning span; a
+// MISS is the OS-direct sentinel (`SlabArena.ArenaMapNoSpan`), which is why nothing may ever register an
+// OS-direct mapping's pages in that map.
+//
+// ⚠ **`ptr` MUST BE A SLOT BASE, and nothing here can check it.** The free list is threaded through the
+// slot's first word, so an INTERIOR pointer would corrupt the slot it lands in and then be handed out as a
+// slot base. Every caller passes back exactly what `__slab_alloc` answered (`__mm_free` passes the box
+// HEADER base, which is that pointer); v1 has the same obligation and states it the same way.
+function buildSlabFree(module StdModule)
+	var func = IrFunction.createFromStd(SlabFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var osDirect = module.addBlock(func, label: b"osdirect")
+	var toSpan = module.addBlock(func, label: b"tospan")
+	var fullyFree = module.addBlock(func, label: b"fullyfree")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	let span = ids.mint()
+	module.appendOp(entry, op: StdOp.call(span, callee: SlabArenaMapGetName, args: argsOf(ptr)))
+	let noSpan = emitConst(module, block: entry, value: ArenaMapNoSpan, ids: ids)
+	let unmapped = emitCmp(module, block: entry, a: span, b: noSpan, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(unmapped, thenBlockId: osDirect.id, elseBlockId: toSpan.id))
+
+	module.appendOp(osDirect, op: StdOp.call(ids.mint(), callee: SlabOsDirectFreeName, args: argsOf(ptr)))
+	module.setTerminator(osDirect, op: StdOp.retVoid)
+
+	// PUSH: `[slot] = free_list; free_list = slot; free_count += 1` — the other half of INV-1.
+	let head = emitLoadField(module, block: toSpan, record: span, offset: MspanFreeListOffset, ids: ids)
+	emitStoreField(module, block: toSpan, record: ptr, offset: 0, value: head)
+	emitStoreField(module, block: toSpan, record: span, offset: MspanFreeListOffset, value: ptr)
+	let live = emitLoadField(module, block: toSpan, record: span, offset: MspanFreeCountOffset, ids: ids)
+	let one = emitConst(module, block: toSpan, value: 1, ids: ids)
+	let released = emitBin(module, block: toSpan, a: live, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: toSpan, record: span, offset: MspanFreeCountOffset, value: released)
+
+	let classIdx = emitLoadField(module, block: toSpan, record: span, offset: MspanClassIdxOffset, ids: ids)
+	let geom = emitClassGeometry(module, block: toSpan, classIdx: classIdx, ids: ids)
+	let totalSlots = emitGeomTotalSlots(module, block: toSpan, geom: geom, ids: ids)
+	let spanIsEmpty = emitCmp(module, block: toSpan, a: released, b: totalSlots, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(toSpan, op: StdOp.condBranch(spanIsEmpty, thenBlockId: fullyFree.id, elseBlockId: done.id))
+
+	module.appendOp(fullyFree, op: StdOp.call(ids.mint(), callee: SlabSpanReturnName, args: argsOf(span)))
+	module.setTerminator(fullyFree, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSlabFree'
+
+// `__slab_os_direct_alloc(size) -> ptr` — one mapping for one request, with its length in a prefix.
+//
+// See `OsDirectPrefixBytes` for why the length rides in the mapping rather than in a side table, and what
+// v1's side table costs.
+function buildSlabOsDirectAlloc(module StdModule)
+	var func = IrFunction.createFromStd(SlabOsDirectAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let size = 0 as ValueId
+
+	let prefix = emitConst(module, block: entry, value: OsDirectPrefixBytes, ids: ids)
+	let withPrefix = emitBin(module, block: entry, a: size, b: prefix, opcode: StdBinOpcode.add, ids: ids)
+	let total = emitPageAlignUp(module, block: entry, bytes: withPrefix, ids: ids)
+
+	let raw = ids.mint()
+	module.appendOp(entry, op: StdOp.osAllocPages(raw, sizeId: total))
+	let base = ids.mint()
+	module.appendOp(entry, op: StdOp.call(base, callee: SlabAssertOsAllocName, args: argsOf(raw)))
+
+	emitStoreField(module, block: entry, record: base, offset: OsDirectTotalBytesOffset, value: total)
+	let magic = emitConst(module, block: entry, value: OsDirectMagic, ids: ids)
+	emitStoreField(module, block: entry, record: base, offset: OsDirectMagicOffset, value: magic)
+
+	// The pages are fresh from the OS, so the payload past the prefix is already zero — the zeroing contract
+	// costs this tier nothing at all, and an OS-direct mapping is never recycled through us.
+	let payload = emitBin(module, block: entry, a: base, b: prefix, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(payload))
+
+	module.functions.push(func)
+end 'buildSlabOsDirectAlloc'
+
+// `__slab_os_direct_free(ptr)` — hand one mapping back whole.
+//
+// ⭐ The magic word is what v1 gets out of failing to find the pointer in its tracking array (its sentinel
+// exit 135): without it, a double free or a pointer that was never ours reads user data as a byte count and
+// unmaps an arbitrary region.
+function buildSlabOsDirectFree(module StdModule)
+	var func = IrFunction.createFromStd(SlabOsDirectFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var notOurs = module.addBlock(func, label: b"notours")
+	var release = module.addBlock(func, label: b"release")
+
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	let prefix = emitConst(module, block: entry, value: OsDirectPrefixBytes, ids: ids)
+	let base = emitBin(module, block: entry, a: ptr, b: prefix, opcode: StdBinOpcode.sub, ids: ids)
+	let stamped = emitLoadField(module, block: entry, record: base, offset: OsDirectMagicOffset, ids: ids)
+	let magic = emitConst(module, block: entry, value: OsDirectMagic, ids: ids)
+	let ours = emitCmp(module, block: entry, a: stamped, b: magic, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(ours, thenBlockId: release.id, elseBlockId: notOurs.id))
+
+	emitRuntimeAbort(module, func: func, block: notOurs, abort: RuntimeAbort.slabOsDirectPointerNotOurs, ids: ids)
+
+	let total = emitLoadField(module, block: release, record: base, offset: OsDirectTotalBytesOffset, ids: ids)
+	module.appendOp(release, op: StdOp.osFreePages(base, sizeId: total))
+	module.setTerminator(release, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSlabOsDirectFree'

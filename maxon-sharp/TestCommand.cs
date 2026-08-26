@@ -328,6 +328,8 @@ internal static class TestCommand {
       return true;
     }
 
+    // Captured BEFORE the compile — see BuildCache.CaptureInputs.
+    var testInputs = BuildCache.CaptureInputs(onDiskSources, target);
     var result = new Compiler.Compiler().Compile(generated.Sources, binaryPath, irOutputPath: null,
       dumpStagesBasePath: null, target: target, entryFunction: TestDispatcher.EntrySymbol);
 
@@ -336,7 +338,7 @@ internal static class TestCommand {
       return false;
     }
 
-    BuildCache.WriteCache(projectDir, onDiskSources, binaryPath, target, CacheName, generated.ExtraKey);
+    BuildCache.WriteCache(projectDir, testInputs, binaryPath, CacheName, generated.ExtraKey);
     compiled = true;
     return true;
   }

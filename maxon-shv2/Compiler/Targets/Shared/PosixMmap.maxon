@@ -17,3 +17,35 @@ export let MmapProtReadWrite = 0x3  // PROT_READ (0x1) | PROT_WRITE (0x2)
 export let MmapAnonPrivateLinux = 0x22  // Linux: MAP_ANONYMOUS (0x20) | MAP_PRIVATE (0x2)
 export let MmapAnonFd = 0xFFFFFFFFFFFFFFFF  // fd = -1 (two's-complement): MAP_ANON names no file.
 export let MmapNoOffset = 0x0  // offset = 0 (ignored for an anonymous mapping).
+
+// --- F1a: the `madvise` advice that DECOMMITS a range (drops its physical backing, keeps the mapping) ---
+//
+// ⭐ **THE ADVICE NUMBER IS A LINUX FACT AND IS ARCH-INVARIANT, WHICH IS WHY IT SITS BESIDE THE MMAP FLAGS
+// RATHER THAN IN EITHER BACKEND.** Linux defines the whole `madvise` advice table in `asm-generic`, so
+// `MADV_DONTNEED` is 4 on x86-64 and on AArch64 alike — one fact, consumed by both Linux isels, exactly like
+// `MmapAnonPrivateLinux` above. (The SYSCALL NUMBER is not arch-invariant and is therefore prefixed and kept
+// per-backend: 28 on x86-64, 233 on AArch64.)
+//
+// ⚠ **DARWIN'S ANSWER IS A DIFFERENT ADVICE, NOT A DIFFERENT NUMBER FOR THIS ONE.** `MADV_FREE` (5) is what
+// decommits on Darwin, and it has WEAKER SEMANTICS: a page may come back still DIRTY. That constant lives with
+// the arm64-macOS isel (`StdToArm64Conversion.MadviseFreeMacos`), the only backend that targets macOS —
+// precisely the split `MmapAnonPrivateMacos` already makes, and for the same reason. Sharing one name across the
+// two would hide a semantic difference behind a numeric one; see `osDecommitPages` for what rests on it.
+export let MadviseDontNeedLinux = 0x4  // Linux: MADV_DONTNEED — drop the pages; the next touch refaults a ZERO page.
+
+// --- F1c: the two `mmap` parameters that turn one page source into RESERVE and COMMIT ---
+//
+// ⭐⭐ **POSIX HAS NO COMMIT CALL, SO BOTH HALVES OF THE SPLIT ARE `mmap` WITH DIFFERENT ARGUMENTS.** A
+// reservation is `mmap(NULL, size, PROT_NONE, MAP_ANON|MAP_PRIVATE, -1, 0)` — the kernel records the range and
+// backs nothing, and a touch faults because the pages permit nothing. A commit is the SAME mapping call over an
+// address the reservation already owns, with real protection and `MAP_FIXED`: it replaces that sub-range with
+// fresh anonymous pages. Both are Go's, verbatim (`vendor/go/src/runtime/mem_linux.go:163` and `:172`,
+// `mem_darwin.go:57` and `:67`), which is why neither needs a new import or a new syscall number — `mmap` is
+// already the page source both isels call.
+//
+// ⚠ **THESE TWO ARE POSIX-UNIVERSAL, UNLIKE THE ANON-PRIVATE WORD ABOVE.** `PROT_NONE` is 0 and `MAP_FIXED` is
+// 0x10 on Linux and on Darwin alike, so they sit here rather than being split per-OS the way
+// `MmapAnonPrivateLinux`/`MmapAnonPrivateMacos` are. Each isel ORs `MmapFixed` into ITS OWN anon-private word
+// at the one site that materializes the immediate, so the per-OS fact stays stated once.
+export let MmapProtNone = 0x0  // PROT_NONE: reserved address space, and a touch of it FAULTS.
+export let MmapFixed = 0x10  // MAP_FIXED — map EXACTLY at the given address, REPLACING whatever was there.

@@ -289,6 +289,7 @@ export enum Arm64CondCode
 	eq = 0  // Z==1                 (== ; float ==)
 	ne = 1  // Z==0                 (!= ; float !=)
 	hs = 2  // C==1                 (unsigned >= — the jump table's out-of-bounds bounds check)
+	lo = 3  // C==0                 (unsigned < — `hs`'s complement; the fill ladder's band dispatch)
 	mi = 4  // N==1                 (float <  — false on NaN)
 	pl = 5  // N==0                 (⚠ TRUE on NaN — `mi`'s arithmetic complement, NOT float >=)
 	hi = 8  // C==1 ∧ Z==0          (unsigned > ; ⚠ TRUE on NaN — NOT float >)
@@ -1300,10 +1301,10 @@ export union TargetOp
 	// so their clobber genuinely reserves them at this one op.
 	//
 	// x64 scratch = r10 (0x400) | r11 (0x800) = 0xC00. A union-backing literal cannot reference a named
-	// `let`, so the mask is inline (guarded — see `assertJumpTableScratch`).
+	// `let`, so the mask is inline (guarded — see `assertEncoderScratchMasks`).
 	x64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0xC00}
 	// arm64 scratch = x16 (0x10000) | x17 (0x20000) = 0x30000 — the IP0/IP1 scratch pair, already outside
-	// the arm64 allocatable pool. Inline for the same union-literal reason (guarded by `assertJumpTableScratch`).
+	// the arm64 allocatable pool. Inline for the same union-literal reason (guarded by `assertEncoderScratchMasks`).
 	arm64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
 	// --- P1.7a slice 2a: the fused witness call's memory-indirect call (x64) ---
 	//
@@ -1408,6 +1409,173 @@ export union TargetOp
 	//
 	// `isMemory: false` — it computes an address; it does not touch memory (the mirror of `leaRegGlobal`).
 	leaRegSlot(destReg TargetVReg, slot SpillSlot) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// --- F1b: the byte-fill SIZE LADDER, one macro-op per ISA ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `leaRegSlot`, per the band-append invariant.
+	//
+	// ⭐⭐ **A MACRO-OP BECAUSE THE LADDER HAS INTERNAL BRANCHES AND THE Std→Target LOWERINGS CANNOT CREATE
+	// BLOCKS.** `StdOp.memFill` lowers to a size dispatch — a `cmp` chain picking between straight-line
+	// overlapping stores, a block loop and (x64) `rep stosq` — and there is no `addBlock` anywhere in either
+	// isel: an isel maps Std blocks to Target blocks 1:1 and has no way to split one. So the dispatch lives
+	// INSIDE the encoder as one self-contained instruction sequence with locally-backpatched jumps, exactly
+	// as `x64JumpTable`/`arm64JumpTable` already do and exactly as v1's `emitX64MemzeroOp` does. ⇒ these are
+	// ops to the allocator and an instruction SEQUENCE to the assembler, and they must never become IR blocks.
+	//
+	// ⭐⭐ **THE FIXED REGISTERS RIDE `implicitDefs`, AND ON x64 THAT IS LOAD-BEARING IN A WAY IT WAS NOT IN
+	// v1.** The isel pre-moves the destination and the byte count into the ladder's fixed registers (the shape
+	// every OS-call lowering already uses), and the ladder then WRITES all four of its registers — it advances
+	// the cursor, decrements the count, pins the region's END and holds the broadcast fill pattern. Declaring
+	// them clobbered is what makes the sequence safe without a reserved-scratch pool (shv2 has none):
+	// the liveness clobber census forbids any value live ACROSS the fill from those registers, so the ladder
+	// destroys nothing live, and it ends the pre-move's "established register" window at exactly the right op.
+	//
+	// ⛔ **v1's x64 ladder pins the same rax/rcx/rdx/rdi — but v1's ABI makes rsi/rdi CALLEE-SAVED, and shv2's
+	// makes them ARGUMENT REGISTERS** (`X64GtRuntime`: "the one place shv2's ABI diverges from v1's"). rdi is
+	// therefore ALLOCATABLE here, so a live value genuinely can be coloured into it and a mask copied from
+	// v1's assumptions would be a silent mid-fill clobber. The mask is checked against the encoders' actual
+	// fixed registers by `assertEncoderScratchMasks`, the way the jump-table scratch pair is.
+	//
+	// `implicitUses: 0`, like every call op here and NOT like `cqo`: the ladder's inputs arrive by pre-move
+	// into physical registers, and it is `implicitDefs` — not `implicitUses` — that closes that window
+	// (`sweepEstablishedRegisters` deliberately does not end one at a mere read). It has no explicit virtual
+	// operand for `forbidOperandsFromImplicit` to constrain, so an `implicitUses` here would be inert.
+	//
+	// `isCall: false` — nothing is called; `functionMakesCall` must not be told a heap-touching runtime body
+	// needs a frame it does not. `isMemory`/`isStore` are true: it writes the region.
+	//
+	// ⭐ `fillByte` is the Std op's CONSTANT, carried through UNCHANGED — the byte, never the broadcast. All
+	// three tiers therefore speak the same vocabulary (a fill BYTE), and WIDENING it is each encoder's own
+	// business: the two native ladders materialize `memFillPatternWord` of it into a register so one register
+	// serves every store width, and wasm's `memory.fill` takes the byte itself. Splitting that vocabulary at
+	// the isel would have bought nothing and made the wasm lane the odd one out.
+	//
+	// x64 scratch = rax (0x1) | rcx (0x2) | rdx (0x4) | rdi (0x80) = 0x87. A union-backing literal cannot
+	// reference a named `let`, so the mask is inline (guarded — see `assertEncoderScratchMasks`).
+	x64MemFill(fillByte ParsedInt) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0x87}
+	// arm64 scratch = x0 (0x1) | x1 (0x2) | x2 (0x4) | x3 (0x8) = 0xF — the first four AAPCS64 argument
+	// registers, which is what the isel's pre-moves already use for a syscall's arguments. Deliberately NOT
+	// x16/x17: `Arm64Backend` records that x16 is straddled by isel-minted producer/consumer pairs, leaving
+	// only x17 safe at the encoder tier — and this ladder needs FOUR registers, not one. Inline for the same
+	// union-literal reason (guarded by `assertEncoderScratchMasks`).
+	arm64MemFill(fillByte ParsedInt) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0xF}
+	// --- F2: the ATOMICS, one shape per ISA ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `arm64MemFill`, per the band-append invariant.
+	//
+	// ⭐⭐ **x64 SPELLS EACH ATOMIC AS ONE INSTRUCTION AND arm64 AS A RETRY LOOP, SO THE TWO ISAs GET
+	// DIFFERENT OP SHAPES RATHER THAN ONE SHARED SHAPE WITH TWO ENCODERS.** A `lock cmpxchg` is a single
+	// x86 instruction whose comparand is the fixed accumulator, so it is modelled the way `divideReg` is:
+	// an ordinary op with an implicit RAX read and write. ARMv8.0 has no such instruction — the atomic is
+	// an `LDAXR`/`STLXR` reservation loop that RETRIES on contention — so its arm64 form is a macro-op
+	// whose branches live INSIDE the encoder, exactly as `arm64JumpTable` and `arm64MemFill` already do,
+	// and for the identical reason: the Std→Target lowerings cannot create blocks (there is no `addBlock`
+	// in either isel).
+	//
+	// ⛔ **ARMv8.1 LSE (`CAS`, `LDADD`) WOULD MAKE BOTH ARM ARMS ONE INSTRUCTION AND IS DELIBERATELY NOT
+	// USED.** LSE is an ARMv8.1-A extension: Apple Silicon has it, but arm64-linux runs on ARMv8.0 parts
+	// (Cortex-A72 and friends), where those encodings are undefined instructions. shv2 emits ONE arm64
+	// instruction stream per OS and has no CPU-feature dimension to select on, so the baseline is what may
+	// be emitted. v1 made the same call for the same reason. If a feature axis ever arrives, these two
+	// encoders are where LSE goes in.
+
+	// `lock cmpxchg [addrReg], srcReg` (`F0 REX.W 0F B1 /r`) — compare RAX against the word at `addrReg`;
+	// on a match store `srcReg` and set ZF, otherwise load the observed word into RAX and clear ZF.
+	//
+	// ⭐ **IT READS AND WRITES RAX WITHOUT NAMING IT, WHICH IS `cqo`/`divideReg`'s EXACT SHAPE.**
+	// `implicitUses = 0x1` (the RAX bit) keeps the comparand's `mov rax, expected` alive to here and stops
+	// the allocator colouring `addrReg`/`srcReg` into RAX; `implicitDefs = 0x1` says cmpxchg CLOBBERS RAX
+	// on the failure path, so no value live across it may sit there. Both halves are needed: with only the
+	// use, a value live across the CAS could be colored into RAX and destroyed by a failed swap; with only
+	// the def, the pinned comparand would look dead before the instruction that reads it.
+	//
+	// ⚠ **shv2's THIRD INTEGER ARGUMENT REGISTER IS RAX**, so a CAS whose `expected` arrived as argument 3
+	// already sits in the pinned register and the isel's `mov rax, expected` self-elides. That is the
+	// implicit-use/def pair doing its job — nothing at the lowering may hand-detect it.
+	//
+	// It defines no VIRTUAL value: the answer is ZF, which a following `setccReg` materializes.
+	x64LockCmpxchg(addrReg TargetVReg, srcReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0x1, implicitDefs: 0x1}
+	// `lock xadd [addrReg], dest` (`F0 REX.W 0F C1 /r`) — atomically add `dest` into the word at `addrReg`
+	// and leave the PRIOR word in `dest`.
+	//
+	// ⭐ **TWO-ADDRESS, SO `dest` IS A REUSE-DEF OVER `src` AND THE ALLOCATOR SUPPLIES THE COPY.** xadd's
+	// register operand is both its addend and its result, so the addend must arrive in the destination
+	// register. v1 hand-emits `mov result, val` ahead of it (`MirToX64Conversion.lowerAtomicXadd`); shv2
+	// does not, because the reuse-def IS that statement — and the allocator then emits the copy only when
+	// `src` outlives the op, which is the same saving `binOpImm`'s word-ALU forms already take.
+	x64LockXadd(dest TargetVReg, src TargetVReg, addrReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `lock add [addrReg], srcReg` (`F0 REX.W 01 /r`) — the same atomic add with its PRIOR value DISCARDED.
+	// Emitted where nothing reads the RMW's result, which is `atomicInc`/`atomicDec`'s whole shape.
+	//
+	// ⭐ **IT EXISTS TO SPEND NO REGISTER, NOT TO SAVE A BYTE.** Its two-address twin above must have the
+	// addend in the destination, so a discarded result still costs a live register plus the allocator's
+	// copy into it — the DEAD-DEF transient `TargetLiveness.addOpTransientPressure` bills, on a path a
+	// refcount update runs everywhere. `lock add` reads two registers and writes none.
+	x64LockAdd(addrReg TargetVReg, srcReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `mov dest, gs:[0x30]` (`65 REX.W 8B /r`, ModRM mod=00 rm=100 + SIB 0x25 + disp32) — the Win64 TEB
+	// SELF-POINTER, i.e. `NtCurrentTeb()`. Per-OS-thread-stable and never NULL, which is exactly
+	// `StdOp.currentThreadToken`'s contract; the OS establishes it before the thread's first instruction,
+	// so it needs no runtime setup and works before any scheduler exists.
+	//
+	// ⚠ **THE `gs:[reg]` FORM'S rbp/r13 TRAP DOES NOT APPLY HERE, AND THE DIFFERENCE IS THE ADDRESSING
+	// MODE.** v1 reads its TLS slot as `gs:[reg]` and must panic when the register is rbp/r13, because
+	// ModRM.rm=101 with mod=00 means RIP-RELATIVE rather than "[rbp]" (`X64Backend.emitX64GtLoadCurrentP`).
+	// This op uses the ABSOLUTE form instead — a SIB with no base and no index — so the destination lives
+	// in ModRM.**reg**, where every register including rbp and r13 encodes normally. Choosing the absolute
+	// form is what removes the trap rather than guarding it.
+	//
+	// `isMemory: true` (it loads from the TEB), `isStore: false`, `isCall: false` — one plain def, no use.
+	x64TebSelfPointer(dest TargetVReg) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// The arm64 compare-and-swap, an `LDAXR`/`CMP`/`B.NE`/`STLXR`/`CBNZ` retry loop followed by a `CSET`,
+	// emitted as ONE macro-op for the reason stated at the head of this block. Three value USES and one
+	// plain def; the def is written by the closing `CSET` only, i.e. AFTER every operand's last read.
+	//
+	// ⭐⭐ **"THE DEF IS WRITTEN LAST" IS A CORRECTNESS REQUIREMENT, NOT AN INCIDENTAL PROPERTY.** A late
+	// def MAY be coloured onto the register of a use that dies at this op (`allocateDef`'s `dyingRegs`,
+	// documented at `TargetLiveness.addOpTransientPressure`), so `dest` can legitimately BE `addrReg`. The
+	// loop re-reads the address on every retry, so an encoder that wrote `dest` before the last `STLXR`
+	// would corrupt its own address the moment the reservation was lost — a miscompile that appears only
+	// under contention. Both encoders below therefore keep every scratch value in x16/x17 and touch `dest`
+	// once, at the end.
+	//
+	// ⭐ **x16 AND x17, AND x16 IS SAFE HERE FOR THE REASON `arm64JumpTable` IS.** `StdToArm64Conversion`'s
+	// `Arm64Scratch` header states the rule: an x16 clobber is unsafe only when something SPLICES it
+	// between an isel-minted x16 producer/consumer pair, and the ops that splice (spill, reload,
+	// rematerialization) all avoid x16 by construction. These two are ISEL-emitted macro-ops that nothing
+	// splices and nothing rematerializes — the same standing `arm64JumpTable`, `arm64FpLoadRdata` and
+	// `xchgRegReg` already have. ⚠ The rule that DOES bind is the encoder-tier one: `arm64EmitWideFrameSlot`
+	// must keep using x17 alone, because a frame access IS spliced.
+	//
+	// The scratch pair rides `implicitDefs` (0x30000 = x16 | x17), exactly as `arm64JumpTable`'s does and
+	// held equal to the encoders' registers by `assertEncoderScratchMasks`. Neither is allocatable, so the
+	// declaration documents rather than reserves — which is precisely what `arm64JumpTable`'s note says of
+	// its own.
+	arm64AtomicCas(dest TargetVReg, addrReg TargetVReg, expectedReg TargetVReg, replacementReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
+	// The arm64 read-modify-write, an `LDAXR`/`<op>`/`STLXR`/`CBNZ` retry loop that recovers the PRIOR
+	// value into `dest` with one inverse operation after the loop. Two value uses, one plain def written
+	// last — see the CAS above for why that ordering is load-bearing, and for the x16/x17 argument.
+	//
+	// ⛔⛔ **v1's arm64 `atomicXadd` IS A PLAIN LOAD-ADD-STORE AND IS NOT ATOMIC — IT SAYS SO ITSELF**
+	// (`Arm64CodeEmitter.arm64EmitAtomicXaddMem`: *"A non-atomic load-add-store … The LL/SC form this
+	// replaced needed a THIRD scratch register beyond the x16/x17 the inc/dec/cas emitters use, and reached
+	// for x18 — but x18 is the reserved platform register on arm64-macos … clobbering it corrupted thread
+	// state and silently corrupted the heap (the slab allocator double-allocated slots)"*). That third
+	// register is not needed at all: the loop keeps only the RUNNING value in x16 and recovers the prior
+	// one afterwards by applying the operation's INVERSE (`SUB` for `add`), so two scratches suffice and
+	// x18 is never touched. This is a real LL/SC loop, and it is why the port is of the LESSON and not the
+	// code.
+	arm64AtomicRmw(dest TargetVReg, addrReg TargetVReg, operandReg TargetVReg, opcode StdAtomicRmwOpcode) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
+	// `MRS dest, TPIDRRO_EL0` then `LSR dest,#3` / `LSL dest,#3` — the Darwin thread pointer with its low
+	// three bits (which hold the current CPU number) masked off. v1's owner token verbatim
+	// (`Arm64MacosGreenThread.arm64GtOwnerToken`): per-OS-thread-stable, unique, non-zero, and reachable
+	// with no pthread key, no TSD dereference and no NULL-owner edge case, before the scheduler exists.
+	//
+	// ⚠ **arm64-macOS ONLY.** `TPIDRRO_EL0` is the READ-ONLY thread ID register, and Linux leaves it at
+	// zero unless something sets it — see `StdOp.currentThreadToken` for why shv2's raw-static Linux lanes
+	// cannot use a thread-pointer register at all, and what they use instead.
+	//
+	// One plain def and no use; it needs no scratch, because the three instructions read and write `dest`
+	// alone. `isMemory: false` — a system-register read touches no memory.
+	arm64ThreadPointer(dest TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

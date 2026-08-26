@@ -14,9 +14,10 @@ end 'main'
 ExitCode: 33
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -43,12 +44,10 @@ func @main {
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, r12
     x64.callDirect __managed_push
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.imulRegRegImm32 r13, r8, 10
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r13, r13, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.leaRegRegReg r13, rax, rcx
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

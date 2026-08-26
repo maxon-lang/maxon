@@ -1534,10 +1534,22 @@ end 'main'
 <!-- test: both-sides-detach-parent-first -->
 Both sides write. The parent copies out first and gives up the shared buffer, leaving the slice as its
 sole owner; the slice then copies out and reclaims it. This case reaches the path where a detach's release
-frees the bytes it just copied — but it cannot *catch* a detach that released BEFORE copying, because
-`__mm_free` reclaims nothing under the bump allocator, so freed bytes still read back intact (measured:
-reversing that order leaves the suite at 1197/0). The ordering is a rule `__managed_cow_detach` keeps on its
-own; it becomes testable the day the allocator reuses memory.
+frees the bytes it just copied — but it does NOT *catch* a detach that released BEFORE copying, and the
+reason is no longer the one this note used to give.
+
+⛔⛔ **THE OLD PREMISE WAS *"`__mm_free` RECLAIMS NOTHING UNDER THE BUMP ALLOCATOR, SO FREED BYTES STILL
+READ BACK INTACT"*, AND IT IS FALSE TWICE OVER.** There is no bump allocator (`__mm_free` hands the box to
+`__slab_free`, which puts the slot back on its span's free list for the next allocation to take), and the
+payload is POISONED with `0x3F` on the way out whether or not anything reuses it. Both halves have been
+true for a while; the note was not re-measured when they became true, which is exactly the failure this
+project keeps naming.
+
+⭐ **RE-MEASURED AT S4, WITH THE BOX LAYER ON THE REAL SLAB.** With the release emitted AHEAD of
+`__mm_cow_detach`'s copy, `--filter=arrays` still read **151 passed / 0 failed**, this case among them —
+against a compiler whose output genuinely differed (the same program compiled to a byte-different image, so
+the instrument was live and not inert). The ordering therefore remains a rule `__managed_cow_detach` keeps
+on its OWN rather than one this case gates. **Why it survives a recycling, poisoning allocator is an OPEN
+QUESTION, not a prediction** — do not re-derive the old answer, it was measured wrong.
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30, 40, 50]

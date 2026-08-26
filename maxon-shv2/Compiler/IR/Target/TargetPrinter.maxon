@@ -600,6 +600,15 @@ function opIsArm64Band(op TargetOp) returns bool
 		arm64FmovFpGpr gives true
 		// SHARED by both CPUs, like `storeSlotReg`/`loadRegSlot` — not an arm64-band op.
 		leaRegSlot gives false
+		// F1b: the fill ladders are per-ISA, exactly as the jump tables above are — same question, same
+		// answer, and written as two arms rather than a range for that reason.
+		x64MemFill gives false
+		arm64MemFill gives true
+		// F2: per-ISA, exactly as the fill ladders and jump tables above — the four x64 forms are x64's, the
+		// three arm64 forms are arm64's. Two ranges rather than seven arms, which the band-append order makes
+		// exact: the x64 four are contiguous and the arm64 three follow them.
+		x64LockCmpxchg to x64TebSelfPointer gives false
+		arm64AtomicCas to arm64ThreadPointer gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -802,6 +811,29 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns
 		// Printed like its two slot neighbours: the SLOT, not the displacement, because the displacement is
 		// the encoder's and a golden that spelled it would move whenever an unrelated frame grew.
 		leaRegSlot(destReg, slot) gives "leaRegSlot {sharedVregName(destReg, cpu: cpu)}, slot{slot}"
+		// F1b: the fill ladders print their NAME and their fill BYTE — never an operand list, because they
+		// have none (see `targetOpOperands`). The byte is the one thing that varies between two otherwise
+		// identical fills, so it is exactly what a golden needs to show.
+		x64MemFill(fillByte) gives "x64MemFill 0x{hexByte(fillByte as MachineWord)}"
+		arm64MemFill(fillByte) gives "arm64MemFill 0x{hexByte(fillByte as MachineWord)}"
+		// F2 — the atomics print their REAL MNEMONICS, for `x64DivideOpName`'s reason one screen up: what a
+		// golden is for is showing which instruction was emitted, and `lock xadd` versus `lock add` is exactly
+		// the difference the prior-value peephole makes. `[reg]` renders the memory operand, so the address is
+		// visibly a dereference and not a value.
+		//
+		// ⚠ `lock cmpxchg`'s implicit RAX comparand is NOT printed, and deliberately: it is not an operand of
+		// this op, it arrives in the `movRegReg rax, …` the isel emits immediately above, and a golden that
+		// invented a third operand here would show a register the instruction does not encode.
+		x64LockCmpxchg(addrReg, srcReg) gives "lock cmpxchg [{vregName(addrReg)}], {vregName(srcReg)}"
+		x64LockXadd(dest, src, addrReg) gives "lock xadd [{vregName(addrReg)}], {vregName(dest)} <- {vregName(src)}"
+		x64LockAdd(addrReg, srcReg) gives "lock add [{vregName(addrReg)}], {vregName(srcReg)}"
+		x64TebSelfPointer(dest) gives "mov {vregName(dest)}, gs:[0x{hexByte(WindowsTebSelfPointerOffset)}]"
+		// The arm64 macro-ops print their name and their operands rather than the six-instruction sequence
+		// they expand to — the choice `x64MemFill`/`arm64MemFill` already make, and for their reason: a golden
+		// records the OPS the allocator coloured, and the encoder's internal branches are not ops.
+		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) gives "arm64AtomicCas {arm64VregName(dest)}, [{arm64VregName(addrReg)}], {arm64VregName(expectedReg)}, {arm64VregName(replacementReg)}"
+		arm64AtomicRmw(dest, addrReg, operandReg, opcode) gives "arm64AtomicRmw.{opcode.name} {arm64VregName(dest)}, [{arm64VregName(addrReg)}], {arm64VregName(operandReg)}"
+		arm64ThreadPointer(dest) gives "arm64ThreadPointer {arm64VregName(dest)}"
 	end 'op'
 end 'formatTargetOp'
 

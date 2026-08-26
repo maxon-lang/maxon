@@ -1,0 +1,176 @@
+// Test: runtime-scratch-reclaim.subprocess-scratch-returns
+function child() returns int
+	return try __Builtins.runProcess("cmd /c exit 3") otherwise 99
+end 'child'
+
+function main() returns ExitCode
+	let p0 = async child()
+	let w = await p0
+	let totalBefore = __Builtins.mmRawAllocTotal()
+	let liveBefore = __Builtins.mmRawAllocLive()
+	let p1 = async child()
+	let a = await p1
+	let p2 = async child()
+	let b = await p2
+	let totalGrew = __Builtins.mmRawAllocTotal() - totalBefore
+	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	var score = 0
+	if w + a + b == 9 'everyChildExitedThree'
+		score = score + 1
+	end 'everyChildExitedThree'
+	if totalGrew >= 6 'eachRunTookItsScratchFromTheAllocator'
+		score = score + 2
+	end 'eachRunTookItsScratchFromTheAllocator'
+	if liveGrew <= 2 'andGaveItBack'
+		score = score + 4
+	end 'andGaveItBack'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mm_alloc_total@8 = i64 0
+  __mm_alloc_bytes@16 = i64 0
+  __mm_raw_alloc_count@24 = i64 0
+  __mm_raw_live_count@32 = i64 0
+  __mm_raw_alloc_bytes@40 = i64 0
+  __gt_current_gt@48 = i64 0
+  __gt_run_queue_head@56 = i64 0
+  __gt_run_queue_tail@64 = i64 0
+  __gt_init_done@72 = i64 0
+  __gt_system_stack_top@80 = i64 0
+  __gt_timer_count@88 = i64 0
+  __gt_timer_heap_base@96 = i64 0
+  __gt_timer_capacity@104 = i64 0
+  __gt_trace_counter@112 = i64 0
+  __gt_trace_digits@120 = i64 0
+  __gt_clock_ticks@128 = i64 0
+  __gt_clock_freq@136 = i64 0
+  __gt_proc_count@144 = i64 0
+  __gt_proc_handles_base@152 = i64 0
+  __gt_proc_gts_base@160 = i64 0
+  __gt_live_count@168 = i64 0
+  __slab_arena_list@176 = i64 0
+  __slab_arena_map_l1@184 = i64 0
+  __slab_state@192 = i64 0
+}
+
+func @child {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __gt_process_run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 99
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegFunc rcx, [rip + child]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.movRegReg rbx, r8
+    x64.callDirect __mm_counter_raw_alloc_total
+    x64.movRegReg r12, r8
+    x64.callDirect __mm_counter_raw_alloc_live
+    x64.movRegReg r13, r8
+    x64.leaRegFunc rcx, [rip + child]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.movRegReg r14, r8
+    x64.leaRegFunc rcx, [rip + child]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_counter_raw_alloc_total
+    x64.movRegReg r15, r8
+    x64.subRegReg r15, r8, r12
+    x64.callDirect __mm_counter_raw_alloc_live
+    x64.subRegReg r8, r8, r13
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegReg rcx, rbx, r14
+    x64.loadRegSlot rdx, slot0
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 9
+    x64.jcc equal, everyChildExitedThree
+    x64.jmp critsplit#10
+  everyChildExitedThree:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#2
+  critsplit#10:
+    x64.jmp ifcont#2
+  ifcont#2:
+    x64.cmpRegImm32 r15, 6
+    x64.jcc greaterEqual, eachRunTookItsScratchFromTheAllocator
+    x64.jmp critsplit#11
+  eachRunTookItsScratchFromTheAllocator:
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.jmp ifcont#4
+  critsplit#11:
+    x64.jmp ifcont#4
+  ifcont#4:
+    x64.cmpRegImm32 r8, 2
+    x64.jcc lessEqual, andGaveItBack
+    x64.jmp critsplit#12
+  andGaveItBack:
+    x64.leaRegRegImm32 r8, rax, 4
+    x64.jmp ifcont#6
+  critsplit#12:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont#6
+  ifcont#6:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -563,6 +563,32 @@ export enum StdCmpPred
 	ge
 end 'StdCmpPred'
 
+// The read-modify-write operation `StdOp.atomicRmw` performs on the word it names (F2). One member
+// today, and the enum exists rather than a family of `atomic*` VARIANTS because of the rule the StdOp
+// header states: a family sharing one operand shape AND one metadata profile is an OPCODE FIELD, not a
+// variant. v1 spells this as three ops (`atomicInc`, `atomicDec`, `atomicXadd`) and pays for it in every
+// backend's match — `atomicInc(addr)` IS `atomicRmw(_, addr, +1, add)`, and the only things the separate
+// variants buy are a shorter x86 encoding and `lock dec`'s ZF, neither of which is vocabulary. (The
+// encoding half is recovered at the x64 isel — see `lowerAtomicRmw` there; the ZF half has no reader,
+// because shv2's decref path branches on a value it loads rather than on flags.)
+//
+// ⭐ **A LATER MEMBER APPENDS HERE, AND THAT IS THE WHOLE POINT OF THE FIELD.** `and`/`or`/`xchg` all
+// share `add`'s operand shape and its metadata, so each is one member plus one arm in each of the three
+// backends — never a fourth `StdOp` variant, and never a new tier boundary to thread. Every backend
+// matches this enum exhaustively, so an appended member is a COMPILE error in each of them rather than a
+// silently wrong lowering.
+export enum StdAtomicRmwOpcode
+	add
+end 'StdAtomicRmwOpcode'
+
+// The two values `StdOp.atomicCas` answers with — the SUCCESS BOOLEAN convention stated as code rather
+// than only as prose on the op. They live here, at the contract, because a backend that has to SPELL the
+// answer must not spell it from memory: the two native lanes read the boolean straight off the hardware
+// (x86 `setz`, AArch64 `CSET`, both of which produce 1/0 by definition), while the wasm lane materializes
+// it and is therefore the one reader. Inverting the convention has to be possible in ONE place.
+export let AtomicCasSucceeded = 1 as ParsedInt
+export let AtomicCasFailed = 0 as ParsedInt
+
 // Per-variant static metadata backing for StdOp (read via `op.rawValue`). Carries
 // what passes need to classify an op WITHOUT matching on it: the category (see
 // above), the structural role, the two inliner axes, and the scheduling facts the
@@ -1136,19 +1162,31 @@ export union StdOp
 	// (the invariant working in the reviewer's favour). Its `category: system` places it logically in the system
 	// band, independent of this tail position.
 	//
-	// `osFreePages(addr)` RELEASES a page region an earlier `osAllocPages` committed — the free twin the bump heap
-	// (which never frees) never needed, but the green-thread scheduler does: a completed GT's stack (possibly GROWN
-	// by the morestack, so of a size only the runtime knows) is released here, on `__gt_drive_until`'s completion
-	// path, so a spawn/await loop stays bounded without the fixed-size free-list the 1 MiB rung used. ONE VALUE
-	// operand (the region base), no result — the mirror of `osExit`/`osCloseHandle`. It carries no SIZE because the
-	// x64-windows page source (`VirtualFree(addr, 0, MEM_RELEASE)`) frees the whole reservation from its base alone.
+	// `osFreePages(addr, size)` RELEASES the `size`-byte page region an earlier `osAllocPages` committed at `addr`
+	// — the free twin the bump heap (which never frees) never needed, but the green-thread scheduler does: a
+	// completed GT's stack (possibly GROWN by the morestack, so of a size only the runtime knows) is released here,
+	// on `__gt_drive_until`'s completion path, so a spawn/await loop stays bounded without the fixed-size free-list
+	// the 1 MiB rung used. TWO VALUE operands, no result — the mirror of `osExit`/`osCloseHandle`.
 	//
-	// ⭐ x64-WINDOWS ONLY, exactly like its five subprocess siblings and the two sleep ops above it — the whole
-	// green-thread substrate is x64-windows-gated at this rung, and `osFreePages` is emitted ONLY inside that
-	// substrate (`__gt_drive_until`), so its arm64/linux/wasm lowerings reject rather than implement an untested
-	// `munmap`/`memory`-shrink that no test could ever reach (see StdToX64/StdToArm64/StdToWasm). Full call-barrier
-	// metadata: it IS an indirect call once lowered, exactly like `osAllocPages`.
-	osFreePages(addrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// ⚠⚠ **THE SIZE OPERAND IS WHAT MAKES THIS OP LOWERABLE ON THE THREE POSIX LANES AT ALL.** It carried the base
+	// ALONE until F1a, because `VirtualFree(addr, 0, MEM_RELEASE)` releases the whole reservation from its base and
+	// the only producer (`__gt_drive_until`) was x64-windows-gated anyway. But every POSIX page source needs the
+	// LENGTH — `munmap(addr, len)` takes one and has no "free the whole mapping" spelling to fall back on — so on
+	// x64-linux, arm64-linux and arm64-macOS a base-only op could not be lowered even in principle, and those
+	// refusals were FORCED BY THE VOCABULARY rather than judgements about what the target can do. ⇒ the size is
+	// REQUIRED VOCABULARY, not redundancy. (wasm's refusal was the fourth, and the ONLY one that was really about
+	// the target — see below.)
+	//
+	// ⭐ **AND x64-WINDOWS READS IT NOWHERE.** `dwSize` MUST be 0 for a `MEM_RELEASE` — passing the real length
+	// makes `VirtualFree` FAIL and leak the region — so `lowerOsFreePagesWin64` materializes a literal zero and the
+	// operand goes unread on that one lane. A producer always states the size; one target ignores it. The asymmetry
+	// is stated at BOTH ends (see that lowering) so neither end can be tidied into the other.
+	//
+	// ⭐ ON wasm32-wasi IT IS A PERMANENT NO-OP: linear memory only ever GROWS (`memory.grow`), so there is no
+	// instruction that could hand a region back. That is an ISA fact, not a rung — see `StdToWasm.emitBodyOp`.
+	//
+	// Full call-barrier metadata: it IS an indirect call or a syscall once lowered, exactly like `osAllocPages`.
+	osFreePages(addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// --- P1.1b slice 2: the DENSE-match jump table ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osFreePages` (the last `system`-band op), per the
@@ -1853,6 +1891,234 @@ export union StdOp
 	// A stub would be a silent wrong answer about a cost, on a lane that cannot ask for it. Full
 	// call-barrier metadata: it IS an indirect call once lowered.
 	osThreadCpuTicks(outPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- F1a: the DECOMMIT an OS-direct allocation and a scavenger need ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osThreadCpuTicks`, per the band-append invariant every entry
+	// above states: a mid-band insert is silently swallowed by a `… to X` range arm. It carries
+	// `category: system`, placing it logically in the system band independent of this tail position.
+	//
+	// ⭐⭐ **DECOMMIT IS NOT FREE, AND THAT IS WHY THERE IS A THIRD PAGE OP AT ALL.** `osFreePages` gives
+	// the ADDRESS RANGE back: the reservation is gone and the base may be handed to the next mapping.
+	// `osDecommitPages` gives back only the PHYSICAL BACKING and KEEPS the reservation, so the base stays valid and
+	// `osCommitPages` (F1c, at the end of this union) can re-back it IN PLACE. A scavenger returning a quiet
+	// arena's pages to the OS needs exactly that distinction: the arena's free lists still point into the range,
+	// so losing the ADDRESS — which is what `osFreePages` does — would turn every one of those links into a
+	// dangling pointer.
+	//
+	// `osDecommitPages(addr, size)` drops the backing of the `size` bytes at `addr`, keeping the reservation. TWO
+	// VALUE operands and no result — `osFreePages`'s shape and, for its reasons, its full call-barrier metadata.
+	// `isStore: true` is the load-bearing bit: a decommit DESTROYS the contents of the range, so it must order
+	// against every load and store around it exactly as a call does.
+	//
+	// ⚠⚠ **WHAT A RECOMMITTED PAGE CONTAINS IS NOT THE SAME ON EVERY LANE, SO A SCAVENGER MUST MEMZERO
+	// UNCONDITIONALLY.** Four answers, none of them a bug:
+	//   • x64-windows — `VirtualFree(MEM_DECOMMIT)` then `VirtualAlloc(MEM_COMMIT)` ⇒ ZEROED, by the same
+	//     newly-committed-pages-are-zero guarantee `osAllocPages` already rests on.
+	//   • x64-linux / arm64-linux / arm64-macOS — `madvise` drops the pages and `osCommitPages` re-maps the range
+	//     with `MAP_FIXED`, so the next touch reads a fresh ZERO page.
+	//   • wasm32-wasi — the decommit is INERT and the commit copies the address through, so the bytes SURVIVE
+	//     VERBATIM.
+	// ⇒ the strongest contract a reback can honestly offer is "readable and writable", NEVER "zeroed", and the
+	// slab's zeroing contract (ARCHITECTURE.md) does NOT extend across a decommit/recommit round trip.
+	//
+	// ⛔ **THAT OBLIGATION IS RECORDED HERE, AT THE OP, AND NOT LEFT TO THE EVENTUAL CALLER.** The natural later
+	// shortcut is a per-OS `pagesAreZeroAfterReback` flag the scavenger consults — and whoever writes it will set it
+	// false for wasm alone, because that is the lane that visibly keeps its bytes, and MISS the fact that a Darwin
+	// `MADV_FREE` page can come back DIRTY if the `MAP_FIXED` remap is ever optimized away. The dependency
+	// therefore lives at the op that creates it.
+	//
+	// ⚠ **ACCESSIBILITY AFTER A DECOMMIT IS ALSO LANE-DEPENDENT, AND NOTHING MAY REST ON IT.** Windows'
+	// `MEM_DECOMMIT` makes the range INACCESSIBLE, so a touch faults; POSIX's `madvise` leaves it mapped and
+	// readable, so a touch silently reads zeros; wasm leaves the old bytes in place. Go's `sysUnused` makes the
+	// same choice for the same reason (`sysFault` is its separate, debug-only, mprotect path), so the asymmetry is
+	// deliberate rather than an omission — a decommitted range is simply not a range a caller may touch.
+	osDecommitPages(addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- F1b: the BYTE FILL the zeroing contract and the free poison both run on ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION AS IT THEN STOOD, past `osDecommitPages`, per the band-append
+	// invariant every entry above states: a mid-band insert is silently swallowed by a `… to X` range arm.
+	// `category: memory` places it logically in the memory band, independent of this tail position. (F1c has
+	// since appended two more `system` variants past it, which is the same invariant working again.)
+	//
+	// `memFill(dest, byteCount, value)` overwrites `byteCount` bytes at `dest` with the low byte of `value`.
+	// A `byteCount` of 0 writes nothing.
+	//
+	// ⭐⭐ **IT IS AN OP BECAUSE THE THING IT LOWERS TO IS A SIZE LADDER, AND STD IR CANNOT SPELL ONE.** This
+	// replaced a hand-built Std-IR loop (`MmRuntime.emitFillRange`) that cost one `storeIndirect u8` plus an
+	// add, a compare and a branch PER BYTE — on the three hottest paths the runtime has: the zeroing a
+	// recycled free-list slot owes (ARCHITECTURE.md → "Allocator: the zeroing contract"), `__mm_free`'s
+	// poison of the whole dead payload, and the array capacity-slot eraser. A recycled 32 KB slot was 32,768
+	// iterations of it. A backend can do the same work in a handful of stores because it may CHOOSE an
+	// instruction sequence by SIZE — straight-line overlapping stores in the small bands, a block loop in the
+	// middle, `rep stosq` at the top — and "eight overlapping qword stores" is not a thing this tier has the
+	// vocabulary to say. ⇒ the size dispatch is the backend's, and this op is the request. The per-target
+	// ladders are specified in ARCHITECTURE.md → "The `memzero` the backend must emit".
+	//
+	// ⭐ **`value` IS A COMPILE-TIME `ParsedInt`, NOT A `ValueId`, AND THAT IS WHAT MAKES THE FILL PATTERN
+	// FREE.** Every call site passes a literal (0 to restore the zeroing contract, `PoisonByte` to poison a
+	// dead payload), and a constant lets the isel compute the 64-bit broadcast `byte × 0x0101010101010101`
+	// AT COMPILE TIME and hand the backend an immediate. A `ValueId` operand would buy a generality no caller
+	// asks for and charge every fill a runtime multiply to widen the byte before the first store.
+	//
+	// ⛔⛔ **`clobbersFlags: true` IS MANDATORY, AND COPYING v1's `memcpy` METADATA HERE WOULD BE A SILENT
+	// MISCOMPILE.** The ladder `cmp`s the length to pick its arm, so it WRITES EFLAGS/NZCV. v1's `memcpy` op
+	// declares its flags fact `false` — correct for a bare `rep movsb`, which is one instruction and compares
+	// nothing — and a fill that inherited it would let `recordFusableCompare` walk back PAST this op to a
+	// `cmp` and fuse it with a `condBranch` on the far side, reading flags the ladder has since destroyed.
+	// There is no `setsFlags` on `TargetOpMeta` to say it at the other tier, deliberately; the flags fact
+	// lives once, here (see `TargetOpMeta`'s header).
+	//
+	// ⭐ **`isCall: false`, and that is not an oversight about a macro-op that contains branches.** The ladder
+	// is INLINE code: it calls nothing, and it destroys a FIXED FOUR-REGISTER set, declared at each of the two
+	// `TargetOp` macro-ops' `implicitDefs` — not the caller-saved half. `isCall`'s live reader is
+	// `functionMakesCall`, which decides whether a function needs a frame at all; a `true` here would give
+	// every heap-touching runtime body a prologue it does not need. `isMemory`/`isStore` are the true facts:
+	// it writes memory, so it must order against every load and store around it.
+	memFill(destId ValueId, byteCountId ValueId, value ParsedInt) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
+	// --- F1c: RESERVE address space, and COMMIT a range inside a reservation ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `memFill`, per the band-append invariant every entry above
+	// states: a mid-band insert is silently swallowed by a `… to X` range arm. Both carry `category: system`,
+	// placing them logically in the system band independent of this tail position. They are ADJACENT so the
+	// sites that treat "an OS page call that defines a value" alike need ONE range arm rather than two.
+	//
+	// ⭐⭐ **THE PAIR IS GO'S `sysReserve` + `sysMap`, AND IT EXISTS BECAUSE `osAllocPages` CANNOT BE THE WHOLE
+	// VOCABULARY.** `osAllocPages` reserves and commits TOGETHER (Windows `MEM_COMMIT|MEM_RESERVE`, POSIX an
+	// `mmap` that is writable the instant it returns), so an allocator sized to the address space it wants to OWN
+	// charges every byte of it to the process on the day it maps it. Go's heap does not: it takes an arena's worth
+	// of ADDRESS SPACE with `sysReserve` (`vendor/go/src/runtime/mem_linux.go:163`, `mem_windows.go:118`) and maps
+	// pages into it as the allocator reaches them (`sysMap`, `mem_linux.go:172`). These two ops ARE that split,
+	// and `SlabArena` is their consumer — which is what let its arena grow from 2 MiB to the 64 MiB its reverse
+	// map's bottom level covers while a hello-world still commits 64 KiB.
+	//
+	// `osReservePages(size) -> base` takes `size` bytes of address space with NO access and NO backing.
+	// `osCommitPages(addr, size) -> addr` makes `[addr, addr + size)` readable, writable and backed.
+	//
+	// ⭐⭐ **BOTH DEFINE A VALUE BECAUSE BOTH CAN FAIL, AND AN UNCHECKED COMMIT IS AN ACCESS VIOLATION WITH NO
+	// ATTRIBUTION.** A reservation fails when the address space is gone; a commit fails when the system commit
+	// limit is (Windows) or when the mapping cannot be split (POSIX). Every caller writes into the range
+	// immediately afterwards, so an unchecked failure arrives as a store through whatever the OS answered — a
+	// NULL on Windows, a small negative errno from a raw POSIX syscall — which is precisely the shape
+	// `SlabArena.__slab_assert_os_alloc` already exists to convert into a named abort. Both ops answer in the
+	// convention that guard reads: a failure is never a positive page base.
+	//
+	// ⛔⛔ **`osCommitPages` DESTROYS THE CONTENTS OF THE RANGE ON THE THREE POSIX LANES AND PRESERVES THEM ON
+	// WINDOWS — SO A CALLER MAY COMMIT ONLY A RANGE IT HOLDS NO DATA IN.** POSIX has no "commit" call at all: the
+	// MAPPING is the commitment, so a commit is `mmap(addr, size, PROT_READ|PROT_WRITE, MAP_FIXED|MAP_ANON|
+	// MAP_PRIVATE)` — Go's `sysMapOS` verbatim — and `MAP_FIXED` REPLACES whatever was mapped there with fresh
+	// zeroed pages. Windows' `VirtualAlloc(MEM_COMMIT)` over an already-committed range is a no-op that keeps
+	// every byte, and wasm's is inert for the same reason. ⇒ a re-commit of a LIVE range is a silent data loss on
+	// three lanes and green on the one most likely to be tested. `SlabArena` commits strictly above a per-arena
+	// watermark, so it can never ask.
+	//
+	// ⭐ **`osRecommitPages` (F1a) IS DELETED, FOLDED INTO `osCommitPages`, AND THE FOLD IS A DECISION.** Go keeps
+	// `sysMap` and `sysUsed` separate because it commits at TWO granularities — an arena region at `mheap.grow`
+	// and a page run at `pageAlloc.allocRange` — and on each OS exactly one of the two does the work (`sysMapOS`
+	// is EMPTY on Windows; `sysUsedOS` is empty on Linux). shv2's page layer has ONE granularity, so it has one
+	// place that says "make this range usable", and one place deserves one op: a second variant whose Windows
+	// lowering is character-for-character its neighbour's, and whose only producer would be a scavenger that does
+	// not exist, is the duplication this file's neighbours refuse everywhere else. The price is named: a future
+	// POSIX scavenger's reback costs one `mmap` where Go's `sysUsed` costs nothing, on a path that has just paid
+	// for a `madvise`.
+	//
+	// ⚠ **wasm32-wasi HAS NO RESERVATION TO MAKE, AND THAT IS AN ISA FACT RATHER THAN A GAP.** Linear memory is
+	// one contiguous region that only ever GROWS, and `memory.grow` both takes the address range and backs it —
+	// there is no state between "not there" and "there" for a reserve to occupy. So `osReservePages` IS
+	// `osAllocPages` on that lane and `osCommitPages` copies its address through, which is the honest translation
+	// of a distinction the machine does not have. ⛔ The consequence is REAL and belongs with the arena rather
+	// than here: a wasm reservation is CHARGED, so an arena sized for a 64-bit address space is 64 MiB of linear
+	// memory. Go answers that with a per-platform arena size (512 KiB on wasm, `malloc.go:259`); shv2 cannot yet,
+	// because the Std tier builds the arena without knowing the target — see `SlabArena`'s header for the exact
+	// shape of the follow-up.
+	//
+	// Full call-barrier metadata on both: each IS a call or a syscall once lowered, exactly like `osAllocPages`,
+	// and `isStore: true` because a commit replaces the contents of the range it names.
+	osCommitPages(resultId ValueId, addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osReservePages(resultId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- F2: the ATOMICS and the PER-THREAD IDENTITY the multi-M scheduler is built on ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osReservePages`, per the band-append invariant every
+	// entry above states: a mid-band insert is silently swallowed by a `… to X` range arm. All three carry
+	// `category: system`, placing them logically in the system band independent of this tail position.
+	//
+	// ⭐⭐ **NO FENCE OP IS NEEDED FOR THE TREIBER-STACK USE, AND THAT IS A PROPERTY OF THESE THREE
+	// LOWERINGS RATHER THAN AN OMISSION.** The publish shape a lock-free stack needs is "write the new
+	// node's `next` link, THEN CAS it onto the head, and let a popper that observes the head also observe
+	// the link": on x64 `lock cmpxchg` is a full barrier, so the prior store cannot sink past it; on arm64
+	// the CAS publishes with `STLXR`, a store-RELEASE, which orders every earlier store before it; and
+	// wasm32-wasi has one thread by construction, so there is no second observer to order against. ⇒ **do
+	// NOT add an `mfence`/`dmb` op speculatively.** A fence belongs here only when a use appears that these
+	// three orderings genuinely do not cover (a store-load pair with no CAS between them is the shape to
+	// watch for), and it should arrive WITH that use, not ahead of it.
+	//
+	// ⛔ **THE REFCOUNT OPS ARE DELIBERATELY NOT FLIPPED TO THESE, AND THE TRIGGER IS NOT THE ONE WRITTEN
+	// DOWN.** `MmRuntime.emitRefcountCheckToLastOwner` is a plain load/add/store and its comment names "the
+	// day green threads land" as the day it must become atomic. Green threads HAVE landed and shv2 stayed
+	// correct, because a single-M cooperative scheduler switches only at explicit yield points and no two
+	// green threads ever execute a refcount update concurrently. The real trigger is MULTI-M — two OS
+	// threads running Maxon code at once — which is a later rung, and which is why this one delivers the
+	// vocabulary and changes no refcount.
+	//
+	// **`atomicCas(result, addr, expected, replacement)`** — a 64-bit compare-and-swap of the word at
+	// `addr`. ⚠ **`result` IS 1 ON SUCCESS AND 0 ON FAILURE — NOT THE PRIOR VALUE.** That is v1's stated
+	// contract (`stdlib/Internals.maxon:128-129`, *"returns 1 on success / 0 on failure (NOT the prior
+	// value) — the CAS loops below test it as a success boolean"*) and every CAS loop in the reference
+	// tests it as a boolean. The two conventions are not interchangeable: a prior-value CAS makes the
+	// caller re-compare, and a caller written for one against an op implementing the other loops for ever
+	// on a legitimately failing swap. The boolean is also what both ISAs answer natively — x86 leaves it in
+	// ZF, AArch64 leaves it in the flags the retry loop exits on — so a prior-value result would cost an
+	// EXTRA reload on both.
+	atomicCas(resultId ValueId, addrId ValueId, expectedId ValueId, replacementId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
+	// **`atomicRmw(result, addr, operand, opcode)`** — an atomic read-modify-write of the word at `addr`.
+	// ⚠ **`result` IS THE PRIOR VALUE**, the opposite convention to `atomicCas` above and the one every RMW
+	// instruction on both ISAs already answers in (`lock xadd` leaves the prior value in its register
+	// operand; an LL/SC loop has it in hand). A caller wanting the NEW value applies the operation again to
+	// the result, which costs one ALU op; a caller wanting the PRIOR value out of a new-value RMW cannot
+	// recover it at all when the operand is not invertible. See `StdAtomicRmwOpcode` for why the operation
+	// is a FIELD and not three variants.
+	//
+	// There is no `operandType`: an atomic is 64-bit ONLY at this tier. A narrower one is a different
+	// instruction on both ISAs (`lock xadd DWORD`, `LDAXR W`) and a different alignment obligation, and
+	// nothing shv2 emits has a sub-word counter; the day one does, the width is a field appended here.
+	atomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
+	// **`currentThreadToken(result)`** — a per-OS-thread-stable, **NON-ZERO** identity word. Two live
+	// consumers are already visible for it and they are the reason it is ONE op rather than each site's own
+	// inline sequence: a recursive lock's OWNER field (v1 hand-emits the read twice per backend, once in
+	// `__slab_lock_acquire` and once in `__slab_lock_release`) and the future P-id the sharded allocator
+	// indexes its mcache by.
+	//
+	// ⚠ **NOT A v1 OP.** v1 reads the thread pointer inline inside each hand-written assembly helper
+	// (`Arm64MacosGreenThread.arm64GtOwnerToken`, `X64Backend.emitX64GtLoadCurrentP`), which is why the
+	// masking rule lives in two places there and why the x64 half needs a pthread key and a TSD deref that
+	// the arm64 half does not. Naming it once is the whole divergence.
+	//
+	// ⭐ **NON-ZERO IS PART OF THE CONTRACT, NOT AN OBSERVATION.** Both consumers use 0 as "no owner", so a
+	// lane that could answer 0 would make a free lock read as owned by whoever asked. Every lowering below
+	// therefore either reads a word the OS guarantees non-null (a TEB/TCB self-pointer, a masked thread
+	// pointer) or asks the kernel for a thread id, which is never 0.
+	//
+	// ⚠ **`isPure: false`, AND IT IS THE `loadIndirect` ARGUMENT VERBATIM.** The token is constant for the
+	// lifetime of an OS THREAD, which makes "pure" look right and is exactly the trap: under a work-
+	// stealing multi-M scheduler a green thread may be resumed on a DIFFERENT M mid-function, so a token
+	// read hoisted out of a loop would pin a stale M for ever — a silent wrong answer in the one place this
+	// op exists to serve. Purity is "may this op be moved?", and the answer is no.
+	//
+	// `isCall: true` because two of the five lanes lower it to a SYSCALL (see below); a Std-tier fact must
+	// hold on every lane, and the conservative union is the only honest value. `isMemory: true` — the
+	// non-syscall lanes read the TEB/TCB. `isStore: false`: it observes identity, it publishes nothing.
+	//
+	// ⚠⚠ **THE TWO LINUX LANES DO NOT USE A THREAD-POINTER REGISTER, AND THAT IS FORCED BY shv2's OWN ABI
+	// RATHER THAN CHOSEN.** The obvious lowerings — `mov dest, fs:[0]` on x64-linux and `MRS TPIDR_EL0` on
+	// arm64-linux — read a base that **libc sets up**, and shv2's Linux lanes are raw-syscall static
+	// binaries with no libc (`TargetDialect`'s `x64Syscall`: *"x64-linux is raw-syscall + static ELF"*).
+	// The kernel leaves FS base and TPIDR_EL0 at **zero** for a fresh process, so `fs:[0]` dereferences
+	// address 0 (a SIGSEGV) and `TPIDR_EL0` reads 0 (which violates the non-zero contract above). Both lanes
+	// therefore ask the kernel: `gettid`, which is per-thread stable, never 0, needs no TLS setup and works
+	// identically before and after the scheduler exists. It costs a syscall, and that price is named where
+	// it is paid (`lowerCurrentThreadToken` in each backend): the day the multi-M runtime owns thread
+	// CREATION on Linux it can set the thread-pointer register itself, and these two lowerings collapse to
+	// one instruction each.
+	currentThreadToken(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1966,8 +2232,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osWaitHandles(handleArrayPtr, count, timeoutMs) then insertUseTriple(referenced, a: handleArrayPtr, b: count, c: timeoutMs)
 		osCloseHandle(handle) then referenced.insert(handle)
 		osWaitHandle(_, handle, timeoutMs) then insertUsePair(referenced, a: handle, b: timeoutMs)
-		// The region base is the one value operand `osFreePages` reads; it defines nothing (like `osExit`/`osCloseHandle`).
-		osFreePages(addr) then referenced.insert(addr)
+		// The region base AND its length are both value operands; it defines nothing (like `osExit`/`osCloseHandle`).
+		// The size is reported even though x64-windows reads it nowhere — this set is target-neutral, and a POSIX
+		// `munmap` would find its length register freed early if it were not.
+		osFreePages(addr, size) then insertUsePair(referenced, a: addr, b: size)
 		// The assembled message's address is the one value operand a rendered panic reads; it defines
 		// nothing (the label-carrying `osPanic` reads nothing at all).
 		osPanicValue(messagePtr) then referenced.insert(messagePtr)
@@ -2071,6 +2339,25 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// `osReadWallClock`'s reason: the allocator would otherwise free its register before the OS call
 		// writes through it. It defines nothing.
 		osThreadCpuTicks(outPtr) then referenced.insert(outPtr)
+		// F1a: base and length are BOTH real value operands of the decommit — the same pair `osFreePages`
+		// reports, and reported for the same reason: the allocator would otherwise free the length's register
+		// before the OS call reads it.
+		osDecommitPages(addr, size) then insertUsePair(referenced, a: addr, b: size)
+		// F1b: the destination and the length are the two value operands a fill reads; the fill BYTE is a
+		// compile-time constant on the op, so it is not one. It defines nothing.
+		memFill(dest, byteCount, _) then insertUsePair(referenced, a: dest, b: byteCount)
+		// F1c: a commit reads base and length, for the decommit's reason; a reservation reads only the length,
+		// exactly as `osAllocPages` does. `resultId` is a DEF on both, so it is skipped here exactly as
+		// `osAllocPages`'s result id is.
+		osCommitPages(_, addr, size) then insertUsePair(referenced, a: addr, b: size)
+		osReservePages(_, sizeId) then referenced.insert(sizeId)
+		// F2: every operand of an atomic is a genuine value READ — the address, plus the words compared and
+		// stored — so all of them must be reported, or the allocator frees a register the instruction still
+		// needs. Each `resultId` is a DEF, reported by `stdOpDefinedValue` instead.
+		atomicCas(_, addr, expected, replacement) then insertUseTriple(referenced, a: addr, b: expected, c: replacement)
+		atomicRmw(_, addr, operand, _) then insertUsePair(referenced, a: addr, b: operand)
+		// The thread token reads no VALUE at all — its input is the OS thread it is asked on. It defines one.
+		currentThreadToken then break 'u'
 	end 'u'
 end 'collectStdOpUses'
 
@@ -2258,6 +2545,19 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		// The thread-CPU read defines nothing — its answer lands in the caller's out-param word, exactly as
 		// the wall-clock read's does.
 		osThreadCpuTicks gives DefinedValueLookup.none
+		// F1a: the decommit defines no value. `VirtualFree`'s BOOL is discarded exactly as `osFreePages`
+		// discards it — a failed decommit leaves a caller nothing to do.
+		osDecommitPages gives DefinedValueLookup.none
+		// F1b: a fill defines no value — it is a store, and a store answers nothing.
+		memFill gives DefinedValueLookup.none
+		// F1c: both DO define one, and the definition is what makes the failure checkable — see the ops.
+		osCommitPages(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osReservePages(resultId, _) gives DefinedValueLookup.defines(resultId)
+		// F2: all three define their result — the CAS its SUCCESS BOOLEAN, the RMW the PRIOR value, the token
+		// the identity word. The two atomics carry OPPOSITE conventions; see each op for which and why.
+		atomicCas(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		atomicRmw(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		currentThreadToken(resultId) gives DefinedValueLookup.defines(resultId)
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -2380,8 +2680,9 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osWaitHandles(handleArrayPtr, count, timeoutMs) gives StdOp.osWaitHandles(remappedValue(handleArrayPtr, subst: subst), countId: remappedValue(count, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
 		osCloseHandle(handle) gives StdOp.osCloseHandle(remappedValue(handle, subst: subst))
 		osWaitHandle(resultId, handle, timeoutMs) gives StdOp.osWaitHandle(resultId, handleId: remappedValue(handle, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
-		// The exact mirror of `collectStdOpUses`'s arm: the region base is the one read, so it is the one rewrite.
-		osFreePages(addr) gives StdOp.osFreePages(remappedValue(addr, subst: subst))
+		// The exact mirror of `collectStdOpUses`'s arm: the base and the length are the two reads, so both are
+		// rewritten — including on x64-windows, where the length then lowers to nothing.
+		osFreePages(addr, size) gives StdOp.osFreePages(remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osPanicValue(messagePtr) gives StdOp.osPanicValue(remappedValue(messagePtr, subst: subst))
 		osCommandLine(resultId) gives StdOp.osCommandLine(resultId)
 		// The exact mirror of `collectStdOpUses`'s `switch` arm: only the biased index `subjectId` is a value
@@ -2465,6 +2766,21 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// The exact mirror of `collectStdOpUses`'s arm: the out-param address is the one read, so it is the
 		// one rewrite. It defines nothing.
 		osThreadCpuTicks(outPtr) gives StdOp.osThreadCpuTicks(remappedValue(outPtr, subst: subst))
+		// F1a: the exact mirror of `collectStdOpUses`'s arm — base and length are the reads, so both are the
+		// rewrites; the op defines nothing to carry through.
+		osDecommitPages(addr, size) gives StdOp.osDecommitPages(remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
+		// F1b: the exact mirror of `collectStdOpUses`'s arm — the destination and the length are the reads, so
+		// both are the rewrites, and the constant fill byte rides through untouched.
+		memFill(dest, byteCount, value) gives StdOp.memFill(remappedValue(dest, subst: subst), byteCountId: remappedValue(byteCount, subst: subst), value: value)
+		// F1c: the exact mirror of `collectStdOpUses`'s two arms — the reads are the rewrites, and each result id
+		// is a DEF carried through unchanged, exactly as `osAllocPages`'s is.
+		osCommitPages(resultId, addr, size) gives StdOp.osCommitPages(resultId, addrId: remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
+		osReservePages(resultId, sizeId) gives StdOp.osReservePages(resultId, sizeId: remappedValue(sizeId, subst: subst))
+		// F2: the exact mirror of `collectStdOpUses`'s three arms — every read is a rewrite, each result id is
+		// a DEF carried through unchanged, and the RMW's opcode rides along untouched (it names no value).
+		atomicCas(resultId, addr, expected, replacement) gives StdOp.atomicCas(resultId, addrId: remappedValue(addr, subst: subst), expectedId: remappedValue(expected, subst: subst), replacementId: remappedValue(replacement, subst: subst))
+		atomicRmw(resultId, addr, operand, opcode) gives StdOp.atomicRmw(resultId, addrId: remappedValue(addr, subst: subst), operandId: remappedValue(operand, subst: subst), opcode: opcode)
+		currentThreadToken(resultId) gives StdOp.currentThreadToken(resultId)
 	end 'r'
 end 'remapStdOpUses'
 

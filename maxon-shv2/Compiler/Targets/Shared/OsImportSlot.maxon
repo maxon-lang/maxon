@@ -21,11 +21,29 @@
 // `exit` terminates the process with main's return code. `write` is both the panic runtime's
 // route to stderr and the `osWriteStdout`/`print` primitive. `mmap` is the page source
 // `osAllocPages` bottoms out in; MAP_ANON returns ZEROED pages, satisfying the slab's zeroing
-// contract. No `munmap`: the slab never decommits, so a page-free import would be dead.
+// contract. `munmap` releases such a mapping (`osFreePages`) and `madvise` drops its physical
+// backing while KEEPING the mapping (`osDecommitPages`).
+//
+// ⛔ **THIS LIST SAID "No `munmap`: the slab never decommits, so a page-free import would be dead",
+// AND THAT SENTENCE OUTLIVED ITS PREMISE.** It was true of the bump heap, which never frees; it was
+// already false for the green-thread scheduler, which releases a completed GT's stack — that op just
+// happened to be x64-windows-gated, so the missing import surfaced as a PANIC in the arm64 isel rather
+// than as a link error here. ⚠ Only arm64-macOS actually reaches these two: the two Linux lanes make the
+// same calls as raw `svc`/`syscall` and need no import table at all (see the ⚠ note above), which is why
+// two names appear here for four lanes.
+// ⚠ APPENDED, never inserted: `osImportSlotIndex` is the enum ORDINAL and every emitted `arm64ImportCall`
+// records it, so a reorder would silently repoint every existing call site.
+//
+// ⚠ There is no `mprotect` slot, and that is not an omission: POSIX has no COMMIT state to change a
+// protection into, so `osCommitPages` is an `mmap` of the sub-range (`MAP_FIXED`) and reaches the `mmap`
+// slot already listed — exactly as `osReservePages` does. One page source, three spellings of its arguments:
+// allocate, reserve, commit.
 export enum OsImportSlot
 	exit
 	write
 	mmap
+	munmap
+	madvise
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor

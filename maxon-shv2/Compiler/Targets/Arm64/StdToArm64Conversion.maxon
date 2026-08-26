@@ -74,6 +74,17 @@ let Arm64FlagReturnReg = Arm64Register.x9
 // anonymous nor zeroed.
 let MmapAnonPrivateMacos = 0x1002  // Darwin: MAP_ANON (0x1000) | MAP_PRIVATE (0x2). arm64-macOS only.
 
+// The `madvise` advice that DECOMMITS a range on Darwin (F1a). Here rather than in `PosixMmap` for exactly
+// `MmapAnonPrivateMacos`'s reason one line up: arm64 is the only backend that targets macOS.
+//
+// ⚠⚠ **IT IS A DIFFERENT ADVICE FROM LINUX'S, NOT A DIFFERENT NUMBER FOR THE SAME ONE, AND IT IS WEAKER.**
+// Darwin's `MADV_DONTNEED` does not free anonymous private pages at all; `MADV_FREE` does, but only marks them
+// RECLAIMABLE — a write that beats the kernel to them cancels the reclaim, so a page can come back STILL DIRTY.
+// Linux's `MADV_DONTNEED` refaults a zero page instead. ⇒ a scavenger may never assume a recommitted page is
+// zeroed; `StdDialect.osDecommitPages` carries that obligation in full, and it is the reason these two constants
+// have separate names rather than one `MadviseDecommit` hiding the difference.
+let MadviseFreeMacos = 0x5  // Darwin: MADV_FREE — reclaimable, and NOT promised zero on the next touch.
+
 // The anonymous-private mapping flag word for `os`. Routed through `arm64OsCallKind` rather than a
 // second `match os`, so the set of OSes this backend serves is stated in exactly one place.
 function mmapAnonPrivateFlags(os Os) returns MachineWord
@@ -82,6 +93,15 @@ function mmapAnonPrivateFlags(os Os) returns MachineWord
 		syscall gives MmapAnonPrivateLinux
 	end 'route'
 end 'mmapAnonPrivateFlags'
+
+// The decommit advice for `os` — `mmapAnonPrivateFlags`' twin, routed through the same one door so the set of
+// OSes this backend serves is stated in exactly one place. See `MadviseFreeMacos` for why the two differ.
+function madviseDecommitAdvice(os Os) returns MachineWord
+	return match arm64OsCallKind(os) 'route'
+		importCall gives MadviseFreeMacos
+		syscall gives MadviseDontNeedLinux
+	end 'route'
+end 'madviseDecommitAdvice'
 
 // The IP scratch register the isel materialises an immediate — or a folded `base + offset` address —
 // into when no immediate op-form fits: a multiplier (arm64 has no multiply-by-immediate), a non-bitmask
@@ -483,6 +503,20 @@ type StdToArm64Lowering
 			// band, the machine query AND the thread-CPU read — is x64-windows only and never reaches an arm64
 			// frame; it reserves nothing here for the same reason every other refused op does.
 			osHandleSetInherit to osThreadCpuTicks gives 0
+			// F1a: unlike the band above, this one DOES lower here — and it still reserves nothing, because
+			// `madvise` takes three register arguments, inside AAPCS64's x0..x7. Nothing overflows onto the
+			// outgoing-argument stack.
+			osDecommitPages gives 0
+			// F1b: the byte fill calls nothing at all — it is a store ladder emitted inline — so there is no
+			// outgoing-argument region for it to reserve.
+			memFill gives 0
+			// F1c: both lower here too, and both are `mmap` — six arguments, which AAPCS64 passes in x0..x5 and
+			// Linux's `svc` reads from the same six. Nothing reaches the stack.
+			osCommitPages to osReservePages gives 0
+			// F2: the two atomics are inline instruction sequences and reserve nothing; the thread token is a
+			// system-register read on macOS and a ZERO-argument syscall on Linux, and a syscall never touches the
+			// stack. So none of the three needs an outgoing-argument region.
+			atomicCas to currentThreadToken gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -592,9 +626,16 @@ type StdToArm64Lowering
 			// is x64-windows only — CreateProcessA and the wait/handle imports have no arm64 primitive at this rung,
 			// and an `async runProcess` program is spec-gated to x64-windows, so none reaches arm64 lowering.
 			osProcessSpawn to osWaitHandle then panic("lowerStdToArm64: the P1.5 subprocess ops are x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
-			// P1.5-B1a′ `osFreePages` (the relocating morestack's page release) is x64-windows only — it is emitted
-			// ONLY inside the x64-windows-gated green-thread substrate (`__gt_drive_until`), so it never reaches arm64.
-			osFreePages then panic("lowerStdToArm64: `osFreePages` is x64-windows only — the green-thread substrate is x64-windows-gated at this rung")
+			// F1a + F1c: the four PAGE-LIFECYCLE ops all lower here — `munmap`, `madvise`, and two spellings of
+			// `mmap`. They are the one OS family on this backend that is NOT x64-windows-gated, and `osAllocPages`
+			// above is why: the allocator's page SOURCE already runs on every lane, so its free, decommit, reserve
+			// and commit twins must too.
+			osFreePages(addrId, sizeId) then self.lowerOsFreePages(addrId, sizeId: sizeId, dstRef: dstRef)
+			osDecommitPages(addrId, sizeId) then self.lowerOsDecommitPages(addrId, sizeId: sizeId, dstRef: dstRef)
+			// F1b: the byte fill's size ladder — two pre-moves and the macro-op that IS the dispatch.
+			memFill(destId, byteCountId, value) then self.lowerMemFill(destId, byteCountId: byteCountId, value: value, dstRef: dstRef)
+			osCommitPages(resultId, addrId, sizeId) then self.lowerOsCommitPages(resultId, addrId: addrId, sizeId: sizeId, dstRef: dstRef)
+			osReservePages(resultId, sizeId) then self.lowerOsReservePages(resultId, sizeId: sizeId, dstRef: dstRef)
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
 			switch then panic("lowerStdToArm64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 			// P1.7a slice 2b-iv-C: constrained-type-parameter dispatch, the third and last target to get it.
@@ -656,6 +697,12 @@ type StdToArm64Lowering
 			// import, and the POSIX answer (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`) is a different API in a
 			// different unit — a rung rather than a lowering. A stub here would fabricate a cost.
 			osThreadCpuTicks then panic("lowerStdToArm64: `osThreadCpuTicks` is x64-windows only — the thread-CPU clock is x64-windows-gated at this rung, and SemanticCheck refuses it on every other target")
+			// F2: the atomics and the per-thread identity word. Neither atomic is OS-routed — LDAXR/STLXR are ISA
+			// facts — while the token IS, because only one of the two OSes here has a thread-pointer register a raw
+			// static binary may read (see `lowerCurrentThreadToken`).
+			atomicCas(resultId, addrId, expectedId, replacementId) then self.lowerAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId, dstRef: dstRef)
+			atomicRmw(resultId, addrId, operandId, opcode) then self.lowerAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode, dstRef: dstRef)
+			currentThreadToken(resultId) then self.lowerCurrentThreadToken(resultId, dstRef: dstRef)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -690,7 +737,7 @@ type StdToArm64Lowering
 			osReadClock then panic("lowerStdToArm64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op; also x64-windows only)")
 			osSleepMs then panic("lowerStdToArm64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op; also x64-windows only)")
 			osProcessSpawn to osWaitHandle then panic("lowerStdToArm64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops; also x64-windows only)")
-			osFreePages then panic("lowerStdToArm64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op; also x64-windows only)")
+			osFreePages then panic("lowerStdToArm64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 			// The dense-match jump table lowers to the arm64 jump-table target op, registering its `.rdata`
 			// slot blob (its label the ADRP+ADD addresses and the writer patches). Routed through a helper so
 			// the `denseTargetBlockIds` Array is not bound in this big match.
@@ -709,6 +756,15 @@ type StdToArm64Lowering
 			osSocketStartup to osSocketClose then panic("lowerStdToArm64: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
 			osCpuCount then panic("lowerStdToArm64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op; it is also x64-windows only)")
 			osThreadCpuTicks then panic("lowerStdToArm64: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param; it is also x64-windows only)")
+			// F1a: a decommit is a body op, exactly as `osFreePages` above is — a page-lifecycle op transfers
+			// control nowhere.
+			osDecommitPages then panic("lowerStdToArm64: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
+			// F1c: a reserve and a commit are value-producing body ops, for the decommit's reason.
+			osCommitPages to osReservePages then panic("lowerStdToArm64: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
+			memFill then panic("lowerStdToArm64: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
+			// F2: all three are value-producing body ops. The CAS/RMW retry loop branches, but inside one macro-op's
+			// encoder — never between IR blocks, exactly as the fill ladder above.
+			atomicCas to currentThreadToken then panic("lowerStdToArm64: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1413,6 +1469,90 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsAllocPages'
 
+	// Lower `osFreePages(addr, size)` to POSIX `munmap(addr, size)` — the free counterpart of `lowerOsAllocPages`
+	// directly above, and the shape x64's `lowerOsFreePagesLinux` takes, generalized to both OSes this backend
+	// serves. Two register arguments in x0/x1 on BOTH (AAPCS64 passes a libSystem call's there, and Linux's `svc`
+	// reads its arguments from the same registers), so only the terminal call differs — which is the one thing
+	// `emitOsPrimitiveCall` exists to decide. The `int` it answers in x0 is NOT captured: `osFreePages` defines no
+	// value, because a failed unmap leaves a caller nothing to do.
+	//
+	// ⭐ **THIS ARM USED TO PANIC, AND THE VOCABULARY IS WHY.** `osFreePages` carried the BASE ALONE, and there
+	// is no `munmap` spelling that takes one — so the refusal here was forced by the op's shape rather than by
+	// anything arm64 cannot do. F1a gave the op its length; this is the lowering that was always available.
+	function lowerOsFreePages(addrId ValueId, sizeId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(addrId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(sizeId)))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.munmap, syscallNumber: Arm64LinuxSyscallMunmap)
+	end 'lowerOsFreePages'
+
+	// Lower `osDecommitPages(addr, size)` to `madvise(addr, size, <advice>)` — drop the range's physical backing
+	// and KEEP the mapping, so the base stays valid and `osCommitPages` can re-back it in place. Same three
+	// register arguments on both OSes; only the ADVICE and the terminal call differ, and each comes from its own
+	// one door (`madviseDecommitAdvice`, `emitOsPrimitiveCall`).
+	//
+	// ⚠ The two OSes do not promise the same CONTENTS afterwards — Linux refaults zeros, Darwin's `MADV_FREE`
+	// may hand the same dirty page back. `StdDialect.osDecommitPages` carries that obligation; nothing here may
+	// paper over it, because there is no Darwin advice that both keeps the reservation and promises zeros.
+	function lowerOsDecommitPages(addrId ValueId, sizeId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(addrId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(sizeId)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: madviseDecommitAdvice(self.target.os)))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.madvise, syscallNumber: Arm64LinuxSyscallMadvise)
+	end 'lowerOsDecommitPages'
+
+	// Lower `osReservePages(size)` to `mmap(NULL, size, PROT_NONE, MAP_ANON|MAP_PRIVATE, -1, 0)` — Go's
+	// `sysReserveOS` (`vendor/go/src/runtime/mem_linux.go:163`, `mem_darwin.go:57`) verbatim, and
+	// `lowerOsAllocPages` above with ONE argument changed: the protection word. `PROT_NONE` is what makes it a
+	// reservation rather than an allocation — the kernel records the range and backs nothing, and a touch faults.
+	//
+	// The anon-private flag word still comes from `mmapAnonPrivateFlags`, so the one number that differs between
+	// the two OSes this backend serves stays stated in one place.
+	function lowerOsReservePages(resultId ValueId, sizeId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: MmapKernelChoosesBase))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(sizeId)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: MmapProtNone))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: mmapAnonPrivateFlags(self.target.os)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x4), value: MmapAnonFd))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x5), value: MmapNoOffset))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.mmap, syscallNumber: Arm64LinuxSyscallMmap)
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerOsReservePages'
+
+	// Lower `osCommitPages(addr, size)` to `mmap(addr, size, PROT_READ|PROT_WRITE,
+	// MAP_ANON|MAP_PRIVATE|MAP_FIXED, -1, 0)` — Go's `sysMapOS` (`mem_linux.go:172`, `mem_darwin.go:67`)
+	// verbatim. POSIX has no commit state: the MAPPING is the commitment, so committing a sub-range of a
+	// `PROT_NONE` reservation means re-mapping it with real protection, and `MAP_FIXED` is what makes the kernel
+	// use the address it was given instead of choosing one.
+	//
+	// ⛔ It therefore DESTROYS whatever was mapped in the range. `StdDialect.osCommitPages` carries that
+	// obligation for all four lanes at once; nothing here may soften it.
+	//
+	// `MAP_FIXED` is ORed into the anon-private word at this one site, exactly as the x64 isel does it, so the
+	// per-OS half of the flag word is still stated only in `mmapAnonPrivateFlags`.
+	function lowerOsCommitPages(resultId ValueId, addrId ValueId, sizeId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(addrId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(sizeId)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: MmapProtReadWrite))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: mmapAnonPrivateFlags(self.target.os) or MmapFixed))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x4), value: MmapAnonFd))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x5), value: MmapNoOffset))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.mmap, syscallNumber: Arm64LinuxSyscallMmap)
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerOsCommitPages'
+
+	// Lower `memFill(dest, byteCount, value)` — the destination and the length into the two registers the size
+	// ladder reads, then the macro-op that IS the ladder. The exact twin of x64's `lowerMemFill`, and — unlike
+	// every OS primitive around it — NOT routed through `arm64OsCallKind`: a byte fill is arithmetic and
+	// stores, identical on macOS and Linux, so there is nothing for an OS to decide.
+	//
+	// The fill BYTE is moved nowhere: it is broadcast across the word at compile time and rides the op as an
+	// immediate (`memFillPatternWord`), which is the whole reason `StdOp.memFill`'s value is a constant.
+	function lowerMemFill(destId ValueId, byteCountId ValueId, value ParsedInt, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysVReg(Arm64MemFillCursorRegNum), srcReg: TargetVReg.virtual(destId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysVReg(Arm64MemFillCountRegNum), srcReg: TargetVReg.virtual(byteCountId)))
+		self.emit(dstRef, op: TargetOp.arm64MemFill(memFillByte(value)))
+	end 'lowerMemFill'
+
 	// Lower `osWriteStdout`/`osWriteStderr(result, buf, len)` to `write(fd, buf, len)`. FAR simpler than
 	// x64's `lowerOsWriteStream` (GetStdHandle then WriteFile with a handle, an out-param and a stack
 	// argument): a single POSIX `write` with three register arguments, and the Linux syscall takes them
@@ -1433,4 +1573,48 @@ type StdToArm64Lowering
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.write, syscallNumber: Arm64LinuxSyscallWrite)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsWriteStream'
+
+	// Lower `atomicCas`/`atomicRmw` (F2) — ONE macro-op each, operands left VIRTUAL. Unlike every OS
+	// primitive above, and unlike `lowerMemFill`'s pre-moves into fixed registers, there is nothing to
+	// marshal: the LL/SC loop reads its three (or two) operands wherever the allocator put them and keeps
+	// its own working state in the x16/x17 IP scratch pair, which is outside the allocatable pool. The
+	// retry BRANCHES live inside the encoder's byte sequence — the Std→Target lowerings cannot create
+	// blocks — exactly as `arm64JumpTable` and `arm64MemFill` already do.
+	//
+	// ⚠ Not routed through `arm64OsCallKind`, for `lowerMemFill`'s reason: an atomic is an ISA fact, and
+	// LDAXR/STLXR are the same instructions on macOS and Linux.
+	function lowerAtomicCas(resultId ValueId, addrId ValueId, expectedId ValueId, replacementId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64AtomicCas(TargetVReg.virtual(resultId), addrReg: TargetVReg.virtual(addrId), expectedReg: TargetVReg.virtual(expectedId), replacementReg: TargetVReg.virtual(replacementId)))
+	end 'lowerAtomicCas'
+
+	function lowerAtomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64AtomicRmw(TargetVReg.virtual(resultId), addrReg: TargetVReg.virtual(addrId), operandReg: TargetVReg.virtual(operandId), opcode: opcode))
+	end 'lowerAtomicRmw'
+
+	// Lower `currentThreadToken(result)` (F2) — the one member of this family with a genuine OS split on
+	// arm64, so it is routed through the same `arm64OsCallKind` door `mmapAnonPrivateFlags` and
+	// `madviseDecommitAdvice` already use rather than through a second `match os`.
+	//
+	// macOS: the masked thread pointer, `MRS TPIDRRO_EL0` + `LSR #3` + `LSL #3` — v1's owner token,
+	// which needs no pthread key, no TSD dereference and no NULL-owner edge case.
+	// Linux: the `gettid` syscall. ⚠ `TPIDRRO_EL0` is NOT the answer there — the read-only thread ID
+	// register reads 0 unless something has written it, and shv2's Linux lane is a raw static binary with
+	// no libc to do so. `StdOp.currentThreadToken` carries that argument in full.
+	function lowerCurrentThreadToken(resultId ValueId, dstRef BlockRef)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emit(dstRef, op: TargetOp.arm64ThreadPointer(TargetVReg.virtual(resultId)))
+			syscall then self.lowerCurrentThreadTokenLinux(resultId, dstRef: dstRef)
+		end 'route'
+	end 'lowerCurrentThreadToken'
+
+	// `gettid()` — a ZERO-argument syscall, so nothing is marshalled; only the answer is captured out of x0,
+	// exactly as `lowerOsAllocPages` captures `mmap`'s base.
+	//
+	// ⚠ It goes straight to `arm64Syscall` rather than through `emitOsPrimitiveCall`, which routes by OS
+	// between an import slot and a syscall number: this arm is ALREADY the Linux one, and there is no macOS
+	// import to name — the macOS answer is the register read above, not a call.
+	function lowerCurrentThreadTokenLinux(resultId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64Syscall(Arm64LinuxSyscallGettid))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerCurrentThreadTokenLinux'
 end 'StdToArm64Lowering'
