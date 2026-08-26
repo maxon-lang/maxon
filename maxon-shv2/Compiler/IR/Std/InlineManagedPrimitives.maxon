@@ -44,12 +44,16 @@
 // ⭐⭐ **SO THE ORDER IS SPENT ON THE ONE THING IT CAN BUY: THE MOST DISCRIMINATING TEST FIRST.** A fast
 // arm that ends up taking the call has paid for every guard ahead of the one that refused, ON TOP of the
 // call it was always going to make — so a family this pass cannot serve must be shown the door early or
-// this rung makes it SLOWER. Two tests refuse whole element types outright and both are two ops:
-// `element_size@24 != 8` refuses every byte-, narrow- and sub-byte-packed array (`ByteArray` is one of
-// this compiler's most used types), and, on the STORE path only, `element_destroy@40 != 0` refuses every
-// managed-element array, whose occupant is the runtime's to destroy. They go first; the bound and the
-// three copy-on-write arms, which refuse rarely, follow. MEASURED on the emitted code: a `ByteArray`
-// element access pays **4** instructions before reaching its call rather than 13.
+// this rung makes it SLOWER. The stride fork goes first and is the only test that refuses a whole element
+// type outright: `element_size@24` is neither a machine word nor a single byte for a 2- or 4-byte element,
+// an unset stride and every sub-byte-packed width, and each of those leaves in at most two compares. On the
+// STORE path `element_destroy@40 != 0` refuses every managed-element array next, whose occupant is the
+// runtime's to destroy. The bound and the three copy-on-write arms, which refuse rarely, follow.
+//
+// ⚠ **EC1 MEASURED THAT DOOR ON `ByteArray`, AND EC3 MOVED `ByteArray` TO THE OTHER SIDE OF IT.** The
+// number this paragraph used to carry — a `ByteArray` element access paying 4 instructions before reaching
+// its call rather than 13 — was about the arm that now SERVES it. What still pays it is the narrower set
+// above.
 //
 // ⚠ **WHERE IT IS SCHEDULED, AND WHY IT IS NOT WHERE IT WAS FIRST PLANNED (EC1-b).** It runs AFTER
 // `insertRangeChecks` and before `pruneDeadBlockArgs`/`foldConstOperands`. Before the range checks it
@@ -68,16 +72,23 @@
 // The values that genuinely span the region are the call's own arguments, which were live across the call
 // this replaces.
 
-// The element stride these fast arms are the whole of: ONE MACHINE WORD. `element_size@24` is SIGNED and
-// runtime-valued — a byte stride when positive, `-(bits per element)` when the elements are sub-byte packed
-// (`ManagedMemoryRuntime`'s header) — so a straight `loadIndirect`/`storeIndirect i64` is the complete
-// answer for exactly this one stamp and for no other. Every other stride (1, 2, 4, and every packed one)
-// goes to the runtime, whose `emitLoadElemAt`/`emitStoreElemAt` own that arithmetic and its zero-extension
-// rules.
+// ⭐⭐ **THE TWO STRIDES THESE FAST ARMS ARE THE WHOLE OF: ONE MACHINE WORD, AND ONE BYTE.**
+// `element_size@24` is SIGNED and runtime-valued — a byte stride when positive, `-(bits per element)` when
+// the elements are sub-byte packed (`ManagedMemoryRuntime`'s header) — and a target moves exactly two of
+// those widths in ONE memory op (`emitStrideDispatch`'s header states the list and why it is those two).
+// Every other stride (2, 4, the unset 0, and every packed one) goes to the runtime, whose
+// `emitLoadElemAt`/`emitStoreElemAt` own that arithmetic and its zero-extension rules.
 //
-// DERIVED from `LayoutDescriptor.MachineWordBytes` — the owner of "how wide is a value with no narrower
-// home" — rather than written as an 8 beside it, because the stamp this compares against IS that width:
-// `ProgramSignatures.arrayElementSize` stamps `element_size@24` off the same ladder.
+// ⭐ **THE BYTE ARM JOINED IN EC3, AND IT IS NOT A GENERALIZATION — IT IS A MEASURED FAMILY.** Every
+// `ByteArray` access and every 1-byte enum slot (`enum-narrow-storage`) MISSED the word arm and paid the
+// whole runtime call: `__managed_get`'s slow arm reached from `Map.findSlot` alone is 2% of a stage-2
+// self-compile, and the body it lands in walks an eight-trip byte loop to move one byte.
+//
+// `WordElementStride` is DERIVED from `LayoutDescriptor.MachineWordBytes` — the owner of "how wide is a
+// value with no narrower home" — rather than written as an 8 beside it, because the stamp this compares
+// against IS that width: `ProgramSignatures.arrayElementSize` stamps `element_size@24` off the same ladder.
+// The byte stride is `ManagedMemoryRuntime.ByteStringElementSize` itself, named directly rather than
+// aliased, for the same single-fact reason.
 let WordElementStride = MachineWordBytes as ParsedInt
 
 // The block labels this pass mints. They reach the committed goldens, so they are short, prefixed
@@ -91,8 +102,15 @@ let InlineEmptyLabel = b"__im_empty"
 let InlineOwnedLabel = b"__im_owned"
 let InlineBufferLabel = b"__im_buffer"
 let InlineViewedLabel = b"__im_viewed"
-let InlineDestroyLabel = b"__im_destroy"
 let InlineStoreLabel = b"__im_store"
+// The stride fork's own three: the block that asks the SECOND of `emitStrideDispatch`'s two questions, and
+// the entry of each accepted arm. Named here rather than left to the runtime's `esbyte` default so every
+// block this pass puts inside a user function still reads as this pass's.
+let InlineStrideLabel = b"__im_stride"
+let InlineWordLabel = b"__im_word"
+let InlineByteLabel = b"__im_byte"
+// Where the two widths of a checked `get` rejoin, carrying the loaded element as a block arg.
+let InlineLoadedLabel = b"__im_loaded"
 
 // How many sites the pass expanded — a diagnostic counter, reported once per compile.
 typealias InlinedSiteCount = int(0 to u64.max)
@@ -310,7 +328,9 @@ type PrimitiveInliner
 		return blockRef
 	end 'rewriteCountInPlace'
 
-	// `__managed_get_unchecked(arr, index) -> value`: the whole-word arm is a slot address and one load.
+	// `__managed_get_unchecked(arr, index) -> value`: each accepted stride is a slot address and one load, at
+	// its own width. There is nothing above the widths to share, so the stride fork IS the whole guard chain
+	// and neither arm costs the other anything.
 	// There is deliberately NO bounds check and NO empty-slot check here — not because they are cheap to
 	// omit, but because `__managed_get_unchecked`'s body does not have them either: the `for`-in header
 	// re-reads the length live on every trip and a managed array cannot hold an empty slot inside
@@ -321,18 +341,24 @@ type PrimitiveInliner
 		let index = argAt(args, index: 1, callee: callee)
 		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
 
-		var cur = self.blockAt(blockRef)
-		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineLoadLabel)
-
-		let value = self.emitWordElementLoad(cur, arr: arr, index: index)
-		self.module.setTerminator(cur, op: StdOp.branch(frame.cont.id))
-		attachEdge(cur, targetId: frame.cont.id, argIds: argsOf(value))
+		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
+		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
+		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: frame.slow.id)
+		self.emitLoadArmToCont(wordArm, arr: arr, index: index, stride: WordElementStride, accessType: StdType.i64, cont: frame.cont)
+		self.emitLoadArmToCont(byteArm, arr: arr, index: index, stride: ByteStringElementSize, accessType: StdType.u8, cont: frame.cont)
 
 		return self.finish(frame)
 	end 'expandUncheckedGet'
 
+	// One width's whole answer for the unchecked get: the slot load, then the continuation edge carrying it.
+	function emitLoadArmToCont(cur IrBlock, arr ValueId, index ValueId, stride ParsedInt, accessType StdType, cont IrBlock)
+		let value = self.emitElementLoad(cur, arr: arr, index: index, stride: stride, accessType: accessType)
+		self.module.setTerminator(cur, op: StdOp.branch(cont.id))
+		attachEdge(cur, targetId: cont.id, argIds: argsOf(value))
+	end 'emitLoadArmToCont'
+
 	// `__managed_get(arr, index) -> (value, flag)`. The fast arm is `buildManagedGet`'s success path with
-	// its two branches kept and its byte loop collapsed: in range, whole-word stride, and — for a MANAGED
+	// its two branches kept and its byte loop collapsed: a single-op stride, in range, and — for a MANAGED
 	// element only — a slot that is not empty.
 	//
 	// ⭐ **THE EMPTY-SLOT ARM IS GATED ON THE DESTRUCTOR, EXACTLY AS `emitLoadElemAndOkReturn` GATES IT.** A
@@ -340,16 +366,28 @@ type PrimitiveInliner
 	// `resize` grew and nothing wrote, and reading its fields would fault, so it throws `emptySlot`. Only
 	// that second case leaves for the slow arm, which is where the throw lives — so an array of Strings
 	// keeps the inline read for every slot that holds one.
+	//
+	// ⭐ **THE BOUND IS PER-ARM AND THE EMPTY-SLOT TAIL IS SHARED, WHICH IS WHERE THE WIDTHS DIVERGE AND
+	// WHERE THEY DO NOT.** The bound is three ops, so emitting it once per width costs less than keeping
+	// `element_size@24` live across it to re-ask which width this is; the tail is six and reads only the
+	// loaded VALUE, so the two arms rejoin at `loaded` carrying it as a block arg and the tail is written —
+	// and emitted — once.
 	function expandCheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 
-		var cur = self.blockAt(blockRef)
-		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineBoundsLabel)
-		cur = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: frame.slow, next: InlineLoadLabel)
+		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
+		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
+		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: frame.slow.id)
 
-		let value = self.emitWordElementLoad(cur, arr: arr, index: index)
+		var loaded = self.module.addBlock(self.func, label: InlineLoadedLabel)
+		let value = self.valueIds().mint()
+		attachBlockArgs(loaded, valueIds: argsOf(value))
+
+		self.emitBoundedLoadArm(wordArm, arr: arr, index: index, stride: WordElementStride, accessType: StdType.i64, slow: frame.slow, loaded: loaded)
+		self.emitBoundedLoadArm(byteArm, arr: arr, index: index, stride: ByteStringElementSize, accessType: StdType.u8, slow: frame.slow, loaded: loaded)
+
 		// ⚠ THREE CONSTANTS THAT ARE ALL ZERO TODAY, AND THEY STAY THREE. "no error in flight", "no
 		// per-element destructor" (inside `emitElementIsManaged`, which owns that one) and "an empty managed
 		// slot" are three different facts that happen to share a value; folding them into one `const 0` would
@@ -357,16 +395,16 @@ type PrimitiveInliner
 		// `MemoryIndexOutOfBoundsOrdinal` makes about not aliasing itself to `ArrayErrorIndexOutOfBoundsFlag`.
 		// It costs nothing: `foldConstOperands` folds both compares into immediates and DCEs their consts,
 		// leaving only the flag, whose reader is the edge below.
-		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
-		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-		let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
+		let noError = emitConst(self.module, block: loaded, value: NoErrorFlag, ids: self.valueIds())
+		let destroy = emitLoadField(self.module, block: loaded, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
+		let managed = emitElementIsManaged(self.module, block: loaded, destroy: destroy, ids: self.valueIds())
 
 		var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel)
-		self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.cont.id))
-		attachEdge(cur, targetId: frame.cont.id, argIds: twoArgs(value, second: noError))
+		self.module.setTerminator(loaded, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.cont.id))
+		attachEdge(loaded, targetId: frame.cont.id, argIds: twoArgs(value, second: noError))
 
-		// `value` and `noError` are defined in `cur`, which dominates this block, so both are readable here
-		// and on this block's own edge to the continuation without a block arg of their own.
+		// `value` is `loaded`'s own block arg and `noError` is defined there, and `loaded` dominates this
+		// block, so both are readable here and on this block's own edge to the continuation.
 		let emptySlot = emitConst(self.module, block: checkEmpty, value: EmptyManagedSlot, ids: self.valueIds())
 		let isEmpty = emitCmp(self.module, block: checkEmpty, a: value, b: emptySlot, pred: StdCmpPred.eq, ids: self.valueIds())
 		self.module.setTerminator(checkEmpty, op: StdOp.condBranch(isEmpty, thenBlockId: frame.slow.id, elseBlockId: frame.cont.id))
@@ -374,6 +412,15 @@ type PrimitiveInliner
 
 		return self.finish(frame)
 	end 'expandCheckedGet'
+
+	// One width's half of the checked get: the `length@8` bound, then the slot load, then the edge into the
+	// shared tail carrying what it read.
+	function emitBoundedLoadArm(cur IrBlock, arr ValueId, index ValueId, stride ParsedInt, accessType StdType, slow IrBlock, loaded IrBlock)
+		var at = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: slow, next: InlineLoadLabel)
+		let value = self.emitElementLoad(at, arr: arr, index: index, stride: stride, accessType: accessType)
+		self.module.setTerminator(at, op: StdOp.branch(loaded.id))
+		attachEdge(at, targetId: loaded.id, argIds: argsOf(value))
+	end 'emitBoundedLoadArm'
 
 	// `__managed_set` / `__managed_mem_set`. ⭐⭐ **THE COW ARMS ARE `__managed_cow_detach`'s OWN THREE
 	// ARMS, ASKED IN ITS OWN ORDER, AND ANSWERED BY REFUSING RATHER THAN BY DETACHING.** A detach that has
@@ -399,51 +446,75 @@ type PrimitiveInliner
 		let value = argAt(args, index: 2, callee: callee)
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 
-		var cur = self.blockAt(blockRef)
-		cur = self.guardWordStride(cur, arr: arr, slow: frame.slow, next: InlineDestroyLabel)
-
-		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-		let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
-		cur = self.guard(cur, refused: managed, slow: frame.slow, next: InlineBoundsLabel)
-
-		cur = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineOwnedLabel)
-
-		let notOwned = emitBufferNotOwned(self.module, block: cur, record: arr, ids: self.valueIds())
-		cur = self.guard(cur, refused: notOwned, slow: frame.slow, next: InlineBufferLabel)
-
-		let buffer = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
-		let zeroBuf = emitConst(self.module, block: cur, value: NoBufferAllocated, ids: self.valueIds())
-		let unallocated = emitCmp(self.module, block: cur, a: buffer, b: zeroBuf, pred: StdCmpPred.eq, ids: self.valueIds())
-		cur = self.guard(cur, refused: unallocated, slow: frame.slow, next: InlineViewedLabel)
-
-		let viewed = emitIsSharedAllocation(self.module, block: cur, ptr: buffer, ids: self.valueIds())
-		cur = self.guard(cur, refused: viewed, slow: frame.slow, next: InlineStoreLabel)
-
-		let stride = emitConst(self.module, block: cur, value: WordElementStride, ids: self.valueIds())
-		let slot = emitSlotAddr(self.module, block: cur, buffer: buffer, index: index, elementSize: stride, ids: self.valueIds())
-		self.module.appendOp(cur, op: StdOp.storeIndirect(slot, offset: 0, valueId: value, valueType: StdType.i64))
-
-		// The ok exit of a throwing VOID entry: the placeholder value the ABI never moves, and the flag,
-		// are both `NoErrorFlag` — one `const`, exactly as `emitVoidOkReturn` spells it in the runtime.
-		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
-		self.module.setTerminator(cur, op: StdOp.branch(frame.cont.id))
-		attachEdge(cur, targetId: frame.cont.id, argIds: twoArgs(noError, second: noError))
+		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
+		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
+		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: frame.slow.id)
+		self.emitStoreArm(wordArm, arr: arr, index: index, value: value, limitOffset: limitOffset, stride: WordElementStride, accessType: StdType.i64, frame: frame)
+		self.emitStoreArm(byteArm, arr: arr, index: index, value: value, limitOffset: limitOffset, stride: ByteStringElementSize, accessType: StdType.u8, frame: frame)
 
 		return self.finish(frame)
 	end 'expandElementStore'
 
+	// ⭐ **ONE WIDTH'S WHOLE FAST ARM, AND THE STORE'S FIVE GUARDS LIVE HERE RATHER THAN ABOVE THE STRIDE
+	// FORK.** Every one of them is width-INDEPENDENT, so they could equally have been asked once above a
+	// second stride test placed just before the store — and that shape was rejected: it puts two more
+	// instructions (a compare and a branch) on the WORD path, which is every `Array with Int`, `String`
+	// element and pointer slot in the language, to save emitting five guards a second time. The guards are
+	// paid in CODE SIZE, once per call site; the second test would be paid in TIME, once per element access.
+	// Nothing about the arms differs but the stride constant and the access width, which is why they are one
+	// function called twice rather than two.
+	function emitStoreArm(cur IrBlock, arr ValueId, index ValueId, value ValueId, limitOffset ByteOffset, stride ParsedInt, accessType StdType, frame InlineFrame)
+		var at = cur
+
+		let destroy = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
+		let managed = emitElementIsManaged(self.module, block: at, destroy: destroy, ids: self.valueIds())
+		at = self.guard(at, refused: managed, slow: frame.slow, next: InlineBoundsLabel)
+
+		at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineOwnedLabel)
+
+		let notOwned = emitBufferNotOwned(self.module, block: at, record: arr, ids: self.valueIds())
+		at = self.guard(at, refused: notOwned, slow: frame.slow, next: InlineBufferLabel)
+
+		let buffer = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
+		let zeroBuf = emitConst(self.module, block: at, value: NoBufferAllocated, ids: self.valueIds())
+		let unallocated = emitCmp(self.module, block: at, a: buffer, b: zeroBuf, pred: StdCmpPred.eq, ids: self.valueIds())
+		at = self.guard(at, refused: unallocated, slow: frame.slow, next: InlineViewedLabel)
+
+		let viewed = emitIsSharedAllocation(self.module, block: at, ptr: buffer, ids: self.valueIds())
+		at = self.guard(at, refused: viewed, slow: frame.slow, next: InlineStoreLabel)
+
+		let strideValue = emitConst(self.module, block: at, value: stride, ids: self.valueIds())
+		let slot = emitSlotAddr(self.module, block: at, buffer: buffer, index: index, elementSize: strideValue, ids: self.valueIds())
+		self.module.appendOp(at, op: StdOp.storeIndirect(slot, offset: 0, valueId: value, valueType: accessType))
+
+		// The ok exit of a throwing VOID entry: the placeholder value the ABI never moves, and the flag,
+		// are both `NoErrorFlag` — one `const`, exactly as `emitVoidOkReturn` spells it in the runtime.
+		let noError = emitConst(self.module, block: at, value: NoErrorFlag, ids: self.valueIds())
+		self.module.setTerminator(at, op: StdOp.branch(frame.cont.id))
+		attachEdge(at, targetId: frame.cont.id, argIds: twoArgs(noError, second: noError))
+	end 'emitStoreArm'
+
 	// --- the shared pieces every carved expansion is built from ---
 
-	// ⭐ THE ONE PRECONDITION EVERY FAST ARM SHARES — the element is one whole machine word, so the access
-	// is a single `loadIndirect`/`storeIndirect i64`. See `WordElementStride` for why that stamp and no
-	// other, and `ManagedMemoryRuntime`'s SUB-BYTE BIT-PACKED ELEMENTS section for what the runtime does
-	// with the rest.
-	function guardWordStride(cur IrBlock, arr ValueId, slow IrBlock, next ByteArray) returns IrBlock
+	// ⭐ THE ONE PRECONDITION EVERY FAST ARM SHARES — the element is one whole machine word or one byte, so
+	// the access is a single `loadIndirect`/`storeIndirect` at that width. Every other stride leaves for the
+	// slow arm HERE, first, which is what keeps a family this pass cannot serve from paying for guards that
+	// were never going to admit it.
+	//
+	// ⛔⛔ **THE TWO COMPARES ARE `emitStrideDispatch`'s, NOT THIS FILE'S.** The list of strides a target
+	// moves in one memory op is the runtime's — it is the same list `emitLoadElemAt`/`emitStoreElemAt` route
+	// their own fast arms on — and a pass that re-spelled it here would be the drifting checklist this
+	// file's header rejects, one predicate further out than the one review already caught
+	// (`emitElementIsManaged`). If the tier ever moves a 2- or 4-byte element in one op, that fact changes
+	// in one place and both tiers learn it.
+	//
+	// The caller MINTS the two arm blocks and hands their ids in, rather than taking them back from here:
+	// it goes on emitting into both, and a block a caller emits into is a `var` binding of the caller's
+	// under this compiler's own ownership rules.
+	function dispatchOnStride(cur IrBlock, arr ValueId, wordArm BlockId, byteArm BlockId, slow BlockId)
 		let elementSize = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: self.valueIds())
-		let stride = emitConst(self.module, block: cur, value: WordElementStride, ids: self.valueIds())
-		let narrowOrPacked = emitCmp(self.module, block: cur, a: elementSize, b: stride, pred: StdCmpPred.ne, ids: self.valueIds())
-		return self.guard(cur, refused: narrowOrPacked, slow: slow, next: next)
-	end 'guardWordStride'
+		emitStrideDispatch(self.module, func: self.func, cur: cur, es: elementSize, wordArm: wordArm, byteArm: byteArm, otherArm: slow, ids: self.valueIds(), checkByteLabel: InlineStrideLabel)
+	end 'dispatchOnStride'
 
 	// The index bound, through `emitIndexOutOfRange` — the ONE home of "reject this index", which carries
 	// the NEGATIVE half with it (`StdCmpPred` is signed only, so `-1 >= 3` is false and a negative index
@@ -479,19 +550,25 @@ type PrimitiveInliner
 		return ok
 	end 'guard'
 
-	// The whole-word element read: `[buffer@0 + index · 8]`. The address is `emitSlotAddr`'s — the runtime's
-	// one home of "where does element `index` start" — and the load is a plain `loadIndirect i64` rather
-	// than `emitLoadElemAt`, because collapsing that byte loop IS this arm. The two agree by construction at
-	// this stride: `emitLoadElemAt` accumulates the eight little-endian bytes and then masks with
-	// `AllBitsSet`, which is the identity for a 64-bit field, so the value is bit-for-bit the same one.
-	function emitWordElementLoad(cur IrBlock, arr ValueId, index ValueId) returns ValueId
+	// The single-op element read: `[buffer@0 + index · stride]` at the arm's own width. The address is
+	// `emitSlotAddr`'s — the runtime's one home of "where does element `index` start" — and the load is a
+	// plain `loadIndirect` rather than `emitLoadElemAt`, because collapsing that byte loop IS this arm.
+	//
+	// ⭐ **THE TWO AGREE BY CONSTRUCTION AT BOTH STRIDES, AND THE SECOND HALF OF THAT IS A RULE RATHER THAN
+	// AN IDENTITY.** At `es == 8` `emitLoadElemAt` accumulates the eight little-endian bytes and masks with
+	// `AllBitsSet`, which is the identity for a 64-bit field. At `es == 1` it loads one `u8` — ZERO-extended
+	// (`movzx` on x64, `ldrb` on arm64, `i32.load8_u` on wasm) — and masks with `0xFF`, which is that same
+	// zero-extended byte; the zero-extension is what `SignatureIndex.arrayElementSize` and
+	// `LayoutDescriptor.rangedAliasPackedBits`' `low == 0` rule both rest on, and the parser re-signs a
+	// narrow slot from there. So a `u8` load is precisely what the runtime body itself would have answered.
+	function emitElementLoad(cur IrBlock, arr ValueId, index ValueId, stride ParsedInt, accessType StdType) returns ValueId
 		let buffer = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
-		let stride = emitConst(self.module, block: cur, value: WordElementStride, ids: self.valueIds())
-		let slot = emitSlotAddr(self.module, block: cur, buffer: buffer, index: index, elementSize: stride, ids: self.valueIds())
+		let strideValue = emitConst(self.module, block: cur, value: stride, ids: self.valueIds())
+		let slot = emitSlotAddr(self.module, block: cur, buffer: buffer, index: index, elementSize: strideValue, ids: self.valueIds())
 		let value = self.valueIds().mint()
-		self.module.appendOp(cur, op: StdOp.loadIndirect(value, addrId: slot, offset: 0, valueType: StdType.i64))
+		self.module.appendOp(cur, op: StdOp.loadIndirect(value, addrId: slot, offset: 0, valueType: accessType))
 		return value
-	end 'emitWordElementLoad'
+	end 'emitElementLoad'
 
 	// Carve the call out of its block and build the frame around it: `head` keeps everything BEFORE the
 	// call and loses its exit, the CONTINUATION takes everything after it plus that exit, and the call is
@@ -651,6 +728,13 @@ end 'attachEdge'
 // that declaration (`StdLoweringShared.calleeResultClass`), and a dual-register error flag is i64 on every
 // backend (`StdToWasm.recordTryCallDefs`). The arg TYPE is what picks a value's register file on x64/arm64
 // and its wasm valtype, so a wrong one here is a wrong register class, not a cosmetic mismatch.
+//
+// ⚠ **THE `loaded` JOIN'S ARG IS AN ELEMENT AND NOT A CALL RESULT, AND IT IS i64 FOR A DIFFERENT REASON
+// (EC3).** The byte arm reaches it with a `u8` load, which is a ZERO-EXTENDED byte in a general register —
+// the same register file and the same machine word, so i64 is its class too. The only backend that
+// distinguishes them is wasm, where a byte access is i32-backed and the phi copy COERCES at the edge
+// (`StdToWasm.emitLocalCopy`) — which is exactly what the runtime's own `emitLoadElemAt` has relied on for
+// its byte arm since EC1.
 function attachBlockArgs(block IrBlock, valueIds ValueIdArray)
 	var target = block
 	if target.blockArgs.count() != 0 'alreadyHasArgs'

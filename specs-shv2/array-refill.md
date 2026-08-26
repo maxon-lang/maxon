@@ -255,6 +255,36 @@ end 'main'
 5
 ```
 
+<!-- test: shrink-then-grow-reads-zero-past-a-byte-elements-old-length -->
+### the erase covers a byte element's ODD tail
+The same invariant one stride down, where the vacated run is NOT a whole number of machine words. The
+eraser fills whole WORDS and finishes the `byteCount mod 8` that is left one byte at a time, so a
+THREE-byte window is entirely that remainder — the word half cannot cover for it, and a tail that stopped
+short would hand the old bytes straight back to the grow. The case above is the other half of the pair:
+two 8-byte elements is sixteen bytes, two whole words and no tail at all.
+```maxon
+function main() returns ExitCode
+	var b = ByteArray.create()
+	var i = 0
+	while i < 5 'fill'
+		b.push(9)
+		i = i + 1
+	end 'fill'
+	b.resize(2)
+	b.resize(5)
+	var total = 0
+	var k = 2
+	while k < 5 'sum'
+		total = total + (try b.get(k) otherwise 99)
+		k = k + 1
+	end 'sum'
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: refill-a-string-element-array -->
 ### refill on a String-element array holds exactly one reference per slot
 A `String` element is a reference the array owns one of. Every slot the refill overwrites must
@@ -539,4 +569,35 @@ end 'main'
 ```
 ```exitcode
 11
+```
+
+<!-- test: fill-writes-only-its-own-window-at-a-byte-stride -->
+### the buffer fill writes ONE BYTE per entry at a one-byte stride
+The stride is dispatched ONCE above the fill's loop and each width runs a loop of its own, so a BYTE
+element has an arm no word or packed case ever enters — and the ONLY way to see that arm's width from
+outside is to leave something ON THE OTHER SIDE of the window's high end. A run of ascending word-wide
+stores hides its own damage: each one zeroes the seven slots ahead of it and the next store puts the
+value back, so a filled window reads correct however wide the store was. What does NOT come back is
+whatever the window did not cover — here slots 3 and 4, which a word store at slot 2 would erase.
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
+	try mm.setLength(5) otherwise return 2
+	try mm.set(3, value: 4) otherwise return 3
+	try mm.set(4, value: 5) otherwise return 4
+	let applied = try mm.fill(0, count: 3, value: 3) otherwise return 6
+	if not applied 'aTrivialElementMustApply'
+		return 7
+	end 'aTrivialElementMustApply'
+	var total = 0
+	var i = 0
+	while i < 5 'sum'
+		total = total + (try mm.get(i) otherwise return 8)
+		i = i + 1
+	end 'sum'
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+18
 ```

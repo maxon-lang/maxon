@@ -1633,17 +1633,23 @@ end 'emitCowDetach'
 // has to name which one.** (Found in review of the packing rung, where this note said "the two callers left
 // here are the managed-element walks" and there were nine.)
 //
-//   1. **INSIDE AN `es >= 0` ARM** the caller itself branched on — `emitStoreElemAt`'s byte arm and the byte
-//      arms of `__managed_move_elems` / `__managed_zero_elems`. The guard is three lines above the call.
-//      ⭐ **THE FOUR SINGLE-MEMORY-OP ARMS ARE THIS CASE AT ITS STRONGEST**: `emitStrideDispatch` reaches
-//      them only on `es == MachineWordBytes` or `es == ByteStringElementSize`, so the stride is not merely
-//      non-negative there, it is one exact positive number.
+//   1. **INSIDE AN `es >= 0` ARM** the caller itself branched on — `emitGenericStrideStore`'s byte-loop arm
+//      and the byte arms of `__managed_move_elems` / `__managed_zero_elems`. The guard is three lines above
+//      the call.
+//      ⭐ **EVERY SINGLE-MEMORY-OP ARM IS THIS CASE AT ITS STRONGEST**: `emitStrideDispatch` reaches them
+//      only on `es == MachineWordBytes` or `es == ByteStringElementSize`, so the stride is not merely
+//      non-negative there, it is one exact positive number. The dispatch has FOUR call sites now — the
+//      element load, the element store, `__managed_fill`'s three per-stride loops (EC3), and the inline
+//      pass one tier up — and they are named here as a class rather than counted, because a count in this
+//      note is the thing the parenthesis below records going stale.
 //   2. **A MANAGED ELEMENT**, which is never packed by construction
 //      (`ProgramSignatures.arrayElementPackedBits` answers `NotSubBytePacked` for it before it reads
 //      anything else) — the destroy walk, the deep-clone walk, and the `_managed` slice/append the parser
 //      routes a managed element to instead of the trivial path.
-//   3. **A CALLER WHOSE `elementSize` IS A COMPILE-TIME 1** — `emitViewRecordHead` reached from
-//      `StringRuntime.__str_bytes_view`. Its OTHER caller, `emitRecordView`, is case 1.
+//   3. **A CALLER WHOSE `elementSize` IS A COMPILE-TIME CONSTANT THE STRIDE FORK ALREADY PROVED** —
+//      `emitViewRecordHead` reached from `StringRuntime.__str_bytes_view` (a compile-time 1), and
+//      `InlineManagedPrimitives`' four fast arms, which pass the constant of the arm `emitStrideDispatch`
+//      routed them into. Its OTHER caller, `emitRecordView`, is case 1.
 //
 // A call site that fits none of the three is a bug, not a fourth case.
 export function emitSlotAddr(module StdModule, block IrBlock, buffer ValueId, index ValueId, elementSize ValueId, ids ValueMinter) returns ValueId
@@ -1810,12 +1816,20 @@ end 'emitFieldPlacement'
 // here. The two strides this DOES cover are every `int`, every pointer, every managed element and every
 // byte — which is the whole of the hot path the fast arms exist for.
 //
-// ⭐ **IT IS ONE FUNCTION BECAUSE THE LOAD AND THE STORE MUST NOT DISAGREE ABOUT THE LIST.** Each of them
-// having its own pair of comparisons would be one rule written twice, in the two halves of a round trip —
-// the shape `containerElementIsFloatWord` is single-homed for one tier up, and the shape
-// `buildManagedCowDetach`'s header calls a drifting checklist.
-function emitStrideDispatch(module StdModule, func IrFunction, cur IrBlock, es ValueId, wordArm BlockId, byteArm BlockId, otherArm BlockId, ids ValueMinter)
-	var checkByte = module.addBlock(func, label: b"esbyte")
+// ⭐ **IT IS ONE FUNCTION BECAUSE NO READER OF THE LIST MAY DISAGREE WITH ANOTHER ABOUT IT.** It began as
+// the load's and the store's — two halves of a round trip, where a pair of comparisons written twice is one
+// rule written twice — and EC3 added two more readers to the same list: `__managed_fill` (which now asks
+// ONCE above its loop instead of per element) and the inline pass one tier up. The shape
+// `containerElementIsFloatWord` is single-homed for one tier up, and the shape `buildManagedCowDetach`'s
+// header calls a drifting checklist.
+//
+// ⚠ **IT IS `export`ed, AND ONE OF ITS READERS IS A TIER UP.** `InlineManagedPrimitives` routes its own
+// fast arms on exactly this list, and a pass that inlined a fast path on a stride list the runtime states
+// elsewhere is the drifting checklist `buildManagedCowDetach`'s header rejects. `checkByteLabel` exists for
+// that reader alone: the pass labels every block it mints `__im_*`, so it names the intermediate block
+// rather than leaving a runtime label inside a user function.
+export function emitStrideDispatch(module StdModule, func IrFunction, cur IrBlock, es ValueId, wordArm BlockId, byteArm BlockId, otherArm BlockId, ids ValueMinter, checkByteLabel ByteArray = b"esbyte")
+	var checkByte = module.addBlock(func, label: checkByteLabel)
 
 	let wordStride = emitConst(module, block: cur, value: MachineWordBytes as ParsedInt, ids: ids)
 	let isWord = emitCmp(module, block: cur, a: es, b: wordStride, pred: StdCmpPred.eq, ids: ids)
@@ -1916,59 +1930,76 @@ end 'emitLoadElemAt'
 // `emitSingleOpElementLoad`'s mirror and its twin in every way that matters. At `es == 8` the generic byte
 // loop stores eight little-endian bytes, which IS the i64 at that address; at `es == 1` it stores the low
 // byte, which is what a `u8` store keeps (`i32.store8` on wasm, a byte-register `mov` natively).
-function emitSingleOpElementStore(module StdModule, block IrBlock, joinId BlockId, buffer ValueId, index ValueId, value ValueId, es ValueId, accessType StdType, ids ValueMinter)
+//
+// ⚠ **IT LEAVES `block` UN-TERMINATED, UNLIKE ITS LOAD TWIN.** A store defines nothing, so where control
+// goes afterwards is entirely the caller's: `emitStoreElemAt` branches to its join, and `__managed_fill`'s
+// two single-op arms carry on with the loop increment in the very same block. The load twin has to terminate
+// because the value it read travels on a block-arg edge.
+function emitSingleOpElementStore(module StdModule, block IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, accessType StdType, ids ValueMinter)
 	let slot = emitSlotAddr(module, block: block, buffer: buffer, index: index, elementSize: es, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(slot, offset: 0, valueId: value, valueType: accessType))
-	module.setTerminator(block, op: StdOp.branch(joinId))
 end 'emitSingleOpElementStore'
 
-// ⭐⭐ **WRITE `value` INTO ELEMENT `index` — THE ONE ELEMENT STORE, AND THE FILE'S ONE PACKED/BYTE
-// BRANCH.** Every write accessor (`push`, `set`, `insert`, and the vacating erase) goes through here.
+// ⭐⭐ **WRITE `value` INTO ELEMENT `index` — THE ONE ELEMENT STORE.** Every write accessor (`push`, `set`,
+// `insert`, and the vacating erase) goes through here.
 //
-// ⚠⚠ **THIS ONE IS BRANCHED WHERE THE LOAD'S GENERIC ARM IS NOT, AND THE REASON IS MEMORY TRAFFIC RATHER
-// THAN TASTE.** A sub-byte field must PRESERVE the neighbours sharing its byte, so its write is a
-// read-modify-write; a byte-strided element owns every byte it touches and simply overwrites them. A
-// unified formula exists — `(old & ~(mask << shift)) | ((value & mask) << shift)` is correct for both,
-// because a byte-strided element's `~(mask << shift)` is zero — but it would make every `push` into an
-// `Array with int` LOAD its eight destination bytes before storing them, on the hottest array write there
-// is, to compute a value that is provably discarded. One compare and one branch is the cheaper honesty.
+// ⚠⚠ **THE GENERIC ARM IS BRANCHED WHERE THE LOAD'S IS NOT, AND THE REASON IS MEMORY TRAFFIC RATHER THAN
+// TASTE** (the fork itself now lives in `emitGenericStrideStore`). A sub-byte field must PRESERVE the
+// neighbours sharing its byte, so its write is a read-modify-write; a byte-strided element owns every byte
+// it touches and simply overwrites them. A unified formula exists — `(old & ~(mask << shift)) | ((value &
+// mask) << shift)` is correct for both, because a byte-strided element's `~(mask << shift)` is zero — but it
+// would make every `push` into an `Array with int` LOAD its eight destination bytes before storing them, on
+// the hottest array write there is, to compute a value that is provably discarded. One compare and one
+// branch is the cheaper honesty.
 //
-// ⭐⭐ **AND SINCE EC1 THE TWO COMMON STRIDES DO NOT REACH EITHER OF THOSE ARMS.** `emitStrideDispatch`
-// takes a WORD and a single BYTE to one `storeIndirect` apiece, ahead of the packed/byte split, for
+// ⭐⭐ **AND SINCE EC1 THE TWO COMMON STRIDES DO NOT REACH THAT FORK AT ALL.** `emitStrideDispatch` takes a
+// WORD and a single BYTE to one `storeIndirect` apiece, ahead of the packed/byte split, for
 // `emitLoadElemAt`'s measured reason — the byte loop that follows is eight trips of
 // `shrLogical`/`store_u8` to move a word one `mov` moves, and `__managed_mem_set` was 21% of a self-compile.
-// The packed arm and the byte-loop arm below are untouched and are still what a 2- or 4-byte element, an
-// unset stride and every sub-byte width take.
+// The generic arm is untouched and is still what a 2- or 4-byte element, an unset stride and every sub-byte
+// width take.
 //
 // Threads `cur` and returns the join every arm reaches.
 function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter) returns IrBlock
 	var wordArm = module.addBlock(func, label: b"stword")
 	var byteArm = module.addBlock(func, label: b"stbyte")
 	var otherStride = module.addBlock(func, label: b"stother")
-	var packedArm = module.addBlock(func, label: b"stpk")
-	var byteLoopArm = module.addBlock(func, label: b"stby")
 	let join = module.addBlock(func, label: b"stjoin")
 
 	emitStrideDispatch(module, func: func, cur: cur, es: es, wordArm: wordArm.id, byteArm: byteArm.id, otherArm: otherStride.id, ids: ids)
 
-	emitSingleOpElementStore(module, block: wordArm, joinId: join.id, buffer: buffer, index: index, value: value, es: es, accessType: StdType.i64, ids: ids)
-	emitSingleOpElementStore(module, block: byteArm, joinId: join.id, buffer: buffer, index: index, value: value, es: es, accessType: StdType.u8, ids: ids)
+	emitSingleOpElementStore(module, block: wordArm, buffer: buffer, index: index, value: value, es: es, accessType: StdType.i64, ids: ids)
+	module.setTerminator(wordArm, op: StdOp.branch(join.id))
+	emitSingleOpElementStore(module, block: byteArm, buffer: buffer, index: index, value: value, es: es, accessType: StdType.u8, ids: ids)
+	module.setTerminator(byteArm, op: StdOp.branch(join.id))
 
-	let zero = emitConst(module, block: otherStride, value: 0, ids: ids)
-	let isPacked = emitCmp(module, block: otherStride, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(otherStride, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteLoopArm.id))
+	emitGenericStrideStore(module, func: func, cur: otherStride, joinId: join.id, buffer: buffer, index: index, value: value, es: es, ids: ids)
+
+	return join
+end 'emitStoreElemAt'
+
+// ⭐ **THE STRIDES NO TARGET MOVES IN ONE MEMORY OP — 2, 4, the unset 0 and every sub-byte packed width.**
+// The packed/byte-loop fork `emitStoreElemAt` has always had, SPLIT OUT so a caller that has already
+// answered the stride question can run it as a loop body of its own without re-asking it (EC3:
+// `buildManagedFill`'s generic arm). Both arms terminate at `joinId`; nothing is returned, because the
+// caller owns the block they converge on and already knows which one it is.
+function emitGenericStrideStore(module StdModule, func IrFunction, cur IrBlock, joinId BlockId, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter)
+	var packedArm = module.addBlock(func, label: b"stpk")
+	var byteLoopArm = module.addBlock(func, label: b"stby")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let isPacked = emitCmp(module, block: cur, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteLoopArm.id))
 
 	// packedArm: the shared straight-line read-modify-write of the one byte this field lives in.
 	emitPackedFieldStore(module, block: packedArm, buffer: buffer, index: index, value: value, es: es, ids: ids)
-	module.setTerminator(packedArm, op: StdOp.branch(join.id))
+	module.setTerminator(packedArm, op: StdOp.branch(joinId))
 
 	// byteLoopArm: unchanged from before packing existed — the element owns its bytes outright.
 	let slot = emitSlotAddr(module, block: byteLoopArm, buffer: buffer, index: index, elementSize: es, ids: ids)
 	var afterByteStore = emitStoreElem(module, func: func, cur: byteLoopArm, addr: slot, value: value, size: es, ids: ids)
-	module.setTerminator(afterByteStore, op: StdOp.branch(join.id))
-
-	return join
-end 'emitStoreElemAt'
+	module.setTerminator(afterByteStore, op: StdOp.branch(joinId))
+end 'emitGenericStrideStore'
 
 // ⭐⭐ **A PACKED FIELD READ, STRAIGHT-LINE** — for the callers that already KNOW the element is packed
 // (the emitted move and zero loops below), where the branchless unified load would emit a byte LOOP and a
@@ -2116,23 +2147,14 @@ end 'buildManagedMoveElems'
 // `0..count` in both directions and the FROM-THE-TOP arm turns it into `count - 1 - i` when it addresses, so
 // one loop shape serves both and the direction is arithmetic rather than a second loop.
 function emitPackedElementMove(module StdModule, func IrFunction, cur IrBlock, destBuffer ValueId, destIndex ValueId, srcBuffer ValueId, srcIndex ValueId, count ValueId, es ValueId, fromTheTop bool, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"pmvh")
-	var body = module.addBlock(func, label: b"pmvb")
-	let done = module.addBlock(func, label: b"pmvd")
+	let firstIndex = emitConst(module, block: cur, value: 0, ids: ids)
+	var loop = openCountedLoop(module, func: func, cur: cur, from: firstIndex, to: count, label: b"pmv", ids: ids)
+	var body = loop.body
 
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
-
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
-
-	var step = i
+	var step = loop.index
 	if fromTheTop 'highestElementFirst'
 		let lastOffset = emitBin(module, block: body, a: count, b: emitConst(module, block: body, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-		step = emitBin(module, block: body, a: lastOffset, b: i, opcode: StdBinOpcode.sub, ids: ids)
+		step = emitBin(module, block: body, a: lastOffset, b: loop.index, opcode: StdBinOpcode.sub, ids: ids)
 	end 'highestElementFirst'
 
 	let readAt = emitBin(module, block: body, a: srcIndex, b: step, opcode: StdBinOpcode.add, ids: ids)
@@ -2140,12 +2162,9 @@ function emitPackedElementMove(module StdModule, func IrFunction, cur IrBlock, d
 	let writeAt = emitBin(module, block: body, a: destIndex, b: step, opcode: StdBinOpcode.add, ids: ids)
 	emitPackedFieldStore(module, block: body, buffer: destBuffer, index: writeAt, value: value, es: es, ids: ids)
 
-	let one = emitConst(module, block: body, value: 1, ids: ids)
-	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+	closeCountedLoop(module, loop: loop, tail: body, step: SingleStep, ids: ids)
 
-	return done
+	return loop.done
 end 'emitPackedElementMove'
 
 // ⭐⭐ **`__managed_zero_elems(buffer, start, count, es)` — ERASE ELEMENTS `[start, start + count)`**, the
@@ -2196,29 +2215,16 @@ end 'buildManagedZeroElems'
 
 // The packed arm of the erase: `count` iterations of write-zero-into-one-field.
 function emitPackedElementZero(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, start ValueId, count ValueId, es ValueId, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"pzh")
-	var body = module.addBlock(func, label: b"pzb")
-	let done = module.addBlock(func, label: b"pzd")
+	let firstIndex = emitConst(module, block: cur, value: 0, ids: ids)
+	var loop = openCountedLoop(module, func: func, cur: cur, from: firstIndex, to: count, label: b"pz", ids: ids)
 
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
+	let at = emitBin(module, block: loop.body, a: start, b: loop.index, opcode: StdBinOpcode.add, ids: ids)
+	let blank = emitConst(module, block: loop.body, value: 0, ids: ids)
+	emitPackedFieldStore(module, block: loop.body, buffer: buffer, index: at, value: blank, es: es, ids: ids)
 
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	closeCountedLoop(module, loop: loop, tail: loop.body, step: SingleStep, ids: ids)
 
-	let at = emitBin(module, block: body, a: start, b: i, opcode: StdBinOpcode.add, ids: ids)
-	let blank = emitConst(module, block: body, value: 0, ids: ids)
-	emitPackedFieldStore(module, block: body, buffer: buffer, index: at, value: blank, es: es, ids: ids)
-
-	let one = emitConst(module, block: body, value: 1, ids: ids)
-	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
-
-	return done
+	return loop.done
 end 'emitPackedElementZero'
 
 // Call `__managed_move_elems`. The callee is void, so the minted result is unread; it exists because a `call` op
@@ -3956,8 +3962,9 @@ function buildManagedFill(module StdModule)
 	var classify = module.addBlock(func, label: b"classify")
 	var declined = module.addBlock(func, label: b"declined")
 	var prepare = module.addBlock(func, label: b"prepare")
-	var header = module.addBlock(func, label: b"fillh")
-	var body = module.addBlock(func, label: b"fillb")
+	var wordArm = module.addBlock(func, label: b"fillword")
+	var byteArm = module.addBlock(func, label: b"fillbyte")
+	var genericArm = module.addBlock(func, label: b"fillgen")
 	var applied = module.addBlock(func, label: b"applied")
 
 	emitParams(module, block: entry, count: 4)
@@ -4004,25 +4011,50 @@ function buildManagedFill(module StdModule)
 	emitCowDetach(module, block: prepare, arr: arr, ids: ids)
 	let buffer = emitLoadField(module, block: prepare, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: prepare, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	module.setTerminator(prepare, op: StdOp.branch(header.id))
 
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	prepare.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
-	let atEnd = emitCmp(module, block: header, a: i, b: stop, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: applied.id, elseBlockId: body.id))
+	// ⭐⭐ **THE STRIDE IS DISPATCHED ONCE, ABOVE THE LOOP, AND EACH ARM HAS ITS OWN (EC3).** It used to be
+	// asked PER ELEMENT: the body was `emitStoreElemAt`, whose first act is `emitStrideDispatch` — two
+	// compares and two branches to re-derive, on every trip, a fact `element_size@24` fixed before the loop
+	// started. `__managed_fill` was 6.0% of a stage-2 self-compile. The window is one array, so one answer
+	// serves every element of it, and hoisting is the only thing that can be said about a loop whose body
+	// re-tests a loop-invariant field.
+	//
+	// ⚠ **THE ARMS ARE THREE LOOPS AND NOT THREE BODIES INSIDE ONE LOOP**, because the alternative is the
+	// dispatch back inside. They share their SHAPE through `openCountedLoop`/`closeCountedLoop` rather than
+	// through a copied header/back-edge triple, and the two single-op arms share their whole BODY through
+	// `emitSingleOpFillLoop` — so what is written three times is the per-element emitter, which is the one
+	// thing that genuinely differs.
+	emitStrideDispatch(module, func: func, cur: prepare, es: es, wordArm: wordArm.id, byteArm: byteArm.id, otherArm: genericArm.id, ids: ids)
 
-	var afterStore = emitStoreElemAt(module, func: func, cur: body, buffer: buffer, index: i, value: value, es: es, ids: ids)
-	let one = emitConst(module, block: afterStore, value: 1, ids: ids)
-	let iNext = emitBin(module, block: afterStore, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(afterStore, op: StdOp.branch(header.id))
-	afterStore.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+	emitSingleOpFillLoop(module, func: func, cur: wordArm, exit: applied, buffer: buffer, from: start, to: stop, value: value, es: es, accessType: StdType.i64, label: b"fiw", ids: ids)
+	emitSingleOpFillLoop(module, func: func, cur: byteArm, exit: applied, buffer: buffer, from: start, to: stop, value: value, es: es, accessType: StdType.u8, label: b"fib", ids: ids)
+
+	// The generic arm keeps `emitStoreElemAt`'s packed/byte-loop fork verbatim — a 2- or 4-byte element, an
+	// unset stride and every sub-byte width still take exactly what they always took, one element per trip.
+	var generic = openCountedLoop(module, func: func, cur: genericArm, from: start, to: stop, label: b"fig", ids: ids)
+	var genericStep = module.addBlock(func, label: b"figstep")
+	emitGenericStrideStore(module, func: func, cur: generic.body, joinId: genericStep.id, buffer: buffer, index: generic.index, value: value, es: es, ids: ids)
+	closeCountedLoop(module, loop: generic, tail: genericStep, step: SingleStep, ids: ids)
+	module.setTerminator(generic.done, op: StdOp.branch(applied.id))
 
 	let didApply = emitConst(module, block: applied, value: PredicateTrue, ids: ids)
 	emitOkReturn(module, block: applied, value: didApply, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedFill'
+
+// One stride arm of the buffer fill: `[from, to)` written one WHOLE element per trip, at the single width
+// the arm was dispatched on. The word and byte arms are this call twice and differ in `accessType` alone —
+// the same pair `emitStrideDispatch` routes `emitLoadElemAt`/`emitStoreElemAt`'s fast arms to, and the same
+// agreement-by-construction argument holds: at `es == 8` the generic byte loop writes the eight
+// little-endian bytes that IS the i64 at that address, and at `es == 1` it writes the low byte a `u8` store
+// keeps.
+function emitSingleOpFillLoop(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, buffer ValueId, from ValueId, to ValueId, value ValueId, es ValueId, accessType StdType, label ByteArray, ids ValueMinter)
+	var loop = openCountedLoop(module, func: func, cur: cur, from: from, to: to, label: label, ids: ids)
+	emitSingleOpElementStore(module, block: loop.body, buffer: buffer, index: loop.index, value: value, es: es, accessType: accessType, ids: ids)
+	closeCountedLoop(module, loop: loop, tail: loop.body, step: SingleStep, ids: ids)
+	module.setTerminator(loop.done, op: StdOp.branch(exit.id))
+end 'emitSingleOpFillLoop'
 
 // ⭐ `__managed_mem_grow(arr, newCapacity)` — raise the capacity to EXACTLY `newCapacity`, or throw
 // `invalidCapacity`. VOID and throwing. v1's `__managed_mem_grow` (`stdlib/Internals.maxon:3485-3503`).

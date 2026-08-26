@@ -1048,48 +1048,167 @@ end 'buildStrCopy'
 export let PredicateTrue = 1 as ParsedInt
 export let PredicateFalse = 0 as ParsedInt
 
-// ⭐ **THE ONE BYTE-GRANULAR FILL LOOP.** Overwrite `byteCount` bytes at `dest` with the low byte of
-// `fillValue`, one byte at a time (fill widths are not all 8-multiples — a `b"hi"` buffer is 2 bytes, a
-// `pop`'s vacated slot is one ranged element). `byteCount == 0` exits on the first compare, writing nothing.
-// Creates its own header/body/done blocks off `cur` and returns the continuation (`done`), so the caller
-// threads it like any other loop-emitting helper.
+// ⭐⭐ **THE COUNTED LOOP EVERY RUNTIME WALK IS, WRITTEN DOWN ONCE.** `i` from `from` up to (but excluding)
+// `to`, stepping by whatever the caller closes it with: a header carrying the induction variable as its own
+// block arg, a BODY the caller fills, an exit the caller terminates, and the back edge. A runtime function
+// has no parser, so this on-the-fly SSA shape is built by hand — and it was built by hand, identically, in
+// every loop-emitting builder of both runtime layers.
 //
-// ⚠ **IT IS SHARED ACROSS A FILE BOUNDARY ON PURPOSE, WHICH IS WHY IT LIVES HERE IN THE BASE LAYER.** Two
-// call sites fill a contiguous byte range with a constant: `__mm_free`'s poison (fill `PoisonByte`) and the
-// array capacity-slot zeroer (`ManagedMemoryRuntime`'s `clear`/`resize`-shrink/`pop`/`remove`, fill 0, which restore
-// the `[length, capacity)`-reads-zero invariant the element walk depends on). They were two independent copies
+// ⭐ **IT IS TWO CALLS AND NOT ONE, BECAUSE THE BODY IS THE PART THAT VARIES — AND SOME BODIES BRANCH.**
+// `openCountedLoop` hands back the body block; the caller emits its per-iteration work, which may thread
+// through blocks of its own; `closeCountedLoop` is told the block that work ENDED in and puts the increment
+// and the back edge there. That is what lets `__managed_fill`'s three stride arms share ONE loop shape when
+// two of them are a single store and the third is a packed read-modify-write with a byte loop inside it.
+export type CountedLoop
+	// The loop header. The caller never emits into it — `openCountedLoop` has already terminated it.
+	export var header as IrBlock
+	// Where the caller emits this iteration's work.
+	export var body as IrBlock
+	// Where control lands once the count is exhausted. UN-terminated: the exit is the caller's.
+	export var done as IrBlock
+	// The induction variable — the header's block arg, readable in `body` and in every block it threads into.
+	export var index as ValueId
+
+	export static function create(header IrBlock, body IrBlock, done IrBlock, index ValueId) returns CountedLoop
+		return Self{header: header, body: body, done: done, index: index}
+	end 'create'
+end 'CountedLoop'
+
+// Open a counted loop off `cur`: terminate it with the entry edge carrying `from`, and mint the three
+// blocks. A range whose `to` is at or below `from` runs ZERO times — the header's `>=` already holds on the
+// entry edge — which is what makes an empty walk cost one compare rather than a guard of its own.
+//
+// `label` prefixes the three block labels (`<label>h`, `<label>b`, `<label>d`) so a function holding several
+// loops reads back as several loops under `--emit-ir-runtime`.
+export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter) returns CountedLoop
+	var header = module.addBlock(func, label: "{String.from(label)}h".toByteArray())
+	var body = module.addBlock(func, label: "{String.from(label)}b".toByteArray())
+	let done = module.addBlock(func, label: "{String.from(label)}d".toByteArray())
+
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(from)))
+
+	let atEnd = emitCmp(module, block: header, a: i, b: to, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	return CountedLoop.create(header, body: body, done: done, index: i)
+end 'openCountedLoop'
+
+// Close a counted loop: `tail` is the block the caller's per-iteration work ENDED in (`loop.body` when that
+// work was straight-line), and this puts the increment and the back edge there.
+//
+// ⭐ **THE INCREMENT IS THE IMMEDIATE FORM, AND THAT IS DELIBERATE RATHER THAN A SHORTHAND.** The runtime is
+// hand-built at the Std tier and is never shown `foldConstOperands` — `Compiler.compile` installs it AFTER
+// the pipeline, on purpose — so a `const` + `binOp` pair reaches the backend as a `movRegImm32` AND an add:
+// two instructions per trip, in the hottest loops the language has. `binOpImm` is the very op the fold would
+// have produced, minted by the one party that already knows the operand is a compile-time constant.
+export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter)
+	let next = ids.mint()
+	module.appendOp(tail, op: StdOp.binOpImm(next, lhs: loop.index, imm: step, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(tail, op: StdOp.branch(loop.header.id))
+	tail.branchEdges.push(BranchEdge.create(loop.header.id, argIds: argsOf(next)))
+end 'closeCountedLoop'
+
+// The low byte of a fill value — what a `u8` store keeps, and therefore the only part of `fillValue` the
+// byte tail below can write. Named rather than left as a bare `0xFF` because the WORD arm has to replicate
+// exactly the byte the tail stores, and the two must be the same fact.
+let FillByteMask = 0xFF as ParsedInt
+
+// The i64 whose every byte is the low byte of `fillValue` — what the word arm of `emitFillRange` stores.
+//
+// ⭐ **DERIVED FROM THE ONE CONSTANT THE CALLER PASSED, never spelled as a wide literal beside it.** A
+// `PoisonByte` changed in one place and not the other would poison the tail of every freed payload and leave
+// the rest holding some other byte, which is the kind of half-poisoned buffer poison exists to prevent.
+//
+// It is a shift-or LOOP rather than a multiply by `0x0101010101010101` because that product leaves the
+// `ParsedInt` range for any byte above `0x7F`, while the shift-or wraps into the sign bit and lands on
+// exactly the i64 bit pattern wanted (`0xFF` gives `-1`, which IS eight `0xFF` bytes).
+function wordOfRepeatedByte(fillValue ParsedInt) returns ParsedInt
+	let low = fillValue and FillByteMask
+	let wordBytes = MachineWordBytes as ParsedInt
+	var word = 0 as ParsedInt
+	var placed = 0 as ParsedInt
+	while placed < wordBytes 'eachByte'
+		word = (word shl BitsPerByte) or low
+		placed = placed + 1
+	end 'eachByte'
+	return word
+end 'wordOfRepeatedByte'
+
+// `byteCount and -8` — how many of `byteCount`'s bytes a run of WHOLE machine words covers. Derived from the
+// word size rather than written as a `-8` beside it, for `wordOfRepeatedByte`'s reason: the mask and the
+// step of the word loop are one fact.
+let WholeWordsMask = 0 - (MachineWordBytes as ParsedInt)
+
+// The step of a counted loop that advances ONE item per trip — one byte, one element, one slot. Named
+// because `closeCountedLoop`'s step is a WIDTH everywhere else in this family (a word fill steps eight), so
+// a bare 1 beside a `MachineWordBytes` reads as a width that happens to be small rather than as "the next
+// one".
+export let SingleStep = 1 as Imm32
+
+// ⭐ **THE ONE CONTIGUOUS FILL.** Overwrite `byteCount` bytes at `dest` with the low byte of `fillValue`.
+// Creates its own blocks off `cur` and returns the continuation, so the caller threads it like any other
+// loop-emitting helper.
+//
+// ⭐⭐ **IT MOVES A MACHINE WORD PER TRIP AND FINISHES THE `byteCount mod 8` LEFT OVER ONE BYTE AT A TIME**
+// (EC3). It was a BYTE loop, and that byte loop is `__mm_free`'s poison over EVERY freed payload — 7.1% of a
+// stage-2 self-compile between the free and its list bookkeeping — as well as the array capacity-slot zeroer
+// under `__managed_zero_elems` (3.2%). Eight `store_u8`s plus eight increments and eight compares move what
+// one `store i64` moves. **Every byte in `[dest, dest + byteCount)` is still written**, which is the whole
+// contract: the word run covers `byteCount and -8` and the tail covers the remainder, so the two partition
+// the range exactly and neither can reach past its end.
+//
+// ⚠ Unaligned word stores are fine on every target this compiler emits: x64 and arm64 permit them on normal
+// memory, and wasm's `i64.store` memarg alignment is a HINT that never changes what the store does. `dest` is
+// an arbitrary interior address (an element slot, a payload pointer), so this is not an assumption but the
+// reason no alignment fixup is needed.
+//
+// ⚠ **THE `byteCount <= 0` DOOR IS A CORRECTNESS GUARD, NOT A FAST PATH FOR THE EMPTY FILL.** A NEGATIVE
+// count masks to a negative word end, and the byte tail would then walk `[byteCount and -8, byteCount)` —
+// writing up to seven bytes BEFORE `dest`. The byte loop this replaces was safe under it by accident (its
+// `i >= byteCount` held at once), and a memory-writing primitive on the free path does not get to lose that.
+// No caller passes one today; the guard is what keeps that from being load-bearing. It absorbs the empty
+// fill (`__mm_free` of a zero-size box) on the way past.
+//
+// ⚠ **IT IS SHARED ACROSS A FILE BOUNDARY ON PURPOSE, WHICH IS WHY IT LIVES HERE IN THE BASE LAYER.** Three
+// call sites fill a contiguous byte range with a constant: `__mm_free`'s poison (fill `PoisonByte`), the
+// free-list reuse path's re-zeroing of a recycled payload, and the array capacity-slot zeroer
+// (`ManagedMemoryRuntime`'s `clear`/`resize`-shrink/`pop`/`remove`, fill 0, which restores the
+// `[length, capacity)`-reads-zero invariant the element walk depends on). They were two independent copies
 // of the same loop in two files — nothing making them agree, so a future edit to one (a wider store, a changed
 // bound) would silently diverge from the other and corrupt exactly one of freed-payload poison / vacated-slot
 // zeroing. `MmRuntime` is the runtime's base layer — installed whenever the program touches the heap, and
 // already the home of the single-op emit helpers above that `ManagedMemoryRuntime` draws on — so homing the loop here
 // single-sources it without any new cross-layer dependency (the managed-memory runtime already depends on this file).
 export function emitFillRange(module StdModule, func IrFunction, cur IrBlock, dest ValueId, byteCount ValueId, fillValue ParsedInt, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"fillh")
-	var body = module.addBlock(func, label: b"fillb")
+	var run = module.addBlock(func, label: b"fillrun")
 	let done = module.addBlock(func, label: b"filld")
 
-	let zero = ids.mint()
-	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
-	module.setTerminator(cur, op: StdOp.branch(header.id))
+	let nothing = emitConst(module, block: cur, value: 0, ids: ids)
+	let empty = emitCmp(module, block: cur, a: byteCount, b: nothing, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(empty, thenBlockId: done.id, elseBlockId: run.id))
 
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-	let atEnd = ids.mint()
-	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: byteCount, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	let wordMask = emitConst(module, block: run, value: WholeWordsMask, ids: ids)
+	let wordEnd = emitBin(module, block: run, a: byteCount, b: wordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let word = emitConst(module, block: run, value: wordOfRepeatedByte(fillValue), ids: ids)
+	let start = emitConst(module, block: run, value: 0, ids: ids)
 
-	let dstAddr = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let fillByte = ids.mint()
-	module.appendOp(body, op: StdOp.const(fillByte, value: fillValue, valueType: StdType.i64))
-	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: fillByte, valueType: StdType.u8))
-	let one = ids.mint()
-	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
-	let iNext = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+	var words = openCountedLoop(module, func: func, cur: run, from: start, to: wordEnd, label: b"fillw", ids: ids)
+	let wordAddr = emitBin(module, block: words.body, a: dest, b: words.index, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(words.body, op: StdOp.storeIndirect(wordAddr, offset: 0, valueId: word, valueType: StdType.i64))
+	closeCountedLoop(module, loop: words, tail: words.body, step: MachineWordBytes as Imm32, ids: ids)
+
+	// The tail's fill byte is minted in the word loop's EXIT rather than in the tail's body: at most seven
+	// trips read it, and a constant re-materialized per trip is the `movRegImm32` this rung is about.
+	let fillByte = emitConst(module, block: words.done, value: fillValue, ids: ids)
+	var bytes = openCountedLoop(module, func: func, cur: words.done, from: wordEnd, to: byteCount, label: b"fillt", ids: ids)
+	let byteAddr = emitBin(module, block: bytes.body, a: dest, b: bytes.index, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(bytes.body, op: StdOp.storeIndirect(byteAddr, offset: 0, valueId: fillByte, valueType: StdType.u8))
+	closeCountedLoop(module, loop: bytes, tail: bytes.body, step: SingleStep, ids: ids)
+
+	module.setTerminator(bytes.done, op: StdOp.branch(done.id))
 
 	return done
 end 'emitFillRange'
