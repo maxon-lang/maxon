@@ -23,6 +23,7 @@ Exits with the target's exit code, or 124 if the duration cap killed it
 """
 
 import argparse
+import os
 import bisect
 import ctypes
 import ctypes.wintypes as wt
@@ -230,6 +231,12 @@ def main():
         cmd = cmd[1:]
     if not cmd:
         ap.error("no target command given (use: ... -- exe args)")
+
+    # CreateProcess resolves a bare relative path with forward slashes (`temp/x.exe`) as a
+    # PATH lookup and fails "file not found", while open() reads the same spelling fine — so
+    # the symbols loaded and the launch died. Measured 2026-08-26 on the stage-2 profile of
+    # scripts/self-host-ab.sh. An absolute path is unambiguous to both.
+    cmd[0] = os.path.abspath(cmd[0])
 
     text_rva, sym_offsets, sym_names = load_symbols(cmd[0])
 
