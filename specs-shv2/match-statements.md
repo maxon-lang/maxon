@@ -1073,6 +1073,35 @@ end 'main'
 0
 ```
 
+<!-- test: match-string.pattern-decodes-escapes -->
+### A string pattern is read like every other string literal
+A pattern becomes the `.rdata` literal its arm compares against, and the scrutinee's own literal was
+decoded on the way in — so both sides have to be read the SAME way. MEASURED 2026-08-26: the
+bootstrap kept the raw token slice for the pattern only, so it compared the FOUR bytes `a\nb`
+against a three-byte string, missed every arm and fell silently through to `default` — this program
+exited **2** there and **6** under shv2. A wrong answer, not a diagnostic. `\{` is the literal brace
+(see string-interpolation.md) and reads the same in a pattern as in the value matched against it.
+```maxon
+typealias Choice = int(0 to 9)
+
+function pick(s String) returns Choice
+	match s 'pick'
+		"a\nb" then return 4
+		"\{" then return 2
+		default then return 1
+	end 'pick'
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick("a\nb")
+	let b = pick("\{")
+	return a + b
+end 'main'
+```
+```exitcode
+6
+```
+
 <!-- test: match-string.or-patterns -->
 ```maxon
 function main() returns ExitCode

@@ -10290,23 +10290,47 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private void ParsePanic() {
     var panicToken = Advance(); // consume 'panic'
     Expect(TokenType.LeftParen);
+
+    EmitPanicMessage(panicToken);
+  }
+
+  /// <summary>
+  /// THE ONE READER OF A PANIC'S MESSAGE, from the token after `(` to the `)`. Both spellings of
+  /// `panic` reach it — the statement (<see cref="ParsePanic"/>) and the match arm
+  /// (<see cref="EmitPanicArmBody"/>) — and each used to carry a byte-identical copy of this block.
+  /// The copies agreed, and nothing made them: a clause added to one would have read as correct at
+  /// both sites. They also shared a defect, which is what a shared body makes unrepeatable — the
+  /// INTERPOLATED arm decoded its message and the LITERAL arm kept the raw token slice, so
+  /// `panic("a{x}b\n")` emitted a newline while `panic("a\nb")` emitted a backslash and an `n`.
+  /// Measured 2026-08-26 (EC4 review): shv2 emits the newline for both, so the two compilers
+  /// disagreed on the same program. <see cref="DecodeStringLiteralText"/> is that one reading.
+  ///
+  /// <paramref name="siteToken"/> supplies the LINE the message is stamped with: the `panic` token
+  /// for the statement, the arm's own token for a match arm.
+  /// </summary>
+  private void EmitPanicMessage(Token siteToken) {
     var msgToken = Current();
 
     var sourceFileName = _sourceFilePath != null ? Path.GetFileName(_sourceFilePath) : "unknown";
-    var prefix = $"panic at {sourceFileName}:{panicToken.Line}: ";
+    var prefix = $"panic at {sourceFileName}:{siteToken.Line}: ";
 
     if (msgToken.Type == TokenType.StringInterp) {
       Advance(); // consume interpolated string
       Expect(TokenType.RightParen);
-      // Prepend location prefix and append newline to the interpolated string content
+
+      // The prefix is spliced into the token's SOURCE text and re-read by the same escape reader as
+      // the message, so the trailing newline is written as the two-character escape, not as a byte.
       var prefixedToken = new Token(TokenType.StringInterp, prefix + msgToken.Value + "\\n", msgToken.Line, msgToken.Column);
       var interpResult = EmitStringLiteralWithInterpolation(prefixedToken);
       _currentBlock!.AddOp(new MaxonPanicDynamicOp(interpResult));
+
     } else if (msgToken.Type == TokenType.StringLiteral) {
       Advance(); // consume string literal
       Expect(TokenType.RightParen);
-      var message = prefix + msgToken.Value;
+
+      var message = prefix + DecodeStringLiteralText(msgToken, "a panic message");
       _currentBlock!.AddOp(new MaxonPanicOp(message, _isStdlib));
+
     } else {
       throw new CompileError(ErrorCode.SemanticTypeMismatch, "panic requires a string argument", msgToken.Line, msgToken.Column);
     }
@@ -15863,13 +15887,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             Current().Line, Current().Column);
         }
         var strToken = Advance();
+
+        // The DISPLAY keeps the source spelling — a diagnostic should quote what the author wrote —
+        // but the VALUE is the decoded text, because it becomes the `.rdata` literal this arm's
+        // `.equals` compares against, and the scrutinee's own literal was decoded on the way in.
+        // Reading it raw made `match s { "a\nb" then … }` compare a FOUR-byte pattern against a
+        // three-byte string and silently fall through to `default` (measured 2026-08-26: the
+        // bootstrap answered `default`, shv2 answered the arm — a wrong answer, not a diagnostic).
         var displayName = $"\"{strToken.Value}\"";
         if (!seenPatternKeys.Add(displayName)) {
           throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
             $"duplicate pattern in match: '{displayName}'",
             patternLine, patternCol);
         }
-        patterns.Add(new ExactStringPattern(strToken.Value, displayName, patternLine, patternCol));
+        patterns.Add(new ExactStringPattern(DecodeStringLiteralText(strToken, "a match pattern"),
+          displayName, patternLine, patternCol));
       } else if (Check(TokenType.CharacterLiteral) && structTypeName != null &&
           HeldType(structTypeName) is IrStructType charSt && charSt.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
         var charToken = Advance();
@@ -16779,27 +16811,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private void EmitPanicArmBody(Token armToken) {
     Advance(); // consume 'panic'
     Expect(TokenType.LeftParen);
-    var msgToken = Current();
 
-    var sourceFileName = _sourceFilePath != null ? Path.GetFileName(_sourceFilePath) : "unknown";
-    var prefix = $"panic at {sourceFileName}:{armToken.Line}: ";
-
+    // Ordered before the message: the arm's scope ends whatever the message turns out to be, and an
+    // INTERPOLATED message emits its own ops, which must land after the scope has been closed out.
     _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
 
-    if (msgToken.Type == TokenType.StringInterp) {
-      Advance(); // consume interpolated string
-      Expect(TokenType.RightParen);
-      var prefixedToken = new Token(TokenType.StringInterp, prefix + msgToken.Value + "\\n", msgToken.Line, msgToken.Column);
-      var interpResult = EmitStringLiteralWithInterpolation(prefixedToken);
-      _currentBlock!.AddOp(new MaxonPanicDynamicOp(interpResult));
-    } else if (msgToken.Type == TokenType.StringLiteral) {
-      Advance(); // consume string literal
-      Expect(TokenType.RightParen);
-      var message = prefix + msgToken.Value;
-      _currentBlock!.AddOp(new MaxonPanicOp(message, _isStdlib));
-    } else {
-      throw new CompileError(ErrorCode.SemanticTypeMismatch, "panic requires a string argument", msgToken.Line, msgToken.Column);
-    }
+    EmitPanicMessage(armToken);
   }
 
   /// <summary>
@@ -20262,24 +20279,33 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   /// <summary>
   /// THE ONE READER OF A STRING LITERAL'S TEXT where an expression is not allowed — an enum's raw
-  /// value or case name, a top-level constant. It is the same reading the expression path does
-  /// (<see cref="ParseStringInterpParts"/>): reading a literal takes TWO steps, and only the first
-  /// knows the braces — `\{` and `\}` are consumed by the interpolation splitter, everything else
-  /// by <see cref="StringUtils.ResolveEscapes"/>, which THROWS on a brace. Three readers used to
-  /// take a shortcut: two kept the raw token slice (`\{` reached .rdata as two bytes), one called
-  /// ResolveEscapes alone (`\{` was an invalid escape). Measured 2026-08-26 (EC4): shv2's own
+  /// value or case name, a top-level constant, a `match` string pattern, a `panic` message. It is
+  /// the same reading the expression path does (<see cref="ParseStringInterpParts"/>): reading a
+  /// literal takes TWO steps, and only the first knows the braces — `\{` and `\}` are consumed by
+  /// the interpolation splitter, everything else by <see cref="StringUtils.ResolveEscapes"/>, which
+  /// THROWS on a brace. FIVE readers used to take a shortcut: four kept the raw token slice (`\{`
+  /// reached .rdata as two bytes), one called ResolveEscapes alone (`\{` was an invalid escape).
+  /// Three were found writing this door and two more reviewing it, which is the measure of how
+  /// little a shortcut here looks like a defect at its own site. Measured 2026-08-26 (EC4): shv2's own
   /// `Lexer.maxon` declares `leftBrace = "\{"`, so under this compiler every shv2 diagnostic naming
   /// that token printed `\{` while under shv2-built shv2 it printed `{` — a self-hosting fixed-point
   /// violation the byte-identical gate could not see, because both stages carried the same constant.
   /// The spec (string-interpolation.md:84) says one character. One door, every reader.
+  ///
+  /// Every caller has already checked <c>TokenType.StringLiteral</c>, and the lexer types a literal
+  /// holding an unescaped `{` as <c>StringInterp</c> instead (1-Lexer.cs `ScanStringLiteral` sets
+  /// `hasInterpolation` only on a brace the escape branch did NOT swallow). A StringLiteral token
+  /// therefore cannot yield an interpolation part, which is why the guard below is an INTERNAL
+  /// invariant and not a parser diagnostic: no program can reach it. Measured 2026-08-26 — an enum
+  /// raw value written `= "{5}"` is refused one level out, by the `Check(StringLiteral)` that fails.
   /// </summary>
   private string DecodeStringLiteralText(Token token, string where) {
     var parts = ParseStringInterpParts(token, StringLiteralTypeName(token));
     var text = new System.Text.StringBuilder();
     foreach (var part in parts) {
       if (!part.IsLiteral)
-        throw new CompileError(ErrorCode.ParserExpectedExpression,
-          $"an interpolation is not allowed in {where}", token.Line, token.Column);
+        throw new CompileError(ErrorCode.InternalError,
+          $"a StringLiteral token yielded an interpolation part reading {where}", token.Line, token.Column);
       text.Append(part.LiteralValue);
     }
     return text.ToString();

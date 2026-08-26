@@ -64,6 +64,29 @@ Stack trace:
   in mrt_start
 ```
 
+<!-- test: panic.message-decodes-escapes -->
+### A panic message is read like every other string literal
+MEASURED 2026-08-26: `panic`'s two arms disagreed with each other. An INTERPOLATED message was
+decoded, a plain literal one kept the raw token slice — so `panic("a{x}b\n")` emitted a newline
+while `panic("a\nb")` emitted a backslash and an `n`. shv2 emitted the newline for both, so the two
+compilers printed different bytes for the same program. Both spellings of `panic` — the statement
+and the match arm — now read their message through the one door.
+```maxon
+function main() returns ExitCode
+	panic("first\nsecond")
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at panic.message-decodes-escapes.test:3: first
+second
+Stack trace:
+  in main
+  in mrt_start
+```
+
 <!-- test: panic.in-function -->
 ```maxon
 function fail()
