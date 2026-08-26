@@ -878,18 +878,27 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// program links. A hand-built body has no fold the pass could re-derive; it has the same const operands
 	// user code has, minted by a builder rather than by a parser. So the fold runs over the appended band
 	// too, once, after the last thing that appends to it (below `synthesizeBodies`).
+	//
+	// ⇒ ⭐⭐ **THIS HEADER IS THE ONE PLACE THAT SAYS WHAT DOES AND DOES NOT RUN OVER THE APPENDED BAND, AND
+	// EVERY INSTALLER POINTS HERE RATHER THAN RESTATING IT.** No PIPELINE pass sees the band — `pipeline.run`
+	// has finished before the first install below, so `inlineManagedPrimitives`, the two block-arg passes and
+	// `promoteStackRecords` are all behind it — and `foldConstOperands` ALONE runs a second time over it,
+	// below the last append. The installers used to carry a copy of that fact apiece, phrased as *"appended
+	// after the pipeline so it is never re-optimized"*; EC3-H falsified all fourteen at once and corrected
+	// only this one, which is this project's own signature bug (ONE FACT WRITTEN DOWN FOURTEEN TIMES) at
+	// comment level. A pointer at the owner cannot go stale, so they are pointers now.
 	if usage.usesHeap 'installMm'
 		installMmRuntime(pipeline.stdModule, usage: usage)
 	end 'installMm'
 	// The green-thread scheduler (`__gt_init`/`__gt_spawn`/`__gt_enqueue`/`__gt_dequeue`/`__gt_await`),
-	// installed the same way — already-lowered Std, appended after the pipeline so it is never re-optimized.
-	// Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
+	// installed the same way — already-lowered Std, appended after the pipeline (see this block's header for
+	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
 		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming)
 	end 'installGt'
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
-	// reason — already-lowered Std, appended after the pipeline so it is never re-optimized — but it is
+	// reason — already-lowered Std, appended after the pipeline, see this block's header — but it is
 	// keyed on its OWN usage bits, not on `usesHeap`: a Wave-A literal is immortal rdata, so a
 	// print-only or string-`==`-only program pulls in NEITHER the allocator NOR the leak check.
 	// `installStringRuntime` installs only the referenced functions (a no-op when neither is used).
@@ -961,7 +970,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	installProcessRuntime(pipeline.stdModule, usage: usage)
 
 	// The managed-memory runtime (`__managed_create`/`__managed_push`/`__managed_get`/…) — installed the same way and for the
-	// same reason: already-lowered Std, appended after the pipeline so it is never re-optimized. Keyed on
+	// same reason: already-lowered Std, appended after the pipeline, see this block's header. Keyed on
 	// its own `usesManagedMemory` bit (any `__managed_*` reference), which also implied `usesHeap` above (the helpers
 	// `__mm_alloc`/`__mm_free` the record and its element buffer). It installs the WHOLE managed-memory runtime as
 	// one closure — the helpers call each other, and `__`-prefixed functions are excluded from the goldens,

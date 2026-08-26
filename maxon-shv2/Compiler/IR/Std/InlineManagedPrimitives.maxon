@@ -84,12 +84,12 @@
 // whole runtime call: `__managed_get`'s slow arm reached from `Map.findSlot` alone is 2% of a stage-2
 // self-compile, and the body it lands in walks an eight-trip byte loop to move one byte.
 //
-// `WordElementStride` is DERIVED from `LayoutDescriptor.MachineWordBytes` — the owner of "how wide is a
-// value with no narrower home" — rather than written as an 8 beside it, because the stamp this compares
-// against IS that width: `ProgramSignatures.arrayElementSize` stamps `element_size@24` off the same ladder.
-// The byte stride is `ManagedMemoryRuntime.ByteStringElementSize` itself, named directly rather than
-// aliased, for the same single-fact reason.
-let WordElementStride = MachineWordBytes as ParsedInt
+// ⚠ **NEITHER WIDTH IS SPELLED IN THIS FILE, AND THAT IS THE POINT** (found in review of EC3-F3). Each
+// arm below names a `ManagedMemoryRuntime.SingleOpStride`, which carries the `element_size@24` stamp AND
+// the Std memory type an access at that stamp uses as ONE fact — see its header for the wrong answers a
+// site able to name the two separately can produce. This file briefly carried its own `WordElementStride`
+// derived from `MachineWordBytes`, a second derivation of a width the runtime already derives, paired by
+// hand with `StdType.i64` at each of three call sites and with `StdType.u8` at three more.
 
 // The block labels this pass mints. They reach the committed goldens, so they are short, prefixed
 // `__im_` (inline-managed, disjoint from `InsertRangeChecks`' `__rc_`), and each names WHAT THE BLOCK IT
@@ -344,15 +344,15 @@ type PrimitiveInliner
 		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
 		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
 		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: frame.slow.id)
-		self.emitLoadArmToCont(wordArm, arr: arr, index: index, stride: WordElementStride, accessType: StdType.i64, cont: frame.cont)
-		self.emitLoadArmToCont(byteArm, arr: arr, index: index, stride: ByteStringElementSize, accessType: StdType.u8, cont: frame.cont)
+		self.emitLoadArmToCont(wordArm, arr: arr, index: index, stride: SingleOpStride.word, cont: frame.cont)
+		self.emitLoadArmToCont(byteArm, arr: arr, index: index, stride: SingleOpStride.byte, cont: frame.cont)
 
 		return self.finish(frame)
 	end 'expandUncheckedGet'
 
 	// One width's whole answer for the unchecked get: the slot load, then the continuation edge carrying it.
-	function emitLoadArmToCont(cur IrBlock, arr ValueId, index ValueId, stride ParsedInt, accessType StdType, cont IrBlock)
-		let value = self.emitElementLoad(cur, arr: arr, index: index, stride: stride, accessType: accessType)
+	function emitLoadArmToCont(cur IrBlock, arr ValueId, index ValueId, stride SingleOpStride, cont IrBlock)
+		let value = self.emitElementLoad(cur, arr: arr, index: index, stride: stride)
 		self.module.setTerminator(cur, op: StdOp.branch(cont.id))
 		attachEdge(cur, targetId: cont.id, argIds: argsOf(value))
 	end 'emitLoadArmToCont'
@@ -385,8 +385,8 @@ type PrimitiveInliner
 		let value = self.valueIds().mint()
 		attachBlockArgs(loaded, valueIds: argsOf(value))
 
-		self.emitBoundedLoadArm(wordArm, arr: arr, index: index, stride: WordElementStride, accessType: StdType.i64, slow: frame.slow, loaded: loaded)
-		self.emitBoundedLoadArm(byteArm, arr: arr, index: index, stride: ByteStringElementSize, accessType: StdType.u8, slow: frame.slow, loaded: loaded)
+		self.emitBoundedLoadArm(wordArm, arr: arr, index: index, stride: SingleOpStride.word, slow: frame.slow, loaded: loaded)
+		self.emitBoundedLoadArm(byteArm, arr: arr, index: index, stride: SingleOpStride.byte, slow: frame.slow, loaded: loaded)
 
 		// ⚠ THREE CONSTANTS THAT ARE ALL ZERO TODAY, AND THEY STAY THREE. "no error in flight", "no
 		// per-element destructor" (inside `emitElementIsManaged`, which owns that one) and "an empty managed
@@ -415,9 +415,9 @@ type PrimitiveInliner
 
 	// One width's half of the checked get: the `length@8` bound, then the slot load, then the edge into the
 	// shared tail carrying what it read.
-	function emitBoundedLoadArm(cur IrBlock, arr ValueId, index ValueId, stride ParsedInt, accessType StdType, slow IrBlock, loaded IrBlock)
+	function emitBoundedLoadArm(cur IrBlock, arr ValueId, index ValueId, stride SingleOpStride, slow IrBlock, loaded IrBlock)
 		var at = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: slow, next: InlineLoadLabel)
-		let value = self.emitElementLoad(at, arr: arr, index: index, stride: stride, accessType: accessType)
+		let value = self.emitElementLoad(at, arr: arr, index: index, stride: stride)
 		self.module.setTerminator(at, op: StdOp.branch(loaded.id))
 		attachEdge(at, targetId: loaded.id, argIds: argsOf(value))
 	end 'emitBoundedLoadArm'
@@ -449,8 +449,8 @@ type PrimitiveInliner
 		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
 		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
 		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: frame.slow.id)
-		self.emitStoreArm(wordArm, arr: arr, index: index, value: value, limitOffset: limitOffset, stride: WordElementStride, accessType: StdType.i64, frame: frame)
-		self.emitStoreArm(byteArm, arr: arr, index: index, value: value, limitOffset: limitOffset, stride: ByteStringElementSize, accessType: StdType.u8, frame: frame)
+		self.emitStoreArm(wordArm, arr: arr, index: index, value: value, limitOffset: limitOffset, stride: SingleOpStride.word, frame: frame)
+		self.emitStoreArm(byteArm, arr: arr, index: index, value: value, limitOffset: limitOffset, stride: SingleOpStride.byte, frame: frame)
 
 		return self.finish(frame)
 	end 'expandElementStore'
@@ -463,7 +463,7 @@ type PrimitiveInliner
 	// paid in CODE SIZE, once per call site; the second test would be paid in TIME, once per element access.
 	// Nothing about the arms differs but the stride constant and the access width, which is why they are one
 	// function called twice rather than two.
-	function emitStoreArm(cur IrBlock, arr ValueId, index ValueId, value ValueId, limitOffset ByteOffset, stride ParsedInt, accessType StdType, frame InlineFrame)
+	function emitStoreArm(cur IrBlock, arr ValueId, index ValueId, value ValueId, limitOffset ByteOffset, stride SingleOpStride, frame InlineFrame)
 		var at = cur
 
 		let destroy = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
@@ -483,9 +483,9 @@ type PrimitiveInliner
 		let viewed = emitIsSharedAllocation(self.module, block: at, ptr: buffer, ids: self.valueIds())
 		at = self.guard(at, refused: viewed, slow: frame.slow, next: InlineStoreLabel)
 
-		let strideValue = emitConst(self.module, block: at, value: stride, ids: self.valueIds())
+		let strideValue = emitConst(self.module, block: at, value: singleOpStrideBytes(stride), ids: self.valueIds())
 		let slot = emitSlotAddr(self.module, block: at, buffer: buffer, index: index, elementSize: strideValue, ids: self.valueIds())
-		self.module.appendOp(at, op: StdOp.storeIndirect(slot, offset: 0, valueId: value, valueType: accessType))
+		self.module.appendOp(at, op: StdOp.storeIndirect(slot, offset: 0, valueId: value, valueType: singleOpStrideAccessType(stride)))
 
 		// The ok exit of a throwing VOID entry: the placeholder value the ABI never moves, and the flag,
 		// are both `NoErrorFlag` — one `const`, exactly as `emitVoidOkReturn` spells it in the runtime.
@@ -561,12 +561,12 @@ type PrimitiveInliner
 	// zero-extended byte; the zero-extension is what `SignatureIndex.arrayElementSize` and
 	// `LayoutDescriptor.rangedAliasPackedBits`' `low == 0` rule both rest on, and the parser re-signs a
 	// narrow slot from there. So a `u8` load is precisely what the runtime body itself would have answered.
-	function emitElementLoad(cur IrBlock, arr ValueId, index ValueId, stride ParsedInt, accessType StdType) returns ValueId
+	function emitElementLoad(cur IrBlock, arr ValueId, index ValueId, stride SingleOpStride) returns ValueId
 		let buffer = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
-		let strideValue = emitConst(self.module, block: cur, value: stride, ids: self.valueIds())
+		let strideValue = emitConst(self.module, block: cur, value: singleOpStrideBytes(stride), ids: self.valueIds())
 		let slot = emitSlotAddr(self.module, block: cur, buffer: buffer, index: index, elementSize: strideValue, ids: self.valueIds())
 		let value = self.valueIds().mint()
-		self.module.appendOp(cur, op: StdOp.loadIndirect(value, addrId: slot, offset: 0, valueType: accessType))
+		self.module.appendOp(cur, op: StdOp.loadIndirect(value, addrId: slot, offset: 0, valueType: singleOpStrideAccessType(stride)))
 		return value
 	end 'emitElementLoad'
 

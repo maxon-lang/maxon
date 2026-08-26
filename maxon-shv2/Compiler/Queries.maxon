@@ -1340,14 +1340,24 @@ export function probeRebuildCacheHits(project Project) throws CompileError
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fileIndex in 0 upto project.db.sourcePaths.count() 'each'
-		// All three queries must run: a queryParseOps HIT returns before it would reach
-		// queryActiveTokens, which in turn returns on its own hit before it would reach
-		// queryTokens — so each must be asked directly to move its own counter.
-		_ = try queryTokens(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("probeRebuildCacheHits: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
-		_ = try queryActiveTokens(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("probeRebuildCacheHits: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
-		_ = try queryParseOps(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("probeRebuildCacheHits: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
+		try probeOnePathCacheHits(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("probeRebuildCacheHits: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
 	end 'each'
 end 'probeRebuildCacheHits'
+
+// Ask all three queries about ONE file. ⭐ **THE PATH ARRIVES AS A PARAMETER**, which is what lets it be
+// named three times: read inline out of `project.db.sourcePaths` it is a borrow of `project`, and each
+// query WRITES `project`'s memo, so the loop above would need the same `try … get(fileIndex) otherwise
+// panic(…)` spelled once per query — one fact, three copies. Same cure as
+// `Parser.conformanceRequiresMethod`.
+//
+// All three must run: a `queryParseOps` HIT returns before it would reach `queryActiveTokens`, which in
+// turn returns on its own hit before it would reach `queryTokens` — so each must be asked directly to
+// move its own counter.
+function probeOnePathCacheHits(project Project, path FilePath) throws CompileError
+	_ = try queryTokens(project, path: path)
+	_ = try queryActiveTokens(project, path: path)
+	_ = try queryParseOps(project, path: path)
+end 'probeOnePathCacheHits'
 
 // ⭐ **IS THIS SOURCE FILE `stdlib/`'s (P1.9)?** Asked ONCE PER FILE, by the three places that need a file's
 // provenance: the two queries that build a `Parser` for a real parse, and `queryProgramSignatures`'s

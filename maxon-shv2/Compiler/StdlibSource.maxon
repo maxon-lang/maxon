@@ -285,20 +285,8 @@ export function growStdlibBodyDemand(project Project, module MaxonModule, signat
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fileIndex in 0 upto project.stdlibSourcePaths.count() 'eachFile'
-		if project.db.demandedStdlibBodyFiles.contains(try project.stdlibSourcePaths.get(fileIndex) otherwise panic("growStdlibBodyDemand: fileIndex {fileIndex} is below project.stdlibSourcePaths.count()")) 'alreadyBuilding'
-			continue
-		end 'alreadyBuilding'
-
-		let artifact = try queryParseOps(project, path: try project.stdlibSourcePaths.get(fileIndex) otherwise panic("growStdlibBodyDemand: fileIndex {fileIndex} is below project.stdlibSourcePaths.count()"))
-		for func in artifact.module.functions 'eachFunc'
-			if not reachable.contains(func.name) 'notReached'
-				continue
-			end 'notReached'
-
-			project.db.demandedStdlibBodyFiles.insert(try project.stdlibSourcePaths.get(fileIndex) otherwise panic("growStdlibBodyDemand: fileIndex {fileIndex} is below project.stdlibSourcePaths.count()"))
-			grew = true
-			break
-		end 'eachFunc'
+		let demandedThisFile = try demandOneStdlibFileIfReached(project, path: try project.stdlibSourcePaths.get(fileIndex) otherwise panic("growStdlibBodyDemand: fileIndex {fileIndex} is below project.stdlibSourcePaths.count()"), reachable: reachable)
+		grew = grew or demandedThisFile
 	end 'eachFile'
 
 	return grew
@@ -308,6 +296,30 @@ end 'growStdlibBodyDemand'
 // file's PARSE ARTIFACT — a memo HIT, since `queryAllModule` has already parsed it — so the cost is
 // O(stdlib functions) and touches nothing the user wrote. A `ByteArrayArray` rather than a set because
 // the names are unique by construction (E3006 rejects a duplicate) and the substrate fixpoint needs a
+// Demand ONE stdlib file's bodies if any function it declares is reachable, answering whether the demand
+// set grew. ⭐ **THE PATH ARRIVES AS A PARAMETER**, which is what lets it be named three times: read
+// inline out of `project.stdlibSourcePaths` it is a borrow of `project`, and `queryParseOps` and the
+// `insert` both WRITE `project`, so the caller would need the same `try … get(fileIndex) otherwise
+// panic(…)` spelled once per use — one fact, three copies. Same cure as
+// `Parser.conformanceRequiresMethod`.
+function demandOneStdlibFileIfReached(project Project, path FilePath, reachable FunctionNameSet) returns bool throws CompileError
+	if project.db.demandedStdlibBodyFiles.contains(path) 'alreadyBuilding'
+		return false
+	end 'alreadyBuilding'
+
+	let artifact = try queryParseOps(project, path: path)
+	for func in artifact.module.functions 'eachFunc'
+		if not reachable.contains(func.name) 'notReached'
+			continue
+		end 'notReached'
+
+		project.db.demandedStdlibBodyFiles.insert(path)
+		return true
+	end 'eachFunc'
+
+	return false
+end 'demandOneStdlibFileIfReached'
+
 // dense ORDER for its node space as well as membership.
 function stdlibFunctionNames(project Project) returns ByteArrayArray throws CompileError
 	var names = ByteArrayArray.create()

@@ -1078,11 +1078,16 @@ end 'openCountedLoop'
 // Close a counted loop: `tail` is the block the caller's per-iteration work ENDED in (`loop.body` when that
 // work was straight-line), and this puts the increment and the back edge there.
 //
-// ⭐ **THE INCREMENT IS THE IMMEDIATE FORM, AND THAT IS DELIBERATE RATHER THAN A SHORTHAND.** The runtime is
-// hand-built at the Std tier and is never shown `foldConstOperands` — `Compiler.compile` installs it AFTER
-// the pipeline, on purpose — so a `const` + `binOp` pair reaches the backend as a `movRegImm32` AND an add:
-// two instructions per trip, in the hottest loops the language has. `binOpImm` is the very op the fold would
-// have produced, minted by the one party that already knows the operand is a compile-time constant.
+// ⭐ **THE INCREMENT IS THE IMMEDIATE FORM, AND THAT IS DELIBERATE RATHER THAN A SHORTHAND.** It is the very
+// op `foldConstOperands` produces, minted by the one party that already knows the operand is a compile-time
+// constant — so the fold has nothing to find here, and the emitted trip carries one `add` rather than a
+// `movRegImm32` AND an add, in the hottest loops the language has.
+//
+// ⛔ **THIS PARAGRAPH SAID THE RUNTIME "IS NEVER SHOWN `foldConstOperands`", AND EC3-H FALSIFIED THAT IN
+// THE SAME RUNG THAT WROTE IT** — a second fold runs over exactly the appended band now
+// (`Compiler.compileToCodeResult`'s install block owns that fact). The CHOICE survives its dead reason: an
+// op the builder can mint directly is one the fold does not have to find, classify, rewrite and then DCE
+// the `const` of. Do not read the correction as licence to spell a runtime constant as `const` + `binOp`.
 export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter)
 	let next = ids.mint()
 	module.appendOp(tail, op: StdOp.binOpImm(next, lhs: loop.index, imm: step, opcode: StdBinOpcode.add, operandType: StdType.i64))
@@ -2051,7 +2056,8 @@ end 'buildGlobalReader'
 // ⭐⭐ **THE PER-UNION DESTRUCTOR CASCADE (P1.3 slice 2).** Synthesize `__destruct_<U>(box)` for every
 // managed-payload union whose destructor is REFERENCED (`needed`, collected from the module's
 // `__destruct_*` calls — install only what is used, exactly like the rest of the runtime). It is
-// APPENDED already-lowered after the pipeline (like `installMmRuntime`), so it is never re-optimized.
+// APPENDED already-lowered after the pipeline (like `installMmRuntime`); what runs over that appended band
+// is stated once, in `Compiler.compileToCodeResult`'s install block.
 //
 // ⭐ **THE BIGGEST DIVERGENCE FROM v1**: v1's union drop is ONE polymorphic `mm_decref` that recurses
 // through the payload's box-HEADER destructor. shv2 has NO header destructor (static dispatch) — so THIS
@@ -2624,7 +2630,8 @@ end 'synthesizeUnionDestructor'
 
 // ⭐⭐ **THE PER-STRUCT DESTRUCTOR CASCADE (P1.4a wave 2).** The struct twin of `installUnionDestructors`:
 // synthesize `__destruct_<Struct>(box)` for every struct that owns a managed field and whose destructor is
-// REFERENCED. Appended already-lowered after the pipeline, like the union one, so it is never re-optimized.
+// REFERENCED. Appended already-lowered after the pipeline, like the union one; what runs over that appended
+// band is stated once, in `Compiler.compileToCodeResult`'s install block.
 // A struct has NO tag — every field is always present — so the cascade drops each managed field
 // unconditionally (behind a null-guard) rather than under a tag switch.
 //

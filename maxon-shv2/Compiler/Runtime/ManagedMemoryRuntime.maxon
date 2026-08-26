@@ -980,8 +980,8 @@ end 'arrayAccessorSourceMethodName'
 // Golden-neutral: `__`-prefixed functions are excluded from the spec goldens (`isRuntimeFunction`), so an
 // all-or-nothing install costs nothing in the fragments and needs no per-helper dependency tracking; the
 // helpers call each other (`push`→`grow`→`grown_cap`→`__mm_alloc`) so a dependency graph would only re-
-// derive the closure this install already is. Appended AFTER the pipeline (like `installMmRuntime`), so
-// they are never re-optimized.
+// derive the closure this install already is. Appended AFTER the pipeline (like `installMmRuntime`); what
+// runs over that appended band is stated once, in `Compiler.compileToCodeResult`'s install block.
 // The names these two families' ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic.
 let ArrayErrorOrdinalInstaller = b"the managed-memory runtime (ArrayError)"
 let ManagedMemoryOrdinalInstaller = b"the managed-memory runtime (__ManagedMemoryError)"
@@ -1875,6 +1875,44 @@ end 'emitFieldPlacement'
 // elsewhere is the drifting checklist `buildManagedCowDetach`'s header rejects. `checkByteLabel` exists for
 // that reader alone: the pass labels every block it mints `__im_*`, so it names the intermediate block
 // rather than leaving a runtime label inside a user function.
+// ⭐⭐ **THE TWO ARMS `emitStrideDispatch` ROUTES TO, EACH CARRYING ITS STRIDE AND ITS ACCESS WIDTH AS ONE
+// FACT.** A stride and the Std memory type a single-op access at that stride names are the same
+// statement, and a site that spells them separately can spell them INCONSISTENTLY: an 8-byte stride read
+// with a `u8` access takes one byte of every element and answers zero for the other seven, and a 1-byte
+// stride read with an `i64` access reads seven bytes of its NEIGHBOURS — neither is a type error at any
+// tier, so nothing but this pairing can make the two agree.
+//
+// ⚠ **THE INLINE PASS ONE TIER UP HAD SIX SEPARATE SPELLINGS OF IT** — a locally-derived word stride
+// beside `StdType.i64` and `ByteStringElementSize` beside `StdType.u8`, once per arm of each of its three
+// expanders (EC3-F3, found in review). It asks for an arm now. `CopyChunk` further up this file is this
+// same union for the contiguous copies, and exists for the same reason.
+//
+// The word stamp is DERIVED from `LayoutDescriptor.MachineWordBytes` — the owner of "how wide is a value
+// with no narrower home" — rather than written as an 8, because the field this is compared against IS
+// that width: `ProgramSignatures.arrayElementSize` stamps `element_size@24` off the same ladder.
+export union SingleOpStride
+	// One machine word per element — every `int`, every pointer, every managed element.
+	word
+	// One byte per element — every `ByteArray` and every 1-byte enum slot.
+	byte
+end 'SingleOpStride'
+
+// The `element_size@24` stamp this arm is reached on.
+export function singleOpStrideBytes(stride SingleOpStride) returns ParsedInt
+	return match stride 's'
+		word gives MachineWordBytes as ParsedInt
+		byte gives ByteStringElementSize
+	end 's'
+end 'singleOpStrideBytes'
+
+// The Std memory type one element of that stride loads and stores through.
+export function singleOpStrideAccessType(stride SingleOpStride) returns StdType
+	return match stride 's'
+		word gives StdType.i64
+		byte gives StdType.u8
+	end 's'
+end 'singleOpStrideAccessType'
+
 export function emitStrideDispatch(module StdModule, func IrFunction, cur IrBlock, es ValueId, wordArm BlockId, byteArm BlockId, otherArm BlockId, ids ValueMinter, checkByteLabel ByteArray = b"esbyte")
 	var checkByte = module.addBlock(func, label: checkByteLabel)
 

@@ -516,11 +516,20 @@ function checkHeldAssociatedTypeBindings(project Project, signatures ProgramSign
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for declIndex in 0 upto project.conformances.count() 'eachDecl'
-		if let binding = try declAssociatedBinding(try project.conformances.get(declIndex) otherwise panic("checkHeldAssociatedTypeBindings: declIndex {declIndex} is below project.conformances.count()"), interfaceName: iface.name, position: position) 'bindsThisPosition'
-			checkOneHeldBinding(project, signatures: signatures, declared: declared, iface: iface, name: name, conformer: try project.conformances.get(declIndex) otherwise panic("checkHeldAssociatedTypeBindings: declIndex {declIndex} is below project.conformances.count()"), binding: binding, heldAt: heldAt)
-		end 'bindsThisPosition'
+		checkOneConformersHeldBinding(project, signatures: signatures, declared: declared, iface: iface, name: name, conformance: try project.conformances.get(declIndex) otherwise panic("checkHeldAssociatedTypeBindings: declIndex {declIndex} is below project.conformances.count()"), position: position, heldAt: heldAt)
 	end 'eachDecl'
 end 'checkHeldAssociatedTypeBindings'
+
+// One conformer's binding at `position`, if it declares one. ⭐ **THE CONFORMANCE ARRIVES AS A
+// PARAMETER**, which is what lets it be named twice: read inline out of `project.conformances` it is a
+// borrow of `project`, and `checkOneHeldBinding` writes `project`'s diagnostics, so the caller would need
+// the same `try … get(declIndex) otherwise panic(…)` for the lookup AND for the conformer it passes on
+// — one fact, two copies. Same cure as `Parser.conformanceRequiresMethod`.
+function checkOneConformersHeldBinding(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, iface IrInterface, name ByteArray, conformance ConformanceDecl, position ElementCount, heldAt ByteArray)
+	if let binding = try declAssociatedBinding(conformance, interfaceName: iface.name, position: position) 'bindsThisPosition'
+		checkOneHeldBinding(project, signatures: signatures, declared: declared, iface: iface, name: name, conformer: conformance, binding: binding, heldAt: heldAt)
+	end 'bindsThisPosition'
+end 'checkOneConformersHeldBinding'
 
 // One conformer's binding against the holding. TWO refusals, and the order is load-bearing: a binding that is
 // ITSELF an interface fails both tests and only the first says the true thing. It is not "does not conform" —

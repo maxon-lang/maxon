@@ -169,23 +169,35 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
 		defaultArgOrigins.beginFunction()
-		for opIdx in module.liveOpIndices(try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()")) 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCalls: opIdx {opIdx} from liveOpIndices is not in module.ops")
-			// ⚠⚠ **THE `direct` ARM IS LAST, AND THE ORDER IS LOAD-BEARING — DO NOT SORT THESE.** An op
-			// read out of `module.ops` is a BORROW of `module`, and resolving a direct call REPLACES that
-			// element (`commitOverloadChoice`), which releases the very record `op` points into. A borrow's
-			// liveness is its last use in SOURCE order, so any arm reading `op` BELOW the resolving one leaves
-			// it live across that write — E3070, and a real use-after-free rather than a technicality. Putting
-			// the only writing arm last is what ends the borrow before the write; the resolver re-reads the op
-			// itself, which is why it is handed an INDEX and not the op.
-			match maxonOpCalleeKind(op) 'callee'
-				noCallee then break 'callee'
-				functionValue then refuseOverloadedFunctionValue(project, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), opIndex: opIdx, name: maxonOpCalleeName(op))
-				direct then resolveOneOverloadedCall(project, module: module, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), opIndex: opIdx, defaultArgOrigins: defaultArgOrigins)
-			end 'callee'
-		end 'eachOp'
+		resolveOverloadedCallsInFunc(project, module: module, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), defaultArgOrigins: defaultArgOrigins)
 	end 'eachFunc'
 end 'resolveOverloadedCalls'
+
+// One function's op walk. ⭐ **IT IS A FUNCTION SO THAT `func` IS A PARAMETER**, which is the same cure
+// `Parser.conformanceRequiresMethod` records: an element read out of `module.functions` inline is a borrow
+// of `module`, and BOTH calls below take `module` (or storage reached through `project`) mutably, so the
+// element cannot be named more than once per statement without going live across one of them. Spelled
+// inline this walk needed the same 130-character `try … get(fnIndex) otherwise panic(…)` THREE times, one
+// per use — one fact, three copies, in a shape where a future edit to one of them reads as deliberate.
+// A parameter carries no borrow of `module`, so each use is just `func`. It is also the shape the two Std
+// passes already take (`foldConstOperandsInFunc`, `elimTrivialBlockArgsInFunc`).
+function resolveOverloadedCallsInFunc(project Project, module MaxonModule, func IrFunction, defaultArgOrigins DefaultArgOrigins)
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCallsInFunc: opIdx {opIdx} from liveOpIndices is not in module.ops")
+		// ⚠⚠ **THE `direct` ARM IS LAST, AND THE ORDER IS LOAD-BEARING — DO NOT SORT THESE.** An op
+		// read out of `module.ops` is a BORROW of `module`, and resolving a direct call REPLACES that
+		// element (`commitOverloadChoice`), which releases the very record `op` points into. A borrow's
+		// liveness is its last use in SOURCE order, so any arm reading `op` BELOW the resolving one leaves
+		// it live across that write — E3070, and a real use-after-free rather than a technicality. Putting
+		// the only writing arm last is what ends the borrow before the write; the resolver re-reads the op
+		// itself, which is why it is handed an INDEX and not the op.
+		match maxonOpCalleeKind(op) 'callee'
+			noCallee then break 'callee'
+			functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
+			direct then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, defaultArgOrigins: defaultArgOrigins)
+		end 'callee'
+	end 'eachOp'
+end 'resolveOverloadedCallsInFunc'
 
 // ⭐⭐ **WHICH OP DEFINES EACH VALUE OF THE FUNCTION BEING WALKED (W74)** — the one thing
 // `repointDefaultedArgHelpers` needs and the op stream does not offer: a synthesized default argument is

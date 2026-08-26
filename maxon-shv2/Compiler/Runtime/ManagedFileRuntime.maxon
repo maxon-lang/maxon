@@ -313,7 +313,8 @@ end 'managedFileThrows'
 // exactly `length` bytes. Writing a NUL at `buffer[length]` in place would be a one-byte heap overflow
 // whenever capacity equals length — which is precisely what a freshly materialized view has.
 // ⇒ allocate `length + 1`, copy, terminate. The copy reuses `ManagedMemoryRuntime.emitForwardCopy` rather than
-// growing a second byte loop. **The caller owns the scratch and must `__mm_free` it on every path.**
+// growing a second copy loop — which since EC3-G is a machine word per trip with a byte tail, not the byte
+// loop this line used to call it. **The caller owns the scratch and must `__mm_free` it on every path.**
 //
 // Emits into `cur`, routes the copy loop's exit into `join`, and writes the terminator in `join` — so the
 // caller carries on from `join` with the pointer this returns. `cur` dominates `join`, which is what lets
