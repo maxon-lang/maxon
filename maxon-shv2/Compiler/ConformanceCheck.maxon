@@ -75,8 +75,11 @@ export function checkConformance(project Project, module MaxonModule, signatures
 	let functionsByName = try FunctionNameIndex.create(module.functions, project: project) otherwise 'duplicateFunctionName'
 		return
 	end 'duplicateFunctionName'
-	for conformance in project.conformances 'eachDecl'
-		checkOneConformance(project, functionsByName: functionsByName, conformance: conformance, signatures: signatures)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for declIndex in 0 upto project.conformances.count() 'eachDecl'
+		checkOneConformance(project, functionsByName: functionsByName, conformance: try project.conformances.get(declIndex) otherwise panic("checkConformance: declIndex {declIndex} is below project.conformances.count()"), signatures: signatures)
 	end 'eachDecl'
 
 	checkGrantedEnumConformance(project, functionsByName: functionsByName, signatures: signatures)
@@ -509,9 +512,12 @@ end 'unclaimedAssociatedPosition'
 // `associatedAbiBindingOf` folds, and it runs only for a position some use site actually holds.
 function checkHeldAssociatedTypeBindings(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount, heldAt ByteArray)
 	let declared = declaredConformanceIndex(project)
-	for conformance in project.conformances 'eachDecl'
-		if let binding = try declAssociatedBinding(conformance, interfaceName: iface.name, position: position) 'bindsThisPosition'
-			checkOneHeldBinding(project, signatures: signatures, declared: declared, iface: iface, name: name, conformer: conformance, binding: binding, heldAt: heldAt)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for declIndex in 0 upto project.conformances.count() 'eachDecl'
+		if let binding = try declAssociatedBinding(try project.conformances.get(declIndex) otherwise panic("checkHeldAssociatedTypeBindings: declIndex {declIndex} is below project.conformances.count()"), interfaceName: iface.name, position: position) 'bindsThisPosition'
+			checkOneHeldBinding(project, signatures: signatures, declared: declared, iface: iface, name: name, conformer: try project.conformances.get(declIndex) otherwise panic("checkHeldAssociatedTypeBindings: declIndex {declIndex} is below project.conformances.count()"), binding: binding, heldAt: heldAt)
 		end 'bindsThisPosition'
 	end 'eachDecl'
 end 'checkHeldAssociatedTypeBindings'
@@ -735,9 +741,17 @@ export function checkLiteralInitConformance(project Project)
 	end 'malformedProject'
 
 	let declared = declaredConformanceIndex(project)
-	for site in project.literalInitSites 'eachSite'
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for siteIndex in 0 upto project.literalInitSites.count() 'eachSite'
+		let site = try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")
 		if not typeDeclaresInterface(declared, interfaces: project.interfaces, typeName: site.typeName, interfaceName: InitableFromStringLiteralName) 'doesNotConform'
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: "Type '{String.from(site.typeName)}' does not conform to {String.from(InitableFromStringLiteralName)}", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+			// The POSITION is read off the borrow and copied into scalars, so the only thing crossing the
+			// mutating call is a fresh inline element read — see the loop header's note.
+			let nameLine = site.nameLine
+			let nameColumn = site.nameColumn
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: "Type '{String.from((try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")).typeName)}' does not conform to {String.from(InitableFromStringLiteralName)}", line: nameLine, column: nameColumn, filePath: (try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")).filePath)
 		end 'doesNotConform'
 	end 'eachSite'
 end 'checkLiteralInitConformance'

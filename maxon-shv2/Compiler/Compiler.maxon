@@ -1147,8 +1147,11 @@ function reportBindingHygieneDiagnostics(project Project) throws CompileError
 		return
 	end 'nothingToSayOrSomethingRealerSaidIt'
 
-	for diagnostic in project.bindingHygieneDiagnostics 'each'
-		reportDiagnostic(project, diagnostic: diagnostic)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for hygieneIndex in 0 upto project.bindingHygieneDiagnostics.count() 'each'
+		reportDiagnostic(project, diagnostic: try project.bindingHygieneDiagnostics.get(hygieneIndex) otherwise panic("reportBindingHygieneDiagnostics: hygieneIndex {hygieneIndex} is below project.bindingHygieneDiagnostics.count()"))
 	end 'each'
 
 	try refuseCompile(project)

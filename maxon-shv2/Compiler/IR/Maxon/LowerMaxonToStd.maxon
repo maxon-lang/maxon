@@ -1122,7 +1122,11 @@ type MaxonToStdLowering
 		// Walk each function's blocks and lower their body ops + terminator. Value
 		// ids need no per-function reset — the parser already numbered them densely
 		// per function, and this pass passes them through untouched.
-		for srcFunc in self.stdModule.functions 'eachFunc'
+		// An INDEX loop, not `for … in`: the element is a BORROW of `stdModule`, and the call below is
+		// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+		for fnIndex in 0 upto self.stdModule.functions.count() 'eachFunc'
+			let srcFunc = try self.stdModule.functions.get(fnIndex) otherwise panic("lowerFunctionBodies: fnIndex {fnIndex} is below self.stdModule.functions.count()")
 			// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES HAS NO BODY LOWERED, AND THE REASON IS THE
 			// WHITELIST'S BYTE-NEUTRALITY INVARIANT** (`StdlibLoader`: "adding a module changes NOTHING for a
 			// program that does not use it"). This pass is PRE-ELIMINATION, and lowering a body REGISTERS

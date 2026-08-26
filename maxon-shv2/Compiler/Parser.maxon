@@ -24389,7 +24389,11 @@ export type Parser
 	// body with a real error never also reports its unused names as cascade noise. shv2 gets it structurally
 	// and needs no rule for it.
 	function reportUnusedBindings(methodName ByteArray) returns bool
-		for candidate in self.unusedCandidates 'eachCandidate'
+		// An INDEX loop, not `for … in`: the element is a BORROW of `unusedCandidates`, and the call below is
+		// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+		for candidateIndex in 0 upto self.unusedCandidates.count() 'eachCandidate'
+			let candidate = try self.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")
 			if self.bindingNameWasMentioned(candidate.binding) 'wasMentioned'
 				continue
 			end 'wasMentioned'
@@ -24415,7 +24419,7 @@ export type Parser
 				continue
 			end 'contractDictatedTheList'
 
-			self.recordBindingHygieneDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from(candidate.binding.name)}'", range: candidate.nameRange)
+			self.recordBindingHygieneDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from((try self.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")).binding.name)}'", range: (try self.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")).nameRange)
 			return true
 		end 'eachCandidate'
 
@@ -24439,7 +24443,11 @@ export type Parser
 	// it here would say "use `let`" about a binding whose real fix is deletion. v1 skips it on the identical
 	// `referenced` test, for the identical reason.
 	function reportVarShouldBeLet()
-		for candidate in self.unusedCandidates 'eachCandidate'
+		// An INDEX loop, not `for … in`: the element is a BORROW of `unusedCandidates`, and the call below is
+		// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+		for candidateIndex in 0 upto self.unusedCandidates.count() 'eachCandidate'
+			let candidate = try self.unusedCandidates.get(candidateIndex) otherwise panic("reportVarShouldBeLet: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")
 			if not candidate.binding.mutable 'notAVar'
 				continue
 			end 'notAVar'
@@ -24452,7 +24460,7 @@ export type Parser
 				continue
 			end 'neededTheMutability'
 
-			self.recordBindingHygieneDiagnostic(ErrorCode.semanticVarShouldBeLet, message: "variable '{String.from(candidate.binding.name)}' is never reassigned; use 'let' instead of 'var'", range: candidate.nameRange)
+			self.recordBindingHygieneDiagnostic(ErrorCode.semanticVarShouldBeLet, message: "variable '{String.from((try self.unusedCandidates.get(candidateIndex) otherwise panic("reportVarShouldBeLet: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")).binding.name)}' is never reassigned; use 'let' instead of 'var'", range: (try self.unusedCandidates.get(candidateIndex) otherwise panic("reportVarShouldBeLet: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")).nameRange)
 			return
 		end 'eachCandidate'
 	end 'reportVarShouldBeLet'
@@ -24586,23 +24594,42 @@ export type Parser
 			return false
 		end 'notAMethod'
 
-		for conformance in self.artifact.conformances 'eachDecl'
+		// An INDEX loop, not `for … in`: the element is a BORROW of `artifact`, and the call below is
+		// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+		for declIndex in 0 upto self.artifact.conformances.count() 'eachDecl'
+			let conformance = try self.artifact.conformances.get(declIndex) otherwise panic("parametersAreInterfaceDictated: declIndex {declIndex} is below self.artifact.conformances.count()")
 			if not conformance.typeName.equals(self.enclosingType) 'anotherType'
 				continue
 			end 'anotherType'
 
-			for entry in conformance.interfaces 'eachInterface'
-				let slots = self.requirementSlotsOf(entry.interfaceName)
-				for slot in slots 'eachRequirement'
-					if slot.method.name.equals(methodName) 'thisMethodIsRequired'
-						return true
-					end 'thisMethodIsRequired'
-				end 'eachRequirement'
-			end 'eachInterface'
+			// ⚠ **THE INNER WALK IS A HELPER, AND THAT IS THE SAME RULE ONE LEVEL DOWN.** Left inline it read
+			// `conformance.interfaces`, which keeps the OUTER element's borrow live across
+			// `requirementSlotsOf` — a write of `artifact`. Handing the conformance to a function makes it a
+			// PARAMETER there, which carries no borrow of `artifact` at all, so the walk is free to memoize.
+			if self.conformanceRequiresMethod(try self.artifact.conformances.get(declIndex) otherwise panic("parametersAreInterfaceDictated: declIndex {declIndex} is below self.artifact.conformances.count()"), methodName: methodName) 'thisMethodIsRequired'
+				return true
+			end 'thisMethodIsRequired'
 		end 'eachDecl'
 
 		return false
 	end 'parametersAreInterfaceDictated'
+
+	// Does any interface this conformance declares REQUIRE `methodName`? Split out of the walk above for the
+	// reason its call site records: the conformance arrives as a parameter, so the memoizing
+	// `requirementSlotsOf` is not a write standing between an element borrow and its use.
+	function conformanceRequiresMethod(conformance ConformanceDecl, methodName ByteArray) returns bool
+		for interfaceIndex in 0 upto conformance.interfaces.count() 'eachInterface'
+			let slots = self.requirementSlotsOf((try conformance.interfaces.get(interfaceIndex) otherwise panic("conformanceRequiresMethod: interfaceIndex {interfaceIndex} is below conformance.interfaces.count()")).interfaceName)
+			for slot in slots 'eachRequirement'
+				if slot.method.name.equals(methodName) 'required'
+					return true
+				end 'required'
+			end 'eachRequirement'
+		end 'eachInterface'
+
+		return false
+	end 'conformanceRequiresMethod'
 
 	// The TRANSITIVE requirement list of `interfaceName` — the memoized walk a witness dispatch already
 	// takes (`witnessSlotsOf`), so a method satisfying a requirement inherited through `extends` is seen.
@@ -24976,8 +25003,11 @@ export type Parser
 		end 'noDefaults'
 
 		let resume = self.pos
-		for pending in self.pendingDefaultHelpers 'eachDefault'
-			try self.parseDefaultHelper(pending)
+		// An INDEX loop, not `for … in`: the element is a BORROW of `pendingDefaultHelpers`, and the call below is
+		// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+		for pendingIndex in 0 upto self.pendingDefaultHelpers.count() 'eachDefault'
+			try self.parseDefaultHelper(try self.pendingDefaultHelpers.get(pendingIndex) otherwise panic("parseDefaultHelpers: pendingIndex {pendingIndex} is below self.pendingDefaultHelpers.count()"))
 		end 'eachDefault'
 		self.pos = resume
 		// The last helper drained left ITS declaration's scope open (W43, `restoreDeclaringTypeScope`), and
@@ -37428,30 +37458,27 @@ export type Parser
 		// one: `for x in arr.cursor()` / `arr.withIterator()` iterate an `ArrayIterator`, which is a different
 		// instance and resumes from where it stands (`array-cursor`, `with-iterator`).
 		//
-		// ⛔⛔ **AND IT IS THE ELEMENT-OWNS-NOTHING `Array`'s, WHICH IS NARROWER THAN EC3's ROW ASKED FOR —
-		// BECAUSE THE MANAGED HALF IS NOT A LOWERING CHANGE, IT IS AN OWNERSHIP RULING, AND IT DOES NOT
-		// SELF-COMPILE.** `containerElementOwnsNothing` is `emitContainerElementAccessor`'s OWN trivial test,
-		// asked here — which is exactly the condition under which the two forms cannot be told apart: a
-		// trivial element is a COPIED WORD, so it mints no E3070 borrow (that accessor returns before the
-		// borrow arm) and there is no ownership question for the two forms to answer differently.
+		// ⭐⭐ **AND THE ELEMENT IS A BORROW AT EVERY ELEMENT TYPE — ⚖ USER RULING, 2026-08-26.** The two forms
+		// do not agree about ownership: the cursor's `ArrayIterator.current()` hands back a `+1`
+		// (`coOwnBorrowedOpaque` on its opaque return), while the counter form hands back the accessor's BORROW
+		// and enrols it against the source. For a TRIVIAL element the difference is invisible — the element is
+		// a copied word and `emitContainerElementAccessor` returns before it mints anything — but for a MANAGED
+		// or OPAQUE one it is the whole question, and the ruling is that **P1.8 Slice A's borrow holds**.
 		//
-		// ⚠ **FOR A MANAGED OR OPAQUE ELEMENT THEY ANSWER IT DIFFERENTLY, AND THE COUNTER FORM'S ANSWER IS
-		// REFUSED BY THE COMPILER'S OWN SOURCE.** The cursor's `ArrayIterator.current()` hands back a `+1`
-		// (`coOwnBorrowedOpaque`); the counter form hands back a BORROW and enrols it against the source
-		// (P1.8 Slice A's user ruling, `emitContainerElementAccessor`'s ⭐ block). MEASURED at EC3 by routing
-		// the managed half here too and self-compiling: **32 E3070s, every one of them
-		// `for <x> in <record>.<field> … <call>(<record>, …)`** — `for func in module.functions` +
-		// `insertFrameForFunction(module, func: func)` in both prologue emitters, `for path in
-		// project.db.sourcePaths` + `queryParseOps(project, …)`, `for conformance in project.conformances` +
-		// `checkOneConformance(project, …)`, and 28 more across 12 files. The refusal is SOUND (the callee
-		// could clear the field the borrow points into, and E3070's subject is necessarily the whole base
-		// record) and it is what the runnable oracle ACCEPTS, because the oracle retains on element read.
+		// ⚠⚠ **SO shv2 DIVERGES FROM THE RUNNABLE ORACLE HERE, DELIBERATELY, AND THE DIVERGENCE IS PRICED.**
+		// The oracle RETAINS on element read, so it compiles `for it in b.items … wipe(b.items)` and prints an
+		// answer; shv2 does not retain, so the same program is a use-after-free unless refused — measured at
+		// P1.8 as the `0x3F` free-poison byte. `specs-shv2/borrow-liveness.md` carries the four cases with both
+		// compilers' answers; `emitContainerElementAccessor`'s ⭐ block carries the original ruling.
 		//
-		// ⇒ **SO THE MANAGED HALF IS ITS OWN ROW**: it needs either a per-trip reference for the loop element
-		// (the oracle's answer — `promoteBorrowedToOwned` + `coOwnBorrowedOpaque` + `giveTemporaryScopeLifetime`,
-		// a fourth `BorrowLaunderDoor`) or those 32 loops restructured. Widening this gate without settling that
-		// is not a lowering improvement, it is a language change that stops the compiler compiling itself.
-		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) and self.containerElementOwnsNothing(self.valueNameId(source)) 'theLoopBuildsItsOwn'
+		// ⚠ **THE PRICE WAS PAID IN THIS COMPILER'S OWN SOURCE, AND IT WAS 32 LOOPS.** Widening this gate made
+		// the self-compile report **32 E3070s, every one a `for x in <record>.<field> … <call>(<record>, …)`**
+		// — the loop element's borrow is LEXICAL (`attachPendingBorrows`'s `liveUntil`, which is exactly what
+		// `borrow-liveness:forin-element-borrow-is-lexical` pins), so it is live across a callee that takes the
+		// base mutably. All 32 are index loops over `count()` + `get(i)` now, whose borrow is ordinary
+		// last-use liveness and dies at the call it feeds; each carries a comment naming this ruling. Do not
+		// "fix" this by narrowing the borrow, the lock or `iterationSubjectNameAt` — the refusal IS the ruling.
+		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'theLoopBuildsItsOwn'
 			return IterableIterationSource.notIterable
 		end 'theLoopBuildsItsOwn'
 
@@ -61777,14 +61804,8 @@ export type Parser
 		return receiver
 	end 'emitArrayVoidCall'
 
-	// ⭐⭐ **DOES AN ELEMENT OF THIS CONTAINER OWN NOTHING? — THE ONE TEST THAT DECIDES WHETHER READING ONE
-	// IS AN OWNERSHIP QUESTION AT ALL**, and the reason it is a function rather than a conjunction spelled at
-	// each asker. TWO doors ask it and they must not drift: the element accessor below returns a bare word
-	// and mints NO borrow when it is true, and `materializeIterableIterationSource` routes a `for … in` over
-	// an `Array` to the counter form when it is true — which is sound precisely BECAUSE the accessor answers
-	// the same way, so the counter form and the declared cursor become indistinguishable. A second spelling
-	// here would let one door call an element trivial while the other borrows it, which is a dangling
-	// reference rather than a disagreement.
+	// ⭐ **DOES AN ELEMENT OF THIS CONTAINER OWN NOTHING?** — the accessor's own trivial test, named rather
+	// than spelled inline so its two halves are read as ONE question and neither can be dropped.
 	//
 	// ⚠ **BOTH HALVES ARE LOAD-BEARING AND THE SECOND IS THE ONE THAT LOOKS REDUNDANT.**
 	// `containerElementIsManaged` reads the TAG and answers FALSE for a `typeParameter` — in a shared generic
@@ -61804,11 +61825,10 @@ export type Parser
 	// still name them. `last`/`pop`/`remove` are **CORPUS** members now (`stdlib/Array.maxon` is compiled), so
 	// they arrive as ordinary calls at `emitCall` and never reach here.
 	//
-	// ⚠ **THE `for … in` READ IS BACK, FOR THE ELEMENTS THAT OWN NOTHING (EC3).** An `Array` whose element
-	// is a bare word is no longer rewritten to its cursor (`materializeIterableIterationSource`), so the loop
-	// reads `__managed_get_unchecked` through this door again and takes the trivial arm below. A MANAGED or
-	// OPAQUE element still goes through the cursor surface — that half is an ownership question and its
-	// measurement is written at the exemption.
+	// ⚠ **THE `for … in` READ IS BACK (EC3).** An `Array` source is no longer rewritten to its cursor
+	// (`materializeIterableIterationSource`), so the loop reads `__managed_get_unchecked` through this door
+	// again — a trivial element through the arm below, a managed or opaque one through the BORROW arm, whose
+	// enrolment against the iterated source is what the 2026-08-26 ruling upheld.
 	//
 	// ⇒ all three exist because a corpus body is compiled ONCE against an opaque `Element`: it reads a slot
 	// with the shared, zero-extending element load and can know nothing the INSTANCE fixes. Where the value
@@ -61949,13 +61969,12 @@ export type Parser
 			// right. The corpus half is `retypeOpaqueReturnValue`'s, off the SAME `narrowSignedSlotOf` question
 			// — see `emitNarrowSignedSlotRead` for why asking it twice is one derivation and not two.
 			//
-			// ⚠ **THE `for … in` HALF OF THAT MEASUREMENT CAME BACK THROUGH THIS DOOR AT EC3, AND IT CAME BACK
-			// EXACTLY WHERE IT MATTERS.** An `Array` whose element owns nothing is no longer rewritten to its
-			// cursor (`materializeIterableIterationSource`), so the iteration read is `parseForStatement`'s
-			// `__managed_get_unchecked` again — and a narrow signed enum IS such an element, so `for s in a` is
-			// sign-extended by this arm rather than by the corpus one. The corpus half above is unchanged and
-			// still load-bearing for `pop`/`last`/`remove`; both are the same question asked of the same
-			// function, which is why one becoming reachable again cannot make the two disagree.
+			// ⚠ **THE `for … in` HALF OF THAT MEASUREMENT CAME BACK THROUGH THIS DOOR AT EC3.** An `Array` is no
+			// longer rewritten to its cursor (`materializeIterableIterationSource`), so the iteration read is
+			// `parseForStatement`'s `__managed_get_unchecked` again — and a narrow signed enum element takes this
+			// arm, so `for s in a` is sign-extended here rather than by the corpus one. The corpus half above is
+			// unchanged and still load-bearing for `pop`/`last`/`remove`; both are the same question asked of the
+			// same function, which is why one becoming reachable again cannot make the two disagree.
 			return self.emitNarrowSignedSlotRead(slotValue, valueType: trivialType, range: range)
 		end 'trivial'
 

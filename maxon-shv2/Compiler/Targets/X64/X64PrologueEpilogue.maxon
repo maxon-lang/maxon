@@ -154,8 +154,11 @@ typealias X64RegisterArray = Array with X64Register
 // Insert prologue/epilogue ops for every function in the module.
 export function insertPrologueEpilogue(module TargetModule, target Target)
 	logDebug(LogCategory.codegen, message: function() gives "Prologue/epilogue insertion ({targetToString(target)}): {module.funcCount()} function(s)")
-	for func in module.functions 'eachFunc'
-		insertFrameForFunction(module, func: func)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		insertFrameForFunction(module, func: try module.functions.get(fnIndex) otherwise panic("insertPrologueEpilogue: fnIndex {fnIndex} is below module.functions.count()"))
 	end 'eachFunc'
 end 'insertPrologueEpilogue'
 

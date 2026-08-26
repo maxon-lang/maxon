@@ -1,4 +1,4 @@
-// Test: forin-element-survives-a-callee-that-clears
+// Test: forin-element-borrow-is-lexical
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
 
@@ -18,8 +18,8 @@ function main() returns ExitCode
 	let b = Bag.create()
 	var total = 0 as Integer
 	for it in b.items 'scan'
-		wipe(b.items)
 		total = total + it.byteLength()
+		wipe(b.items)
 	end 'scan'
 	print("{total}\n")
 	return 0
@@ -126,11 +126,11 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect ArrayIterator.current
     x64.movRegReg r14, r8
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect wipe
     x64.movRegReg rcx, r14
     x64.callDirect String.byteLength
     x64.leaRegRegReg r12, r12, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect wipe
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
     x64.jmp forstep

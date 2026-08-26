@@ -293,7 +293,11 @@ function reportDeferredNameDiagnostics(project Project)
 	// suppress another that happens to share its line in a different file.
 	let alreadyReported = project.diagnostics.count()
 
-	for entry in project.unusedTypeAliasDiagnostics 'eachUnused'
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for unusedIndex in 0 upto project.unusedTypeAliasDiagnostics.count() 'eachUnused'
+		let entry = try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")
 		// ⭐ **A DECLARATION THAT WAS ALREADY REFUSED IS NOT ALSO REPORTED AS UNUSED.** Of course it is
 		// unused — nothing accepted it — so the second diagnostic adds no fact and points the reader at
 		// the symptom instead of the cause. TWO tests, because there are two ways a declaration earns a
@@ -316,11 +320,19 @@ function reportDeferredNameDiagnostics(project Project)
 			continue
 		end 'alreadyExplained'
 
-		reportPositioned(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{String.from(entry.name)}'", line: entry.line, column: entry.column, filePath: entry.filePath)
+		// Scalars off the borrow, a fresh inline read for the managed halves — see the loop header's note.
+		let line = entry.line
+		let column = entry.column
+		reportPositioned(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{String.from((try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")).name)}'", line: line, column: column, filePath: (try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")).filePath)
 	end 'eachUnused'
 
-	for entry in project.hiddenTypeNameDiagnostics 'eachHidden'
-		reportPositioned(project, code: ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: entry.line, column: entry.column, filePath: entry.filePath)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for hiddenIndex in 0 upto project.hiddenTypeNameDiagnostics.count() 'eachHidden'
+		let line = (try project.hiddenTypeNameDiagnostics.get(hiddenIndex) otherwise panic("reportDeferredNameDiagnostics: hiddenIndex {hiddenIndex} is below project.hiddenTypeNameDiagnostics.count()")).line
+		let column = (try project.hiddenTypeNameDiagnostics.get(hiddenIndex) otherwise panic("reportDeferredNameDiagnostics: hiddenIndex {hiddenIndex} is below project.hiddenTypeNameDiagnostics.count()")).column
+		reportPositioned(project, code: ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: line, column: column, filePath: (try project.hiddenTypeNameDiagnostics.get(hiddenIndex) otherwise panic("reportDeferredNameDiagnostics: hiddenIndex {hiddenIndex} is below project.hiddenTypeNameDiagnostics.count()")).filePath)
 	end 'eachHidden'
 end 'reportDeferredNameDiagnostics'
 

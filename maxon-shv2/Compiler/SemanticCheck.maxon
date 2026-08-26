@@ -164,9 +164,12 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 	// ONE column for the whole pass, re-keyed to each function and FILLED only by a call that actually has a
 	// defaulted argument to re-point — see `DefaultArgOrigins`.
 	var defaultArgOrigins = DefaultArgOrigins.create()
-	for func in module.functions 'eachFunc'
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
 		defaultArgOrigins.beginFunction()
-		for opIdx in module.liveOpIndices(func) 'eachOp'
+		for opIdx in module.liveOpIndices(try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()")) 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCalls: opIdx {opIdx} from liveOpIndices is not in module.ops")
 			// ⚠⚠ **THE `direct` ARM IS LAST, AND THE ORDER IS LOAD-BEARING — DO NOT SORT THESE.** An op
 			// read out of `module.ops` is a BORROW of `module`, and resolving a direct call REPLACES that
@@ -177,8 +180,8 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 			// itself, which is why it is handed an INDEX and not the op.
 			match maxonOpCalleeKind(op) 'callee'
 				noCallee then break 'callee'
-				functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
-				direct then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, defaultArgOrigins: defaultArgOrigins)
+				functionValue then refuseOverloadedFunctionValue(project, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), opIndex: opIdx, name: maxonOpCalleeName(op))
+				direct then resolveOneOverloadedCall(project, module: module, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), opIndex: opIdx, defaultArgOrigins: defaultArgOrigins)
 			end 'callee'
 		end 'eachOp'
 	end 'eachFunc'
@@ -3253,8 +3256,11 @@ end 'functionValueGoverningName'
 // TAG was compared. `FunctionTypeDoor` is the roster and is deliberately not re-listed here; see
 // `PendingFunctionTypeDoor` and `Parser.recordFunctionTypeDoor`.
 function checkFunctionTypeDoors(project Project)
-	for door in project.pendingFunctionTypeDoors 'eachDoor'
-		checkOneFunctionTypeDoor(project, door: door)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for doorIndex in 0 upto project.pendingFunctionTypeDoors.count() 'eachDoor'
+		checkOneFunctionTypeDoor(project, door: try project.pendingFunctionTypeDoors.get(doorIndex) otherwise panic("checkFunctionTypeDoors: doorIndex {doorIndex} is below project.pendingFunctionTypeDoors.count()"))
 	end 'eachDoor'
 end 'checkFunctionTypeDoors'
 
@@ -3282,8 +3288,11 @@ end 'checkOneFunctionTypeDoor'
 // container's own element, and until this drained nothing compared either fact against what the value
 // declares. See `PendingTransformArity` and `Parser.requireElementTransform`.
 function checkTransformArities(project Project)
-	for transform in project.pendingTransformArities 'eachTransform'
-		checkOneTransform(project, transform: transform)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for transformIndex in 0 upto project.pendingTransformArities.count() 'eachTransform'
+		checkOneTransform(project, transform: try project.pendingTransformArities.get(transformIndex) otherwise panic("checkTransformArities: transformIndex {transformIndex} is below project.pendingTransformArities.count()"))
 	end 'eachTransform'
 end 'checkTransformArities'
 
@@ -3408,13 +3417,20 @@ function checkDiscardedResults(project Project, module MaxonModule, funcNames Fu
 	end 'nothingDiscardedAWholeResult'
 
 	let effectFree = buildEffectFreeSummary(module, funcNames: funcNames)
-	for site in project.pendingDiscardedResults 'eachSite'
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
+		let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 		let calleeIndex = try funcNames.byName.get(site.callee) otherwise continue
 		if not (try effectFree.get(calleeIndex) otherwise panic("checkDiscardedResults: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")) 'theCallDidSomething'
 			continue
 		end 'theCallDidSomething'
 
-		reportPositioned(project, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{String.from(site.callee)}' must be used", line: site.line, column: site.column, filePath: site.filePath)
+		// Scalars off the borrow, a fresh inline read for the managed halves — see the loop header's note.
+		let line = site.line
+		let column = site.column
+		reportPositioned(project, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{String.from((try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).callee)}' must be used", line: line, column: column, filePath: (try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).filePath)
 	end 'eachSite'
 end 'checkDiscardedResults'
 

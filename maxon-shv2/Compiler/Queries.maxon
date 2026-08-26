@@ -1231,8 +1231,11 @@ function foldEveryFileIntoAModule(project Project) returns MaxonModule throws Co
 	resetMergeTargets(project)
 
 	var merged = MaxonModule.create()
-	for path in project.db.sourcePaths 'eachFile'
-		let artifact = try queryParseOps(project, path: path)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
+		let artifact = try queryParseOps(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("foldEveryFileIntoAModule: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
 
 		let mergeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
 		mergeArtifact(project, target: merged, artifact: artifact)
@@ -1254,8 +1257,11 @@ end 'foldEveryFileIntoAModule'
 // build before lowering. Called once per compile from `compileToCodeResult` (NOT inside the memoized
 // `queryAllModule`, so a warm rebuild re-reports).
 export function checkValueMergeSignatures(project Project)
-	for check in project.pendingFnMergeChecks 'eachCheck'
-		checkOneValueMergeSignature(project, check: check)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for checkIndex in 0 upto project.pendingFnMergeChecks.count() 'eachCheck'
+		checkOneValueMergeSignature(project, check: try project.pendingFnMergeChecks.get(checkIndex) otherwise panic("checkValueMergeSignatures: checkIndex {checkIndex} is below project.pendingFnMergeChecks.count()"))
 	end 'eachCheck'
 end 'checkValueMergeSignatures'
 
@@ -1330,13 +1336,16 @@ end 'reportUnverifiableFnMerge'
 // `queryTokens`/`queryParseOps` stay file-private; this is the one exported entry
 // the gate needs.
 export function probeRebuildCacheHits(project Project) throws CompileError
-	for path in project.db.sourcePaths 'each'
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fileIndex in 0 upto project.db.sourcePaths.count() 'each'
 		// All three queries must run: a queryParseOps HIT returns before it would reach
 		// queryActiveTokens, which in turn returns on its own hit before it would reach
 		// queryTokens — so each must be asked directly to move its own counter.
-		_ = try queryTokens(project, path: path)
-		_ = try queryActiveTokens(project, path: path)
-		_ = try queryParseOps(project, path: path)
+		_ = try queryTokens(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("probeRebuildCacheHits: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
+		_ = try queryActiveTokens(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("probeRebuildCacheHits: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
+		_ = try queryParseOps(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("probeRebuildCacheHits: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
 	end 'each'
 end 'probeRebuildCacheHits'
 

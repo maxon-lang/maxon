@@ -154,8 +154,11 @@ end 'stdConstInfo'
 // Fold constant operands in every function of the module, in place.
 export function foldConstOperands(module StdModule)
 	logDebug(LogCategory.ir, message: function() gives "foldConstOperands: {module.funcCount()} function(s)")
-	for func in module.functions 'eachFunc'
-		foldConstOperandsInFunc(module, func: func)
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		foldConstOperandsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("foldConstOperands: fnIndex {fnIndex} is below module.functions.count()"))
 	end 'eachFunc'
 end 'foldConstOperands'
 

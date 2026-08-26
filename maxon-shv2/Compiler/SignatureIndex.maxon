@@ -15909,8 +15909,16 @@ export type ProgramSignatures
 	// program that declares none.
 	export function conformersOf(interfaceName ByteArray) returns ByteArrayArray
 		var conformers = ByteArrayArray.create()
-		for name in self.structNamesInDeclOrder 'eachDeclaredType'
-			if typeDeclaresInterface(self.sweptConformanceIndex(), interfaces: self.interfaces, typeName: name, interfaceName: interfaceName) 'conforms'
+		// An INDEX loop, not `for … in`: the element is a BORROW of `structNamesInDeclOrder`, and the call below is
+		// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+		// ⚠ **THE SWEPT INDEX IS BUILT BEFORE THE WALK, NOT INSIDE IT.** It is memoized, so hoisting cannot
+		// change what it answers — and it must be hoisted: asked inside, it is a write of `self`'s storage
+		// standing between the element borrow and its use, which is the refusal the loop header names.
+		let swept = self.sweptConformanceIndex()
+		for declaredTypeIndex in 0 upto self.structNamesInDeclOrder.count() 'eachDeclaredType'
+			let name = try self.structNamesInDeclOrder.get(declaredTypeIndex) otherwise panic("conformersOf: declaredTypeIndex {declaredTypeIndex} is below self.structNamesInDeclOrder.count()")
+			if typeDeclaresInterface(swept, interfaces: self.interfaces, typeName: name, interfaceName: interfaceName) 'conforms'
 				conformers.push(name)
 			end 'conforms'
 		end 'eachDeclaredType'

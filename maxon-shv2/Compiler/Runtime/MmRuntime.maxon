@@ -2570,7 +2570,14 @@ function installStructRuntimeEntries(module StdModule, project Project, signatur
 		installOneStructRuntimeEntry(module, layout: layout, typeNames: project.typeNames, project: project, signatures: signatures, needed: needed, kind: kind)
 	end 'each'
 
-	for layout in signatures.tupleLayouts() 'eachInternedTuple'
+	// ⚠ **THE SNAPSHOT IS NAMED, AND THAT IS WHAT MAKES THIS ONE STILL A `for … in`.** `tupleLayouts()`
+	// BUILDS a fresh array, so this walk was always over a snapshot — but spelled inline the loop's E3070
+	// subject was the chain's base, `signatures`, which `installOneStructRuntimeEntry` takes mutably. Naming
+	// the snapshot moves the subject to a local nothing writes. It is NOT the index idiom the other 25 sites
+	// took (⚖ ruling of 2026-08-26, canonical note at `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`),
+	// because the cause here is different: the array being walked is not the one being mutated.
+	let internedTuples = signatures.tupleLayouts()
+	for layout in internedTuples 'eachInternedTuple'
 		if projectHasStructLayout(project, name: layout.name) 'committedAlready'
 			continue
 		end 'committedAlready'
