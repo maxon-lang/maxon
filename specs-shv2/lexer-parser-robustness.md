@@ -483,7 +483,7 @@ error E2001: specs/fragments/lexer-parser-robustness/deep-parens-balanced-empty.
 {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/deep-braces-open-only.test:2:1: Expected function declaration, got '\{'
+error E2001: specs/fragments/lexer-parser-robustness/deep-braces-open-only.test:2:1: Expected function declaration, got '{'
 ```
 
 <!-- test: deep-brackets-open-only -->

@@ -1137,6 +1137,35 @@ end 'main'
 1
 ```
 
+<!-- test: explicit-string-raw-value-decodes-escapes -->
+### An explicit string raw value is read like every other string literal
+`\{` and `\}` are the literal braces (see string-interpolation.md) and `\n` is a newline, in a raw
+value exactly as in an expression. MEASURED 2026-08-26: the bootstrap kept the raw token slice for a
+string raw value (while decoding a char raw value), so `"\{"` reached the binary as TWO bytes — and
+shv2's own `Lexer.maxon` names its `{` token that way, so every diagnostic naming it printed `\{` under
+the bootstrap-built compiler and `{` under the shv2-built one: a self-hosting fixed-point violation the
+byte-identical gate could not see. One reader for both arms now.
+```maxon
+enum Tok
+	leftBrace = "\{"
+	rightBrace = "\}"
+	twoLines = "a\nb"
+end 'Tok'
+
+function main() returns ExitCode
+	print("[{Tok.leftBrace.rawValue}] {Tok.leftBrace.rawValue.byteLength()}\n")
+	print("[{Tok.rightBrace.rawValue}] {Tok.rightBrace.rawValue.byteLength()}\n")
+	print("[{Tok.twoLines.rawValue}] {Tok.twoLines.rawValue.byteLength()}\n")
+	return 0
+end 'main'
+```
+```stdout
+[{] 1
+[}] 1
+[a
+b] 3
+```
+
 <!-- test: float-backed -->
 ```maxon
 enum FloatBacked

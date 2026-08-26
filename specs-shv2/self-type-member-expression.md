@@ -788,7 +788,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:8:14: Expected '\{' but got 'newline'
+error E2010: <fragment>:8:14: Expected '{' but got 'newline'
 ```
 
 <!-- test: error.Self-as-a-binding-name -->
@@ -1013,7 +1013,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:8:14: Expected '\{' but got 'newline'
+error E2010: <fragment>:8:14: Expected '{' but got 'newline'
 ```
 
 <!-- test: enum-case-named-Self-through-Self -->

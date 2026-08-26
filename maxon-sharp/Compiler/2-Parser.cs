@@ -4474,7 +4474,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         hasExplicitBacking = true;
         bool isString = Check(TokenType.StringLiteral);
         var litToken = Advance();
-        var litName = litToken.Value;
+        var litName = isString ? DecodeStringLiteralText(litToken, "an enum case name") : litToken.Value;
 
         if (!caseNames.Add(litName)) {
           throw new CompileError(ErrorCode.SemanticEnumDuplicateCase,
@@ -4560,7 +4560,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           }
         } else if (Check(TokenType.StringLiteral)) {
 
-          var rawVal = Advance().Value;
+          var rawVal = DecodeStringLiteralText(Advance(), "an enum raw value");
 
           if (backingType == null) {
             backingType = new IrStringBackingType();
@@ -7071,8 +7071,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return ParseFloatLiteral(token);
     }
     if (Check(TokenType.StringLiteral)) {
-      var token = Advance();
-      return StringUtils.ResolveEscapes(token.Value);
+      return DecodeStringLiteralText(Advance(), "a constant");
     }
     if (Check(TokenType.True)) {
       Advance();
@@ -20236,10 +20235,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private const long OctalHalfRadix = 4;
   private const long BinaryHalfRadix = 1;
 
-  private MaxonStruct EmitStringLiteralWithInterpolation(Token token) {
-    var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+  /// The corpus type a string literal is made of — asked once here for both readers of a literal.
+  private string StringLiteralTypeName(Token token) {
+    return FindTypeImplementingInterface("BuiltinStringLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
         "No type implements BuiltinStringLiteral (String type not found in stdlib)",
         token.Line, token.Column);
+  }
+
+  private MaxonStruct EmitStringLiteralWithInterpolation(Token token) {
+    var stringTypeName = StringLiteralTypeName(token);
 
     var parts = ParseStringInterpParts(token, stringTypeName);
 
@@ -20254,6 +20258,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var interpOp = new MaxonStringInterpOp(parts, stringTypeName);
     _currentBlock!.AddOp(interpOp);
     return interpOp.Result;
+  }
+
+  /// <summary>
+  /// THE ONE READER OF A STRING LITERAL'S TEXT where an expression is not allowed — an enum's raw
+  /// value or case name, a top-level constant. It is the same reading the expression path does
+  /// (<see cref="ParseStringInterpParts"/>): reading a literal takes TWO steps, and only the first
+  /// knows the braces — `\{` and `\}` are consumed by the interpolation splitter, everything else
+  /// by <see cref="StringUtils.ResolveEscapes"/>, which THROWS on a brace. Three readers used to
+  /// take a shortcut: two kept the raw token slice (`\{` reached .rdata as two bytes), one called
+  /// ResolveEscapes alone (`\{` was an invalid escape). Measured 2026-08-26 (EC4): shv2's own
+  /// `Lexer.maxon` declares `leftBrace = "\{"`, so under this compiler every shv2 diagnostic naming
+  /// that token printed `\{` while under shv2-built shv2 it printed `{` — a self-hosting fixed-point
+  /// violation the byte-identical gate could not see, because both stages carried the same constant.
+  /// The spec (string-interpolation.md:84) says one character. One door, every reader.
+  /// </summary>
+  private string DecodeStringLiteralText(Token token, string where) {
+    var parts = ParseStringInterpParts(token, StringLiteralTypeName(token));
+    var text = new System.Text.StringBuilder();
+    foreach (var part in parts) {
+      if (!part.IsLiteral)
+        throw new CompileError(ErrorCode.ParserExpectedExpression,
+          $"an interpolation is not allowed in {where}", token.Line, token.Column);
+      text.Append(part.LiteralValue);
+    }
+    return text.ToString();
   }
 
   /// <summary>
