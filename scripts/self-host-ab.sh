@@ -219,10 +219,15 @@ if [[ $suite -eq 1 ]]; then
 	suite_exit=$?
 	summary="$(grep -oE '^[0-9]+ passed, [0-9]+ failed' "$out/suite-s2.log" | tail -1)"
 	echo "  stage-2: ${summary:-no summary — read $out/suite-s2.log}   (exit $suite_exit)"
-	grep -n '^FAIL' "$out/suite-s2.log" | head -20
+	# `|| true`: under `set -eo pipefail` a grep that matches NOTHING is exit 1 and would end the script
+	# right here — which it did (EC4, 2026-08-26): a GREEN suite exited 1 and a RED one, where grep
+	# matched, ran on to exit 0. The instrument reported the opposite of what it measured.
+	grep -n '^FAIL' "$out/suite-s2.log" | head -20 || true
 	if [[ $suite_exit -ne 0 ]]; then
 		echo "  ⚠ the suite is RED under the stage-2 compiler while (presumably) green under stage-1: a program the" >&2
 		echo "    self-hosted compiler compiles differently. The fixpoint's byte identity cannot see this. Read the log." >&2
 	fi
+	# The suite under stage-2 is the Phase 2 gate's second half; the script's exit code IS its verdict.
+	exit "$suite_exit"
 fi
 
