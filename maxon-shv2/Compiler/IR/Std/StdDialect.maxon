@@ -2313,16 +2313,18 @@ end 'insertUseCalleeAndArgs'
 // rewritten to (and `v` itself where nothing changes). The mirror of `collectStdOpUses`: it
 // rewrites exactly the operands that one reports, so the two cannot drift. DEFS are left alone
 // (a def is not a use), and so are branch-edge args — those live on the predecessor's `IrBlock`,
-// not on the op, so rewriting them is the caller's job. Exhaustive over StdOp with no bare
-// `default`, for the same reason its twin is: a new variant must be a COMPILE ERROR here rather
-// than a silently-missed rewrite at every call site.
+// not on the op, so rewriting them is `substituteValuesInFunc`'s job — its ONLY caller, and the
+// reason this is file-private where `remappedValue` beside it is not: a pass that reached the op
+// rewrite directly could perform half the substitution, which is the failure that function's header
+// names. Exhaustive over StdOp with no bare `default`, for the same reason its twin is: a new variant
+// must be a COMPILE ERROR here rather than a silently-missed rewrite at every call site.
 //
 // A COLUMN, NOT A (from, to) PAIR, and that is a performance contract rather than a convenience.
 // The pair form could only rewrite ONE value per walk, so a caller with k substitutions to make
 // walked the function k times — O(ops x k), and worse, it rebuilt every branch edge k times, which
 // made its ALLOCATIONS quadratic too. `elimTrivialBlockArgs` had exactly that shape and it made
 // the pass 54% of a large compile. The column form applies all k in a single walk.
-module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
+function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 	return match op 'r'
 		const gives op
 		binOp(resultId, lhs, rhs, opcode, operandType) gives StdOp.binOp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), opcode: opcode, operandType: operandType)
@@ -2479,6 +2481,37 @@ function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArra
 	end 'each'
 	return out
 end 'remappedArgs'
+
+// Rewrite every READ in `func` that `subst` maps — in the ops, via `remapStdOpUses` above, and in the
+// BRANCH-EDGE args, which live on the predecessor's `IrBlock` rather than on any op and are therefore
+// the one half `remapStdOpUses` cannot reach.
+//
+// ⭐⭐ **THE EDGE HALF IS WHY THIS IS ONE FUNCTION AND NOT A CALLER'S TWO LOOPS.** `remapStdOpUses`'s
+// own header says edges are "the caller's job", and for a while there was exactly one caller so that
+// read as a division of labour. It is not: a pass that rewrites the ops and forgets the edges leaves a
+// successor block reading a value the rewrite retired, which is a dangling reference the type checker
+// cannot see and the golden shows as a wrong register. TWO passes fold values now
+// (`elimTrivialBlockArgs`, `foldConstOperands`), so the pairing lives HERE, beside the three functions
+// it drives, and neither pass can perform half of it.
+//
+// ONE walk, applying ALL of the substitutions — never one walk per substitution. That is a performance
+// contract and `remapStdOpUses`' own header carries the measurement behind it (the pair form made
+// `elimTrivialBlockArgs` 54% of a large compile).
+module function substituteValuesInFunc(module StdModule, func IrFunction, subst ValueIdArray)
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("substituteValuesInFunc: live op index {opIdx} not in module.ops")
+		try module.ops.set(opIdx, value: remapStdOpUses(op, subst: subst)) otherwise panic("substituteValuesInFunc: ops.set({opIdx}) OOB")
+	end 'eachOp'
+
+	for blockRef in func.blockRefs 'eachPred'
+		var pred = try module.blocks.get(blockRef) otherwise panic("substituteValuesInFunc: blockRef from func.blockRefs not in module.blocks")
+		var newEdges = BranchEdgeArray.create()
+		for edge in pred.branchEdges 'eachEdge'
+			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: remappedArgs(edge.argIds, subst: subst)))
+		end 'eachEdge'
+		pred.branchEdges = newEdges
+	end 'eachPred'
+end 'substituteValuesInFunc'
 
 // --- The sugar band contract ---
 //

@@ -857,13 +857,27 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesThreadCpuTicks = usage.usesThreadCpuTicks
 
+	// Where the APPENDED band begins. Every install below and every synthesizer under
+	// `synthesizeBodies` pushes onto `functions`, so this index is the boundary between what the
+	// pipeline optimized and what only exists after it — and it is what
+	// `CompilePhase.foldEmittedConstOperands` below folds over. Read BEFORE the first install for the
+	// obvious reason and stated here rather than recomputed there, so the two cannot disagree.
+	let firstEmittedFuncIndex = pipeline.stdModule.functions.count()
+
 	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
 
-	// AFTER the pipeline: the runtime is already lowered Std, so it must not be re-lowered, and it
-	// is deliberately not exposed to the Std optimization passes — it is hand-built at the tier
-	// they run on, and `foldConstOperands` would only re-derive folds it already has. It still
+	// AFTER the pipeline: the runtime is already lowered Std, so it must not be re-lowered. It still
 	// flows through the WHOLE backend (ISel, register allocation, frames), which is the entire
 	// argument for building it as `StdOp`s rather than as bytes.
+	//
+	// ⛔⛔ **THIS COMMENT SAID THE RUNTIME WAS "DELIBERATELY NOT EXPOSED TO THE STD OPTIMIZATION PASSES"
+	// BECAUSE `foldConstOperands` "WOULD ONLY RE-DERIVE FOLDS IT ALREADY HAS". MEASURED FALSE (EC3-H).**
+	// A runtime builder emits a comparison against a literal as `emitConst` + `cmp`, which is exactly the
+	// unfolded form — `__managed_fill` alone carried SEVEN `movRegImm32 rcx, k ; cmpRegReg rax, rcx` pairs
+	// and `__managed_get` five, one materialized immediate and one register apiece, on bodies EVERY array
+	// program links. A hand-built body has no fold the pass could re-derive; it has the same const operands
+	// user code has, minted by a builder rather than by a parser. So the fold runs over the appended band
+	// too, once, after the last thing that appends to it (below `synthesizeBodies`).
 	if usage.usesHeap 'installMm'
 		installMmRuntime(pipeline.stdModule, usage: usage)
 	end 'installMm'
@@ -1094,6 +1108,18 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	end 'installDebugStream'
 
 	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)
+
+	// ⭐ **THE STD OPTIMIZER, OVER THE BAND THE TWO BRACKETS ABOVE APPENDED.** See the install block's own
+	// header for the measurement that put it here. It runs ONCE, below the LAST thing that appends a
+	// function, so a body synthesized after an earlier fold could not slip past it — which is the failure
+	// mode a fold placed between the two brackets would have.
+	//
+	// ⚠ It is deliberately OUTSIDE both brackets above: billing an optimizer to the builder whose output it
+	// reads would report one cost as part of another, and the two scale with different things (see
+	// `CompilePhase.foldEmittedConstOperands`).
+	let emittedFoldProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.foldEmittedConstOperands)
+	foldConstOperands(pipeline.stdModule, firstFuncIndex: firstEmittedFuncIndex)
+	recordPhase(project, phase: CompilePhase.foldEmittedConstOperands, probe: emittedFoldProbe)
 
 	// The backend owns its own error gate now, and TWO of its stages use it: the register allocator
 	// reports E5001 (register pressure) onto `project.diagnostics` and throws when a loop genuinely

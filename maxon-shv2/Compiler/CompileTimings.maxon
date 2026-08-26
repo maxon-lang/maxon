@@ -297,6 +297,16 @@ export enum CompilePhase
 	// Std pass: it walks every block of every function and appends blocks, and a cost billed into a
 	// neighbour is a cost nobody can act on.
 	inlineManagedPrimitives
+	// `foldConstOperands` run a SECOND time, over the functions the two brackets above APPENDED (EC3-H).
+	// APPENDED HERE for this enum's own reason — the ordinals are the `.metrics.tsv` wire format.
+	//
+	// Its OWN row rather than a slice of `installRuntime`/`synthesizeBodies`, because it answers a different
+	// question from either: those two ask what BUILDING the appended bodies cost, and this asks what
+	// OPTIMIZING them cost. It is also the only one of the three that scales with the SIZE of what was
+	// built rather than with how many entry points were gated on, so a single row over a bracket and its
+	// optimizer would move for two unrelated reasons — the grouping rule the `synthesizeBodies` comment
+	// states, applied one level down.
+	foldEmittedConstOperands
 end 'CompilePhase'
 
 // Per-compile timing state, owned by `Project` (which is already threaded through

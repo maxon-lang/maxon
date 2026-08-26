@@ -10,14 +10,28 @@
 // it — so `10 + 5*2` still lowers to real arithmetic, now `imul`/`lea` with the
 // literals as immediates instead of a register per literal.
 //
-// Three moves, per the design:
+// Four moves — the design's three, plus the IDENTITY fold that only becomes visible once move 2 has
+// run:
 //   1. Canonicalize a COMMUTATIVE op (`add`, `mul`) so the constant lands on the
 //      rhs (swap when it started on the lhs).
 //   2. Rewrite a const-rhs `binOp`/`cmp` into the `binOpImm`/`cmpImm` form. A
 //      const-lhs COMPARISON swaps operands AND flips the predicate (`5 < a` becomes
 //      `a > 5`). A const-lhs NON-COMMUTATIVE arith op (`5 - a`) is LEFT ALONE — it
 //      is NOT `a - 5`, and rewriting it would silently miscompile.
-//   3. DCE the `const` op left with no remaining reference.
+//   3. Replace a `binOpImm` whose immediate is its opcode's IDENTITY ELEMENT — `x * 1`, `x + 0`,
+//      `x - 0`, `x & -1`, `x | 0`, `x ^ 0`, `x shl/shr 0` — by its own operand: every read of the
+//      result is rewritten to read the operand instead.
+//   4. DCE the `const` op left with no remaining reference, and the identity op left with none.
+//
+// ⭐⭐ **WHY MOVE 3 IS HERE AND NOT IN A PASS OF ITS OWN.** It reads the form move 2 produces and it
+// pays for nothing extra: the reference set move 4 already builds is exactly what decides whether the
+// identity op may go, and the walk is the same walk. It is also where the shape is CREATED — move 2 is
+// what turns `x * <const 1>` into the single op an identity test can recognise without a use count.
+//
+// ⚠ **IT IS NOT A GENERAL DCE AND MUST NOT GROW INTO ONE.** Move 4 retires exactly two kinds of def —
+// a `const` and an identity `binOpImm` — because those are the two THIS pass detached from their
+// readers. An unreferenced `call` is not dead (it may have run for its effects) and an unreferenced
+// `div` is not either (`isPure: false` — it traps); deciding that is another pass's question.
 //
 // A const is folded only when it fits the immediate field of the lowered op — see
 // `constFitsBinOpImmediate`, which is the ONE place that per-opcode rule lives. A
@@ -83,6 +97,34 @@ union FoldResult
 	unchanged
 	folded(op StdOp)
 end 'FoldResult'
+
+// Whether an op is an IDENTITY `binOpImm` — one whose immediate is its opcode's identity element, so
+// that the op COMPUTES its own operand and every read of its result may read that operand instead.
+union StdIdentityInfo
+	notIdentity
+	isIdentity(resultId ValueId, operand ValueId)
+end 'StdIdentityInfo'
+
+// ⭐ **ONLY `binOpImm` CAN BE ONE, BY CONSTRUCTION — which is why this match has two blanket bands
+// where `stdConstInfo` below has fifteen commented ones.** An identity is a fact about an op's
+// IMMEDIATE OPERAND, and `binOpImm` is the only variant in the dialect that carries an immediate the
+// arithmetic reads. (`cmpImm` carries one too, but it produces an i1 verdict rather than its operand,
+// so no immediate makes it the identity.) A `binOp` whose rhs is a constant cannot be one either: by
+// the time this runs, `rewriteBinAndCmpOps` has already turned every foldable const rhs into a
+// `binOpImm`, and each of the four identity constants (0, 1, -1) fits every immediate field
+// `constFitsBinOpImmediate` guards. So there is nothing per-band to say and no band whose exclusion
+// could be wrong for its own reason.
+//
+// ⚠ The two ranges are pinned to the union's FIRST and LAST variants, so a variant APPENDED at the end
+// (the rule `StdOp`'s header states) falls outside both and is a COMPILE ERROR here rather than a
+// silently-missed classification.
+function stdIdentityInfo(op StdOp) returns StdIdentityInfo
+	return match op 'i'
+		const to cmp gives StdIdentityInfo.notIdentity
+		binOpImm(resultId, lhs, imm, opcode, _) gives StdIdentityInfo.isIdentity(resultId, operand: lhs) if binOpImmIsIdentity(opcode, imm: imm) else StdIdentityInfo.notIdentity
+		cmpImm to osThreadCpuTicks gives StdIdentityInfo.notIdentity
+	end 'i'
+end 'stdIdentityInfo'
 
 // Whether a `const` op defines a value, split out so the fold/DCE matches share ONE
 // exhaustive classification of the flat StdOp union.
@@ -151,13 +193,23 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 	end 'c'
 end 'stdConstInfo'
 
-// Fold constant operands in every function of the module, in place.
-export function foldConstOperands(module StdModule)
-	logDebug(LogCategory.ir, message: function() gives "foldConstOperands: {module.funcCount()} function(s)")
+// Fold constant operands in `module.functions[firstFuncIndex …]`, in place.
+//
+// ⭐⭐ **IT TAKES A START INDEX BECAUSE IT RUNS TWICE, OVER TWO DISJOINT HALVES OF ONE MODULE (EC3-H).**
+// The pipeline runs it over the whole module (`firstFuncIndex: 0`) — every function lowered from source.
+// `Compiler.compileToCodeResult` then runs it a SECOND time over just the functions the runtime installs
+// and the body synthesizers APPENDED after the pipeline, which the first run could not have seen because
+// they did not exist yet. A start index is what makes the second run cost only what it folds; re-walking
+// from 0 would re-collect a `ConstValueMap` for every user function to fold nothing in it.
+//
+// The two runs are disjoint by construction — the appended band starts exactly where the pipeline's module
+// ended — so no function is folded twice, and folding is not idempotent-by-luck: it is simply never asked.
+export function foldConstOperands(module StdModule, firstFuncIndex FuncIndex)
+	logDebug(LogCategory.ir, message: function() gives "foldConstOperands: functions [{firstFuncIndex}, {module.funcCount()})")
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+	for fnIndex in firstFuncIndex upto module.functions.count() 'eachFunc'
 		foldConstOperandsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("foldConstOperands: fnIndex {fnIndex} is below module.functions.count()"))
 	end 'eachFunc'
 end 'foldConstOperands'
@@ -165,7 +217,10 @@ end 'foldConstOperands'
 function foldConstOperandsInFunc(module StdModule, func IrFunction)
 	let constMap = collectConstValues(module, func: func)
 	rewriteBinAndCmpOps(module, func: func, constMap: constMap)
-	dceUnreferencedConsts(module, func: func)
+	// AFTER the immediate rewrite, which is what MAKES the identity shape, and BEFORE the prune,
+	// which is what retires both kinds of def this pass detaches.
+	substituteIdentityImmediates(module, func: func)
+	dceRetiredDefs(module, func: func)
 end 'foldConstOperandsInFunc'
 
 // Map each `const` result value id to its constant. Value ids are function-local, so
@@ -193,6 +248,115 @@ function rewriteBinAndCmpOps(module StdModule, func IrFunction, constMap ConstVa
 		end 'r'
 	end 'eachOp'
 end 'rewriteBinAndCmpOps'
+
+// Rewrite every read of an IDENTITY `binOpImm`'s result to read that op's own operand instead. The op
+// itself is left where it is; `dceRetiredDefs` below is what removes it, and only once nothing reads
+// it any more.
+//
+// ⭐⭐ **THE PRUNE IS REFERENCE-DRIVEN, AND THAT IS WHAT MAKES THIS SAFE WITHOUT A CHAIN RESOLVER.**
+// Identities chain — `(x * 1) + 0` is two of them, and the corpus produces exactly that pair (an enum
+// ordinal's `(v == k) * 1` summed into an accumulator seeded at 0). A chain is resolved HERE, at record
+// time, by reading the column that is being built: `x * 1` is recorded first, so `+ 0`'s operand
+// resolves through it to `x` in one step and both ops go.
+//
+// That works because `liveOpIndices` walks blocks in `func.blockRefs` order, which for a
+// parser-generated CFG puts a def before its uses. It is not GUARANTEED to — `blockRefs` is LAYOUT
+// order, not dominance order (`IrModule.blockIndexById`) — and the prune is why that costs nothing but
+// a missed fold: an entry left pointing at a value that folds LATER leaves that value still READ, so
+// its op is kept and the `imul`/`lea` survives. There is no arrangement in which a read is rewritten to
+// a def that was deleted, which is the only failure that would matter.
+//
+// (`elimTrivialBlockArgs` DOES carry a union-find for its chains. It has to: its chains are built by a
+// WORKLIST, in trigger order, so "record time" there has no order to lean on at all.)
+function substituteIdentityImmediates(module StdModule, func IrFunction)
+	var subst = ValueIdArray.create()
+
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
+		match stdIdentityInfo(op) 'i'
+			isIdentity(resultId, operand) then recordIdentitySubstitution(subst, resultId: resultId, operand: operand)
+			notIdentity then break 'i'
+		end 'i'
+	end 'eachOp'
+
+	// An EMPTY column means no identity was found — `recordIdentitySubstitution` always extends it by at
+	// least the one slot it writes — so a function without one pays neither the rewrite walk nor the
+	// branch-edge rebuild. Most functions are in that case.
+	if subst.count() == 0 'nothingToRewrite'
+		return
+	end 'nothingToRewrite'
+
+	substituteValuesInFunc(module, func: func, subst: subst)
+end 'substituteIdentityImmediates'
+
+// Record that every read of `resultId` may read `operand` instead, extending `subst` to hold the id
+// with every NEW slot standing for ITSELF.
+//
+// ⚠ `resize` cannot build this column and the difference is a miscompile rather than a detail: it
+// zero-fills, and a zero in a substitution column means *"rewrite this read to value 0"*. The identity
+// seed is what makes `remappedValue` answer "unchanged" for every value the pass does not fold — the
+// same discipline `elimTrivialBlockArgs` seeds its union-find column with, grown to meet the ids as they
+// arrive rather than sized from a bound computed up front.
+//
+// `push` grows the backing store GEOMETRICALLY, so filling from 0 to the largest folded id is linear
+// overall — the trap `ConstValueMap.upsert` names, avoided the same way.
+//
+// The stored value is `operand` READ THROUGH THE COLUMN, which is what collapses a chain of identities
+// in one step; see `substituteIdentityImmediates` for why that is an optimization rather than a
+// correctness requirement.
+function recordIdentitySubstitution(subst ValueIdArray, resultId ValueId, operand ValueId)
+	var next = subst.count()
+	while next <= resultId 'grow'
+		subst.push(next)
+		next = next + 1
+	end 'grow'
+
+	try subst.set(resultId, value: remappedValue(operand, subst: subst)) otherwise panic("foldConstOperands: subst.set OOB at {resultId} against a column of {subst.count()}")
+end 'recordIdentitySubstitution'
+
+// THE per-opcode identity rule — `x <opcode> imm == x` — and the one place it lives, exactly as
+// `constFitsBinOpImmediate` below is the one place the per-opcode immediate RANGE lives.
+//
+// ⭐⭐ **THE ANSWER DOES NOT DEPEND ON `operandType`, BECAUSE EVERY IMMEDIATE FORM COMPUTES AT THE
+// MACHINE WORD ON ALL THREE TARGETS.** x64's `lowerBinOpImm` selects `lea`/`imul`/`and`/`or`/`xor` over
+// 64-bit registers and reads no width at all; arm64's selects the X-register forms; wasm's
+// `emitBinOpImm` computes at `wasmMachineValTypeOf`, which is `i64` for every integer type. So a narrow
+// `operandType` is a STORAGE class here and never an arithmetic one, and `x + 0` at i8 is the same 64
+// bits as `x` — which is what makes substituting the operand for the result exact rather than merely
+// equal-in-range. (`operandType` still TRAVELS with the immediate fold, for the reason `tryFoldBinOp`
+// gives: a rewrite that KEEPS an op must not change the width it asks about. This one keeps none.)
+//
+// ⚠ **THERE IS NO FLOAT ARM AND NONE WOULD BE CORRECT.** `x * 1.0` is not `x` — it quiets a signalling
+// NaN — and no float `binOpImm` exists to classify anyway, because `tryFoldBinOp` refuses a float
+// operand type (no SSE/NEON/wasm form takes an immediate). The float-only opcodes answer `false` for
+// the same reason `constFitsBinOpImmediate`'s arm does: it is the answer that stays correct if the
+// arm ever stops being unreachable.
+function binOpImmIsIdentity(opcode StdBinOpcode, imm Imm32) returns bool
+	return match opcode 'o'
+		add gives imm == AdditiveIdentity
+		sub gives imm == AdditiveIdentity
+		mul gives imm == MultiplicativeIdentity
+		bitAnd gives imm == AllBitsSet
+		bitOr to bitXor gives imm == AdditiveIdentity
+		shl to shrLogical gives imm == NoShift
+		div to max gives false
+	end 'o'
+end 'binOpImmIsIdentity'
+
+// The identity ELEMENTS, named because each is a fact about an OPERATION rather than a number that
+// happens to appear here.
+//
+// `bitOr`/`bitXor` share the additive one and that is not a coincidence of value: an all-zero operand
+// sets no bit and flips none, which is the same statement about a bit that `+ 0` is about a sum.
+let AdditiveIdentity = 0 as Imm32
+let MultiplicativeIdentity = 1 as Imm32
+// ⚠ `-1`, NOT `0xFFFFFFFF`. The immediate field is SIGNED and every target sign-extends it to the
+// machine word, so `-1` is an all-ones 64-bit mask while `4294967295` would be a 32-bit TRUNCATION —
+// a different question, and one this fold must never answer yes to. (It cannot arrive here anyway:
+// `fitsImm32` rejects it, so a real u32 mask keeps its register operand.)
+let AllBitsSet = -1 as Imm32
+// A shift of zero moves no bit, at every width and in both directions.
+let NoShift = 0 as Imm32
 
 // Attempt to fold one op. Only `binOp` and `cmp` are candidates; every other op is
 // unchanged. In particular `div`/`mod` are DELIBERATELY left alone (covered by the
@@ -414,24 +578,25 @@ function constAsImmediate(constMap ConstValueMap, id ValueId) returns Imm32
 	return constMap.constantOf(id) as Imm32
 end 'constAsImmediate'
 
-// Drop every `const` op whose result no longer appears anywhere — the rhs consts the
-// rewrite just detached from their `binOp`/`cmp`. A const still feeding another op or
-// a phi branch edge is kept.
-function dceUnreferencedConsts(module StdModule, func IrFunction)
+// Drop every def this pass detached from its readers and that nothing else reads: the rhs `const`s the
+// immediate rewrite took out of their `binOp`/`cmp`, and the identity `binOpImm`s whose reads
+// `substituteIdentityImmediates` moved onto their own operand. Either one still feeding another op or a
+// phi branch edge is kept.
+function dceRetiredDefs(module StdModule, func IrFunction)
 	let referenced = collectReferencedValues(module, func: func)
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("foldConstOperands: blockRef from func.blockRefs not in module.blocks")
 		var newRefs = OpIndexArray.create()
 		for opIdx in block.opRefs 'eachRef'
 			let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
-			if isUnreferencedConst(op, referenced: referenced) 'dead'
+			if isRetiredDef(op, referenced: referenced) 'dead'
 				continue
 			end 'dead'
 			newRefs.push(opIdx)
 		end 'eachRef'
 		block.opRefs = newRefs
 	end 'eachBlock'
-end 'dceUnreferencedConsts'
+end 'dceRetiredDefs'
 
 // Every value id READ by any live op, plus every value passed on a phi branch edge —
 // the reachability roots the const DCE keeps a def alive for.
@@ -452,6 +617,13 @@ function collectReferencedValues(module StdModule, func IrFunction) returns StdV
 	return referenced
 end 'collectReferencedValues'
 
+// True for a def the prune drops: a `const` or an identity `binOpImm` whose result appears in no
+// reference set. TWO predicates rather than one match, because the two kinds are recognised by two
+// different classifications of the same union and neither subsumes the other.
+function isRetiredDef(op StdOp, referenced StdValueUseSet) returns bool
+	return isUnreferencedConst(op, referenced: referenced) or isUnreferencedIdentity(op, referenced: referenced)
+end 'isRetiredDef'
+
 // True for a `const` op whose result appears in no reference set — the dead def the
 // prune drops.
 function isUnreferencedConst(op StdOp, referenced StdValueUseSet) returns bool
@@ -460,3 +632,14 @@ function isUnreferencedConst(op StdOp, referenced StdValueUseSet) returns bool
 		notConst gives false
 	end 'c'
 end 'isUnreferencedConst'
+
+// Its identity twin: a `binOpImm` that computes its own operand and that nothing reads any more.
+//
+// ⚠ The reference test is not a formality here — it is the whole safety argument for a substitution
+// that was applied in walk order. See `substituteIdentityImmediates`.
+function isUnreferencedIdentity(op StdOp, referenced StdValueUseSet) returns bool
+	return match stdIdentityInfo(op) 'i'
+		isIdentity(resultId, _) gives not referenced.contains(resultId)
+		notIdentity gives false
+	end 'i'
+end 'isUnreferencedIdentity'

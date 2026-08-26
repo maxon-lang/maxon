@@ -374,7 +374,10 @@ export type PassPipeline
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
-			foldConstOperands then foldConstOperands(self.stdModule)
+			// From function 0 — the whole module, which is everything that EXISTS at this point. The pass's
+			// other caller is `Compiler.compileToCodeResult`, which runs it a second time over the band the
+			// runtime installs append below the pipeline; see `foldConstOperands`' own header.
+			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 		end 'dispatch'
 

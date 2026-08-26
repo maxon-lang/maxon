@@ -358,7 +358,7 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 	// The compressed forest IS the substitution: after this, `parent[v]` is the value `v` ultimately
 	// became, and `v` itself where nothing changed. No second column, and no chains left in it.
 	compressAll(parent, bound: bound)
-	substituteEverywhere(module, func: func, subst: parent)
+	substituteValuesInFunc(module, func: func, subst: parent)
 
 	// `folded` is this pass's working column — a fold is an EVENT, and the settle loop asks "has this
 	// one already gone?". The shared dropper asks the OPPOSITE question, "does this one survive?", and
@@ -470,7 +470,7 @@ function findRoot(parent ValueIdArray, v ValueId, bound ValueId) returns ValueId
 end 'findRoot'
 
 // Flatten the whole forest in place, so `parent` becomes a plain substitution column: one `findRoot`
-// per entry, each of which path-compresses what it walks. `substituteEverywhere` can then read it as
+// per entry, each of which path-compresses what it walks. `substituteValuesInFunc` can then read it as
 // a lookup with no chains left in it — and `remappedValue` reads any value at or above `bound` as
 // itself, which is exactly right for the op results and parameters that never fold.
 function compressAll(parent ValueIdArray, bound ValueId)
@@ -482,29 +482,3 @@ end 'compressAll'
 function isFolded(folded BoolArray, v ValueId) returns bool
 	return try folded.get(v) otherwise panic("elimTrivialBlockArgs: folded.get({v}) is outside the block-arg id space")
 end 'isFolded'
-
-// Rewrite every READ mapped by `subst` — in the ops, via the dialect's `remapStdOpUses`, and in the
-// branch-edge args, which live on the predecessor blocks rather than on any op and so are this
-// pass's own responsibility.
-//
-// ONE walk, applying ALL of the folds. It used to be one walk PER substitution, rebuilding every
-// branch edge each time.
-function substituteEverywhere(module StdModule, func IrFunction, subst ValueIdArray)
-	for opIdx in module.liveOpIndices(func) 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("elimTrivialBlockArgs: live op index {opIdx} not in module.ops")
-		try module.ops.set(opIdx, value: remapStdOpUses(op, subst: subst)) otherwise panic("elimTrivialBlockArgs: ops.set({opIdx}) OOB")
-	end 'eachOp'
-
-	for blockRef in func.blockRefs 'eachPred'
-		var pred = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		var newEdges = BranchEdgeArray.create()
-		for edge in pred.branchEdges 'eachEdge'
-			var newArgs = ValueIdArray.create()
-			for a in edge.argIds 'eachArg'
-				newArgs.push(remappedValue(a, subst: subst))
-			end 'eachArg'
-			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: newArgs))
-		end 'eachEdge'
-		pred.branchEdges = newEdges
-	end 'eachPred'
-end 'substituteEverywhere'
