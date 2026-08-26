@@ -32,6 +32,13 @@
 #                                           attribution the phase table cannot give
 #   scripts/self-host-ab.sh --repeat=N      scale-test repeat count (default 3; 1 is enough for the
 #                                           memory columns, never for the CPU column)
+#   scripts/self-host-ab.sh --suite         ALSO run the whole specs-shv2 suite UNDER THE STAGE-2
+#                                           COMPILER (~5 min). This is the Phase 2 gate's second half,
+#                                           and the byte-identical fixpoint cannot stand in for it:
+#                                           2026-08-26 the stage-2 compiler failed 3 committed cases —
+#                                           `Lexer.maxon`'s `leftBrace = "\{"` is two characters under
+#                                           the bootstrap and one under shv2, so BOTH stages carried the
+#                                           same wrong constant and only a suite run under stage-2 saw it.
 #
 # Everything it writes goes under temp/selfhost/ (gitignored). It records NOTHING in
 # docs/optimization-log.md — that row is yours to write with `scale-test --note=…` once you know WHY
@@ -46,11 +53,13 @@ cd "$repo_root"
 
 skip_build=0
 profile=0
+suite=0
 repeat=3
 for arg in "$@"; do
 	case "$arg" in
 		--skip-build) skip_build=1 ;;
 		--profile) profile=1 ;;
+		--suite) suite=1 ;;
 		--repeat=*) repeat="${arg#--repeat=}" ;;
 		-h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "self-host-ab.sh: unknown arg: $arg" >&2; exit 2 ;;
@@ -201,3 +210,19 @@ if [[ $profile -eq 1 ]]; then
 		echo "--- stage-$stage"; grep -A 25 '=== sample profile' "$out/profile-s$stage.txt" | head -26
 	done
 fi
+
+if [[ $suite -eq 1 ]]; then
+	# The compiler under test is the binary running the runner, so this IS the suite as stage-2 sees it.
+	# It takes the tree lock, so it runs after the scale-tests, never beside them. Redirected, never piped.
+	echo "=== specs-shv2 under the STAGE-2 compiler"
+	"$stage2" spec-test > "$out/suite-s2.log" 2>&1
+	suite_exit=$?
+	summary="$(grep -oE '^[0-9]+ passed, [0-9]+ failed' "$out/suite-s2.log" | tail -1)"
+	echo "  stage-2: ${summary:-no summary — read $out/suite-s2.log}   (exit $suite_exit)"
+	grep -n '^FAIL' "$out/suite-s2.log" | head -20
+	if [[ $suite_exit -ne 0 ]]; then
+		echo "  ⚠ the suite is RED under the stage-2 compiler while (presumably) green under stage-1: a program the" >&2
+		echo "    self-hosted compiler compiles differently. The fixpoint's byte identity cannot see this. Read the log." >&2
+	fi
+fi
+
