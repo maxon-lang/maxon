@@ -170,9 +170,11 @@ enum LeafVerdict
 	// Inside every other rule but past `MaxInlinedLeafOps`. Kept apart from `notALeaf` because it is the
 	// only refusal a BUDGET could change, and the report says how many sites it costs.
 	tooManyOps
-	// A call of any kind, an `isUnsupportedInInlineBody` op, a by-reference parameter, a body that runs
-	// user code on its caller's stack, a panicking entry block, an entry block carrying phis, or no body
-	// at all.
+	// Everything else, and the list is the whole eligibility rule read backwards: a call of any kind, a
+	// `/` or `mod` (which can FAULT — see `leafOpRole`), an `isUnsupportedInInlineBody` op, a
+	// by-reference parameter, a body that runs user code on its caller's stack, a panicking ENTRY block,
+	// an entry block carrying phis, a block still in `Terminator.unset` (a body the lowering never
+	// emitted), or no body at all.
 	notALeaf
 end 'LeafVerdict'
 
@@ -627,8 +629,8 @@ type LeafInliner
 			let at = try self.sitePositions.get(k) otherwise panic("LeafInliner.inlineSitesIn: sitePositions.get OOB at {k}")
 			// Split immediately PAST the call, so the call stays the last op of the block on the left and
 			// its continuation begins at the op that followed it.
-			_ = splitBlockInPlace(self.module, func: self.func, head: self.blockAt(blockRef), position: at + 1, label: InlineContLabel)
-			try contRefs.set(k, value: self.lastBlockRef()) otherwise panic("LeafInliner.inlineSitesIn: contRefs.set OOB at {k}")
+			let cont = splitBlockInPlace(self.module, func: self.func, head: self.blockAt(blockRef), position: at + 1, label: InlineContLabel)
+			try contRefs.set(k, value: self.registeredRefOf(cont)) otherwise panic("LeafInliner.inlineSitesIn: contRefs.set OOB at {k}")
 		end 'eachSiteBackwards'
 
 		var pred = blockRef
@@ -706,14 +708,24 @@ type LeafInliner
 	function spliceCallAtTailOf(predRef BlockRef, contRef BlockRef, calleeIndex FuncIndex)
 		let tail = self.blockAt(predRef).opRefs.count() - 1
 		match self.opAt(predRef, pos: tail) 'site'
-			const to param then panic("LeafInliner.spliceCallAtTailOf: the last op of a spliced block of '{String.from(self.func.name)}' is not the call the split cut past")
+			const to param then self.refuseNotTheSplitCall()
 			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId)
-			retVoid to osThreadCpuTicks then panic("LeafInliner.spliceCallAtTailOf: the last op of a spliced block of '{String.from(self.func.name)}' is not the call the split cut past")
+			retVoid to osThreadCpuTicks then self.refuseNotTheSplitCall()
 		end 'site'
 		var pred = self.blockAt(predRef)
 		pred.opRefs.truncate(tail)
 		self.stats.noteInlined()
 	end 'spliceCallAtTailOf'
+
+	// The backstop the two non-`call` arms above share — ONE site, because they say one thing: the split
+	// cut immediately PAST the call, so the call is the last op of the block on the left, and anything
+	// else there means a coordinate moved between the split and this read.
+	//
+	// ⚠ It is a FUNCTION THAT PANICS rather than a function returning the message, because `panic` takes
+	// a string LITERAL (E3005 refuses an expression), so a shared message cannot be shared as a value.
+	function refuseNotTheSplitCall()
+		panic("LeafInliner.spliceCallAtTailOf: the last op of a spliced block of '{String.from(self.func.name)}' is not the call the split cut past")
+	end 'refuseNotTheSplitCall'
 
 	// ⭐⭐ **THE SPLICE.** `predRef` ends in the call (about to be dropped); `contRef` holds everything
 	// that followed it, and — if this is the block's last site — the block's whole exit.
@@ -795,7 +807,7 @@ type LeafInliner
 
 			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if i == 0 else calleeBlock.label)
 			try blocks.blockSubst.set(calleeBlock.id, value: fresh.id) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
-			let freshRef = self.lastBlockRef()
+			let freshRef = self.registeredRefOf(fresh)
 			blocks.copiedRefs.push(freshRef)
 			// Coverage follows the code: a copied block's source footprint is the CALLEE block's, which is
 			// where its ops were written. `addBlock` pushed an empty entry, parallel to `blocks`.
@@ -853,22 +865,30 @@ type LeafInliner
 	// void call's result is not a value any op can name), and there is no `ret v` in the body to feed a
 	// block arg with.
 	//
-	// It refuses a block that already carries args: every continuation this pass wires is a block
+	// A void callee touches nothing here — no array is built for it, which is the difference between
+	// "the continuation declares no args" and "it declares an empty list", and this pass makes thousands
+	// of continuations.
+	function attachContinuationArg(contRef BlockRef, calleeFunc IrFunction, resultId ValueId)
+		match calleeFunc.returnType 'rt'
+			void then break 'rt'
+			value(inner) then self.setSingleBlockArg(contRef, valueId: resultId, argType: inner)
+		end 'rt'
+	end 'attachContinuationArg'
+
+	// The block-arg half of `setSingleEdge`'s rule — a FRESH array, field-assigned (see `IrBlock`'s phi
+	// model). It refuses a block that already carries args: every continuation this pass wires is a block
 	// `splitBlockInPlace` minted moments earlier, so args arriving here would be a wiring bug rather than
 	// a case to extend.
-	function attachContinuationArg(contRef BlockRef, calleeFunc IrFunction, resultId ValueId)
+	function setSingleBlockArg(contRef BlockRef, valueId ValueId, argType StdType)
 		var target = self.blockAt(contRef)
 		if target.blockArgs.count() != 0 'alreadyHasArgs'
-			panic("LeafInliner.attachContinuationArg: continuation '{String.from(target.label)}' of '{String.from(self.func.name)}' already carries {target.blockArgs.count()} block arg(s) — a continuation this pass minted has none")
+			panic("LeafInliner.setSingleBlockArg: continuation '{String.from(target.label)}' of '{String.from(self.func.name)}' already carries {target.blockArgs.count()} block arg(s) — a continuation this pass minted has none")
 		end 'alreadyHasArgs'
 
 		var blockArgs = IrBlockArgArray.create()
-		match calleeFunc.returnType 'rt'
-			void then break 'rt'
-			value(inner) then blockArgs.push(IrBlockArg.create(resultId, argType: inner))
-		end 'rt'
+		blockArgs.push(IrBlockArg.create(valueId, argType: argType))
 		target.blockArgs = blockArgs
-	end 'attachContinuationArg'
+	end 'setSingleBlockArg'
 
 	// Copy every non-panic block's phis, ops and exit into the fresh blocks `mintCopiedBlocks` minted, in
 	// the same order and skipping the same blocks — so the two walks pair up positionally.
@@ -932,14 +952,14 @@ type LeafInliner
 
 		let term = self.opAtIndex(calleeBlock.terminatorIndex(), ofFunc: calleeFunc)
 		match term 'exit'
-			const to mod then panic("LeafInliner.copyBlockExit: an arith op is in the terminator slot of '{String.from(calleeFunc.name)}'")
+			const to mod then refuseNotATerminator(calleeFunc)
 			condBranch to branch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
 			ret(retValId) then self.returnToContinuation(freshRef, contRef: contRef, argIds: self.returnedValues(calleeFunc, valueId: clonedLeafValue(retValId, subst: subst)))
-			param to call then panic("LeafInliner.copyBlockExit: a `param`/`call` op is in the terminator slot of '{String.from(calleeFunc.name)}'")
+			param to call then refuseNotATerminator(calleeFunc)
 			retVoid then self.returnToContinuation(freshRef, contRef: contRef, argIds: ValueIdArray.create())
-			globalAddr to osFreePages then panic("LeafInliner.copyBlockExit: a non-terminator op is in the terminator slot of '{String.from(calleeFunc.name)}'")
+			globalAddr to osFreePages then refuseNotATerminator(calleeFunc)
 			switch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
-			witnessCall to osThreadCpuTicks then panic("LeafInliner.copyBlockExit: a non-terminator op is in the terminator slot of '{String.from(calleeFunc.name)}'")
+			witnessCall to osThreadCpuTicks then refuseNotATerminator(calleeFunc)
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -1049,12 +1069,22 @@ type LeafInliner
 		try self.module.blockSourceInfo.set(to, value: sourceInfo) otherwise panic("LeafInliner.carryBlockSourceInfo: blockSourceInfo.set OOB at {to}")
 	end 'carryBlockSourceInfo'
 
-	// The `BlockRef` naming the block `IrModule.addBlock` (or `splitBlockInPlace`) registered LAST. Read
-	// IMMEDIATELY after the append it is about — a later read names a later block. Same discipline, and
-	// the same hazard, as `PrimitiveInliner.lastBlockRef`.
-	function lastBlockRef() returns BlockRef
-		return try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("LeafInliner.lastBlockRef: '{String.from(self.func.name)}' has no blocks")
-	end 'lastBlockRef'
+	// ⭐ **THE `BlockRef` OF A BLOCK JUST REGISTERED — CHECKED BY IDENTITY, not assumed by position.**
+	// `IrModule.addBlock` and `splitBlockInPlace` hand back the BLOCK, and a `BlockRef` is what may be
+	// held across the blocks this pass goes on adding (an `IrBlock` alias answers a different question —
+	// `getBlockByIdIn`'s header states the discipline, and a search for the ref later would be O(blocks)
+	// per site). The ref is only knowable in O(1) at the moment the block is the function's last, so this
+	// must be called IMMEDIATELY after the append it is about — and it COMPARES rather than trusting,
+	// because a reordering that slipped another `addBlock` in between would hand back a different block
+	// entirely, silently. `PrimitiveInliner.carveFrame` states the same rule against the same hazard.
+	function registeredRefOf(block IrBlock) returns BlockRef
+		let last = try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("LeafInliner.registeredRefOf: '{String.from(self.func.name)}' has no blocks")
+		if self.blockAt(last).id != block.id 'notTheLastRegistered'
+			panic("LeafInliner.registeredRefOf: block {block.id} ('{String.from(block.label)}') of '{String.from(self.func.name)}' is not the one registered LAST — something appended a block between the append this asks about and this read")
+		end 'notTheLastRegistered'
+
+		return last
+	end 'registeredRefOf'
 end 'LeafInliner'
 
 // One callee value through the splice's column, strictly. The column is TOTAL over the callee's id
@@ -1071,11 +1101,23 @@ end 'clonedLeafValue'
 // v1's `bindParamRemap` header records exactly that failure, one cause further out.
 function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 	match op 'p'
-		const to ret then panic("assertParamOpMatchesConvention: asked of an op that is not a `param`")
+		const to ret then refuseNotAParamOp()
 		param(resultId, index, _) then requireParamValueIsItsIndex(resultId, index: index, calleeFunc: calleeFunc)
-		call to osThreadCpuTicks then panic("assertParamOpMatchesConvention: asked of an op that is not a `param`")
+		call to osThreadCpuTicks then refuseNotAParamOp()
 	end 'p'
 end 'assertParamOpMatchesConvention'
+
+// The backstop every non-terminator arm of `copyBlockExit` shares — ONE string, for `notTheSplitCall`'s
+// reason. Which op it was is not worth naming: any of them in a terminator slot is the same broken
+// block, and `scanLeafBody` has already refused every op a leaf may not hold.
+function refuseNotATerminator(calleeFunc IrFunction)
+	panic("LeafInliner.copyBlockExit: an op that is not a terminator is in the terminator slot of '{String.from(calleeFunc.name)}'")
+end 'refuseNotATerminator'
+
+// The backstop the two non-`param` arms share — ONE string, for `notTheSplitCall`'s reason.
+function refuseNotAParamOp()
+	panic("assertParamOpMatchesConvention: asked of an op that is not a `param` — its one caller has already classified it as one through `leafOpRole`")
+end 'refuseNotAParamOp'
 
 function requireParamValueIsItsIndex(resultId ValueId, index ParamCount, calleeFunc IrFunction)
 	if resultId != index 'conventionBroken'

@@ -4,23 +4,24 @@ typealias Byte = int(0 to u8.max)
 
 type Box uses T
 	export var value as T
+	export var weight as Integer
 
-	export static function create(v T) returns Self
-		return Self{value: v}
+	export static function create(v T, weight Integer) returns Self
+		return Self{value: v, weight: weight}
 	end 'create'
 
-	export function get() returns T
-		return self.value
-	end 'get'
+	export function weightOf() returns Integer
+		return self.weight
+	end 'weightOf'
 end 'Box'
 
 typealias IntBox = Box with Integer
 typealias ByteBox = Box with Byte
 
 function main() returns ExitCode
-	let a = IntBox.create(40)
-	let b = ByteBox.create(2 as Byte)
-	return (a.get() + b.get()) as ExitCode
+	let a = IntBox.create(7, weight: 40)
+	let b = ByteBox.create(2 as Byte, weight: 2)
+	return (a.weightOf() + b.weightOf()) as ExitCode
 end 'main'
 ---
 ExitCode: 42
@@ -32,40 +33,32 @@ data {
   __mm_alloc_count@24 = i64 0
 }
 
-func @Box.get {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.callDirect __retain_type_param
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 48
-    x64.movRegImm32 rax, 40
-    x64.leaRegSlot rcx, slot0
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.prologue 64
+    x64.movRegImm32 rax, 7
+    x64.movRegImm32 rcx, 40
+    x64.leaRegSlot rdx, slot0
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.storeBaseDispReg.word64 [rdx + 8], rcx
     x64.movRegImm32 rax, 2
-    x64.leaRegSlot rbx, slot1
-    x64.storeBaseDispReg.word64 [rbx + 0], rax
-    x64.leaRegRdata rdx, [rip + __layout_Box_Integer]
-    x64.callDirect Box.get
-    x64.movRegReg r12, r8
-    x64.leaRegRdata rdx, [rip + __layout_Box_Byte]
-    x64.movRegReg rcx, rbx
-    x64.callDirect Box.get
-    x64.leaRegRegReg r8, r12, r8
+    x64.movRegImm32 rcx, 2
+    x64.leaRegSlot rsi, slot2
+    x64.storeBaseDispReg.word64 [rsi + 0], rax
+    x64.storeBaseDispReg.word64 [rsi + 8], rcx
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 8]
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.jmp __il_body#7
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rcx, [rsi + 8]
+    x64.jmp __il_cont#4
+  __il_cont#4:
+    x64.leaRegRegReg r8, rax, rcx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -78,15 +71,11 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r12
-    x64.popReg rbx
+    x64.epilogue 64
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 48
-    x64.popReg r12
-    x64.popReg rbx
+    x64.epilogue 64
     x64.popReg rbp
     x64.ret
 }

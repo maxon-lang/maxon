@@ -59,11 +59,18 @@ union PassKind
 	// `insertRangeChecks` no callee has one, so every ranged-parameter leaf would look store-free and
 	// panic-free and be copied WITH its guard emitted later into the callee alone.
 	//
-	// It runs BEFORE `inlineManagedPrimitives` because that pass carves the `__managed_*` fast paths into
-	// call sites, and a body carved that way is no longer a leaf — inlining first is what lets a tiny
-	// accessor reach its caller before the carve makes it unrecognizable. `promoteStackRecords` runs
-	// last, so no `stackRecordAddr` exists here (which is what its `isUnsupportedInInlineBody` would
-	// otherwise refuse a callee for).
+	// It runs BEFORE `inlineManagedPrimitives`, and ⚠ **THAT ORDER IS A CHOICE WITH A MEASURED PRICE, not
+	// a forced one.** Running first means a body the carve would have turned into a guard chain plus a
+	// slow arm holding the call is still small and call-free here. But `__managed_count` is the primitive
+	// that pass rewrites IN PLACE — into a single `loadIndirect` — and the accessors built on it are
+	// therefore NOT leaves at this point and are refused: MEASURED on the self-compile, `Array.isEmpty`
+	// keeps 209 call sites, `Parser.advance` 106 and `String.byteLength` 92, all three because their one
+	// call is a `__managed_count` the very next pass would have deleted. Whether to run a second round
+	// after that pass — or to move this one — is a rung of its own, and the number above is what it costs
+	// today.
+	//
+	// `promoteStackRecords` runs last, so no `stackRecordAddr` exists here (which is what its
+	// `isUnsupportedInInlineBody` would otherwise refuse a callee for).
 	inlineLeaves
 	// Phase 3.45: Std → Std expansion of the `__ManagedMemory` element primitives' FAST PATHS at their
 	// call sites (EC1), leaving the call itself — verbatim — as the slow arm every other case takes.

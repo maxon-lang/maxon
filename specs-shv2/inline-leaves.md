@@ -31,6 +31,9 @@ stands BEFORE any splice, and memoised:
   ops, because a shift whose count the compiler cannot fold carries the 6-op saturation `THE SHIFT RULE`
   emits at the Maxon tier, and its `int(0 to 63)` parameter adds a 9-op entry guard on top of that;
 - it takes **no by-reference parameter**, and it does not run user code on its caller's stack;
+- **its body was actually lowered.** A stdlib function no path from `main` reaches keeps its relocated
+  blocks and gets none of its ops — not even its `param` ops — so it looks exactly like a zero-op leaf.
+  A block still in `Terminator.unset` is what says "never written";
 - it is **not the caller** — a self-recursive function is refused, and a mutually recursive pair is
   already refused by the leaf rule.
 
@@ -316,9 +319,16 @@ end 'main'
 ```
 
 <!-- test: a-generic-leaf -->
-An `Array.isEmpty`-shaped accessor on a type declared with `uses`: ONE shared body, reached from two
-instantiations. Its trailing layout parameter is an ordinary parameter and maps to the site's argument
-like any other.
+A `Map.count`-shaped accessor on a type declared with `uses`: ONE shared body, reached from two
+instantiations. Its trailing LAYOUT-DESCRIPTOR parameter is an ordinary parameter and maps to the
+site's argument like any other — which is what the two `__il_body` blocks in the golden say, one per
+instantiation, each carrying that instantiation's own `__layout_Box_*` address in.
+
+⚠ **IT READS A FIELD OF A CONCRETE TYPE, AND THAT IS THE WHOLE DIFFERENCE FROM `get() returns T`.**
+Handing back the type PARAMETER makes the body retain it — `call __retain_type_param`, since `T` may be
+managed — and a body with a call is not a leaf. So the shape that inlines is the accessor whose ANSWER
+is concrete, however generic the record holding it is; measured on the self-compile, `Map.count` and
+`Set.count` are exactly this and both reach zero call sites.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -326,23 +336,24 @@ typealias Byte = int(0 to u8.max)
 
 type Box uses T
 	export var value as T
+	export var weight as Integer
 
-	export static function create(v T) returns Self
-		return Self{value: v}
+	export static function create(v T, weight Integer) returns Self
+		return Self{value: v, weight: weight}
 	end 'create'
 
-	export function get() returns T
-		return self.value
-	end 'get'
+	export function weightOf() returns Integer
+		return self.weight
+	end 'weightOf'
 end 'Box'
 
 typealias IntBox = Box with Integer
 typealias ByteBox = Box with Byte
 
 function main() returns ExitCode
-	let a = IntBox.create(40)
-	let b = ByteBox.create(2 as Byte)
-	return (a.get() + b.get()) as ExitCode
+	let a = IntBox.create(7, weight: 40)
+	let b = ByteBox.create(2 as Byte, weight: 2)
+	return (a.weightOf() + b.weightOf()) as ExitCode
 end 'main'
 ```
 ```exitcode
