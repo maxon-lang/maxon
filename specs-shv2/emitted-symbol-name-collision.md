@@ -78,6 +78,12 @@ build exiting 0 — re-measured with the refusal removed from `recordChunkLabel`
 
 ⚠ **x64 ONLY, and the omission of arm64 is the reading above, not a lane that was skipped**: arm64 lays no
 `mrt_runtime_init` chunk, so on those two targets this program holds no collision and compiles.
+⚠ **THE BODY IS REACHED THROUGH A FUNCTION VALUE, AND THAT IS LOAD-BEARING (EC5, 2026-08-26).** The rule is about a body the
+compiler LAYS DOWN, and a direct call to a one-line function no longer guarantees one: `inlineLeaves` splices the
+leaf into `main`, `dfe` drops the now-uncalled declaration, no second body exists under the label, and the program
+compiles and returns 7 — which is the rule's own correct answer for a body that is never emitted. Taking the
+function as a VALUE roots it (`funcAddr` is a liveness root) and a call through a value is never inlined, so the
+collision this case pins is the one that actually reaches layout.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -86,7 +92,8 @@ function mrt_runtime_init() returns Integer
 end 'mrt_runtime_init'
 
 function main() returns ExitCode
-	return mrt_runtime_init() as ExitCode
+	let emitted = mrt_runtime_init
+	return emitted() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -104,6 +111,12 @@ concatX64FunctionChunks: 'mrt_start' must be laid out FIRST in .text but is at o
 panic, with no file and no line, on a program whose only fault is a name. The refusal now fires at the
 label, which is one chunk EARLIER than the guard, so the guard keeps its own meaning (the stub was
 appended in the wrong ORDER) rather than doubling as a collision report.
+⚠ **THE BODY IS REACHED THROUGH A FUNCTION VALUE, AND THAT IS LOAD-BEARING (EC5, 2026-08-26).** The rule is about a body the
+compiler LAYS DOWN, and a direct call to a one-line function no longer guarantees one: `inlineLeaves` splices the
+leaf into `main`, `dfe` drops the now-uncalled declaration, no second body exists under the label, and the program
+compiles and returns 7 — which is the rule's own correct answer for a body that is never emitted. Taking the
+function as a VALUE roots it (`funcAddr` is a liveness root) and a call through a value is never inlined, so the
+collision this case pins is the one that actually reaches layout.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -112,7 +125,8 @@ function mrt_start() returns Integer
 end 'mrt_start'
 
 function main() returns ExitCode
-	return mrt_start() as ExitCode
+	let emitted = mrt_start
+	return emitted() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
