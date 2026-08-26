@@ -201,6 +201,69 @@ end 'main'
 0
 ```
 
+### ⚠ AN ELEMENT MOVE IS NOT ONE LOOP — IT IS A RUN OF MACHINE WORDS AND A RUN OF BYTES, IN AN ORDER
+
+`__managed_move_elems`' byte arm moves a WHOLE MACHINE WORD per trip and finishes the
+`byteCount mod 8` left over one byte at a time (EC3). At a 1-byte stride that split is
+reachable from ordinary source, and the three inserts above cannot see it: each shifts at
+most five bytes, so the word run is EMPTY in all three and only the byte tail ever executes.
+They pass with the word run deleted, with the two runs in either order, and with either run
+walking the wrong way.
+
+The two cases below shift TWENTY-ONE and TWENTY bytes across one buffer — the smallest sizes
+at which the word run holds MORE THAN ONE chunk, the byte tail is non-empty, and the
+destination overlaps the source. Each pins three separate facts at once: that the tail exists,
+that each run walks in the direction the overlap needs, and that the two runs happen in the
+right ORDER.
+
+<!-- test: bytearray-insert-at-front-crosses-the-word-and-tail-boundary -->
+### An `insert` that shifts two whole words AND a remainder, upward, onto itself
+Twenty-one bytes shifted UP one is two machine words plus a five-byte remainder, and the
+destination overlaps the source everywhere but its top byte. Three things have to be true and
+each has its own way of going wrong:
+* the remainder must be copied FIRST — it sits at the TOP of the range, and the highest word's
+  store lands on `buffer[16]`, which is the remainder's own lowest source byte;
+* the words must descend — the low word's store lands on `buffer[8]`, which the high word
+  still has to read;
+* the remainder must exist at all — without it the array keeps its old last five bytes.
+```maxon
+function main() returns ExitCode
+	var bytes = b"abcdefghijklmnopqrstu"
+	bytes.insert(0, value: 90)
+	if bytes.count() != 22 'cnt'
+		return 1
+	end 'cnt'
+	return 0 if String.from(bytes) == "Zabcdefghijklmnopqrstu" else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: bytearray-remove-at-front-crosses-the-word-and-tail-boundary -->
+### The same crossing DOWNWARD — a `remove` that shifts twenty bytes onto their own source
+`remove(0)` moves the surviving twenty bytes DOWN one: two machine words followed by a
+four-byte remainder, overlapping the source the other way. Every clause above is mirrored —
+the WORDS must move first, because the remainder's first store lands on `buffer[16]`, which
+the high word has not read yet; and the words must ASCEND, because the high word's store lands
+on `buffer[8]`, which the low word still has to read.
+```maxon
+function main() returns ExitCode
+	var bytes = b"abcdefghijklmnopqrstu"
+	let gone = try bytes.remove(0) otherwise panic("test invariant: index 0 is in bounds")
+	if gone != 97 'first'
+		return 1
+	end 'first'
+	if bytes.count() != 20 'cnt'
+		return 2
+	end 'cnt'
+	return 0 if String.from(bytes) == "bcdefghijklmnopqrstu" else 3
+end 'main'
+```
+```exitcode
+0
+```
+
 ### ⚠ THE STRIDE HAS TWO PRODUCERS, AND THEY ARE ONLY ALLOWED TO EXIST WHILE THEY AGREE
 
 `element_size@24` is stamped from `ProgramSignatures.arrayElementSize`, which sizes a ranged element from

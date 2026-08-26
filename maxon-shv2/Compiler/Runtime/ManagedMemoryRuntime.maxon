@@ -1315,10 +1315,11 @@ function recordGatedReturnType(action RecordGatedAction) returns StdReturnType
 	end 'a'
 end 'recordGatedReturnType'
 
-// --- The byte-loop builders: the runtime-polymorphic element_size lives HERE ---
+// --- The range builders: the runtime-polymorphic element_size lives HERE ---
 //
-// Every element move is byte-granular because `element_size` is a runtime field. Four primitives, each a
-// header-guarded loop (the `buildStrCopy` shape), threaded through `cur`: they set `cur`'s terminator and
+// Every element move is byte-ADDRESSED because `element_size` is a runtime field — the extent of a move is
+// a number of BYTES nothing can know at compile time, even when the chunks it moves them in are machine
+// words. Four primitives, each a counted loop threaded through `cur`: they set `cur`'s terminator and
 // return the continuation block (`emitLoadElem` also the loaded value). One implementation of each,
 // shared by every accessor, so the element-stride arithmetic lives in exactly one place per direction.
 
@@ -1344,79 +1345,125 @@ export function emitManagedByteBuffer(module StdModule, block IrBlock, record Va
 	return emitLoadField(module, block: block, record: record, offset: ManagedRecordBufferOffset, ids: ids)
 end 'emitManagedByteBuffer'
 
-// Copy `byteCount` bytes from `src` to `dest`, LOW address first — safe when `dest <= src` (a grow's
-// old→new copy, a remove's shift-left). `byteCount == 0` copies nothing (the header guard holds at once).
+// ⭐ **THE TWO WIDTHS A CONTIGUOUS COPY MOVES IN** — whole machine words for the bulk of the range, single
+// bytes for the `byteCount mod 8` `openWordTailSplit` leaves over. It rides a union rather than a width
+// integer because the width and the Std memory TYPE the load/store names are one fact: a run that steps
+// eight while loading a `u8` would copy every eighth byte and leave the rest holding whatever was there.
+union CopyChunk
+	// One `i64` load and one `i64` store per trip — what `[0, byteCount and -8)` is covered by.
+	word
+	// One `u8` load and one `u8` store per trip — the `[byteCount and -8, byteCount)` tail, and the only
+	// width that can finish a range whose length is not a multiple of eight.
+	byte
+end 'CopyChunk'
+
+// The Std memory type one chunk moves through.
+function copyChunkType(chunk CopyChunk) returns StdType
+	return match chunk 'c'
+		word gives StdType.i64
+		byte gives StdType.u8
+	end 'c'
+end 'copyChunkType'
+
+// How far one chunk advances the run — the counted loop's step, and the amount a HIGH-address-first run
+// backs its mirror off by so its first trip lands on the range's last whole chunk.
+function copyChunkStride(chunk CopyChunk) returns Imm32
+	return match chunk 'c'
+		word gives MachineWordBytes as Imm32
+		byte gives SingleStep
+	end 'c'
+end 'copyChunkStride'
+
+// ⭐⭐ **ONE RUN OF EQUAL-WIDTH CHUNKS OVER THE BYTE OFFSETS `[from, to)` OF A dest/src PAIR** — the loop
+// both copy directions and both chunk widths are, so the load/store pair and its bound are written down
+// once. `to - from` must be a whole multiple of the chunk's stride, which is exactly what
+// `openWordTailSplit`'s boundary guarantees for both of the runs below.
+//
+// ⭐ **THE DIRECTION IS TWO SUBTRACTIONS INSTEAD OF TWO ADDITIONS, NOT A SECOND LOOP SHAPE.** A
+// HIGH-address-first run needs the same bound, the same step and the same trip count as a low-address-first
+// one — only the offset it addresses is mirrored. Precomputing `dest + from + to - stride` (and the same for
+// `src`) OUTSIDE the loop turns `mirror - i` into the address, so the descending run costs the ascending
+// one's instruction count exactly and `openCountedLoop`'s one ascending shape serves both. A loop that
+// counted DOWN would have needed a second header predicate for a walk that is otherwise identical.
+function emitCopyRun(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, from ValueId, to ValueId, chunk CopyChunk, fromTheTop bool, label ByteArray, ids ValueMinter) returns IrBlock
+	var srcAnchor = src
+	var destAnchor = dest
+	var addrOpcode = StdBinOpcode.add
+
+	if fromTheTop 'highestChunkFirst'
+		let span = emitBin(module, block: cur, a: from, b: to, opcode: StdBinOpcode.add, ids: ids)
+		let stride = emitConst(module, block: cur, value: copyChunkStride(chunk), ids: ids)
+		let mirror = emitBin(module, block: cur, a: span, b: stride, opcode: StdBinOpcode.sub, ids: ids)
+		srcAnchor = emitBin(module, block: cur, a: src, b: mirror, opcode: StdBinOpcode.add, ids: ids)
+		destAnchor = emitBin(module, block: cur, a: dest, b: mirror, opcode: StdBinOpcode.add, ids: ids)
+		addrOpcode = StdBinOpcode.sub
+	end 'highestChunkFirst'
+
+	let chunkType = copyChunkType(chunk)
+	var loop = openCountedLoop(module, func: func, cur: cur, from: from, to: to, label: label, ids: ids)
+
+	let srcAddr = emitBin(module, block: loop.body, a: srcAnchor, b: loop.index, opcode: addrOpcode, ids: ids)
+	let moved = ids.mint()
+	module.appendOp(loop.body, op: StdOp.loadIndirect(moved, addrId: srcAddr, offset: 0, valueType: chunkType))
+	let destAddr = emitBin(module, block: loop.body, a: destAnchor, b: loop.index, opcode: addrOpcode, ids: ids)
+	module.appendOp(loop.body, op: StdOp.storeIndirect(destAddr, offset: 0, valueId: moved, valueType: chunkType))
+
+	closeCountedLoop(module, loop: loop, tail: loop.body, step: copyChunkStride(chunk), ids: ids)
+
+	return loop.done
+end 'emitCopyRun'
+
+// ⭐ **COPY `byteCount` BYTES FROM `src` TO `dest`, LOW ADDRESS FIRST** — a whole machine word per trip
+// across `[0, byteCount and -8)`, then the remaining `byteCount mod 8` bytes one at a time. A grow's
+// old→new copy, a remove's shift-left, every fresh-buffer blit, and `__str_copy` itself.
+//
+// ⭐⭐ **THE WORD RUN IS CORRECT EXACTLY WHERE THE BYTE LOOP IT REPLACES WAS, AND THAT IS PROVABLE RATHER
+// THAN AUDITED** (EC3). The rule for a low-address-first copy is `dest <= src` or no overlap at all. Under
+// it, the chunk at offset `k` reads `src + [k, k+w)` while everything written so far is `dest + [0, k)`,
+// whose top lies at `dest + k - 1 <= src + k - 1` — BELOW the read. That argument does not mention `w`, so
+// widening the chunk from one byte to eight cannot admit a caller the byte loop excluded, and cannot exclude
+// one it admitted. The word run also never touches a byte outside `[0, byteCount)`: it stops at the last
+// WHOLE word, and the tail covers what is left, so the two partition the range exactly.
+//
 // ⚠ EXPORTED for `ManagedFileRuntime` (R4.1), which copies a path's bytes into a NUL-terminated scratch
-// buffer. Exported rather than re-implemented: a second byte-copy loop is the duplication this file's own
-// header argues against ("One implementation of each … so the element-stride arithmetic lives in exactly
-// one place per direction"), and the low-address-first direction is exactly what a fresh buffer needs.
+// buffer, and for `MmRuntime`'s box cloners and `__str_copy`. Exported rather than re-implemented: a second
+// copy loop is the duplication this file's own header argues against ("One implementation of each … so the
+// element-stride arithmetic lives in exactly one place per direction"), and the low-address-first direction
+// is exactly what a fresh buffer needs.
 export function emitForwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"cpyfh")
-	var body = module.addBlock(func, label: b"cpyfb")
-	let done = module.addBlock(func, label: b"cpyfd")
+	var split = openWordTailSplit(module, func: func, cur: cur, byteCount: byteCount, label: b"cpyf", ids: ids)
 
-	let zero = ids.mint()
-	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
-	module.setTerminator(cur, op: StdOp.branch(header.id))
+	let start = emitConst(module, block: split.run, value: 0, ids: ids)
+	var afterWords = emitCopyRun(module, func: func, cur: split.run, dest: dest, src: src, from: start, to: split.wordEnd, chunk: CopyChunk.word, fromTheTop: false, label: b"cpyfw", ids: ids)
+	var afterBytes = emitCopyRun(module, func: func, cur: afterWords, dest: dest, src: src, from: split.wordEnd, to: byteCount, chunk: CopyChunk.byte, fromTheTop: false, label: b"cpyft", ids: ids)
 
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-	let atEnd = ids.mint()
-	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: byteCount, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
-
-	let srcAddr = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(srcAddr, lhs: src, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let b = ids.mint()
-	module.appendOp(body, op: StdOp.loadIndirect(b, addrId: srcAddr, offset: 0, valueType: StdType.u8))
-	let dstAddr = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: b, valueType: StdType.u8))
-	let one = ids.mint()
-	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
-	let iNext = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
-
-	return done
+	return closeWordTailSplit(module, split: split, tail: afterBytes)
 end 'emitForwardCopy'
 
-// Copy `byteCount` bytes from `src` to `dest`, HIGH address first — the overlap-safe direction when
-// `dest > src` (an insert's shift-right). The cursor `i` counts DOWN from `byteCount` to 0; each step
-// copies index `i-1`, so `i` doubles as the next iteration count.
+// ⭐ **COPY `byteCount` BYTES FROM `src` TO `dest`, HIGH ADDRESS FIRST** — the overlap-safe direction when
+// `dest > src` (an insert's shift-right).
+//
+// ⭐⭐ **IT RUNS THE TAIL BEFORE THE WORDS, AND THAT ORDER IS THE WHOLE OF WHAT MAKES IT BACKWARD** (EC3).
+// The `byteCount mod 8` tail sits at the TOP of the range, so a copy that must touch the highest bytes first
+// has to move it first — running the words first would overwrite tail source bytes that had not been read.
+// Within each run the chunks descend too (`emitCopyRun`'s mirrored addressing), so the whole move visits
+// offsets in strictly decreasing order and the argument is one sentence: at offset `k` with width `w`,
+// everything written so far is `dest + [k+w, byteCount)`, whose bottom `dest + k + w` lies ABOVE the read's
+// top `src + k + w - 1` whenever `dest >= src`. Like the forward rule, it does not mention `w` — so the
+// widening admits and excludes exactly the callers the byte loop did.
+//
+// ⚠ **THE DIRECTION IS NOT THIS FUNCTION'S TO DECIDE.** `buildManagedMoveElems` derives `destBuf == srcBuf
+// and destIdx > srcIdx` once, above the packed/byte split, and routes here only on that answer; every other
+// copy in the tree goes to `emitForwardCopy`. Calling this one on a `dest < src` overlap would smear just as
+// surely as calling the forward one on a `dest > src` overlap.
 function emitBackwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"cpybh")
-	var body = module.addBlock(func, label: b"cpybb")
-	let done = module.addBlock(func, label: b"cpybd")
+	var split = openWordTailSplit(module, func: func, cur: cur, byteCount: byteCount, label: b"cpyb", ids: ids)
 
-	module.setTerminator(cur, op: StdOp.branch(header.id))
+	var afterBytes = emitCopyRun(module, func: func, cur: split.run, dest: dest, src: src, from: split.wordEnd, to: byteCount, chunk: CopyChunk.byte, fromTheTop: true, label: b"cpybt", ids: ids)
+	let start = emitConst(module, block: afterBytes, value: 0, ids: ids)
+	var afterWords = emitCopyRun(module, func: func, cur: afterBytes, dest: dest, src: src, from: start, to: split.wordEnd, chunk: CopyChunk.word, fromTheTop: true, label: b"cpybw", ids: ids)
 
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(byteCount)))
-	let zero = ids.mint()
-	module.appendOp(header, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
-	let atStart = ids.mint()
-	module.appendOp(header, op: StdOp.cmp(atStart, lhs: i, rhs: zero, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(header, op: StdOp.condBranch(atStart, thenBlockId: done.id, elseBlockId: body.id))
-
-	let one = ids.mint()
-	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
-	let k = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(k, lhs: i, rhs: one, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	let srcAddr = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(srcAddr, lhs: src, rhs: k, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let b = ids.mint()
-	module.appendOp(body, op: StdOp.loadIndirect(b, addrId: srcAddr, offset: 0, valueType: StdType.u8))
-	let dstAddr = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: k, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: b, valueType: StdType.u8))
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(k)))
-
-	return done
+	return closeWordTailSplit(module, split: split, tail: afterWords)
 end 'emitBackwardCopy'
 
 // ⭐ **THE MANAGED-ELEMENT DESTROY WALK (P1.7 slice 3).** Walk `[start, end)` of `buffer` (stride
@@ -3210,7 +3257,7 @@ function buildManagedClear(module StdModule)
 end 'buildManagedClear'
 
 // `__managed_remove(arr, index) -> (value, flag)` — remove and return element `index` (throws OOB), shifting
-// the tail left by one slot (a forward byte copy) and zeroing the vacated last slot.
+// the tail left by one slot (a forward copy — low address first) and zeroing the vacated last slot.
 function buildManagedRemove(module StdModule)
 	var func = IrFunction.createFromStd(ManagedRemoveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(2)

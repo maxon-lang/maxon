@@ -983,53 +983,32 @@ export function emitLoadByteIndexed(module StdModule, block IrBlock, base ValueI
 	return emitLoadByteAt(module, block: block, addr: emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids), ids: ids)
 end 'emitLoadByteIndexed'
 
-// `__str_copy(dest, src, len)` — blit `len` bytes from `src` into `dest`. A byte loop rather than a
+// `__str_copy(dest, src, len)` — blit `len` bytes from `src` into `dest`. An emitted loop rather than a
 // `rep movsb`/memcpy op because there is no memory-move op in the Std tier (`system` holds only
-// `osAllocPages`/`osWriteStdout`), and a byte loop needs nothing the tier lacks. `len == 0` copies nothing
-// (the header guard is `i >= len`, true at once).
+// `osAllocPages`/`osWriteStdout`), and a loop needs nothing the tier lacks.
 //
-// The loop index `i` is the header's phi — 0 from entry, `i+1` from the back edge — the same on-the-fly
-// SSA shape every runtime builder here constructs directly, a runtime function having no parser.
+// ⭐⭐ **ITS BODY IS `emitForwardCopy`, WHICH IS THE WHOLE FUNCTION** (EC3). It used to hand-build the same
+// header-guarded byte loop the two copy helpers in `ManagedMemoryRuntime` build — one shape written down
+// three times, in the three places a wider store would have to land at once. It is now the LOW-ADDRESS-FIRST
+// copy those helpers already are: a machine word per trip and a byte tail. MEASURED on this tree's own
+// self-compile (`--emit-ir`, `callDirect __str_copy`): 23,745 call sites — every String interpolation part
+// and every String clone in the compiler — which makes it the most-called loop the language emits.
+//
+// ⚠ **THE FORWARD DIRECTION IS SOUND HERE BY CONSTRUCTION, NOT BY LUCK.** Every `__str_copy` writes into a
+// FRESH record's inline buffer or a scratch allocation and reads from a different one, so `dest` and `src`
+// name disjoint allocations and no overlap rule applies — see `emitForwardCopy` for the rule that does apply
+// when they can be the same buffer.
 export function buildStrCopy(module StdModule)
 	var func = IrFunction.createFromStd(StrCopyName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"header")
-	var body = module.addBlock(func, label: b"body")
-	var done = module.addBlock(func, label: b"done")
-
 	emitParams(module, block: entry, count: 3)
 	let dest = 0 as ValueId
 	let src = 1 as ValueId
 	let len = 2 as ValueId
 
-	let zero = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-
-	let atEnd = ids.mint()
-	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: len, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
-
-	let srcAddr = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(srcAddr, lhs: src, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let srcByte = ids.mint()
-	module.appendOp(body, op: StdOp.loadIndirect(srcByte, addrId: srcAddr, offset: 0, valueType: StdType.u8))
-	let dstAddr = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: srcByte, valueType: StdType.u8))
-	let one = ids.mint()
-	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
-	let iNext = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
-
+	let done = emitForwardCopy(module, func: func, cur: entry, dest: dest, src: src, byteCount: len, ids: ids)
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1148,6 +1127,72 @@ let WholeWordsMask = 0 - (MachineWordBytes as ParsedInt)
 // one".
 export let SingleStep = 1 as Imm32
 
+// ⭐⭐ **THE WORD/TAIL PARTITION EVERY CONTIGUOUS BYTE-RANGE PRIMITIVE RUNS ON, DERIVED IN ONE PLACE.** A
+// range of `byteCount` bytes splits into `[0, byteCount and -8)`, which whole machine words cover exactly,
+// and `[byteCount and -8, byteCount)`, the `byteCount mod 8` left over. `openWordTailSplit` emits that
+// split's guard and its one piece of arithmetic; the caller emits the two runs, in whatever ORDER its
+// direction needs, and branches its last one into `done`.
+//
+// ⭐ **THE SPLIT AND THE RUNS ARE SEPARATE CALLS BECAUSE THE ORDER IS THE PART THAT VARIES.** A fill and a
+// low-address-first copy run the words then the tail; an overlap-safe HIGH-address-first copy must run the
+// TAIL first, since it sits at the top of the range and a backward move has to touch the highest bytes
+// before anything overwrites them. One partition, three orders — so the partition is what is shared.
+//
+// ⚠ **UNALIGNED WORD ACCESSES ARE WHAT MAKE THE WORD RUN LEGAL AT ALL, AND EVERY TARGET THIS COMPILER
+// EMITS PERMITS THEM.** x64 and arm64 allow them on normal memory, and wasm's `i64.load`/`i64.store` memarg
+// alignment is a HINT that never changes what the access does. Every address this family is handed is an
+// arbitrary interior one — an element slot, a payload pointer, a String record's inline buffer — so this is
+// not a precondition the callers have to satisfy but the reason no alignment fixup is needed anywhere.
+export type WordTailSplit
+	// Where the caller emits its runs. Reached only when `byteCount > 0`.
+	export var run as IrBlock
+	// The continuation, un-terminated: the caller's last run branches into it. The empty-range door also
+	// lands here, so a caller threads exactly one exit.
+	export var done as IrBlock
+	// `byteCount and -8` — the end of the word run and the start of the byte tail, the one boundary both
+	// runs read.
+	export var wordEnd as ValueId
+
+	export static function create(run IrBlock, done IrBlock, wordEnd ValueId) returns WordTailSplit
+		return Self{run: run, done: done, wordEnd: wordEnd}
+	end 'create'
+end 'WordTailSplit'
+
+// Open the word/tail split off `cur`, labelling its two blocks `<label>run` and `<label>d`.
+//
+// ⚠ **THE `byteCount <= 0` DOOR IS A CORRECTNESS GUARD, NOT A FAST PATH FOR THE EMPTY RANGE.** A NEGATIVE
+// count masks to a NEGATIVE word end, and the byte tail would then walk `[byteCount and -8, byteCount)` —
+// touching up to seven bytes BEFORE `dest`. The single byte loops this family replaces were safe under that
+// by accident (their `i >= byteCount` held at once), and memory-writing primitives on the free path and
+// under every array move do not get to lose that. No caller passes one today; the guard is what keeps that
+// from being load-bearing. It absorbs the empty range (an `__mm_free` of a zero-size box, a zero-length
+// `__str_copy`) on the way past.
+export function openWordTailSplit(module StdModule, func IrFunction, cur IrBlock, byteCount ValueId, label ByteArray, ids ValueMinter) returns WordTailSplit
+	var run = module.addBlock(func, label: "{String.from(label)}run".toByteArray())
+	let done = module.addBlock(func, label: "{String.from(label)}d".toByteArray())
+
+	let nothing = emitConst(module, block: cur, value: 0, ids: ids)
+	let empty = emitCmp(module, block: cur, a: byteCount, b: nothing, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(empty, thenBlockId: done.id, elseBlockId: run.id))
+
+	let wordMask = emitConst(module, block: run, value: WholeWordsMask, ids: ids)
+	let wordEnd = emitBin(module, block: run, a: byteCount, b: wordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+
+	return WordTailSplit.create(run, done: done, wordEnd: wordEnd)
+end 'openWordTailSplit'
+
+// Close the split: `tail` is the block the caller's LAST run ended in, and this branches it into the
+// continuation and answers that continuation. `closeCountedLoop`'s counterpart one level up.
+//
+// It exists so that no caller has to know HOW the two exits meet. The empty-range door and the completed
+// runs land in the same block by a plain branch today; a caller that spelled `branch(split.done.id)` itself
+// would be a third party stating that, in three places, for a join it does not own.
+export function closeWordTailSplit(module StdModule, split WordTailSplit, tail IrBlock) returns IrBlock
+	module.setTerminator(tail, op: StdOp.branch(split.done.id))
+
+	return split.done
+end 'closeWordTailSplit'
+
 // ⭐ **THE ONE CONTIGUOUS FILL.** Overwrite `byteCount` bytes at `dest` with the low byte of `fillValue`.
 // Creates its own blocks off `cur` and returns the continuation, so the caller threads it like any other
 // loop-emitting helper.
@@ -1160,17 +1205,8 @@ export let SingleStep = 1 as Imm32
 // contract: the word run covers `byteCount and -8` and the tail covers the remainder, so the two partition
 // the range exactly and neither can reach past its end.
 //
-// ⚠ Unaligned word stores are fine on every target this compiler emits: x64 and arm64 permit them on normal
-// memory, and wasm's `i64.store` memarg alignment is a HINT that never changes what the store does. `dest` is
-// an arbitrary interior address (an element slot, a payload pointer), so this is not an assumption but the
-// reason no alignment fixup is needed.
-//
-// ⚠ **THE `byteCount <= 0` DOOR IS A CORRECTNESS GUARD, NOT A FAST PATH FOR THE EMPTY FILL.** A NEGATIVE
-// count masks to a negative word end, and the byte tail would then walk `[byteCount and -8, byteCount)` —
-// writing up to seven bytes BEFORE `dest`. The byte loop this replaces was safe under it by accident (its
-// `i >= byteCount` held at once), and a memory-writing primitive on the free path does not get to lose that.
-// No caller passes one today; the guard is what keeps that from being load-bearing. It absorbs the empty
-// fill (`__mm_free` of a zero-size box) on the way past.
+// ⚠ The unaligned-word-access licence, and the empty-range and negative-count door, are
+// `openWordTailSplit`'s — stated there once for the whole family rather than here for the fill alone.
 //
 // ⚠ **IT IS SHARED ACROSS A FILE BOUNDARY ON PURPOSE, WHICH IS WHY IT LIVES HERE IN THE BASE LAYER.** Three
 // call sites fill a contiguous byte range with a constant: `__mm_free`'s poison (fill `PoisonByte`), the
@@ -1183,19 +1219,12 @@ export let SingleStep = 1 as Imm32
 // already the home of the single-op emit helpers above that `ManagedMemoryRuntime` draws on — so homing the loop here
 // single-sources it without any new cross-layer dependency (the managed-memory runtime already depends on this file).
 export function emitFillRange(module StdModule, func IrFunction, cur IrBlock, dest ValueId, byteCount ValueId, fillValue ParsedInt, ids ValueMinter) returns IrBlock
-	var run = module.addBlock(func, label: b"fillrun")
-	let done = module.addBlock(func, label: b"filld")
+	var split = openWordTailSplit(module, func: func, cur: cur, byteCount: byteCount, label: b"fill", ids: ids)
 
-	let nothing = emitConst(module, block: cur, value: 0, ids: ids)
-	let empty = emitCmp(module, block: cur, a: byteCount, b: nothing, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(empty, thenBlockId: done.id, elseBlockId: run.id))
+	let word = emitConst(module, block: split.run, value: wordOfRepeatedByte(fillValue), ids: ids)
+	let start = emitConst(module, block: split.run, value: 0, ids: ids)
 
-	let wordMask = emitConst(module, block: run, value: WholeWordsMask, ids: ids)
-	let wordEnd = emitBin(module, block: run, a: byteCount, b: wordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let word = emitConst(module, block: run, value: wordOfRepeatedByte(fillValue), ids: ids)
-	let start = emitConst(module, block: run, value: 0, ids: ids)
-
-	var words = openCountedLoop(module, func: func, cur: run, from: start, to: wordEnd, label: b"fillw", ids: ids)
+	var words = openCountedLoop(module, func: func, cur: split.run, from: start, to: split.wordEnd, label: b"fillw", ids: ids)
 	let wordAddr = emitBin(module, block: words.body, a: dest, b: words.index, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(words.body, op: StdOp.storeIndirect(wordAddr, offset: 0, valueId: word, valueType: StdType.i64))
 	closeCountedLoop(module, loop: words, tail: words.body, step: MachineWordBytes as Imm32, ids: ids)
@@ -1203,14 +1232,12 @@ export function emitFillRange(module StdModule, func IrFunction, cur IrBlock, de
 	// The tail's fill byte is minted in the word loop's EXIT rather than in the tail's body: at most seven
 	// trips read it, and a constant re-materialized per trip is the `movRegImm32` this rung is about.
 	let fillByte = emitConst(module, block: words.done, value: fillValue, ids: ids)
-	var bytes = openCountedLoop(module, func: func, cur: words.done, from: wordEnd, to: byteCount, label: b"fillt", ids: ids)
+	var bytes = openCountedLoop(module, func: func, cur: words.done, from: split.wordEnd, to: byteCount, label: b"fillt", ids: ids)
 	let byteAddr = emitBin(module, block: bytes.body, a: dest, b: bytes.index, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(bytes.body, op: StdOp.storeIndirect(byteAddr, offset: 0, valueId: fillByte, valueType: StdType.u8))
 	closeCountedLoop(module, loop: bytes, tail: bytes.body, step: SingleStep, ids: ids)
 
-	module.setTerminator(bytes.done, op: StdOp.branch(done.id))
-
-	return done
+	return closeWordTailSplit(module, split: split, tail: bytes.done)
 end 'emitFillRange'
 
 // `__slab_alloc(size) -> ptr` — the bump allocator.
