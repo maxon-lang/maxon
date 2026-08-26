@@ -13946,7 +13946,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var nameToken = Advance();
     Expect(TokenType.RightParen);
 
-    var op = new MaxonDebugStreamNameIdOp(nameToken.Value);
+    // Interned into MXDS_STRS verbatim, so the name is TEXT and reads like any other literal's — the
+    // raw slice put `a\nb` in the blob where shv2 puts the newline (measured 2026-08-26 by scanning
+    // two `--debugstream` binaries for the bytes). Nothing in either SUITE can see this: the spec
+    // calls the id numbering "the whole observable contract" and the text reaches no stdout, only
+    // `maxon monitor`. So the two compilers could disagree here indefinitely without a red case.
+    var op = new MaxonDebugStreamNameIdOp(DecodeStringLiteralText(nameToken, "a debug-stream name"));
     _currentBlock!.AddOp(op);
     return op.Result;
   }
