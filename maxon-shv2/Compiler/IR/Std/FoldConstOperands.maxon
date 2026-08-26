@@ -91,51 +91,109 @@ export type ConstValueMap
 	end 'constantOf'
 end 'ConstValueMap'
 
-// The result of attempting to fold one op: either unchanged, or a replacement op
-// to write back at the same index (never a sentinel op).
-union FoldResult
-	unchanged
-	folded(op StdOp)
-end 'FoldResult'
+// ⭐⭐ **WHAT ONE OP IS TO THIS PASS — WRITTEN INTO A CALLER-OWNED RECORD, NEVER RETURNED AS A UNION.**
+//
+// A PAYLOAD-BEARING UNION HEAP-BOXES EVERY CASE, PAYLOAD-FREE ONES INCLUDED — the finding EC1 measured
+// in `InlineManagedPrimitives` (`30dc6c90b9`) — and this classification sits on a path walked ONCE PER
+// OP, three times over: the const collect, the identity collect, and the prune. Returned as a union it
+// minted and dropped a box for every op in the module that is neither a `const` nor an identity, which
+// is almost all of them. It was `StdConstInfo` and `StdIdentityInfo`, two unions and two exhaustive
+// `StdOp` rosters; it is now ONE roster filling this record in place, created once per walk.
+//
+// ⭐ **ONE ROSTER, NOT TWO, AND THAT IS THE POINT RATHER THAN A SIDE EFFECT.** The prune asks BOTH
+// questions of the same op (`isRetiredDef` was "unreferenced const OR unreferenced identity", two
+// matches over one union), so the two classifications were already taken together at the one call site
+// that needed both. Merged, a new `StdOp` variant is a compile error in ONE place instead of two, and
+// the two answers cannot disagree about which band a variant falls in.
+//
+// It is the shape `collectStdOpUses` uses for the dual question — one exhaustive roster, a caller-owned
+// sink, no allocation per op.
+enum StdFoldableDefKind
+	// Neither a `const` nor an identity `binOpImm`: nothing this pass detaches from a reader or retires.
+	neither
+	// A `const` — `definedId` is its result and `constant` the value it materializes.
+	constDef
+	// An identity `binOpImm` — `definedId` is its result and `identityOperand` the operand it computes.
+	identityDef
+end 'StdFoldableDefKind'
 
-// Whether an op is an IDENTITY `binOpImm` — one whose immediate is its opcode's identity element, so
-// that the op COMPUTES its own operand and every read of its result may read that operand instead.
-union StdIdentityInfo
-	notIdentity
-	isIdentity(resultId ValueId, operand ValueId)
-end 'StdIdentityInfo'
+type StdFoldableDef
+	// ⚠ **THE THREE FIELDS BELOW ARE MEANINGLESS UNTIL `kind` SAYS WHICH OF THEM THE LAST
+	// classification FILLED** — the discipline the union enforced by construction, and the one thing a
+	// record has to state rather than enforce. Every reader asks a `kind` predicate first, and none of
+	// them may be read as a sentinel: ValueId 0 and constant 0 are both REAL values here
+	// (`DefinedValueLookup`'s header carries the incident that taught this compiler so).
+	var kind as StdFoldableDefKind
+	// The value the classified op defines — its result. Set by BOTH retirable kinds, which is what lets
+	// the prune ask one question of either.
+	export var definedId as ValueId
+	// `constDef` only: the constant the `const` op materializes.
+	export var constant as ParsedInt
+	// `identityDef` only: the operand the identity `binOpImm` computes, and so the value every read of
+	// `definedId` may read instead.
+	export var identityOperand as ValueId
 
-// ⭐ **ONLY `binOpImm` CAN BE ONE, BY CONSTRUCTION — which is why this match has two blanket bands
-// where `stdConstInfo` below has fifteen commented ones.** An identity is a fact about an op's
+	static function create() returns StdFoldableDef
+		return Self{kind: StdFoldableDefKind.neither, definedId: 0, constant: 0, identityOperand: 0}
+	end 'create'
+
+	function recordNeither()
+		self.kind = StdFoldableDefKind.neither
+	end 'recordNeither'
+
+	function recordConst(resultId ValueId, value ParsedInt)
+		self.kind = StdFoldableDefKind.constDef
+		self.definedId = resultId
+		self.constant = value
+	end 'recordConst'
+
+	// A `binOpImm` is an IDENTITY only when its immediate is its opcode's identity element. The test
+	// lives here rather than in the roster's arm so that arm carries the dispatch fact and nothing else.
+	function recordBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode)
+		if not binOpImmIsIdentity(opcode, imm: imm) 'notIdentity'
+			self.recordNeither()
+			return
+		end 'notIdentity'
+
+		self.kind = StdFoldableDefKind.identityDef
+		self.definedId = resultId
+		self.identityOperand = lhs
+	end 'recordBinOpImm'
+
+	export function isConstDef() returns bool
+		return self.kind == StdFoldableDefKind.constDef
+	end 'isConstDef'
+
+	export function isIdentityDef() returns bool
+		return self.kind == StdFoldableDefKind.identityDef
+	end 'isIdentityDef'
+
+	// A def this pass may retire — either kind. The prune's question, asked of `kind` rather than of the
+	// op a second time.
+	export function isRetirableDef() returns bool
+		return self.kind != StdFoldableDefKind.neither
+	end 'isRetirableDef'
+end 'StdFoldableDef'
+
+// Fill `def` with what `op` is to this pass. Exhaustive over StdOp, no bare `default`.
+//
+// ⭐ **ONLY `binOpImm` CAN BE AN IDENTITY, BY CONSTRUCTION — which is why the identity half needs one
+// arm where the const half needs fifteen commented bands.** An identity is a fact about an op's
 // IMMEDIATE OPERAND, and `binOpImm` is the only variant in the dialect that carries an immediate the
 // arithmetic reads. (`cmpImm` carries one too, but it produces an i1 verdict rather than its operand,
 // so no immediate makes it the identity.) A `binOp` whose rhs is a constant cannot be one either: by
-// the time this runs, `rewriteBinAndCmpOps` has already turned every foldable const rhs into a
-// `binOpImm`, and each of the four identity constants (0, 1, -1) fits every immediate field
-// `constFitsBinOpImmediate` guards. So there is nothing per-band to say and no band whose exclusion
-// could be wrong for its own reason.
+// the time the identity collect runs, `rewriteBinAndCmpOps` has already turned every foldable const rhs
+// into a `binOpImm`, and each of the three identity constants (0, 1, -1) fits every immediate field
+// `constFitsBinOpImmediate` guards.
 //
-// ⚠ The two ranges are pinned to the union's FIRST and LAST variants, so a variant APPENDED at the end
-// (the rule `StdOp`'s header states) falls outside both and is a COMPILE ERROR here rather than a
+// ⚠ The bands are pinned to the union's FIRST and LAST variants, so a variant APPENDED at the end (the
+// rule `StdOp`'s header states) falls outside all of them and is a COMPILE ERROR here rather than a
 // silently-missed classification.
-function stdIdentityInfo(op StdOp) returns StdIdentityInfo
-	return match op 'i'
-		const to cmp gives StdIdentityInfo.notIdentity
-		binOpImm(resultId, lhs, imm, opcode, _) gives StdIdentityInfo.isIdentity(resultId, operand: lhs) if binOpImmIsIdentity(opcode, imm: imm) else StdIdentityInfo.notIdentity
-		cmpImm to osThreadCpuTicks gives StdIdentityInfo.notIdentity
-	end 'i'
-end 'stdIdentityInfo'
-
-// Whether a `const` op defines a value, split out so the fold/DCE matches share ONE
-// exhaustive classification of the flat StdOp union.
-union StdConstInfo
-	notConst
-	isConst(resultId ValueId, value ParsedInt)
-end 'StdConstInfo'
-
-function stdConstInfo(op StdOp) returns StdConstInfo
-	return match op 'c'
-		const(resultId, value, _) gives StdConstInfo.isConst(resultId, value: value)
+function classifyFoldableDef(op StdOp, def StdFoldableDef)
+	match op 'c'
+		const(resultId, value, _) then def.recordConst(resultId, value: value)
+		binOp to cmp then def.recordNeither()
+		binOpImm(resultId, lhs, imm, opcode, _) then def.recordBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode)
 		// ⚠ Extended past `retVoid` to take in the memory band, and `loadIndirect` is the arm that
 		// matters: a load's result is NOT a constant, however constant the global's INITIAL value in
 		// the `.data` image is. That image is the value the program STARTS with, and any store since
@@ -144,10 +202,11 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// counter` would return 0 — reached by a different road.
 		//
 		// ⚠ **"describes", not "prevents": `StdOpMeta.isPure` has ZERO readers** (see OPEN.md #27), so
-		// it stops nothing, here or anywhere. **THIS ARM IS THE ONLY THING STANDING BETWEEN THAT WRONG
-		// ANSWER AND THE PROGRAM** — it is a real check with a real reader (`stdConstInfo`), and the
-		// purity flag beside it is a declaration awaiting its own. Do not read the flag's existence as
-		// cover for narrowing this arm.
+		// it stops nothing, here or anywhere. **THIS BAND IS THE ONLY THING STANDING BETWEEN THAT WRONG
+		// ANSWER AND THE PROGRAM** — it is a real check with a real reader (`classifyFoldableDef`), and
+		// the purity flag beside it is a declaration awaiting its own. Do not read the flag's existence
+		// as cover for narrowing this band.
+		//
 		// Extended past `storeIndirect` to take in the system band and the `osWriteStdout`/`rdataAddr`
 		// tail. None is a constant a fold could read: an allocation's result is an OS-chosen address,
 		// `osWriteStdout` defines no value, and `rdataAddr`'s result is a RIP-relative address, not a
@@ -156,42 +215,42 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// Extended past `osExit` to the P1.5-A1 tail: `funcAddr`'s result is a RIP-relative `.text`
 		// address — not a constant `constValueOfDef` could rebuild, exactly like `rdataAddr` — and
 		// `callIndirect`'s result is a call return, like `call`/`tryCall`.
-		binOp to osFreePages gives StdConstInfo.notConst
+		cmpImm to osFreePages then def.recordNeither()
 		// The jump table is a terminator — it defines no value, so nothing to fold a constant into.
-		switch gives StdConstInfo.notConst
+		switch then def.recordNeither()
 		// A witness call's result is a call return — not a constant this pass can rebuild, like `callIndirect`.
-		witnessCall gives StdConstInfo.notConst
-		witnessTryCall gives StdConstInfo.notConst
+		witnessCall then def.recordNeither()
+		witnessTryCall then def.recordNeither()
 		// P1.5 dogfood slice 1a: an IOCP op's result is a kernel handle/BOOL/error, never a compile-time constant.
-		osPipeCreate to osWriteFile gives StdConstInfo.notConst
+		osPipeCreate to osWriteFile then def.recordNeither()
 		// The wall-clock read defines no value at all, so there is nothing to call constant.
-		osReadWallClock gives StdConstInfo.notConst
+		osReadWallClock then def.recordNeither()
 		// R4.1 + R4.2: an OS file HANDLE, a Win32 BOOL and a search handle are kernel values, never
 		// compile-time constants; the two void ops define nothing to call constant.
-		osFileOpenRead to osFileAttributes gives StdConstInfo.notConst
+		osFileOpenRead to osFileAttributes then def.recordNeither()
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
-		osPanicValue gives StdConstInfo.notConst
-		osCommandLine gives StdConstInfo.notConst
+		osPanicValue then def.recordNeither()
+		osCommandLine then def.recordNeither()
 		// W5: a kernel HANDLE and the character count `GetModuleFileNameA` wrote are OS answers, never
 		// compile-time constants.
-		osStdHandle gives StdConstInfo.notConst
-		osExecutablePath gives StdConstInfo.notConst
+		osStdHandle then def.recordNeither()
+		osExecutablePath then def.recordNeither()
 		// W35: the byte count the OS reports for a stderr write is an OS answer, exactly as its stdout
 		// twin's is.
-		osWriteStderr gives StdConstInfo.notConst
+		osWriteStderr then def.recordNeither()
 		// A frame address is a constant of the FRAME, not of the program: its value is not known until the
 		// allocator has sized the slot area, so it is no more foldable than a global's address.
-		stackRecordAddr gives StdConstInfo.notConst
+		stackRecordAddr then def.recordNeither()
 		// O3: a section HANDLE, a mapped ADDRESS and a millisecond stopwatch reading are OS answers, never
 		// compile-time constants.
-		osOpenNamedSegment to osTickCountMs gives StdConstInfo.notConst
+		osOpenNamedSegment to osTickCountMs then def.recordNeither()
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
 		// band, the machine query AND the thread-CPU read — are import calls too: a pipe's byte count, an
 		// environment string, a SOCKET and a byte count the kernel chose are OS answers, never compile-time
 		// constants.
-		osHandleSetInherit to osThreadCpuTicks gives StdConstInfo.notConst
+		osHandleSetInherit to osThreadCpuTicks then def.recordNeither()
 	end 'c'
-end 'stdConstInfo'
+end 'classifyFoldableDef'
 
 // Fold constant operands in `module.functions[firstFuncIndex …]`, in place.
 //
@@ -214,38 +273,56 @@ export function foldConstOperands(module StdModule, firstFuncIndex FuncIndex)
 	end 'eachFunc'
 end 'foldConstOperands'
 
+// ⭐ **ONE `liveOpIndices` FOR THE WHOLE PASS OVER THIS FUNCTION, NOT ONE PER WALK.** Every step below
+// visits exactly the same live ops, and none of them changes WHICH ops are live: the two rewrites replace
+// an op IN PLACE at its own index (`module.ops.set`), and the only step that touches `block.opRefs` is
+// `dceRetiredDefs`, which does it AFTER the last read of this column. So the column is built once and
+// read four times.
+//
+// It is not a micro-optimization: `liveOpIndices` allocates a fresh `OpIndexArray` and `push`es one
+// entry per live op into it, so a per-walk rebuild is a per-walk O(ops) allocation and copy. Four walks
+// meant four of them (five once the identity substitution fired), and the pass runs over every function
+// in the module.
 function foldConstOperandsInFunc(module StdModule, func IrFunction)
-	let constMap = collectConstValues(module, func: func)
-	rewriteBinAndCmpOps(module, func: func, constMap: constMap)
+	let opIndices = module.liveOpIndices(func)
+	// ONE classification record for all three walks below — refilled per op, never re-created. See
+	// `StdFoldableDef`'s header for why it is a record and not a returned union.
+	var def = StdFoldableDef.create()
+
+	let constMap = collectConstValues(module, opIndices: opIndices, def: def)
+	rewriteBinAndCmpOps(module, opIndices: opIndices, constMap: constMap)
 	// AFTER the immediate rewrite, which is what MAKES the identity shape, and BEFORE the prune,
 	// which is what retires both kinds of def this pass detaches.
-	substituteIdentityImmediates(module, func: func)
-	dceRetiredDefs(module, func: func)
+	substituteIdentityImmediates(module, func: func, opIndices: opIndices, def: def)
+	dceRetiredDefs(module, func: func, opIndices: opIndices, def: def)
 end 'foldConstOperandsInFunc'
 
 // Map each `const` result value id to its constant. Value ids are function-local, so
 // the map is rebuilt per function.
-function collectConstValues(module StdModule, func IrFunction) returns ConstValueMap
+function collectConstValues(module StdModule, opIndices OpIndexArray, def StdFoldableDef) returns ConstValueMap
 	var constMap = ConstValueMap.create()
-	for opIdx in module.liveOpIndices(func) 'eachOp'
+	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
-		match stdConstInfo(op) 'c'
-			isConst(resultId, value) then constMap.upsert(resultId, value: value)
-			notConst then break 'c'
-		end 'c'
+		classifyFoldableDef(op, def: def)
+		if def.isConstDef() 'isConst'
+			constMap.upsert(def.definedId, value: def.constant)
+		end 'isConst'
 	end 'eachOp'
 	return constMap
 end 'collectConstValues'
 
 // Rewrite each `binOp`/`cmp` with a foldable constant operand into its immediate
 // form, in place at the same op index (so block `opRefs`/terminators stay valid).
-function rewriteBinAndCmpOps(module StdModule, func IrFunction, constMap ConstValueMap)
-	for opIdx in module.liveOpIndices(func) 'eachOp'
+//
+// The store is UNCONDITIONAL because `tryFold` hands back the op that belongs at the index — the
+// ORIGINAL one where nothing folded — so an op that does not fold is written back over itself, which
+// is a refcount and no allocation. It used to answer with a `FoldResult` union so this loop could skip
+// the store, and that union was a heap box per op: the skip cost more than the store it saved.
+// `substituteValuesInFunc` writes every op back for the same reason.
+function rewriteBinAndCmpOps(module StdModule, opIndices OpIndexArray, constMap ConstValueMap)
+	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
-		match tryFold(op, constMap: constMap) 'r'
-			unchanged then break 'r'
-			folded(newOp) then try module.ops.set(opIdx, value: newOp) otherwise panic("foldConstOperands: ops.set OOB at {opIdx}")
-		end 'r'
+		try module.ops.set(opIdx, value: tryFold(op, constMap: constMap)) otherwise panic("foldConstOperands: ops.set OOB at {opIdx}")
 	end 'eachOp'
 end 'rewriteBinAndCmpOps'
 
@@ -268,15 +345,15 @@ end 'rewriteBinAndCmpOps'
 //
 // (`elimTrivialBlockArgs` DOES carry a union-find for its chains. It has to: its chains are built by a
 // WORKLIST, in trigger order, so "record time" there has no order to lean on at all.)
-function substituteIdentityImmediates(module StdModule, func IrFunction)
+function substituteIdentityImmediates(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
 	var subst = ValueIdArray.create()
 
-	for opIdx in module.liveOpIndices(func) 'eachOp'
+	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
-		match stdIdentityInfo(op) 'i'
-			isIdentity(resultId, operand) then recordIdentitySubstitution(subst, resultId: resultId, operand: operand)
-			notIdentity then break 'i'
-		end 'i'
+		classifyFoldableDef(op, def: def)
+		if def.isIdentityDef() 'isIdentity'
+			recordIdentitySubstitution(subst, resultId: def.definedId, operand: def.identityOperand)
+		end 'isIdentity'
 	end 'eachOp'
 
 	// An EMPTY column means no identity was found — `recordIdentitySubstitution` always extends it by at
@@ -358,18 +435,23 @@ let AllBitsSet = -1 as Imm32
 // A shift of zero moves no bit, at every width and in both directions.
 let NoShift = 0 as Imm32
 
-// Attempt to fold one op. Only `binOp` and `cmp` are candidates; every other op is
+// Attempt to fold one op, answering with THE OP THAT BELONGS AT ITS INDEX — the folded immediate form,
+// or `op` itself where nothing folds. Never a union: "unchanged" spelled as a `FoldResult` case cost a
+// heap box on a path walked once per op, and the op is a truthful answer that costs nothing (the same
+// cure, for the same reason, as `StdFoldableDef`'s).
+//
+// Only `binOp` and `cmp` are candidates; every other op is
 // unchanged. In particular `div`/`mod` are DELIBERATELY left alone (covered by the
 // `binOpImm to retVoid` range below): x64 `idiv` has no immediate divisor form, and the
 // division family is non-commutative, so there is nothing to canonicalize or fold to
 // an immediate — both operands stay register values. Exhaustive over StdOp, no bare
 // `default`.
-function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
+function tryFold(op StdOp, constMap ConstValueMap) returns StdOp
 	return match op 'f'
-		const gives FoldResult.unchanged
-		binOp(resultId, lhs, rhs, opcode, operandType) gives tryFoldBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, constMap: constMap)
-		unaryOp gives FoldResult.unchanged
-		cmp(resultId, lhs, rhs, pred, operandType) gives tryFoldCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, constMap: constMap)
+		const gives op
+		binOp(resultId, lhs, rhs, opcode, operandType) gives tryFoldBinOp(op, resultId: resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, constMap: constMap)
+		unaryOp gives op
+		cmp(resultId, lhs, rhs, pred, operandType) gives tryFoldCmp(op, resultId: resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, constMap: constMap)
 		// Extended past `retVoid` to take in the memory band. Nothing there has an immediate form to
 		// fold INTO: `globalAddr` has no value operand at all, and a load's and a store's address is a
 		// register the `lea` produced — x64 can fold a RIP-relative address into a `mov`, but that is
@@ -389,40 +471,40 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// Extended past `osExit` to the P1.5-A1 tail (`funcAddr`/`callIndirect`): neither has an
 		// immediate form to fold INTO — `funcAddr` has no value operand at all, and `callIndirect`'s
 		// operands are the callee register and args, none an immediate.
-		binOpImm to osFreePages gives FoldResult.unchanged
+		binOpImm to osFreePages gives op
 		// The jump table has no immediate operand to fold into — its index rides a register, its table is
 		// block ids. (Its subject IS the biased index; folding a constant subject to a fixed target is a
 		// future optimization, not this pass's immediate-operand fold.)
-		switch gives FoldResult.unchanged
+		switch gives op
 		// A witness call carries no immediate-foldable operand — its operands are the table address and args.
-		witnessCall gives FoldResult.unchanged
-		witnessTryCall gives FoldResult.unchanged
+		witnessCall gives op
+		witnessTryCall gives op
 		// P1.5 dogfood slice 1a: an IOCP op takes no const-foldable immediate operand.
-		osPipeCreate to osWriteFile gives FoldResult.unchanged
+		osPipeCreate to osWriteFile gives op
 		// The wall-clock read's one operand is an out-param ADDRESS — never an immediate.
-		osReadWallClock gives FoldResult.unchanged
+		osReadWallClock gives op
 		// R4.1 + R4.2: every file op's operands are BUFFER or out-param addresses, a HANDLE or a byte
 		// COUNT the caller computed — never a const-foldable immediate.
-		osFileOpenRead to osFileAttributes gives FoldResult.unchanged
+		osFileOpenRead to osFileAttributes gives op
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
-		osPanicValue gives FoldResult.unchanged
-		osCommandLine gives FoldResult.unchanged
+		osPanicValue gives op
+		osCommandLine gives op
 		// W5: the handle read has no operand at all, and the path fill's two are a buffer ADDRESS and a
 		// capacity the caller computed — neither has an immediate form to fold into.
-		osStdHandle gives FoldResult.unchanged
-		osExecutablePath gives FoldResult.unchanged
+		osStdHandle gives op
+		osExecutablePath gives op
 		// W35: a buffer ADDRESS and a byte length reach the OS in registers on every lane — no immediate
 		// form to fold into, exactly as `osWriteStdout` has none.
-		osWriteStderr gives FoldResult.unchanged
+		osWriteStderr gives op
 		// It reads no value operand at all, so there is nothing to fold into an immediate.
-		stackRecordAddr gives FoldResult.unchanged
+		stackRecordAddr gives op
 		// O3: a name POINTER, a scratch BUFFER, a handle and a byte count the caller computed — none has an
 		// immediate form to fold into, and the tick read has no operand at all.
-		osOpenNamedSegment to osTickCountMs gives FoldResult.unchanged
+		osOpenNamedSegment to osTickCountMs gives op
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
 		// band, the machine query AND the thread-CPU read — are import calls too: every operand is an address,
 		// a handle or a length the caller computed, so none has an immediate form to fold into.
-		osHandleSetInherit to osThreadCpuTicks gives FoldResult.unchanged
+		osHandleSetInherit to osThreadCpuTicks gives op
 	end 'f'
 end 'tryFold'
 
@@ -442,17 +524,17 @@ end 'tryFold'
 // promise agrees (`a mod b`'s overflow mask adds `-1` to an i1 at i64 width). A rewrite
 // that changes the INSTRUCTION must not change the QUESTION; carrying the type is how it
 // does not.
-function tryFoldBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, constMap ConstValueMap) returns FoldResult
+function tryFoldBinOp(op StdOp, resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, constMap ConstValueMap) returns StdOp
 	if stdTypeIsFloat(operandType) 'float'
-		return FoldResult.unchanged
+		return op
 	end 'float'
 	if foldableBinOpImm(constMap, id: rhs, opcode: opcode) 'rhsConst'
-		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), opcode: opcode, operandType: operandType))
+		return StdOp.binOpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), opcode: opcode, operandType: operandType)
 	end 'rhsConst'
 	if binOpcodeIsCommutative(opcode) and foldableBinOpImm(constMap, id: lhs, opcode: opcode) 'lhsConst'
-		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), opcode: opcode, operandType: operandType))
+		return StdOp.binOpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), opcode: opcode, operandType: operandType)
 	end 'lhsConst'
-	return FoldResult.unchanged
+	return op
 end 'tryFoldBinOp'
 
 // `resultId = lhs <pred> rhs`. A const rhs folds directly. A const lhs swaps operands
@@ -468,17 +550,17 @@ end 'tryFoldBinOp'
 // surfaces only on a negative operand (whose sign bit inverts the integer order) or a
 // NaN (which no integer compare can report as unordered).
 // specs-shv2/float-compare-branch.md `lt-nan-is-false` is the case that catches it.
-function tryFoldCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType, constMap ConstValueMap) returns FoldResult
+function tryFoldCmp(op StdOp, resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType, constMap ConstValueMap) returns StdOp
 	if stdTypeIsFloat(operandType) 'float'
-		return FoldResult.unchanged
+		return op
 	end 'float'
 	if foldableCmpImm(constMap, id: rhs) 'rhsConst'
-		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), pred: pred, operandType: operandType))
+		return StdOp.cmpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), pred: pred, operandType: operandType)
 	end 'rhsConst'
 	if foldableCmpImm(constMap, id: lhs) 'lhsConst'
-		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), pred: flipCmpPred(pred), operandType: operandType))
+		return StdOp.cmpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), pred: flipCmpPred(pred), operandType: operandType)
 	end 'lhsConst'
-	return FoldResult.unchanged
+	return op
 end 'tryFoldCmp'
 
 function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
@@ -582,14 +664,24 @@ end 'constAsImmediate'
 // immediate rewrite took out of their `binOp`/`cmp`, and the identity `binOpImm`s whose reads
 // `substituteIdentityImmediates` moved onto their own operand. Either one still feeding another op or a
 // phi branch edge is kept.
-function dceRetiredDefs(module StdModule, func IrFunction)
-	let referenced = collectReferencedValues(module, func: func)
+function dceRetiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
+	let referenced = collectReferencedValues(module, func: func, opIndices: opIndices)
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("foldConstOperands: blockRef from func.blockRefs not in module.blocks")
+
+		// ⭐ **A BLOCK THAT LOSES NOTHING KEEPS THE COLUMN IT ALREADY HAS.** The rebuild allocates a fresh
+		// `OpIndexArray` and refills it, and MOST blocks in most functions retire no def at all — the
+		// unconditional rebuild was one allocation per block per function for a column that came out
+		// identical. The scan below is allocation-free, so asking first is strictly cheaper than
+		// rebuilding blind.
+		if not blockHasRetiredDef(module, block: block, referenced: referenced, def: def) 'nothingRetired'
+			continue
+		end 'nothingRetired'
+
 		var newRefs = OpIndexArray.create()
 		for opIdx in block.opRefs 'eachRef'
 			let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
-			if isRetiredDef(op, referenced: referenced) 'dead'
+			if isRetiredDef(op, referenced: referenced, def: def) 'dead'
 				continue
 			end 'dead'
 			newRefs.push(opIdx)
@@ -598,11 +690,24 @@ function dceRetiredDefs(module StdModule, func IrFunction)
 	end 'eachBlock'
 end 'dceRetiredDefs'
 
+// Whether `block` holds any def the prune would drop — the question that decides whether its `opRefs`
+// column has to be rebuilt at all. It asks `isRetiredDef` about exactly the ops the rebuild would, so
+// the two cannot disagree about what survives.
+function blockHasRetiredDef(module StdModule, block IrBlock, referenced StdValueUseSet, def StdFoldableDef) returns bool
+	for opIdx in block.opRefs 'eachRef'
+		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
+		if isRetiredDef(op, referenced: referenced, def: def) 'dead'
+			return true
+		end 'dead'
+	end 'eachRef'
+	return false
+end 'blockHasRetiredDef'
+
 // Every value id READ by any live op, plus every value passed on a phi branch edge —
 // the reachability roots the const DCE keeps a def alive for.
-function collectReferencedValues(module StdModule, func IrFunction) returns StdValueUseSet
+function collectReferencedValues(module StdModule, func IrFunction, opIndices OpIndexArray) returns StdValueUseSet
 	var referenced = StdValueUseSet.create()
-	for opIdx in module.liveOpIndices(func) 'eachOp'
+	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
 		collectStdOpUses(op, referenced: referenced)
 	end 'eachOp'
@@ -618,28 +723,16 @@ function collectReferencedValues(module StdModule, func IrFunction) returns StdV
 end 'collectReferencedValues'
 
 // True for a def the prune drops: a `const` or an identity `binOpImm` whose result appears in no
-// reference set. TWO predicates rather than one match, because the two kinds are recognised by two
-// different classifications of the same union and neither subsumes the other.
-function isRetiredDef(op StdOp, referenced StdValueUseSet) returns bool
-	return isUnreferencedConst(op, referenced: referenced) or isUnreferencedIdentity(op, referenced: referenced)
-end 'isRetiredDef'
-
-// True for a `const` op whose result appears in no reference set — the dead def the
-// prune drops.
-function isUnreferencedConst(op StdOp, referenced StdValueUseSet) returns bool
-	return match stdConstInfo(op) 'c'
-		isConst(resultId, _) gives not referenced.contains(resultId)
-		notConst gives false
-	end 'c'
-end 'isUnreferencedConst'
-
-// Its identity twin: a `binOpImm` that computes its own operand and that nothing reads any more.
+// reference set. ONE classification answers for both kinds — see `StdFoldableDef` — where it used to be
+// two predicates over two unions, each with its own exhaustive `StdOp` roster.
 //
-// ⚠ The reference test is not a formality here — it is the whole safety argument for a substitution
-// that was applied in walk order. See `substituteIdentityImmediates`.
-function isUnreferencedIdentity(op StdOp, referenced StdValueUseSet) returns bool
-	return match stdIdentityInfo(op) 'i'
-		isIdentity(resultId, _) gives not referenced.contains(resultId)
-		notIdentity gives false
-	end 'i'
-end 'isUnreferencedIdentity'
+// ⚠ The reference test is not a formality for the identity kind — it is the whole safety argument for
+// a substitution that was applied in walk order. See `substituteIdentityImmediates`.
+function isRetiredDef(op StdOp, referenced StdValueUseSet, def StdFoldableDef) returns bool
+	classifyFoldableDef(op, def: def)
+	if not def.isRetirableDef() 'notRetirable'
+		return false
+	end 'notRetirable'
+
+	return not referenced.contains(def.definedId)
+end 'isRetiredDef'

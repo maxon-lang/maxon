@@ -2505,6 +2505,17 @@ module function substituteValuesInFunc(module StdModule, func IrFunction, subst 
 
 	for blockRef in func.blockRefs 'eachPred'
 		var pred = try module.blocks.get(blockRef) otherwise panic("substituteValuesInFunc: blockRef from func.blockRefs not in module.blocks")
+
+		// ⭐ **A BLOCK WHOSE EDGE ARGS THE COLUMN DOES NOT TOUCH KEEPS THE EDGES IT ALREADY HAS.** The
+		// rebuild is three allocations per edge — a `BranchEdgeArray`, a `BranchEdge` box and the
+		// `ValueIdArray` `remappedArgs` mints — and a substitution typically moves a handful of values in
+		// a function with dozens of edges, so almost every one of those rebuilds produced a column
+		// identical to the one it replaced. The test below is the same walk over the same args and
+		// allocates nothing, so asking first is strictly cheaper than rebuilding blind.
+		if not anyEdgeArgIsRemapped(pred, subst: subst) 'edgesUnchanged'
+			continue
+		end 'edgesUnchanged'
+
 		var newEdges = BranchEdgeArray.create()
 		for edge in pred.branchEdges 'eachEdge'
 			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: remappedArgs(edge.argIds, subst: subst)))
@@ -2512,6 +2523,20 @@ module function substituteValuesInFunc(module StdModule, func IrFunction, subst 
 		pred.branchEdges = newEdges
 	end 'eachPred'
 end 'substituteValuesInFunc'
+
+// Whether any branch-edge argument of `block` is a value `subst` rewrites — the question that decides
+// whether that block's edge column has to be rebuilt at all. It reads exactly the args the rebuild
+// rewrites, through the same `remappedValue`, so the two cannot disagree about what moves.
+function anyEdgeArgIsRemapped(block IrBlock, subst ValueIdArray) returns bool
+	for edge in block.branchEdges 'eachEdge'
+		for argId in edge.argIds 'eachArg'
+			if remappedValue(argId, subst: subst) != argId 'moved'
+				return true
+			end 'moved'
+		end 'eachArg'
+	end 'eachEdge'
+	return false
+end 'anyEdgeArgIsRemapped'
 
 // --- The sugar band contract ---
 //
