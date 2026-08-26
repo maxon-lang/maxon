@@ -7657,7 +7657,7 @@ end 'CharLiteralValue'
 // (A5m-ab) — every literal is a `Character` and an integer position converts it — so what this returns is a
 // DECODING, and its two value arms differ only in how many bytes the character occupies.
 function decodeCharLiteral(raw ByteArray) returns CharLiteralValue
-	let decoded = decodeEscapes(raw)
+	let decoded = decodeEscapes(raw, kind: LiteralEscapeKind.characterLiteral)
 	match decoded 'd'
 		bytes(buf) then return charValueOf(buf)
 		unknownEscape(text) then return CharLiteralValue.badEscape(text)
@@ -7690,11 +7690,16 @@ end 'DecodedLiteral'
 // character literal and (at P1.2) a string literal read escapes the same way — which is
 // the whole reason this is a shared decoder rather than a char-only one.
 //
+// ⚠ **"THE SAME WAY" IS TRUE OF THE TABLE, NOT OF EVERY ROW IN IT.** `kind` names the literal form being
+// decoded and is threaded to `escapeByte` for the one row that differs: `\{`/`\}` are a fact about
+// INTERPOLATION, so a character literal refuses them (D14). It is not optional at any call site, so a form
+// cannot be decoded without saying which form it is.
+//
 // An UNRECOGNIZED escape is REPORTED, not copied through: v1 falls back to a literal copy
 // only because a separate `validateEscapes` pass has already reported it, and shv2 has no
 // such pass. Silently turning `'\q'` into two bytes would then surface as the far more
 // confusing "multi-byte character literal".
-function decodeEscapes(raw ByteArray) returns DecodedLiteral
+function decodeEscapes(raw ByteArray, kind LiteralEscapeKind) returns DecodedLiteral
 	var buf = ByteArray.create()
 	let len = raw.count()
 	var i = 0 as ByteOffset
@@ -7738,7 +7743,7 @@ function decodeEscapes(raw ByteArray) returns DecodedLiteral
 			continue
 		end 'digitEscape'
 
-		match escapeByte(next) 'esc'
+		match escapeByte(next, kind: kind) 'esc'
 			byte(b) then buf.push(b)
 			unknown then return DecodedLiteral.unknownEscape("\\{String.from(byteSlice(next))}")
 		end 'esc'
@@ -7785,7 +7790,10 @@ union EscapeByte
 	unknown
 end 'EscapeByte'
 
-function escapeByte(c Byte) returns EscapeByte
+// The escape table BOTH decoders consult — `decodeEscapes` for a character literal and a string, and
+// `appendByteStringEscape` for a `b"…"` blob — so the set cannot come to differ by decoder. `kind` is the
+// one coordinate on which the forms legitimately disagree; see the brace arm.
+function escapeByte(c Byte, kind LiteralEscapeKind) returns EscapeByte
 	if c == LowerN 'newline'
 		return EscapeByte.byte(NewlineByte)
 	end 'newline'
@@ -7800,10 +7808,32 @@ function escapeByte(c Byte) returns EscapeByte
 	end 'nul'
 	// The self-escapes: a backslash, and the delimiters a literal must be able
 	// to contain — the single quote that would close a character literal, the double quote
-	// that would close a string, and the brace that would open an interpolation.
-	if c == Backslash or c == SingleQuote or c == DoubleQuote or c == LeftBrace or c == RightBrace 'selfEscape'
+	// that would close a string. Every literal form admits all three.
+	if c == Backslash or c == SingleQuote or c == DoubleQuote 'selfEscape'
 		return EscapeByte.byte(c)
 	end 'selfEscape'
+
+	// ⭐⭐ **THE BRACE ESCAPES BELONG TO THE ONE LITERAL FORM THAT INTERPOLATES, AND TO NO OTHER — WHICH IS
+	// THE WHOLE REASON THIS TABLE TAKES A KIND.** `\{` spells a literal brace only because a bare `{` would
+	// OPEN AN INTERPOLATION; where nothing interpolates there is no brace to rescue, so the escape names no
+	// known escape and is refused. `/specs/character-type.md:313-328` lists a character literal's escapes as
+	// `\n \t \\ \'` — no brace — and the bootstrap oracle refuses the brace in BOTH non-interpolating forms
+	// (measured 2026-08-26: `'\{'` and `b"a\{b"` are each `error E1004: Invalid escape sequence '\{' in …`).
+	//
+	// ⚠ **A SHARED TABLE WITH NO KIND CANNOT STATE A PER-KIND FACT, AND THAT IS EXACTLY HOW THIS BROKE
+	// (D14).** Sharing one decoder across every quoted body is right and stays; what was missing is the one
+	// coordinate on which the forms genuinely differ. Without it the string's braces reached the character
+	// literal AND the byte string — TWO arrivals, of which D14's row named only the first. The exhaustive
+	// `match` below is the guard: a fourth literal form cannot be added and left silently inheriting an
+	// answer, which is what a `default` here would have bought.
+	if c == LeftBrace or c == RightBrace 'interpolationBrace'
+		return match kind 'interpolates'
+			stringInterpolation gives EscapeByte.byte(c)
+			characterLiteral gives EscapeByte.unknown
+			byteStringLiteral gives EscapeByte.unknown
+		end 'interpolates'
+	end 'interpolationBrace'
+
 	return EscapeByte.unknown
 end 'escapeByte'
 
@@ -8076,7 +8106,7 @@ function appendByteStringEscape(buf ByteArray, raw ByteArray, at ByteOffset, len
 		buf.push((value and ByteMask) as Byte)
 		return at + form.width
 	end 'digitEscape'
-	match escapeByte(next) 'esc'
+	match escapeByte(next, kind: LiteralEscapeKind.byteStringLiteral) 'esc'
 		byte(b) then buf.push(b)
 		unknown then throw ParseError.unsupported("the escape sequence '\\{String.from(byteSlice(next))}' in a byte string literal is not a recognized escape", line: tok.line, column: tok.column)
 	end 'esc'
@@ -48114,7 +48144,7 @@ export type Parser
 	// bakes bytes and emits no value at all. Written twice, the panic path would have been free to accept an
 	// escape the value path rejects.
 	function decodedStringLiteralBytes(tok Token) returns ByteArray throws ParseError
-		match decodeEscapes(tok.value) 'decoded'
+		match decodeEscapes(tok.value, kind: LiteralEscapeKind.stringInterpolation) 'decoded'
 			bytes(buf) then return buf
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
 			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: LiteralEscapeKind.stringInterpolation, offset: offset, marker: marker, tok: tok)
@@ -48329,7 +48359,7 @@ export type Parser
 	// contributes nothing and is skipped — the bootstrap's `if (string.IsNullOrEmpty(...)) continue`.
 	function materializeLiteralFragment(partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
 		let tok = try self.consume(TokenKind.stringLiteral)
-		match decodeEscapes(tok.value) 'decoded'
+		match decodeEscapes(tok.value, kind: LiteralEscapeKind.stringInterpolation) 'decoded'
 			bytes(buf) then self.materializeFragmentBytes(buf, partBufs: partBufs, partLens: partLens, range: range)
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
 			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: LiteralEscapeKind.stringInterpolation, offset: offset, marker: marker, tok: tok)
@@ -68578,7 +68608,7 @@ export type Parser
 	// happens to be parsing.
 
 	function decodeConstStringLiteral(tok Token) returns ByteArray throws ConstEvalError
-		match decodeEscapes(tok.value) 'decoded'
+		match decodeEscapes(tok.value, kind: LiteralEscapeKind.stringInterpolation) 'decoded'
 			bytes(buf) then return buf
 			unknownEscape(text) then throw ConstEvalError.defective(ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column))
 			badDigitEscape(text, offset, marker) then throw ConstEvalError.defective(invalidDigitEscapeError(text, kind: LiteralEscapeKind.stringInterpolation, offset: offset, marker: marker, tok: tok))
