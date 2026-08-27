@@ -2991,6 +2991,15 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		osPanic to osFreePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a panic or an `isUnsupportedInInlineBody` system primitive — a panic BLOCK is redirected to the slow arm rather than copied, and the rest refuse the callee outright")
 		switch(subjectId, denseTargetBlockIds, defaultBlockId) then return StdOp.switch(subjectId, denseTargetBlockIds: clonedBlocks(denseTargetBlockIds, subst: blockSubst), defaultBlockId: clonedBlock(defaultBlockId, subst: blockSubst))
 		witnessCall to osThreadCpuTicks then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
+		// The appended page/fill/atomic band (F1, F2) and the thread/TLS band (G1), placed consciously: the
+		// three `scanLeafBody` ADMITS are cloned like any body op — a fill defines nothing, the two atomics
+		// define their result — and the rest are `isUnsupportedInInlineBody` import calls it refuses.
+		osDecommitPages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` page primitive, which `scanLeafBody` refuses a callee for")
+		memFill then return op
+		osCommitPages to osReservePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` page primitive, which `scanLeafBody` refuses a callee for")
+		atomicCas(resultId, addrId, expectedId, replacementId) then return StdOp.atomicCas(clonedValue(resultId, subst: valueSubst), addrId: addrId, expectedId: expectedId, replacementId: replacementId)
+		atomicRmw(resultId, addrId, operandId, opcode) then return StdOp.atomicRmw(clonedValue(resultId, subst: valueSubst), addrId: addrId, operandId: operandId, opcode: opcode)
+		currentThreadToken to osSetEvent then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` thread or TLS primitive, which `scanLeafBody` refuses a callee for")
 	end 'r'
 end 'remapClonedDefsAndTargets'
 

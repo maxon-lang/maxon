@@ -154,7 +154,11 @@ function leafOpRole(op StdOp) returns LeafOpRole
 		witnessTryCall then return LeafOpRole.calling
 		osFileOpenRead to osFileAttributes then break 'kind'
 		osPanicValue then return LeafOpRole.panicking
-		osCommandLine to osThreadCpuTicks then break 'kind'
+		// The allocator's page/fill/atomic band and the scheduler's thread/TLS band (F1, F2, G1) are placed
+		// here consciously: none is a call site, a terminator or a `param`, so each one's own
+		// `isUnsupportedInInlineBody` answers below — a fill and the two atomics are body ops a leaf may
+		// hold, the import calls refuse.
+		osCommandLine to osSetEvent then break 'kind'
 	end 'kind'
 
 	return LeafOpRole.refusing if op.rawValue.isUnsupportedInInlineBody else LeafOpRole.body
@@ -660,7 +664,7 @@ type LeafInliner
 			match self.opAt(blockRef, pos: pos) 'kind'
 				const to param then break 'kind'
 				call(_, callee, _) then self.considerSite(pos, callee: callee)
-				retVoid to osThreadCpuTicks then break 'kind'
+				retVoid to osSetEvent then break 'kind'
 			end 'kind'
 		end 'eachOp'
 		return self.sitePositions.count()
@@ -710,7 +714,7 @@ type LeafInliner
 		match self.opAt(predRef, pos: tail) 'site'
 			const to param then self.refuseNotTheSplitCall()
 			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId)
-			retVoid to osThreadCpuTicks then self.refuseNotTheSplitCall()
+			retVoid to osSetEvent then self.refuseNotTheSplitCall()
 		end 'site'
 		var pred = self.blockAt(predRef)
 		pred.opRefs.truncate(tail)
@@ -947,7 +951,7 @@ type LeafInliner
 			retVoid then self.returnToContinuation(freshRef, contRef: contRef, argIds: ValueIdArray.create())
 			globalAddr to osFreePages then refuseNotATerminator(calleeFunc)
 			switch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
-			witnessCall to osThreadCpuTicks then refuseNotATerminator(calleeFunc)
+			witnessCall to osSetEvent then refuseNotATerminator(calleeFunc)
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -1060,7 +1064,7 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 	match op 'p'
 		const to ret then refuseNotAParamOp()
 		param(resultId, index, _) then requireParamValueIsItsIndex(resultId, index: index, calleeFunc: calleeFunc)
-		call to osThreadCpuTicks then refuseNotAParamOp()
+		call to osSetEvent then refuseNotAParamOp()
 	end 'p'
 end 'assertParamOpMatchesConvention'
 
