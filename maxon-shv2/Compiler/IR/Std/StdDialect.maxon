@@ -2495,7 +2495,7 @@ end 'remappedArgs'
 // deliberately leaves alone — a def is not a use) and the branch targets.
 //
 // ⭐ **IT COVERS THE OPS AN INLINABLE LEAF MAY HOLD, AND PANICS ON EVERY OTHER — which is not a gap but
-// the eligibility rule's backstop.** `InlineLeaves.leafBodyVerdict` refuses a callee holding any call,
+// the eligibility rule's backstop.** `InlineLeaves.scanLeafBody` refuses a callee holding any call,
 // any `isUnsupportedInInlineBody` op, or a panic op (whose block is dropped rather than copied), so the
 // set that can reach here is closed: the arith band, the two branches, `switch`, the two returns, the
 // three address ops and the two indirect accesses. Writing arms for the other seventy would be
@@ -2504,8 +2504,64 @@ end 'remappedArgs'
 // arm ending at the union's last member, so a variant appended past it fails to compile here until it
 // is consciously placed.
 module function remapStdOpForClone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) returns StdOp
-	return remapClonedDefsAndTargets(remapStdOpUses(op, subst: valueSubst), valueSubst: valueSubst, blockSubst: blockSubst)
+	let cloned = remapClonedDefsAndTargets(remapStdOpUses(op, subst: valueSubst), valueSubst: valueSubst, blockSubst: blockSubst)
+	requireClonedDefAgreesWithTheDefEnumerator(op, cloned: cloned, valueSubst: valueSubst)
+	return cloned
 end 'remapStdOpForClone'
+
+// ⛔⛔ **THE CHECK BETWEEN TWO PER-VARIANT DEF WALKS — because this file now holds two, and nothing
+// else makes them agree.** `stdOpDefinedValue` says WHICH value a variant defines;
+// `remapClonedDefsAndTargets` rewrites it. They are exhaustive matches over the same union, so a variant
+// APPENDED to `StdOp` is a compile error in both — but an EXISTING arm silently moving to the
+// hand-it-back-unchanged side is not: the clone would keep the CALLEE's ValueId, the caller would hold two
+// definitions of one value, and the result is a wrong operand rather than a diagnostic. (That is not
+// hypothetical for this union: `osWriteStdout` and `osWriteStderr` each GAINED a def in W35, and
+// `stdOpDefinedValue`'s own header records `osStdHandle` answering `none` as a defect that "would not fail
+// to compile".)
+//
+// So the def half is verified against the enumerator on every cloned op: whatever `stdOpDefinedValue`
+// reports of the original must come back as its image under the column. Two extra jump-table matches per
+// copied op, against a splice budget of 24 ops — the price of the two walks not being able to drift apart
+// unnoticed.
+function requireClonedDefAgreesWithTheDefEnumerator(op StdOp, cloned StdOp, valueSubst ValueIdArray)
+	match stdOpDefinedValue(op) 'before'
+		none then requireClonedDefines(cloned, expected: DefinedValueLookup.none)
+		defines(v) then requireClonedDefines(cloned, expected: DefinedValueLookup.defines(clonedValue(v, subst: valueSubst)))
+		// A `tryCall`/`witnessTryCall` is the only two-def shape and `scanLeafBody` refuses a callee holding
+		// one, so the cloner never sees it — which is why it has no arm there and none here either.
+		definesPair then panic("remapStdOpForClone: a two-def op reached the cloner — only `tryCall` and `witnessTryCall` define a pair, and both are calls, which `scanLeafBody` refuses a callee for")
+	end 'before'
+end 'requireClonedDefAgreesWithTheDefEnumerator'
+
+function requireClonedDefines(cloned StdOp, expected DefinedValueLookup)
+	match stdOpDefinedValue(cloned) 'after'
+		none then requireNoDefExpected(cloned, expected: expected)
+		defines(actual) then requireDefIs(cloned, actual: actual, expected: expected)
+		definesPair then panic("remapStdOpForClone: cloning produced a two-def op from one that is not — the two def walks in this file disagree about `{stdOpCloneRefusalName(cloned)}`")
+	end 'after'
+end 'requireClonedDefines'
+
+function requireNoDefExpected(cloned StdOp, expected DefinedValueLookup)
+	match expected 'want'
+		none then break 'want'
+		defines(want) then panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` DEFINES value {want} by `stdOpDefinedValue` but `remapClonedDefsAndTargets` handed it back with no def rewritten — the clone would keep the callee's id and the caller would hold two definitions of one value")
+		definesPair then panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines a PAIR by `stdOpDefinedValue` and none by the cloner")
+	end 'want'
+end 'requireNoDefExpected'
+
+function requireDefIs(cloned StdOp, actual ValueId, expected DefinedValueLookup)
+	match expected 'want'
+		none then panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines nothing by `stdOpDefinedValue` yet the clone defines value {actual} — the two def walks in this file disagree")
+		defines(want) then requireDefEquals(cloned, actual: actual, want: want)
+		definesPair then panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines a PAIR by `stdOpDefinedValue` and one value by the cloner")
+	end 'want'
+end 'requireDefIs'
+
+function requireDefEquals(cloned StdOp, actual ValueId, want ValueId)
+	if actual != want 'defNotRemapped'
+		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` came back defining value {actual} where the splice's column maps the original's def to {want} — the def rewrite and `stdOpDefinedValue` name different fields")
+	end 'defNotRemapped'
+end 'requireDefEquals'
 
 // The half `remapStdOpUses` does not do: the result ids an op DEFINES, and the block ids a terminator
 // names. Its operand fields arrive already rewritten, so they are bound and handed straight back.
@@ -2526,19 +2582,19 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		ret then return op
 		// A `param` is never copied (its value is the call site's argument) and a call of any kind
 		// disqualifies the callee, so neither can reach a clone.
-		param to call then panic("remapStdOpForClone: a `param`/`call` op reached the cloner — `leafBodyVerdict` refuses a callee holding a call, and a splice maps a parameter to its argument instead of copying it")
+		param to call then panic("remapStdOpForClone: a `param`/`call` op reached the cloner — `scanLeafBody` refuses a callee holding a call, and a splice maps a parameter to its argument instead of copying it")
 		retVoid then return op
 		globalAddr(resultId, label) then return StdOp.globalAddr(clonedValue(resultId, subst: valueSubst), label: label)
 		loadIndirect(resultId, addrId, offset, valueType) then return StdOp.loadIndirect(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
 		storeIndirect then return op
-		osAllocPages to osWriteStdout then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is marked `isUnsupportedInInlineBody`, which `leafBodyVerdict` refuses a callee for")
+		osAllocPages to osWriteStdout then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is marked `isUnsupportedInInlineBody`, which `scanLeafBody` refuses a callee for")
 		rdataAddr(resultId, label) then return StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: label)
-		tryCall to osExit then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a throwing call, a dual-register return or a process exit — each refused by `leafBodyVerdict`")
+		tryCall to osExit then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a throwing call, a dual-register return or a process exit — each refused by `scanLeafBody`")
 		funcAddr(resultId, funcName) then return StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: funcName)
-		callIndirect then panic("remapStdOpForClone: an indirect call reached the cloner — `leafBodyVerdict` refuses a callee holding one")
+		callIndirect then panic("remapStdOpForClone: an indirect call reached the cloner — `scanLeafBody` refuses a callee holding one")
 		osPanic to osFreePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a panic or an `isUnsupportedInInlineBody` system primitive — a panic BLOCK is redirected to the slow arm rather than copied, and the rest refuse the callee outright")
 		switch(subjectId, denseTargetBlockIds, defaultBlockId) then return StdOp.switch(subjectId, denseTargetBlockIds: clonedBlocks(denseTargetBlockIds, subst: blockSubst), defaultBlockId: clonedBlock(defaultBlockId, subst: blockSubst))
-		witnessCall to osThreadCpuTicks then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `leafBodyVerdict`")
+		witnessCall to osThreadCpuTicks then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
 	end 'r'
 end 'remapClonedDefsAndTargets'
 
@@ -2556,7 +2612,12 @@ end 'stdOpCloneRefusalName'
 // question with no honest identity answer, because the two functions number their values independently.
 // The column covers `0 .. nextFreeValueId(callee)`, so an id outside it is a column built against a
 // different function.
-function clonedValue(v ValueId, subst ValueIdArray) returns ValueId
+//
+// ⚠ **`module`-VISIBLE BECAUSE THE SPLICE ITSELF ASKS IT TOO**, of the values no op carries — a copied
+// block's phis and its outgoing edge args live on the `IrBlock`, not on any op, so `InlineLeaves` reaches
+// them past the cloner. It briefly had its own byte-identical copy under another name, which is one
+// column-bounds rule written twice.
+module function clonedValue(v ValueId, subst ValueIdArray) returns ValueId
 	return try subst.get(v) otherwise panic("remapStdOpForClone: callee value {v} is outside the {subst.count()}-entry value column this splice built — the column is sized by the callee's own `nextFreeValueId`, so an id past it means the op belongs to another function")
 end 'clonedValue'
 

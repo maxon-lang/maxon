@@ -383,7 +383,13 @@ type PrimitiveInliner
 
 		var loaded = self.module.addBlock(self.func, label: InlineLoadedLabel)
 		let value = self.valueIds().mint()
-		attachBlockArgs(loaded, valueIds: argsOf(value))
+		// ⚠ **THE `loaded` JOIN'S ARG IS AN ELEMENT AND NOT A CALL RESULT, AND IT IS i64 FOR A DIFFERENT
+		// REASON FROM THE ONE BELOW (EC3).** The byte arm reaches it with a `u8` load, which is a
+		// ZERO-EXTENDED byte in a general register — the same register file and the same machine word, so
+		// i64 is its class too. The only backend that distinguishes them is wasm, where a byte access is
+		// i32-backed and the phi copy COERCES at the edge (`StdToWasm.emitLocalCopy`) — which is exactly
+		// what the runtime's own `emitLoadElemAt` has relied on for its byte arm since EC1.
+		attachBlockArgs(loaded, valueIds: argsOf(value), argType: StdType.i64)
 
 		self.emitBoundedLoadArm(wordArm, arr: arr, index: index, stride: SingleOpStride.word, slow: frame.slow, loaded: loaded)
 		self.emitBoundedLoadArm(byteArm, arr: arr, index: index, stride: SingleOpStride.byte, slow: frame.slow, loaded: loaded)
@@ -627,17 +633,13 @@ type PrimitiveInliner
 		_ = self.valueIds()
 
 		let cont = self.carve(blockRef, pos: pos)
-		// Read immediately: `carve` is the one moment the continuation is the function's last-registered
-		// block, and the `addBlock` on the next line ends it.
-		let contRef = self.lastBlockRef()
-		// ⚠ **CHECKED, NOT ASSUMED, BECAUSE `expandAt` NOW ANSWERS BY IDENTITY.** "The scan carries on in
-		// THIS block" and "the scan carries on in the continuation" are told apart by comparing the two
-		// refs, so a reordering that slipped an `addBlock` between the split and this read would hand the
-		// walk a guard or slow block — which holds the very call just expanded, and would be rediscovered
-		// forever. `InsertRangeChecks.extendGuardChain` states the same rule against the same hazard.
-		if self.blockAt(contRef).id != cont.id 'notTheContinuation'
-			panic("carveFrame: the last block registered in '{String.from(self.func.name)}' is not the continuation `splitBlockInPlace` returned — a block was appended between the split and this read")
-		end 'notTheContinuation'
+		// Read immediately, and CHECKED by identity — `carve` is the one moment the continuation is the
+		// function's last-registered block, and the `addBlock` on the next line ends it. The check is not
+		// belt-and-braces here: `expandAt` answers "the scan carries on in THIS block" vs "… in the
+		// continuation" by COMPARING the two refs, so a reordering that slipped an `addBlock` between the
+		// split and this read would hand the walk a guard or slow block — which holds the very call just
+		// expanded, and would be rediscovered forever. See `registeredBlockRef` for the rule itself.
+		let contRef = registeredBlockRef(self.module, func: self.func, block: cont)
 
 		return InlineFrame.create(cont, contRef: contRef, slow: self.module.addBlock(self.func, label: InlineSlowLabel))
 	end 'carveFrame'
@@ -650,7 +652,11 @@ type PrimitiveInliner
 		var cont = frame.cont
 		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
 		attachEdge(slow, targetId: cont.id, argIds: slowCarried)
-		attachBlockArgs(cont, valueIds: carried)
+		// Every value these five primitives carry is a MACHINE WORD, and that is exact rather than a
+		// default: all five are declared `value(StdType.i64)` or void, so the `resultId` a call defined was
+		// already classed off that declaration (`StdLoweringShared.calleeResultClass`), and a dual-register
+		// error flag is i64 on every backend (`StdToWasm.recordTryCallDefs`).
+		attachBlockArgs(cont, valueIds: carried, argType: StdType.i64)
 	end 'closeFrame'
 
 	// Split the site block just PAST the call, then drop the call off the head — so the head holds the ops
@@ -687,66 +693,8 @@ type PrimitiveInliner
 		return try self.module.ops.get(opIdx) otherwise panic("PrimitiveInliner: op index {opIdx} named by block {blockRef} of '{String.from(self.func.name)}' is not in module.ops")
 	end 'opAt'
 
-	// The `BlockRef` naming the block `IrModule.addBlock` registered LAST — `addBlock` hands back the block
-	// alone, and a ref is what may be held across the blocks this pass goes on adding (the discipline
-	// `guardSiteAt` states: a ref survives every later append, where an `IrBlock` alias answers a different
-	// question). It is read IMMEDIATELY after the append it is about; a later read would name a later block.
-	function lastBlockRef() returns BlockRef
-		return try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("PrimitiveInliner.lastBlockRef: '{String.from(self.func.name)}' has no blocks")
-	end 'lastBlockRef'
 end 'PrimitiveInliner'
 
-// Give `pred` its ONE outgoing edge, carrying `argIds` to `targetId`.
-//
-// ⚠ It builds a FRESH array and field-assigns rather than pushing into whatever array the block holds,
-// which is `IrBlock`'s stated rule and not a formality: the three tiers SHARE one phi model, and a Std
-// block's arrays can be the very arrays `queryAllModule` hands back on every cache hit — so an in-place
-// write corrupts the memo for every later compile of the project, silently, with nothing downstream that
-// re-reads the model to notice.
-//
-// ⚠ **AND IT REFUSES A BLOCK THAT ALREADY CARRIES ONE, WHICH IS THE DOCUMENTATION.** Every predecessor
-// this pass wires is a block it minted itself moments earlier, so a block arriving here with an edge is a
-// wiring bug rather than a case to merge into — and carrying the existing edges across "just in case"
-// would be generality no call site can reach and no test can redden.
-function attachEdge(pred IrBlock, targetId BlockId, argIds ValueIdArray)
-	var predBlock = pred
-	if predBlock.branchEdges.count() != 0 'alreadyWired'
-		panic("attachEdge: block '{String.from(predBlock.label)}' already carries {predBlock.branchEdges.count()} outgoing edge(s) — every predecessor this pass wires is one it minted in the same breath")
-	end 'alreadyWired'
-
-	var edges = BranchEdgeArray.create()
-	edges.push(BranchEdge.create(targetId, argIds: argIds))
-	predBlock.branchEdges = edges
-end 'attachEdge'
-
-// Give `block` the block args `valueIds` names, in order — the continuation half of the same two rules
-// `attachEdge` follows (a fresh array, and a block that carries none yet), and the positional
-// `blockArgs[k] ↔ edge.argIds[k]` pairing every predecessor this pass wires must match.
-//
-// Every value these five primitives carry is a MACHINE WORD, and that is exact rather than a default: all
-// five are declared `value(StdType.i64)` or void, so the `resultId` a call defined was already classed off
-// that declaration (`StdLoweringShared.calleeResultClass`), and a dual-register error flag is i64 on every
-// backend (`StdToWasm.recordTryCallDefs`). The arg TYPE is what picks a value's register file on x64/arm64
-// and its wasm valtype, so a wrong one here is a wrong register class, not a cosmetic mismatch.
-//
-// ⚠ **THE `loaded` JOIN'S ARG IS AN ELEMENT AND NOT A CALL RESULT, AND IT IS i64 FOR A DIFFERENT REASON
-// (EC3).** The byte arm reaches it with a `u8` load, which is a ZERO-EXTENDED byte in a general register —
-// the same register file and the same machine word, so i64 is its class too. The only backend that
-// distinguishes them is wasm, where a byte access is i32-backed and the phi copy COERCES at the edge
-// (`StdToWasm.emitLocalCopy`) — which is exactly what the runtime's own `emitLoadElemAt` has relied on for
-// its byte arm since EC1.
-function attachBlockArgs(block IrBlock, valueIds ValueIdArray)
-	var target = block
-	if target.blockArgs.count() != 0 'alreadyHasArgs'
-		panic("attachBlockArgs: block '{String.from(target.label)}' already carries {target.blockArgs.count()} block arg(s) — a continuation this pass minted has none")
-	end 'alreadyHasArgs'
-
-	var blockArgs = IrBlockArgArray.create()
-	for valueId in valueIds 'each'
-		blockArgs.push(IrBlockArg.create(valueId, argType: StdType.i64))
-	end 'each'
-	target.blockArgs = blockArgs
-end 'attachBlockArgs'
 
 // The argument at `index`, with the callee named in the failure — a runtime entry's arity is fixed by the
 // builder that emitted it, so a mismatch here is a compiler bug and not a program error.

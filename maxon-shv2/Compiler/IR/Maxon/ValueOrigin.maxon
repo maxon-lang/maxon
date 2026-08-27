@@ -434,11 +434,26 @@ export type ValueOriginTable
 	// if that id was the function's highest it sits past the Std bound. Such a row describes a value the
 	// splice did not copy because it does not exist to copy, so there is nothing to re-file.
 	// (MEASURED: it fires on `Array.clone` and on `Vector.count`'s callees.)
-	export function copyRows(index ValueOriginRowIndex, fromFunc FuncIndex, toFunc FuncIndex, subst ValueIdArray)
+	// ⛔⛔ **A ROW NAMING A PARAMETER IS REFUSED, AND THAT IS `lookup`'s OWN INVARIANT DEFENDED WHERE IT IS
+	// SPENT.** The splice's column maps a callee's ids `0..paramCount-1` onto the CALL SITE's argument
+	// values, which are the caller's own and already carry the caller's own origin rows. Re-filing a
+	// parameter row through it would give one value in one function TWO rows — and `lookup` is a scan that
+	// returns the first match and states, in as many words, that "a value defined by an op appears exactly
+	// once, so the first match is authoritative". The second row would win or lose by table order, and the
+	// symptom would be an E5001 naming the wrong source line rather than anything that fails.
+	//
+	// It holds today by construction — `record` is called only from `emitOp`, and a parameter is minted by
+	// no op (it goes to `recordParam` and the separate `ParamOriginTable`) — which is exactly the kind of
+	// invariant that is true until an unrelated change makes it false. Stated here it is a panic instead.
+	export function copyRows(index ValueOriginRowIndex, fromFunc FuncIndex, toFunc FuncIndex, subst ValueIdArray, calleeParamCount ParamCount)
 		for k in index.firstRowOf(fromFunc) upto index.endRowOf(fromFunc) 'eachRow'
 			let row = index.rowAt(k)
 			let v = try self.valueIds.get(row) otherwise panic("ValueOriginTable.copyRows: valueIds.get OOB at row {row}")
 			let opIndex = try self.opIndices.get(row) otherwise panic("ValueOriginTable.copyRows: opIndices.get OOB at row {row}")
+			if v < calleeParamCount 'rowNamesAParameter'
+				panic("ValueOriginTable.copyRows: function {fromFunc} has an OP-ORIGIN row for value {v}, which is inside its {calleeParamCount} parameter id(s) — a parameter is minted by no op and belongs in the ParamOriginTable, and re-filing it through a splice's column would file a second row against the CALLER's argument value")
+			end 'rowNamesAParameter'
+
 			let cloned = try subst.get(v) otherwise continue
 			self.record(toFunc, valueId: cloned, opIndex: opIndex)
 		end 'eachRow'

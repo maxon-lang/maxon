@@ -630,7 +630,7 @@ type LeafInliner
 			// Split immediately PAST the call, so the call stays the last op of the block on the left and
 			// its continuation begins at the op that followed it.
 			let cont = splitBlockInPlace(self.module, func: self.func, head: self.blockAt(blockRef), position: at + 1, label: InlineContLabel)
-			try contRefs.set(k, value: self.registeredRefOf(cont)) otherwise panic("LeafInliner.inlineSitesIn: contRefs.set OOB at {k}")
+			try contRefs.set(k, value: registeredBlockRef(self.module, func: self.func, block: cont)) otherwise panic("LeafInliner.inlineSitesIn: contRefs.set OOB at {k}")
 		end 'eachSiteBackwards'
 
 		var pred = blockRef
@@ -747,7 +747,7 @@ type LeafInliner
 
 		self.attachContinuationArg(contRef, calleeFunc: calleeFunc, resultId: resultId)
 		self.copyBodies(calleeFunc, contRef: contRef, blocks: blocks, subst: subst)
-		self.project.valueOrigins.copyRows(self.origins, fromFunc: calleeIndex, toFunc: self.funcIndex, subst: subst)
+		self.project.valueOrigins.copyRows(self.origins, fromFunc: calleeIndex, toFunc: self.funcIndex, subst: subst, calleeParamCount: calleeFunc.paramCount)
 
 		// The head's own exit was moved onto the continuation by the split, so it is un-terminated here
 		// and carries no edge. The copied entry block takes no block args (`scanLeafBody` refuses a
@@ -799,7 +799,7 @@ type LeafInliner
 		for i in 0 upto calleeFunc.blockRefs.count() 'eachBlock'
 			let calleeBlockRef = try calleeFunc.blockRefs.get(i) otherwise panic("LeafInliner.mintCopiedBlocks: blockRefs.get OOB at {i}")
 			let calleeBlock = try self.module.blocks.get(calleeBlockRef) otherwise panic("LeafInliner.mintCopiedBlocks: blockRef {calleeBlockRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
-			if self.blockHoldsAPanic(calleeBlock) 'panicBlock'
+			if self.blockHoldsAPanic(calleeBlock, calleeFunc: calleeFunc) 'panicBlock'
 				blocks.hasPanicBlock = true
 				try blocks.isPanic.set(calleeBlock.id, value: true) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
 				continue
@@ -807,7 +807,7 @@ type LeafInliner
 
 			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if i == 0 else calleeBlock.label)
 			try blocks.blockSubst.set(calleeBlock.id, value: fresh.id) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
-			let freshRef = self.registeredRefOf(fresh)
+			let freshRef = registeredBlockRef(self.module, func: self.func, block: fresh)
 			blocks.copiedRefs.push(freshRef)
 			// Coverage follows the code: a copied block's source footprint is the CALLEE block's, which is
 			// where its ops were written. `addBlock` pushed an empty entry, parallel to `blocks`.
@@ -829,11 +829,12 @@ type LeafInliner
 	// ⚠ The argument array is SHARED with the dropped call op rather than copied — the op is an orphan
 	// and nothing rewrites either. `InlineManagedPrimitives.openPlain` shares the same way.
 	function mintSlowArm(contRef BlockRef, callee ByteArray, args ValueIdArray, calleeFunc IrFunction, blocks SpliceBlocks)
+		let contId = self.blockAt(contRef).id
 		var slow = self.module.addBlock(self.func, label: InlineSlowLabel)
 		let slowResult = self.valueIds().mint()
 		self.module.appendOp(slow, op: StdOp.call(slowResult, callee: callee, args: args))
-		self.module.setTerminator(slow, op: StdOp.branch(self.blockAt(contRef).id))
-		self.setSingleEdge(slow, targetRef: contRef, argIds: self.returnedValues(calleeFunc, valueId: slowResult))
+		self.module.setTerminator(slow, op: StdOp.branch(contId))
+		attachEdge(slow, targetId: contId, argIds: self.returnedValues(calleeFunc, valueId: slowResult))
 
 		for i in 0 upto blocks.isPanic.count() 'eachCalleeBlockId'
 			if not blocks.isPanicBlock(i) 'notAPanicBlock'
@@ -844,9 +845,11 @@ type LeafInliner
 		end 'eachCalleeBlockId'
 	end 'mintSlowArm'
 
-	// The edge-argument list a return into the continuation carries: the one value for a value-returning
-	// callee, and NOTHING for a void one. One function, so the slow arm and every copied `ret`/`retVoid`
-	// cannot disagree with the continuation's own arity about which case they are in.
+	// The value list a return into the continuation carries: the one value for a value-returning callee,
+	// and NOTHING for a void one. ONE function feeding all THREE users of that arity — the slow arm's
+	// edge, every copied `ret`/`retVoid`'s edge, and the continuation's own block-arg list — so the
+	// positional `blockArgs[k] ↔ edge.argIds[k]` pairing cannot be built from two readings of the same
+	// return type.
 	function returnedValues(calleeFunc IrFunction, valueId ValueId) returns ValueIdArray
 		var out = ValueIdArray.create()
 		match calleeFunc.returnType 'rt'
@@ -871,24 +874,9 @@ type LeafInliner
 	function attachContinuationArg(contRef BlockRef, calleeFunc IrFunction, resultId ValueId)
 		match calleeFunc.returnType 'rt'
 			void then break 'rt'
-			value(inner) then self.setSingleBlockArg(contRef, valueId: resultId, argType: inner)
+			value(inner) then attachBlockArgs(self.blockAt(contRef), valueIds: self.returnedValues(calleeFunc, valueId: resultId), argType: inner)
 		end 'rt'
 	end 'attachContinuationArg'
-
-	// The block-arg half of `setSingleEdge`'s rule — a FRESH array, field-assigned (see `IrBlock`'s phi
-	// model). It refuses a block that already carries args: every continuation this pass wires is a block
-	// `splitBlockInPlace` minted moments earlier, so args arriving here would be a wiring bug rather than
-	// a case to extend.
-	function setSingleBlockArg(contRef BlockRef, valueId ValueId, argType StdType)
-		var target = self.blockAt(contRef)
-		if target.blockArgs.count() != 0 'alreadyHasArgs'
-			panic("LeafInliner.setSingleBlockArg: continuation '{String.from(target.label)}' of '{String.from(self.func.name)}' already carries {target.blockArgs.count()} block arg(s) — a continuation this pass minted has none")
-		end 'alreadyHasArgs'
-
-		var blockArgs = IrBlockArgArray.create()
-		blockArgs.push(IrBlockArg.create(valueId, argType: argType))
-		target.blockArgs = blockArgs
-	end 'setSingleBlockArg'
 
 	// Copy every non-panic block's phis, ops and exit into the fresh blocks `mintCopiedBlocks` minted, in
 	// the same order and skipping the same blocks — so the two walks pair up positionally.
@@ -918,7 +906,7 @@ type LeafInliner
 
 		var blockArgs = IrBlockArgArray.create()
 		for arg in calleeBlock.blockArgs 'each'
-			blockArgs.push(IrBlockArg.create(clonedLeafValue(arg.valueId, subst: subst), argType: arg.argType))
+			blockArgs.push(IrBlockArg.create(clonedValue(arg.valueId, subst: subst), argType: arg.argType))
 		end 'each'
 		var fresh = self.blockAt(freshRef)
 		fresh.blockArgs = blockArgs
@@ -954,7 +942,7 @@ type LeafInliner
 		match term 'exit'
 			const to mod then refuseNotATerminator(calleeFunc)
 			condBranch to branch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
-			ret(retValId) then self.returnToContinuation(freshRef, contRef: contRef, argIds: self.returnedValues(calleeFunc, valueId: clonedLeafValue(retValId, subst: subst)))
+			ret(retValId) then self.returnToContinuation(freshRef, contRef: contRef, argIds: self.returnedValues(calleeFunc, valueId: clonedValue(retValId, subst: subst)))
 			param to call then refuseNotATerminator(calleeFunc)
 			retVoid then self.returnToContinuation(freshRef, contRef: contRef, argIds: ValueIdArray.create())
 			globalAddr to osFreePages then refuseNotATerminator(calleeFunc)
@@ -1006,7 +994,7 @@ type LeafInliner
 
 			var argIds = ValueIdArray.create()
 			for argId in edge.argIds 'eachArg'
-				argIds.push(clonedLeafValue(argId, subst: subst))
+				argIds.push(clonedValue(argId, subst: subst))
 			end 'eachArg'
 			edges.push(BranchEdge.create(blocks.targetOf(edge.targetBlockId), argIds: argIds))
 		end 'eachEdge'
@@ -1015,26 +1003,17 @@ type LeafInliner
 	end 'cloneExit'
 
 	function returnToContinuation(freshRef BlockRef, contRef BlockRef, argIds ValueIdArray)
-		self.module.setTerminator(self.blockAt(freshRef), op: StdOp.branch(self.blockAt(contRef).id))
-		self.setSingleEdge(self.blockAt(freshRef), targetRef: contRef, argIds: argIds)
+		let contId = self.blockAt(contRef).id
+		self.module.setTerminator(self.blockAt(freshRef), op: StdOp.branch(contId))
+		attachEdge(self.blockAt(freshRef), targetId: contId, argIds: argIds)
 	end 'returnToContinuation'
-
-	// Give `pred` its ONE outgoing edge. A FRESH array, field-assigned — `IrBlock`'s stated rule, and the
-	// reason is not a formality: the three tiers share one phi model and a Std block's arrays can be the
-	// very arrays the parse memo hands back on a cache hit.
-	function setSingleEdge(pred IrBlock, targetRef BlockRef, argIds ValueIdArray)
-		var predBlock = pred
-		var edges = BranchEdgeArray.create()
-		edges.push(BranchEdge.create(self.blockAt(targetRef).id, argIds: argIds))
-		predBlock.branchEdges = edges
-	end 'setSingleEdge'
 
 	// Does this block hold a panic op? A panic is a BODY op (followed by an unreachable return — see
 	// `InsertRangeChecks.emitPanicBlock`), so the terminator half is not consulted; `scanLeafBody` panics
 	// if one ever reaches a terminator slot.
-	function blockHoldsAPanic(block IrBlock) returns bool
+	function blockHoldsAPanic(block IrBlock, calleeFunc IrFunction) returns bool
 		for opIdx in block.opRefs 'eachOp'
-			let op = self.opAtIndex(opIdx, ofFunc: self.func)
+			let op = self.opAtIndex(opIdx, ofFunc: calleeFunc)
 			if leafOpRole(op) == LeafOpRole.panicking 'panics'
 				return true
 			end 'panics'
@@ -1069,29 +1048,7 @@ type LeafInliner
 		try self.module.blockSourceInfo.set(to, value: sourceInfo) otherwise panic("LeafInliner.carryBlockSourceInfo: blockSourceInfo.set OOB at {to}")
 	end 'carryBlockSourceInfo'
 
-	// ⭐ **THE `BlockRef` OF A BLOCK JUST REGISTERED — CHECKED BY IDENTITY, not assumed by position.**
-	// `IrModule.addBlock` and `splitBlockInPlace` hand back the BLOCK, and a `BlockRef` is what may be
-	// held across the blocks this pass goes on adding (an `IrBlock` alias answers a different question —
-	// `getBlockByIdIn`'s header states the discipline, and a search for the ref later would be O(blocks)
-	// per site). The ref is only knowable in O(1) at the moment the block is the function's last, so this
-	// must be called IMMEDIATELY after the append it is about — and it COMPARES rather than trusting,
-	// because a reordering that slipped another `addBlock` in between would hand back a different block
-	// entirely, silently. `PrimitiveInliner.carveFrame` states the same rule against the same hazard.
-	function registeredRefOf(block IrBlock) returns BlockRef
-		let last = try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("LeafInliner.registeredRefOf: '{String.from(self.func.name)}' has no blocks")
-		if self.blockAt(last).id != block.id 'notTheLastRegistered'
-			panic("LeafInliner.registeredRefOf: block {block.id} ('{String.from(block.label)}') of '{String.from(self.func.name)}' is not the one registered LAST — something appended a block between the append this asks about and this read")
-		end 'notTheLastRegistered'
-
-		return last
-	end 'registeredRefOf'
 end 'LeafInliner'
-
-// One callee value through the splice's column, strictly. The column is TOTAL over the callee's id
-// space, so an id outside it is a column built against another function.
-function clonedLeafValue(v ValueId, subst ValueIdArray) returns ValueId
-	return try subst.get(v) otherwise panic("LeafInliner: callee value {v} is outside the {subst.count()}-entry value column this splice built from the callee's own `nextFreeValueId`")
-end 'clonedLeafValue'
 
 // ⭐ **THE STD-ABI CONVENTION, CHECKED WHERE IT IS SPENT.** `buildValueColumn` maps ids
 // `0..paramCount-1` straight onto the call's arguments instead of scanning for `param` ops, which is

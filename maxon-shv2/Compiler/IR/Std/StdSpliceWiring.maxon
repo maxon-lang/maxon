@@ -1,0 +1,81 @@
+// StdSpliceWiring — the three block-level rules a CALL-SITE SPLICE must obey, in ONE home because TWO
+// passes obey them: `inlineManagedPrimitives` (EC1) carves a fast path around a runtime call, and
+// `inlineLeaves` (EC5) copies a tiny callee's body into its caller. Both split a block at a call, hand
+// the continuation the call's original result ids as block args, and wire one edge per predecessor they
+// mint.
+//
+// ⛔⛔ **THEY LIVED IN BOTH PASSES, WORD FOR WORD, AND THAT IS THE FAILURE THIS FILE EXISTS TO END.**
+// Nothing made the two copies agree: a later edit that taught one of them to PUSH into the block's
+// existing `branchEdges` instead of field-assigning a fresh array would corrupt the parse memo for every
+// later compile of the project (see `IrBlock`'s header) — silently, in one pass only, with nothing
+// downstream that re-reads the phi model to notice. A rule whose violation is invisible is exactly the
+// rule that may not be written down twice.
+//
+// ⚠ **THE SPLITTER ITSELF IS NOT HERE**: `splitBlockInPlace` already had one home, in
+// `InsertRangeChecks`, and both passes already called it. These are the three helpers that stood beside
+// it in duplicate.
+
+// Give `pred` its ONE outgoing edge, carrying `argIds` to `targetId`.
+//
+// ⚠ It builds a FRESH array and field-assigns rather than pushing into whatever array the block holds,
+// which is `IrBlock`'s stated rule and not a formality: the three tiers SHARE one phi model, and a Std
+// block's arrays can be the very arrays `queryAllModule` hands back on every cache hit — so an in-place
+// write corrupts the memo for every later compile of the project, silently, with nothing downstream that
+// re-reads the model to notice.
+//
+// ⚠ **AND IT REFUSES A BLOCK THAT ALREADY CARRIES ONE, WHICH IS THE DOCUMENTATION.** Every predecessor
+// either splicing pass wires is a block it minted itself moments earlier, so a block arriving here with
+// an edge is a wiring bug rather than a case to merge into — and carrying the existing edges across
+// "just in case" would be generality no call site can reach and no test can redden.
+module function attachEdge(pred IrBlock, targetId BlockId, argIds ValueIdArray)
+	var predBlock = pred
+	if predBlock.branchEdges.count() != 0 'alreadyWired'
+		panic("attachEdge: block '{String.from(predBlock.label)}' already carries {predBlock.branchEdges.count()} outgoing edge(s) — every predecessor a splice wires is one it minted in the same breath")
+	end 'alreadyWired'
+
+	var edges = BranchEdgeArray.create()
+	edges.push(BranchEdge.create(targetId, argIds: argIds))
+	predBlock.branchEdges = edges
+end 'attachEdge'
+
+// Give `block` the block args `valueIds` names, in order — the continuation half of the same two rules
+// `attachEdge` follows (a fresh array, and a block that carries none yet), and the positional
+// `blockArgs[k] ↔ edge.argIds[k]` pairing every predecessor a splice wires must match.
+//
+// ⚠ **THE TYPE IS THE CALLER'S TO STATE, AND IT IS NOT COSMETIC.** A block arg's `argType` is what picks
+// the value's register FILE on x64 and arm64 and its valtype on wasm, so a wrong one here is a wrong
+// register class rather than a mislabelled field. The two callers know different things and neither
+// could derive the other's: `inlineManagedPrimitives` carries machine words off five `value(StdType.i64)`
+// runtime signatures, while `inlineLeaves` carries an arbitrary callee's declared return type and must
+// leave a float-returning leaf's result in an XMM.
+module function attachBlockArgs(block IrBlock, valueIds ValueIdArray, argType StdType)
+	var target = block
+	if target.blockArgs.count() != 0 'alreadyHasArgs'
+		panic("attachBlockArgs: block '{String.from(target.label)}' already carries {target.blockArgs.count()} block arg(s) — a continuation a splice minted has none")
+	end 'alreadyHasArgs'
+
+	var blockArgs = IrBlockArgArray.create()
+	for valueId in valueIds 'each'
+		blockArgs.push(IrBlockArg.create(valueId, argType: argType))
+	end 'each'
+	target.blockArgs = blockArgs
+end 'attachBlockArgs'
+
+// ⭐ **THE `BlockRef` OF A BLOCK JUST REGISTERED — CHECKED BY IDENTITY, not assumed by position.**
+// `IrModule.addBlock` and `splitBlockInPlace` hand back the BLOCK, and a `BlockRef` is what may be held
+// across the blocks a splice goes on adding (an `IrBlock` alias answers a different question —
+// `getBlockByIdIn`'s header states the discipline, and a search for the ref later would be O(blocks) per
+// site, i.e. Θ(sites × blocks) over exactly the function these passes exist for). The ref is only
+// knowable in O(1) at the moment the block is the function's last, so this must be called IMMEDIATELY
+// after the append it is about — and it COMPARES rather than trusting, because a reordering that slipped
+// another `addBlock` in between would hand back a different block entirely, silently.
+module function registeredBlockRef(module StdModule, func IrFunction, block IrBlock) returns BlockRef
+	let last = try func.blockRefs.get(func.blockRefs.count() - 1) otherwise panic("registeredBlockRef: '{String.from(func.name)}' has no blocks")
+	let lastId = try module.blocks.get(last) otherwise panic("registeredBlockRef: blockRef {last} of '{String.from(func.name)}' is not in module.blocks")
+
+	if lastId.id != block.id 'notTheLastRegistered'
+		panic("registeredBlockRef: block {block.id} ('{String.from(block.label)}') of '{String.from(func.name)}' is not the one registered LAST — something appended a block between the append this asks about and this read")
+	end 'notTheLastRegistered'
+
+	return last
+end 'registeredBlockRef'

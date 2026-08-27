@@ -47,14 +47,21 @@
 // `argIds` before its first write to it. A pass that CREATES phis (mem2reg, when it
 // lands) must follow the same discipline.
 
-// Role tag for an IrBlockArg, used by the inliner to record that a
-// continuation-block arg stands in for what would otherwise be a value
-// captured from a multi-value-return register. The backend's coalescer
-// reads this and seeds a physical-register hint on the arg, replacing
-// the hint anchor the post-call capture mov used to provide before the
-// callee was inlined.
+// Role tag for an IrBlockArg: that a continuation-block arg stands in for what would
+// otherwise be a value captured from a multi-value-return register, so a coalescer
+// could seed a physical-register hint on it in place of the hint anchor the post-call
+// capture mov provided before the callee was inlined.
 //
-//   none           — normal phi (the parser's SSA, a branch arg). Default.
+// ⛔ **NOTHING IN shv2 PRODUCES A NON-`none` VALUE AND NOTHING READS THE FIELD** (measured
+// 2026-08-26: `returnRole` has no reader outside this file). Both splicing passes leave it
+// at `none` — `inlineManagedPrimitives` and `inlineLeaves` alike — and no backend consults
+// it, so the hint it describes is one the allocator currently arrives at on its own or not
+// at all. It is v1's design carried across with the phi model; wiring a producer here
+// before there is a consumer would be a producer with no consumer, which is why neither
+// pass does. Kept because the register-hint rung is what gives it its reader; the moment
+// that lands, this note is what it replaces.
+//
+//   none           — normal phi (the parser's SSA, a branch arg). The only value in use.
 //   primaryReturn  — primary return value: R8 (x64) / X0 (arm64).
 //   errorFlag      — multi-value-return error flag: RDX / X1.
 export enum BlockArgReturnRole
@@ -70,11 +77,8 @@ end 'BlockArgReturnRole'
 export type IrBlockArg
 	export var valueId as ValueId
 	export var argType as StdType
-	// Set to a non-`none` value only by the inliner on the continuation
-	// block it synthesizes for a multi-block splice. Every other producer
-	// of blockArgs (the parser, target lowering) leaves it as `none`.
-	// Consumed by each backend's `coalesceRanges` to seed a
-	// physical-register hint via `setPhysHint`.
+	// `none` from every producer there is — see `BlockArgReturnRole`, which
+	// records that shv2 has neither a producer of another value nor a reader.
 	export var returnRole as BlockArgReturnRole
 
 	export static function create(valueId ValueId, argType StdType, returnRole BlockArgReturnRole = BlockArgReturnRole.none) returns IrBlockArg
