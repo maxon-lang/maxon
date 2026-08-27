@@ -44,23 +44,30 @@
 //
 //   worker -> parent (stdout, one line each):
 //       WORKER_READY                                  at startup, and again after every job
-//       WORKER_COMPILING:<spec>/<test>                about to compile that test, IN THIS PROCESS.
-//                                                     Zero or more per job, always BEFORE that job's
-//                                                     records. The parent keeps only the LAST one and
-//                                                     drops them all before counting records — see
-//                                                     `emitWorkerCompiling`
-//       WORKER_SINGLE_RESULT:<spec>:<test>            that test PASSED
-//       WORKER_SINGLE_FAIL:<spec>:<test>:<payload>    that test FAILED; <payload> is its reason,
-//                                                     escaped onto this one line
-//       WORKER_SINGLE_DRIFT:<spec>:<test>:<payload>   that test PASSED and its committed golden no
-//                                                     longer matches; <payload> is the difference,
-//                                                     escaped the same way. NOT A FAILURE — see
-//                                                     SpecTestRunner's `GoldenDrift`
-//       WORKER_SINGLE_SKIP:<spec>:<test>:<payload>    that test did NOT RUN here: the compiler refused
-//                                                     a construct this target has no implementation
-//                                                     for. <payload> is its E3104 text, escaped the
-//                                                     same way. NOT A PASS AND NOT A FAILURE — see
-//                                                     SpecTestRunner's `targetRefusalIn`
+//       WORKER_STEP:<phase>:<label>                   about to perform one step of the job, IN THIS
+//                                                     PROCESS. <phase> is COMPILE or RUN; <label> names
+//                                                     what the step is about — a `<spec>/<test>`, or a
+//                                                     whole spec's batched executions. Zero or more per
+//                                                     job, always BEFORE that job's records. The parent
+//                                                     TIMES THE GAPS BETWEEN THEM (the progress bound)
+//                                                     and keeps the LAST one to say what a dead worker
+//                                                     was doing; it drops them all before counting
+//                                                     records — see `emitWorkerStep`
+//       WORKER_SINGLE_RESULT:<verdict>:<golden>:<spec>:<test>:<payload>
+//                                                     exactly one per test of the job, in declaration
+//                                                     order. <verdict> is PASS / FAIL / SKIP / NOTRUN
+//                                                     and <golden> is NOPIN / SAME / DRIFT / MINT /
+//                                                     NOREC — two INDEPENDENT facts, which is why they
+//                                                     are two fields and not ten markers. <payload> is
+//                                                     owned by at most one of them and is escaped onto
+//                                                     this one line. See the record note below
+//
+//                                                     ⛔ THIS ENTRY LISTED FOUR SEPARATE MARKERS —
+//                                                     `WORKER_SINGLE_RESULT/FAIL/DRIFT/SKIP` — FOR
+//                                                     LONGER THAN THEY EXISTED. The consolidation is
+//                                                     documented thirty lines down and this block, the
+//                                                     one place a reader looks FIRST for the wire, went
+//                                                     on describing the wire it replaced
 //       WORKER_JOB_CPU:<ticks>:<reported>:<unreported>
 //                                                     exactly once per job, immediately BEFORE that
 //                                                     job's WORKER_READY: what compiling this spec's
@@ -91,8 +98,8 @@
 // line; a drain whose last line is not it reached EOF first, which means the worker died mid-job.
 // See `drainResultsThunk` and `endedWithReady`.
 //
-// INVARIANT, and the drain leans on it: a worker NEVER writes an empty line to stdout. The six
-// lines above are the only ones it can write and all six are non-empty — so an empty line back
+// INVARIANT, and the drain leans on it: a worker NEVER writes an empty line to stdout. The four
+// lines above are the only ones it can write and all four are non-empty — so an empty line back
 // from `readStdoutLine()` is unambiguously EOF, i.e. the worker died. Keeping stdout clean takes
 // no effort here: the compiled test programs a worker spawns run under `Subprocess.run` with
 // COLLECTED output, so their streams are captured, never inherited — and the COMPILES no longer
@@ -108,17 +115,20 @@
 // about the mechanism and both rested on the one premise this rung deleted. shv2's worker IS the
 // compiler now, so both come back — for v1's reasons, in shv2's shape:
 //
-// * **A PER-JOB DEADLINE** (`jobDeadlineMs`). A compiler infinite loop used to be bounded by
+// * **A PROGRESS BOUND** (`TestProgressDeadlineMs`). A compiler infinite loop used to be bounded by
 //   `SpecSpawnTimeoutMs`, the deadline on the `build` SPAWN, and surfaced as one named FAIL. With no
-//   spawn there is no such bound, so the parent carries one: a busy slot that outruns its job's
-//   deadline is force-terminated, and its whole spec is failed through the dead-worker path below.
+//   spawn there is no such bound, so the parent carries one: a busy slot whose worker has said NOTHING
+//   for longer than one step may take is force-terminated, and its whole spec is failed through the
+//   dead-worker path below.
 //   ⚠ `WedgeWatchdogMs` is NOT a substitute and never was — it bounds the DISPATCH LOOP's idleness,
-//   not a job — and the two are now explicitly disjoint: a slot still inside its deadline RESETS the
+//   not a worker — and the two are now explicitly disjoint: a slot still inside its bound RESETS the
 //   idleness clock, so neither guard can pre-empt the other and report the other's failure as its own.
-// * **`WORKER_COMPILING:` BREADCRUMBS** (`emitWorkerCompiling`). A compiler panic used to be a
-//   non-zero exit from a grandchild, which the runner turned into an ordinary FAIL naming the test.
-//   Now it kills the WORKER, and the parent has the plan but no way to know WHICH test was in the
-//   compiler's hands — so the worker says so, one line before each compile.
+// * **`WORKER_STEP:` BREADCRUMBS** (`emitWorkerStep`). A compiler panic used to be a non-zero exit
+//   from a grandchild, which the runner turned into an ordinary FAIL naming the test. Now it kills the
+//   WORKER, and the parent has the plan but no way to know WHICH test was in the compiler's hands — so
+//   the worker says so, one line before each step. They carry the bound above as well as the
+//   post-mortem: a worker that is progressing says so by speaking, and one that has stopped is
+//   recognised by its SILENCE rather than by an estimate of how long its whole spec should take.
 // * **DEAD-WORKER RECOVERY** (`deadJobResults`). v1's own dispatcher does NOT have this — it calls
 //   `abortOnCrashedWorker` and panics the run (`maxon-selfhosted/Testing/SpecTestRunner.maxon:3776`),
 //   although the comment on `runOneSinglesJob` (`:2626`) describes the recovery as though it did.
@@ -132,8 +142,10 @@
 //   named test's compile: **6612 passed, 7 failed** on the full suite — seven being every test of
 //   that one spec, each naming `abs/abs.rt-zero` as the compile that killed the worker — the other
 //   444 specs unaffected, exit 1, no wedge. A non-terminating compile in the same place: the
-//   deadline fired at **155.0 s** (120 + 7x5, exactly `jobDeadlineMs` for a 7-test spec), that job
-//   failed alone and the eleven other selected tests still PASSED.
+//   deadline fired, that job failed alone and the eleven other selected tests still PASSED. ⚠ The
+//   deadline that fired then was the JOB-SIZED one this rung deleted (`120 + tests x 5 s`); the
+//   injection and its two outcomes are unchanged by the replacement, which moves only WHICH interval
+//   is timed — see `TestProgressDeadlineMs`, and W214's own re-run of the same injection.
 //
 // ============================================================================================
 // WHAT IS STILL DELIBERATELY LEFT IN v1
@@ -161,10 +173,32 @@
 let WorkerReadyMarker = "WORKER_READY"
 let WorkerResultMarker = "WORKER_SINGLE_RESULT:"
 let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
-let WorkerCompilingMarker = "WORKER_COMPILING:"
+let WorkerStepMarker = "WORKER_STEP:"
 let JobSinglesPrefix = "JOB:singles:"
 let ExitCommand = "EXIT"
 let ProtocolFieldSep = ":"
+
+// ⭐ **WHICH KIND OF STEP A WORKER IS ABOUT TO PERFORM.** A union rather than two markers, for the
+// reason the result record's two token fields already give: the kinds would multiply, and the parent
+// needs the distinction for exactly one purpose — saying what a dead worker was doing, in words that
+// point at the right half of the system. "Terminated while COMPILING x" blames the compiler;
+// "terminated while RUNNING x" blames the test program or its runner, and the two are diagnosed in
+// completely different places.
+//
+// ⚠ THERE IS NO `verdict` ARM, AND THAT IS A DECISION WITH A MEASUREMENT UNDER IT. `runOneSpec` is
+// three passes — compile every test, execute the ones that need it, then finish every verdict — and
+// only the first two contain a step that can BLOCK (an in-process compile, a spawned program). The
+// third compares captured output against the spec, compares a golden fragment and deletes scratch
+// files: local work, no subprocess, and the whole of it for the corpus's largest spec (161 tests)
+// sits inside the grace `TestProgressDeadlineMs` carries for exactly this. A step kind whose whole
+// pass is cheaper than the noise on the bound would be a line per test that bought nothing.
+export union WorkerStep
+	compile
+	run
+end 'WorkerStep'
+
+let StepCompileToken = "COMPILE"
+let StepRunToken = "RUN"
 
 // ⭐⭐ **ONE RECORD SHAPE, TWO TOKEN FIELDS — BECAUSE A RESULT IS TWO INDEPENDENT FACTS.**
 //
@@ -224,7 +258,7 @@ export let MillisPerSecond = 1000
 let TenthsPerSecond = 10
 
 // ============================================================================================
-// THE PER-JOB DEADLINE — the bound that came back with the in-process compile (G20)
+// THE PROGRESS BOUND — the bound that came back with the in-process compile (G20)
 // ============================================================================================
 //
 // ⭐⭐ **WHAT IT REPLACES, AND WHY NOTHING ELSE COULD.** A compiler infinite loop used to be bounded
@@ -234,22 +268,43 @@ let TenthsPerSecond = 10
 // worker for ever, silently, and an unattended gate never returns. So the bound moves to the PARENT,
 // which is the only party still able to end it.
 //
-// ⚠ **IT BOUNDS A JOB — A WHOLE SPEC — AND SO IT SCALES WITH THE SPEC.** A flat number cannot serve
-// both `abs` (3 tests) and `managed-memory-methods` (161): tight enough to catch the former's hang, it
-// FALSE-REDS the latter under contention, and a false red on a whole spec has no workaround. The floor
-// is the one-execution deadline (a spec's every test still SPAWNS its program, and that spawn is still
-// bounded by `SpecSpawnTimeoutMs`); the per-test term is v1's, which had the same shape for the same
-// reason (`maxon-selfhosted/Testing/SpecTestRunner.maxon:520-530`).
+// ⛔⛔ **IT USED TO BOUND THE WHOLE JOB AND SCALE WITH THE SPEC — `SpecSpawnTimeoutMs + tests x 5 s` —
+// AND THAT NUMBER WAS AN ESTIMATE OF A COST NOBODY MEASURED PER SPEC.** Its argument was that a flat
+// number cannot serve both `abs` (3 tests) and `managed-memory-methods` (161), which is true, and its
+// calibration was a spec's AVERAGE test: 161 tests running alone in 44.1 s against a 925 s deadline,
+// ~21x. **A spec of FEW HUGE tests inverts that ratio, and one in this corpus does.**
 //
-// MEASURED 2026-08-23 on this host, before the change: `managed-memory-methods` — the largest spec in
-// the corpus at 161 tests — runs ALONE in 44.1 s. Its deadline here is 120 + 161x5 = 925 s, i.e. ~21x
-// its solo time and ~7x what 12-worker contention could plausibly make of it. That ratio is the point:
-// like `SpecSpawnTimeoutMs`, this exists to convert an unbounded silent hang into a named failure, NOT
-// to police slow specs.
-let JobDeadlinePerTestMs = 5 * MillisPerSecond
+// MEASURED 2026-08-26 on this host, against the tree as it stood: `wide-spill-frames` has THREE cases,
+// two of which hold 4111 values live at one program point. Compiled one at a time, alone:
+// **64.7 s**, **70.0 s** and 2.2 s — **136.9 s of compiling** against a job deadline of 120 + 3x5 =
+// **135 s**. The spec therefore FAILED ALL THREE OF ITS CASES through the dead-worker path on a run of
+// its own (159 s wall, exit 1), and did so intermittently on the full suite — two of four runs that
+// day — which is the worst shape a harness bug can take: a red that names the tests it terminated and
+// blames the compiler for a deadline the harness chose.
+//
+// ⭐⭐ **SO THE BOUND IS KEYED OFF PROGRESS INSTEAD OF OFF AN ESTIMATE.** The worker already announces
+// each step it is about to take (`emitWorkerStep`), and the parent's drain green thread already reads
+// those lines as they arrive. What the parent times is therefore the interval since a slot's worker
+// LAST SPOKE — and a worker that is making progress speaks, whatever its spec's shape. A compiler
+// infinite loop is exactly the state in which nothing is said, which is the state this catches.
+//
+// ⚠ **THE NUMBER IS A SINGLE STEP'S, AND IT HAS A FLOOR NOTHING MAY GO UNDER: ONE EXECUTION.** A step
+// is either an in-process compile (bounded by nothing, which is why this exists) or a spawned program
+// run — and a run is ALREADY bounded, by `SpecSpawnTimeoutMs`, and already surfaces as one named FAIL
+// naming the test. An outer bound tighter than that would kill a whole spec for a hang the inner bound
+// was about to report per test: the nesting `SpecSpawnTimeoutMs`'s own header states, violated. The
+// grace on top of it is the compile's, because a compile has no bound of its own.
+//
+// MEASURED, same host, same day: the slowest single compile in the corpus is 70.0 s (above) — with the
+// stdlib load included, which a warm worker has already paid. 240 s is ~3.4x that, and the bound as a
+// whole is ~5.1x. Like `SpecSpawnTimeoutMs`, it exists to convert an unbounded silent hang into a named
+// failure, NOT to police slow steps, so wide is the safe direction: a bound too loose costs an
+// unattended gate a few extra minutes ONCE, while a bound too tight false-reds a whole spec and has no
+// workaround.
+let SlowCompileGraceMs = 240 * MillisPerSecond
 
-// ⭐ How long a worker gets to leave on its own once its job deadline has fired, before the runtime
-// kills it.
+// ⭐ How long a worker gets to leave on its own once it has been given up on, before the runtime kills
+// it.
 //
 // ⚠ **`waitWithTimeout` IS THE ONLY WAY THIS HARNESS CAN TERMINATE A CHILD, AND ITS EXPIRY IS EXACTLY
 // THE WANTED BEHAVIOUR**: *"throws `SubprocessError.timeout` if the timeout fires (the runtime forcibly
@@ -258,34 +313,61 @@ let JobDeadlinePerTestMs = 5 * MillisPerSecond
 // can exercise), and adding one to reach a kill this call already performs would be a second door onto
 // one act.
 //
-// It is SHORT because the call BLOCKS the scheduler's one OS thread — shv2 is single-M — and the
-// worker has already had its entire job deadline to finish. It is not zero because zero means "wait
-// for ever" to `waitWithTimeout`.
+// It is SHORT because the call BLOCKS the scheduler's one OS thread — shv2 is single-M — and a worker
+// that has gone silent for its whole progress bound is not about to answer in the next 50 ms. It is
+// not zero because zero means "wait for ever" to `waitWithTimeout`.
 let JobKillGraceMs = 50
 
 // The headroom the pool's idleness bound keeps over the interval it is actually measuring.
 //
-// ⛔ **ITS ARGUMENT CHANGED WITH THE PER-JOB DEADLINE ABOVE, AND THE OLD ONE IS RECORDED BECAUSE IT
-// WAS RIGHT UNTIL THIS RUNG.** It used to read: *"it has to cover the rest of one job after a spawn of
+// ⛔ **ITS ARGUMENT CHANGED WHEN THE BOUND ABOVE CAME BACK (G20), AND THE OLD ONE IS RECORDED BECAUSE
+// IT WAS RIGHT UNTIL THEN.** It used to read: *"it has to cover the rest of one job after a spawn of
 // that job has already burned the worker's full deadline"* — i.e. `WedgeWatchdogMs` had to outlast a
 // whole job, because nothing else bounded one. Now something does, and the two guards are made
-// explicitly disjoint instead: a busy slot still INSIDE its job deadline resets the idleness clock (see
-// the dispatch loop), so what this grace covers is only the interval AFTER every outstanding job has
-// been given up on — an EOF propagating back through the runtime, and a drain completing. That is
+// explicitly disjoint instead: a busy slot still INSIDE its progress bound resets the idleness clock
+// (see the dispatch loop), so what this grace covers is only the interval AFTER every outstanding job
+// has been given up on — an EOF propagating back through the runtime, and a drain completing. That is
 // milliseconds. Three minutes is left as it stands because the number is also quoted at an operator by
 // `E6002`, where wide is the safe direction.
 let WedgeWatchdogGraceMs = 180 * MillisPerSecond
 
-// ⭐ **A JOB'S DEADLINE, FROM THE ONE THING THE PARENT ALREADY KNOWS ABOUT IT: how many tests it runs.**
-// The parent's plan is built before anything is dispatched (`buildPlans`), so this needs no message
-// from the worker and no second census of the spec.
-function jobDeadlineMs(tests TestTally) returns DurationMs
-	return SpecSpawnTimeoutMs + tests * JobDeadlinePerTestMs
-end 'jobDeadlineMs'
+let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
+
+// ⭐ **HOW LONG THIS SLOT'S WORKER MAY STAY SILENT — the step bound, plus whatever this LANE makes one
+// step out of.**
+//
+// ⚠ IT TAKES THE STRATEGY RATHER THAN THE TARGET, and that is not merely tidier: this is asked once per
+// busy slot per one-millisecond park, and `runStrategyFor` on a target with no runner here BUILDS ITS
+// REASON STRING (`ExternalRunner.unspawnable`) — an allocation, twelve thousand times a second, on a
+// cross run whose every case is `notRunHere`. The lane is a property of the RUN, so the dispatcher asks
+// once, before the loop.
+//
+// ⚠ **ONE LANE DOES NOT PERFORM ONE EXECUTION PER STEP, AND AN OUTER BOUND THAT IGNORED THAT WOULD
+// PRE-EMPT THE INNER ONE.** The x64-linux/arm64-linux lane runs a whole spec's executions inside a
+// SINGLE `wsl` entry (`SpecTestRunner.runWslBatch`), which the WORKER bounds at
+// `batchDeadlineMs(executions)` — a number that scales with the spec because the entry does. The
+// parent cannot see inside that entry and no breadcrumb can arrive from within it, so the silence it
+// must tolerate is the batch's whole allowance. Taken from the runner's own function rather than
+// re-derived here: two spellings of one deadline is how an outer bound comes to fire first.
+//
+// ⛔ **THE BOUND THIS REPLACED GOT THAT BACKWARDS, MEASURABLY.** `jobDeadlineMs(161)` was 925 s while
+// `batchDeadlineMs(161)` is 19,440 s, so the pool would have terminated a batched spec at 1/21st of the
+// deadline the worker was still honouring — and reported it as a worker that had to be killed. That
+// lane is not run on this host's gate, which is exactly why nothing caught it.
+//
+// The parent counts TESTS where the batch counts EXECUTIONS (only a test that got as far as running is
+// in the entry), so this is an upper bound on the worker's own — which is the safe direction and the
+// only one the parent's plan can supply.
+function progressDeadlineMs(tests TestTally, strategy RunStrategy) returns DurationMs
+	return match strategy 'lane'
+		individually or noneHere gives TestProgressDeadlineMs
+		wslBatch gives TestProgressDeadlineMs + batchDeadlineMs(tests)
+	end 'lane'
+end 'progressDeadlineMs'
 
 // How long the dispatch loop tolerates making NO progress at all — nothing dispatched, nothing
-// collected, and no outstanding job still inside its own deadline — before it declares the pool
-// wedged and panics with every slot's state.
+// collected, and no outstanding job whose worker is still inside its progress bound — before it
+// declares the pool wedged and panics with every slot's state.
 //
 // ⚠ IT IS DERIVED FROM `SpecSpawnTimeoutMs`, AND THAT IS THE LOAD-BEARING PART, not the measured
 // headroom underneath it. The two deadlines are nested — the worker bounds ONE subprocess, the pool
@@ -301,12 +383,13 @@ end 'jobDeadlineMs'
 // `runProcess`'s comment records an external runner blocking 18m35s at ~1 exec in 700 on the cross
 // lane, which is exactly what `SpecSpawnTimeoutMs` exists to convert into a test failure.
 //
-// ⚠ WHAT THIS IS NOT, AND STILL IS NOT: a bound on how long a JOB may take. `jobDeadlineMs` is that,
-// and it can legitimately exceed this number (925 s for the largest spec against 300 s here) — which
-// is precisely why the two are kept from racing by CONDITION rather than by arithmetic: a slot inside
-// its job deadline is not idleness, so the clock below does not run while one exists. Nesting them by
-// size instead would force this number past the largest job in the corpus, i.e. past a figure that
-// grows every time a spec does.
+// ⚠ WHAT THIS IS NOT, AND STILL IS NOT: a bound on how long a JOB may take. Nothing bounds a job any
+// more — `progressDeadlineMs` bounds a worker's SILENCE, and a spec of many steps may legitimately
+// take as long as its steps do. That bound can itself exceed this number (360 s per step against 300 s
+// here, and far more on the batched lane), which is precisely why the two are kept from racing by
+// CONDITION rather than by arithmetic: a slot whose worker is still speaking is not idleness, so the
+// clock below does not run while one exists. Nesting them by size instead would force this number past
+// the largest job in the corpus, i.e. past a figure that grows every time a spec does.
 //
 // The measured margin against a HEALTHY run, on the 8-core arm64-macOS host, 2026-07-30: the whole
 // 210-spec suite takes 5.5 s on the host lane and 8.2 s on the wasm lane; the slowest single spec on
@@ -677,24 +760,66 @@ function runSinglesJob(specDir FilePath, specName String, filter String, updateR
 	print("{WorkerJobCpuMarker}{run.cpu.ticks}{ProtocolFieldSep}{run.cpu.reported}{ProtocolFieldSep}{run.cpu.unreported}\n")
 end 'runSinglesJob'
 
-// ⭐⭐ **THE BREADCRUMB: WHICH TEST THIS WORKER IS ABOUT TO COMPILE.** Printed by
-// `SpecTestRunner.compileStagedTest` immediately before each compile, and read by the parent ONLY when
-// the worker dies — see this file's dead-worker recovery, and v1's `emitWorkerCompiling`
-// (`maxon-selfhosted/Testing/SpecTestRunner.maxon:2412`), which is the same mechanism for the same
-// reason.
+// ⭐⭐ **THE BREADCRUMB: WHAT THIS WORKER IS ABOUT TO DO NEXT.** Printed by `SpecTestRunner` immediately
+// before each compile and before each execution, and read by the parent for TWO things — see v1's
+// `emitWorkerCompiling` (`maxon-selfhosted/Testing/SpecTestRunner.maxon:2412`), which is the same
+// mechanism for the first of them:
+//
+//   * WHEN A WORKER DIES, the last one names what killed it. v1's reason exactly.
+//   * WHILE IT LIVES, each one is a heartbeat. The parent times the GAPS (`progressDeadlineMs`), so a
+//     worker that is progressing is recognised by the fact that it is still talking. v1 had no such
+//     use for its line and bounded a job by an estimate of the whole spec instead; that estimate is
+//     what this rung deleted.
+//
+// ⚠ **IT IS EMITTED BEFORE THE STEP, NEVER AFTER, AND BOTH USES DEPEND ON THAT.** After the step it
+// would name the last thing that FINISHED, which is precisely not what a post-mortem wants — and the
+// silence it is supposed to interrupt is the step's own duration.
 //
 // ⚠ **IT IS ON STDOUT, WHERE v1 PUT IT ON STDERR, AND THE DIFFERENCE IS THIS FILE'S OWN DESIGN.** v1
 // drained a worker's stderr continuously from a green thread — and leaked one MM allocation per worker
 // doing it, which is exactly why shv2 drains stderr only at shutdown (`shutdownAndDrainStderr`). With
-// nothing reading stderr during a run, a line per compile would fill that pipe (hundreds of lines per
+// nothing reading stderr during a run, a line per step would fill that pipe (hundreds of lines per
 // worker) and BLOCK the worker inside a write, which is a deadlock rather than a diagnostic. Stdout is
 // already drained line by line by the very green thread that needs this line.
 //
 // It is EXPORTED because the runner emits it and the pool decodes it: one spelling, in the file that
 // owns the wire.
-export function emitWorkerCompiling(label String)
-	print("{WorkerCompilingMarker}{label}\n")
-end 'emitWorkerCompiling'
+export function emitWorkerStep(step WorkerStep, label String)
+	print("{WorkerStepMarker}{stepToken(step)}{ProtocolFieldSep}{label}\n")
+end 'emitWorkerStep'
+
+// The wire spelling of a step kind, and — in `stepFromToken` — its inverse. A pair rather than a
+// comparison at each site, for `verdictToken`/`decodeVerdict`'s reason: the encode is exhaustive over
+// the union (a new arm fails to compile until it is given a token) and the decode PANICS on anything
+// else, so a token can neither go missing nor be silently read as the wrong kind.
+function stepToken(step WorkerStep) returns String
+	return match step 'kind'
+		compile gives StepCompileToken
+		run gives StepRunToken
+	end 'kind'
+end 'stepToken'
+
+function stepFromToken(token String, line String) returns WorkerStep
+	if token == StepCompileToken 'isCompile'
+		return WorkerStep.compile
+	end 'isCompile'
+
+	if token == StepRunToken 'isRun'
+		return WorkerStep.run
+	end 'isRun'
+
+	panic("spec worker pool: '{token}' is not one of the {StepCompileToken}/{StepRunToken} step tokens: '{line}'")
+end 'stepFromToken'
+
+// What a worker is DOING, as the two readers of its last step say it. The per-test FAIL reason and
+// the once-per-death report must describe one event the same way, which is `deathCause`'s argument
+// applied to the other half of the same sentence.
+function stepVerb(step WorkerStep) returns String
+	return match step 'kind'
+		compile gives "compiling"
+		run gives "running"
+	end 'kind'
+end 'stepVerb'
 
 // The wire line for ONE result — the one place a result becomes bytes. Its inverse is
 // `decodeWorkerLine`, which reads the same five fields back in the same order.
@@ -1040,11 +1165,20 @@ end 'resultsFromLines'
 typealias DrainPromise = Promise with (StringArray, SubprocessError)
 typealias DrainPromiseArray = Array with DrainPromise
 
-// When each slot's in-flight job was handed to its worker. Read ONLY by the wedge report, where the
-// spread between the slots is the diagnosis: twelve slots dispatched within milliseconds of each
-// other says the whole pool stalled at once, while one slot far older than the rest names the single
-// worker that stopped answering.
-typealias DispatchInstantArray = Array with InstantMs
+// AN INSTANT PER SLOT. The pool keeps two of them and they answer different questions, which is why
+// they are two arrays and not one:
+//
+//   * WHEN THE SLOT'S JOB WAS DISPATCHED — the job's AGE. Read only by the wedge report, where the
+//     spread between the slots is the diagnosis: twelve slots dispatched within milliseconds of each
+//     other says the whole pool stalled at once, while one slot far older than the rest names the
+//     single worker that stopped answering.
+//   * WHEN THAT SLOT'S WORKER LAST SPOKE — its SILENCE, which is what `progressDeadlineMs` bounds.
+//     Written by the drain green thread, on every line it reads.
+//
+// ⚠ THE SECOND IS NOT DERIVABLE FROM THE FIRST, and a run where they diverge is the normal case: a
+// 161-test spec is dispatched once and speaks 161 times. Reporting both is what separates "this worker
+// has been busy for four minutes" from "this worker has said nothing for four minutes".
+typealias SlotInstantArray = Array with InstantMs
 
 // Read everything `child` says for one job, up to and INCLUDING its next WORKER_READY — or up to EOF,
 // which is what a worker that DIED mid-job leaves behind.
@@ -1073,11 +1207,31 @@ typealias DispatchInstantArray = Array with InstantMs
 // the green thread runs. Passing the inner `child` by value hands the GT its own copy —
 // StreamingSubprocess copies share the runtime-side pipe by handle, so the GT and the parent still
 // address the same OS object.
-function drainResultsThunk(child StreamingSubprocess) returns StringArray throws SubprocessError
+//
+// ⭐⭐ **IT PUBLISHES PROGRESS AS IT READS, AND THAT IS THE ONLY WAY THE PARENT CAN SEE ANY.** A job's
+// lines are handed back in one array when the job ENDS, so until this rung the dispatcher could not
+// tell a worker two seconds into a compile from one that stopped four minutes ago — and bounded the
+// whole job by an estimate for want of the distinction. `spokeAt` is the parent's own array, handed to
+// this thread by the spawn: `async` gives a managed argument its OWN REFERENCE to the same heap object
+// (`Parser.emitAsyncCall`), and shv2 is single-M with cooperative scheduling, so a write here is
+// immediately and atomically visible to the dispatcher — this GT yields only inside `readStdoutLine`.
+//
+// ⚠ IT STAMPS A CLOCK RATHER THAN COUNTING LINES, and the alternative is why: a counter would need the
+// dispatcher to remember the previous count AND when it changed — two more per-slot arrays and a second
+// place that decides what progress is. The instant IS the answer, written by the one party that knows
+// it. The cost is one clock read per line, against ~2 lines per test.
+function drainResultsThunk(child StreamingSubprocess, spokeAt SlotInstantArray, slot WorkerId) returns StringArray throws SubprocessError
 	var lines = StringArray.create()
 
 	while true 'lineLoop'
 		let line = try child.readStdoutLine()
+		// STAMPED BEFORE THE EOF TEST, so there is exactly ONE stamp site: every read that RETURNS is
+		// evidence from the worker's own pipe, EOF included. Stamping only real lines would leave a dead
+		// worker's last stamp stale for the interval between its EOF and the dispatcher serving the
+		// drain — a window in which the sweep would terminate a worker that is already gone, and print a
+		// line accusing it of silence.
+		try spokeAt.set(slot, value: Clock.nowMs()) otherwise panic("drainResultsThunk: spokeAt.set({slot}) is in bounds — the dispatcher sizes it to the pool before any drain is spawned")
+
 		if line.isEmpty() 'eof'
 			// Workers never print an empty line (see the protocol note at the top of this file), so this
 			// IS EOF: the worker died with the job unfinished. What it managed to say comes back WITHOUT
@@ -1107,20 +1261,29 @@ function endedWithReady(lines StringArray) returns bool
 	return last.trim() == WorkerReadyMarker
 end 'endedWithReady'
 
-// The LAST `WORKER_COMPILING:` breadcrumb in a drain — the test that was in the compiler's hands when
-// the worker died — or empty when it died before starting one (or between jobs).
+// ⭐ WHAT A DEAD WORKER WAS DOING — or that it had not started anything. A union rather than an empty
+// label, because "it never said" is a real answer the report words differently, and a sentinel string
+// would be a second thing an empty label could mean.
+union LastStep
+	none
+	started(step WorkerStep, label String)
+end 'LastStep'
+
+// The LAST `WORKER_STEP:` breadcrumb in a drain — what was in the worker's hands when it died — or
+// `none` when it died before starting anything (or between jobs).
 //
-// The LAST wins because a worker emits one per compile and only the most recent one can have killed
-// it; v1's `lastCompilingLabelFromStderr` walks its own stderr the same way and for the same reason.
-function lastCompilingLabelIn(lines StringArray) returns String
-	var label = ""
+// The LAST wins because a worker emits one per step and only the most recent one can have killed it;
+// v1's `lastCompilingLabelFromStderr` walks its own stderr the same way and for the same reason.
+function lastStepIn(lines StringArray) returns LastStep
+	var last = LastStep.none
 	for line in lines 'eachLine'
-		if line.startsWith(WorkerCompilingMarker) 'isBreadcrumb'
-			label = sliceAfterPrefix(line, prefix: WorkerCompilingMarker).trim()
+		if line.startsWith(WorkerStepMarker) 'isBreadcrumb'
+			let cut = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerStepMarker), expected: "label", line: line)
+			last = LastStep.started(stepFromToken(cut.field, line: line), label: cut.rest.trim())
 		end 'isBreadcrumb'
 	end 'eachLine'
-	return label
-end 'lastCompilingLabelIn'
+	return last
+end 'lastStepIn'
 
 // A FINISHED job's drained lines reduced to what the record checks are entitled to count: the READY
 // terminator dropped, every breadcrumb dropped, everything else kept in order.
@@ -1133,7 +1296,7 @@ end 'lastCompilingLabelIn'
 function recordLinesOf(lines StringArray) returns StringArray
 	var records = StringArray.create()
 	for line in lines 'eachLine'
-		if not line.startsWith(WorkerCompilingMarker) 'isNotABreadcrumb'
+		if not line.startsWith(WorkerStepMarker) 'isNotABreadcrumb'
 			records.push(line)
 		end 'isNotABreadcrumb'
 	end 'eachLine'
@@ -1404,30 +1567,36 @@ end 'deadJobResults'
 // per test — up to 161 times for the largest spec — while the evidence (the worker's own panic message
 // and stack trace) is printed ONCE, by `reportDeadWorker`.
 //
-// It names the breadcrumb test because that is the whole point of the breadcrumb, and says plainly
-// that the OTHER tests are failed by association rather than on their own merits: a reader who sees
-// 160 identical FAILs must be able to tell them from 160 real ones.
-function deadJobReason(workerId WorkerId, specName String, lastCompiling String, killedByDeadline bool) returns String
-	if lastCompiling.isEmpty() 'noBreadcrumb'
-		return "spec worker {workerId} {deathCause(killedByDeadline)} while running '{specName}', before it reported any test and before it printed a {WorkerCompilingMarker} breadcrumb naming one — every test of this spec is failed because none of them was answered"
-	end 'noBreadcrumb'
-	return "spec worker {workerId} {deathCause(killedByDeadline)} while compiling '{lastCompiling}' — every test of '{specName}' is failed because the worker never reported any of them"
+// It names the step the breadcrumb named because that is the whole point of the breadcrumb, and says
+// plainly that the OTHER tests are failed by association rather than on their own merits: a reader who
+// sees 160 identical FAILs must be able to tell them from 160 real ones.
+function deadJobReason(workerId WorkerId, specName String, lastStep LastStep, killedByDeadline bool) returns String
+	return match lastStep 'breadcrumb'
+		// NOT "while running", which `stepVerb` now spells for a step of its own kind: this arm is the one
+		// that could name no step at all, and borrowing the RUN phase's word for "was working on" is how a
+		// reader comes to believe a breadcrumb said something it never said.
+		none gives "spec worker {workerId} {deathCause(killedByDeadline)} while working on '{specName}', before it reported any test and before it printed a {WorkerStepMarker} breadcrumb naming what it was doing — every test of this spec is failed because none of them was answered"
+		started(step, label) gives "spec worker {workerId} {deathCause(killedByDeadline)} while {stepVerb(step)} '{label}' — every test of '{specName}' is failed because the worker never reported any of them"
+	end 'breadcrumb'
 end 'deadJobReason'
 
 // HOW a worker stopped: the parent gave up on it and terminated it, or it went away on its own. One
 // spelling, because the per-test reason and the once-per-death report must not describe the same event
 // two ways.
 function deathCause(killedByDeadline bool) returns String
-	return "was TERMINATED for exceeding its job deadline" if killedByDeadline else "DIED"
+	return "was TERMINATED after saying nothing for longer than one step may take" if killedByDeadline else "DIED"
 end 'deathCause'
 
-// Report a dead worker ONCE: which job, which test was in the compiler's hands, and everything the
-// worker managed to say. The per-test FAIL reasons are one line each; this is where the stack trace is.
-function reportDeadWorker(handle PersistentWorkerHandle, specName String, lastCompiling String, killedByDeadline bool)
+// Report a dead worker ONCE: which job, what it was in the middle of, and everything the worker
+// managed to say. The per-test FAIL reasons are one line each; this is where the stack trace is.
+function reportDeadWorker(handle PersistentWorkerHandle, specName String, lastStep LastStep, killedByDeadline bool)
 	printError("\n=== spec worker {handle.workerId} {deathCause(killedByDeadline)} on '{specName}' — failing that spec and continuing ===\n")
-	if not lastCompiling.isEmpty() 'hasBreadcrumb'
-		printError("last compile started: {lastCompiling}\n")
-	end 'hasBreadcrumb'
+	// BOTH ARMS SPEAK, for `deadWorkerStderr`'s reason one line down: "it never said what it was doing"
+	// and "nobody asked" read identically as an absent line, and only one of them is true.
+	match lastStep 'breadcrumb'
+		none then printError("last step started: (none — it died before announcing one)\n")
+		started(step, label) then printError("last step started: {stepVerb(step)} {label}\n")
+	end 'breadcrumb'
 	printError("{deadWorkerStderr(handle)}\n")
 end 'reportDeadWorker'
 
@@ -1469,10 +1638,15 @@ end 'drainHasAnswered'
 //     would mean the answer arrived and the SCAN missed it — a different bug entirely, in this file
 //     rather than under it, and one nothing else would ever surface.
 //
-//   * WHETHER THE SLOT'S JOB DEADLINE HAS ALREADY FIRED. Every busy slot must read `expired` here,
-//     because a slot still INSIDE its deadline resets the idleness clock and this report is therefore
+//   * WHETHER THE SLOT'S PROGRESS BOUND HAS ALREADY FIRED. Every busy slot must read `expired` here,
+//     because a slot still INSIDE its bound resets the idleness clock and this report is therefore
 //     unreachable while one exists. A `no` would mean the reset was skipped — again a bug in this file
 //     rather than under it.
+//
+//   * HOW LONG SINCE THAT SLOT'S WORKER LAST SPOKE, beside how long it has held the job. The pair is
+//     the diagnosis: a worker four minutes into a job that spoke a second ago is working, and one that
+//     has been silent for the whole four minutes is not. A single age cannot tell them apart, and the
+//     bound above is decided on the second number.
 //
 // There is deliberately no recovery HERE, for the same reason `abortOnDeadWorker` has none in its own
 // case: a wedge is the harness's own machinery having stopped, and there is no job whose failure it
@@ -1481,7 +1655,7 @@ end 'drainHasAnswered'
 // `idleFor` is the interval actually MEASURED, not the threshold that was crossed. The two differ by
 // at most one poll on a real wedge and by an unbounded amount on a suspended machine, which is the
 // case the header exists to let an operator tell apart: a run idle for 4000 s did not wedge, it slept.
-function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt DispatchInstantArray, expired BoolArray, idleFor DurationMs, queued JobTally, dispatched JobTally, completed JobTally)
+function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SlotInstantArray, expired BoolArray, idleFor DurationMs, queued JobTally, dispatched JobTally, completed JobTally)
 	var report = LineJoiner.create()
 	report.push("\n=== spec worker pool WEDGED: nothing dispatched or collected for {formatSeconds(idleFor)} (limit {formatSeconds(WedgeWatchdogMs)}) ===")
 	report.push("{dispatched} job(s) dispatched, {completed} collected, {queued} still queued")
@@ -1495,11 +1669,12 @@ function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPr
 
 		let job = try inFlight.get(slot) otherwise panic("abortOnWedgedPool: inFlight.get({slot}) is in bounds by construction")
 		let since = try dispatchedAt.get(slot) otherwise panic("abortOnWedgedPool: dispatchedAt.get({slot}) is in bounds by construction")
+		let spoke = try spokeAt.get(slot) otherwise panic("abortOnWedgedPool: spokeAt.get({slot}) is in bounds by construction")
 		let drain = try drains.get(slot) otherwise panic("abortOnWedgedPool: a busy slot always has a drain promise, and slot {slot} is busy")
 		let answered = "yes" if drainHasAnswered(drain) else "no"
 		let deadlineFired = try expired.get(slot) otherwise panic("abortOnWedgedPool: expired.get({slot}) is in bounds by construction")
 		let givenUpOn = "yes" if deadlineFired else "no"
-		report.push("  slot {slot}: '{job.specName}' sent {formatSeconds(Clock.elapsedMs(since))} ago, drain complete: {answered}, deadline fired: {givenUpOn}")
+		report.push("  slot {slot}: '{job.specName}' sent {formatSeconds(Clock.elapsedMs(since))} ago, last spoke {formatSeconds(Clock.elapsedMs(spoke))} ago, drain complete: {answered}, bound fired: {givenUpOn}")
 	end 'eachSlot'
 
 	printError("{report.build()}\n")
@@ -1635,31 +1810,41 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
 	// and splitting out only that one field would read worse than splitting all of them.
 	//
-	// THE FIVE ARE INDEXED BY THE SAME SLOT NUMBER AND `busy` IS THE GUARD FOR THE OTHER FOUR:
-	// `inFlight[slot]`, `drains[slot]`, `dispatchedAt[slot]` and `expired[slot]` are read ONLY where
-	// `busy[slot]` is true, and `sendAndDrain` establishes all four before it sets the guard — so a slot
-	// is never observable as busy with a stale job, a missing promise or a deadline somebody else's job
-	// already fired.
+	// THE SIX ARE INDEXED BY THE SAME SLOT NUMBER AND `busy` IS THE GUARD FOR THE OTHER FIVE:
+	// `inFlight[slot]`, `drains[slot]`, `dispatchedAt[slot]`, `spokeAt[slot]` and `expired[slot]` are
+	// read ONLY where `busy[slot]` is true, and `sendAndDrain` establishes all five before it sets the
+	// guard — so a slot is never observable as busy with a stale job, a missing promise or a bound
+	// somebody else's job already fired.
+	//
+	// ⚠ `spokeAt` IS THE ONE THIS LOOP DOES NOT OWN ALONE: each slot's drain green thread stamps its own
+	// entry as lines arrive (`drainResultsThunk`), which is the only way the parent can see a worker
+	// making progress before its job ends. Single-M cooperative scheduling makes that safe — see there.
+	// HOW THIS LANE PERFORMS A SPEC'S EXECUTIONS, asked ONCE — see `progressDeadlineMs`, which is the
+	// only reader and is asked per busy slot per park.
+	let runStrategy = runStrategyFor(effectiveTarget)
+
 	var busy = BoolArray.create()
 	var inFlight = SpecJobArray.create()
 	var drains = DrainPromiseArray.create()
-	var dispatchedAt = DispatchInstantArray.create()
-	// Whether this slot's job deadline has already fired and the worker been terminated for it. A LATCH,
-	// not a re-derivable predicate: once the deadline is past it stays past, and without it the sweep
-	// would re-terminate the same (already dead) worker on every one-millisecond poll while the EOF
-	// makes its way back through the runtime — printing a line each time. v1 hit exactly this and solved
-	// it by re-stamping the dispatch instant instead, which cannot work here: a worker that exited on
-	// its own would then have its deadline pushed forward for ever.
+	var dispatchedAt = SlotInstantArray.create()
+	var spokeAt = SlotInstantArray.create()
+	// Whether this slot's progress bound has already fired and the worker been terminated for it. A
+	// LATCH, not a re-derivable predicate: once a worker has been given up on it stays given up on, and
+	// without this the sweep would re-terminate the same (already dead) worker on every one-millisecond
+	// poll while the EOF makes its way back through the runtime — printing a line each time. v1 hit
+	// exactly this and solved it by re-stamping the dispatch instant instead, which cannot work here: a
+	// worker that exited on its own would then have its bound pushed forward for ever.
 	var expired = BoolArray.create()
 	let idleJob = SpecJob.idle()
 	// The placeholder instant, like `SpecJob.idle()` beside it: never read, because an idle slot's
-	// age is not a thing the report prints. It only keeps this array the same length as `busy` from
-	// the start, so the two are indexed by the same slot number.
+	// age is not a thing the report prints. It only keeps these arrays the same length as `busy` from
+	// the start, so the three are indexed by the same slot number.
 	let idleInstant = Clock.nowMs()
 	for _ in 0 upto poolSize 'initSlots'
 		busy.push(false)
 		inFlight.push(idleJob)
 		dispatchedAt.push(idleInstant)
+		spokeAt.push(idleInstant)
 		expired.push(false)
 	end 'initSlots'
 
@@ -1708,7 +1893,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 		// job, so an idle slot always outranks a ready answer.
 		if let idleSlot = try findIdleSlot(busy, cursor: dispatchCursor) 'haveIdleWorker'
 			if jobQueue.count() > 0 'haveWork'
-				sendAndDrain(workers, slot: idleSlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, expired: expired)
+				sendAndDrain(workers, slot: idleSlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired)
 				dispatched = dispatched + 1
 				dispatchCursor = wrapSlot(idleSlot + 1, poolSize: poolSize)
 				continue
@@ -1751,10 +1936,10 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 			// right and retrying is not.
 			if not endedWithReady(lines) 'workerDiedMidJob'
 				let killedByDeadline = try expired.get(readySlot) otherwise panic("runSpecPool: expired.get({readySlot}) is in bounds by construction")
-				let lastCompiling = lastCompilingLabelIn(lines)
-				reportDeadWorker(handle, specName: job.specName, lastCompiling: lastCompiling, killedByDeadline: killedByDeadline)
+				let lastStep = lastStepIn(lines)
+				reportDeadWorker(handle, specName: job.specName, lastStep: lastStep, killedByDeadline: killedByDeadline)
 
-				try buckets.set(job.planIndex, value: deadJobResults(plan, reason: deadJobReason(handle.workerId, specName: job.specName, lastCompiling: lastCompiling, killedByDeadline: killedByDeadline))) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
+				try buckets.set(job.planIndex, value: deadJobResults(plan, reason: deadJobReason(handle.workerId, specName: job.specName, lastStep: lastStep, killedByDeadline: killedByDeadline))) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
 
 				// ⚠ THE CPU TALLY MUST COVER THESE TESTS TOO. `runSpecPool`'s own cross-check requires
 				// exactly one reading per reported test, and a job that printed no WORKER_JOB_CPU record
@@ -1778,7 +1963,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 			// the instant it printed WORKER_READY, so the next job overlaps with the parent's
 			// decode — and with a slowest-first queue, the next job is the best one left.
 			if jobQueue.count() > 0 'moreWork'
-				sendAndDrain(workers, slot: readySlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, expired: expired)
+				sendAndDrain(workers, slot: readySlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired)
 				dispatched = dispatched + 1
 			end 'moreWork' else 'queueDrained'
 				try busy.set(readySlot, value: false) otherwise panic("runSpecPool: busy.set({readySlot}) is in bounds by construction")
@@ -1800,30 +1985,30 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 		// separate guards over two different intervals (see `WedgeWatchdogMs`).
 		let now = Clock.nowMs()
 
-		// ⭐ FIRST: has any outstanding JOB outrun its own deadline? With the compile in process this is
-		// the only bound on a compiler that never terminates, and it is asked here — at the one place
-		// the loop parks — so a healthy run pays a handful of comparisons per idle millisecond and
-		// nothing else.
-		let anyJobWithinDeadline = enforceJobDeadlines(workers, busy: busy, inFlight: inFlight, dispatchedAt: dispatchedAt, expired: expired, plans: plans, now: now)
+		// ⭐ FIRST: has any outstanding worker gone silent for longer than one step may take? With the
+		// compile in process this is the only bound on a compiler that never terminates, and it is asked
+		// here — at the one place the loop parks — so a healthy run pays a handful of comparisons per idle
+		// millisecond and nothing else.
+		let anyWorkerStillSpeaking = enforceProgressDeadlines(workers, busy: busy, inFlight: inFlight, spokeAt: spokeAt, expired: expired, plans: plans, strategy: runStrategy, now: now)
 
 		// ⭐ SECOND: has the LOOP stopped moving? `dispatched + completed` counts every progress event
 		// it can make.
 		//
-		// ⚠ **A JOB STILL INSIDE ITS DEADLINE IS NOT IDLENESS, AND FOLDING THE TWO WOULD MAKE THE
-		// WATCHDOG PRE-EMPT THE DEADLINE.** A job's deadline can legitimately exceed `WedgeWatchdogMs`
-		// (925 s for the largest spec against 300 s here), so without this term a long spec would be
-		// reported as "a HARNESS bug, RETRY" purely for taking the time its own deadline allows it. The
-		// clock therefore runs only once every outstanding job has been given up on, which leaves it
-		// measuring exactly what its name says.
+		// ⚠ **A WORKER STILL INSIDE ITS PROGRESS BOUND IS NOT IDLENESS, AND FOLDING THE TWO WOULD MAKE
+		// THE WATCHDOG PRE-EMPT THE BOUND.** That bound can legitimately exceed `WedgeWatchdogMs` (360 s
+		// per step against 300 s here, and far more on the batched lane), so without this term a spec of
+		// slow steps would be reported as "a HARNESS bug, RETRY" purely for taking the time its steps are
+		// allowed. The clock therefore runs only once every outstanding worker has been given up on, which
+		// leaves it measuring exactly what its name says.
 		let progress = dispatched + completed
-		if progress != lastProgress or anyJobWithinDeadline 'stillMoving'
+		if progress != lastProgress or anyWorkerStillSpeaking 'stillMoving'
 			lastProgress = progress
 			lastProgressMs = now
 		end 'stillMoving'
 
 		let idleFor = Clock.elapsedMs(lastProgressMs)
 		if idleFor >= WedgeWatchdogMs 'wedged'
-			abortOnWedgedPool(busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, expired: expired, idleFor: idleFor, queued: jobQueue.count(), dispatched: dispatched, completed: completed)
+			abortOnWedgedPool(busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired, idleFor: idleFor, queued: jobQueue.count(), dispatched: dispatched, completed: completed)
 		end 'wedged'
 
 		// Park, so the scheduler can run the drain green threads — every one of them blocked on an
@@ -1949,53 +2134,59 @@ function spawnReadyWorker(harnessExe FilePath, workerId WorkerId, specDir FilePa
 	return handle
 end 'spawnReadyWorker'
 
-// ⭐⭐ **THE PER-JOB DEADLINE, SWEPT ONCE PER PARK.** Every busy slot that has outrun `jobDeadlineMs`
-// for its own job is TERMINATED and latched as given-up-on; its drain then sees EOF and the dispatch
-// loop's dead-worker path fails that spec and respawns.
+// ⭐⭐ **THE PROGRESS BOUND, SWEPT ONCE PER PARK.** Every busy slot whose worker has said NOTHING for
+// longer than `progressDeadlineMs` allows one step is TERMINATED and latched as given-up-on; its drain
+// then sees EOF and the dispatch loop's dead-worker path fails that spec and respawns.
 //
-// It answers whether any busy slot is still INSIDE its deadline, which is what the wedge watchdog's
+// It answers whether any busy slot is still INSIDE its bound, which is what the wedge watchdog's
 // idleness clock is reset by — see the dispatch loop. The two guards are disjoint by that one term.
+//
+// ⚠ **IT TIMES `spokeAt`, NOT `dispatchedAt`, AND THAT ONE FIELD IS THE WHOLE RUNG.** Timing the
+// dispatch instant asks "has this spec taken too long?", which no fixed number can answer for a corpus
+// holding both a 161-test spec of one-liners and a 3-test spec of 4000-slot frames — the estimate that
+// answer needed is what false-redded `wide-spill-frames`. Timing the last line asks "has this worker
+// STOPPED?", which is the question the guard was always for, and it has one answer for every spec.
 //
 // ⚠ THE LATCH, NOT A RE-STAMP. v1 re-stamped the dispatch instant before killing, so it would not
 // re-kill the same slot on every poll while the EOF propagated
 // (`maxon-selfhosted/Testing/SpecTestRunner.maxon:3754`). That cannot work here, because the same
-// sweep also has to leave a slot alone once it is dead: re-stamping would push a dead slot's deadline
+// sweep also has to leave a slot alone once it is dead: re-stamping would push a dead slot's bound
 // forward for ever and the wedge watchdog — whose clock this function resets — would never run either.
-function enforceJobDeadlines(workers PersistentWorkerHandleArray, busy BoolArray, inFlight SpecJobArray, dispatchedAt DispatchInstantArray, expired BoolArray, plans SpecPlanArray, now InstantMs) returns bool
+function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy BoolArray, inFlight SpecJobArray, spokeAt SlotInstantArray, expired BoolArray, plans SpecPlanArray, strategy RunStrategy, now InstantMs) returns bool
 	var anyWithinDeadline = false
 
 	for slot in 0 upto busy.count() 'eachSlot'
-		let isBusy = try busy.get(slot) otherwise panic("enforceJobDeadlines: busy.get({slot}) is in bounds by construction")
+		let isBusy = try busy.get(slot) otherwise panic("enforceProgressDeadlines: busy.get({slot}) is in bounds by construction")
 		if not isBusy 'idleSlot'
 			continue
 		end 'idleSlot'
 
-		let alreadyGivenUpOn = try expired.get(slot) otherwise panic("enforceJobDeadlines: expired.get({slot}) is in bounds by construction")
+		let alreadyGivenUpOn = try expired.get(slot) otherwise panic("enforceProgressDeadlines: expired.get({slot}) is in bounds by construction")
 		if alreadyGivenUpOn 'killedAlready'
 			continue
 		end 'killedAlready'
 
-		let job = try inFlight.get(slot) otherwise panic("enforceJobDeadlines: inFlight.get({slot}) is in bounds by construction")
-		let plan = try plans.get(job.planIndex) otherwise panic("enforceJobDeadlines: plans.get({job.planIndex}) is in bounds by construction")
-		let deadline = jobDeadlineMs(plan.testNames.count() as TestTally)
-		let since = try dispatchedAt.get(slot) otherwise panic("enforceJobDeadlines: dispatchedAt.get({slot}) is in bounds by construction")
+		let job = try inFlight.get(slot) otherwise panic("enforceProgressDeadlines: inFlight.get({slot}) is in bounds by construction")
+		let plan = try plans.get(job.planIndex) otherwise panic("enforceProgressDeadlines: plans.get({job.planIndex}) is in bounds by construction")
+		let deadline = progressDeadlineMs(plan.testNames.count() as TestTally, strategy: strategy)
+		let since = try spokeAt.get(slot) otherwise panic("enforceProgressDeadlines: spokeAt.get({slot}) is in bounds by construction")
 
-		if now - since < deadline 'stillWithinDeadline'
+		if now - since < deadline 'stillSpeaking'
 			anyWithinDeadline = true
 			continue
-		end 'stillWithinDeadline'
+		end 'stillSpeaking'
 
-		var handle = try workers.get(slot) otherwise panic("enforceJobDeadlines: workers.get({slot}) is in bounds by construction")
-		printError("error: spec worker {handle.workerId} has held '{job.specName}' for {formatSeconds(now - since)}, past its {formatSeconds(deadline)} deadline — terminating it\n")
+		var handle = try workers.get(slot) otherwise panic("enforceProgressDeadlines: workers.get({slot}) is in bounds by construction")
+		printError("error: spec worker {handle.workerId} has said nothing about '{job.specName}' for {formatSeconds(now - since)}, past the {formatSeconds(deadline)} one step is allowed — terminating it\n")
 		// TERMINATE, do NOT release: the dispatch loop's dead-worker path still has to read this
 		// worker's stderr, and it is the ONE place a handle is freed. Killing here closes the worker's
 		// stdout, which is what makes its drain complete and hands the slot to that path.
 		handle.terminate()
-		try expired.set(slot, value: true) otherwise panic("enforceJobDeadlines: expired.set({slot}) is in bounds by construction")
+		try expired.set(slot, value: true) otherwise panic("enforceProgressDeadlines: expired.set({slot}) is in bounds by construction")
 	end 'eachSlot'
 
 	return anyWithinDeadline
-end 'enforceJobDeadlines'
+end 'enforceProgressDeadlines'
 
 // Hand `job` to slot `slot` and immediately spawn the green thread that will drain its answer.
 //
@@ -2006,22 +2197,28 @@ end 'enforceJobDeadlines'
 // right index, and the strict split below turns any future reordering into a panic rather than a
 // silently mis-indexed promise.
 //
-// THE ORDER OF THE FIVE SLOT WRITES IS DELIBERATE, and `busy` goes LAST. `busy[slot]` is the guard
-// that tells the two scans below that `inFlight[slot]`, `drains[slot]`, `dispatchedAt[slot]` and
-// `expired[slot]` may be read, so it is set only once all four hold this job's values. Setting it
-// first — as this used to — leaves a window in which the slot claims to be busy while its promise is
-// still the PREVIOUS job's, and that window is safe today only because nothing between the writes
-// happens to yield to another green thread. That is a property of the current code, not of the
-// invariant, so it is not one to rest on.
+// THE ORDER OF THE SIX SLOT WRITES IS DELIBERATE, and `busy` goes LAST. `busy[slot]` is the guard
+// that tells the two scans below that `inFlight[slot]`, `drains[slot]`, `dispatchedAt[slot]`,
+// `spokeAt[slot]` and `expired[slot]` may be read, so it is set only once all five hold this job's
+// values. Setting it first — as this used to — leaves a window in which the slot claims to be busy
+// while its promise is still the PREVIOUS job's, and that window is safe today only because nothing
+// between the writes happens to yield to another green thread. That is a property of the current code,
+// not of the invariant, so it is not one to rest on.
 //
 // ⚠ `expired` is CLEARED here and nowhere else. It is the previous job's answer to a question about
 // THIS one, and a slot inheriting it would be a fresh worker the deadline sweep never looks at again.
 //
 // `dispatchedAt` is stamped AFTER the send rather than before it, so it dates the job from the moment
 // the worker could first have seen it. The distinction matters in exactly the two cases it is read in:
-// a wedge report — or a job deadline — whose age included a blocked write would be timing the parent,
-// not the worker.
-function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt DispatchInstantArray, expired BoolArray)
+// a wedge report — or a progress bound — whose age included a blocked write would be timing the
+// parent, not the worker.
+//
+// ⚠ **`spokeAt` IS SEEDED FROM THE SAME INSTANT, AND IT HAS TO BE SEEDED SOMEWHERE.** A worker's first
+// line of a job arrives one whole step later (it parses the spec, then announces its first compile),
+// so with nothing seeded the sweep would read a slot's silence as stretching back to whenever that
+// worker last spoke on its PREVIOUS job — and terminate a healthy worker part-way into its first
+// compile. Dispatch is the moment the interval starts, so dispatch is what starts it.
+function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SlotInstantArray, expired BoolArray)
 	var handle = try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")
 
 	try handle.sendJob(job.toJobLine()) otherwise (e) 'sendFailed'
@@ -2030,11 +2227,16 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 		abortOnDeadWorker(handle, job: job, reason: "could not send it the job: {e.displayReason()}")
 	end 'sendFailed'
 
-	try dispatchedAt.set(slot, value: Clock.nowMs()) otherwise panic("sendAndDrain: dispatchedAt.set({slot}) is in bounds by construction")
+	let dispatchInstant = Clock.nowMs()
+	try dispatchedAt.set(slot, value: dispatchInstant) otherwise panic("sendAndDrain: dispatchedAt.set({slot}) is in bounds by construction")
+	try spokeAt.set(slot, value: dispatchInstant) otherwise panic("sendAndDrain: spokeAt.set({slot}) is in bounds by construction")
 	try inFlight.set(slot, value: job) otherwise panic("sendAndDrain: inFlight.set({slot}) is in bounds by construction")
 	try expired.set(slot, value: false) otherwise panic("sendAndDrain: expired.set({slot}) is in bounds by construction")
 
-	let drain = async drainResultsThunk(handle.child)
+	// The spawn hands the green thread its OWN REFERENCE to `spokeAt` (see `drainResultsThunk`), so the
+	// stamps it writes land in the array this loop reads. It is the parent's array throughout: the drain
+	// only ever writes its own slot, and only the dispatcher ever reads one.
+	let drain = async drainResultsThunk(handle.child, spokeAt: spokeAt, slot: slot)
 	if slot == drains.count() 'firstDispatchToThisSlot'
 		drains.push(drain)
 	end 'firstDispatchToThisSlot' else if slot < drains.count() 'redispatch'

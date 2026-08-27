@@ -14,7 +14,7 @@
 //
 // ⇒ The containment the spawn bought is re-bought where it belongs, in the POOL: a compiler panic now
 // kills the WORKER, and `SpecWorkerPool` turns that into one named FAIL per unreported test of that
-// job, respawns, and carries on (see `emitWorkerCompiling` and the pool's dead-worker recovery). The
+// job, respawns, and carries on (see `emitWorkerStep` and the pool's dead-worker recovery). The
 // `build` command path — arg parsing, output-path derivation — is no longer exercised per test; it is
 // exercised by every real `maxon-shv2 build`, including the one that builds this compiler.
 //
@@ -713,15 +713,17 @@ end 'CompileAnswer'
 // this guard could leave things worse than it found them.
 //
 // ⚠ EXPORTED BECAUSE TWO OF THE POOL'S BOUNDS ARE DERIVED FROM IT, and must be: this deadline,
-// `jobDeadlineMs`'s floor and `WedgeWatchdogMs` are NESTED — this one bounds a single subprocess, the
-// job deadline bounds the whole SPEC a worker is running, and the wedge watchdog bounds the dispatch
-// loop's idleness — so an outer bound must never fire first and report an inner one's failure as its
-// own. Do not re-spell any of the three as a literal; see `SpecWorkerPool.jobDeadlineMs`.
+// `TestProgressDeadlineMs`'s floor and `WedgeWatchdogMs` are NESTED — this one bounds a single
+// subprocess, the progress bound bounds how long a worker may say NOTHING (i.e. one step of the spec
+// it is running), and the wedge watchdog bounds the dispatch loop's idleness — so an outer bound must
+// never fire first and report an inner one's failure as its own. Do not re-spell any of the three as a
+// literal; see `SpecWorkerPool.progressDeadlineMs`, which derives the batched lane's allowance from
+// `batchDeadlineMs` for exactly this reason.
 //
-// ⛔ **IT NO LONGER BOUNDS A COMPILE, AND THAT IS THE GAP `jobDeadlineMs` EXISTS TO FILL (G20).** Every
-// selected test used to be built by a `build` SUBPROCESS carrying this deadline, so a compiler
-// infinite loop surfaced as one named FAIL. The compile happens in process now and this bounds only
-// the RUN — the job deadline is what ends a hung compile, one level up.
+// ⛔ **IT NO LONGER BOUNDS A COMPILE, AND THAT IS THE GAP `TestProgressDeadlineMs` EXISTS TO FILL
+// (G20).** Every selected test used to be built by a `build` SUBPROCESS carrying this deadline, so a
+// compiler infinite loop surfaced as one named FAIL. The compile happens in process now and this
+// bounds only the RUN — the pool's progress bound is what ends a hung compile, one level up.
 //
 // ⚠ **IT IS THE DEADLINE FOR ONE EXECUTION, WHICH IS NO LONGER THE SAME THING AS ONE SPAWN.** The
 // batched WSL run performs a whole spec's executions inside a SINGLE `wsl` process (`runWslBatch`):
@@ -1016,7 +1018,7 @@ export function runOneSpec(specDir FilePath, specName String, filter String, upd
 		prepared.push(prepareOneTest(test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
 	end 'eachCompile'
 
-	let observations = executeRuns(prepared, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+	let observations = executeRuns(prepared, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
 
 	for (iter, test) in tests.withIterator() 'eachVerdict'
 		let step = try prepared.get(iter.index()) otherwise panic("runOneSpec: {prepared.count()} prepared tests for {tests.count()} selected — one is pushed per selected test, in one loop")
@@ -1908,9 +1910,10 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 	// ⭐⭐ **THE BREADCRUMB, IMMEDIATELY BEFORE THE COMPILE, AND THIS IS THE WHOLE REASON IT EXISTS.**
 	// The compile runs in THIS process, so a compiler panic kills this worker and the parent never
 	// receives a single record for the job. The parent's plan tells it which tests it is owed; only
-	// this line can tell it which of them was in the compiler's hands when it died. See
-	// `SpecWorkerPool.emitWorkerCompiling`.
-	emitWorkerCompiling("{specName}/{test.name}")
+	// this line can tell it which of them was in the compiler's hands when it died — and only the
+	// INTERVAL between two of them tells it that this worker is still alive at all. See
+	// `SpecWorkerPool.emitWorkerStep`.
+	emitWorkerStep(WorkerStep.compile, label: stepLabel(specName, testName: test.name))
 
 	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, pinnable: emitsTargetIr(effectiveTarget), effectiveTarget: effectiveTarget)
 
@@ -1929,6 +1932,15 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 		needsExecution(expected, stderr, stdout) gives PreparedTest.awaiting(PendingRun.create(compiled, expected: expected, stderr: stderr, stdout: stdout))
 	end 'verdict'
 end 'compileStagedTest'
+
+// ⭐ THE `<spec>/<test>` LABEL A BREADCRUMB CARRIES — the same shape a reader sees on a PASS/FAIL line
+// and types into `--filter`, which is the whole point: a dead worker's report names the case in the
+// spelling its reader already has in hand. ONE spelling for the two steps that emit one, because the
+// pool prints them side by side and a step that named its case differently would read as a different
+// case.
+function stepLabel(specName String, testName String) returns String
+	return "{specName}/{testName}"
+end 'stepLabel'
 
 // ⭐⭐ **THE COMPILE ITSELF — IN THIS PROCESS, THROUGH `Compiler.compileToProduct`, WHICH IS THE SAME
 // PIPELINE DRIVER A COMMAND LINE GOES THROUGH.** There is deliberately no second `loadProject →
@@ -3428,10 +3440,13 @@ export function runStrategyFor(effectiveTarget Target) returns RunStrategy
 	end 'runner'
 end 'runStrategyFor'
 
-function executeRuns(prepared PreparedTestArray, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
+// ⚠ **THE SPEC NAME IS CARRIED IN FOR THE BREADCRUMBS AND FOR NOTHING ELSE.** The pool bounds how long
+// a worker may say NOTHING (`SpecWorkerPool.progressDeadlineMs`), so every step that can block owes it
+// a line first — and a line has to name the case it is about in the reader's own spelling.
+function executeRuns(prepared PreparedTestArray, specName String, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
 	return match runStrategyFor(effectiveTarget) 'strategy'
-		individually gives spawnEachRun(prepared, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
-		wslBatch gives runWslBatch(prepared, tempDir: tempDir, runWorkingDir: runWorkingDir)
+		individually gives spawnEachRun(prepared, specName: specName, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+		wslBatch gives runWslBatch(prepared, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir)
 		noneHere gives unperformedRuns(prepared)
 	end 'strategy'
 end 'executeRuns'
@@ -3451,18 +3466,30 @@ function unperformedRuns(prepared PreparedTestArray) returns RunObservationArray
 end 'unperformedRuns'
 
 // One spawn per test — the host's own binaries, and the two external runners that are not batched.
-function spawnEachRun(prepared PreparedTestArray, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
+function spawnEachRun(prepared PreparedTestArray, specName String, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
 	var observations = RunObservationArray.create()
 	for step in prepared 'eachStep'
 		observations.push(match step 'phase'
 			finished gives RunObservation.notRequired
-			awaiting(pending) gives spawnOneRun(pending, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+			awaiting(pending) gives spawnOneRun(pending, specName: specName, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
 		end 'phase')
 	end 'eachStep'
 	return observations
 end 'spawnEachRun'
 
-function spawnOneRun(pending PendingRun, runWorkingDir FilePath, effectiveTarget Target) returns RunObservation
+function spawnOneRun(pending PendingRun, specName String, runWorkingDir FilePath, effectiveTarget Target) returns RunObservation
+	// ⭐ THE BREADCRUMB FOR THIS STEP, IMMEDIATELY BEFORE THE SPAWN, and it is emitted HERE rather than
+	// in the loop above so that the tests that need NO execution emit none: a step line is a claim that
+	// something is about to take time, and a `finished` test takes none.
+	//
+	// ⚠ **THE RUN PASS HAS TO ANNOUNCE ITSELF OR THE COMPILE PASS'S LINES BOUND THE WRONG THING.** A
+	// hung PROGRAM is already bounded — `runProcess` carries `SpecSpawnTimeoutMs` and reports one named
+	// FAIL — but only if the pool lets it finish. With the whole run pass silent, a spec whose programs
+	// hang would look like a worker that stopped, and the pool would terminate it and fail every one of
+	// its tests for a failure the runner was about to name test by test. That is the nesting violation
+	// `SpecSpawnTimeoutMs`'s own header warns about, and this line is what keeps it from happening.
+	emitWorkerStep(WorkerStep.run, label: stepLabel(specName, testName: pending.compiled.test.name))
+
 	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned by
 	// the host, so it goes behind the vendored wasmtime instead — what is checked afterwards is
 	// IDENTICAL either way.
@@ -3493,9 +3520,16 @@ end 'BatchLaunch'
 // path and WSL translates it, so nothing here maps a Windows path to a guest one and nothing here
 // assumes an automount root. Every binary that spec built is IN that directory, so each execution
 // inherits exactly the working directory the per-test `--cd` gave it.
-function runWslBatch(prepared PreparedTestArray, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
+function runWslBatch(prepared PreparedTestArray, specName String, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
 	let batchSubdir = batchSubdirPath()
 	let batchDir = tempDir.join(batchSubdir)
+
+	// ⭐ ONE BREADCRUMB FOR THE WHOLE ENTRY, because the entry is one blocking call and no line can come
+	// out of it. It names the batch's SIZE rather than a test, and that is not decoration: the pool's
+	// progress bound for this lane is `batchDeadlineMs` of exactly this count, so a report that reads
+	// "terminated while running <spec>: 40 executions" is read against the number that allowed it.
+	emitWorkerStep(WorkerStep.run, label: "{specName}: {pendingRunCount(prepared)} execution(s) in one {WslExecutableName} entry")
+
 	let launch = launchBatch(prepared, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir)
 
 	var observations = RunObservationArray.create()
@@ -3582,6 +3616,11 @@ end 'launchBatch'
 // worth for the shell around them. It is the same structural ceiling a spec had when each test was its
 // own spawn — (tests) x `SpecSpawnTimeoutMs` — stated once instead of accumulated by accident.
 //
+// ⚠ EXPORTED BECAUSE THE POOL'S OUTER BOUND HAS TO KNOW IT: this entry is the longest a worker on this
+// lane can legitimately stay silent, and an outer bound smaller than it would terminate a worker that
+// is doing exactly what this number allows. `SpecWorkerPool.progressDeadlineMs` reads it rather than
+// re-deriving it — the same rule this file states about `SpecSpawnTimeoutMs` one level down.
+//
 // ⛔ **A TIGHTER NUMBER WOULD BE WORSE THAN NO NUMBER.** Nothing outside the guest can tell "a test is
 // inside its own deadline" from "`wsl` has stopped responding", so a deadline short enough to catch the
 // second kills a batch that is merely doing what the first one legitimately does — and every test after
@@ -3589,7 +3628,7 @@ end 'launchBatch'
 // actually bounds a wedged PROGRAM, per test, at exactly the value one spawn used to be bounded by; this
 // bounds only a `wsl` that never returns at all, which the pool's own wedge watchdog would report
 // anyway.
-function batchDeadlineMs(executions TestTally) returns DurationMs
+export function batchDeadlineMs(executions TestTally) returns DurationMs
 	return SpecSpawnTimeoutMs * (executions + 1)
 end 'batchDeadlineMs'
 
