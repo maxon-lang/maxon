@@ -283,6 +283,9 @@ export let POffRemoteFreeHead = 0x78 as ByteOffset
 // it as *"this is a real OS thread stack, call directly"*, the prologue stack guard reads it as *"nothing to
 // grow"*, and `__gt_drive_until`'s recycle gate reads it as *"never free this stack"*. Its TIB bounds are
 // captured by the first `__gt_context_switch` AWAY from it, exactly as GT0's are.
+//
+// ⚠ NOT exported: every reader is in this file (`emitSchedAdoptProc` and the worker loop's run arm), and an
+// `export` with no cross-file consumer is exactly what E3092 refuses.
 let POffMainThread = 0x80 as ByteOffset
 
 // ⭐⭐ **THE DEFERRED RE-ENQUEUE SLOTS — the BACK one, and it may NOT share the front one's slot.**
@@ -456,7 +459,10 @@ export let SchedDrainPendingName = b"__sched_drain_pending"
 
 // `__sched_runq_put(gt)` — push a runnable green thread onto the CURRENT P's ring tail, overflowing half the
 // ring plus `gt` to the global queue when the ring is full. Go's `runqput` + `runqputslow`.
-export let SchedRunqPutName = b"__sched_runq_put"
+//
+// ⚠ NOT exported: `GtRuntime` reaches it through `emitSchedRunqPut` rather than by name, so the SYMBOL has
+// no cross-file reader.
+let SchedRunqPutName = b"__sched_runq_put"
 
 // `__sched_runq_get(p) -> gt` — take the oldest thread off `p`'s ring by CAS on its head, or 0. Go's
 // `runqget`. It takes `p` rather than reading TLS because the SWEEP calls it for the P it already holds.
@@ -468,7 +474,10 @@ let SchedStealName = b"__sched_steal"
 
 // ⭐⭐ `__sched_find_runnable() -> gt` — **THE ONE PLACE THE SCHEDULER DECIDES WHAT RUNS NEXT**, and 0 when
 // there is nothing. Go's `findRunnable`, minus everything shv2 has no equivalent of.
-export let SchedFindRunnableName = b"__sched_find_runnable"
+//
+// ⚠ NOT exported, for `SchedRunqPutName`'s reason: its three drivers reach it through
+// `emitSchedFindRunnable`.
+let SchedFindRunnableName = b"__sched_find_runnable"
 
 // `__sched_sweep_dropped()` — reclaim the dropped green threads sitting at the FRONT of this P's ring and of
 // the global queue. Called by `__gt_promise_drop`, which is what puts one there.
@@ -693,7 +702,7 @@ export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMin
 	module.appendOp(block, op: StdOp.osLockLeave(emitLoadGlobalWord(module, block: block, label: SchedLockLabel, ids: ids)))
 end 'emitSchedLockLeave'
 
-// ⭐⭐ **PUBLISH A RUNNABLE GREEN THREAD AT `end` — the ONE door, and the reason it is one door is the
+// ⭐⭐ **PUBLISH A RUNNABLE GREEN THREAD AT `queueEnd` — the ONE door, and the reason it is one door is the
 // WAKE.** Every site that makes a green thread discoverable makes it discoverable AND tells an idle or
 // absent M about it, and no site has ever been able to say that the second belongs with the first.
 //
@@ -704,11 +713,11 @@ end 'emitSchedLockLeave'
 // tail's own publish — an `atomicRmw add`, i.e. a `lock xadd`, which is both the store-release that makes
 // the slot visible to a thief and the full barrier the reads below need. See `buildSchedRunqPut`, which
 // states it at the instruction.
-export function emitSchedPublishRunnable(module StdModule, block IrBlock, gt ValueId, end SchedQueueEnd, ids ValueMinter)
-	match end 'end'
+export function emitSchedPublishRunnable(module StdModule, block IrBlock, gt ValueId, queueEnd SchedQueueEnd, ids ValueMinter)
+	match queueEnd 'queueEnd'
 		localRing then emitSchedRunqPut(module, block: block, gt: gt, ids: ids)
 		globalTail then emitSchedEnqueueGlobalTail(module, block: block, gt: gt, ids: ids)
-	end 'end'
+	end 'queueEnd'
 
 	emitSchedWakeAnIdleM(module, block: block, ids: ids)
 end 'emitSchedPublishRunnable'
@@ -734,11 +743,11 @@ end 'emitSchedEnqueueGlobalTail'
 // CRITICAL_SECTION and therefore RECURSIVE, so taking it twice is not an error and getting this wrong
 // produces no diagnostic anywhere — only a wake that observes a stale `idleFlag`.
 //
-// ⚠ Its one caller since W212 is the ring's OVERFLOW (`buildSchedRunqPut`), which moves half a full ring to
-// the global queue under the lock. The timer and process walks, which were its other callers, now push to
-// the ring instead — a push that takes no lock at all, so their recursive-entry problem is one they no
-// longer have.
-export function emitSchedEnqueueLocked(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+// ⚠ **ITS ONE CALLER SINCE W212 IS THE RING'S OVERFLOW (`buildSchedRunqPut`), WHICH IS IN THIS FILE — SO IT
+// IS NO LONGER EXPORTED.** That call moves half a full ring to the global queue under the lock. The timer
+// and process walks, which were its other callers, now push to the RING instead — a push that takes no lock
+// at all, so their recursive-entry problem is one they no longer have.
+function emitSchedEnqueueLocked(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(gt)))
 end 'emitSchedEnqueueLocked'
 
@@ -776,10 +785,11 @@ end 'emitSchedFindRunnable'
 // the divergence a copied idiom predicts, and it is a silent wrong answer rather than a compile error: a
 // concurrent pop and append can leave the FIFO's tail pointing at a node the head no longer reaches.
 //
-// ⚠ Since W212 those four sites are ONE — `__sched_find_runnable`, which every driver calls — and this door
-// serves the two places inside it that consult the global queue: the 61-schedule fairness check and the
-// sweep. The divergence above is what a single decision point makes structurally impossible.
-export function emitSchedDequeueLocked(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+// ⚠ **SINCE W212 THOSE FOUR SITES ARE ONE — `__sched_find_runnable`, which every driver calls — SO THIS DOOR
+// IS NO LONGER EXPORTED EITHER.** It serves the two places inside that function which consult the global
+// queue: the 61-schedule fairness check and the sweep. The divergence above is what a single decision point
+// makes structurally impossible.
+function emitSchedDequeueLocked(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	emitSchedLockEnter(module, block: block, ids: ids)
 	let g = ids.mint()
 	module.appendOp(block, op: StdOp.call(g, callee: GtDequeueName, args: ValueIdArray.create()))
@@ -1096,17 +1106,17 @@ function buildSchedDrainPending(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"done")
 
 	let p = emitLoadCurrentP(module, block: entry, ids: ids)
-	emitSchedDrainSlot(module, func: func, cur: entry, p: p, offset: POffPendingWaiter, end: SchedQueueEnd.localRing, cont: yielderTest, ids: ids)
-	emitSchedDrainSlot(module, func: func, cur: yielderTest, p: p, offset: POffPendingYielder, end: SchedQueueEnd.globalTail, cont: doneBlock, ids: ids)
+	emitSchedDrainSlot(module, func: func, cur: entry, p: p, offset: POffPendingWaiter, queueEnd: SchedQueueEnd.localRing, cont: yielderTest, ids: ids)
+	emitSchedDrainSlot(module, func: func, cur: yielderTest, p: p, offset: POffPendingYielder, queueEnd: SchedQueueEnd.globalTail, cont: doneBlock, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildSchedDrainPending'
 
-// One slot's drain: if it holds a green thread, clear it and publish that thread at `end`; either way
+// One slot's drain: if it holds a green thread, clear it and publish that thread at `queueEnd`; either way
 // continue at `cont`. Stated once because the two slots differ only in their offset and their end — and
 // that day has arrived, so the end is an ARGUMENT here rather than a copy of this function.
-function emitSchedDrainSlot(module StdModule, func IrFunction, cur IrBlock, p ValueId, offset ByteOffset, end SchedQueueEnd, cont IrBlock, ids ValueMinter)
+function emitSchedDrainSlot(module StdModule, func IrFunction, cur IrBlock, p ValueId, offset ByteOffset, queueEnd SchedQueueEnd, cont IrBlock, ids ValueMinter)
 	var enqueue = module.addBlock(func, label: b"drainpush")
 
 	let pending = emitLoadField(module, block: cur, record: p, offset: offset, ids: ids)
@@ -1118,7 +1128,7 @@ function emitSchedDrainSlot(module StdModule, func IrFunction, cur IrBlock, p Va
 	// and a clear afterwards would erase it.
 	let clear = emitConst(module, block: enqueue, value: 0, ids: ids)
 	emitStoreField(module, block: enqueue, record: p, offset: offset, value: clear)
-	emitSchedPublishRunnable(module, block: enqueue, gt: pending, end: end, ids: ids)
+	emitSchedPublishRunnable(module, block: enqueue, gt: pending, queueEnd: queueEnd, ids: ids)
 	module.setTerminator(enqueue, op: StdOp.branch(cont.id))
 end 'emitSchedDrainSlot'
 
