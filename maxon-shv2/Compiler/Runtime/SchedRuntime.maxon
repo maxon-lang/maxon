@@ -174,8 +174,13 @@ end 'pushRuntimeGlobal'
 // `tail - head`, and a third word maintained beside two that already answer the question is a fact stored
 // twice — which is exactly how a queue comes to disagree with itself. It stays reserved rather than being
 // reused so the bootstrap's debug agent, which reads this header, still finds its own field where it left it.
-export let POffRunqHead = 0x00 as ByteOffset
-export let POffRunqTail = 0x08 as ByteOffset
+//
+// ⚠ NEITHER IS EXPORTED. Both were, so that `GtRuntime`'s yield arm could ask whether this P had anything
+// queued; that question is `emitRunqAnyQueued` now, and with it gone the counters have no reader outside
+// this file — which is what the SELF-COMPILE's E3092 refuses, and the shape the ring's representation
+// should have had from the start.
+let POffRunqHead = 0x00 as ByteOffset
+let POffRunqTail = 0x08 as ByteOffset
 let POffReservedLocalQueueLen = 0x10 as ByteOffset
 
 // ⭐⭐ **THE GREEN THREAD THIS M IS RUNNING** — the field that replaces the single `.data` word shv2 kept it
@@ -231,8 +236,11 @@ let PStatusActive = 1 as ParsedInt
 // bootstrap hit it as a documented `--workers>=5` crash. The waking side therefore parks the GT HERE and the
 // scheduler drains it AFTER the switch.
 //
-// ⚠ **IT IS THE FRONT OF THE QUEUE, AND ITS SIBLING BELOW IS THE BACK.** A woken AWAITER belongs at the
-// front: it is the thread this processor was waiting on.
+// ⚠ **IT IS THE SOONEST END OF THE HIERARCHY, AND ITS SIBLING BELOW IS THE FURTHEST.** A woken AWAITER is
+// the thread this processor was waiting on, so it drains to `SchedQueueEnd.localRing` — this P's own ring,
+// which `__sched_find_runnable` consults before anything else. ⚠ Since W212 that is a ring TAIL and not a
+// queue front: with no `runnext` (`POffRunnext`) there is no front to put anything at, and "soonest" means
+// "on the tier that is read first".
 let POffPendingWaiter = 0x50 as ByteOffset
 
 // Go's `runnext` — the one green thread a P runs before consulting its local ring.
@@ -268,10 +276,15 @@ let POffFreeListLen = 0x68 as ByteOffset
 // EXPORTED because the shim (hand-assembled) reads it.
 export let POffSystemStackSP = 0x70 as ByteOffset
 
-// The head of this P's MPSC remote-free queue: where an M that frees a slot owned by ANOTHER P pushes it,
-// for the owner to drain on its next slow path. ⚠ RESERVED AND LEFT ZERO: shv2's slab has one shard and no
-// ownership gate (`SlabRuntime`'s header), so there is no cross-P free to queue. The slot is reserved
-// because the sharded allocator is a later rung and the bootstrap's layout puts it here.
+// ⭐ **THE HEAD OF THIS P's MPSC REMOTE-FREE QUEUE — a Treiber stack, and it is LIVE.** An M that frees a
+// slot whose span another P owns CAS-pushes it here, and the owner drains it on its next slow path
+// (`SlabRuntime.maxon`'s header for the mechanism, and its two readers at the push and the drain).
+//
+// ⛔ **THIS NOTE SAID "RESERVED AND LEFT ZERO — shv2's slab has one shard and no ownership gate" UNTIL THE
+// W212 REVIEW, AND S5 HAD FALSIFIED IT.** The sharding landed, gave the slot its two callers, and left the
+// sentence here saying the opposite of this file's own header three screens up — one fact written twice,
+// with the second copy rotting. A W213 author reading only this line would conclude a P carries no
+// cross-thread state at all, which is exactly the premise P migration must NOT be built on.
 export let POffRemoteFreeHead = 0x78 as ByteOffset
 
 // ⭐ **THIS M's OWN SCHEDULER GREEN THREAD — an INLINE GT struct, not a pointer.** It is Go's `g0`: the
@@ -1145,6 +1158,27 @@ function emitRunqSlotAddr(module StdModule, block IrBlock, p ValueId, counter Va
 	return emitWordSlotAddr(module, block: block, base: emitFieldAddr(module, block: block, record: p, offset: POffRunqBase, ids: ids), index: index, ids: ids)
 end 'emitRunqSlotAddr'
 
+// ⭐⭐ **DOES `p` HAVE ANYTHING IN ITS RING? — THE DOOR THE OTHER FILE ASKS THROUGH, and the reason it is a
+// door is that the ANSWER IS DUE TO CHANGE.** `tail != head` is Go's `runqempty` negated, MINUS the re-read
+// loop that function carries (`proc.go:7499`) — and that loop exists for exactly one reason: a `runnext` can
+// hold a thread while the two counters agree. shv2 deliberately has no `runnext` (`POffRunnext`), so the day
+// **W213** builds one this answer stops being true, and it stops SILENTLY: a scheduler that concludes
+// "nobody is queued here" polls where it should have handed the processor over, which is a latency bug no
+// suite goes red over.
+//
+// ⛔ **BEFORE THIS DOOR, `GtRuntime.buildGtResched`'s YIELD ARM READ THE TWO COUNTERS ITSELF** — so where the
+// ring keeps its head and tail, and what makes it empty, were facts a second file knew. That is the shape
+// this project keeps paying for, and W213 is already scheduled to falsify it.
+//
+// ⚠ The two askers INSIDE this file (`__sched_runq_get`, `__sched_sweep_dropped`) deliberately do not come
+// through here: each needs the very `head` it compared, to address a slot and then to compare-and-swap it,
+// and a door that re-loaded the word would hand them a head they had not tested.
+export function emitRunqAnyQueued(module StdModule, block IrBlock, p ValueId, ids ValueMinter) returns ValueId
+	let head = emitLoadField(module, block: block, record: p, offset: POffRunqHead, ids: ids)
+	let tail = emitLoadField(module, block: block, record: p, offset: POffRunqTail, ids: ids)
+	return emitCmp(module, block: block, a: tail, b: head, pred: StdCmpPred.ne, ids: ids)
+end 'emitRunqAnyQueued'
+
 // ⭐⭐ **PUBLISH THE RING TAIL — AND THIS ONE INSTRUCTION IS THE DEKKER PAIR'S FENCE.** It advances
 // `p.runqTail` by `delta` with a `lock xadd` where a plain store would do, because on x86 a plain store may
 // be reordered past a LATER LOAD — and the later load is `__sched_wake_or_spawn`'s scan of every P's
@@ -1263,8 +1297,7 @@ function buildSchedRunqPut(module StdModule)
 	// and this is the only other place a marked thread is looked at without being run.
 	let slotCounter = emitBin(module, block: moveBody, a: head, b: moveIndex, opcode: StdBinOpcode.add, ids: ids)
 	let movingGt = emitLoadField(module, block: moveBody, record: emitRunqSlotAddr(module, block: moveBody, p: p, counter: slotCounter, ids: ids), offset: 0, ids: ids)
-	let movingStatus = emitLoadField(module, block: moveBody, record: movingGt, offset: GtOffStatus, ids: ids)
-	let movingDropped = emitGtStatusEquals(module, block: moveBody, status: movingStatus, want: GtStatusDropped, ids: ids)
+	let movingDropped = emitGtIsDropped(module, block: moveBody, gt: movingGt, ids: ids)
 	module.setTerminator(moveBody, op: StdOp.condBranch(movingDropped, thenBlockId: moveDrop.id, elseBlockId: moveKeep.id))
 
 	emitSchedEnqueueLocked(module, block: moveKeep, gt: movingGt, ids: ids)
@@ -1690,8 +1723,7 @@ function buildSchedFindRunnable(module StdModule)
 	module.setTerminator(candidate, op: StdOp.condBranch(nothingFound, thenBlockId: noWork.id, elseBlockId: checkDropped.id))
 	emitConstReturn(module, block: noWork, value: 0, ids: ids)
 
-	let candidateStatus = emitLoadField(module, block: checkDropped, record: found, offset: GtOffStatus, ids: ids)
-	let wasDropped = emitGtStatusEquals(module, block: checkDropped, status: candidateStatus, want: GtStatusDropped, ids: ids)
+	let wasDropped = emitGtIsDropped(module, block: checkDropped, gt: found, ids: ids)
 	module.setTerminator(checkDropped, op: StdOp.condBranch(wasDropped, thenBlockId: reclaim.id, elseBlockId: hand.id))
 	module.setTerminator(hand, op: StdOp.ret(found))
 
@@ -1753,8 +1785,7 @@ function buildSchedSweepDropped(module StdModule)
 	module.setTerminator(ringHdr, op: StdOp.condBranch(ringEmpty, thenBlockId: globalStart.id, elseBlockId: ringPeek.id))
 
 	let peeked = emitLoadField(module, block: ringPeek, record: emitRunqSlotAddr(module, block: ringPeek, p: p, counter: head, ids: ids), offset: 0, ids: ids)
-	let peekedStatus = emitLoadField(module, block: ringPeek, record: peeked, offset: GtOffStatus, ids: ids)
-	let peekedDropped = emitGtStatusEquals(module, block: ringPeek, status: peekedStatus, want: GtStatusDropped, ids: ids)
+	let peekedDropped = emitGtIsDropped(module, block: ringPeek, gt: peeked, ids: ids)
 	module.setTerminator(ringPeek, op: StdOp.condBranch(peekedDropped, thenBlockId: ringTake.id, elseBlockId: globalStart.id))
 
 	let headAddr = emitFieldAddr(module, block: ringTake, record: p, offset: POffRunqHead, ids: ids)
@@ -1778,8 +1809,7 @@ function buildSchedSweepDropped(module StdModule)
 	let globalEmpty = emitCmp(module, block: globalHdr, a: globalHead, b: globalZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(globalHdr, op: StdOp.condBranch(globalEmpty, thenBlockId: doneBlock.id, elseBlockId: globalPeek.id))
 
-	let globalStatus = emitLoadField(module, block: globalPeek, record: globalHead, offset: GtOffStatus, ids: ids)
-	let globalDropped = emitGtStatusEquals(module, block: globalPeek, status: globalStatus, want: GtStatusDropped, ids: ids)
+	let globalDropped = emitGtIsDropped(module, block: globalPeek, gt: globalHead, ids: ids)
 	module.setTerminator(globalPeek, op: StdOp.condBranch(globalDropped, thenBlockId: globalFree.id, elseBlockId: doneBlock.id))
 
 	module.appendOp(globalFree, op: StdOp.call(ids.mint(), callee: GtDequeueName, args: ValueIdArray.create()))
@@ -1857,8 +1887,10 @@ end 'buildSchedStealCount'
 // context-switch into it — coming back here when that thread yields or completes — or, with nothing to run,
 // PARK on this P's wake event. On shutdown it drops the live-worker count, releases the P and returns 0.
 //
-// Ports v1's `emitX64SchedWorkerLoop` (`X64Backend.maxon:9205`) restricted to the global-queue subset shv2
-// has (no runnext, no local ring, no stealing) and written in builder-built Std rather than bytes.
+// Ports v1's `emitX64SchedWorkerLoop` (`X64Backend.maxon:9205`), written in builder-built Std rather than
+// bytes. ⚠ **IT NO LONGER "DEQUEUES" ANYTHING (W212)** — it asks `__sched_find_runnable`, which consults
+// this P's ring, the global queue and every other P's ring in Go's order. The one thing v1 has and this
+// still does not is `runnext`, and `POffRunnext` carries the reason.
 //
 // ⚠ **IT IS A `__`-PREFIXED RUNTIME FUNCTION, so `skipsGreenThreadStackGuard` keeps the prologue stack guard
 // off it — which is correct and load-bearing: it runs on a real OS-thread stack with megabytes to spare, and
@@ -1925,8 +1957,7 @@ function buildSchedWorkerLoop(module StdModule)
 	// Run it, on this M's own scheduler context. The GT's waiter is this P's inline scheduler GT, so when it
 	// completes or parks the trampoline switches straight back to the block below the switch.
 	let mainThread = emitFieldAddr(module, block: haveWork, record: p, offset: POffMainThread, ids: ids)
-	let runZero = emitConst(module, block: haveWork, value: 0, ids: ids)
-	emitGtRunOne(module, run: haveWork, recycle: recycle, freeStack: freeStack, g: runGt, selfGt: mainThread, p: p, zeroConst: runZero, continuation: loopTop, ids: ids)
+	emitGtRunOne(module, run: haveWork, recycle: recycle, freeStack: freeStack, g: runGt, selfGt: mainThread, p: p, continuation: loopTop, ids: ids)
 
 	// ⭐⭐ **THE PARK — A DEKKER PAIR, AND THE TWO HALVES MUST BE READ TOGETHER.** This M has just seen an
 	// empty queue. An enqueuer running concurrently publishes its GT and THEN reads `idleFlag`; this side
@@ -2044,11 +2075,19 @@ end 'emitSchedRaiseHighWater'
 // who runs it. First scan `P[1..numProcs)` for an M that has published `idleFlag == 1` and signal it; if
 // none is idle, scan again for a P no M has claimed and start one on it.
 //
-// ⚠⚠ **THE ORDER — PUBLISH, THEN FENCE, THEN READ `idleFlag` — IS THE WHOLE CORRECTNESS ARGUMENT, and the
-// fence is not written here.** It is the LOCK RELEASE the caller has just performed: `LeaveCriticalSection`
-// is a full barrier, so the queue publish inside the lock cannot be reordered past the `idleFlag` reads
-// below. That is why this function is called AFTER the unlock rather than inside the critical section, and
-// why moving it inside would be a silent correctness regression rather than a scope change.
+// ⚠⚠ **THE ORDER — PUBLISH, THEN FENCE, THEN READ `idleFlag` — IS THE WHOLE CORRECTNESS ARGUMENT, the fence
+// is not written here, and SINCE W212 IT IS A DIFFERENT INSTRUCTION ON EACH ARM.** Both arms have one:
+//   • **`SchedQueueEnd.globalTail`** — the fence is the LOCK RELEASE the caller has just performed.
+//     `LeaveCriticalSection` is a full barrier, so the queue publish inside the lock cannot be reordered past
+//     the `idleFlag` reads below. That is why this function is called AFTER the unlock rather than inside the
+//     critical section, and why moving it inside would be a silent correctness regression, not a scope change.
+//   • **`SchedQueueEnd.localRing`** — there is NO lock and therefore no release to be the fence, so the ring
+//     tail's own publish carries it: `emitRunqPublishTail`'s `atomicRmw add` is a `lock xadd`, and the LOCK
+//     prefix is the StoreLoad barrier this scan needs. That function states it at the instruction and forbids
+//     the "optimisation" back to a plain store; this is the reader it protects.
+// ⚠ A caller that already HELD the lock and pushed to the ring inside it has neither fence: its nested leave
+// releases nothing (`osLockEnter` is a recursive CRITICAL_SECTION). The `lock xadd` is what covers it, which
+// is why `__gt_timer_check` and `__gt_proc_check` may publish inside their walk and wake once after it.
 //
 // ⚠ **AT `DefaultMaxProcs == 1` BOTH SCANS ARE EMPTY** — `numProcs` is 1 and both start at index 1 — so an
 // enqueue costs one load and one compare, and no worker is ever created. That is what "built and not turned

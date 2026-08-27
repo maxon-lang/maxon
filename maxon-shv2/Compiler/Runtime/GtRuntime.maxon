@@ -274,8 +274,15 @@ export let GtStructSize = GtOffArgInline + ArgBufBytes
 // --- GT status ---
 // `ready` (the slab-zeroed initial state), `completed` (set by the trampoline, read by the drive loop's
 // recycle gate) and `waiting` (set by `__gt_sleep` while parked on a timer, cleared to `ready` by
-// `__gt_timer_check` when the deadline fires) are load-bearing. `running` (1) exists in the reference layout
-// but is unused here — nothing reads it in single-M. `waiting` MUST be distinct from `completed` so the drive
+// `__gt_timer_check` when the deadline fires) are load-bearing.
+//
+// ⛔⛔ **`running` (1) EXISTS IN THE REFERENCE LAYOUT AND SHV2 NEVER STORES IT, WHICH IS A MEASURED HOLE
+// ABOVE ONE M AND NOT A SAVING.** Nothing reads it under one M because `ready` and "on-CPU right now" cannot
+// be confused there: the only thread running is the one asking. With a second M they can, and
+// `__gt_promise_drop`'s `checkReady` is the site that confuses them — see the measurement and the control
+// there. Storing it is not by itself the fix (the trampoline overwrites the word at completion), which is
+// why the note lives at the arm that suffers rather than at this constant.
+// `waiting` MUST be distinct from `completed` so the drive
 // loop's `status == completed` recycle gate NEVER recycles a merely-parked GT's stack (the #1 mid-body-yield
 // trap: recycling a yielded GT's stack is a use-after-free when it resumes).
 export let GtStatusReady = 0
@@ -298,7 +305,10 @@ let GtStatusWaiting = 3
 // ⚠ It is 4 rather than reusing `waiting`: a `waiting` thread is on a timer or a child and a driver must
 // leave it alone, while a `dropped` one is on a RUN queue and must be taken off it. The two are asked by
 // different code and answered differently, so one value could not carry both.
-export let GtStatusDropped = 4
+//
+// ⚠ NOT exported: the scheduler's four askers go through `emitGtIsDropped`, so the VALUE has no reader
+// outside this file — which is what E3092 refuses, and is the shape a single-homed constant should have.
+let GtStatusDropped = 4
 
 // The green-thread stack: the INITIAL region a spawned GT gets. The relocating morestack (P1.5-B1a′) grows it
 // on demand (2x per guard fault, copy + rbp-chain relocation), so this is a small SEED, not a ceiling — the
@@ -2457,7 +2467,7 @@ function buildGtDriveUntil(module StdModule, usesIocp bool)
 	module.appendOp(drive, op: StdOp.cmp(gNull, lhs: g, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(drive, op: StdOp.condBranch(gNull, thenBlockId: netpoll.id, elseBlockId: run.id))
 
-	emitGtRunOne(module, run: run, recycle: recycle, freeStack: freeStack, g: g, selfGt: selfGt, p: driverProc, zeroConst: zeroConst, continuation: loopHdr, ids: ids)
+	emitGtRunOne(module, run: run, recycle: recycle, freeStack: freeStack, g: g, selfGt: selfGt, p: driverProc, continuation: loopHdr, ids: ids)
 
 	// netpoll: the run queue is empty. Block the single M until something becomes ready — a parked TIMER fires or a
 	// parked CHILD exits. `pc` = parked children, `earliest` = the nearest timer deadline (0 = none). When BOTH are
@@ -2815,11 +2825,51 @@ function emitGtStructReclaim(module StdModule, block IrBlock, ids ValueMinter, g
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(gt)))
 end 'emitGtStructReclaim'
 
+// ⭐⭐ **RELEASE A GREEN THREAD'S SEED STACK — the ONE copy, and W212 is when it became worth making
+// one: it was written out at TWO sites and this rung added a THIRD.** `startBlock` decides (a `stackBase` of
+// 0 means there is no stack of this thread's own), `doFree` releases, and both edges land on `cont`. The two
+// blocks are the CALLER'S so each site keeps its own block ORDER — `emitGtRunOne`'s reason for taking its
+// three blocks from its callers, and what keeps every driver's emitted layout where it was.
+//
+// ⛔⛔ **THE LENGTH COMES OUT OF THE STRUCT AND NOT FROM THE `GtStackSize` SEED CONSTANT, AND THAT IS THE
+// FACT THREE COPIES WERE HOLDING.** The relocating morestack GROWS a stack and writes the new length back to
+// `gt.stackSize` (`X64GtRuntime.__gt_morestack`), so the seed would under-free every stack that ever grew.
+// ⚠ x64-windows — the only lane that runs this today — IGNORES the operand (`MEM_RELEASE` demands
+// `dwSize == 0`), so a copy that drifted onto the seed would be RIGHT here and WRONG on the first POSIX
+// green-thread lane, with nothing in between to say so. That is the divergence a shared emitter removes: not
+// three comments promising to agree, but one site that cannot disagree with itself.
+//
+// ⚠ The null guard is not defensive. GT0 and every P's inline scheduler GT run on a real OS-thread stack
+// and carry `stackBase == 0`; `__gt_drive_until`'s recycle gate reads the same zero for the same reason.
+function emitGtFreeSeedStack(module StdModule, startBlock IrBlock, doFree IrBlock, gt ValueId, cont IrBlock, ids ValueMinter)
+	let stackBase = emitLoadField(module, block: startBlock, record: gt, offset: GtOffStackBase, ids: ids)
+	let stackZero = emitConst(module, block: startBlock, value: 0, ids: ids)
+	let noStack = emitCmp(module, block: startBlock, a: stackBase, b: stackZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(startBlock, op: StdOp.condBranch(noStack, thenBlockId: cont.id, elseBlockId: doFree.id))
+
+	let stackSize = emitLoadField(module, block: doFree, record: gt, offset: GtOffStackSize, ids: ids)
+	module.appendOp(doFree, op: StdOp.osFreePages(stackBase, sizeId: stackSize))
+	module.setTerminator(doFree, op: StdOp.branch(cont.id))
+end 'emitGtFreeSeedStack'
+
+// ⭐⭐ **IS THIS THREAD ONE THE SCHEDULER MUST RECLAIM RATHER THAN RUN? — the ONE spelling of the
+// dropped-thread question, asked at FOUR places (W212).** The ring overflow asks it of a slot it is about to
+// move, `__sched_find_runnable` of the candidate it is about to hand back, and `__sched_sweep_dropped` of
+// each queue's front. Spelled out per site it would be one load and one compare four times — and the day
+// the protocol grows a second reclaimable state (a mark published in two steps, say) three of the four would
+// still be asking the old question and answering it wrongly, which is a thread RUN after its promise was
+// dropped rather than a compile error.
+export function emitGtIsDropped(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
+	let status = emitLoadField(module, block: block, record: gt, offset: GtOffStatus, ids: ids)
+	return emitGtStatusEquals(module, block: block, status: status, want: GtStatusDropped, ids: ids)
+end 'emitGtIsDropped'
+
 // ⭐⭐ **DOES A GT'S ALREADY-LOADED STATUS WORD EQUAL `want`? — the ONE spelling of the comparison three
 // entry points make, and the reason it is worth a name is that they read it for three different verdicts:**
-// `__gt_promise_drop` picks its teardown arm from it (`completed` ⇒ struct only, `ready` ⇒ unlink the run
-// queue first), `emitGtRunOne` gates the STACK RECYCLE on it (the one place where getting it wrong is a
-// use-after-free rather than a leak), and `__gt_is_complete` answers it to a caller.
+// `__gt_promise_drop` picks its teardown arm from it (`completed` ⇒ struct only; `ready` ⇒ the thread is in
+// a queue and is MARKED rather than unlinked, W212), `emitGtRunOne` gates the STACK RECYCLE on it (the one
+// place where getting it wrong is a use-after-free rather than a leak), and `__gt_is_complete` answers it to
+// a caller.
 //
 // ⚠ **IT TAKES THE LOADED WORD RATHER THAN THE GT, so a caller that asks TWO questions of one status loads
 // it ONCE.** `__gt_promise_drop` is exactly that caller — `completed?` then `ready?` — and a helper that
@@ -2829,10 +2879,9 @@ end 'emitGtStructReclaim'
 // ⚠ **THE CONSTANT AND THE OFFSET WERE ALREADY SINGLE-HOMED (`GtStatusCompleted`, `GtOffStatus`); what was
 // not is the SHAPE.** Emitting `const` then `cmp` in that order, minting in that order, is what makes this
 // substitution byte-identical at both existing sites — which is the property that let it be made at all.
-// ⚠ EXPORTED since W212: the scheduler asks the same question of a candidate it is about to hand back, of a
-// ring slot it is about to move on overflow, and of a queue front it is about to sweep — three more readers
-// of one comparison, in `SchedRuntime`.
-export function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, want ParsedInt, ids ValueMinter) returns ValueId
+// ⚠ NOT exported. The scheduler's four dropped-thread askers reach the comparison through `emitGtIsDropped`
+// below, which is in this file and pairs the load with it — so this door keeps the only callers it ever had.
+function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, want ParsedInt, ids ValueMinter) returns ValueId
 	let wantConst = emitConst(module, block: block, value: want, ids: ids)
 	return emitCmp(module, block: block, a: status, b: wantConst, pred: StdCmpPred.eq, ids: ids)
 end 'emitGtStatusEquals'
@@ -2925,8 +2974,27 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool, rawFree ByteArray)
 	let isCompleted = emitGtStatusEquals(module, block: entry, status: status, want: GtStatusCompleted, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isCompleted, thenBlockId: release.id, elseBlockId: checkReady.id))
 
-	// checkReady: ready → the thread is QUEUED and must be abandoned in place; else (waiting) → remove it from
-	// the timer/proc stores, where removal is still possible.
+	// checkReady: `ready` → abandon the thread in place; else (`waiting`) → remove it from the timer/proc
+	// stores, where removal is still possible.
+	//
+	// ⛔⛔ **`ready` MEANS "QUEUED **OR** RUNNING", AND THAT IS A HOLE RATHER THAN A SUBTLETY — IT IS STATED
+	// HERE BECAUSE IT IS NOT CLOSED.** `GtStatusRunning` (1) exists in the reference layout and shv2 NEVER
+	// SETS IT (see the status band), so a thread another M popped a microsecond ago and is executing right
+	// now reads exactly as one still sitting in a ring. Under one M the two cannot be confused — the dropper
+	// IS the running thread's processor — which is why every committed spec is green over it.
+	// **MEASURED at the W212 review, `MAXON_MAX_PROCS=12`:** 200 threads spawned and dropped, then a long
+	// await to let every started one finish — `mmRawAllocLive()` 8 at one processor against 84–99 at twelve,
+	// growing with the count. Those are GT STRUCTS nobody reclaims: the dropper took the arm below, so the
+	// popper's dropped-check never sees the thread, and `emitGtRunOne` frees only the STACK of a thread that
+	// completes. The exit gate cannot see them either, because the debit below already happened.
+	// ⚠ **W212 did not open it, it NARROWED it.** Before the ring, this arm walked the FIFO, failed to find a
+	// running thread, fell through, and then freed the stack the thread was executing on — the same probe
+	// SEGFAULTS on `main` (exit 139, 3/3 at 7 and 12 processors) where it now leaks. A crash became a bounded
+	// leak; neither is right.
+	// ⇒ **Closing it needs the dropper and the completing driver to RENDEZVOUS** — a per-GT word both step
+	// with one atomic, the second party doing the release and the struct reclaim — because the trampoline
+	// overwrites the status word at completion and no mark in it can survive. That is a new ownership
+	// mechanism, not a line, so it belongs beside `SchedRuntime`'s multi-M audit rather than in this arm.
 	let isReady = emitGtStatusEquals(module, block: checkReady, status: status, want: GtStatusReady, ids: ids)
 	module.setTerminator(checkReady, op: StdOp.condBranch(isReady, thenBlockId: abandonArm.id, elseBlockId: waitingArm.id))
 
@@ -2969,25 +3037,10 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool, rawFree ByteArray)
 	emitSchedLockLeave(module, block: waitingUnlock, ids: ids)
 	module.setTerminator(waitingUnlock, op: StdOp.branch(freeStack.id))
 
-	// freeStack: release the GT's stack unless it has none (GT0's stackBase is 0 — but GT0 is never dropped;
-	// the null-guard mirrors `__gt_drive_until`'s recycle gate for safety). `osFreePages` is an `iatCall`
-	// inside a `__gt_` function, so the syscall shim wraps it onto the system stack automatically.
-	let stackBase = ids.mint()
-	module.appendOp(freeStack, op: StdOp.loadIndirect(stackBase, addrId: gt, offset: GtOffStackBase, valueType: StdType.i64))
-	let stackZero = ids.mint()
-	module.appendOp(freeStack, op: StdOp.const(stackZero, value: 0, valueType: StdType.i64))
-	let stackNull = ids.mint()
-	module.appendOp(freeStack, op: StdOp.cmp(stackNull, lhs: stackBase, rhs: stackZero, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(freeStack, op: StdOp.condBranch(stackNull, thenBlockId: release.id, elseBlockId: doFree.id))
-
-	// ⭐ **THE LENGTH COMES OUT OF THE STRUCT, NOT FROM THE `GtStackSize` SEED CONSTANT.** The relocating morestack
-	// GROWS a GT's stack and writes the new length back to `gt.stackSize` (`X64GtRuntime.__gt_morestack`), so the
-	// seed would under-free every stack that ever grew. ⚠ x64-windows — the only lane that runs this today —
-	// IGNORES the operand (`MEM_RELEASE` demands `dwSize == 0`), so getting it wrong here would be invisible until
-	// the first POSIX green-thread lane, which is exactly why it is taken from the authoritative field now.
-	let stackSize = emitLoadField(module, block: doFree, record: gt, offset: GtOffStackSize, ids: ids)
-	module.appendOp(doFree, op: StdOp.osFreePages(stackBase, sizeId: stackSize))
-	module.setTerminator(doFree, op: StdOp.branch(release.id))
+	// freeStack: release the GT's stack unless it has none, then fall into the shared release. The stack's
+	// whole rule — the null guard and the length taken from `gt.stackSize` rather than from `GtStackSize` —
+	// is `emitGtFreeSeedStack`'s, stated once for this site, `__gt_dispose_dropped` and `emitGtRunOne`.
+	emitGtFreeSeedStack(module, startBlock: freeStack, doFree: doFree, gt: gt, cont: release, ids: ids)
 
 	// release: hand back the reference the spawn took to every managed argument, AND — this being
 	// `ownedByThisDrop` — the result-or-error the thread produced and nobody awaited. **Skipping the second of
@@ -3160,6 +3213,12 @@ end 'emitGtIoCancelArm'
 // the dropper cannot take the thread out; what it CAN do is hand back everything the promise owned and leave
 // a mark that stops it being run.
 //
+// ⛔⛔ **ITS PRECONDITION IS THAT THE THREAD IS QUEUED, AND NOTHING PROVES IT — read `buildGtPromiseDrop`'s
+// `checkReady` note before trusting this function's name.** `ready` is also what a RUNNING thread reads,
+// because `GtStatusRunning` is never stored; above one M the two are indistinguishable here, and the arm
+// then releases a running thread's arguments and debits a count for memory nobody will reclaim. Measured,
+// with the control that shows it is narrower than what it replaced, at the `checkReady` site.
+//
 // ⛔⛔ **THE ORDER IS THE WHOLE SAFETY ARGUMENT AND IT IS RELEASE, THEN COUNT, THEN MARK.** The instant the
 // mark is visible, any popper may reclaim the struct — so the releaser, which reloads the thread's inline
 // argument slots, must have finished before it. A mark written first would be a release reading somebody
@@ -3197,9 +3256,8 @@ end 'emitGtAbandonQueued'
 // release and a double debit. The split is the ownership: the promise's half ends at the mark, the memory's
 // half ends here.
 //
-// The stack null-guard is the one `__gt_drive_until`'s recycle gate and `__gt_promise_drop`'s `freeStack`
-// both make, for the same reason — GT0 has no stack of its own — and the length comes out of `gt.stackSize`
-// rather than from `GtStackSize`, because the relocating morestack writes a grown length back there.
+// The stack is released through `emitGtFreeSeedStack`, which is the one place the null guard and the
+// `gt.stackSize` length live — this site, `__gt_promise_drop`'s and `emitGtRunOne`'s recycle gate.
 function buildGtDisposeDropped(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(GtDisposeDroppedName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -3211,14 +3269,7 @@ function buildGtDisposeDropped(module StdModule, rawFree ByteArray)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
-	let stackBase = emitLoadField(module, block: entry, record: gt, offset: GtOffStackBase, ids: ids)
-	let stackZero = emitConst(module, block: entry, value: 0, ids: ids)
-	let noStack = emitCmp(module, block: entry, a: stackBase, b: stackZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(noStack, thenBlockId: reclaim.id, elseBlockId: freeStack.id))
-
-	let stackSize = emitLoadField(module, block: freeStack, record: gt, offset: GtOffStackSize, ids: ids)
-	module.appendOp(freeStack, op: StdOp.osFreePages(stackBase, sizeId: stackSize))
-	module.setTerminator(freeStack, op: StdOp.branch(reclaim.id))
+	emitGtFreeSeedStack(module, startBlock: entry, doFree: freeStack, gt: gt, cont: reclaim, ids: ids)
 
 	// The struct alone: the counted free door, without the live-count debit `emitGtStructReclaim` pairs with
 	// it, because the debit already happened at the mark.
@@ -3631,7 +3682,7 @@ end 'buildGtProcCount'
 // mid-body yield, which is precisely the case the specs exercise least. The caller supplies the three blocks
 // so each driver keeps its own block ORDER (and so `__gt_drive_until`'s emitted code is unchanged by the
 // factoring), but the ops inside them are stated once, here.
-export function emitGtRunOne(module StdModule, run IrBlock, recycle IrBlock, freeStack IrBlock, g ValueId, selfGt ValueId, p ValueId, zeroConst ValueId, continuation IrBlock, ids ValueMinter)
+export function emitGtRunOne(module StdModule, run IrBlock, recycle IrBlock, freeStack IrBlock, g ValueId, selfGt ValueId, p ValueId, continuation IrBlock, ids ValueMinter)
 	// run: g.waiter = selfGt; current = g; switch into g; on switch-back restore current, then gate recycle.
 	module.appendOp(run, op: StdOp.storeIndirect(g, offset: GtOffWaiter, valueId: selfGt, valueType: StdType.i64))
 	emitStoreField(module, block: run, record: p, offset: POffCurrentGt, value: g)
@@ -3652,20 +3703,11 @@ export function emitGtRunOne(module StdModule, run IrBlock, recycle IrBlock, fre
 	// a DIFFERENT await, and its struct still holds its result for a live, un-awaited promise — so the STRUCT is
 	// reclaimed by the AWAITER (`__gt_await`/`__gt_try_await`), never at completion. The stack, by contrast, is dead
 	// once the GT completes (it has switched off it), so freeing it here is safe and bounds the loop's stack churn.
-	let gStackBase = ids.mint()
-	module.appendOp(recycle, op: StdOp.loadIndirect(gStackBase, addrId: g, offset: GtOffStackBase, valueType: StdType.i64))
-	let gStackNull = ids.mint()
-	module.appendOp(recycle, op: StdOp.cmp(gStackNull, lhs: gStackBase, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(recycle, op: StdOp.condBranch(gStackNull, thenBlockId: continuation.id, elseBlockId: freeStack.id))
-
-	// freeStack: release g's completed stack, whatever size the morestack grew it to. This bounds a spawn/await
-	// loop's stacks by alloc+free churn. The length is read from `g.stackSize` rather than from `GtStackSize` for
-	// the reason `buildGtPromiseDrop`'s twin site states in full: the morestack writes the grown length back there,
-	// and the one lane that runs this today ignores the operand entirely, so a seed constant would have looked
-	// correct here for as long as x64-windows stayed the only green-thread target.
-	let gStackSize = emitLoadField(module, block: freeStack, record: g, offset: GtOffStackSize, ids: ids)
-	module.appendOp(freeStack, op: StdOp.osFreePages(gStackBase, sizeId: gStackSize))
-	module.setTerminator(freeStack, op: StdOp.branch(continuation.id))
+	// Releasing g's completed stack bounds a spawn/await loop's stacks by alloc+free churn. The null guard
+	// (GT0 and every scheduler context run on a real OS-thread stack) and the length — `g.stackSize`, which
+	// the relocating morestack writes back, never the `GtStackSize` seed — are `emitGtFreeSeedStack`'s, and
+	// this is one of the three sites that used to spell them out.
+	emitGtFreeSeedStack(module, startBlock: recycle, doFree: freeStack, gt: g, cont: continuation, ids: ids)
 end 'emitGtRunOne'
 
 // `__gt_trace_emit(tagRecord, value, suffixRecord)` — print one async-trace line to stderr:
@@ -3976,15 +4018,14 @@ function buildGtResched(module StdModule)
 	// one"*). Taking the lock here would put an uncontended critical section on the yield fast path to sharpen
 	// an answer neither arm needs sharp.
 	//
-	// ⚠ **A RING'S EMPTINESS IS `head == tail` AND NOTHING ELSE HERE**, which is Go's `runqempty` minus the
-	// re-read loop that function needs (`proc.go:7499`): its whole complication is a `runnext` that can hold a
-	// thread while the counters agree, and shv2 deliberately has no `runnext` (see `POffRunnext`).
+	// ⚠ **THE RING HALF IS ASKED THROUGH `SchedRuntime.emitRunqAnyQueued` AND IS NOT SPELLED HERE**, because
+	// where the ring keeps its counters and what makes it empty belong to the file that owns the P. That
+	// answer is due to change — Go's `runqempty` re-reads because a `runnext` can hold a thread while the
+	// counters agree, and W213 is the rung that builds one — and a copy in this file would go on answering the
+	// old question in silence.
 	var spawnedRing = module.addBlock(func, label: b"spawnedring")
-	let reschedRingHead = emitLoadField(module, block: spawnedBlock, record: reschedProc, offset: POffRunqHead, ids: ids)
-	let reschedRingTail = emitLoadField(module, block: spawnedBlock, record: reschedProc, offset: POffRunqTail, ids: ids)
-	let ringEmpty = ids.mint()
-	module.appendOp(spawnedBlock, op: StdOp.cmp(ringEmpty, lhs: reschedRingHead, rhs: reschedRingTail, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(spawnedBlock, op: StdOp.condBranch(ringEmpty, thenBlockId: spawnedRing.id, elseBlockId: handoffBlock.id))
+	let ringHasWork = emitRunqAnyQueued(module, block: spawnedBlock, p: reschedProc, ids: ids)
+	module.setTerminator(spawnedBlock, op: StdOp.condBranch(ringHasWork, thenBlockId: handoffBlock.id, elseBlockId: spawnedRing.id))
 
 	let headAddr = ids.mint()
 	module.appendOp(spawnedRing, op: StdOp.globalAddr(headAddr, label: GtRunQueueHeadLabel))
@@ -4007,7 +4048,7 @@ function buildGtResched(module StdModule)
 	module.appendOp(gt0Drive, op: StdOp.cmp(nothingReady, lhs: dequeued, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(gt0Drive, op: StdOp.condBranch(nothingReady, thenBlockId: pollBlock.id, elseBlockId: runBlock.id))
 
-	emitGtRunOne(module, run: runBlock, recycle: recycleBlock, freeStack: freeStackBlock, g: dequeued, selfGt: selfGt, p: reschedProc, zeroConst: zeroConst, continuation: doneBlock, ids: ids)
+	emitGtRunOne(module, run: runBlock, recycle: recycleBlock, freeStack: freeStackBlock, g: dequeued, selfGt: selfGt, p: reschedProc, continuation: doneBlock, ids: ids)
 
 	// poll: nothing to hand off to. Fire what is already due — expired timers, exited children — so a yield
 	// LOOP makes progress, then return. Both calls are scans, so neither blocks and neither adds a timer entry.
