@@ -1658,11 +1658,12 @@ export function specRunWorkingDir() returns FilePath
 end 'specRunWorkingDir'
 
 // Does `--filter=<pattern>` select this test? The pattern is matched as a
-// SUBSTRING of the `<spec>/<test>` label the runner reports — the same string a
-// reader sees in a PASS/FAIL line — so one rule covers every way you would want to
-// narrow a run: a bare spec name takes that whole spec, a bare test name takes that
-// test wherever it lives, and `spec/test` takes exactly one. An empty pattern
-// (no `--filter` given) selects everything.
+// SUBSTRING of `testLabel` — the same string a reader sees in a PASS/FAIL line and
+// in a dead worker's breadcrumb, and it is that FUNCTION rather than a second copy
+// of the spelling, which is the only thing keeping the three in step. So one rule
+// covers every way you would want to narrow a run: a bare spec name takes that whole
+// spec, a bare test name takes that test wherever it lives, and `spec/test` takes
+// exactly one. An empty pattern (no `--filter` given) selects everything.
 //
 // Private: `selectedTests` above is the only door in, so neither half of the pool can apply this
 // rule without also applying the `draft` rule that sits beside it.
@@ -1671,7 +1672,7 @@ function selectedByFilter(specName String, testName String, filter String) retur
 		return true
 	end 'wholeSuite'
 
-	return "{specName}/{testName}".contains(filter)
+	return testLabel(specName, testName: testName).contains(filter)
 end 'selectedByFilter'
 
 // The committed-fragment root for `target`: `<specDir>/fragments/<target>`
@@ -1913,7 +1914,7 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 	// this line can tell it which of them was in the compiler's hands when it died — and only the
 	// INTERVAL between two of them tells it that this worker is still alive at all. See
 	// `SpecWorkerPool.emitWorkerStep`.
-	emitWorkerStep(WorkerStep.compile, label: stepLabel(specName, testName: test.name))
+	emitWorkerStep(WorkerStep.compile, label: testLabel(specName, testName: test.name))
 
 	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, pinnable: emitsTargetIr(effectiveTarget), effectiveTarget: effectiveTarget)
 
@@ -1933,14 +1934,23 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 	end 'verdict'
 end 'compileStagedTest'
 
-// ⭐ THE `<spec>/<test>` LABEL A BREADCRUMB CARRIES — the same shape a reader sees on a PASS/FAIL line
-// and types into `--filter`, which is the whole point: a dead worker's report names the case in the
-// spelling its reader already has in hand. ONE spelling for the two steps that emit one, because the
-// pool prints them side by side and a step that named its case differently would read as a different
-// case.
-function stepLabel(specName String, testName String) returns String
+// ⭐⭐ **THE `<spec>/<test>` LABEL — THE ONE STRING THREE UNRELATED-LOOKING SITES HAVE TO AGREE ABOUT.**
+// `selectedByFilter` matches `--filter` against it, `Main.verdictLine` prints it on every PASS/FAIL
+// line, and a breadcrumb names its step with it — and the three are ONE fact because of what a reader
+// does with them: a dead worker's report says `while compiling 'spec/test'`, and the next thing that
+// happens is somebody retyping that into `--filter`.
+//
+// ⚠ **NOTHING BUT THIS FUNCTION MAKES THEM AGREE, WHICH IS WHY THE FILTER MATCHER CALLS IT AND DOES
+// NOT SPELL IT AGAIN.** A separator changed in one copy alone is not a compile error anywhere; it is a
+// breadcrumb a reader can no longer look up, which reads as "that case does not exist".
+//
+// ⛔ **THE THIRD SITE IS STILL A SECOND SPELLING: `Main.reportResults` builds the printed label by
+// hand** (`"{result.specName}/{result.testName}"`). It is in another file and outside the file list of
+// the rung that introduced this function, so it is named here rather than quietly left — it is the one
+// copy left to fold in.
+function testLabel(specName String, testName String) returns String
 	return "{specName}/{testName}"
-end 'stepLabel'
+end 'testLabel'
 
 // ⭐⭐ **THE COMPILE ITSELF — IN THIS PROCESS, THROUGH `Compiler.compileToProduct`, WHICH IS THE SAME
 // PIPELINE DRIVER A COMMAND LINE GOES THROUGH.** There is deliberately no second `loadProject →
@@ -3488,7 +3498,7 @@ function spawnOneRun(pending PendingRun, specName String, runWorkingDir FilePath
 	// hang would look like a worker that stopped, and the pool would terminate it and fail every one of
 	// its tests for a failure the runner was about to name test by test. That is the nesting violation
 	// `SpecSpawnTimeoutMs`'s own header warns about, and this line is what keeps it from happening.
-	emitWorkerStep(WorkerStep.run, label: stepLabel(specName, testName: pending.compiled.test.name))
+	emitWorkerStep(WorkerStep.run, label: testLabel(specName, testName: pending.compiled.test.name))
 
 	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned by
 	// the host, so it goes behind the vendored wasmtime instead — what is checked afterwards is

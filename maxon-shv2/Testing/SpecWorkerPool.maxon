@@ -2161,6 +2161,31 @@ function spawnReadyWorker(harnessExe FilePath, workerId WorkerId, specDir FilePa
 	return handle
 end 'spawnReadyWorker'
 
+// ⭐ HOW LONG THIS SLOT HAS BEEN SILENT, measured from the ONE park instant every slot in a sweep is
+// judged against — so twelve slots are compared on one clock read rather than twelve, and the sweep
+// cannot report one slot as older than another purely because it was looked at later.
+//
+// ⚠ **IT CLAMPS, AND `spokeAt`'s WRITER IS WHY.** `Clock.elapsedMs` clamps for the same reason and
+// says so (*"guards against bugs"*), but there both readings are taken by one thread. Here `since` is
+// stamped by the slot's DRAIN GREEN THREAD while `now` is read by the dispatcher, so "the stamp is no
+// newer than the park instant" is an ORDERING property rather than an arithmetic one — it holds today
+// only because nothing between the two yields (`waitWithTimeout` BLOCKS the single M rather than
+// yielding, which is what `JobKillGraceMs` says about it). That is a property of the current code, not
+// of the invariant, and what it would cost if it lapsed is not a wrong number: `InstantMs` is
+// `int(0 to u64.max)`, so a subtraction going below the range PANICS — taking the whole run down from
+// inside the one guard whose job is to stop a single bad worker doing exactly that.
+//
+// It is also what keeps the sweep's MESSAGE and its PREDICATE from measuring two different intervals,
+// which is the distinction `abortOnWedgedPool` states about `idleFor`: there is one subtraction and
+// both read it.
+function silenceMs(now InstantMs, since InstantMs) returns DurationMs
+	if now < since 'stampIsAheadOfThePark'
+		return 0
+	end 'stampIsAheadOfThePark'
+
+	return now - since
+end 'silenceMs'
+
 // ⭐⭐ **THE PROGRESS BOUND, SWEPT ONCE PER PARK.** Every busy slot whose worker has said NOTHING for
 // longer than `progressDeadlineMs` allows one step is TERMINATED and latched as given-up-on; its drain
 // then sees EOF and the dispatch loop's dead-worker path fails that spec and respawns.
@@ -2198,13 +2223,15 @@ function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy Bool
 		let deadline = progressDeadlineMs(plan.testNames.count() as TestTally, strategy: strategy)
 		let since = try spokeAt.get(slot) otherwise panic("enforceProgressDeadlines: spokeAt.get({slot}) is in bounds by construction")
 
-		if now - since < deadline 'stillSpeaking'
+		let silent = silenceMs(now, since: since)
+
+		if silent < deadline 'stillSpeaking'
 			anyWithinDeadline = true
 			continue
 		end 'stillSpeaking'
 
 		var handle = try workers.get(slot) otherwise panic("enforceProgressDeadlines: workers.get({slot}) is in bounds by construction")
-		printError("error: spec worker {handle.workerId} has said nothing about '{job.specName}' for {formatSeconds(now - since)}, past the {formatSeconds(deadline)} one step is allowed — terminating it\n")
+		printError("error: spec worker {handle.workerId} has said nothing about '{job.specName}' for {formatSeconds(silent)}, past the {formatSeconds(deadline)} one step is allowed — terminating it\n")
 		// TERMINATE, do NOT release: the dispatch loop's dead-worker path still has to read this
 		// worker's stderr, and it is the ONE place a handle is freed. Killing here closes the worker's
 		// stdout, which is what makes its drain complete and hands the slot to that path.
