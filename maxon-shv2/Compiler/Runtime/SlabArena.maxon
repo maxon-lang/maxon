@@ -69,7 +69,15 @@
 // re-read by every later consumer that meant something else by it. `Compiler.maxon` sets it beside
 // `debugStream`, at the seam where lowering has finished and nothing has been installed yet.
 //
-// ⚠ **THE ALIGNED ARENA GO USES IS ALSO DELIBERATELY NOT COPIED, AND THE PRICE OF COPYING IT IS MEASURED.**
+// ⚠ **THE ARENA IS ALIGNED TO A COMMIT GRANULE (W215), AND THE ARENA-SIZED ALIGNMENT GO USES IS A DIFFERENT
+// THING THAT IS STILL DELIBERATELY NOT COPIED.** `__slab_arena_new` raises the base `osReservePages` answered
+// to the next `SlabArenaCommitGranuleBytes`, because the OS promises only its own page granularity and
+// x64-linux's is 4 KiB — HALF a chunk, which puts the chunk grid out of phase with the reverse map's page
+// grid. See that function for the whole failure and for what it measured; `arenaAlignSlackBytes` records why
+// the slack it needs is free on the lanes that pay for it and zero on the lane that does not. What follows
+// is about the OTHER alignment — to the ARENA's own 64 MiB — whose slack is a whole second arena.
+//
+// ⚠ **AND THE PRICE OF COPYING THAT ONE IS MEASURED.**
 // `sysReserveAligned` (`vendor/go/src/runtime/mem.go:185`) over-reserves `size + align` and then either TRIMS
 // the unaligned ends (POSIX) or — since Windows cannot release part of a reservation — releases the whole
 // thing and re-reserves at the aligned address, retrying on a race. Two things stop that here, and neither is
@@ -79,7 +87,8 @@
 // and not the other. What it would buy is 0.2% → 0.1% of the map, plus `arenaBase == addr and -size`
 // — a THIRD answer to the "owning arena's base" question below, and the cheapest of the three. What it would
 // cost is a `size`-sized second reservation per arena, which on wasm is not address space at all but a second
-// arena's worth of charged memory — a DOUBLING of the lane the geometry above exists to shrink. ⇒
+// arena's worth of charged memory — a DOUBLING of the lane the geometry above exists to shrink, where the
+// granule-sized alignment above costs that lane nothing at all. ⇒
 // **FOLLOW-UP, NAMED: an address-hint operand on `osReservePages`** is what makes Go's routine expressible;
 // until something needs the mask, a straddling arena costs one extra 64 KiB table.
 //
@@ -183,8 +192,17 @@ type SlabArenaGeometry
 	// offset, and an offset computed at each of its four use sites is four chances to describe a different
 	// table.
 	export let commitBitmapOffset as ByteOffset
-	// What `__slab_arena_new` asks `osReservePages` for.
+	// The arena's own span — the address range its chunk grid covers, measured from the ALIGNED base
+	// `__slab_arena_new` starts it at. `__slab_arena_of` tests an address against it.
 	export let bytes as ParsedInt
+	// ⭐⭐ **WHAT `__slab_arena_new` ASKS `osReservePages` FOR — `bytes` PLUS THE ROOM THE ALIGN-UP NEEDS.**
+	// The base the OS answers is raised to the next commit granule (see `buildSlabArenaNew` for why it must
+	// be), which can move it by as much as `SlabArenaCommitGranuleBytes - 1`; the arena then runs `bytes`
+	// from there. Reserving only `bytes` would put the arena's last granule OUTSIDE the reservation, and on
+	// the POSIX lanes that granule's commit is a `MAP_FIXED` re-map — a silent clobber of whatever the
+	// process had at that address, not a refusal. Carried rather than derived at the one call site so
+	// `checkArenaGeometryForLane` can assert the two against each other.
+	export let reservationBytes as ParsedInt
 	// ⭐ Which lane this geometry IS, carried rather than passed alongside. `checkArenaMapCoupling` asks a
 	// DIFFERENT question of each lane, and a geometry travelling beside a separate bool is a pair that can
 	// arrive mismatched — a 512 KiB arena checked against the reserving lane's rule would pass the wrong
@@ -207,9 +225,30 @@ type SlabArenaGeometry
 		let granuleCount = chunkCount shr SlabArenaCommitGranuleChunksShift
 		let commitBitmapWords = (granuleCount + BitmapBitsPerWordMask) shr BitmapBitsPerWordShift
 		let commitBitmapOffset = ((ArenaBitmapOffset as ParsedInt) + bitmapWords * ArenaWordBytes) as ByteOffset
-		return Self{chunkCount: chunkCount, bitmapWords: bitmapWords, granuleCount: granuleCount, commitBitmapWords: commitBitmapWords, commitBitmapOffset: commitBitmapOffset, bytes: chunkCount * SlabPageBytes, hasPageReservation: hasPageReservation}
+		let bytes = chunkCount * SlabPageBytes
+		return Self{chunkCount: chunkCount, bitmapWords: bitmapWords, granuleCount: granuleCount, commitBitmapWords: commitBitmapWords, commitBitmapOffset: commitBitmapOffset, bytes: bytes, reservationBytes: bytes + arenaAlignSlackBytes(hasPageReservation), hasPageReservation: hasPageReservation}
 	end 'fromChunkCount'
 end 'SlabArenaGeometry'
+
+// ⭐⭐ **THE ROOM AN ARENA'S ALIGN-UP NEEDS, AND WHY THE ONE LANE THAT CANNOT AFFORD IT DOES NOT NEED IT.**
+// `osReservePages` answers a base aligned to whatever the LANE'S page source hands out and nothing more —
+// x64-linux's is 4 KiB, HALF a chunk — so `__slab_arena_new` raises it to the next commit granule and the
+// reservation has to be that much longer.
+//
+// ⭐ **WHERE A RESERVATION IS FREE, SO IS THE SLACK; WHERE IT IS NOT, THERE IS NOTHING TO RAISE.** This is
+// `hasPageReservation` read from both sides, and it is ONE fact rather than a lane test wearing two hats:
+// the lane that answers *no* answers no because its reservation IS its allocation — `memory.grow`, whose
+// unit is `LargestTargetPageBytes` — and a base handed out in whole grow units is already granule-aligned,
+// which is exactly what makes the align-up the identity there. Slack on that lane would be 64 KiB of
+// CHARGED linear memory on a 512 KiB arena (+12.5%), against the 5.22 / 11.10 MiB the header measures.
+// `checkArenaGeometryForLane` asserts the arithmetic half of that premise rather than trusting it.
+function arenaAlignSlackBytes(hasPageReservation bool) returns ParsedInt
+	if hasPageReservation 'reserves'
+		return SlabArenaCommitGranuleBytes - 1
+	end 'reserves'
+
+	return 0
+end 'arenaAlignSlackBytes'
 
 // A bitmap word is a machine word. The shift and the mask are the same fact three times over by necessity
 // (a count, the shift that divides by it, the mask that takes a remainder of it), so the pair that CAN be
@@ -530,8 +569,37 @@ function checkArenaGeometryForLane(geometry SlabArenaGeometry)
 		panic("slab arena ({lane}): {metadataBytes} bytes of metadata do not fit in {ArenaMetadataChunks} chunk(s) of {SlabPageBytes}")
 	end 'metadataOverflowsChunk'
 
+	checkArenaReservationSlack(geometry, lane: lane)
 	checkArenaMapCoupling(geometry.chunkCount, hasPageReservation: geometry.hasPageReservation, lane: lane)
 end 'checkArenaGeometryForLane'
+
+// ⭐⭐ **THE RESERVATION MUST STILL HOLD THE ARENA AFTER THE ALIGN-UP HAS MOVED IT — asked as TWO rules,
+// because the two lanes satisfy it for opposite reasons and one rule covering both would hold vacuously for
+// whichever lane it was not written for.** Short by a byte and the arena's last granule is committed OUTSIDE
+// the reservation, which on the POSIX lanes is a `MAP_FIXED` re-map over whatever the process had there — a
+// clobber, not a refusal, and the one failure this geometry could produce that no abort would ever name.
+function checkArenaReservationSlack(geometry SlabArenaGeometry, lane String)
+	if not geometry.hasPageReservation 'noSlackToSpend'
+		// The lane pays for its reservation, so it reserves EXACTLY the arena — which is only sound because
+		// its page source hands out whole `LargestTargetPageBytes` units and a granule divides one, making
+		// the align-up the identity. That divisibility is the premise, and it is arithmetic.
+		if LargestTargetPageBytes mod SlabArenaCommitGranuleBytes != 0 'growUnitIsNotWholeGranules'
+			panic("slab arena ({lane}): a page source handing out {LargestTargetPageBytes}-byte units does not answer a whole number of {SlabArenaCommitGranuleBytes}-byte commit granules, so `__slab_arena_new`'s align-up could move a base this lane reserves no room for")
+		end 'growUnitIsNotWholeGranules'
+
+		if geometry.reservationBytes != geometry.bytes 'unreservedLaneOverReserves'
+			panic("slab arena ({lane}): reserving {geometry.reservationBytes} bytes for a {geometry.bytes}-byte arena charges this lane for slack its already-aligned base never uses")
+		end 'unreservedLaneOverReserves'
+
+		return
+	end 'noSlackToSpend'
+
+	// A lane with reservations pays only address space, so it buys the worst case outright: an align-up can
+	// move the base by as much as one granule less a byte.
+	if geometry.reservationBytes - geometry.bytes < SlabArenaCommitGranuleBytes - 1 'slackTooShort'
+		panic("slab arena ({lane}): a {geometry.reservationBytes}-byte reservation leaves {geometry.reservationBytes - geometry.bytes} bytes of slack for a {geometry.bytes}-byte arena, fewer than the {SlabArenaCommitGranuleBytes - 1} an align-up to a commit granule can consume")
+	end 'slackTooShort'
+end 'checkArenaReservationSlack'
 
 // ⭐⭐ **THE ARENA↔MAP-TABLE RATIO, WHICH IS THE ONE INVARIANT THE TWO LANES DO NOT SHARE — SO IT IS ASKED AS
 // TWO RULES RATHER THAN AS ONE THAT HOLDS VACUOUSLY.** Where a reservation is free the arena IS one L3
@@ -669,11 +737,40 @@ function buildSlabArenaNew(module StdModule, geometry SlabArenaGeometry)
 
 	var entry = module.addBlock(func, label: b"entry")
 
-	let requested = emitConst(module, block: entry, value: geometry.bytes, ids: ids)
+	let requested = emitConst(module, block: entry, value: geometry.reservationBytes, ids: ids)
 	let raw = ids.mint()
 	module.appendOp(entry, op: StdOp.osReservePages(raw, sizeId: requested))
-	let base = ids.mint()
-	module.appendOp(entry, op: StdOp.call(base, callee: SlabAssertOsAllocName, args: argsOf(raw)))
+	let reserved = ids.mint()
+	module.appendOp(entry, op: StdOp.call(reserved, callee: SlabAssertOsAllocName, args: argsOf(raw)))
+
+	// ⛔⛔ **THE ARENA STARTS AT THE NEXT COMMIT GRANULE, NOT AT THE ADDRESS THE OS ANSWERED — AND TAKING
+	// THE OS's ANSWER WAS AN UNSTATED ALIGNMENT ASSUMPTION THAT ONLY WINDOWS AND wasm HAPPENED TO SATISFY.**
+	// `osReservePages` promises the LANE'S page granularity and nothing more: 64 KiB on Windows (the
+	// allocation granularity) and on wasm (the grow unit), 16 KiB on arm64-macOS — but **4 KiB on x64-linux,
+	// HALF a chunk.** The reverse map indexes by `addr shr SlabPageShift`, so an arena whose base is 4096 mod
+	// 8192 puts the chunk grid out of phase with the map's page grid, and the map then describes a heap that
+	// is not the one the allocator hands out:
+	//
+	//   • `__slab_arena_map_set(spanBase, numPages, span)` registers exactly `numPages` page indices while
+	//     the span's BYTE range touches `numPages + 1` of them — so the tail of every span is unregistered,
+	//     `__slab_free` MISSES there, reads the pointer as OS-direct and aborts
+	//     (`slabOsDirectPointerNotOurs`);
+	//   • and each registered index covers the first bytes of its page, which belong to the PRECEDING chunk
+	//     — so a slot at the end of one span resolves to its NEIGHBOUR's span record and is pushed onto the
+	//     wrong free list, which is a silent wrong answer and then a fault.
+	//
+	// MEASURED (W215): `spec-test --target=x64-linux --filter=slab` failed 4 of 16 on one run and a
+	// DIFFERENT 6 of 16 on the next, because the set moved with ASLR; a probe aborting on a misaligned base
+	// showed the failing runs were exactly the ones where `mmap` answered 4096 mod 8192, and `setarch -R`
+	// — which pins the base — failed 15 of 15.
+	//
+	// ⭐⭐ **THE GRANULE IS THE ALIGNMENT, NOT THE CHUNK, AND THAT IS ONE FACT COVERING BOTH OBLIGATIONS.**
+	// Every range this file names to the OS is a whole granule at a granule offset from this base, so a
+	// granule-aligned base is what makes each one page-aligned on EVERY lane — including arm64-macOS's
+	// 16 KiB page, which an 8 KiB-aligned base would split (`mmap` refuses that, and `checkSlabArenaGeometry`
+	// already asserts the granule is a whole number of the widest page). A granule is also a whole number of
+	// chunks, so the map's grid follows from the same statement instead of needing a second one.
+	let base = emitAlignUp(module, block: entry, value: reserved, width: SlabArenaCommitGranuleBytes, ids: ids)
 
 	// The first granule, before ANY store below: the metadata chunk is inside it (asserted by
 	// `checkSlabArenaGeometry`), and until it is committed the arena's own base is not writable.

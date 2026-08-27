@@ -548,21 +548,15 @@ end 'slabStateChunks'
 // *"mirrors the two routing arms of `__slab_alloc` exactly"* — which is one fact written twice, and the
 // failure mode is a sizing function that reports a class for a request the allocator sends to the OS. Both
 // callers branch through here, so they cannot disagree about where the boundary is.
+//
+// ⚠ **THE PAGE ROUNDING ON THE OS-DIRECT ARM IS THE OTHER HALF OF THE SAME AGREEMENT**, and it is not a
+// second function: both arms call `MmRuntime.emitAlignUp` naming `SlabPageBytes`, so the width they round
+// to is one named constant rather than two spellings of 8192.
 function emitSlabSizeRouting(module StdModule, block IrBlock, size ValueId, osDirect IrBlock, small IrBlock, ids ValueMinter)
 	let maxSmall = emitConst(module, block: block, value: SlabMaxSmallSize, ids: ids)
 	let isLarge = emitCmp(module, block: block, a: size, b: maxSmall, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(isLarge, thenBlockId: osDirect.id, elseBlockId: small.id))
 end 'emitSlabSizeRouting'
-
-// `(bytes + SlabPageBytes - 1) and -SlabPageBytes` — a byte count rounded up to a whole page. The OS-direct
-// allocation and the sizing function are its two callers, and they are the SAME two the routing above
-// serves: the page alignment is the other half of the fact those two must agree on.
-function emitPageAlignUp(module StdModule, block IrBlock, bytes ValueId, ids ValueMinter) returns ValueId
-	let bump = emitConst(module, block: block, value: SlabPageBytes - 1, ids: ids)
-	let raised = emitBin(module, block: block, a: bytes, b: bump, opcode: StdBinOpcode.add, ids: ids)
-	let mask = emitConst(module, block: block, value: 0 - SlabPageBytes, ids: ids)
-	return emitBin(module, block: block, a: raised, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
-end 'emitPageAlignUp'
 
 // The packed geometry word for `classIdx` — ONE indexed `.rdata` load, which is the whole of what storing
 // `class_idx` alone costs. See `SlabClassGeomSlotShift`.
@@ -909,8 +903,8 @@ end 'emitReverseTableLookup'
 // `__slab_rounded_size(size) -> bytes` — the number of bytes `__slab_alloc(size)` actually serves.
 //
 // ⭐ **IT SHARES THE ROUTING WITH THE ALLOCATOR (`emitSlabSizeRouting`) AND THE PAGE ALIGNMENT WITH THE
-// OS-DIRECT PATH (`emitPageAlignUp`)**, which is the whole of what v1's *"mirrors the two routing arms of
-// `__slab_alloc` exactly"* was asking for and not getting.
+// OS-DIRECT PATH (`emitAlignUp` over `SlabPageBytes`)**, which is the whole of what v1's *"mirrors the two
+// routing arms of `__slab_alloc` exactly"* was asking for and not getting.
 //
 // ⚠ **IT HAS NO CALLER IN shv2 TODAY, AND SINCE S4 THERE IS ONE WAITING FOR IT.** v1's caller is the
 // inline-small-array capacity reclaim, which turns a class's slack into spare elements. shv2's array records
@@ -936,7 +930,7 @@ function buildSlabRoundedSize(module StdModule)
 	// less the prefix again — the bytes a caller may actually use.
 	let prefix = emitConst(module, block: osDirect, value: OsDirectPrefixBytes, ids: ids)
 	let withPrefix = emitBin(module, block: osDirect, a: size, b: prefix, opcode: StdBinOpcode.add, ids: ids)
-	let mapped = emitPageAlignUp(module, block: osDirect, bytes: withPrefix, ids: ids)
+	let mapped = emitAlignUp(module, block: osDirect, value: withPrefix, width: SlabPageBytes, ids: ids)
 	let usable = emitBin(module, block: osDirect, a: mapped, b: prefix, opcode: StdBinOpcode.sub, ids: ids)
 	module.setTerminator(osDirect, op: StdOp.ret(usable))
 
@@ -1917,7 +1911,7 @@ function buildSlabOsDirectAlloc(module StdModule)
 
 	let prefix = emitConst(module, block: entry, value: OsDirectPrefixBytes, ids: ids)
 	let withPrefix = emitBin(module, block: entry, a: size, b: prefix, opcode: StdBinOpcode.add, ids: ids)
-	let total = emitPageAlignUp(module, block: entry, bytes: withPrefix, ids: ids)
+	let total = emitAlignUp(module, block: entry, value: withPrefix, width: SlabPageBytes, ids: ids)
 
 	let raw = ids.mint()
 	module.appendOp(entry, op: StdOp.osAllocPages(raw, sizeId: total))

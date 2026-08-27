@@ -806,6 +806,24 @@ export function emitFieldAddr(module StdModule, block IrBlock, record ValueId, o
 	return emitBin(module, block: block, a: record, b: displacement, opcode: StdBinOpcode.add, ids: ids)
 end 'emitFieldAddr'
 
+// ⭐⭐ **A VALUE RAISED TO THE NEXT MULTIPLE OF A POWER-OF-TWO WIDTH — `(value + width - 1) and -width`.**
+// Two layers of the allocator round to two DIFFERENT widths and neither of them owns the idiom: the
+// OS-direct tier rounds a BYTE COUNT up to a whole `SlabPageBytes` chunk, and `__slab_arena_new` rounds the
+// BASE `osReservePages` answered up to a whole commit granule. Written once, with the width as an argument,
+// because the second copy's failure mode is not a wrong shape — it is the right shape carrying the wrong
+// width, which reads correct at both sites and is a silent misalignment at one of them.
+//
+// ⚠ **`width` MUST BE A POWER OF TWO.** `-width` is the "clear the low bits" mask only then, and a width
+// that is not one raises to a boundary that does not exist. Both widths are constants their own geometry
+// check already proves are powers of two, by asserting each against the shift that divides by it
+// (`checkSlabClassTable` for `SlabPageBytes`, `checkSlabArenaGeometry` for the commit granule).
+export function emitAlignUp(module StdModule, block IrBlock, value ValueId, width ParsedInt, ids ValueMinter) returns ValueId
+	let bias = emitConst(module, block: block, value: width - 1, ids: ids)
+	let raised = emitBin(module, block: block, a: value, b: bias, opcode: StdBinOpcode.add, ids: ids)
+	let mask = emitConst(module, block: block, value: 0 - width, ids: ids)
+	return emitBin(module, block: block, a: raised, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitAlignUp'
+
 // ⭐ **ONE MACHINE-WORD SLOT — the stride every WORD-INDEXED buffer in the runtime uses.** A hash table's
 // `keys`/`states`/`hashes`/`values` columns, and the element buffer of any `Array` whose element is a managed
 // POINTER or a machine-word int, all address slot `i` at `base + i·8`.
