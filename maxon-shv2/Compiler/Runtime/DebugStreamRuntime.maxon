@@ -82,6 +82,7 @@ let DsSharedMemoryBytes = DsHeaderBytes + DsRingBytes + DsTagReserveBytes
 
 // Segment-header field offsets, from the base of the mapping.
 let DsOffMagic = 0 as ByteOffset
+
 // The MONITOR's schema version, written when it creates the segment.
 let DsOffVersion = 8 as ByteOffset
 let DsOffBufferSize = 16 as ByteOffset
@@ -92,6 +93,7 @@ let DsOffStartTimestamp = 56 as ByteOffset
 let DsOffTotalEvents = 64 as ByteOffset
 let DsOffDroppedEvents = 72 as ByteOffset
 let DsOffPeakUsed = 96 as ByteOffset
+
 // ⭐ The PRODUCER's schema version. `DsOffVersion` above is the MONITOR's — the two travel in opposite
 // directions, because it takes both for each end to check the other. A producer too old to know this slot
 // exists leaves it at zero, and "wrote entries but never announced a version" is precisely the signature
@@ -138,6 +140,7 @@ export let DsEvMmDecref = 4
 // Offsets from the START of the entry, so the header's 8 bytes are included and an emitter writes
 // straight through the pointer `__ds_reserve` handed back.
 let DsMmOffAllocId = 8 as ByteOffset
+
 // `tag_index(2) | scope_len(2) | value(4)` — one word. `value` is the allocation SIZE for `mm_alloc` and
 // the new OWNER COUNT for the refcount family; `scope_len` is 0 (this producer emits no scope names).
 let DsMmOffPacked = 16 as ByteOffset
@@ -183,17 +186,20 @@ let DsEvLogText = 99
 // Offsets from the START of the entry, so the 8-byte header is included — the mm family's convention above.
 let DsLogOffGt = 8 as ByteOffset
 let DsLogOffPid = 16 as ByteOffset
+
 // The packed field word. Its layout differs per event (see the table above), but every Log event has
 // exactly one and it always sits here.
 let DsLogOffFields = 24 as ByteOffset
 let DsLogOffArg0 = 32 as ByteOffset
 let DsLogOffArg1 = 40 as ByteOffset
+
 // LOG_TEXT only: the first byte of the UTF-8 tail. It shares LOG_EVENT's `arg0` offset because the two
 // entries diverge exactly there — one carries two numbers, the other a string.
 let DsLogOffText = 32 as ByteOffset
 
 let DsLogPhaseEntryBytes = 32
 let DsLogEventEntryBytes = 48
+
 // The FIXED part of a LOG_TEXT entry; the 8-byte-aligned UTF-8 tail follows it.
 let DsLogTextFixedBytes = 32
 
@@ -220,8 +226,20 @@ let DsLogU16FieldMask = 65535
 let DsLogUnitIdShift = 32
 
 // The ring keeps every entry 8-byte aligned, so a LOG_TEXT's tail is rounded UP to this. The SHIFT is what
-// the round is emitted as (`>> 3 << 3`), because the mask form would need a bitwise complement this tier
-// has no op for; the bias is what makes the shift round up rather than down.
+// the round is emitted as (`>> 3 << 3`) and the bias is what makes it round up rather than down.
+//
+// ⛔⛔ **THE REASON THAT USED TO BE GIVEN FOR THE SHIFT PAIR — *"the mask form would need a bitwise
+// complement this tier has no op for"* — IS FALSE, and was found by W215's review.** The mask is a
+// COMPILE-TIME constant, so nothing has to be complemented at run time: `MmRuntime.emitAlignUp` emits
+// exactly `(value + width - 1) and -width` over two `emitConst`s, and this very file already reaches for
+// `StdBinOpcode.bitAnd` twice (`emitRingPos`, `emitMaskedField`). What the tier genuinely lacks is a
+// complement of a RUNTIME value, which is why `SlabArena.emitBitRunUpdate` spells `not bit` as `bit xor -1`
+// — a different situation that this comment had borrowed the excuse from.
+//
+// ⇒ **KNOWN DEBT, FILED RATHER THAN RIDDEN ALONG: this is a THIRD hand-spelling of the align-up idiom
+// `emitAlignUp` was made the single owner of**, and one op more than it (add + shr + shl against add + and).
+// Collapsing it moves EMITTED code in a runtime W215 does not own, so it wants its own gate over the
+// debug-stream specs rather than a reviewer's commit.
 let DsEntryAlign = 8
 let DsEntryAlignShift = 3
 let DsEntryAlignBias = DsEntryAlign - 1
@@ -527,13 +545,16 @@ export let DsEmitLogTextName = b"__ds_emit_log_text"
 // exist.
 export let DsBaseLabel = b"__ds_base"
 let DsBufSizeLabel = b"__ds_buf_size"
+
 // `buf_size - 1`, cached so the ring's modulo is one AND.
 let DsBufMaskLabel = b"__ds_buf_mask"
 let DsStartTsLabel = b"__ds_start_ts"
+
 // A POINTER to the slab-allocated CRITICAL_SECTION, exactly as `SchedRuntime`'s `__sched_lock` is a pointer to
 // its own: `InitializeCriticalSection` needs a valid region to initialize in place, and a `.data` slot is
 // one machine word.
 let DsLockLabel = b"__ds_lock"
+
 // The monotonic allocation id `__mm_alloc` stamps into each box header. Starts at 0 and pre-increments,
 // so the first allocation is #1 and a zero packed id can only mean "never stamped".
 export let DsAllocIdLabel = b"__mm_alloc_id"
@@ -753,8 +774,6 @@ function buildDsShutdown(module StdModule)
 
 	module.functions.push(func)
 end 'buildDsShutdown'
-
-
 
 // `[base + offset] += 1` — the two ring counters the monitor's closing summary reads (`total_events`,
 // `dropped_events`). Both increments happen under the ring lock, which is why a plain read-modify-write is
@@ -1255,8 +1274,9 @@ function buildDsEmitLogText(module StdModule, usesGt bool)
 	let trimmed = emitBin(module, block: entry, a: over, b: excess, opcode: StdBinOpcode.mul, ids: ids)
 	let length = emitBin(module, block: entry, a: rawLength, b: trimmed, opcode: StdBinOpcode.sub, ids: ids)
 
-	// `align8(len)` — the bias is what makes the shift pair round UP. A shift pair rather than an AND with
-	// a complement, which is the op this tier does not have.
+	// `align8(len)` — the bias is what makes the shift pair round UP. ⚠ It is a shift pair for no reason that
+	// survives inspection: `DsEntryAlign`'s header records what W215's review found, which is that
+	// `MmRuntime.emitAlignUp` says this in one op fewer and the excuse for not calling it was never true.
 	let bias = emitConst(module, block: entry, value: DsEntryAlignBias, ids: ids)
 	let biased = emitBin(module, block: entry, a: length, b: bias, opcode: StdBinOpcode.add, ids: ids)
 	let alignShift = emitConst(module, block: entry, value: DsEntryAlignShift, ids: ids)
