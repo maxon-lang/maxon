@@ -820,6 +820,13 @@ end 'emitFieldAddr'
 // (`checkSlabClassTable` for `SlabPageBytes`, `checkSlabArenaGeometry` for the commit granule); this is what
 // makes a THIRD caller arriving with some other width a compile failure instead of a misaligned pointer,
 // since nothing about those two checks reaches this signature.
+//
+// ⚠ **THE COMPILER HAS ITS OWN `alignUp` (`Targets/Shared/BinaryHelpers.maxon`) AND THE TWO CANNOT BE ONE.**
+// That one answers a NUMBER at compile time for the binary writers; this one APPENDS OPS that answer at run
+// time — different tier, different types, no body they could share. They are the same formula in its two
+// spellings (`and not (a - 1)` there, `and -a` here — identical for a power of two on two's complement), so
+// they are named for each other here rather than left to be found: a reader who changes one should know the
+// other exists.
 export function emitAlignUp(module StdModule, block IrBlock, value ValueId, width ParsedInt, ids ValueMinter) returns ValueId
 	if width < 1 or (width and (width - 1)) != 0 'widthNotAPowerOfTwo'
 		panic("emitAlignUp: a width of {width} is not a positive power of two, so `0 - {width}` is not the mask that clears its low bits")

@@ -823,38 +823,62 @@ function buildSlabArenaNew(module StdModule, geometry SlabArenaGeometry)
 	// for `g < granuleCount`, so their union is exactly `[base, base + bytes)`, and
 	// `checkArenaReservationSlack` is what makes that a subrange of `[reserved, reserved + reservationBytes)`.
 
+	// ⛔⛔ **AND THE ALIGNMENT IS CHECKED RATHER THAN ASSUMED, BECAUSE AN UNCHECKED COUPLING IS EXACTLY
+	// WHAT THE DEFECT ABOVE WAS.** It was wrong 50% of the time, for two weeks, on a lane whose suite read
+	// green on the other half of the coin flips — so the cure ends with the invariant stated to the machine
+	// and not only to the reader. Three ops on a path that runs once per arena.
+	//
+	// ⚠ **IT IS NOT TAUTOLOGICAL EVEN THOUGH THE ROUND-UP IS UNCONDITIONAL.** Two things can still put a
+	// misaligned base here, and neither is hypothetical in kind: a granule that is not a power of two, or a
+	// backend materialising the `-granule` mask at the wrong WIDTH — a defect class this project has shipped
+	// before (`project_x8_no_range_is_not_no_constraint`). And on the lane that reserves NO slack
+	// (`arenaAlignSlackBytes` gives wasm zero, because `memory.grow` answers a whole-page base) a round-up
+	// that actually moved the base would move it PAST the reservation's end; `checkArenaReservationSlack`
+	// asserts that premise at compile time from the grow unit, and this is the same statement asked of the
+	// address a future lane really returns.
+	var misaligned = module.addBlock(func, label: b"misaligned")
+	var aligned = module.addBlock(func, label: b"aligned")
+
+	let granuleMask = emitConst(module, block: entry, value: SlabArenaCommitGranuleBytes - 1, ids: ids)
+	let withinGranule = emitBin(module, block: entry, a: base, b: granuleMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let onBoundary = emitConst(module, block: entry, value: 0, ids: ids)
+	let offGrid = emitCmp(module, block: entry, a: withinGranule, b: onBoundary, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(offGrid, thenBlockId: misaligned.id, elseBlockId: aligned.id))
+
+	emitRuntimeAbort(module, func: func, block: misaligned, abort: RuntimeAbort.slabArenaBaseNotGranuleAligned, ids: ids)
+
 	// The first granule, before ANY store below: the metadata chunk is inside it (asserted by
 	// `checkSlabArenaGeometry`), and until it is committed the arena's own base is not writable.
-	let firstGranule = emitConst(module, block: entry, value: SlabArenaCommitGranuleBytes, ids: ids)
-	emitGuardedCommit(module, block: entry, base: base, byteCount: firstGranule, ids: ids)
+	let firstGranule = emitConst(module, block: aligned, value: SlabArenaCommitGranuleBytes, ids: ids)
+	emitGuardedCommit(module, block: aligned, base: base, byteCount: firstGranule, ids: ids)
 
 	// Prepend: `new.next = head; head = new`. The head address is read once and used twice — ordinary SSA,
 	// and `globalAddr` is pure, so the allocator may rematerialize it rather than keep it live.
 	let headAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(headAddr, label: SlabArenaListLabel))
-	let oldHead = emitLoadField(module, block: entry, record: headAddr, offset: 0, ids: ids)
-	emitStoreField(module, block: entry, record: base, offset: ArenaNextOffset, value: oldHead)
+	module.appendOp(aligned, op: StdOp.globalAddr(headAddr, label: SlabArenaListLabel))
+	let oldHead = emitLoadField(module, block: aligned, record: headAddr, offset: 0, ids: ids)
+	emitStoreField(module, block: aligned, record: base, offset: ArenaNextOffset, value: oldHead)
 
-	let bitmapOffset = emitConst(module, block: entry, value: ArenaBitmapOffset as ParsedInt, ids: ids)
-	let bitmapAddr = emitBin(module, block: entry, a: base, b: bitmapOffset, opcode: StdBinOpcode.add, ids: ids)
-	let bitmapBytes = emitConst(module, block: entry, value: geometry.bitmapWords * ArenaWordBytes, ids: ids)
-	module.appendOp(entry, op: StdOp.memFill(bitmapAddr, byteCountId: bitmapBytes, value: ArenaBitmapAllFreeByte))
+	let bitmapOffset = emitConst(module, block: aligned, value: ArenaBitmapOffset as ParsedInt, ids: ids)
+	let bitmapAddr = emitBin(module, block: aligned, a: base, b: bitmapOffset, opcode: StdBinOpcode.add, ids: ids)
+	let bitmapBytes = emitConst(module, block: aligned, value: geometry.bitmapWords * ArenaWordBytes, ids: ids)
+	module.appendOp(aligned, op: StdOp.memFill(bitmapAddr, byteCountId: bitmapBytes, value: ArenaBitmapAllFreeByte))
 
 	// `-(1 shl k)` is the all-ones mask with its low `k` bits cleared — the metadata chunks marked USED, every
 	// other chunk in word 0 free. It lands AFTER the fill, which wrote that word all-free a moment ago.
-	let firstWord = emitConst(module, block: entry, value: 0 - (1 shl ArenaMetadataChunks), ids: ids)
-	emitStoreField(module, block: entry, record: base, offset: ArenaBitmapOffset, value: firstWord)
+	let firstWord = emitConst(module, block: aligned, value: 0 - (1 shl ArenaMetadataChunks), ids: ids)
+	emitStoreField(module, block: aligned, record: base, offset: ArenaBitmapOffset, value: firstWord)
 
 	// ⭐ **GRANULE 0 IS COMMITTED AND EVERY OTHER GRANULE IS NOT, WHICH IS WHAT THE FRESH MAPPING ALREADY
 	// SAYS.** The commit bitmap sits past the chunk bitmap the fill above stopped at, so it is still the
 	// reservation's own zeroes — and a zero bit MEANS "not committed". Only the one bit the commit two dozen
 	// lines up actually made true has to be written, exactly as the arena-list head's zero is its own
 	// initialisation.
-	let firstGranuleCommitted = emitConst(module, block: entry, value: 1, ids: ids)
-	emitStoreField(module, block: entry, record: base, offset: geometry.commitBitmapOffset, value: firstGranuleCommitted)
+	let firstGranuleCommitted = emitConst(module, block: aligned, value: 1, ids: ids)
+	emitStoreField(module, block: aligned, record: base, offset: geometry.commitBitmapOffset, value: firstGranuleCommitted)
 
-	emitStoreField(module, block: entry, record: headAddr, offset: 0, value: base)
-	module.setTerminator(entry, op: StdOp.ret(base))
+	emitStoreField(module, block: aligned, record: headAddr, offset: 0, value: base)
+	module.setTerminator(aligned, op: StdOp.ret(base))
 
 	module.functions.push(func)
 end 'buildSlabArenaNew'

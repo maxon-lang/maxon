@@ -50,7 +50,8 @@
 //     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
 //     cannot be cited about the next.
 // ⇒ **THE PICKING RULE ABOVE IS UNCHANGED AND STILL MEANS WHAT IT SAYS**: the next entry takes the next
-// FREE number above 70, which is now 91 — 77 went to `managedListNodeNotInThisChain`, 81 to
+// FREE number above 70, which is now 92 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
+// W215's arena alignment) — 77 went to `managedListNodeNotInThisChain`, 81 to
 // `managedListNodeElementMovedOut`, 82/83/84/88 to the slab ARENA's four (`SlabArena.maxon`) and 85/86/87 to
 // the slab OBJECT layer's three (`SlabRuntime.maxon`), while 76
 // and 80 stay vacant for the reason this paragraph gives, and S5 took 89 and 90 for the SHARDED allocator's
@@ -207,6 +208,25 @@ export enum RuntimeAbort
 	// replay would push the slot onto a span pointer of `ArenaMapNoSpan`, i.e. store through address 0 and
 	// then increment the word at 16.
 	slabRemoteFreeSlotHasNoSpan = 90
+	// ⛔⛔ `__slab_arena_new`: the arena's base is not a multiple of `SlabArenaCommitGranuleBytes`.
+	//
+	// ⭐⭐ **THIS IS THE INVARIANT THAT WAS BROKEN FOR TWO WEEKS WITH NOTHING TO SAY SO, AND IT IS WHY THIS
+	// CASE EXISTS RATHER THAN A COMMENT.** `__slab_arena_map_get` indexes by the ABSOLUTE page
+	// `addr shr SlabPageShift` while the chunk grid is `arenaBase + k * SlabPageBytes`, so the two grids
+	// coincide only when the base is chunk-aligned. `mmap` promises only the OS page — 4 KiB on x64 Linux,
+	// HALF a chunk — so on POSIX the base was chunk-aligned about half the time, and the other half a span's
+	// tail page mapped to nothing (exit 87 elsewhere) or two spans shared one map page (a corrupted free
+	// list, then a SIGSEGV somewhere else). The lane read 50% green.
+	//
+	// ⚠ **IT LOOKS TAUTOLOGICAL AFTER `MmRuntime.emitAlignUp` AND THAT IS THE POINT.** The round-up runs on
+	// every lane, so this can only fire if the round-up itself is wrong — a granule that is not a power of
+	// two, or a backend materialising the `-granule` mask at the wrong WIDTH, which is a defect class this
+	// project has shipped before. What the lanes differ in is the SLACK: where a reservation IS an
+	// allocation (wasm32-wasi, whose `memory.grow` answers `pageIndex shl 16`) `arenaAlignSlackBytes` gives
+	// ZERO, so a round-up that actually moved the base would move it PAST the reservation's end.
+	// `checkArenaReservationSlack` asserts that premise at compile time from the grow unit; this asks the
+	// same thing of the address a future lane really returns.
+	slabArenaBaseNotGranuleAligned = 91
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2
