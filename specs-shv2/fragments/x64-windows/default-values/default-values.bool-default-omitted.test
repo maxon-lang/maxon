@@ -15,40 +15,37 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @choose {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, check
-    x64.jmp ifelse
-  check:
-    x64.leaRegRegImm32 r8, rdx, 2
-    x64.popReg rbp
-    x64.ret
-  ifelse:
-    x64.movRegReg r8, rax
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.callDirect __paramDefault#choose#0
-    x64.movRegReg rbx, r8
-    x64.callDirect __paramDefault#choose#1
-    x64.movRegReg r12, r8
-    x64.callDirect __paramDefault#choose#2
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.movRegReg rax, r8
-    x64.callDirect choose
+    x64.jmp __il_body#8
+  __il_body#8:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#7
+  __il_cont#7:
+    x64.jmp __il_body#9
+  __il_body#9:
+    x64.movRegImm32 rcx, 40
+    x64.jmp __il_cont#6
+  __il_cont#6:
+    x64.jmp __il_body#10
+  __il_body#10:
+    x64.movRegImm32 r8, 10
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.jmp __il_body#11
+  __il_body#11:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, check
+    x64.jmp ifelse
+  check:
+    x64.leaRegRegImm32 r8, rcx, 2
+    x64.jmp __il_cont#4
+  ifelse:
+    x64.jmp __il_cont#4
+  __il_cont#4:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -62,41 +59,11 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @__paramDefault#choose#0 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-}
-
-func @__paramDefault#choose#1 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 40
-    x64.popReg rbp
-    x64.ret
-}
-
-func @__paramDefault#choose#2 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 10
-    x64.popReg rbp
-    x64.ret
+  ifcont:
 }

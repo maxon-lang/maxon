@@ -18,11 +18,26 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @digits6 {
+func @keepAll {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.jmp __il_body
+  __il_body:
+    x64.imulRegRegImm32 r8, rdi, 100000
+    x64.imulRegRegImm32 r10, rsi, 10000
+    x64.leaRegRegReg r8, r8, r10
+    x64.imulRegRegImm32 r10, r9, 1000
+    x64.leaRegRegReg r8, r8, r10
+    x64.imulRegRegImm32 r10, rax, 100
+    x64.leaRegRegReg r8, r8, r10
+    x64.imulRegRegImm32 r10, rdx, 10
+    x64.leaRegRegReg r8, r8, r10
+    x64.leaRegRegReg r8, r8, rcx
+    x64.jmp __il_cont
+  __il_cont:
     x64.imulRegRegImm32 rcx, rcx, 100000
+    x64.leaRegRegReg rcx, r8, rcx
     x64.imulRegRegImm32 rdx, rdx, 10000
     x64.leaRegRegReg rcx, rcx, rdx
     x64.imulRegRegImm32 rax, rax, 1000
@@ -32,51 +47,6 @@ func @digits6 {
     x64.imulRegRegImm32 rcx, rsi, 10
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegReg r8, rax, rdi
-    x64.popReg rbp
-    x64.ret
-}
-
-func @keepAll {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegReg r13, rax
-    x64.movRegReg r14, r9
-    x64.movRegReg r15, rsi
-    x64.storeSlotReg slot0, rdi
-    x64.movRegReg rcx, rdi
-    x64.movRegReg rdx, r15
-    x64.movRegReg rax, r14
-    x64.movRegReg r9, r13
-    x64.movRegReg rsi, r12
-    x64.movRegReg rdi, rbx
-    x64.callDirect digits6
-    x64.imulRegRegImm32 rax, rbx, 100000
-    x64.leaRegRegReg rax, r8, rax
-    x64.imulRegRegImm32 rcx, r12, 10000
-    x64.leaRegRegReg rax, rax, rcx
-    x64.imulRegRegImm32 rcx, r13, 1000
-    x64.leaRegRegReg rax, rax, rcx
-    x64.imulRegRegImm32 rcx, r14, 100
-    x64.leaRegRegReg rax, rax, rcx
-    x64.imulRegRegImm32 rcx, r15, 10
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegSlot rcx, slot0
-    x64.leaRegRegReg r8, rax, rcx
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

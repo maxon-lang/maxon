@@ -47,15 +47,6 @@ func @reassignReturn {
     x64.ret
 }
 
-func @makeThirty {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 30
-    x64.popReg rbp
-    x64.ret
-}
-
 func @reassignVoid {
   entry:
     x64.pushReg rbp
@@ -86,8 +77,11 @@ func @main {
     x64.movRegReg rcx, r8
     x64.callDirect reassignReturn
     x64.movRegReg rbx, r8
-    x64.callDirect makeThirty
-    x64.movRegReg r12, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.movRegImm32 r12, 30
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc

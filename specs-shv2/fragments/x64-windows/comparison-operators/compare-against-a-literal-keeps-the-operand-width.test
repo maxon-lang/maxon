@@ -25,32 +25,17 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @big {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 4000000000
-    x64.popReg rbp
-    x64.ret
-}
-
-func @hundred {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 100
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.callDirect big
-    x64.movRegReg rbx, r8
+    x64.jmp __il_body#8
+  __il_body#8:
+    x64.movRegImm32 rbx, 4000000000
+    x64.jmp __il_cont#7
+  __il_cont#7:
     x64.cmpRegImm32 rbx, 100
     x64.jcc greater, literalForm
     x64.jmp ifelse#2
@@ -63,8 +48,11 @@ func @main {
     x64.callDirect print
     x64.jmp ifcont#3
   ifcont#3:
-    x64.callDirect hundred
-    x64.cmpRegReg rbx, r8
+    x64.jmp __il_body#10
+  __il_body#10:
+    x64.jmp __il_cont#9
+  __il_cont#9:
+    x64.cmpRegImm32 rbx, 100
     x64.jcc greater, valueForm
     x64.jmp ifelse#5
   valueForm:

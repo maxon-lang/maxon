@@ -73,17 +73,6 @@ func @Bag.wipe {
     x64.ret
 }
 
-func @Bag.add {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.leaRegRegReg rax, rax, rdx
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -103,9 +92,13 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.movRegImm32 rdx, 42
-    x64.movRegReg rcx, rbx
-    x64.callDirect Bag.add
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.leaRegRegImm32 rax, rax, 42
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect Bag.wipe
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]

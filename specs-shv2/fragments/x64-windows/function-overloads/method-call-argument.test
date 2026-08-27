@@ -25,15 +25,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @over#Wide {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 r8, rcx, 100
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -48,9 +39,12 @@ func @main {
     x64.movRegImm32 rdx, 7
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.callDirect over#Wide
-    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 r12, rax, 100
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0

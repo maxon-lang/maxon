@@ -22,69 +22,51 @@ end 'main'
 ---
 ExitCode: 43
 ---
-func @positive {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg greater, r8
-    x64.popReg rbp
-    x64.ret
-}
-
-func @underLimit {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 4
-    x64.setccReg less, r8
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
     x64.jmp whilehdr
   whilehdr:
-    x64.movRegReg rcx, rbx
-    x64.callDirect positive
-    x64.movRegImm32 rax, 0
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body#12
+  __il_body#12:
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg greater, rdx
+    x64.jmp __il_cont#11
+  __il_cont#11:
+    x64.movRegImm32 rsi, 0
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, andrhs
-    x64.jmp critsplit#11
+    x64.jmp critsplit#16
   andrhs:
-    x64.movRegReg rcx, rbx
-    x64.callDirect underLimit
+    x64.jmp __il_body#14
+  __il_body#14:
+    x64.cmpRegImm32 rax, 4
+    x64.setccReg less, rdx
+    x64.jmp __il_cont#13
+  __il_cont#13:
     x64.jmp scmerge
-  critsplit#11:
-    x64.movRegReg r8, rax
+  critsplit#16:
+    x64.movRegReg rdx, rsi
     x64.jmp scmerge
   scmerge:
-    x64.cmpRegImm32 r8, 0
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, loop
-    x64.jmp critsplit#12
+    x64.jmp critsplit#15
   loop:
-    x64.leaRegRegImm32 rax, rbx, 1
-    x64.leaRegRegImm32 rcx, r12, 1
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegImm32 rcx, rcx, 1
     x64.cmpRegImm32 rcx, 10
     x64.jcc greater, runaway
     x64.jmp ifcont
   runaway:
     x64.jmp whileexit
   ifcont:
-    x64.movRegReg rbx, rax
-    x64.movRegReg r12, rcx
     x64.jmp whilehdr
-  critsplit#12:
-    x64.movRegReg rax, rbx
-    x64.movRegReg rcx, r12
+  critsplit#15:
     x64.jmp whileexit
   whileexit:
     x64.imulRegRegImm32 rax, rax, 10
@@ -102,14 +84,10 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

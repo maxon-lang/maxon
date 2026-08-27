@@ -26,54 +26,48 @@ end 'main'
 ---
 ExitCode: 107
 ---
-func @classify {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 10
-    x64.setccReg less, rax
-    x64.movRegImm32 rcx, 0
-    x64.jcc less, first
-    x64.jmp critsplit#8
-  first:
-    x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp ifcont#2
-  critsplit#8:
-    x64.jmp ifcont#2
-  ifcont#2:
-    x64.movRegImm32 rsi, 0
-    x64.jmp whilehdr
-  whilehdr:
-    x64.cmpRegReg rsi, rdx
-    x64.jcc less, loop
-    x64.jmp whileexit
-  loop:
-    x64.leaRegRegReg rcx, rcx, rsi
-    x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp whilehdr
-  whileexit:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, second
-    x64.jmp critsplit#9
-  second:
-    x64.leaRegRegImm32 r8, rcx, 100
-    x64.jmp ifcont#7
-  critsplit#9:
-    x64.movRegReg r8, rcx
-    x64.jmp ifcont#7
-  ifcont#7:
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 3
-    x64.movRegImm32 rdx, 4
-    x64.callDirect classify
+    x64.movRegImm32 rax, 3
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, 10
+    x64.setccReg less, rax
+    x64.movRegImm32 rcx, 0
+    x64.jcc less, first
+    x64.jmp critsplit#13
+  first:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp ifcont#7
+  critsplit#13:
+    x64.jmp ifcont#7
+  ifcont#7:
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rdx, 4
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, second
+    x64.jmp critsplit#14
+  second:
+    x64.leaRegRegImm32 r8, rcx, 100
+    x64.jmp ifcont#12
+  critsplit#14:
+    x64.movRegReg r8, rcx
+    x64.jmp ifcont#12
+  ifcont#12:
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

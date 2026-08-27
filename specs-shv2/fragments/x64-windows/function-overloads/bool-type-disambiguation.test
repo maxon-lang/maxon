@@ -19,31 +19,24 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @check#bool {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, branch
-    x64.jmp ifelse
-  branch:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  ifelse:
-    x64.movRegImm32 r8, 0
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 1
-    x64.callDirect check#bool
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, branch
+    x64.jmp ifelse
+  branch:
+    x64.movRegImm32 r8, 1
+    x64.jmp __il_cont
+  ifelse:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -63,4 +56,5 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  ifcont:
 }

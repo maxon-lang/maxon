@@ -47,19 +47,16 @@ func @Bag.report {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect Bag.has
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect Bag.only
-    x64.leaRegRegReg r8, r12, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
+    x64.jmp __il_body#3
+  __il_body#3:
+    x64.movRegImm32 rax, 40
+    x64.jmp __il_cont#2
+  __il_cont#2:
+    x64.jmp __il_body#4
+  __il_body#4:
+    x64.jmp __il_cont#1
+  __il_cont#1:
+    x64.leaRegRegImm32 r8, rax, 3
     x64.popReg rbp
     x64.ret
 }
@@ -73,24 +70,6 @@ func @Bag.make {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Bag.only {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 3
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Bag.has {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 40
     x64.popReg rbp
     x64.ret
 }

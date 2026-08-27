@@ -67,14 +67,6 @@ func @Alpha.create {
     x64.ret
 }
 
-func @opaque {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.popReg rbp
-    x64.ret
-}
-
 func @ratioVia {
   entry:
     x64.pushReg rbp
@@ -124,7 +116,10 @@ func @main {
     x64.callDirect Alpha.create
     x64.movRegReg rbx, r8
     x64.movsdRegRip xmm0, [rip + __fconst_5]
-    x64.callDirect opaque
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.leaRegRdata rdx, [rip + __witness_Alpha.Scorer]
     x64.movRegReg rcx, rbx
     x64.callDirect ratioVia

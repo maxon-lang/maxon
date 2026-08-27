@@ -97,9 +97,25 @@ func @main {
     x64.movRegImm32 rcx, 41
     x64.callDirect Adder.create
     x64.movRegReg rbx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 r12, rax, 1
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __il_slow
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc greater, __il_slow
+    x64.jmp __rc_ok
+  __il_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect Adder.bump
     x64.movRegReg r12, r8
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.movRegReg r8, r12

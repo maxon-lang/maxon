@@ -35,39 +35,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Outcome.isPass {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
-  matcharm#1:
-    x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
-  matcharm#2:
-    x64.movRegImm32 r8, 0
-    x64.jmp matchcont
-  matchcont:
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-}
-
-func @Outcome.weight {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movsdRegRip xmm0, [rip + __fconst_2]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -85,9 +52,26 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_retain
     x64.storeBaseDispReg.word64 [r12 + 8], r8
-    x64.movRegReg rcx, r12
-    x64.callDirect Outcome.isPass
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#7
+    x64.jmp matchnext
+  matcharm#7:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#8
+    x64.jmp matchdead
+  matcharm#8:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, y
     x64.jmp ifcont#2
   y:
@@ -101,9 +85,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#2:
-    x64.movRegReg rcx, r12
-    x64.callDirect Outcome.weight
-    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.jmp __il_body#13
+  __il_body#13:
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.jmp __il_cont#12
+  __il_cont#12:
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc above, w
     x64.jmp ifcont#4
@@ -127,4 +114,5 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  matchdead:
 }

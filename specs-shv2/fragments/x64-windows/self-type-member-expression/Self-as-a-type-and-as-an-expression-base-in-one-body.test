@@ -28,33 +28,16 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @Toggle.same {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Toggle.matches {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegReg rcx, rdx
-    x64.setccReg equal, r8
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Toggle.isOff {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rdx, 0
-    x64.callDirect Toggle.matches
-    x64.epilogue 32
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, r8
+    x64.jmp __il_cont
+  __il_cont:
     x64.popReg rbp
     x64.ret
 }
@@ -72,9 +55,11 @@ func @main {
     x64.jcc notEqual, ok
     x64.jmp ifcont#4
   ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect Toggle.same
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rbx, 0
     x64.jcc equal, ok2
     x64.jmp ifcont#3
   ok2:

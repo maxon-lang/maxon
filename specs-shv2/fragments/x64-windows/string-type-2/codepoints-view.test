@@ -46,9 +46,11 @@ func @main {
     x64.jcc equal, loop
     x64.jmp forexit
   loop:
-    x64.movRegReg rcx, r12
-    x64.callDirect CodepointIterator.current
-    x64.movRegReg rbx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 16]
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -746,15 +748,6 @@ func @CodepointIterator.create {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @CodepointIterator.current {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 16]
     x64.popReg rbp
     x64.ret
 }

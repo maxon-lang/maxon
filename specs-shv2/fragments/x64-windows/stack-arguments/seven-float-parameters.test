@@ -13,30 +13,11 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @sumf7 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 16
-    x64.storeSlotReg slot0, xmm6
-    x64.loadRegBaseDisp.word64 xmm6, [rbp + 48]
-    x64.addsdRegReg xmm0, xmm0, xmm1
-    x64.addsdRegReg xmm0, xmm0, xmm2
-    x64.addsdRegReg xmm0, xmm0, xmm3
-    x64.addsdRegReg xmm0, xmm0, xmm4
-    x64.addsdRegReg xmm0, xmm0, xmm5
-    x64.addsdRegReg xmm0, xmm0, xmm6
-    x64.loadRegSlot xmm6, slot0
-    x64.epilogue 16
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 48
+    x64.prologue 16
     x64.storeSlotReg slot0, xmm6
     x64.movsdRegRip xmm0, [rip + __fconst_0]
     x64.movsdRegRip xmm1, [rip + __fconst_1]
@@ -45,8 +26,16 @@ func @main {
     x64.movsdRegRip xmm4, [rip + __fconst_4]
     x64.movsdRegRip xmm5, [rip + __fconst_5]
     x64.movsdRegRip xmm6, [rip + __fconst_6]
-    x64.storeBaseDispReg.word64 [rsp + 32], xmm6
-    x64.callDirect sumf7
+    x64.jmp __il_body
+  __il_body:
+    x64.addsdRegReg xmm0, xmm0, xmm1
+    x64.addsdRegReg xmm0, xmm0, xmm2
+    x64.addsdRegReg xmm0, xmm0, xmm3
+    x64.addsdRegReg xmm0, xmm0, xmm4
+    x64.addsdRegReg xmm0, xmm0, xmm5
+    x64.addsdRegReg xmm0, xmm0, xmm6
+    x64.jmp __il_cont
+  __il_cont:
     x64.movsdRegRip xmm1, [rip + __fconst_7]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc parity, ifcont
@@ -57,13 +46,13 @@ func @main {
   ok:
     x64.movRegImm32 r8, 0
     x64.loadRegSlot xmm6, slot0
-    x64.epilogue 48
+    x64.epilogue 16
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 1
     x64.loadRegSlot xmm6, slot0
-    x64.epilogue 48
+    x64.epilogue 16
     x64.popReg rbp
     x64.ret
 }

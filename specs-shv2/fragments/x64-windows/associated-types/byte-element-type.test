@@ -33,15 +33,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @SingleByte.getByte {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @SingleByte.create {
   entry:
     x64.pushReg rbp
@@ -80,19 +71,18 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegImm32 rcx, 42
     x64.callDirect SingleByte.create
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect SingleByte.getByte
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

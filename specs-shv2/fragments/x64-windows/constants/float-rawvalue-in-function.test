@@ -22,34 +22,26 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @getRaw {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movqXmmGpr xmm0, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm rcx, 4612811918334230528
-    x64.callDirect getRaw
+    x64.movRegImm rax, 4612811918334230528
+    x64.jmp __il_body
+  __il_body:
+    x64.movqXmmGpr xmm0, rax
+    x64.jmp __il_cont
+  __il_cont:
     x64.movsdRegRip xmm1, [rip + __fconst_0]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc above, check
     x64.jmp ifcont
   check:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

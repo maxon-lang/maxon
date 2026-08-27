@@ -25,12 +25,68 @@ func @main {
     x64.movsdRegRip xmm7, [rip + __fconst_2]
     x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.subsdRegReg xmm7, xmm7, xmm0
+    x64.jmp __il_body#7
+  __il_body#7:
+    x64.movqGprXmm rax, xmm7
+    x64.movRegImm rcx, 9223372036854775809
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, negzero#8
+    x64.jmp ifcont#9
+  negzero#8:
+    x64.movRegImm32 rbx, 0
+    x64.jmp __il_cont#6
+  ifcont#9:
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#12
+    x64.jmp __rc_chk#11
+  __rc_chk#11:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __il_slow#12
+    x64.jmp __rc_ok#10
+  __il_slow#12:
     x64.movRegReg xmm0, xmm7
     x64.callDirect float.hash
     x64.movRegReg rbx, r8
+    x64.jmp __il_cont#6
+  __rc_ok#10:
+    x64.movRegReg rbx, rax
+    x64.jmp __il_cont#6
+  __il_cont#6:
+    x64.jmp __il_body#13
+  __il_body#13:
+    x64.movqGprXmm rax, xmm6
+    x64.movRegImm rcx, 9223372036854775809
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, negzero#14
+    x64.jmp ifcont#15
+  negzero#14:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#5
+  ifcont#15:
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#18
+    x64.jmp __rc_chk#17
+  __rc_chk#17:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __il_slow#18
+    x64.jmp __rc_ok#16
+  __il_slow#18:
     x64.movRegReg xmm0, xmm6
     x64.callDirect float.hash
-    x64.cmpRegReg rbx, r8
+    x64.movRegReg rax, r8
+    x64.jmp __il_cont#5
+  __rc_ok#16:
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.cmpRegReg rbx, rax
     x64.jcc notEqual, signMasked
     x64.jmp ifcont#2
   signMasked:
@@ -42,9 +98,37 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#2:
+    x64.jmp __il_body#20
+  __il_body#20:
+    x64.movqGprXmm rax, xmm7
+    x64.movRegImm rcx, 9223372036854775809
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, negzero#21
+    x64.jmp ifcont#22
+  negzero#21:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#19
+  ifcont#22:
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#25
+    x64.jmp __rc_chk#24
+  __rc_chk#24:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __il_slow#25
+    x64.jmp __rc_ok#23
+  __il_slow#25:
     x64.movRegReg xmm0, xmm7
     x64.callDirect float.hash
-    x64.cmpRegImm32 r8, 1374389535
+    x64.movRegReg rax, r8
+    x64.jmp __il_cont#19
+  __rc_ok#23:
+    x64.jmp __il_cont#19
+  __il_cont#19:
+    x64.cmpRegImm32 rax, 1374389535
     x64.jcc notEqual, pinned
     x64.jmp ifcont#4
   pinned:

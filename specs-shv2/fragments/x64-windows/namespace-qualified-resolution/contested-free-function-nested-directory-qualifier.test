@@ -20,34 +20,22 @@ end 'main'
 ---
 ExitCode: 35
 ---
-func @lib.inner.pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 3
-    x64.popReg rbp
-    x64.ret
-}
-
-func @beta.pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 5
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.callDirect lib.inner.pick
-    x64.imulRegRegImm32 rbx, r8, 10
-    x64.callDirect beta.pick
-    x64.leaRegRegReg r8, rbx, r8
+    x64.prologue 32
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.movRegImm32 rax, 3
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.jmp __il_body#7
+  __il_body#7:
+    x64.jmp __il_cont#4
+  __il_cont#4:
+    x64.leaRegRegImm32 r8, rax, 5
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -60,13 +48,11 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

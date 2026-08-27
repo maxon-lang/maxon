@@ -70,9 +70,25 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r12 + 0], rax
     x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
+    x64.jmp __il_cont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __il_slow
+    x64.jmp matchdead
+  __il_slow:
     x64.movRegReg rcx, r12
     x64.callDirect pick
     x64.movRegReg rbx, r8
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
@@ -81,4 +97,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  matchdead:
+  matchcont:
 }

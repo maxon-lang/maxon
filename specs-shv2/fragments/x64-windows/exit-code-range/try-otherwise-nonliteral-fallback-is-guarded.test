@@ -57,33 +57,23 @@ func @mk {
     x64.ret
 }
 
-func @wide {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @pick {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 5000
-    x64.callDirect wide
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 5000
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.callDirect mk
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.jmp trycont
   tryok:
     x64.jmp trycont
@@ -99,14 +89,12 @@ func @pick {
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

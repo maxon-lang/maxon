@@ -20,45 +20,38 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @test {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, maybePrefix
-    x64.jmp ifcont#6
-  maybePrefix:
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, isHex
-    x64.jmp ifcont#3
-  isHex:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  ifcont#3:
-    x64.cmpRegImm32 rdx, 2
-    x64.jcc equal, isBinary
-    x64.jmp ifcont#5
-  isBinary:
-    x64.movRegImm32 r8, 2
-    x64.popReg rbp
-    x64.ret
-  ifcont#5:
-    x64.jmp ifcont#6
-  ifcont#6:
-    x64.movRegImm32 r8, 42
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 5
-    x64.movRegImm32 rdx, 0
-    x64.callDirect test
+    x64.movRegImm32 rax, 5
+    x64.movRegImm32 rcx, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, maybePrefix
+    x64.jmp ifcont#11
+  maybePrefix:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, isHex
+    x64.jmp ifcont#8
+  isHex:
+    x64.movRegImm32 r8, 1
+    x64.jmp __il_cont
+  ifcont#8:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, isBinary
+    x64.jmp ifcont#10
+  isBinary:
+    x64.movRegImm32 r8, 2
+    x64.jmp __il_cont
+  ifcont#10:
+    x64.jmp ifcont#11
+  ifcont#11:
+    x64.movRegImm32 r8, 42
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

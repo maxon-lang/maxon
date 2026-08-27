@@ -47,9 +47,12 @@ func @main {
     x64.jcc equal, loop
     x64.jmp forexit
   loop:
-    x64.movRegReg rcx, r12
-    x64.callDirect RangeIterator.current
-    x64.leaRegRegReg rbx, rbx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegReg rbx, rbx, rax
     x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r12
@@ -163,15 +166,6 @@ func @RangeIterator.create {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @RangeIterator.current {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 16]
     x64.popReg rbp
     x64.ret
 }

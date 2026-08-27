@@ -24,50 +24,44 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @Toggle.flip {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
-  matcharm#1:
-    x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
-  matcharm#2:
-    x64.movRegImm32 r8, 0
-    x64.jmp matchcont
-  matchcont:
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect Toggle.flip
-    x64.cmpRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#11
+    x64.jmp matchnext#14
+  matcharm#11:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#15
+  matchnext#14:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#12
+    x64.jmp matchdead#13
+  matcharm#12:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont#15
+  matchcont#15:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, matcharm#2
-    x64.jmp matchnext
+    x64.jmp matchnext#4
   matcharm#2:
     x64.movRegImm32 r8, 0
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 r8, 1
+    x64.jmp matchcont#5
+  matchnext#4:
+    x64.cmpRegImm32 rax, 1
     x64.jcc equal, matcharm#1
-    x64.jmp matchdead
+    x64.jmp matchdead#3
   matcharm#1:
     x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-  matchcont:
+    x64.jmp matchcont#5
+  matchcont#5:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -87,5 +81,6 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchdead:
+  matchdead#3:
+  matchdead#13:
 }

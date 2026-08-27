@@ -56,15 +56,6 @@ func @trivial {
     x64.ret
 }
 
-func @positive {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -77,8 +68,12 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_ready
-    x64.callDirect positive
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, b
     x64.jmp critsplit
   b:

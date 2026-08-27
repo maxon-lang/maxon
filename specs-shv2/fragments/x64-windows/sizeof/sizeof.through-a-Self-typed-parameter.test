@@ -56,24 +56,15 @@ func @Bag.create {
     x64.ret
 }
 
-func @Bag.slotSize {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rdx + 56]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Bag.pairWith {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.callDirect Bag.slotSize
-    x64.epilogue 32
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 r8, [rax + 56]
+    x64.jmp __il_cont
+  __il_cont:
     x64.popReg rbp
     x64.ret
 }

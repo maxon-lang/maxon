@@ -39,24 +39,27 @@ func @main {
     x64.callDirect __destruct_CodepointView
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r14, 0
-    x64.jcc equal, critsplit#12
+    x64.jcc equal, critsplit#14
     x64.jmp forempty
-  critsplit#12:
+  critsplit#14:
     x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, chars
     x64.jmp forexit
   chars:
-    x64.movRegReg rcx, r13
-    x64.callDirect CodepointIterator.current
-    x64.cmpRegImm32 r8, 45
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 16]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 45
     x64.jcc equal, dash
-    x64.jmp critsplit#13
+    x64.jmp critsplit#15
   dash:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp ifcont
-  critsplit#13:
+  critsplit#15:
     x64.jmp ifcont
   ifcont:
     x64.jmp forstep
@@ -731,15 +734,6 @@ func @CodepointIterator.create {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @CodepointIterator.current {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 16]
     x64.popReg rbp
     x64.ret
 }

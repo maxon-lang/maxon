@@ -12,24 +12,17 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @multiply {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.imulRegReg r8, rcx, rdx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 6
-    x64.movRegImm32 rdx, 7
-    x64.callDirect multiply
+    x64.movRegImm32 rax, 6
+    x64.jmp __il_body
+  __il_body:
+    x64.imulRegRegImm32 r8, rax, 7
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

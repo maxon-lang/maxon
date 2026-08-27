@@ -20,52 +20,53 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @firstOver {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 3
-    x64.jcc greater, check
-    x64.jmp ifcont
-  check:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 0
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 5
-    x64.callDirect firstOver
-    x64.cmpRegImm32 r8, 1
+    x64.movRegImm32 rax, 5
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc greater, check#7
+    x64.jmp ifcont#8
+  check#7:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#5
+  ifcont#8:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, branchTaken
     x64.jmp ifcont#2
   branchTaken:
     x64.movRegImm32 r8, 2
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#2:
-    x64.movRegImm32 rcx, 1
-    x64.callDirect firstOver
-    x64.cmpRegImm32 r8, 0
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_body#10
+  __il_body#10:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc greater, check#11
+    x64.jmp ifcont#12
+  check#11:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#9
+  ifcont#12:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#9
+  __il_cont#9:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, branchNotTaken
     x64.jmp ifcont#4
   branchNotTaken:
     x64.movRegImm32 r8, 3
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#4:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

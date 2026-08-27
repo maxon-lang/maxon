@@ -50,9 +50,12 @@ func @main {
     x64.jcc equal, loop
     x64.jmp forexit
   loop:
-    x64.movRegReg rcx, r13
-    x64.callDirect ByteIterator.current
-    x64.leaRegRegReg rbx, rbx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 16]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegReg rbx, rbx, rax
     x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r13
@@ -266,15 +269,6 @@ func @ByteIterator.create {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @ByteIterator.current {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 16]
     x64.popReg rbp
     x64.ret
 }

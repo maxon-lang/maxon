@@ -132,15 +132,6 @@ func @Box.create {
     x64.ret
 }
 
-func @Box.base {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Box.viaClosure {
   entry:
     x64.pushReg rbp
@@ -161,11 +152,11 @@ func @Box.viaClosure {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegReg rdx, r14
     x64.callReg r13
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect Box.base
-    x64.leaRegRegReg rbx, r13, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 rbx, r8, 1
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0

@@ -33,30 +33,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Outcome.isPass {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
-  matcharm#1:
-    x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
-  matcharm#2:
-    x64.movRegImm32 r8, 0
-    x64.jmp matchcont
-  matchcont:
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -82,9 +58,25 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __str_retain
     x64.storeBaseDispReg.word64 [r13 + 8], r8
-    x64.movRegReg rcx, r13
-    x64.callDirect Outcome.isPass
-    x64.movRegReg r12, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#8
+    x64.jmp matchnext
+  matcharm#8:
+    x64.movRegImm32 r12, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#9
+    x64.jmp matchdead
+  matcharm#9:
+    x64.movRegImm32 r12, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Outcome
     x64.cmpRegImm32 r12, 0
@@ -101,6 +93,7 @@ func @main {
   ifcont:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp whilehdr
+  matchdead:
   whileexit:
     x64.movRegImm32 r8, 7
     x64.epilogue 40

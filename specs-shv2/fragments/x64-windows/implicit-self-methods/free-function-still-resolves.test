@@ -32,23 +32,16 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @helper {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 5
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Box.get {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect helper
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.epilogue 32
+    x64.jmp __il_body
+  __il_body:
+    x64.movRegImm32 rax, 5
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 r8, rax, 1
     x64.popReg rbp
     x64.ret
 }

@@ -28,73 +28,99 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @describe {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext#5
-  matcharm#1:
-    x64.movRegImm32 r8, 100
-    x64.popReg rbp
-    x64.ret
-  matchnext#5:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchnext#6
-  matcharm#2:
-    x64.movRegImm32 r8, 200
-    x64.popReg rbp
-    x64.ret
-  matchnext#6:
-    x64.cmpRegImm32 rcx, 2
-    x64.jcc equal, matcharm#3
-    x64.jmp matchdead
-  matcharm#3:
-    x64.movRegImm32 r8, 300
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-  matchcont:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegImm32 rcx, 0
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 r12, 2
-    x64.callDirect describe
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect describe
-    x64.leaRegRegReg rbx, r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect describe
-    x64.leaRegRegReg rax, rbx, r8
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#7
+    x64.jmp matchnext#11
+  matcharm#7:
+    x64.movRegImm32 rax, 100
+    x64.jmp __il_cont#5
+  matchnext#11:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#8
+    x64.jmp matchnext#12
+  matcharm#8:
+    x64.movRegImm32 rax, 200
+    x64.jmp __il_cont#5
+  matchnext#12:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm#9
+    x64.jmp matchdead#10
+  matcharm#9:
+    x64.movRegImm32 rax, 300
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.jmp __il_body#14
+  __il_body#14:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm#15
+    x64.jmp matchnext#19
+  matcharm#15:
+    x64.movRegImm32 rcx, 100
+    x64.jmp __il_cont#4
+  matchnext#19:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm#16
+    x64.jmp matchnext#20
+  matcharm#16:
+    x64.movRegImm32 rcx, 200
+    x64.jmp __il_cont#4
+  matchnext#20:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm#17
+    x64.jmp matchdead#18
+  matcharm#17:
+    x64.movRegImm32 rcx, 300
+    x64.jmp __il_cont#4
+  __il_cont#4:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.jmp __il_body#22
+  __il_body#22:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, matcharm#23
+    x64.jmp matchnext#27
+  matcharm#23:
+    x64.movRegImm32 rcx, 100
+    x64.jmp __il_cont#3
+  matchnext#27:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, matcharm#24
+    x64.jmp matchnext#28
+  matcharm#24:
+    x64.movRegImm32 rcx, 200
+    x64.jmp __il_cont#3
+  matchnext#28:
+    x64.cmpRegImm32 rdx, 2
+    x64.jcc equal, matcharm#25
+    x64.jmp matchdead#26
+  matcharm#25:
+    x64.movRegImm32 rcx, 300
+    x64.jmp __il_cont#3
+  __il_cont#3:
+    x64.leaRegRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 600
     x64.jcc equal, check
     x64.jmp ifcont
   check:
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 1
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  matchdead#26:
+  matchdead#18:
+  matchdead#10:
+  matchcont#13:
+  matchcont#21:
+  matchcont#29:
 }

@@ -60,15 +60,6 @@ func @Box.create {
     x64.ret
 }
 
-func @Box.tag {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 7
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Box_String.make {
   entry:
     x64.pushReg rbp
@@ -88,15 +79,6 @@ func @Box_String.make {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Box_String.tag {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 8
     x64.popReg rbp
     x64.ret
 }
@@ -133,23 +115,26 @@ func @main {
     x64.callDirect Box.create
     x64.movRegReg rbx, r8
     x64.callDirect Box_String.make
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect Box.tag
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect Box_String.tag
-    x64.leaRegRegReg r13, r13, r8
-    x64.movRegReg rcx, r12
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.movRegImm32 rax, 7
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.jmp __il_body#7
+  __il_body#7:
+    x64.jmp __il_cont#4
+  __il_cont#4:
+    x64.leaRegRegImm32 r12, rax, 8
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Box_String
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct___Box_String
-    x64.cmpRegImm32 r13, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r13, rax
+    x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -164,7 +149,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, r13
+    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

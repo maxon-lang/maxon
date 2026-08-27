@@ -28,22 +28,17 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Box.fromString {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @f {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.leaRegRdata rdx, [rip + __str_rec_1]
-    x64.callDirect Box.fromString
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

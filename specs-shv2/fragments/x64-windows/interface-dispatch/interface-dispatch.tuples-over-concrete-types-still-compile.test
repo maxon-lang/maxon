@@ -36,15 +36,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Sq.area {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Sq.create {
   entry:
     x64.pushReg rbp
@@ -66,15 +57,14 @@ func @take {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect Sq.area
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.leaRegRegReg r8, r8, rax
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r8, rax, rcx
     x64.popReg rbp
     x64.ret
 }

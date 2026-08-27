@@ -22,22 +22,16 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @getCode {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 404
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect getCode
-    x64.movRegReg rcx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.movRegImm32 rcx, 404
+    x64.jmp __il_cont
+  __il_cont:
     x64.callDirect __enum_from_raw_HttpStatus
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr

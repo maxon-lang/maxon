@@ -112,15 +112,6 @@ func @Box.create {
     x64.ret
 }
 
-func @Box.constantAnswer {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 3
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -139,10 +130,12 @@ func @main {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
-    x64.leaRegRdata rdx, [rip + __witness_Point.Digest]
-    x64.movRegReg rcx, r12
-    x64.callDirect Box.constantAnswer
-    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __witness_Point.Digest]
+    x64.jmp __il_body
+  __il_body:
+    x64.movRegImm32 rbx, 3
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Box_Point
     x64.movRegReg r8, rbx

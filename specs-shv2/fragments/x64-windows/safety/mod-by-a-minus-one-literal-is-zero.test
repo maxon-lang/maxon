@@ -21,15 +21,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @ident {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -40,14 +31,16 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 72
-    x64.movRegImm rcx, 9223372036854775808
-    x64.callDirect ident
+    x64.movRegImm rax, 9223372036854775808
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegImm rcx, 18446744073709551615
     x64.cmpRegImm32 rcx, -1
-    x64.setccReg equal, rax
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.andRegReg r8, r8, rax
-    x64.movRegReg rax, r8
+    x64.setccReg equal, rdx
+    x64.leaRegRegImm32 rdx, rdx, -1
+    x64.andRegReg rax, rax, rdx
     x64.cqo
     x64.idivReg rcx
     x64.movRegReg rbx, rdx

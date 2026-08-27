@@ -27,76 +27,88 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @tagOf {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext#5
-  matcharm#1:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  matchnext#5:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchnext#6
-  matcharm#2:
-    x64.movRegImm32 r8, 2
-    x64.popReg rbp
-    x64.ret
-  matchnext#6:
-    x64.cmpRegImm32 rcx, 2
-    x64.jcc equal, matcharm#3
-    x64.jmp matchdead
-  matcharm#3:
-    x64.movRegImm32 r8, 3
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-  matchcont:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rbx, 0
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
     x64.jmp whilehdr
   whilehdr:
     x64.movRegImm32 rcx, 1
-    x64.callDirect tagOf
-    x64.cmpRegReg r12, r8
+    x64.jmp __il_body#10
+  __il_body#10:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm#11
+    x64.jmp matchnext#15
+  matcharm#11:
+    x64.movRegImm32 rcx, 1
+    x64.jmp __il_cont#9
+  matchnext#15:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm#12
+    x64.jmp matchnext#16
+  matcharm#12:
+    x64.movRegImm32 rcx, 2
+    x64.jmp __il_cont#9
+  matchnext#16:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm#13
+    x64.jmp matchdead#14
+  matcharm#13:
+    x64.movRegImm32 rcx, 3
+    x64.jmp __il_cont#9
+  __il_cont#9:
+    x64.cmpRegReg rax, rcx
     x64.jcc less, outer
     x64.jmp whileexit
   outer:
     x64.movRegImm32 rcx, 1
-    x64.callDirect tagOf
-    x64.cmpRegImm32 r8, 2
+    x64.jmp __il_body#19
+  __il_body#19:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm#20
+    x64.jmp matchnext#24
+  matcharm#20:
+    x64.movRegImm32 rcx, 1
+    x64.jmp __il_cont#18
+  matchnext#24:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm#21
+    x64.jmp matchnext#25
+  matcharm#21:
+    x64.movRegImm32 rcx, 2
+    x64.jmp __il_cont#18
+  matchnext#25:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm#22
+    x64.jmp matchdead#23
+  matcharm#22:
+    x64.movRegImm32 rcx, 3
+    x64.jmp __il_cont#18
+  __il_cont#18:
+    x64.cmpRegImm32 rcx, 2
     x64.jcc equal, inner
     x64.jmp critsplit
   inner:
-    x64.leaRegRegImm32 rax, rbx, 21
+    x64.leaRegRegImm32 rcx, r8, 21
     x64.jmp ifcont
   critsplit:
-    x64.movRegReg rax, rbx
+    x64.movRegReg rcx, r8
     x64.jmp ifcont
   ifcont:
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.movRegReg rbx, rax
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg r8, rcx
     x64.jmp whilehdr
+  matchdead#23:
   whileexit:
-    x64.cmpRegImm32 rbx, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegReg r8, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -104,15 +116,13 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, rbx
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  matchdead#14:
+  matchcont#17:
+  matchcont#26:
 }

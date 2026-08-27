@@ -12,24 +12,18 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @widen {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegReg rax, rcx, rdx
-    x64.cvtsi2sdRegReg xmm0, rax
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 20
-    x64.movRegImm32 rdx, 22
-    x64.callDirect widen
+    x64.movRegImm32 rax, 20
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 rax, rax, 22
+    x64.cvtsi2sdRegReg xmm0, rax
+    x64.jmp __il_cont
+  __il_cont:
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.addsdRegReg xmm0, xmm0, xmm1
     x64.cvttsd2siRegReg r8, xmm0

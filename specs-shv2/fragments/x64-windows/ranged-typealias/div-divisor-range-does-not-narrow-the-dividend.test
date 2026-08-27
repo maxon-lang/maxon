@@ -27,15 +27,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @ident {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @quotient {
   entry:
     x64.pushReg rbp
@@ -78,9 +69,11 @@ func @main {
     x64.pushReg r15
     x64.prologue 56
     x64.movRegImm rcx, 9223372036854775807
-    x64.callDirect ident
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegImm32 rdx, 8
-    x64.movRegReg rcx, r8
     x64.callDirect quotient
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 21

@@ -13,14 +13,18 @@ end 'main'
 ---
 ExitCode: 20
 ---
-func @work {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 19
+    x64.jmp __il_body
+  __il_body:
     x64.movsdRegRip xmm0, [rip + __fconst_1]
-    x64.cvtsi2sdRegReg xmm1, rcx
+    x64.cvtsi2sdRegReg xmm1, rax
     x64.addsdRegReg xmm1, xmm1, xmm0
-    x64.cmpRegImm32 rcx, 5
+    x64.cmpRegImm32 rax, 5
     x64.jcc greater, gt
     x64.jmp critsplit
   gt:
@@ -31,17 +35,8 @@ func @work {
     x64.jmp ifcont
   ifcont:
     x64.cvttsd2siRegReg r8, xmm1
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 19
-    x64.callDirect work
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

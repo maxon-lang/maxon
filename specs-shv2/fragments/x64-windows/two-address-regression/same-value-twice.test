@@ -18,44 +18,36 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @sameTwice {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 rax, rcx, 9
-    x64.leaRegRegImm32 rcx, rcx, 7
-    x64.movRegReg rdx, rax
-    x64.imulRegReg rdx, rax, rax
-    x64.movRegReg rsi, rax
-    x64.subRegReg rsi, rax, rax
-    x64.imulRegReg rcx, rcx, rcx
-    x64.imulRegRegImm32 rdx, rdx, 100
-    x64.imulRegRegImm32 rsi, rsi, 10
-    x64.leaRegRegReg rdx, rdx, rsi
-    x64.leaRegRegReg rax, rdx, rax
-    x64.leaRegRegReg r8, rax, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect sameTwice
-    x64.cmpRegImm32 r8, 8158
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 rcx, rax, 9
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.movRegReg rdx, rcx
+    x64.imulRegReg rdx, rcx, rcx
+    x64.movRegReg rsi, rcx
+    x64.subRegReg rsi, rcx, rcx
+    x64.imulRegReg rax, rax, rax
+    x64.imulRegRegImm32 rdx, rdx, 100
+    x64.imulRegRegImm32 rsi, rsi, 10
+    x64.leaRegRegReg rdx, rdx, rsi
+    x64.leaRegRegReg rcx, rdx, rcx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 8158
     x64.jcc equal, ok
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

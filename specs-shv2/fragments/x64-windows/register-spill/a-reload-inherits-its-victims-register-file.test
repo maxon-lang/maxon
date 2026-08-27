@@ -126,7 +126,31 @@ func @pressure {
     x64.storeSlotReg slot1, xmm0
     x64.movsdRegRip xmm0, [rip + __fconst_16]
     x64.storeSlotReg slot0, xmm0
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rcx, -1000000000
+    x64.jcc less, __il_slow
+    x64.jmp __rc_chk#10
+  __rc_chk#10:
+    x64.cmpRegImm32 rcx, 1000000000
+    x64.jcc greater, __il_slow
+    x64.jmp __rc_ok#9
+  __rc_ok#9:
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.cmpRegImm32 rax, -1000000000
+    x64.jcc less, __il_slow
+    x64.jmp __rc_chk#12
+  __rc_chk#12:
+    x64.cmpRegImm32 rax, 1000000000
+    x64.jcc greater, __il_slow
+    x64.jmp __rc_ok#11
+  __il_slow:
     x64.callDirect bump
+    x64.jmp __il_cont
+  __rc_ok#11:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont
+  __il_cont:
     x64.cvttsd2siRegReg rax, xmm6
     x64.leaRegRegReg rax, r8, rax
     x64.cvttsd2siRegReg rcx, xmm7

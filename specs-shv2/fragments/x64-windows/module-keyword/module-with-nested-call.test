@@ -20,23 +20,16 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @inner {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 22
-    x64.popReg rbp
-    x64.ret
-}
-
 func @outer {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect inner
-    x64.leaRegRegImm32 r8, r8, 20
-    x64.epilogue 32
+    x64.jmp __il_body
+  __il_body:
+    x64.movRegImm32 rax, 22
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 r8, rax, 20
     x64.popReg rbp
     x64.ret
 }

@@ -22,20 +22,6 @@ data {
   __data_sideEffectCount@0 = i64 0
 }
 
-func @track {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegGlobal rax, __data_sideEffectCount
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.leaRegGlobal rdx, __data_sideEffectCount
-    x64.storeBaseDispReg.word64 [rdx + 0], rax
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -49,9 +35,16 @@ func @main {
     x64.movRegImm32 rax, 7
     x64.jmp matchcont
   ternaryfalse:
-    x64.movRegImm32 rcx, 9
-    x64.callDirect track
-    x64.movRegReg rax, r8
+    x64.movRegImm32 rax, 9
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegGlobal rcx, __data_sideEffectCount
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegGlobal rdx, __data_sideEffectCount
+    x64.storeBaseDispReg.word64 [rdx + 0], rcx
+    x64.jmp __il_cont
+  __il_cont:
     x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 rax, 7

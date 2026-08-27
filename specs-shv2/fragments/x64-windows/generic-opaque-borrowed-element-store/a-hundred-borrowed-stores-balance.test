@@ -107,7 +107,7 @@ func @Bag.fillFrom {
     x64.setccReg lessEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow
+    x64.jcc notEqual, __il_slow
     x64.jmp __im_load#12
   __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
@@ -118,7 +118,7 @@ func @Bag.fillFrom {
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc equal, __im_byte
-    x64.jmp __im_slow
+    x64.jmp __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rdx, 0
@@ -127,7 +127,7 @@ func @Bag.fillFrom {
     x64.setccReg lessEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow
+    x64.jcc notEqual, __il_slow
     x64.jmp __im_load#13
   __im_load#13:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
@@ -142,21 +142,21 @@ func @Bag.fillFrom {
     x64.jmp critsplit#15
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow
+    x64.jcc equal, __il_slow
     x64.jmp critsplit#16
   critsplit#16:
     x64.movRegReg rdx, rax
-    x64.jmp __im_cont
+    x64.jmp __il_cont
   critsplit#15:
     x64.movRegReg rdx, rax
-    x64.jmp __im_cont
-  __im_slow:
+    x64.jmp __il_cont
+  __il_slow:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.movRegReg rdx, r8
     x64.movRegReg rcx, r10
-    x64.jmp __im_cont
-  __im_cont:
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -212,7 +212,7 @@ func @Bag.at {
     x64.setccReg greaterEqual, rax
     x64.orRegReg rsi, rsi, rax
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow
+    x64.jcc notEqual, __il_slow
     x64.jmp __im_load#9
   __im_load#9:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
@@ -223,7 +223,7 @@ func @Bag.at {
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc equal, __im_byte
-    x64.jmp __im_slow
+    x64.jmp __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rdx, 0
@@ -232,7 +232,7 @@ func @Bag.at {
     x64.setccReg greaterEqual, rax
     x64.orRegReg rsi, rsi, rax
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow
+    x64.jcc notEqual, __il_slow
     x64.jmp __im_load#10
   __im_load#10:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
@@ -247,19 +247,19 @@ func @Bag.at {
     x64.jmp critsplit#12
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow
+    x64.jcc equal, __il_slow
     x64.jmp critsplit#13
   critsplit#13:
     x64.movRegReg rdx, rax
-    x64.jmp __im_cont
+    x64.jmp __il_cont
   critsplit#12:
     x64.movRegReg rdx, rax
-    x64.jmp __im_cont
-  __im_slow:
+    x64.jmp __il_cont
+  __il_slow:
     x64.callDirect __managed_get
     x64.movRegReg rdx, r8
-    x64.jmp __im_cont
-  __im_cont:
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok

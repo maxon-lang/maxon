@@ -106,15 +106,6 @@ func @Box.create {
     x64.ret
 }
 
-func @Box.tag {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 5
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -161,9 +152,11 @@ func @main {
     x64.jcc equal, matcharm#1
     x64.jmp matchnext
   matcharm#1:
-    x64.movRegReg rcx, rbx
-    x64.callDirect Box.tag
-    x64.movRegReg r12, r8
+    x64.jmp __il_body#10
+  __il_body#10:
+    x64.movRegImm32 r12, 5
+    x64.jmp __il_cont#9
+  __il_cont#9:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Box_String
     x64.movRegReg rcx, rbx
@@ -181,25 +174,26 @@ func @main {
     x64.jcc equal, matcharm#2
     x64.jmp matchdead
   matcharm#2:
-    x64.loadRegBaseDisp.word64 r12, [r13 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r13 + 8], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect Box.tag
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.leaRegRegReg r14, r8, rax
-    x64.movRegReg rcx, r12
+    x64.jmp __il_body#12
+  __il_body#12:
+    x64.jmp __il_cont#11
+  __il_cont#11:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 r12, rax, 5
     x64.callDirect __destruct_Held
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Box_String
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct___Box_String
-    x64.cmpRegImm32 r14, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r14, rax
+    x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -214,7 +208,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, r14
+    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

@@ -75,12 +75,36 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 5
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+    x64.jmp __rc_chk#10
+  __rc_chk#10:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc greater, __il_slow
+    x64.jmp __rc_ok#9
+  __rc_ok#9:
+    x64.imulRegRegImm32 rdx, rcx, 101
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __il_slow
+    x64.jmp __rc_chk#12
+  __rc_chk#12:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc greater, __il_slow
+    x64.jmp __rc_ok#11
+  __il_slow:
     x64.callDirect grow
-    x64.cmpRegImm32 r8, 0
+    x64.movRegReg rdx, r8
+    x64.jmp __il_cont
+  __rc_ok#11:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#2
     x64.jmp __rc_chk#3
   __rc_chk#3:
-    x64.cmpRegImm32 r8, 100
+    x64.cmpRegImm32 rdx, 100
     x64.jcc greater, __rc_panic#2
     x64.jmp __rc_ok#1
   __rc_panic#2:
@@ -94,7 +118,6 @@ func @main {
     x64.ret
   __rc_ok#1:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.movRegReg rcx, rbx

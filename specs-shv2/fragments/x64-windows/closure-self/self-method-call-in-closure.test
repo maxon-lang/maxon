@@ -70,17 +70,6 @@ func @Doubler.create {
     x64.ret
 }
 
-func @Doubler.doubled {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.leaRegRegReg r8, rax, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Doubler.run {
   entry:
     x64.pushReg rbp
@@ -116,10 +105,14 @@ func @Doubler.run$closure_0 {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
-    x64.callDirect Doubler.doubled
-    x64.epilogue 32
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegReg r8, rcx, rax
+    x64.jmp __il_cont
+  __il_cont:
     x64.popReg rbp
     x64.ret
 }

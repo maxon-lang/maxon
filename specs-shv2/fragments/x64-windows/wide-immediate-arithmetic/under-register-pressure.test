@@ -51,15 +51,6 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @base {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @pressure {
   entry:
     x64.pushReg rbp
@@ -193,8 +184,10 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 0
-    x64.callDirect base
-    x64.movRegReg rcx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.callDirect pressure
     x64.movRegImm rax, 6000000505
     x64.cmpRegReg r8, rax

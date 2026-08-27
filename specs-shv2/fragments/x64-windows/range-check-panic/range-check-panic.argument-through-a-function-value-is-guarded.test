@@ -22,15 +22,6 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @opaque {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @divide {
   entry:
     x64.pushReg rbp
@@ -78,17 +69,15 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.leaRegFunc rbx, [rip + __fnref_divide]
-    x64.movRegImm32 r12, 10
-    x64.movRegImm32 rcx, 0
-    x64.callDirect opaque
+    x64.leaRegFunc rcx, [rip + __fnref_divide]
+    x64.movRegImm32 rdx, 10
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegImm32 r9, 0
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.movRegReg rax, r8
     x64.callDirect apply
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
@@ -103,14 +92,10 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

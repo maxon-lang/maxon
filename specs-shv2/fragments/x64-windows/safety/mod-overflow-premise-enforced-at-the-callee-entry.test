@@ -17,15 +17,6 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @ident {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @remainder {
   entry:
     x64.pushReg rbp
@@ -58,10 +49,12 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rcx, rax, -1
-    x64.callDirect ident
+    x64.leaRegRegImm32 rdx, rax, -1
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegImm rcx, 9223372036854775808
-    x64.movRegReg rdx, r8
     x64.callDirect remainder
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic

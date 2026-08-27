@@ -51,15 +51,6 @@ func @Cell.unwrap {
     x64.ret
 }
 
-func @over#Wide {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 r8, rcx, 100
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -70,8 +61,11 @@ func @main {
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegRdata rdx, [rip + __layout_Cell_Wide]
     x64.callDirect Cell.unwrap
-    x64.movRegReg rcx, r8
-    x64.callDirect over#Wide
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 r8, r8, 100
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

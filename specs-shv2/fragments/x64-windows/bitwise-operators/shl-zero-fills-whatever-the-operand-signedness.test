@@ -25,79 +25,70 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @shlDynamic {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg rax, rcx
-    x64.movRegReg rcx, rdx
-    x64.andRegImm32 rcx, rdx, -64
-    x64.movRegReg rsi, rcx
-    x64.negReg rsi, rcx
-    x64.orRegReg rcx, rcx, rsi
-    x64.movRegReg rsi, rcx
-    x64.sarRegImm8 rsi, rcx, 63
-    x64.movRegReg rcx, rdx
-    x64.shlRegCl rax, rax
-    x64.notReg rsi, rsi
-    x64.movRegReg r8, rax
-    x64.andRegReg r8, rax, rsi
-    x64.popReg rbp
-    x64.ret
-}
-
-func @shlPastWidth {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 0
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm rcx, 18446744073709551615
-    x64.movRegImm32 rdx, 63
-    x64.callDirect shlDynamic
-    x64.movRegImm rax, 9223372036854775808
-    x64.cmpRegReg r8, rax
+    x64.movRegImm rax, 18446744073709551615
+    x64.movRegImm32 rcx, 63
+    x64.jmp __il_body#8
+  __il_body#8:
+    x64.andRegImm32 rcx, rcx, -64
+    x64.movRegReg rdx, rcx
+    x64.negReg rdx, rcx
+    x64.orRegReg rcx, rcx, rdx
+    x64.sarRegImm8 rcx, rcx, 63
+    x64.shlRegImm8 rax, rax, 63
+    x64.notReg rcx, rcx
+    x64.andRegReg rax, rax, rcx
+    x64.jmp __il_cont#7
+  __il_cont#7:
+    x64.movRegImm rcx, 9223372036854775808
+    x64.cmpRegReg rax, rcx
     x64.jcc notEqual, topBitOnly
     x64.jmp ifcont#2
   topBitOnly:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#2:
-    x64.movRegImm rcx, 18446744073709551615
-    x64.callDirect shlPastWidth
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body#10
+  __il_body#10:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#9
+  __il_cont#9:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, everyBitOut
     x64.jmp ifcont#4
   everyBitOut:
     x64.movRegImm32 r8, 2
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#4:
-    x64.movRegImm rcx, 18446744073709551615
-    x64.movRegImm32 rdx, 100
-    x64.callDirect shlDynamic
-    x64.cmpRegImm32 r8, 0
+    x64.movRegImm rax, 18446744073709551615
+    x64.movRegImm32 rcx, 100
+    x64.jmp __il_body#12
+  __il_body#12:
+    x64.movRegReg rdx, rcx
+    x64.andRegImm32 rdx, rcx, -64
+    x64.movRegReg rsi, rdx
+    x64.negReg rsi, rdx
+    x64.orRegReg rdx, rdx, rsi
+    x64.sarRegImm8 rdx, rdx, 63
+    x64.shlRegCl rax, rax
+    x64.notReg rdx, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.jmp __il_cont#11
+  __il_cont#11:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, everyBitOutDynamic
     x64.jmp ifcont#6
   everyBitOutDynamic:
     x64.movRegImm32 r8, 3
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#6:
     x64.movRegImm32 r8, 42
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

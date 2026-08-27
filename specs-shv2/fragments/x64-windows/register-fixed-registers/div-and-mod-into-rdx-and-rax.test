@@ -15,23 +15,10 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @take3 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.imulRegRegImm32 rcx, rcx, 10000
-    x64.imulRegRegImm32 rdx, rdx, 100
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.leaRegRegReg r8, rcx, rax
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
     x64.movRegImm32 rcx, 97
     x64.movRegImm32 rsi, 5
     x64.movRegImm32 rdi, 1
@@ -42,21 +29,23 @@ func @main {
     x64.movRegReg rax, rcx
     x64.cqo
     x64.idivReg rsi
-    x64.movRegReg rax, rdx
-    x64.movRegReg rcx, rdi
-    x64.movRegReg rdx, r8
-    x64.callDirect take3
-    x64.cmpRegImm32 r8, 11902
+    x64.jmp __il_body
+  __il_body:
+    x64.imulRegRegImm32 rax, rdi, 10000
+    x64.imulRegRegImm32 rcx, r8, 100
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, rdx
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 11902
     x64.jcc equal, ok
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

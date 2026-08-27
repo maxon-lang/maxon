@@ -30,21 +30,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @dot {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
-    x64.imulRegReg rax, rax, rsi
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
-    x64.imulRegReg rcx, rcx, rdx
-    x64.leaRegRegReg r8, rax, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -60,9 +45,17 @@ func @main {
     x64.leaRegSlot rsi, slot2
     x64.storeBaseDispReg.word64 [rsi + 0], rax
     x64.storeBaseDispReg.word64 [rsi + 8], rcx
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rsi
-    x64.callDirect dot
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rsi + 0]
+    x64.imulRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rdx, [rsi + 8]
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg r8, rax, rcx
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

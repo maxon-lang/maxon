@@ -45,13 +45,11 @@ func @Five.pick {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.callDirect Five.tag
-    x64.leaRegRegReg r8, r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 r8, rdx, 5
     x64.popReg rbp
     x64.ret
 }
@@ -60,11 +58,11 @@ func @Five.pick#bool {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.callDirect Five.tag
-    x64.cmpRegImm32 rbx, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, ternarytrue
     x64.jmp ternaryfalse
   ternarytrue:
@@ -74,9 +72,7 @@ func @Five.pick#bool {
     x64.movRegImm32 rax, 0
     x64.jmp matchcont
   matchcont:
-    x64.leaRegRegReg r8, r8, rax
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.leaRegRegImm32 r8, rax, 5
     x64.popReg rbp
     x64.ret
 }
@@ -90,15 +86,6 @@ func @Five.make {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Five.tag {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 5
     x64.popReg rbp
     x64.ret
 }

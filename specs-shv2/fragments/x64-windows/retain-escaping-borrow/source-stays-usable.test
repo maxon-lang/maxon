@@ -49,15 +49,6 @@ func @Point.create {
     x64.ret
 }
 
-func @Point.getX {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Box.create {
   entry:
     x64.pushReg rbp
@@ -125,9 +116,12 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect Point.getX
-    x64.leaRegRegImm32 r12, r8, -7
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 r12, rax, -7
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_Box_Point
     x64.movRegReg rcx, rbx

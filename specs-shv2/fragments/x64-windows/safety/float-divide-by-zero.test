@@ -28,21 +28,16 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @opaque {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movsdRegRip xmm0, [rip + __fconst_1]
-    x64.callDirect opaque
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.movsdRegRip xmm2, [rip + __fconst_1]
     x64.ucomisdRegReg xmm0, xmm2

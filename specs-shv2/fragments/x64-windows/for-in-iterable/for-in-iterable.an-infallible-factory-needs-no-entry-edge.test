@@ -67,15 +67,6 @@ func @Countdown.create {
     x64.ret
 }
 
-func @Countdown.current {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Countdown.advance {
   entry:
     x64.pushReg rbp
@@ -137,9 +128,12 @@ func @main {
     x64.jcc equal, each
     x64.jmp forexit
   each:
-    x64.movRegReg rcx, r12
-    x64.callDirect Countdown.current
-    x64.leaRegRegReg rbx, rbx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegReg rbx, rbx, rax
     x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r12

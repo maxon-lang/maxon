@@ -240,15 +240,6 @@ func @print {
     x64.ret
 }
 
-func @String.hasSingleByteGraphemes {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.byte r8, [rcx + 48]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @String.fromOwnedBytes {
   entry:
     x64.pushReg rbp
@@ -881,11 +872,13 @@ func @StringBuilder.append {
     x64.movRegReg rcx, r12
     x64.callDirect String.addressableBytes
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect String.hasSingleByteGraphemes
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.byte rax, [r12 + 48]
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
-    x64.movRegReg rax, r8
     x64.callDirect StringBuilder.appendBytes
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref

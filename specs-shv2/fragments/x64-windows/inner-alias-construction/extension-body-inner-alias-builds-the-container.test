@@ -58,10 +58,12 @@ func @Box.tags {
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect Box.tag
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
     x64.movRegReg rcx, r12
@@ -70,15 +72,6 @@ func @Box.tags {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Box.tag {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
     x64.popReg rbp
     x64.ret
 }

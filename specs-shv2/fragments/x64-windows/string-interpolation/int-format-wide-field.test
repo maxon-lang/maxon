@@ -1391,23 +1391,23 @@ func @findGraphemeEnd {
     x64.cmpRegImm32 r8, 4
     x64.movRegImm32 rax, 0
     x64.jcc notEqual, andrhs#18
-    x64.jmp critsplit#34
+    x64.jmp critsplit#36
   andrhs#18:
     x64.cmpRegImm32 r8, 5
     x64.setccReg notEqual, rax
     x64.jmp scmerge#19
-  critsplit#34:
+  critsplit#36:
     x64.jmp scmerge#19
   scmerge#19:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, andrhs#20
-    x64.jmp critsplit#35
+    x64.jmp critsplit#37
   andrhs#20:
     x64.cmpRegImm32 r8, 8
     x64.setccReg notEqual, rax
     x64.jmp scmerge#21
-  critsplit#35:
+  critsplit#37:
     x64.movRegReg rax, rcx
     x64.jmp scmerge#21
   scmerge#21:
@@ -1462,8 +1462,11 @@ func @findGraphemeEnd {
     x64.movRegReg rcx, r14
     x64.callDirect graphemeBreakProperty
     x64.movRegReg r15, r8
-    x64.callDirect graphemeStateInit
-    x64.movRegReg rcx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.movRegImm32 rcx, 0
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r14
     x64.callDirect graphemeStateUpdate
@@ -1538,9 +1541,12 @@ func @countGraphemes {
     x64.movRegReg rcx, rbx
     x64.callDirect String.byteLength
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.hasSingleByteGraphemes
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.byte rax, [rbx + 48]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, oneByteEach
     x64.jmp ifcont
   oneByteEach:
@@ -2056,38 +2062,6 @@ func @isExtendedPictographic {
     x64.ret
 }
 
-func @graphemeStateInit {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 0
-    x64.popReg rbp
-    x64.ret
-}
-
-func @graphemeStateInEmojiSeq {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.andRegImm32 rcx, rcx, 1
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg notEqual, r8
-    x64.popReg rbp
-    x64.ret
-}
-
-func @graphemeStateRiIsOdd {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.shrRegImm8 rcx, rcx, 1
-    x64.andRegImm32 rcx, rcx, 1
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg notEqual, r8
-    x64.popReg rbp
-    x64.ret
-}
-
 func @isGraphemeBreak {
   entry:
     x64.pushReg rbp
@@ -2156,12 +2130,12 @@ func @isGraphemeBreak {
     x64.cmpRegImm32 rbx, 1
     x64.movRegImm32 rcx, 0
     x64.jcc equal, andrhs#1
-    x64.jmp critsplit#83
+    x64.jmp critsplit#87
   andrhs#1:
     x64.cmpRegImm32 r12, 2
     x64.setccReg equal, rcx
     x64.jmp scmerge#2
-  critsplit#83:
+  critsplit#87:
     x64.jmp scmerge#2
   scmerge#2:
     x64.cmpRegImm32 rcx, 0
@@ -2178,9 +2152,9 @@ func @isGraphemeBreak {
   ifcont#4:
     x64.cmpRegImm32 rbx, 3
     x64.movRegImm32 rcx, 1
-    x64.jcc equal, critsplit#70
+    x64.jcc equal, critsplit#74
     x64.jmp orrhs#5
-  critsplit#70:
+  critsplit#74:
     x64.jmp scmerge#6
   orrhs#5:
     x64.cmpRegImm32 rbx, 1
@@ -2189,9 +2163,9 @@ func @isGraphemeBreak {
   scmerge#6:
     x64.movRegImm32 rdx, 1
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, critsplit#71
+    x64.jcc notEqual, critsplit#75
     x64.jmp orrhs#7
-  critsplit#71:
+  critsplit#75:
     x64.jmp scmerge#8
   orrhs#7:
     x64.cmpRegImm32 rbx, 2
@@ -2213,9 +2187,9 @@ func @isGraphemeBreak {
   ifcont#10:
     x64.cmpRegImm32 r12, 3
     x64.movRegImm32 rcx, 1
-    x64.jcc equal, critsplit#72
+    x64.jcc equal, critsplit#76
     x64.jmp orrhs#11
-  critsplit#72:
+  critsplit#76:
     x64.jmp scmerge#12
   orrhs#11:
     x64.cmpRegImm32 r12, 1
@@ -2224,9 +2198,9 @@ func @isGraphemeBreak {
   scmerge#12:
     x64.movRegImm32 rdx, 1
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, critsplit#73
+    x64.jcc notEqual, critsplit#77
     x64.jmp orrhs#13
-  critsplit#73:
+  critsplit#77:
     x64.jmp scmerge#14
   orrhs#13:
     x64.cmpRegImm32 r12, 2
@@ -2252,9 +2226,9 @@ func @isGraphemeBreak {
   gb6:
     x64.cmpRegImm32 r12, 9
     x64.movRegImm32 rcx, 1
-    x64.jcc equal, critsplit#74
+    x64.jcc equal, critsplit#78
     x64.jmp orrhs#18
-  critsplit#74:
+  critsplit#78:
     x64.jmp scmerge#19
   orrhs#18:
     x64.cmpRegImm32 r12, 10
@@ -2263,9 +2237,9 @@ func @isGraphemeBreak {
   scmerge#19:
     x64.movRegImm32 rdx, 1
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, critsplit#75
+    x64.jcc notEqual, critsplit#79
     x64.jmp orrhs#20
-  critsplit#75:
+  critsplit#79:
     x64.jmp scmerge#21
   orrhs#20:
     x64.cmpRegImm32 r12, 12
@@ -2275,9 +2249,9 @@ func @isGraphemeBreak {
   scmerge#21:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, critsplit#76
+    x64.jcc notEqual, critsplit#80
     x64.jmp orrhs#22
-  critsplit#76:
+  critsplit#80:
     x64.jmp scmerge#23
   orrhs#22:
     x64.cmpRegImm32 r12, 13
@@ -2300,9 +2274,9 @@ func @isGraphemeBreak {
   ifcont#26:
     x64.cmpRegImm32 rbx, 12
     x64.movRegImm32 rcx, 1
-    x64.jcc equal, critsplit#77
+    x64.jcc equal, critsplit#81
     x64.jmp orrhs#27
-  critsplit#77:
+  critsplit#81:
     x64.jmp scmerge#28
   orrhs#27:
     x64.cmpRegImm32 rbx, 10
@@ -2315,9 +2289,9 @@ func @isGraphemeBreak {
   gb7:
     x64.cmpRegImm32 r12, 10
     x64.movRegImm32 rcx, 1
-    x64.jcc equal, critsplit#78
+    x64.jcc equal, critsplit#82
     x64.jmp orrhs#30
-  critsplit#78:
+  critsplit#82:
     x64.jmp scmerge#31
   orrhs#30:
     x64.cmpRegImm32 r12, 11
@@ -2340,9 +2314,9 @@ func @isGraphemeBreak {
   ifcont#34:
     x64.cmpRegImm32 rbx, 13
     x64.movRegImm32 rcx, 1
-    x64.jcc equal, critsplit#79
+    x64.jcc equal, critsplit#83
     x64.jmp orrhs#35
-  critsplit#79:
+  critsplit#83:
     x64.jmp scmerge#36
   orrhs#35:
     x64.cmpRegImm32 rbx, 11
@@ -2369,9 +2343,9 @@ func @isGraphemeBreak {
   ifcont#40:
     x64.cmpRegImm32 r12, 4
     x64.movRegImm32 rcx, 1
-    x64.jcc equal, critsplit#80
+    x64.jcc equal, critsplit#84
     x64.jmp orrhs#41
-  critsplit#80:
+  critsplit#84:
     x64.jmp scmerge#42
   orrhs#41:
     x64.cmpRegImm32 r12, 5
@@ -2417,12 +2391,12 @@ func @isGraphemeBreak {
     x64.cmpRegImm32 rbx, 5
     x64.movRegImm32 rcx, 0
     x64.jcc equal, andrhs#49
-    x64.jmp critsplit#81
+    x64.jmp critsplit#85
   andrhs#49:
     x64.movRegReg rcx, rax
     x64.callDirect isExtendedPictographic
     x64.jmp scmerge#50
-  critsplit#81:
+  critsplit#85:
     x64.movRegReg r8, rcx
     x64.jmp scmerge#50
   scmerge#50:
@@ -2430,9 +2404,15 @@ func @isGraphemeBreak {
     x64.jcc notEqual, gb11
     x64.jmp ifcont#54
   gb11:
-    x64.movRegReg rcx, r13
-    x64.callDirect graphemeStateInEmojiSeq
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body#71
+  __il_body#71:
+    x64.movRegReg rax, r13
+    x64.andRegImm32 rax, r13, 1
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.jmp __il_cont#70
+  __il_cont#70:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, gb11_check
     x64.jmp ifcont#53
   gb11_check:
@@ -2449,21 +2429,27 @@ func @isGraphemeBreak {
     x64.cmpRegImm32 rbx, 6
     x64.movRegImm32 rax, 0
     x64.jcc equal, andrhs#55
-    x64.jmp critsplit#82
+    x64.jmp critsplit#86
   andrhs#55:
     x64.cmpRegImm32 r12, 6
     x64.setccReg equal, rax
     x64.jmp scmerge#56
-  critsplit#82:
+  critsplit#86:
     x64.jmp scmerge#56
   scmerge#56:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, gb12
     x64.jmp ifcont#60
   gb12:
-    x64.movRegReg rcx, r13
-    x64.callDirect graphemeStateRiIsOdd
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body#73
+  __il_body#73:
+    x64.shrRegImm8 r13, r13, 1
+    x64.andRegImm32 r13, r13, 1
+    x64.cmpRegImm32 r13, 0
+    x64.setccReg notEqual, rax
+    x64.jmp __il_cont#72
+  __il_cont#72:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, gb12_odd
     x64.jmp ifcont#59
   gb12_odd:
@@ -2538,13 +2524,13 @@ func @graphemeStateUpdate {
     x64.movRegImm32 r13, 0
     x64.cmpRegImm32 r12, 6
     x64.jcc equal, ri_update
-    x64.jmp critsplit#23
+    x64.jmp critsplit#24
   ri_update:
     x64.movRegReg rcx, rbx
     x64.shrRegImm8 rcx, rbx, 1
     x64.leaRegRegImm32 r13, rcx, 1
     x64.jmp ifcont#2
-  critsplit#23:
+  critsplit#24:
     x64.jmp ifcont#2
   ifcont#2:
     x64.movRegImm32 r14, 0
@@ -2557,17 +2543,22 @@ func @graphemeStateUpdate {
     x64.movRegImm32 rax, 1
     x64.jmp ifcont#11
   ifelse:
-    x64.movRegReg rcx, rbx
-    x64.callDirect graphemeStateInEmojiSeq
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.andRegImm32 rbx, rbx, 1
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg notEqual, rax
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, emoji_continue
-    x64.jmp critsplit#20
+    x64.jmp critsplit#25
   emoji_continue:
     x64.cmpRegImm32 r12, 4
     x64.movRegImm32 rax, 1
-    x64.jcc equal, critsplit#21
+    x64.jcc equal, critsplit#22
     x64.jmp orrhs
-  critsplit#21:
+  critsplit#22:
     x64.jmp scmerge
   orrhs:
     x64.cmpRegImm32 r12, 5
@@ -2576,16 +2567,16 @@ func @graphemeStateUpdate {
   scmerge:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, emoji_extend
-    x64.jmp critsplit#22
+    x64.jmp critsplit#23
   emoji_extend:
     x64.movRegImm32 rax, 1
     x64.jmp ifcont#9
-  critsplit#22:
+  critsplit#23:
     x64.movRegReg rax, r14
     x64.jmp ifcont#9
   ifcont#9:
     x64.jmp ifcont#10
-  critsplit#20:
+  critsplit#25:
     x64.movRegReg rax, r14
     x64.jmp ifcont#10
   ifcont#10:
@@ -3114,15 +3105,6 @@ func @print {
     x64.prologue 32
     x64.callDirect __write_stdout
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.hasSingleByteGraphemes {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.byte r8, [rcx + 48]
     x64.popReg rbp
     x64.ret
 }

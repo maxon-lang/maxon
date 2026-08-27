@@ -55,193 +55,156 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @shlBy {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg rax, rcx
-    x64.movRegReg rcx, rdx
-    x64.andRegImm32 rcx, rdx, -64
-    x64.movRegReg rsi, rcx
-    x64.negReg rsi, rcx
-    x64.orRegReg rcx, rcx, rsi
-    x64.movRegReg rsi, rcx
-    x64.sarRegImm8 rsi, rcx, 63
-    x64.movRegReg rcx, rdx
-    x64.shlRegCl rax, rax
-    x64.notReg rsi, rsi
-    x64.movRegReg r8, rax
-    x64.andRegReg r8, rax, rsi
-    x64.popReg rbp
-    x64.ret
-}
-
-func @shrBy {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.movRegReg rax, rdx
-    x64.andRegImm32 rax, rdx, -64
-    x64.movRegReg rcx, rax
-    x64.negReg rcx, rax
-    x64.orRegReg rax, rax, rcx
-    x64.sarRegImm8 rax, rax, 63
-    x64.movRegReg rcx, rdx
-    x64.orRegReg rcx, rdx, rax
-    x64.sarRegCl r8, r8
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
     x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rbx, rax, -8
-    x64.movRegReg r12, rbx
-    x64.shlRegImm8 r12, rbx, 29
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rcx, rax, -8
-    x64.movRegImm32 rdx, 29
-    x64.callDirect shlBy
-    x64.cmpRegReg r12, r8
+    x64.leaRegRegImm32 rax, rax, -8
+    x64.movRegReg rcx, rax
+    x64.shlRegImm8 rcx, rax, 29
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRegImm32 rdx, rdx, -8
+    x64.movRegImm32 rsi, 29
+    x64.jmp __il_body#18
+  __il_body#18:
+    x64.andRegImm32 rsi, rsi, -64
+    x64.movRegReg rdi, rsi
+    x64.negReg rdi, rsi
+    x64.orRegReg rsi, rsi, rdi
+    x64.sarRegImm8 rsi, rsi, 63
+    x64.shlRegImm8 rdx, rdx, 29
+    x64.notReg rsi, rsi
+    x64.andRegReg rdx, rdx, rsi
+    x64.jmp __il_cont#17
+  __il_cont#17:
+    x64.cmpRegReg rcx, rdx
     x64.jcc notEqual, signedFoldVsEmitted
     x64.jmp ifcont#2
   signedFoldVsEmitted:
     x64.movRegImm32 r8, 1
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#2:
-    x64.movRegReg rax, rbx
-    x64.shlRegImm8 rax, rbx, 29
-    x64.movRegImm32 rcx, 0
-    x64.movRegImm rdx, 4294967296
-    x64.subRegReg rcx, rcx, rdx
-    x64.cmpRegReg rax, rcx
+    x64.movRegReg rcx, rax
+    x64.shlRegImm8 rcx, rax, 29
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm rsi, 4294967296
+    x64.subRegReg rdx, rdx, rsi
+    x64.cmpRegReg rcx, rdx
     x64.jcc notEqual, signedValue
     x64.jmp ifcont#4
   signedValue:
     x64.movRegImm32 r8, 2
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#4:
-    x64.movRegReg r12, rbx
-    x64.sarRegImm8 r12, rbx, 33
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rcx, rax, -8
-    x64.movRegImm32 rdx, 33
-    x64.callDirect shrBy
-    x64.cmpRegReg r12, r8
+    x64.movRegReg rdx, rax
+    x64.sarRegImm8 rdx, rax, 33
+    x64.movRegImm32 rcx, 0
+    x64.leaRegRegImm32 rsi, rcx, -8
+    x64.movRegImm32 rcx, 33
+    x64.jmp __il_body#20
+  __il_body#20:
+    x64.andRegImm32 rcx, rcx, -64
+    x64.movRegReg rdi, rcx
+    x64.negReg rdi, rcx
+    x64.orRegReg rcx, rcx, rdi
+    x64.sarRegImm8 rcx, rcx, 63
+    x64.orRegImm32 rcx, rcx, 33
+    x64.sarRegCl rsi, rsi
+    x64.jmp __il_cont#19
+  __il_cont#19:
+    x64.cmpRegReg rdx, rsi
     x64.jcc notEqual, signedCountFoldVsEmitted
     x64.jmp ifcont#6
   signedCountFoldVsEmitted:
     x64.movRegImm32 r8, 3
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#6:
-    x64.movRegReg rax, rbx
-    x64.sarRegImm8 rax, rbx, 33
-    x64.movRegImm32 rcx, 0
-    x64.leaRegRegImm32 rcx, rcx, -1
-    x64.cmpRegReg rax, rcx
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 33
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRegImm32 rdx, rdx, -1
+    x64.cmpRegReg rcx, rdx
     x64.jcc notEqual, signedCountValue
     x64.jmp ifcont#8
   signedCountValue:
     x64.movRegImm32 r8, 4
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#8:
-    x64.movRegImm32 r12, 4294967295
-    x64.movRegReg r13, r12
-    x64.shlRegImm8 r13, r12, 33
-    x64.movRegImm32 rcx, 4294967295
-    x64.movRegImm32 rdx, 33
-    x64.callDirect shlBy
-    x64.cmpRegReg r13, r8
+    x64.movRegImm32 rdx, 4294967295
+    x64.movRegReg rcx, rdx
+    x64.shlRegImm8 rcx, rdx, 33
+    x64.movRegImm32 rsi, 4294967295
+    x64.movRegImm32 rdi, 33
+    x64.jmp __il_body#22
+  __il_body#22:
+    x64.andRegImm32 rdi, rdi, -64
+    x64.movRegReg r8, rdi
+    x64.negReg r8, rdi
+    x64.orRegReg rdi, rdi, r8
+    x64.sarRegImm8 rdi, rdi, 63
+    x64.shlRegImm8 rsi, rsi, 33
+    x64.notReg rdi, rdi
+    x64.andRegReg rsi, rsi, rdi
+    x64.jmp __il_cont#21
+  __il_cont#21:
+    x64.cmpRegReg rcx, rsi
     x64.jcc notEqual, unsignedFoldVsEmitted
     x64.jmp ifcont#10
   unsignedFoldVsEmitted:
     x64.movRegImm32 r8, 5
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#10:
-    x64.movRegReg r13, r12
-    x64.shrRegImm8 r13, r12, 4
-    x64.movRegImm32 rcx, 4294967295
-    x64.movRegImm32 rdx, 4
-    x64.callDirect shrBy
-    x64.cmpRegReg r13, r8
+    x64.movRegReg rsi, rdx
+    x64.shrRegImm8 rsi, rdx, 4
+    x64.movRegImm32 rdi, 4294967295
+    x64.movRegImm32 rcx, 4
+    x64.jmp __il_body#24
+  __il_body#24:
+    x64.andRegImm32 rcx, rcx, -64
+    x64.movRegReg r8, rcx
+    x64.negReg r8, rcx
+    x64.orRegReg rcx, rcx, r8
+    x64.sarRegImm8 rcx, rcx, 63
+    x64.orRegImm32 rcx, rcx, 4
+    x64.sarRegCl rdi, rdi
+    x64.jmp __il_cont#23
+  __il_cont#23:
+    x64.cmpRegReg rsi, rdi
     x64.jcc notEqual, unsignedShrFoldVsEmitted
     x64.jmp ifcont#12
   unsignedShrFoldVsEmitted:
     x64.movRegImm32 r8, 6
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#12:
-    x64.shrRegImm8 r12, r12, 4
-    x64.cmpRegImm32 r12, 268435455
+    x64.shrRegImm8 rdx, rdx, 4
+    x64.cmpRegImm32 rdx, 268435455
     x64.jcc notEqual, unsignedShrValue
     x64.jmp ifcont#14
   unsignedShrValue:
     x64.movRegImm32 r8, 7
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#14:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rax, rax, -8
+    x64.movRegImm32 rcx, 0
+    x64.leaRegRegImm32 rcx, rcx, -8
+    x64.shlRegImm8 rcx, rcx, 29
     x64.shlRegImm8 rax, rax, 29
-    x64.shlRegImm8 rbx, rbx, 29
-    x64.cmpRegReg rax, rbx
+    x64.cmpRegReg rcx, rax
     x64.jcc notEqual, rangedAgreesWithPlain
     x64.jmp ifcont#16
   rangedAgreesWithPlain:
     x64.movRegImm32 r8, 8
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#16:
     x64.movRegImm32 r8, 42
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

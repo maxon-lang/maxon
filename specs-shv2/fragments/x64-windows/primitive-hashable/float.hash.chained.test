@@ -22,13 +22,88 @@ func @main {
     x64.prologue 40
     x64.storeSlotReg slot0, xmm6
     x64.movsdRegRip xmm6, [rip + __fconst_2]
+    x64.jmp __il_body#8
+  __il_body#8:
+    x64.movqGprXmm rax, xmm6
+    x64.movRegImm rcx, 9223372036854775809
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, negzero#9
+    x64.jmp ifcont#10
+  negzero#9:
+    x64.movRegImm32 rbx, 0
+    x64.jmp __il_cont#7
+  ifcont#10:
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#13
+    x64.jmp __rc_chk#12
+  __rc_chk#12:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __il_slow#13
+    x64.jmp __rc_ok#11
+  __il_slow#13:
     x64.movRegReg xmm0, xmm6
     x64.callDirect float.hash
     x64.movRegReg rbx, r8
+    x64.jmp __il_cont#7
+  __rc_ok#11:
+    x64.movRegReg rbx, rax
+    x64.jmp __il_cont#7
+  __il_cont#7:
+    x64.jmp __il_body#14
+  __il_body#14:
+    x64.movqGprXmm rax, xmm6
+    x64.movRegImm rcx, 9223372036854775809
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, negzero#15
+    x64.jmp ifcont#16
+  negzero#15:
+    x64.movRegImm32 rcx, 0
+    x64.jmp __il_cont#6
+  ifcont#16:
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#19
+    x64.jmp __rc_chk#18
+  __rc_chk#18:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __il_slow#19
+    x64.jmp __rc_ok#17
+  __il_slow#19:
     x64.movRegReg xmm0, xmm6
     x64.callDirect float.hash
     x64.movRegReg rcx, r8
+    x64.jmp __il_cont#6
+  __rc_ok#17:
+    x64.movRegReg rcx, rax
+    x64.jmp __il_cont#6
+  __il_cont#6:
+    x64.jmp __il_body#20
+  __il_body#20:
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg rdx, rcx
+    x64.andRegReg rdx, rcx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __il_slow#23
+    x64.jmp __rc_chk#22
+  __rc_chk#22:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rdx, rax
+    x64.jcc greater, __il_slow#23
+    x64.jmp __rc_ok#21
+  __il_slow#23:
     x64.callDirect int.hash
+    x64.jmp __il_cont#5
+  __rc_ok#21:
+    x64.movRegReg r8, rdx
+    x64.jmp __il_cont#5
+  __il_cont#5:
     x64.cmpRegReg rbx, r8
     x64.jcc notEqual, chainDiffers
     x64.jmp ifcont#2

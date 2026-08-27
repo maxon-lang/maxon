@@ -27,72 +27,83 @@ end 'main'
 ---
 ExitCode: 4
 ---
-func @classify {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.jmp matchdefault
-  matchdefault:
-    x64.movRegImm32 r8, 0
-    x64.jmp matchcont
-  matchcont:
-    x64.popReg rbp
-    x64.ret
-  matcharm:
-    x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rbx, 0
-    x64.movRegImm32 rcx, 5
-    x64.callDirect classify
-    x64.cmpRegImm32 r8, 0
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body#13
+  __il_body#13:
+    x64.jmp matchdefault#15
+  matchdefault#15:
+    x64.movRegImm32 rcx, 0
+    x64.jmp matchcont#16
+  matchcont#16:
+    x64.jmp __il_cont#12
+  __il_cont#12:
+    x64.cmpRegImm32 rcx, 0
     x64.jcc equal, a
-    x64.jmp critsplit#12
+    x64.jmp critsplit#32
   a:
-    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp ifcont#2
-  critsplit#12:
+  critsplit#32:
     x64.jmp ifcont#2
   ifcont#2:
+    x64.jmp __il_body#18
+  __il_body#18:
+    x64.jmp matchdefault#20
+  matchdefault#20:
     x64.movRegImm32 rcx, 0
-    x64.callDirect classify
-    x64.cmpRegImm32 r8, 0
+    x64.jmp matchcont#21
+  matchcont#21:
+    x64.jmp __il_cont#17
+  __il_cont#17:
+    x64.cmpRegImm32 rcx, 0
     x64.jcc equal, b
-    x64.jmp critsplit#13
+    x64.jmp critsplit#33
   b:
-    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp ifcont#4
-  critsplit#13:
+  critsplit#33:
     x64.jmp ifcont#4
   ifcont#4:
-    x64.movRegImm rcx, 18446744073709551615
-    x64.callDirect classify
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body#23
+  __il_body#23:
+    x64.jmp matchdefault#25
+  matchdefault#25:
+    x64.movRegImm32 rcx, 0
+    x64.jmp matchcont#26
+  matchcont#26:
+    x64.jmp __il_cont#22
+  __il_cont#22:
+    x64.cmpRegImm32 rcx, 0
     x64.jcc equal, c
-    x64.jmp critsplit#14
+    x64.jmp critsplit#34
   c:
-    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp ifcont#6
-  critsplit#14:
+  critsplit#34:
     x64.jmp ifcont#6
   ifcont#6:
-    x64.movRegImm rcx, 9223372036854775807
-    x64.callDirect classify
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body#28
+  __il_body#28:
+    x64.jmp matchdefault#30
+  matchdefault#30:
+    x64.movRegImm32 rcx, 0
+    x64.jmp matchcont#31
+  matchcont#31:
+    x64.jmp __il_cont#27
+  __il_cont#27:
+    x64.cmpRegImm32 rcx, 0
     x64.jcc equal, d
-    x64.jmp critsplit#15
+    x64.jmp critsplit#35
   d:
-    x64.leaRegRegImm32 r8, rbx, 1
+    x64.leaRegRegImm32 r8, rax, 1
     x64.jmp ifcont#8
-  critsplit#15:
-    x64.movRegReg r8, rbx
+  critsplit#35:
+    x64.movRegReg r8, rax
     x64.jmp ifcont#8
   ifcont#8:
     x64.cmpRegImm32 r8, 0
@@ -107,13 +118,23 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  matcharm#14:
+    x64.movRegImm32 rcx, 1
+    x64.jmp matchcont#16
+  matcharm#19:
+    x64.movRegImm32 rcx, 1
+    x64.jmp matchcont#21
+  matcharm#24:
+    x64.movRegImm32 rcx, 1
+    x64.jmp matchcont#26
+  matcharm#29:
+    x64.movRegImm32 rcx, 1
+    x64.jmp matchcont#31
 }

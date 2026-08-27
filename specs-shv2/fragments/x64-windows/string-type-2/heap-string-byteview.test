@@ -43,24 +43,27 @@ func @main {
     x64.callDirect __destruct_ByteView
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r14, 0
-    x64.jcc equal, critsplit#9
+    x64.jcc equal, critsplit#11
     x64.jmp forempty
-  critsplit#9:
+  critsplit#11:
     x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, loop
     x64.jmp forexit
   loop:
-    x64.movRegReg rcx, r13
-    x64.callDirect ByteIterator.current
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 16]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc greater, use
-    x64.jmp critsplit#10
+    x64.jmp critsplit#12
   use:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp ifcont
-  critsplit#10:
+  critsplit#12:
     x64.jmp ifcont
   ifcont:
     x64.jmp forstep
@@ -276,15 +279,6 @@ func @ByteIterator.create {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @ByteIterator.current {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 16]
     x64.popReg rbp
     x64.ret
 }
