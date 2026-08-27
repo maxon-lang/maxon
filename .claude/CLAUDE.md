@@ -279,6 +279,15 @@ REFERENCE, not a gate (user ruling 2026-08-02): it never carries a `FAIL` marker
 failure and never touches the exit code. It prints as a separate `note:` block below the summary, so
 read the file for it rather than grepping for a marker that is deliberately absent.
 
+⚠ **A BOOTSTRAP `spec-test` RUN DELETES EVERY `*.exe`, `*.ir_exe` AND `*.mxdbg` UNDER `temp/`, RECURSIVELY**
+(`TestRunner.CleanupExecutables`, `maxon-sharp/Testing/TestRunner.cs:890`, called on EVERY run — filtered or
+not — against `<checkout>/temp`, `Program.cs:1374`). It is cleaning fragment binaries and it cannot tell them
+from one you staged there yourself: an A/B that parks two compilers under `temp/` loses them to the next
+C# suite run, silently, exit 0. MEASURED 2026-08-27 (EC6's review): three staged self-compiles gone after
+one C# run in the same chain. shv2's runner deletes only its own `specs-shv2/.spec-tmp/` files but runs
+every test binary with cwd `temp/`, so the directory is shared. Stage a binary you must keep somewhere
+else, or copy it out before the C# suite runs.
+
 Do not assume the console is small: **shv2's runner prints one line per test (~1,500) and only then the
 summary**, with failures wherever those tests fall in declaration order — `tail` shows PASS lines while
 the reason sits thousands of lines above. (The bootstrap prints only failures unless `--verbose`.)
