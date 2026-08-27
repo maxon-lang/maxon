@@ -143,9 +143,13 @@
 //   that one spec, each naming `abs/abs.rt-zero` as the compile that killed the worker — the other
 //   444 specs unaffected, exit 1, no wedge. A non-terminating compile in the same place: the
 //   deadline fired, that job failed alone and the eleven other selected tests still PASSED. ⚠ The
-//   deadline that fired then was the JOB-SIZED one this rung deleted (`120 + tests x 5 s`); the
-//   injection and its two outcomes are unchanged by the replacement, which moves only WHICH interval
-//   is timed — see `TestProgressDeadlineMs`, and W214's own re-run of the same injection.
+//   deadline that fired then was the JOB-SIZED one this rung deleted (`120 + tests x 5 s`), so the
+//   second injection was RE-RUN against the replacement, 2026-08-27, with the bound temporarily cut
+//   to 10 s so the wait was watchable: a `while` that never leaves, inserted in `compileStagedTest`
+//   ahead of the compile, was terminated at 10.0 s; `abs`'s seven tests were failed by name, each
+//   naming `abs/abs.float` as the step in the worker's hands; the eleven other tests the same filter
+//   selected still PASSED; exit 1, no wedge, and the run RETURNED (17 s) rather than hanging. Only
+//   WHICH interval is timed changed — see `TestProgressDeadlineMs`.
 //
 // ============================================================================================
 // WHAT IS STILL DELIBERATELY LEFT IN v1
@@ -295,13 +299,28 @@ let TenthsPerSecond = 10
 // was about to report per test: the nesting `SpecSpawnTimeoutMs`'s own header states, violated. The
 // grace on top of it is the compile's, because a compile has no bound of its own.
 //
-// MEASURED, same host, same day: the slowest single compile in the corpus is 70.0 s (above) — with the
-// stdlib load included, which a warm worker has already paid. 240 s is ~3.4x that, and the bound as a
-// whole is ~5.1x. Like `SpecSpawnTimeoutMs`, it exists to convert an unbounded silent hang into a named
+// ⚠ **THE NUMBER IS CALIBRATED ON THE SLOWEST STEP ANYONE HAS MEASURED, AND WHAT MAKES THAT SAFE IS
+// THE MARGIN, NOT A CENSUS.** Nobody has timed all ~3,700 cases individually and this comment does not
+// claim otherwise; what is known is that `wide-spill-frames` is the only spec that has ever come near a
+// bound here, and it was re-measured on 2026-08-27 with the box IDLE — 39.7 s, 39.7 s and 7.9 s for its
+// three cases end to end, against 7.3 s for a trivial case through the same harness, i.e. **~32 s** of
+// compile for each of the two big ones. The 70.0 s above is the SAME compile under other agents' load.
+// A factor of two between an idle box and a loaded one is the whole reason a bound here must be wide.
+//
+// So: 240 s is ~3.4x the loaded worst case and ~7.4x the idle one, and the bound as a whole is ~5.1x
+// and ~11x. Like `SpecSpawnTimeoutMs`, it exists to convert an unbounded silent hang into a named
 // failure, NOT to police slow steps, so wide is the safe direction: a bound too loose costs an
 // unattended gate a few extra minutes ONCE, while a bound too tight false-reds a whole spec and has no
 // workaround.
+//
+// ⭐ **AND THE STANDING CHECK IS THE SUITE ITSELF, which is why no census is owed.** A step that ever
+// approached this prints `has said nothing about '<spec>' for …` on stderr and reds the run, naming the
+// spec. The corpus polices the number continuously; a dated ranking of 3,700 compiles could not.
 let SlowCompileGraceMs = 240 * MillisPerSecond
+
+// ⭐ THE BOUND ITSELF: the floor one execution already carries, plus the grace a compile needs on top
+// of it — the two paragraphs above are what each half is, and neither may be spelled again anywhere.
+let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
 
 // ⭐ How long a worker gets to leave on its own once it has been given up on, before the runtime kills
 // it.
@@ -331,8 +350,6 @@ let JobKillGraceMs = 50
 // `E6002`, where wide is the safe direction.
 let WedgeWatchdogGraceMs = 180 * MillisPerSecond
 
-let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
-
 // ⭐ **HOW LONG THIS SLOT'S WORKER MAY STAY SILENT — the step bound, plus whatever this LANE makes one
 // step out of.**
 //
@@ -358,6 +375,15 @@ let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
 // The parent counts TESTS where the batch counts EXECUTIONS (only a test that got as far as running is
 // in the entry), so this is an upper bound on the worker's own — which is the safe direction and the
 // only one the parent's plan can supply.
+//
+// ⚠ **WHAT THAT COSTS, SAID PLAINLY: ON THE BATCHED LANE A HUNG *COMPILE* ALSO WAITS THE BATCH'S
+// ALLOWANCE.** One number serves a slot whichever step is in flight, because the only thing the drain
+// publishes as it reads is the INSTANT, not the kind — the kind is decoded from the lines, and the
+// lines are handed back when the job ends. So `x64-linux` tolerates a non-terminating compile for
+// `360 s + 120 s x (tests + 1)` rather than 360 s. It is left that way deliberately: a per-slot step
+// kind would buy precision on the one lane this host never gates, at the price of a second thing the
+// drain thread writes, and every argument on this bound says loose-but-never-wrong beats tight — the
+// bound this replaced was tight and wrong. A hang there still ENDS; it ends late.
 function progressDeadlineMs(tests TestTally, strategy RunStrategy) returns DurationMs
 	return match strategy 'lane'
 		individually or noneHere gives TestProgressDeadlineMs
@@ -717,9 +743,9 @@ end 'runPersistentWorker'
 //
 // ⚠ MEASURED 2026-08-23, on the first full run of this rung: ~240 bytes per compile against a 64 KiB
 // pipe is about 270 compiles, and a worker in a full suite performs roughly 550. Workers blocked
-// INSIDE a stderr write part-way through the run; each held its spec until the job deadline terminated
-// it, and the suite became a wall of terminated specs. The pool's own guards caught it — which is what
-// they are for — but the cause is here.
+// INSIDE a stderr write part-way through the run; each held its spec until the pool gave up on it
+// and terminated it, and the suite became a wall of terminated specs. The pool's own guards caught
+// it — which is what they are for — but the cause is here.
 //
 // ⇒ The channel is SILENCED rather than drained. Draining continuously is what v1 did and what leaked
 // one allocation per worker; and this output has no reader in a worker under any design — it is
@@ -730,8 +756,9 @@ end 'runPersistentWorker'
 // ⚠ **THE INVARIANT THIS RESTORES IS THE ONE THE PROTOCOL NOTE AT THE TOP OF THIS FILE ALREADY STATES
 // ABOUT STDOUT, APPLIED TO STDERR: a worker writes to stderr only when it is DYING.** Anything added
 // to a per-test path that writes there — a `printError` outside a diagnostic capture, a new `logError`
-// in the compile pipeline — reintroduces exactly this deadlock, and its symptom is a job deadline
-// rather than a stack trace.
+// in the compile pipeline — reintroduces exactly this deadlock, and its symptom is the progress bound
+// firing rather than a stack trace: a worker blocked inside a write says nothing, which is exactly the
+// state that bound reads as a stopped worker.
 function silenceCompilerLogging()
 	setLogLevel(LogLevel.ERROR)
 end 'silenceCompilerLogging'
@@ -1188,8 +1215,8 @@ typealias SlotInstantArray = Array with InstantMs
 // `abortOnDeadWorker` — correct while a compiler panic could only kill a GRANDCHILD, and a usability
 // regression the moment the compile moved into the worker (G20). The parent now FAILS that job's tests
 // and carries on, and to do that it needs two things this hands back: whether the job finished, and
-// the last `WORKER_COMPILING:` breadcrumb. Both ride in the lines — the READY line is no longer
-// swallowed, and the breadcrumbs are ordinary lines the parent strips.
+// the last `WORKER_STEP:` breadcrumb. Both ride in the lines — the READY line is no longer swallowed,
+// and the breadcrumbs are ordinary lines the parent strips.
 //
 // ⚠ **`DrainPromise`'s TWO TYPE ARGUMENTS ARE LEFT EXACTLY AS THEY WERE, ON PURPOSE.** Widening the
 // RESULT type to carry the death bit (a union, a struct) would mint a new generic instantiation on the
@@ -1862,10 +1889,10 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	var dispatched = 0 as JobTally
 	var completed = 0 as JobTally
 
-	// Workers that DIED (or were terminated for outrunning their job deadline) and were replaced. They
-	// are counted HERE and not by `shutdownPool`, which can only see the workers still alive at the end
-	// — the replacements. Both tallies feed the one `failedWorkers` the suite fails on, so a death
-	// cannot be double-counted and cannot go uncounted.
+	// Workers that DIED (or were terminated for going silent past their progress bound) and were
+	// replaced. They are counted HERE and not by `shutdownPool`, which can only see the workers still
+	// alive at the end — the replacements. Both tallies feed the one `failedWorkers` the suite fails
+	// on, so a death cannot be double-counted and cannot go uncounted.
 	var deadWorkers = 0 as WorkerTally
 
 	// The run's compile cost, summed as each job's answer is decoded. Summing per JOB rather than
