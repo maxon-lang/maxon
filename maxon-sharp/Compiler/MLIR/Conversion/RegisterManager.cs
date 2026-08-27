@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler.Ir.Core;
+﻿using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler.Ir.Conversion;
@@ -283,10 +283,11 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
   /// So a NEGATIVE quotient or remainder arrives as `0x00000000FFFFFFF8` — `4294967288`, not `-8` — for
   /// anything that reads the value at 64 bits.
   ///
-  /// ⭐ **AND IT IS THE ONLY NARROWED OP THAT IS ACTUALLY NARROW**, which is what makes that reachable:
-  /// every other <see cref="Ir.Dialects.StdBinaryI32Op"/> — add, sub, mul, and, or, xor — lowers to its
-  /// 64-BIT instruction (the `EmitBinaryRegReg` arms in `StandardToX86Conversion`), so an `StdI32` in a
-  /// register is otherwise always its own 64-bit reading and every consumer was written on that. Making
+  /// ⭐ **AND IT IS NOW THE ONLY NARROWED OP THAT IS ACTUALLY NARROW**, which is what makes that
+  /// reachable: every other <see cref="Ir.Dialects.StdBinaryI32Op"/> — add, sub, mul, and, or, xor —
+  /// lowers to its 64-BIT instruction (the `EmitBinaryRegReg` arms in `StandardToX86Conversion`), so an
+  /// `StdI32` in a register is otherwise always its own 64-bit reading and every consumer was written
+  /// on that. Making
   /// it true again HERE, at the one instruction that breaks it, is why this is not a per-consumer rule:
   /// a consumer that widens first reads CORRECTLY, so the wrong ones are exactly the ones nobody wrote a
   /// test for. That is how a quotient PRINTED as `-8` — an interpolation sign-extends before formatting
@@ -295,6 +296,16 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
   /// ⚠ <see cref="EmitDivOperation32"/> deliberately has NO counterpart: `div r/m32` produces an
   /// UNSIGNED 32-bit result, whose correct 64-bit reading IS the zero-extension the hardware already
   /// wrote. Sign-extending it would turn a `u32` above `i32.max` into a negative number.
+  ///
+  /// ⛔⛔ **"ONLY" READ "ONLY OP", AND IT WAS FALSE WHEN IT WAS WRITTEN — the VARIABLE SLOT was the
+  /// other one, and this instruction's fix was undone by the very next assignment.** `StdStoreI32Op` /
+  /// `StdLoadI32Op` gave a narrow value a 4-byte slot whose load ZERO-extends, so `q = offset / 8`
+  /// handed 4294967288 to the next reader with the `movsxd` above already emitted — and the load's
+  /// result was a plain `StdI32` even for a stored `StdU32`, so a consumer that widens SIGN-extended
+  /// 3999999999 into -294967297. It reached a SUBTRACTION too, where no narrowed instruction exists at
+  /// all. The sentence is true today only because those two ops were DELETED: `EmitStore` widens every
+  /// narrow value through `EnsureI64`, so a variable slot is i64 and there is no narrow PLACE left for
+  /// this rule to have to reach. Do not re-derive that from the word "only" — it is what makes it true.
   private void EmitIdivOperation32(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, IrBlock<X86Op> block) {
     var rhsReg = PrepareDivisionRegisters(lhs, rhs, block);
     block.AddOp(new X86CdqOp());
