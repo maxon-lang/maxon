@@ -1,4 +1,4 @@
-﻿using MaxonSharp.Compiler;
+using MaxonSharp.Compiler;
 using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 using MaxonSharp.Compiler.Ir.Passes;
