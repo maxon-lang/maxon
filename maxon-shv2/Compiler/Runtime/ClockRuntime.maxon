@@ -34,7 +34,8 @@
 // two different imports, and the optional trailing import band is gated per producer. One shared bit would
 // make a program that reads the calendar import `QueryThreadCycleTime`, and a program that measures its own
 // cost import `GetSystemTimeAsFileTime`. Same file, because the two are the same MECHANISM: a host read
-// whose answer arrives through a `.data` scratch word.
+// whose answer arrives through an out-param scratch word — a FRAME slot since W212, and the reason that
+// changed is `ClockScratchSlot`'s.
 
 // The prefix every wall-clock runtime entry point shares — the "does this program read the CALENDAR?" test.
 let ClockRuntimeCallPrefix = b"__clock_"
@@ -55,23 +56,22 @@ let ThreadCpuRuntimeCallPrefix = b"__thread_"
 
 export let ThreadCpuTicksName = b"__thread_cpu_ticks"
 
-// The 8-byte scratch word `GetSystemTimeAsFileTime`'s out-param writes to, read straight back by
-// `__clock_now_unix_s`. Safe as a shared global for the same reason `__gt_clock_ticks` is: the function is
-// straight-line with no yield point between the write and the read, so it cannot be re-entered mid-read.
-let ClockWallTicksLabel = b"__clock_wall_ticks"
-
-// The 8-byte scratch word `QueryThreadCycleTime`'s `PULONG64` out-param writes to, read straight back by
-// `__thread_cpu_ticks`. Safe as a shared global for the wall clock's reason one line up — the function is
-// straight-line with no yield point between the write and the read, so it cannot be re-entered mid-read.
+// ⭐⭐ **THE OUT-PARAM SCRATCH IS A FRAME SLOT, NOT A `.data` WORD (W212) — and that is a MULTI-M FIX rather
+// than tidiness.** Both host reads here take a pointer to write their answer into, and both used to point at
+// a shared global: `GetSystemTimeAsFileTime` into `__clock_wall_ticks`, `QueryThreadCycleTime` into
+// `__thread_cpu_ticks_out`. The safety argument at those words was about RE-ENTRY — the body is straight-line
+// with no yield point between the write and the read — and it held exactly as long as one OS thread ran every
+// green thread. **Two Ms do not need a yield point to be inside one function at once**, so with
+// `MAXON_MAX_PROCS>1` two threads writing one word hand each other the other's reading: a wall clock that
+// jumps, or a CPU-time bracket that reports another thread's cycles. `SchedRuntime.maxon`'s G2 audit listed
+// both as its last outstanding item.
 //
-// ⚠⚠ **THAT ARGUMENT IS ABOUT RE-ENTRY, AND SINCE G1 THE THING IT DEFENDS AGAINST IS NO LONGER THE ONLY
-// THING THERE IS.** It holds while one OS thread runs every green thread: a straight-line body offers no
-// yield point for another green thread to be scheduled at. It says nothing about two Ms, which do not need
-// a yield point to be inside this function at once — and `MAXON_MAX_PROCS>1` gives a program two.
-// ⇒ **BOTH OF THIS FILE'S SCRATCH WORDS ARE ITEM 5 ON `SchedRuntime.maxon`'s AUDIT LIST**, and the fix is
-// the one this comment always named: a per-P slot, which the P now exists to hold. Not done here because
-// the default is one M and flipping shared state is the rung after this one.
-let ThreadCpuTicksLabel = b"__thread_cpu_ticks_out"
+// A per-CALL need gets per-CALL storage: `func.stackSize` plus a `StdOp.stackRecordAddr`, which is exactly
+// what `GtRuntime.buildGtNowNs` does with the QPC pair and what G2's item 4 did with the other three scratch
+// regions. It also deletes two `.data` words, which is why this rung's goldens move for every program that
+// reads a clock.
+let ClockScratchBytes = 8 as StackSize
+let ClockScratchSlot = 0 as SpillSlot
 
 // A FILETIME counts 100-NANOSECOND intervals since 1601-01-01 00:00:00 UTC. Two facts turn that into Unix
 // seconds, and both are named rather than spelled inline at the arithmetic:
@@ -96,23 +96,11 @@ export function isThreadCpuRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ThreadCpuRuntimeCallPrefix)
 end 'isThreadCpuRuntimeCallee'
 
-// The wall clock's one `.data` slot, laid out only when the program reads the calendar (`usesWallClock`), so
-// every other program's `.data` image is unchanged. An ordinary i64 slot in every respect, exactly like
-// MmRuntime's `runtimeGlobals()` and GtRuntime's `gtRuntimeGlobals()`.
-export function clockRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
-	if usage.usesWallClock 'wallClock'
-		out.push(DataSectionEntry.create(String.from(ClockWallTicksLabel), valueType: StdType.i64, value: 0))
-	end 'wallClock'
-
-	// The thread-CPU read's own scratch word, laid out on its OWN bit for the reason the two entry points
-	// wear two bands at all: a program that only reads the calendar must not carry a word it never writes.
-	if usage.usesThreadCpuTicks 'threadCpu'
-		out.push(DataSectionEntry.create(String.from(ThreadCpuTicksLabel), valueType: StdType.i64, value: 0))
-	end 'threadCpu'
-
-	return out
-end 'clockRuntimeGlobals'
+// ⚠ **THIS FILE LAYS OUT NO `.data` AT ALL SINCE W212, and the absence is the point.** Its two words were
+// out-param scratch for two host reads, and both are frame slots now (see `ClockScratchSlot`) — so there is
+// nothing left for a `clockRuntimeGlobals()` to return, and the producer is gone rather than kept as a
+// function that answers an empty array. The `usage` bits it read still gate the two BODIES, in
+// `installClockRuntime` below.
 
 // Install the host-clock runtime into the lowered Std module, each entry point on its OWN bit —
 // `installProcessRuntime`'s discipline, and here it earns exactly what that file's does: the two entries
@@ -146,8 +134,10 @@ function buildWallClockNowUnixSeconds(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry")
 
+	// The out-param lives in THIS CALL's frame, not in `.data` — see `ClockScratchSlot`.
+	func.stackSize = ClockScratchBytes
 	let ticksAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(ticksAddr, label: ClockWallTicksLabel))
+	module.appendOp(entry, op: StdOp.stackRecordAddr(ticksAddr, slot: ClockScratchSlot))
 	module.appendOp(entry, op: StdOp.osReadWallClock(ticksAddr))
 	let ticks = emitLoadField(module, block: entry, record: ticksAddr, offset: 0, ids: ids)
 
@@ -180,8 +170,10 @@ function buildThreadCpuTicks(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry")
 
+	// The out-param lives in THIS CALL's frame, not in `.data` — see `ClockScratchSlot`.
+	func.stackSize = ClockScratchBytes
 	let ticksAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(ticksAddr, label: ThreadCpuTicksLabel))
+	module.appendOp(entry, op: StdOp.stackRecordAddr(ticksAddr, slot: ClockScratchSlot))
 	module.appendOp(entry, op: StdOp.osThreadCpuTicks(ticksAddr))
 	let ticks = emitLoadField(module, block: entry, record: ticksAddr, offset: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(ticks))

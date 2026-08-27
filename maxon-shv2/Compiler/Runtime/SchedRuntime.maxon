@@ -45,18 +45,24 @@
 //      whose failure was a DOUBLE FREE rather than a lost count.
 //   6. **THE SUBPROCESS HANDLE TABLE** — its lazy creation under the lock, its per-slot claim by CAS.
 //
-// ⛔ **TWO THINGS ARE STILL RACY ABOVE ONE M, AND NEITHER IS THIS FILE'S TO FIX.**
-//   • **THE ALLOCATOR.** `SlabRuntime`/`SlabArena` are ONE shard with no lock and no ownership gate; both
-//     files say so in their own headers. `maxon-shv2/track0/alloc-torture.maxon` dies at
-//     `MAXON_MAX_PROCS=2` and above with **exit 86** (`slabSpanExhaustedPastItsEnd`, INV-1) or a segfault,
-//     and it is clean at 1. It is the allocator rung's, and it BITES FIRST: it is why a green thread that
-//     allocates on a worker M still cannot be trusted, whatever this file has done.
-//   • **`ClockRuntime`'s `__clock_wall_ticks` and `__thread_cpu_ticks_out`** — the same out-param scratch
-//     shape item 4 fixed here, in a file G2 did not own. The fix is item 4's, applied one file over:
-//     `func.stackSize` plus two `StdOp.stackRecordAddr`s, and the two `.data` words deleted.
+// ✅ **THE TWO ITEMS THAT WERE STILL RACY ABOVE ONE M ARE BOTH CLOSED.**
+//   • **THE ALLOCATOR (S5).** It was ONE shard with no lock and no ownership gate, and
+//     `maxon-shv2/track0/alloc-torture.maxon` died at `MAXON_MAX_PROCS=2` and above with exit 86
+//     (`slabSpanExhaustedPastItsEnd`, INV-1) or a segfault. S5 sharded it PER P: each processor owns its own
+//     mcache row and is the sole writer of every span cached there, every span carries the P that owns it, a
+//     free by a P that does not own the span CAS-pushes onto the owner's remote-free queue, and an OS thread
+//     with no P uses a dedicated raw row behind a lock. `SlabRuntime.maxon`'s header records the mechanism
+//     and `specs-shv2/slab-sharding.md` pins the part one processor can reach.
+//     ⚠ **W212 KEEPS ITS PREMISE, WHICH IS THAT A P IS BOUND TO EXACTLY ONE M.** The ring below is per-P and
+//     its slots are read by thieves, but the SHARD is untouched: no work in this rung migrates a P between
+//     Ms (that is W213), so `owning_p` still answers one M.
+//   • **`ClockRuntime`'s `__clock_wall_ticks` and `__thread_cpu_ticks_out` (W212)** — the same out-param
+//     scratch shape item 4 fixed here, in a file G2 did not own. The fix is item 4's, applied one file over:
+//     `func.stackSize` plus a `StdOp.stackRecordAddr` each, and the two `.data` words deleted.
 //
-// ⇒ **at N>1 a green thread that ALLOCATES on a worker M still races**; one that retains, releases, sleeps,
-// spawns a child, traces or reads the monotonic clock no longer does.
+// ⇒ **a green thread that allocates, retains, releases, sleeps, spawns a child, traces or reads any clock is
+// safe on a worker M.** What is NOT yet built above one M is P MIGRATION: a green thread that blocks in a
+// kernel call holds its P for the duration, because `entersyscall`/`handoffp`/`sysmon` are W213.
 //
 // ⭐ **WHY A SEPARATE FILE FROM `GtRuntime`.** Not tidiness: the two answer different questions, and one of
 // them is read by code the other cannot see. `emitLoadCurrentGt` below is called from the x64 SHIM and the
@@ -156,12 +162,21 @@ end 'pushRuntimeGlobal'
 // every offset up to and including `POffMainThread` matches, so the header is portable, and only the tail —
 // which grafts onto nothing — differs.
 
-// The per-P LOCAL run-queue ring (Go's `runq`). ⚠ RESERVED AND UNUSED at this rung: shv2 has ONE global FIFO
-// (`GtRuntime`'s `__gt_run_queue_head`/`_tail`), and the per-P ring plus its work-stealing protocol is a
-// later rung. The three words are reserved so that rung is a body change rather than a layout change.
-let POffLocalQueueHead = 0x00 as ByteOffset
-let POffLocalQueueTail = 0x08 as ByteOffset
-let POffLocalQueueLen = 0x10 as ByteOffset
+// ⭐⭐ **THE PER-P LOCAL RUN-QUEUE RING (Go's `runq`) — TWO MONOTONIC COUNTERS, NOT TWO POINTERS.** They
+// count how many green threads have EVER been pushed to and popped from this ring; the ring slot is
+// `counter mod RunqSlots` and the length is `tail - head`. That is what makes the pop a single CAS: a thief
+// and the owner both advance `runqhead` by compare-and-swap, and a counter that only ever rises has no ABA
+// to have (a head that reads `h` twice really did not move — a pair of pointers can look identical after a
+// full lap). `POffRunqBase` at the P's tail is the slot array itself.
+//
+// ⛔ **THERE IS NO LENGTH WORD, AND 0x10 IS THEREFORE STILL RESERVED.** The bootstrap keeps a `len` beside
+// its head/tail because its local queue is a LINKED LIST whose length cannot be computed; a ring's is
+// `tail - head`, and a third word maintained beside two that already answer the question is a fact stored
+// twice — which is exactly how a queue comes to disagree with itself. It stays reserved rather than being
+// reused so the bootstrap's debug agent, which reads this header, still finds its own field where it left it.
+export let POffRunqHead = 0x00 as ByteOffset
+export let POffRunqTail = 0x08 as ByteOffset
+let POffReservedLocalQueueLen = 0x10 as ByteOffset
 
 // ⭐⭐ **THE GREEN THREAD THIS M IS RUNNING** — the field that replaces the single `.data` word shv2 kept it
 // in until this rung. A global cannot express it under more than one M by construction: two Ms run two
@@ -179,9 +194,9 @@ export let POffCurrentGt = 0x18 as ByteOffset
 // EXPORTED because that day arrived: the sharded allocator reads it to pick its mcache row.
 export let POffId = 0x20 as ByteOffset
 
-// The xorshift state a work-stealing P picks its victim with. ⚠ RESERVED AND UNUSED: stealing is a later
-// rung. Seeded to `id + 1` at init anyway, because a zero xorshift state is a fixed point — seeding is free
-// here, while a forgotten seed later would be a stealer that always picks P[0].
+// The xorshift state a work-stealing P picks its victim with — its first reader arrived with the stealing
+// rounds in `__sched_find_runnable`. Seeded to `id + 1` at init, because a zero xorshift state is a FIXED
+// POINT: a P seeded 0 would draw 0 for ever and always try to steal from P[0].
 let POffRng = 0x28 as ByteOffset
 
 // ⭐⭐ **THE PARK FLAG — one half of the Dekker pair.** 1 means *"this M has published that it is about to
@@ -220,9 +235,19 @@ let PStatusActive = 1 as ParsedInt
 // front: it is the thread this processor was waiting on.
 let POffPendingWaiter = 0x50 as ByteOffset
 
-// Go's `runnext` — the one green thread a P runs before consulting its local ring. ⚠ RESERVED AND UNUSED:
-// there is no local ring at this rung (see `POffLocalQueueHead`), so a `runnext` would be a second name for
-// the global queue's head.
+// Go's `runnext` — the one green thread a P runs before consulting its local ring.
+//
+// ⛔⛔ **RESERVED AND DELIBERATELY NOT BUILT, AND THE REASON IS GO'S OWN.** `proc.go:7530-7541` refuses
+// `runnext` outright when the runtime has no `sysmon`: *"A runnext goroutine shares the same time slice as
+// the current goroutine … To prevent a ping-pong pair of goroutines from starving all others, we depend on
+// sysmon to preempt long-running goroutines … If there is no sysmon, we must avoid runnext entirely or risk
+// starvation."* shv2 is cooperative and has no sysmon — that is **W213**, with `entersyscall`/`handoffp` —
+// so a `runnext` here would be the starvation Go names, with nothing to break it.
+//
+// ⚠ **AND SHV2 HAS NO FRONT-OF-QUEUE PRODUCER TO PUT IN IT.** The two deferred slots are what would feed it,
+// and only the YIELDER one has a producer — which belongs at the BACK by measurement (see
+// `POffPendingYielder`). `POffPendingWaiter`, the slot whose contents WOULD go here, has none at all. The
+// slot therefore waits for its consumer AND its safety mechanism, which are the same rung.
 let POffRunnext = 0x58 as ByteOffset
 
 // The per-P GT-struct free list (Go's per-P reuse). ⚠ RESERVED AND UNUSED: `__gt_spawn` takes its struct
@@ -279,13 +304,83 @@ let POffMainThread = 0x80 as ByteOffset
 // one of those offsets is the bootstrap's.
 let POffPendingYielder = POffMainThread + (GtStructSize as ByteOffset)
 
-// One machine word — the stride of the `P*` array `__sched_procs` points at, and the width of every scalar
-// field above. Distinct from `GtRuntime.StackWordBytes` (a STACK word) and `GtArgSlotBytes` (an async
-// ARGUMENT slot) though all three are 8: three facts, three names, so moving one cannot move the others.
+// One machine word — the stride of the `P*` array `__sched_procs` points at, the width of every scalar
+// field above, and the stride of one ring slot. Distinct from `GtRuntime.StackWordBytes` (a STACK word) and
+// `GtArgSlotBytes` (an async ARGUMENT slot) though all three are 8: three facts, three names, so moving one
+// cannot move the others.
 let PointerSlotBytes = 8 as ParsedInt
 
-// 0x180 = 384 bytes. See the layout header for why this is not the bootstrap's 376.
-let PStructSize = ((POffPendingYielder as ParsedInt) + PointerSlotBytes) as ParsedInt
+// ⭐ **THIS P's SCHEDULE COUNTER — Go's `schedtick`, and the ONLY thing the fairness check reads.** One up
+// per green thread `__sched_find_runnable` hands back, and every 61st of them consults the GLOBAL queue
+// before the local ring. Written by the owner alone, so a plain load/add/store: a thief has no reason to
+// know how often its victim has scheduled.
+let POffSchedTick = POffPendingYielder + (PointerSlotBytes as ByteOffset)
+
+// ⭐ **HOW MANY GREEN THREADS THIS P HAS STOLEN — the reading `__Builtins.schedStealCount()` sums.** It is a
+// per-P word and not a `.data` counter for the reason the whole rung is arranged around: a `.data` word is
+// visible in every golden's `data {` section, so one added here would move the emitted image of every
+// green-thread program in the corpus to carry a number nothing but a torture harness reads. Owner-written,
+// like `schedTick`, and summed across `__sched_procs` by `__sched_steal_count`.
+let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
+
+// ⭐⭐ **THE RING'S 256 SLOTS, AT THE P's TAIL.** Go's `runq [256]guintptr` (`runtime2.go:807`), the same
+// count v1's arm64 backend uses (`Arm64MacosGreenThread.maxon:163`, `GtMaxLocalQueueLen = 256`) and the same
+// the bootstrap caps its linked local queue at. FIXED rather than grown: the overflow has somewhere to go
+// (the global queue), so a full ring is a routing decision and never an error, and a growable ring would
+// need a lock on the one path this whole rung exists to take a lock OFF.
+//
+// It sits at the TAIL because everything above it is either the bootstrap's layout or an 8-byte scalar, and
+// a 2 KB array in the middle would push every one of them past an offset another compiler's debug agent
+// already knows.
+let RunqSlots = 256 as ParsedInt
+
+// `counter mod RunqSlots` as a mask, which is what makes the slot computation an `and` rather than an
+// `idiv`. It is `RunqSlots - 1` and is only a mask because `RunqSlots` is a power of two — stated here so
+// that a future `RunqSlots` that is not one fails in ONE place rather than addressing the wrong slot.
+let RunqIndexMask = RunqSlots - 1
+
+// ⭐ **HALF A RING — the overflow batch, the steal grab and the global batch are all this number.** Written
+// as a SHIFT and not as `RunqSlots / 2` because `/` in this language answers a FLOAT whatever its operands
+// are (`n / 2` of two ints is `128.0`), and a constant that has to be truncated at each of its four uses
+// would be the same fact converted four times.
+let RunqHalfSlots = RunqSlots shr 1
+
+let POffRunqBase = POffStealCount + (PointerSlotBytes as ByteOffset)
+
+// 0x990 = 2448 bytes: the bootstrap's header, shv2's bigger inline GT, three tail scalars and the ring. See
+// the layout header for why this is not the bootstrap's 376.
+let PStructSize = ((POffRunqBase as ParsedInt) + RunqSlots * PointerSlotBytes) as ParsedInt
+
+// ⭐ **HOW OFTEN THE GLOBAL QUEUE IS CONSULTED FIRST — Go's 61 (`proc.go:3457`), and v1's
+// (`Arm64MacosGreenThread.maxon:172`, `GtFairnessInterval`).** Without it two green threads that keep
+// re-readying each other own the local ring outright and everything the global queue holds starves. A ring
+// OVERFLOW is what routinely puts work there, so this is not a corner case: it is the other half of the
+// overflow.
+//
+// ⚠ **shv2 TESTS IT AFTER THE INCREMENT WHERE GO TESTS IT BEFORE**, so the first check falls on the 61st
+// schedule rather than on the 0th. Go's tick is bumped in `execute` and read in `findRunnable`, which makes
+// its very first schedule a global check; here that would be a special case with no reader, since the global
+// queue is empty before anything has overflowed into it. The property both spell is the one that matters —
+// nothing waits in the global queue for more than 61 schedules.
+let GtFairnessInterval = 61 as ParsedInt
+
+// ⭐ **FOUR ROUNDS OF STEALING BEFORE A P GIVES UP — Go's `stealTries` (`proc.go:3849`).** More than one
+// because a victim that is momentarily empty may be about to publish; bounded because a P that finds nothing
+// four times over should park and let an enqueuer wake it rather than burn a core.
+let StealRounds = 4 as ParsedInt
+
+// ⭐ **HOW MANY GREEN THREADS ONE GRAB TAKES OFF THE GLOBAL QUEUE — half a ring, which is Go's first term
+// (`proc.go:3492`, `globrunqgetbatch(int32(len(pp.runq)) / 2)`).**
+//
+// ⚠ **GO'S OTHER TWO TERMS ARE NOT TAKEN, AND ONE OF THEM CANNOT BE.** `globrunqgetbatch` takes
+// `min(n, size, size/gomaxprocs+1)`: the `size` term is implicit here (the walk stops when the queue
+// empties), but `size/gomaxprocs+1` needs the global queue's LENGTH, and shv2's global queue is an intrusive
+// list with no length word — adding one would be a `.data` slot, which is the one thing this rung may not
+// spend (see `POffStealCount`). What that term buys is FAIRNESS BETWEEN Ps on a queue several Ps are
+// draining at once, never correctness: without it a P may take up to half a ring where Go would have left
+// some for its peers, and the peers then steal from it. The 61-schedule check is the fairness mechanism that
+// actually matters here, and it is present.
+let GlobalBatchMax = RunqHalfSlots
 
 // ==========================================================================
 // The `.data` slots
@@ -358,6 +453,52 @@ export let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
 // `__sched_drain_pending()` — move whatever the two deferred slots hold onto the run queue, now that the
 // context switch which made deferral necessary has completed.
 export let SchedDrainPendingName = b"__sched_drain_pending"
+
+// `__sched_runq_put(gt)` — push a runnable green thread onto the CURRENT P's ring tail, overflowing half the
+// ring plus `gt` to the global queue when the ring is full. Go's `runqput` + `runqputslow`.
+export let SchedRunqPutName = b"__sched_runq_put"
+
+// `__sched_runq_get(p) -> gt` — take the oldest thread off `p`'s ring by CAS on its head, or 0. Go's
+// `runqget`. It takes `p` rather than reading TLS because the SWEEP calls it for the P it already holds.
+let SchedRunqGetName = b"__sched_runq_get"
+
+// `__sched_steal(p, victim) -> gt` — grab half of `victim`'s ring into `p`'s and answer one of them, or 0.
+// Go's `runqgrab` + `runqsteal`.
+let SchedStealName = b"__sched_steal"
+
+// ⭐⭐ `__sched_find_runnable() -> gt` — **THE ONE PLACE THE SCHEDULER DECIDES WHAT RUNS NEXT**, and 0 when
+// there is nothing. Go's `findRunnable`, minus everything shv2 has no equivalent of.
+export let SchedFindRunnableName = b"__sched_find_runnable"
+
+// `__sched_sweep_dropped()` — reclaim the dropped green threads sitting at the FRONT of this P's ring and of
+// the global queue. Called by `__gt_promise_drop`, which is what puts one there.
+export let SchedSweepDroppedName = b"__sched_sweep_dropped"
+
+// ⭐ `__sched_steal_count() -> i64` — the sum of every P's steal counter, and the floor of
+// `__Builtins.schedStealCount()`. It is the only way a Maxon program can observe that work stealing
+// happened, which is what `maxon-shv2/track0/steal-torture.maxon` asserts on.
+//
+// ⚠ **IT LIVES HERE RATHER THAN BESIDE `__sched_max_active_workers` IN `CpuParallelRuntime`, AND THE SPLIT
+// IS THAT FILE'S OWN TEST APPLIED HONESTLY.** That file holds the queries whose answer costs no scheduler —
+// its `__sched_max_active_workers` is a `.data` load that is TRUE (1) for a program with no scheduler at
+// all. A steal count is not: it walks `__sched_procs`, which only `__sched_init_procs` builds, so the
+// question has no answer without the machinery. `RuntimeUsage.recordCallUsage` therefore routes it to
+// `usesGt` — asking it installs the scheduler, because asking it is a question ABOUT the scheduler.
+export let SchedStealCountName = b"__sched_steal_count"
+
+// ⭐⭐ **WHICH END OF THE HIERARCHY A DEFERRED GREEN THREAD IS DRAINED TO, and the reason it is an argument
+// rather than two copies of a drain.** `emitSchedDrainSlot`'s two callers have always differed in this and
+// have never been able to say so: shv2 had ONE queue with one end, so the difference lived in a comment.
+// With a ring in front of the global queue the two ends exist, and they are Go's
+// (`goready` → `runqput`, `Gosched` → `globrunqput`).
+export enum SchedQueueEnd
+	// The CURRENT P's ring tail — the soonest place there is, because the ring is consulted before the
+	// global queue. Where a SPAWN and a woken AWAITER belong.
+	localRing
+	// The GLOBAL queue's tail — behind every runnable green thread on every P. Where a YIELDER belongs, and
+	// the whole content of *"let someone else have a turn"*.
+	globalTail
+end 'SchedQueueEnd'
 
 // ==========================================================================
 // The TLS read — the one door to "which P am I on"
@@ -519,6 +660,12 @@ end 'schedRuntimeGlobals'
 export function installSchedRuntime(module StdModule)
 	buildSchedInitProcs(module)
 	buildSchedDrainPending(module)
+	buildSchedRunqPut(module)
+	buildSchedRunqGet(module)
+	buildSchedSteal(module)
+	buildSchedFindRunnable(module)
+	buildSchedSweepDropped(module)
+	buildSchedStealCount(module)
 	buildSchedWorkerLoop(module)
 	buildSchedWakeOrSpawn(module)
 end 'installSchedRuntime'
@@ -546,32 +693,51 @@ export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMin
 	module.appendOp(block, op: StdOp.osLockLeave(emitLoadGlobalWord(module, block: block, label: SchedLockLabel, ids: ids)))
 end 'emitSchedLockLeave'
 
-// ⭐⭐ **PUBLISH A RUNNABLE GREEN THREAD — the ONE door, and the reason it is one door is the WAKE.** Every
-// site that makes a green thread discoverable does exactly this: take the run-queue lock, append, release,
-// and only then tell an idle or absent M about it. Four sites spelled the first three steps by hand and none
-// of them could have told a reader that the fourth belongs with them.
+// ⭐⭐ **PUBLISH A RUNNABLE GREEN THREAD AT `end` — the ONE door, and the reason it is one door is the
+// WAKE.** Every site that makes a green thread discoverable makes it discoverable AND tells an idle or
+// absent M about it, and no site has ever been able to say that the second belongs with the first.
 //
-// ⚠ **THE WAKE MUST BE OUTSIDE THE LOCK, AND THAT IS CORRECTNESS RATHER THAN CONTENTION.** The release IS the
-// StoreLoad fence the Dekker pair needs between the queue publish and the `idleFlag` reads — see
-// `buildSchedWakeOrSpawn`, which states the pairing in full. Moving the wake inside would remove the fence
-// and reintroduce the missed wakeup the pair exists to close.
-export function emitSchedPublishRunnable(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
-	emitSchedLockEnter(module, block: block, ids: ids)
-	emitSchedEnqueueLocked(module, block: block, gt: gt, ids: ids)
-	emitSchedLockLeave(module, block: block, ids: ids)
+// ⚠⚠ **THE STORELOAD FENCE BETWEEN THE PUBLISH AND THE WAKE IS NOW SPELLED DIFFERENTLY ON THE TWO ARMS, AND
+// BOTH SPELL IT.** The Dekker pair in `buildSchedWakeOrSpawn` needs the queue publish to be visible before
+// the `idleFlag` reads, and x86 reorders a plain store past a later load. On `globalTail` the fence is the
+// LOCK RELEASE, as it always was. On `localRing` there is no lock to release, so the fence is the ring
+// tail's own publish — an `atomicRmw add`, i.e. a `lock xadd`, which is both the store-release that makes
+// the slot visible to a thief and the full barrier the reads below need. See `buildSchedRunqPut`, which
+// states it at the instruction.
+export function emitSchedPublishRunnable(module StdModule, block IrBlock, gt ValueId, end SchedQueueEnd, ids ValueMinter)
+	match end 'end'
+		localRing then emitSchedRunqPut(module, block: block, gt: gt, ids: ids)
+		globalTail then emitSchedEnqueueGlobalTail(module, block: block, gt: gt, ids: ids)
+	end 'end'
+
 	emitSchedWakeAnIdleM(module, block: block, ids: ids)
 end 'emitSchedPublishRunnable'
 
-// ⭐⭐ **THE TWO HALVES OF THAT DOOR, SPLIT OUT SO A *BATCH* PUBLISHER CAN COMPOSE THEM DIFFERENTLY (G2), AND
-// NAMED FOR THE LOCK STATE EACH REQUIRES.** `__gt_timer_check` and `__gt_proc_check` walk a store under the
-// run-queue lock and may wake SEVERAL green threads in one pass, so they cannot call the door above: it takes
-// the lock they already hold, and its unlock would then be a recursive decrement that RELEASES NOTHING —
-// deleting the StoreLoad fence the wake depends on, which is a missed wakeup and, with an untimed park, a
-// hang. They enqueue through the first half inside their loop and call the second ONCE after the release.
+// The GLOBAL tier's publish, lock and all — the exact counterpart of `emitSchedRunqPut` below, and the arm
+// `SchedQueueEnd.globalTail` selects. It is spelled here rather than inside the `match` above because a match
+// arm carries ONE statement, and it is worth its own name for the same reason its ring twin is: the two are
+// what "which end" means in emitted code.
+function emitSchedEnqueueGlobalTail(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+	emitSchedLockEnter(module, block: block, ids: ids)
+	emitSchedEnqueueLocked(module, block: block, gt: gt, ids: ids)
+	emitSchedLockLeave(module, block: block, ids: ids)
+end 'emitSchedEnqueueGlobalTail'
+
+// ⭐⭐ **THE GLOBAL QUEUE'S APPEND, AND THE WAKE, SPLIT OUT SO A *BATCH* PUBLISHER CAN COMPOSE THEM
+// DIFFERENTLY (G2), AND NAMED FOR THE LOCK STATE EACH REQUIRES.** A caller that already holds
+// `__sched_lock` cannot call the door above: its unlock would be a recursive decrement that RELEASES
+// NOTHING — deleting the StoreLoad fence the wake depends on, which is a missed wakeup and, with an untimed
+// park, a hang. Such a caller appends through the first half inside its loop and calls the second ONCE
+// after the release.
 //
 // ⚠ The function names carry the requirement because nothing else can: `osLockEnter` is a Win32
 // CRITICAL_SECTION and therefore RECURSIVE, so taking it twice is not an error and getting this wrong
 // produces no diagnostic anywhere — only a wake that observes a stale `idleFlag`.
+//
+// ⚠ Its one caller since W212 is the ring's OVERFLOW (`buildSchedRunqPut`), which moves half a full ring to
+// the global queue under the lock. The timer and process walks, which were its other callers, now push to
+// the ring instead — a push that takes no lock at all, so their recursive-entry problem is one they no
+// longer have.
 export function emitSchedEnqueueLocked(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(gt)))
 end 'emitSchedEnqueueLocked'
@@ -580,7 +746,26 @@ export function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueM
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeOrSpawnName, args: ValueIdArray.create()))
 end 'emitSchedWakeAnIdleM'
 
-// ⭐⭐ **TAKE THE NEXT RUNNABLE GREEN THREAD OFF THE QUEUE, OR 0 — the CONSUME twin of the door above, and it
+// ⭐ **THE RING PUSH WITHOUT THE WAKE — the local-ring counterpart of `emitSchedEnqueueLocked`, and it
+// exists for the same caller.** `__gt_timer_check` and `__gt_proc_check` may ready SEVERAL green threads in
+// one pass and wake ONCE at the end, so they need the publish half on its own. Unlike its global twin this
+// one requires NO lock state of its caller: the ring push takes no lock, and an overflow's recursive entry
+// into `__sched_lock` is safe (see `buildSchedRunqPut`).
+export function emitSchedRunqPut(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedRunqPutName, args: argsOf(gt)))
+end 'emitSchedRunqPut'
+
+// ⭐⭐ **ASK THE SCHEDULER WHAT RUNS NEXT — the CONSUME door, and the reason it is one door is that the
+// answer is a POLICY** (fairness, stealing, the dropped-thread refusal) rather than a queue read. Its three
+// callers are the three drivers: `__gt_drive_until`, `__sched_worker_loop` (twice, around its park) and
+// `__gt_resched`'s GT0 arm.
+export function emitSchedFindRunnable(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let g = ids.mint()
+	module.appendOp(block, op: StdOp.call(g, callee: SchedFindRunnableName, args: ValueIdArray.create()))
+	return g
+end 'emitSchedFindRunnable'
+
+// ⭐⭐ **TAKE THE NEXT GREEN THREAD OFF THE GLOBAL QUEUE, OR 0 — the CONSUME twin of the append above, and it
 // is one door for the same reason.** Popping mutates head AND tail, which every other M and the IOCP
 // completion thread also mutate, so it is exactly as lock-bound as the append is.
 //
@@ -590,6 +775,10 @@ end 'emitSchedWakeAnIdleM'
 // already racing the completion thread in any pipe-reading program that also calls `Runtime.yield()`. That is
 // the divergence a copied idiom predicts, and it is a silent wrong answer rather than a compile error: a
 // concurrent pop and append can leave the FIFO's tail pointing at a node the head no longer reaches.
+//
+// ⚠ Since W212 those four sites are ONE — `__sched_find_runnable`, which every driver calls — and this door
+// serves the two places inside it that consult the global queue: the 61-schedule fairness check and the
+// sweep. The divergence above is what a single decision point makes structurally impossible.
 export function emitSchedDequeueLocked(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	emitSchedLockEnter(module, block: block, ids: ids)
 	let g = ids.mint()
@@ -874,16 +1063,17 @@ end 'emitParseUnsignedDecimal'
 // slots.** It runs on this P's scheduler context, AFTER the context switch that made deferral necessary, and
 // moves whatever the two slots hold onto the run queue: the WAITER to the front, the YIELDER to the back.
 //
-// ⚠ **THE FRONT IS SPELLED AS A BACK-INSERT AT THIS RUNG, AND THAT IS A HONEST APPROXIMATION RATHER THAN A
-// SILENT ONE.** shv2 has ONE global FIFO with a tail-append primitive (`__gt_enqueue`) and no front-insert;
-// the reference's front lands in `P->runnext`, which is per-P machinery a later rung builds. Until then both
-// slots reach the queue through the same append, so the two differ in ORDER of drain (waiter first) rather
-// than in END. That is enough for correctness — a deferred GT reaches the queue exactly once, after its
-// registers are saved — and not enough for the fairness the reference's split buys, which is why the SLOTS
-// are already separate: the day `runnext` exists, only this function changes.
+// ⭐⭐ **THE TWO ENDS ARE REAL NOW, AND THIS IS THE FUNCTION THAT CHANGED WHEN THEY BECAME SO (W212).** Until
+// the per-P ring existed shv2 had ONE queue with one end, so both slots reached it through the same append
+// and the difference between a waiter and a yielder lived in a comment. The hierarchy gives the waiter the
+// CURRENT P's ring — the soonest place there is, because the ring is consulted before the global queue — and
+// the yielder the GLOBAL queue's tail, which is behind every runnable thread on every P. That is Go's own
+// split (`goready` → `runqput`, `Gosched` → `globrunqput`) and the bootstrap's
+// (`__gt_enqueue` vs `__gt_enqueue_back`), and it is `SchedQueueEnd`, passed as an argument.
 //
-// ⚠ It takes the run-queue lock itself, because it is called from the scheduler loop rather than from a
-// site that already holds it.
+// ⚠ Neither arm takes the run-queue lock HERE: the ring push takes none at all, and the global append takes
+// it inside `emitSchedPublishRunnable`. This function is called from the scheduler loop rather than from a
+// site that already holds it, so either is safe.
 //
 // ⭐⭐ **THE YIELDER SLOT HAS A REAL PRODUCER — `__gt_resched`'s handoff — AND THAT IS THE WHOLE REASON THE
 // PAIR EXISTS.** A green thread yielding to its driver used to enqueue itself and THEN context-switch, which
@@ -906,17 +1096,17 @@ function buildSchedDrainPending(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"done")
 
 	let p = emitLoadCurrentP(module, block: entry, ids: ids)
-	emitSchedDrainSlot(module, func: func, cur: entry, p: p, offset: POffPendingWaiter, cont: yielderTest, ids: ids)
-	emitSchedDrainSlot(module, func: func, cur: yielderTest, p: p, offset: POffPendingYielder, cont: doneBlock, ids: ids)
+	emitSchedDrainSlot(module, func: func, cur: entry, p: p, offset: POffPendingWaiter, end: SchedQueueEnd.localRing, cont: yielderTest, ids: ids)
+	emitSchedDrainSlot(module, func: func, cur: yielderTest, p: p, offset: POffPendingYielder, end: SchedQueueEnd.globalTail, cont: doneBlock, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildSchedDrainPending'
 
-// One slot's drain: if it holds a green thread, clear it and enqueue that thread; either way continue at
-// `cont`. Stated once because the two slots differ only in their offset — and the day they differ in their
-// QUEUE END too, that difference will be an argument here rather than a copy.
-function emitSchedDrainSlot(module StdModule, func IrFunction, cur IrBlock, p ValueId, offset ByteOffset, cont IrBlock, ids ValueMinter)
+// One slot's drain: if it holds a green thread, clear it and publish that thread at `end`; either way
+// continue at `cont`. Stated once because the two slots differ only in their offset and their end — and
+// that day has arrived, so the end is an ARGUMENT here rather than a copy of this function.
+function emitSchedDrainSlot(module StdModule, func IrFunction, cur IrBlock, p ValueId, offset ByteOffset, end SchedQueueEnd, cont IrBlock, ids ValueMinter)
 	var enqueue = module.addBlock(func, label: b"drainpush")
 
 	let pending = emitLoadField(module, block: cur, record: p, offset: offset, ids: ids)
@@ -928,9 +1118,721 @@ function emitSchedDrainSlot(module StdModule, func IrFunction, cur IrBlock, p Va
 	// and a clear afterwards would erase it.
 	let clear = emitConst(module, block: enqueue, value: 0, ids: ids)
 	emitStoreField(module, block: enqueue, record: p, offset: offset, value: clear)
-	emitSchedPublishRunnable(module, block: enqueue, gt: pending, ids: ids)
+	emitSchedPublishRunnable(module, block: enqueue, gt: pending, end: end, ids: ids)
 	module.setTerminator(enqueue, op: StdOp.branch(cont.id))
 end 'emitSchedDrainSlot'
+
+// ==========================================================================
+// The per-P ring — `__sched_runq_put` / `__sched_runq_get` / `__sched_steal`
+// ==========================================================================
+
+// The byte address of the ring slot `counter` names — `p + POffRunqBase + (counter and 255) * 8`. Stated
+// once because five sites index the ring and the modulus is the whole reason the counters may be monotonic;
+// a site that spelled the mask itself would be the one that later addressed a slot the others do not.
+function emitRunqSlotAddr(module StdModule, block IrBlock, p ValueId, counter ValueId, ids ValueMinter) returns ValueId
+	let mask = emitConst(module, block: block, value: RunqIndexMask, ids: ids)
+	let index = emitBin(module, block: block, a: counter, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	return emitWordSlotAddr(module, block: block, base: emitFieldAddr(module, block: block, record: p, offset: POffRunqBase, ids: ids), index: index, ids: ids)
+end 'emitRunqSlotAddr'
+
+// ⭐⭐ **PUBLISH THE RING TAIL — AND THIS ONE INSTRUCTION IS THE DEKKER PAIR'S FENCE.** It advances
+// `p.runqTail` by `delta` with a `lock xadd` where a plain store would do, because on x86 a plain store may
+// be reordered past a LATER LOAD — and the later load is `__sched_wake_or_spawn`'s scan of every P's
+// `idleFlag`. Until W212 the fence between the publish and that scan was the run-queue LOCK RELEASE, which
+// a lockless ring push does not have; `buildSchedWakeOrSpawn` states the pairing in full and this is the
+// other half of it. It is also the store-release that makes the slot visible to a thief.
+//
+// ⛔ **DO NOT "OPTIMISE" IT INTO A PLAIN STORE.** The tail has exactly one writer, so the atomicity buys
+// nothing and the BARRIER buys everything; the failure it prevents is a green thread sitting in a ring while
+// the M that could run it sleeps out its park timeout — latency, not a fault, which is why it would survive
+// a green suite. One locked op per push, a class G2 measured at ~25 cycles.
+function emitRunqPublishTail(module StdModule, block IrBlock, p ValueId, delta ValueId, ids ValueMinter)
+	let tailAddr = emitFieldAddr(module, block: block, record: p, offset: POffRunqTail, ids: ids)
+	module.appendOp(block, op: StdOp.atomicRmw(ids.mint(), addrId: tailAddr, operandId: delta, opcode: StdAtomicRmwOpcode.add))
+end 'emitRunqPublishTail'
+
+// `1` if this CAS lost. Both ring CASes and the grab's read it the same way, and `AtomicCasFailed` is the
+// contract's own spelling of the answer (`StdDialect`), not a literal 0 restated three times.
+function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
+	let failed = emitConst(module, block: block, value: AtomicCasFailed, ids: ids)
+	return emitCmp(module, block: block, a: result, b: failed, pred: StdCmpPred.eq, ids: ids)
+end 'emitCasLost'
+
+// ⭐⭐ **`__sched_runq_put(gt)` — PUSH A RUNNABLE GREEN THREAD ONTO THE CURRENT P's RING, WITH NO LOCK.**
+// Go's `runqput(pp, gp, next: false)` (`proc.go:7529`) plus `runqputslow` (`proc.go:7576`), which is where a
+// full ring goes.
+//
+// ⚠ **ONLY THE OWNING P's M MAY CALL IT**, which is what makes the tail a single-writer word and the push
+// three instructions. Its callers are all green-thread-side: the spawn publish (`__gt_ready`), the timer and
+// process wake walks, and the deferred-waiter drain. The one producer that owns NO P — the IOCP completion
+// thread — keeps appending to the GLOBAL queue under `__sched_lock` and is untouched by this rung.
+//
+// **THE OVERFLOW IS A ROUTING DECISION, NEVER AN ERROR.** A full ring moves its OLDEST HALF plus the new
+// thread to the global queue, so the ring keeps the freshest work and the rest becomes everybody's. The
+// 61-schedule fairness check in `__sched_find_runnable` is what stops the half that moved from starving.
+//
+// ⭐ **THE BATCH IS READ *AFTER* THE HEAD CAS, WHERE GO READS IT BEFORE — AND THE REASON IS THAT GO NEEDS A
+// SCRATCH ARRAY AND SHV2 DOES NOT.** `runqputslow` copies 128 entries into a frame array, CASes the head and
+// then links them, and the copy has to come first because its own linking overwrites each G's `schedlink`.
+// Here the batch goes onto the global FIFO one at a time, so there is nothing to stage — and after a WON CAS
+// the slots `[h, h+n)` belong to this thread alone: no thief can claim them (the head has moved past) and no
+// push can overwrite them, because this function is the ring's only pusher and it has not pushed yet. A 1 KB
+// frame array avoided, and one fewer place for two copies of a batch to disagree.
+function buildSchedRunqPut(module StdModule)
+	var func = IrFunction.createFromStd(SchedRunqPutName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var retry = module.addBlock(func, label: b"rqretry")
+	var push = module.addBlock(func, label: b"rqpush")
+	var claim = module.addBlock(func, label: b"rqclaim")
+	var moveLock = module.addBlock(func, label: b"rqmovelock")
+	var moveHdr = module.addBlock(func, label: b"rqmovehdr")
+	var moveBody = module.addBlock(func, label: b"rqmovebody")
+	var moveKeep = module.addBlock(func, label: b"rqmovekeep")
+	var moveDrop = module.addBlock(func, label: b"rqmovedrop")
+	var moveNext = module.addBlock(func, label: b"rqmovenext")
+	var moveDone = module.addBlock(func, label: b"rqmovedone")
+
+	emitParams(module, block: entry, count: 1)
+	let gt = 0 as ValueId
+
+	let p = emitLoadCurrentP(module, block: entry, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(retry.id))
+
+	// retry: read both counters and ask whether the ring is full. `tail - head` IS the length — see
+	// `POffRunqHead` for why no third word says so. A plain load of the head is a load-ACQUIRE on the one
+	// lane that has green threads (x64 never reorders load/load), which is the ordering Go spells out.
+	let head = emitLoadField(module, block: retry, record: p, offset: POffRunqHead, ids: ids)
+	let tail = emitLoadField(module, block: retry, record: p, offset: POffRunqTail, ids: ids)
+	let queued = emitBin(module, block: retry, a: tail, b: head, opcode: StdBinOpcode.sub, ids: ids)
+	let capacity = emitConst(module, block: retry, value: RunqSlots, ids: ids)
+	let full = emitCmp(module, block: retry, a: queued, b: capacity, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(retry, op: StdOp.condBranch(full, thenBlockId: claim.id, elseBlockId: push.id))
+
+	// push: write the slot, THEN publish the tail. The order is the whole contract with a thief — the locked
+	// tail bump is a release, so a thief that sees the new tail sees the slot that tail describes.
+	emitStoreField(module, block: push, record: emitRunqSlotAddr(module, block: push, p: p, counter: tail, ids: ids), offset: 0, value: gt)
+	let oneSlot = emitConst(module, block: push, value: 1, ids: ids)
+	emitRunqPublishTail(module, block: push, p: p, delta: oneSlot, ids: ids)
+	module.setTerminator(push, op: StdOp.retVoid)
+
+	// claim: take the oldest half by CAS. A thief that beat us to it leaves the ring no longer full, so the
+	// lost CAS re-reads and the push above succeeds — Go's `goto retry`, and the reason this is a loop.
+	let batchCount = emitConst(module, block: claim, value: RunqHalfSlots, ids: ids)
+	let claimedHead = emitBin(module, block: claim, a: head, b: batchCount, opcode: StdBinOpcode.add, ids: ids)
+	let headAddr = emitFieldAddr(module, block: claim, record: p, offset: POffRunqHead, ids: ids)
+	let claimed = ids.mint()
+	module.appendOp(claim, op: StdOp.atomicCas(claimed, addrId: headAddr, expectedId: head, replacementId: claimedHead))
+	let lostClaim = emitCasLost(module, block: claim, result: claimed, ids: ids)
+	let moveIndex = ids.mint()
+	moveHdr.blockArgs.push(IrBlockArg.create(moveIndex, argType: StdType.i64))
+	module.setTerminator(claim, op: StdOp.condBranch(lostClaim, thenBlockId: retry.id, elseBlockId: moveLock.id))
+
+	// ⛔⛔ **THE ACQUIRE GETS A BLOCK OF ITS OWN, AND BOTH NEIGHBOURS WOULD BE A HANG.** `osLockEnter` is a
+	// Win32 CRITICAL_SECTION, so it COUNTS: an acquire in the loop header below would recurse it 128 times
+	// against the one release at `moveDone`, and an acquire in `claim` would be taken again on every lost-CAS
+	// retry. Both leave the lock held for the process's life, and neither is a fault — the failure is a hang in
+	// the next thread to want the global queue. One acquire, on the one edge that runs exactly once.
+	//
+	// ⚠ **A CALLER THAT ALREADY HOLDS THE LOCK REACHES HERE, AND THAT IS SAFE**, because the same recursion
+	// counts a nested pair correctly. What such a caller must not rely on is this leave being the StoreLoad
+	// fence for its own wake — a recursive leave releases nothing — and none does: the ring's fence is
+	// `emitRunqPublishTail`'s locked op, and a batch publisher's is its own outer release.
+	emitSchedLockEnter(module, block: moveLock, ids: ids)
+	let moveStart = emitConst(module, block: moveLock, value: 0, ids: ids)
+	module.setTerminator(moveLock, op: StdOp.branch(moveHdr.id))
+	moveLock.branchEdges.push(BranchEdge.create(moveHdr.id, argIds: argsOf(moveStart)))
+
+	let moved = emitCmp(module, block: moveHdr, a: moveIndex, b: batchCount, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(moveHdr, op: StdOp.condBranch(moved, thenBlockId: moveDone.id, elseBlockId: moveBody.id))
+
+	// Each claimed slot in turn. A thread whose promise was DROPPED while it sat here is reclaimed instead of
+	// moved — see `GtRuntime.GtStatusDropped`. Doing it here is what keeps a spawn-and-drop loop that never
+	// schedules anything from filling the GLOBAL queue with tombstones: the drop sweeps the ring's own front,
+	// and this is the only other place a marked thread is looked at without being run.
+	let slotCounter = emitBin(module, block: moveBody, a: head, b: moveIndex, opcode: StdBinOpcode.add, ids: ids)
+	let movingGt = emitLoadField(module, block: moveBody, record: emitRunqSlotAddr(module, block: moveBody, p: p, counter: slotCounter, ids: ids), offset: 0, ids: ids)
+	let movingStatus = emitLoadField(module, block: moveBody, record: movingGt, offset: GtOffStatus, ids: ids)
+	let movingDropped = emitGtStatusEquals(module, block: moveBody, status: movingStatus, want: GtStatusDropped, ids: ids)
+	module.setTerminator(moveBody, op: StdOp.condBranch(movingDropped, thenBlockId: moveDrop.id, elseBlockId: moveKeep.id))
+
+	emitSchedEnqueueLocked(module, block: moveKeep, gt: movingGt, ids: ids)
+	module.setTerminator(moveKeep, op: StdOp.branch(moveNext.id))
+
+	module.appendOp(moveDrop, op: StdOp.call(ids.mint(), callee: GtDisposeDroppedName, args: argsOf(movingGt)))
+	module.setTerminator(moveDrop, op: StdOp.branch(moveNext.id))
+
+	let moveStep = emitConst(module, block: moveNext, value: 1, ids: ids)
+	let nextMoveIndex = emitBin(module, block: moveNext, a: moveIndex, b: moveStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(moveNext, op: StdOp.branch(moveHdr.id))
+	moveNext.branchEdges.push(BranchEdge.create(moveHdr.id, argIds: argsOf(nextMoveIndex)))
+
+	// The new thread goes to the global tail BEHIND the batch, which is Go's order (`batch[n] = gp`) and the
+	// only one that keeps the ring's FIFO promise across an overflow.
+	emitSchedEnqueueLocked(module, block: moveDone, gt: gt, ids: ids)
+	emitSchedLockLeave(module, block: moveDone, ids: ids)
+	module.setTerminator(moveDone, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSchedRunqPut'
+
+// ⭐⭐ **`__sched_runq_get(p) -> gt` — TAKE THE OLDEST THREAD OFF `p`'s RING, OR 0.** Go's `runqget`
+// (`proc.go:7650`), minus the `runnext` slot shv2 deliberately does not build (`POffRunnext`).
+//
+// ⛔⛔ **THE CAS ON THE HEAD IS WHAT MAKES A DOUBLE POP STRUCTURALLY IMPOSSIBLE, AND THAT IS THIS RUNG'S
+// WHOLE THESIS.** The bootstrap puts each P's LOCAL queue under the GLOBAL lock and records why
+// (`RuntimeEmitter.Scheduler.cs:262-267`): without it a thief and the owner both popped the same head node —
+// *"kind=local and kind=steal_first on the same gt within the same millisecond, immediately followed by
+// SIGSEGV"*. Here the two contend on ONE word with a compare-and-swap, so exactly one of them can advance
+// past a given index and the loser re-reads. A plain load/store here IS that SIGSEGV.
+//
+// ⚠ **THE SLOT IS READ BEFORE THE CAS**, which looks like the wrong order and is Go's. A read of a slot the
+// CAS then fails to claim is harmless — the value is discarded — while reading it afterwards would be reading
+// a slot the winner may already have overwritten.
+function buildSchedRunqGet(module StdModule)
+	var func = IrFunction.createFromStd(SchedRunqGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loopHdr = module.addBlock(func, label: b"rgloop")
+	var take = module.addBlock(func, label: b"rgtake")
+	var took = module.addBlock(func, label: b"rgtook")
+	var emptyBlock = module.addBlock(func, label: b"rgempty")
+
+	emitParams(module, block: entry, count: 1)
+	let p = 0 as ValueId
+	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
+
+	let head = emitLoadField(module, block: loopHdr, record: p, offset: POffRunqHead, ids: ids)
+	let tail = emitLoadField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
+	let empty = emitCmp(module, block: loopHdr, a: head, b: tail, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(loopHdr, op: StdOp.condBranch(empty, thenBlockId: emptyBlock.id, elseBlockId: take.id))
+
+	let g = emitLoadField(module, block: take, record: emitRunqSlotAddr(module, block: take, p: p, counter: head, ids: ids), offset: 0, ids: ids)
+	let headAddr = emitFieldAddr(module, block: take, record: p, offset: POffRunqHead, ids: ids)
+	let oneSlot = emitConst(module, block: take, value: 1, ids: ids)
+	let nextHead = emitBin(module, block: take, a: head, b: oneSlot, opcode: StdBinOpcode.add, ids: ids)
+	let won = ids.mint()
+	module.appendOp(take, op: StdOp.atomicCas(won, addrId: headAddr, expectedId: head, replacementId: nextHead))
+	let lost = emitCasLost(module, block: take, result: won, ids: ids)
+	module.setTerminator(take, op: StdOp.condBranch(lost, thenBlockId: loopHdr.id, elseBlockId: took.id))
+
+	// `take` is `took`'s only predecessor, so `g` is in scope with no block argument — the dominance argument
+	// every branching emitter in this runtime makes for itself.
+	module.setTerminator(took, op: StdOp.ret(g))
+	emitConstReturn(module, block: emptyBlock, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildSchedRunqGet'
+
+// ⭐⭐ **`__sched_steal(p, victim) -> gt` — GRAB HALF OF `victim`'s RING INTO `p`'s, AND ANSWER ONE OF THEM.**
+// Go's `runqgrab` (`proc.go:7714`) and `runqsteal` (`proc.go:7782`) as ONE function, because Go's split
+// exists to serve a second caller (`runqdrain`) that shv2 has no equivalent of.
+//
+// **HALF, ROUNDED UP** (`n - n/2`), so a victim holding ONE thread still gives it up — which is what makes a
+// pair of processors converge instead of one of them spinning on a queue it is never allowed to empty.
+//
+// ⚠ **THE `n > half` RE-READ IS NOT DEFENSIVE, it is the one place an inconsistent pair of counters can be
+// observed.** Head and tail are read separately while the victim's owner is pushing between them, so a tail
+// from before a wrap paired with a head from after it computes a length larger than the ring exists to hold.
+// Go re-reads for exactly this, and says so at the same line.
+//
+// ⛔ **ITS PRECONDITION IS THAT `p`'s RING IS EMPTY, and unlike Go's this one cannot be violated.** Go's
+// `runqsteal` carries a `throw("runqsteal: runq overflow")` because its `stealWork` may RUN TIMERS first,
+// which readies an arbitrary number of Gs onto the thief's OWN ring before the grab (`proc.go:3886-3893`
+// says so outright). shv2's stealing phase runs no timers, is reached only after `__sched_runq_get` answered
+// 0, and the ring's only pusher is the very thread running this — so the free space is the whole ring and
+// the grab is at most half of one.
+function buildSchedSteal(module StdModule)
+	var func = IrFunction.createFromStd(SchedStealName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var grabHdr = module.addBlock(func, label: b"sgrab")
+	var sized = module.addBlock(func, label: b"ssized")
+	var copyHdr = module.addBlock(func, label: b"scopyhdr")
+	var copyBody = module.addBlock(func, label: b"scopybody")
+	var commit = module.addBlock(func, label: b"scommit")
+	var publish = module.addBlock(func, label: b"spublish")
+	var publishTail = module.addBlock(func, label: b"spubtail")
+	var answer = module.addBlock(func, label: b"sanswer")
+	var failBlock = module.addBlock(func, label: b"sfail")
+
+	emitParams(module, block: entry, count: 2)
+	let p = 0 as ValueId
+	let victim = 1 as ValueId
+
+	// Our own tail, read once: nobody else writes it, and the copy addresses slots relative to it.
+	let ourTail = emitLoadField(module, block: entry, record: p, offset: POffRunqTail, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(grabHdr.id))
+
+	let vHead = emitLoadField(module, block: grabHdr, record: victim, offset: POffRunqHead, ids: ids)
+	let vTail = emitLoadField(module, block: grabHdr, record: victim, offset: POffRunqTail, ids: ids)
+	let vLen = emitBin(module, block: grabHdr, a: vTail, b: vHead, opcode: StdBinOpcode.sub, ids: ids)
+	let halfShift = emitConst(module, block: grabHdr, value: 1, ids: ids)
+	let vHalf = emitBin(module, block: grabHdr, a: vLen, b: halfShift, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let grabCount = emitBin(module, block: grabHdr, a: vLen, b: vHalf, opcode: StdBinOpcode.sub, ids: ids)
+	let grabZero = emitConst(module, block: grabHdr, value: 0, ids: ids)
+	// `<= 0` and not `== 0`: a torn read can make `vLen` negative, and a negative count would run the copy
+	// loop zero times and then answer a slot nobody wrote. Both bad readings land on the same arm.
+	let nothing = emitCmp(module, block: grabHdr, a: grabCount, b: grabZero, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(grabHdr, op: StdOp.condBranch(nothing, thenBlockId: failBlock.id, elseBlockId: sized.id))
+
+	let grabCap = emitConst(module, block: sized, value: RunqHalfSlots, ids: ids)
+	let inconsistent = emitCmp(module, block: sized, a: grabCount, b: grabCap, pred: StdCmpPred.gt, ids: ids)
+	let copyStart = emitConst(module, block: sized, value: 0, ids: ids)
+	let copyIndex = ids.mint()
+	copyHdr.blockArgs.push(IrBlockArg.create(copyIndex, argType: StdType.i64))
+	module.setTerminator(sized, op: StdOp.condBranch(inconsistent, thenBlockId: grabHdr.id, elseBlockId: copyHdr.id))
+	sized.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(copyStart)))
+
+	let copied = emitCmp(module, block: copyHdr, a: copyIndex, b: grabCount, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(copyHdr, op: StdOp.condBranch(copied, thenBlockId: commit.id, elseBlockId: copyBody.id))
+
+	let fromCounter = emitBin(module, block: copyBody, a: vHead, b: copyIndex, opcode: StdBinOpcode.add, ids: ids)
+	let stolenGt = emitLoadField(module, block: copyBody, record: emitRunqSlotAddr(module, block: copyBody, p: victim, counter: fromCounter, ids: ids), offset: 0, ids: ids)
+	let toCounter = emitBin(module, block: copyBody, a: ourTail, b: copyIndex, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: copyBody, record: emitRunqSlotAddr(module, block: copyBody, p: p, counter: toCounter, ids: ids), offset: 0, value: stolenGt)
+	let copyStep = emitConst(module, block: copyBody, value: 1, ids: ids)
+	let nextCopyIndex = emitBin(module, block: copyBody, a: copyIndex, b: copyStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(copyBody, op: StdOp.branch(copyHdr.id))
+	copyBody.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(nextCopyIndex)))
+
+	// commit: the copy is only a copy until the victim's head moves past it. A lost CAS means the victim (or
+	// another thief) consumed some of what we read, so everything above is discarded and re-read.
+	let vHeadAddr = emitFieldAddr(module, block: commit, record: victim, offset: POffRunqHead, ids: ids)
+	let newVHead = emitBin(module, block: commit, a: vHead, b: grabCount, opcode: StdBinOpcode.add, ids: ids)
+	let grabbed = ids.mint()
+	module.appendOp(commit, op: StdOp.atomicCas(grabbed, addrId: vHeadAddr, expectedId: vHead, replacementId: newVHead))
+	let lostGrab = emitCasLost(module, block: commit, result: grabbed, ids: ids)
+	module.setTerminator(commit, op: StdOp.condBranch(lostGrab, thenBlockId: grabHdr.id, elseBlockId: publish.id))
+
+	// publish: the LAST of the grabbed threads is the answer and is NOT published — this M runs it now — so
+	// the tail advances by one fewer than we took. Taking the last rather than the first leaves the ones that
+	// stay in the ring in their original order, which is Go's choice and the FIFO promise's.
+	let publishStep = emitConst(module, block: publish, value: 1, ids: ids)
+	let keptCount = emitBin(module, block: publish, a: grabCount, b: publishStep, opcode: StdBinOpcode.sub, ids: ids)
+	let answerCounter = emitBin(module, block: publish, a: ourTail, b: keptCount, opcode: StdBinOpcode.add, ids: ids)
+	let answerGt = emitLoadField(module, block: publish, record: emitRunqSlotAddr(module, block: publish, p: p, counter: answerCounter, ids: ids), offset: 0, ids: ids)
+	let publishZero = emitConst(module, block: publish, value: 0, ids: ids)
+	let nonePublished = emitCmp(module, block: publish, a: keptCount, b: publishZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(publish, op: StdOp.condBranch(nonePublished, thenBlockId: answer.id, elseBlockId: publishTail.id))
+
+	emitRunqPublishTail(module, block: publishTail, p: p, delta: keptCount, ids: ids)
+	module.setTerminator(publishTail, op: StdOp.branch(answer.id))
+
+	module.setTerminator(answer, op: StdOp.ret(answerGt))
+	emitConstReturn(module, block: failBlock, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildSchedSteal'
+
+// ==========================================================================
+// `__sched_find_runnable`
+// ==========================================================================
+
+// Advance `p.rng` one xorshift64 step and answer the new value — `x ^= x<<13; x ^= x>>7; x ^= x<<17`, the
+// generator both references use for victim selection (v1's `arm64GtXorshift`,
+// `Arm64MacosGreenThread.maxon:1233`; the bootstrap's `EmitXorshift64`).
+//
+// ⚠ **THE SHIFT RIGHT IS LOGICAL, AND THE ARITHMETIC ONE WOULD BREAK IT.** xorshift64 is defined over
+// unsigned words; an arithmetic shift smears the sign bit and the sequence degenerates. The value is then
+// consumed by an UNSIGNED modulus for the same reason: a signed `mod` of a negative draw would index the P
+// array below zero.
+//
+// ⚠ **THE RESULT MUST BE WRITTEN BACK** or the "generator" answers one constant for ever — v1 says exactly
+// this at its own copy, which is the kind of remark that only gets written after it has happened once.
+function emitXorshiftStep(module StdModule, block IrBlock, p ValueId, ids ValueMinter) returns ValueId
+	let seed = emitLoadField(module, block: block, record: p, offset: POffRng, ids: ids)
+	let up13 = emitBin(module, block: block, a: seed, b: emitConst(module, block: block, value: 13, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let mixed13 = emitBin(module, block: block, a: seed, b: up13, opcode: StdBinOpcode.bitXor, ids: ids)
+	let down7 = emitBin(module, block: block, a: mixed13, b: emitConst(module, block: block, value: 7, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	let mixed7 = emitBin(module, block: block, a: mixed13, b: down7, opcode: StdBinOpcode.bitXor, ids: ids)
+	let up17 = emitBin(module, block: block, a: mixed7, b: emitConst(module, block: block, value: 17, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let stepped = emitBin(module, block: block, a: mixed7, b: up17, opcode: StdBinOpcode.bitXor, ids: ids)
+	emitStoreField(module, block: block, record: p, offset: POffRng, value: stepped)
+	return stepped
+end 'emitXorshiftStep'
+
+// `a mod b` where both are known non-negative — the P-index arithmetic, and the ONE place the signedness of
+// that modulus is decided. See `emitXorshiftStep` for why a signed one would be a wild index.
+function emitUnsignedMod(module StdModule, block IrBlock, a ValueId, b ValueId, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.mod(v, lhs: a, rhs: b, signedness: DivideSignedness.unsigned))
+	return v
+end 'emitUnsignedMod'
+
+// ⭐⭐⭐ **`__sched_find_runnable() -> gt` — THE ONE PLACE THE SCHEDULER DECIDES WHAT RUNS NEXT, and 0 when
+// there is nothing to run.** Go's `findRunnable` (`proc.go:3405`) in Go's ORDER, with everything shv2 has no
+// equivalent of removed (the trace reader, the GC workers, netpoll's optimistic poll, the spinning-M
+// accounting, timer stealing):
+//
+//   1. **every 61st schedule, the GLOBAL queue first** — otherwise a ring that keeps refilling starves it;
+//   2. **this P's own ring** (`__sched_runq_get`, a CAS on the head);
+//   3. **a BATCH off the global queue** into this ring, so one lock acquisition serves many schedules;
+//   4. **four rounds of STEALING**, each visiting every other active P once from a random start.
+//
+// ⭐ **IT REPLACED THREE HAND COPIES OF `lock; __gt_dequeue; unlock`** — `__gt_drive_until`'s drive, the
+// worker loop's dequeue and its park re-dequeue, plus `__gt_resched`'s GT0 arm — and the bootstrap says why
+// one door matters at exactly this point (`RuntimeEmitter.Scheduler.cs:257`): *"THIS IS THE ONE PLACE THE
+// SCHEDULER DECIDES WHAT RUNS NEXT"*, which is what makes a policy (fairness, stealing, the dropped-thread
+// refusal) a property of the scheduler rather than of whichever caller remembered it.
+//
+// ⭐⭐ **AND IT IS WHERE A DROPPED THREAD IS REFUSED.** A ring cannot be spliced, so `__gt_promise_drop`
+// MARKS a never-run thread and leaves it queued (`GtRuntime.GtStatusDropped`); the candidate this function
+// is about to hand back is therefore checked, reclaimed if marked, and the selection re-run. Doing it here
+// rather than in each driver is what makes "a dropped thread never runs" true of every path at once —
+// including a thread that reached this P inside a STOLEN batch, which no drop could have reached.
+//
+// ⚠ **THE VICTIM WALK IS A RANDOM START PLUS A FULL SEQUENTIAL SWEEP, WHERE GO USES A COPRIME STRIDE**
+// (`stealOrder.start(cheaprand())`, an `randomEnum` over a coprime step). Both visit every P exactly once
+// per round; the stride exists to decorrelate the ORDER in which many thieves walk the same array, which
+// matters at Go's tens-to-hundreds of Ps and buys nothing at the handful shv2 runs — while a coprime table
+// is a second structure to build at init and to size. The random START is kept, because that is what stops
+// every idle P from hammering P[0].
+function buildSchedFindRunnable(module StdModule)
+	var func = IrFunction.createFromStd(SchedFindRunnableName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var fairPeek = module.addBlock(func, label: b"frfairpeek")
+	var fairTake = module.addBlock(func, label: b"frfairtake")
+	var localPop = module.addBlock(func, label: b"frlocal")
+	var globalPeek = module.addBlock(func, label: b"frglobalpeek")
+	var batchStart = module.addBlock(func, label: b"frbatch")
+	var batchHdr = module.addBlock(func, label: b"frbatchhdr")
+	var batchTake = module.addBlock(func, label: b"frbatchtake")
+	var batchPublish = module.addBlock(func, label: b"frbatchpublish")
+	var batchTail = module.addBlock(func, label: b"frbatchtail")
+	var batchUnlock = module.addBlock(func, label: b"frbatchunlock")
+	var roundHdr = module.addBlock(func, label: b"frroundhdr")
+	var roundNext = module.addBlock(func, label: b"frroundnext")
+	var victimHdr = module.addBlock(func, label: b"frvictimhdr")
+	var victimTest = module.addBlock(func, label: b"frvictimtest")
+	var victimActive = module.addBlock(func, label: b"frvictimactive")
+	var victimTry = module.addBlock(func, label: b"frvictimtry")
+	var victimNext = module.addBlock(func, label: b"frvictimnext")
+	var stole = module.addBlock(func, label: b"frstole")
+	var candidate = module.addBlock(func, label: b"frcandidate")
+	var noWork = module.addBlock(func, label: b"frnowork")
+	var checkDropped = module.addBlock(func, label: b"frcheckdropped")
+	var reclaim = module.addBlock(func, label: b"frreclaim")
+	var hand = module.addBlock(func, label: b"frhand")
+
+	// The candidate merge — every source of a green thread reaches it, and it is the only exit.
+	let found = ids.mint()
+	candidate.blockArgs.push(IrBlockArg.create(found, argType: StdType.i64))
+
+	let p = emitLoadCurrentP(module, block: entry, ids: ids)
+
+	// The schedule counter. Bumped once per CALL rather than once per thread handed back, so the retry a
+	// reclaimed thread causes does not spend a second tick — a dropped thread was never a schedule.
+	let tickStep = emitConst(module, block: entry, value: 1, ids: ids)
+	let tick = emitBin(module, block: entry, a: emitLoadField(module, block: entry, record: p, offset: POffSchedTick, ids: ids), b: tickStep, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: entry, record: p, offset: POffSchedTick, value: tick)
+	let interval = emitConst(module, block: entry, value: GtFairnessInterval, ids: ids)
+	let phase = emitUnsignedMod(module, block: entry, a: tick, b: interval, ids: ids)
+	let entryZero = emitConst(module, block: entry, value: 0, ids: ids)
+	let atFairness = emitCmp(module, block: entry, a: phase, b: entryZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(atFairness, thenBlockId: fairPeek.id, elseBlockId: localPop.id))
+
+	// The unlocked peek before the lock — Go's `!sched.runq.empty()` guard, and safe for the same reason
+	// `__gt_resched`'s arm choice is: it decides only whether to LOOK, and the locked dequeue behind it is
+	// what decides anything.
+	let fairHead = emitLoadGlobalWord(module, block: fairPeek, label: GtRunQueueHeadLabel, ids: ids)
+	let fairZero = emitConst(module, block: fairPeek, value: 0, ids: ids)
+	let fairEmpty = emitCmp(module, block: fairPeek, a: fairHead, b: fairZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(fairPeek, op: StdOp.condBranch(fairEmpty, thenBlockId: localPop.id, elseBlockId: fairTake.id))
+
+	let fairGt = emitSchedDequeueLocked(module, block: fairTake, ids: ids)
+	let fairTakeZero = emitConst(module, block: fairTake, value: 0, ids: ids)
+	let fairMissed = emitCmp(module, block: fairTake, a: fairGt, b: fairTakeZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(fairTake, op: StdOp.condBranch(fairMissed, thenBlockId: localPop.id, elseBlockId: candidate.id))
+	fairTake.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(fairGt)))
+
+	// localPop is also the RETRY target after a reclaimed thread: the fairness tick has already been spent,
+	// and the global queue has already been consulted on the arm that led here.
+	let localGt = ids.mint()
+	module.appendOp(localPop, op: StdOp.call(localGt, callee: SchedRunqGetName, args: argsOf(p)))
+	let localZero = emitConst(module, block: localPop, value: 0, ids: ids)
+	let localEmpty = emitCmp(module, block: localPop, a: localGt, b: localZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(localPop, op: StdOp.condBranch(localEmpty, thenBlockId: globalPeek.id, elseBlockId: candidate.id))
+	localPop.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(localGt)))
+
+	let batchHead = emitLoadGlobalWord(module, block: globalPeek, label: GtRunQueueHeadLabel, ids: ids)
+	let peekZero = emitConst(module, block: globalPeek, value: 0, ids: ids)
+	let globalEmpty = emitCmp(module, block: globalPeek, a: batchHead, b: peekZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(globalPeek, op: StdOp.condBranch(globalEmpty, thenBlockId: roundHdr.id, elseBlockId: batchStart.id))
+
+	// ⭐ **THE BATCH, AND WHY IT CANNOT OVERFLOW THE RING.** `localPop` answered 0, so this ring was empty;
+	// its only pusher is this M, which is here; a thief can only make it emptier. So the free space is the
+	// whole 256 slots and the batch takes at most `GlobalBatchMax` (128) — an invariant, not a hope, and the
+	// reason there is no capacity test in the loop below.
+	emitSchedLockEnter(module, block: batchStart, ids: ids)
+	let batchBase = emitLoadField(module, block: batchStart, record: p, offset: POffRunqTail, ids: ids)
+	let batchFirst = ids.mint()
+	module.appendOp(batchStart, op: StdOp.call(batchFirst, callee: GtDequeueName, args: ValueIdArray.create()))
+	let batchStartZero = emitConst(module, block: batchStart, value: 0, ids: ids)
+	let batchNone = emitCmp(module, block: batchStart, a: batchFirst, b: batchStartZero, pred: StdCmpPred.eq, ids: ids)
+	let batchCount = ids.mint()
+	batchHdr.blockArgs.push(IrBlockArg.create(batchCount, argType: StdType.i64))
+	let published = ids.mint()
+	batchPublish.blockArgs.push(IrBlockArg.create(published, argType: StdType.i64))
+	module.setTerminator(batchStart, op: StdOp.condBranch(batchNone, thenBlockId: batchPublish.id, elseBlockId: batchHdr.id))
+	batchStart.branchEdges.push(BranchEdge.create(batchPublish.id, argIds: argsOf(batchStartZero)))
+	batchStart.branchEdges.push(BranchEdge.create(batchHdr.id, argIds: argsOf(batchStartZero)))
+
+	// The cap is one short of `GlobalBatchMax` because the first thread was taken above and is the answer.
+	let batchCap = emitConst(module, block: batchHdr, value: GlobalBatchMax - 1, ids: ids)
+	let batchFull = emitCmp(module, block: batchHdr, a: batchCount, b: batchCap, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(batchHdr, op: StdOp.condBranch(batchFull, thenBlockId: batchPublish.id, elseBlockId: batchTake.id))
+	batchHdr.branchEdges.push(BranchEdge.create(batchPublish.id, argIds: argsOf(batchCount)))
+
+	let batchGt = ids.mint()
+	module.appendOp(batchTake, op: StdOp.call(batchGt, callee: GtDequeueName, args: ValueIdArray.create()))
+	let batchTakeZero = emitConst(module, block: batchTake, value: 0, ids: ids)
+	let batchDrained = emitCmp(module, block: batchTake, a: batchGt, b: batchTakeZero, pred: StdCmpPred.eq, ids: ids)
+	var batchStore = module.addBlock(func, label: b"frbatchstore")
+	module.setTerminator(batchTake, op: StdOp.condBranch(batchDrained, thenBlockId: batchPublish.id, elseBlockId: batchStore.id))
+	batchTake.branchEdges.push(BranchEdge.create(batchPublish.id, argIds: argsOf(batchCount)))
+
+	let batchSlot = emitBin(module, block: batchStore, a: batchBase, b: batchCount, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: batchStore, record: emitRunqSlotAddr(module, block: batchStore, p: p, counter: batchSlot, ids: ids), offset: 0, value: batchGt)
+	let batchStep = emitConst(module, block: batchStore, value: 1, ids: ids)
+	let nextBatchCount = emitBin(module, block: batchStore, a: batchCount, b: batchStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(batchStore, op: StdOp.branch(batchHdr.id))
+	batchStore.branchEdges.push(BranchEdge.create(batchHdr.id, argIds: argsOf(nextBatchCount)))
+
+	let publishZero = emitConst(module, block: batchPublish, value: 0, ids: ids)
+	let nothingQueued = emitCmp(module, block: batchPublish, a: published, b: publishZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(batchPublish, op: StdOp.condBranch(nothingQueued, thenBlockId: batchUnlock.id, elseBlockId: batchTail.id))
+
+	emitRunqPublishTail(module, block: batchTail, p: p, delta: published, ids: ids)
+	module.setTerminator(batchTail, op: StdOp.branch(batchUnlock.id))
+
+	// The release is inside the function rather than at each exit for `emitGtIoCancelArm`'s reason: several
+	// arms reach it, and one release block cannot have an arm added later that forgets it.
+	emitSchedLockLeave(module, block: batchUnlock, ids: ids)
+	let unlockZero = emitConst(module, block: batchUnlock, value: 0, ids: ids)
+	let batchFailed = emitCmp(module, block: batchUnlock, a: batchFirst, b: unlockZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(batchUnlock, op: StdOp.condBranch(batchFailed, thenBlockId: roundHdr.id, elseBlockId: candidate.id))
+	batchUnlock.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(batchFirst)))
+
+	// The stealing rounds. `roundHdr` dominates every block below it, so the round index and the random start
+	// are in scope throughout without being threaded through a block argument.
+	let numProcs = emitLoadGlobalWord(module, block: globalPeek, label: SchedNumProcsLabel, ids: ids)
+	let roundIndex = ids.mint()
+	roundHdr.blockArgs.push(IrBlockArg.create(roundIndex, argType: StdType.i64))
+	let roundZero = emitConst(module, block: globalPeek, value: 0, ids: ids)
+	globalPeek.branchEdges.push(BranchEdge.create(roundHdr.id, argIds: argsOf(roundZero)))
+	batchUnlock.branchEdges.push(BranchEdge.create(roundHdr.id, argIds: argsOf(roundZero)))
+
+	let roundCap = emitConst(module, block: roundHdr, value: StealRounds, ids: ids)
+	let roundsDone = emitCmp(module, block: roundHdr, a: roundIndex, b: roundCap, pred: StdCmpPred.ge, ids: ids)
+	let giveUp = emitConst(module, block: roundHdr, value: 0, ids: ids)
+	let victimStart = emitUnsignedMod(module, block: roundHdr, a: emitXorshiftStep(module, block: roundHdr, p: p, ids: ids), b: numProcs, ids: ids)
+	let victimIndex = ids.mint()
+	victimHdr.blockArgs.push(IrBlockArg.create(victimIndex, argType: StdType.i64))
+	module.setTerminator(roundHdr, op: StdOp.condBranch(roundsDone, thenBlockId: candidate.id, elseBlockId: victimHdr.id))
+	roundHdr.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(giveUp)))
+	roundHdr.branchEdges.push(BranchEdge.create(victimHdr.id, argIds: argsOf(giveUp)))
+
+	let victimsDone = emitCmp(module, block: victimHdr, a: victimIndex, b: numProcs, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(victimHdr, op: StdOp.condBranch(victimsDone, thenBlockId: roundNext.id, elseBlockId: victimTest.id))
+
+	let victimSlot = emitUnsignedMod(module, block: victimTest, a: emitBin(module, block: victimTest, a: victimStart, b: victimIndex, opcode: StdBinOpcode.add, ids: ids), b: numProcs, ids: ids)
+	let victim = emitLoadProc(module, block: victimTest, index: victimSlot, ids: ids)
+	let isSelf = emitCmp(module, block: victimTest, a: victim, b: p, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(victimTest, op: StdOp.condBranch(isSelf, thenBlockId: victimNext.id, elseBlockId: victimActive.id))
+
+	// A P no M has claimed has an empty ring by construction, and reading it would be a load for nothing.
+	let victimStatus = emitLoadField(module, block: victimActive, record: victim, offset: POffStatus, ids: ids)
+	let activeConst = emitConst(module, block: victimActive, value: PStatusActive, ids: ids)
+	let victimIdle = emitCmp(module, block: victimActive, a: victimStatus, b: activeConst, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(victimActive, op: StdOp.condBranch(victimIdle, thenBlockId: victimNext.id, elseBlockId: victimTry.id))
+
+	let stolenGt = ids.mint()
+	module.appendOp(victimTry, op: StdOp.call(stolenGt, callee: SchedStealName, args: twoArgs(p, second: victim)))
+	let stealZero = emitConst(module, block: victimTry, value: 0, ids: ids)
+	let stealFailed = emitCmp(module, block: victimTry, a: stolenGt, b: stealZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(victimTry, op: StdOp.condBranch(stealFailed, thenBlockId: victimNext.id, elseBlockId: stole.id))
+
+	// The counter `__Builtins.schedStealCount()` sums. Owner-written, so a plain read-modify-write.
+	let stealStep = emitConst(module, block: stole, value: 1, ids: ids)
+	let stolenSoFar = emitBin(module, block: stole, a: emitLoadField(module, block: stole, record: p, offset: POffStealCount, ids: ids), b: stealStep, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: stole, record: p, offset: POffStealCount, value: stolenSoFar)
+	module.setTerminator(stole, op: StdOp.branch(candidate.id))
+	stole.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(stolenGt)))
+
+	let victimStep = emitConst(module, block: victimNext, value: 1, ids: ids)
+	let nextVictim = emitBin(module, block: victimNext, a: victimIndex, b: victimStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(victimNext, op: StdOp.branch(victimHdr.id))
+	victimNext.branchEdges.push(BranchEdge.create(victimHdr.id, argIds: argsOf(nextVictim)))
+
+	let roundStep = emitConst(module, block: roundNext, value: 1, ids: ids)
+	let nextRound = emitBin(module, block: roundNext, a: roundIndex, b: roundStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(roundNext, op: StdOp.branch(roundHdr.id))
+	roundNext.branchEdges.push(BranchEdge.create(roundHdr.id, argIds: argsOf(nextRound)))
+
+	let candidateZero = emitConst(module, block: candidate, value: 0, ids: ids)
+	let nothingFound = emitCmp(module, block: candidate, a: found, b: candidateZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(candidate, op: StdOp.condBranch(nothingFound, thenBlockId: noWork.id, elseBlockId: checkDropped.id))
+	emitConstReturn(module, block: noWork, value: 0, ids: ids)
+
+	let candidateStatus = emitLoadField(module, block: checkDropped, record: found, offset: GtOffStatus, ids: ids)
+	let wasDropped = emitGtStatusEquals(module, block: checkDropped, status: candidateStatus, want: GtStatusDropped, ids: ids)
+	module.setTerminator(checkDropped, op: StdOp.condBranch(wasDropped, thenBlockId: reclaim.id, elseBlockId: hand.id))
+	module.setTerminator(hand, op: StdOp.ret(found))
+
+	// Reclaim and look again. `localPop` rather than `entry` so the retry costs no second fairness tick.
+	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtDisposeDroppedName, args: argsOf(found)))
+	module.setTerminator(reclaim, op: StdOp.branch(localPop.id))
+
+	module.functions.push(func)
+end 'buildSchedFindRunnable'
+
+// ==========================================================================
+// `__sched_sweep_dropped`
+// ==========================================================================
+
+// ⭐⭐ **`__sched_sweep_dropped()` — RECLAIM THE DROPPED THREADS SITTING AT THE FRONT OF THIS P's RING AND OF
+// THE GLOBAL QUEUE.** Its one caller is `__gt_promise_drop`, which is what puts one there.
+//
+// ⛔⛔ **IT IS WHAT KEEPS A NEVER-SCHEDULED PROGRAM'S MEMORY BOUNDED, and without it the mark-and-skip
+// protocol would be a leak with a spec that still passed.** `__gt_promise_drop` hands back the half a
+// dropped thread's promise owns — its managed arguments and its slot in `__gt_live_count` — but its STACK
+// and STRUCT can only be freed by a party that is allowed to take it out of a queue, and in a ring that is
+// only the popper. A program that spawns and drops in a loop and never awaits anything (which is
+// `async-promise-drop.spawn-drop-loop-bounded`, exactly) schedules NOTHING, so nothing would ever pop them.
+// Sweeping the FRONT at the drop reclaims them in that shape immediately: the thread just marked is normally
+// the newest AND the only one, so the ring is empty again by the time the loop comes round.
+//
+// ⚠ **THE FRONT ONLY, AND THE BOUND IS WHAT MAKES THAT RIGHT.** It stops at the first live thread rather
+// than scanning, so the work is O(threads actually reclaimed) and each thread is reclaimed at most once ever
+// — a drop can never be more than amortised O(1). A dropped thread sitting BEHIND a live one is left for
+// `__sched_find_runnable` to refuse and reclaim, or for the ring OVERFLOW to reclaim in passing, and those
+// two are what bound the pathological shape (a live thread pinned at the head while a loop drops behind it).
+//
+// ⛔ **THE PEEK-THEN-CAS IS NOT `__sched_runq_get`, AND MUST NOT BECOME IT.** `runqget` pops whatever is at
+// the head; this must pop ONLY a dropped thread, because popping a live one would consume a thread nobody
+// asked it to schedule. The peek is safe against the CAS window for a reason worth stating: slot `h` is
+// rewritten only by a push at tail counter `h + 256k`, which requires the head to have already passed `h` —
+// so a WON CAS on `head: h -> h+1` proves the slot still holds the thread that was peeked.
+function buildSchedSweepDropped(module StdModule)
+	var func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var ringHdr = module.addBlock(func, label: b"swringhdr")
+	var ringPeek = module.addBlock(func, label: b"swringpeek")
+	var ringTake = module.addBlock(func, label: b"swringtake")
+	var ringFree = module.addBlock(func, label: b"swringfree")
+	var globalStart = module.addBlock(func, label: b"swglobalstart")
+	var globalHdr = module.addBlock(func, label: b"swglobalhdr")
+	var globalPeek = module.addBlock(func, label: b"swglobalpeek")
+	var globalFree = module.addBlock(func, label: b"swglobalfree")
+	var doneBlock = module.addBlock(func, label: b"swdone")
+
+	let p = emitLoadCurrentP(module, block: entry, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(ringHdr.id))
+
+	let head = emitLoadField(module, block: ringHdr, record: p, offset: POffRunqHead, ids: ids)
+	let tail = emitLoadField(module, block: ringHdr, record: p, offset: POffRunqTail, ids: ids)
+	let ringEmpty = emitCmp(module, block: ringHdr, a: head, b: tail, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(ringHdr, op: StdOp.condBranch(ringEmpty, thenBlockId: globalStart.id, elseBlockId: ringPeek.id))
+
+	let peeked = emitLoadField(module, block: ringPeek, record: emitRunqSlotAddr(module, block: ringPeek, p: p, counter: head, ids: ids), offset: 0, ids: ids)
+	let peekedStatus = emitLoadField(module, block: ringPeek, record: peeked, offset: GtOffStatus, ids: ids)
+	let peekedDropped = emitGtStatusEquals(module, block: ringPeek, status: peekedStatus, want: GtStatusDropped, ids: ids)
+	module.setTerminator(ringPeek, op: StdOp.condBranch(peekedDropped, thenBlockId: ringTake.id, elseBlockId: globalStart.id))
+
+	let headAddr = emitFieldAddr(module, block: ringTake, record: p, offset: POffRunqHead, ids: ids)
+	let ringStep = emitConst(module, block: ringTake, value: 1, ids: ids)
+	let nextHead = emitBin(module, block: ringTake, a: head, b: ringStep, opcode: StdBinOpcode.add, ids: ids)
+	let claimed = ids.mint()
+	module.appendOp(ringTake, op: StdOp.atomicCas(claimed, addrId: headAddr, expectedId: head, replacementId: nextHead))
+	let lostRing = emitCasLost(module, block: ringTake, result: claimed, ids: ids)
+	module.setTerminator(ringTake, op: StdOp.condBranch(lostRing, thenBlockId: ringHdr.id, elseBlockId: ringFree.id))
+
+	module.appendOp(ringFree, op: StdOp.call(ids.mint(), callee: GtDisposeDroppedName, args: argsOf(peeked)))
+	module.setTerminator(ringFree, op: StdOp.branch(ringHdr.id))
+
+	// The global half. Under the lock the head cannot move, so the peek and the dequeue name one thread and
+	// no compare-and-swap is needed — the lock IS the claim.
+	emitSchedLockEnter(module, block: globalStart, ids: ids)
+	module.setTerminator(globalStart, op: StdOp.branch(globalHdr.id))
+
+	let globalHead = emitLoadGlobalWord(module, block: globalHdr, label: GtRunQueueHeadLabel, ids: ids)
+	let globalZero = emitConst(module, block: globalHdr, value: 0, ids: ids)
+	let globalEmpty = emitCmp(module, block: globalHdr, a: globalHead, b: globalZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(globalHdr, op: StdOp.condBranch(globalEmpty, thenBlockId: doneBlock.id, elseBlockId: globalPeek.id))
+
+	let globalStatus = emitLoadField(module, block: globalPeek, record: globalHead, offset: GtOffStatus, ids: ids)
+	let globalDropped = emitGtStatusEquals(module, block: globalPeek, status: globalStatus, want: GtStatusDropped, ids: ids)
+	module.setTerminator(globalPeek, op: StdOp.condBranch(globalDropped, thenBlockId: globalFree.id, elseBlockId: doneBlock.id))
+
+	module.appendOp(globalFree, op: StdOp.call(ids.mint(), callee: GtDequeueName, args: ValueIdArray.create()))
+	module.appendOp(globalFree, op: StdOp.call(ids.mint(), callee: GtDisposeDroppedName, args: argsOf(globalHead)))
+	module.setTerminator(globalFree, op: StdOp.branch(globalHdr.id))
+
+	emitSchedLockLeave(module, block: doneBlock, ids: ids)
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSchedSweepDropped'
+
+// ==========================================================================
+// `__sched_steal_count`
+// ==========================================================================
+
+// ⭐⭐ **`__sched_steal_count() -> i64` — THE SUM OF EVERY P's STEAL COUNTER**, and the floor of
+// `__Builtins.schedStealCount()`. It is the only way a Maxon program can observe that work stealing ever
+// happened, which is what makes `track0/steal-torture.maxon`'s `steals > 0` an assertion rather than a hope.
+//
+// ⚠ **IT SUMS RATHER THAN READING A GLOBAL, AND THAT IS THE `.data` RULE THIS RUNG IS ARRANGED AROUND.** A
+// `__sched_steal_count` word would appear in the `data {` section of every green-thread program's golden, so
+// counting is per-P (`POffStealCount`) and the summing happens here, once, in a function no program that
+// does not ask for it carries (`DeadFunctionElimination`).
+//
+// ⚠ **IT IS NOT AN ATOMIC READ AND DOES NOT NEED TO BE.** Each counter is one aligned word written by its
+// own P, so every value the walk reads is a value some P really wrote; what a concurrent steal costs is
+// FRESHNESS, not a torn number. A harness reads it after its work has finished, which is when it is exact.
+function buildSchedStealCount(module StdModule)
+	var func = IrFunction.createFromStd(SchedStealCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loopHdr = module.addBlock(func, label: b"schdr")
+	var loopBody = module.addBlock(func, label: b"scbody")
+	var doneBlock = module.addBlock(func, label: b"scdone")
+
+	let numProcs = emitLoadGlobalWord(module, block: entry, label: SchedNumProcsLabel, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let index = ids.mint()
+	let total = ids.mint()
+	loopHdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
+	loopHdr.blockArgs.push(IrBlockArg.create(total, argType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
+	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(zero, second: zero)))
+
+	// `__sched_num_procs` is 0 until `__sched_init_procs` has run, which answers 0 for a program that asks
+	// before its first `async` — the truthful answer, and the reason the walk needs no separate null test on
+	// `__sched_procs`.
+	let walked = emitCmp(module, block: loopHdr, a: index, b: numProcs, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: loopBody.id))
+
+	let stolenHere = emitLoadField(module, block: loopBody, record: emitLoadProc(module, block: loopBody, index: index, ids: ids), offset: POffStealCount, ids: ids)
+	let runningTotal = emitBin(module, block: loopBody, a: total, b: stolenHere, opcode: StdBinOpcode.add, ids: ids)
+	let step = emitConst(module, block: loopBody, value: 1, ids: ids)
+	let nextIndex = emitBin(module, block: loopBody, a: index, b: step, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(loopBody, op: StdOp.branch(loopHdr.id))
+	loopBody.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(nextIndex, second: runningTotal)))
+
+	module.setTerminator(doneBlock, op: StdOp.ret(total))
+
+	module.functions.push(func)
+end 'buildSchedStealCount'
 
 // ==========================================================================
 // `__sched_worker_loop`
@@ -1000,7 +1902,7 @@ function buildSchedWorkerLoop(module StdModule)
 	var dequeue = module.addBlock(func, label: b"wdequeue")
 	module.setTerminator(loopTop, op: StdOp.condBranch(stopping, thenBlockId: exitBlock.id, elseBlockId: dequeue.id))
 
-	let g = emitSchedDequeueLocked(module, block: dequeue, ids: ids)
+	let g = emitSchedFindRunnable(module, block: dequeue, ids: ids)
 	let dequeueZero = emitConst(module, block: dequeue, value: 0, ids: ids)
 	let empty = emitCmp(module, block: dequeue, a: g, b: dequeueZero, pred: StdCmpPred.eq, ids: ids)
 	// `haveWork` takes the dequeued GT as a block arg, because the park path re-dequeues and reaches the same
@@ -1037,8 +1939,13 @@ function buildSchedWorkerLoop(module StdModule)
 	let publishedIdle = ids.mint()
 	module.appendOp(park, op: StdOp.atomicCas(publishedIdle, addrId: idleAddr, expectedId: idleExpected, replacementId: idleSet))
 
-	// The RE-DEQUEUE that closes the window. Work found here is run at once, with the flag cleared first.
-	let g2 = emitSchedDequeueLocked(module, block: park, ids: ids)
+	// The RE-SEARCH that closes the window. Work found here is run at once, with the flag cleared first.
+	//
+	// ⚠ **IT IS THE WHOLE `__sched_find_runnable`, INCLUDING THE STEALING ROUNDS, AND NOT A QUEUE PEEK** —
+	// which is what makes an M park only when there is no work ANYWHERE, rather than only when its own ring
+	// and the global queue are empty. It is also the second half of the Dekker pair: whatever the enqueuer
+	// published before reading `idleFlag`, this search runs after `idleFlag` was written.
+	let g2 = emitSchedFindRunnable(module, block: park, ids: ids)
 	let parkZero = emitConst(module, block: park, value: 0, ids: ids)
 	let stillEmpty = emitCmp(module, block: park, a: g2, b: parkZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(park, op: StdOp.condBranch(stillEmpty, thenBlockId: reallyPark.id, elseBlockId: reDequeued.id))

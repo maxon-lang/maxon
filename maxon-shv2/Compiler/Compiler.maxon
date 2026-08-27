@@ -759,7 +759,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// The P/M half's `.data` slots (G1). ⚠ **NO OUTER BIT TEST**, because the file it comes from has TWO gates
 	// and asks them itself: the P machinery rides `usesGt`, while the two worker counters also serve
 	// `__Builtins.schedMaxActiveWorkers()` in a program that never spawns a green thread. A gate spelled here
-	// as well would be a second copy of that condition — `clockRuntimeGlobals`'s reasoning, one file over.
+	// as well would be a second copy of that condition — `slabRuntimeGlobals`'s reasoning, two files over.
+	// (It used to name `clockRuntimeGlobals`, which W212 deleted along with the two words it produced.)
 	for entry in schedRuntimeGlobals(usage) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
@@ -777,17 +778,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'subpGlobals'
-	// The two host clocks' out-param scratch words. Unlike every neighbour here this call carries NO outer
-	// bit test, because the file it comes from now has TWO entries on two bits and asks them itself
-	// (`clockRuntimeGlobals`) — a gate spelled here as well would be a second copy of that condition, and
-	// the loop over an empty array is exactly the no-op the absent `if` would have produced.
-	for entry in clockRuntimeGlobals(usage) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
+	// ⚠ **`ClockRuntime` CONTRIBUTES NOTHING HERE SINCE W212, and it used to contribute two words.** Both were
+	// out-param scratch for a host read, and both are FRAME slots now — the multi-M fix `SchedRuntime`'s audit
+	// had listed as its last outstanding item. There is no `clockRuntimeGlobals` to call because there is
+	// nothing for it to answer; the two `usage` bits still gate the two BODIES in `installClockRuntime`.
 	// The slab's PAGE-LAYER slots — the arena list head and the reverse map's L1 pointer — and the OBJECT
-	// layer's one slot, the pointer to its lazily-committed state region. Like the two clocks above, each
-	// gate rides inside its producer (`slabArenaRuntimeGlobals` asks `usesSlabArena`, `slabRuntimeGlobals`
-	// asks `usesHeap`) rather than being spelled a second time here.
+	// layer's one slot, the pointer to its lazily-committed state region. Each gate rides inside its producer
+	// (`slabArenaRuntimeGlobals` asks `usesSlabArena`, `slabRuntimeGlobals` asks `usesHeap`) rather than being
+	// spelled a second time here.
 	for entry in slabArenaRuntimeGlobals(usage) 'each'
 		declaredGlobals.push(entry)
 	end 'each'

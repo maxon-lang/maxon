@@ -707,6 +707,18 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isSchedRuntimeCallee(callee) 'schedMaxActiveWorkers'
 		usage.usesSchedMaxActiveWorkers = true
 	end 'schedMaxActiveWorkers'
+	// ⭐⭐ **THE STEAL COUNT SETS `usesGt` AND HAS NO BIT OF ITS OWN, WHICH IS THE OPPOSITE OF ITS BAND-MATE
+	// ONE LINE UP — and the difference is what the two questions actually need.**
+	// `__sched_max_active_workers` is a `.data` load whose answer (1) is TRUE for a program with no scheduler
+	// at all, so it must not drag one in. `__sched_steal_count` walks `__sched_procs`, an array only
+	// `__sched_init_procs` builds: without the scheduler there is nothing to walk, so asking the question IS
+	// asking for the machinery. And a bit of its own would gate nothing — the body is installed inside
+	// `installSchedRuntime` behind `usesGt` like every other function there, and
+	// `DeadFunctionElimination` drops it from every program that never calls it, which is
+	// `__slab_scavenge`'s situation exactly (below).
+	if callee.equals(SchedStealCountName) 'schedStealCount'
+		usage.usesGt = true
+	end 'schedStealCount'
 	// ⭐ **THE ALLOCATOR'S TRAFFIC COUNTERS.** The `__mm_counter_` band is a STRICT SUBSET of the `__mm_` one
 	// the first arm of this function already matched, so `usesHeap` is set by the time this line runs — which
 	// is exactly the transitive declaration the counters need (see `usesMmCounters`) and the reason the band

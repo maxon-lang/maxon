@@ -1,0 +1,112 @@
+// Track-0 WORK-STEALING torture program (W212) — maximally UNEVEN per-P load.
+//
+// Why this exists: `alloc-torture` and `remote-free-torture` spread their work
+// across processors by construction — main spawns every task itself, so each
+// lands on a run queue somebody is already looking at, and a global FIFO would
+// serve them just as well. Neither can tell a stealing scheduler from a fair
+// one. This program can, because ALL of its work is created by ONE green
+// thread and therefore enters ONE processor's local ring: every other P starts
+// with an empty ring and an empty global queue, so the only way it can ever run
+// anything is `__sched_find_runnable`'s stealing rounds.
+//
+// Mechanism: main spawns a single `producer`, which spawns `childCount`
+// short-lived children onto whichever P is running IT and only then awaits any
+// of them. The backlog is what wakes the other Ms (`__sched_wake_or_spawn`),
+// and what they find when they look is a peer holding hundreds of runnable
+// threads. `__Builtins.schedStealCount()` sums every P's steal counter, so
+// `steals=` is a DIRECT reading of the mechanism rather than an inference from
+// timing.
+//
+// Determinism: each child's result is a pure function of its index, and the
+// aggregate is an order-independent sum, so `aggregate=` is identical however
+// many processors serviced the work. The driver asserts that invariance across
+// MAXON_MAX_PROCS in {1, 2, 7, 12} — which is what makes a stolen thread having
+// run EXACTLY ONCE a checked property rather than a hope.
+//
+// ⚠ `steals=` is legitimately 0 at MAXON_MAX_PROCS=1: there is nobody to steal
+// from. The stealing rounds still RUN there (a P reaches them whenever it finds
+// nothing), so the zero is a measurement of an executed path.
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+// Sized so the backlog outlives the time a worker M needs to be created and to
+// reach its first steal: a few thousand children, each a short pure-integer
+// spin. Deliberately NOT allocation-heavy — that is `alloc-torture`'s subject,
+// and mixing the two would make a failure ambiguous between the allocator and
+// the scheduler.
+let childCount = 4000
+let childWork = 400
+
+// The modulus that keeps each child's contribution small and index-dependent.
+// Coprime with nothing in particular; it exists so the checksum changes if a
+// child runs twice or not at all, which a constant contribution could not show.
+let childMixModulus = 7
+
+function child(idx Integer, work Integer) returns Integer
+	// CPU-parallel checkpoint: marks this hand-written CPU-bound function as a
+	// legitimate `async` target (satisfies the E3073 yielding contract) without
+	// claiming fake I/O. No-op at runtime.
+	__Builtins.parallelBoundary()
+
+	var acc = 0
+	var j = 0
+
+	while j < work 'spin'
+		acc = acc + ((idx + j) mod childMixModulus)
+		j = j + 1
+	end 'spin'
+
+	// The +1 is what makes the aggregate count the children as well as sum them:
+	// a child that never ran removes a 1 the driver's fixed expectation includes.
+	return acc + 1
+end 'child'
+
+// The single producer. Everything it spawns enters the ring of whichever P is
+// running IT, which is the whole point — a second P can only get work by taking
+// it from this one.
+function producer(count Integer, work Integer) returns Integer
+	__Builtins.parallelBoundary()
+
+	var promises = IntPromiseArray.create()
+
+	// Spawn phase: queue every child before awaiting any, so the backlog is real
+	// and a thief has something to find.
+	for i in 0 upto count 'spawn'
+		promises.push(async child(i, work: work))
+	end 'spawn'
+
+	// Await phase: collect in spawn order. Each result is index-derived and the
+	// accumulation order is fixed, so the total is fully deterministic even
+	// though the children ran on an arbitrary set of processors.
+	var total = 0
+
+	for p in promises 'await'
+		total = total + await p
+	end 'await'
+
+	return total
+end 'producer'
+
+function main() returns ExitCode
+	let p = async producer(childCount, work: childWork)
+	let total = await p
+
+	let steals = __Builtins.schedStealCount()
+	let workers = __Builtins.schedMaxActiveWorkers()
+	let cpus = __Builtins.cpuCount()
+
+	// The driver parses these four lines. `aggregate` is the core-count-invariant
+	// determinism signal (and the proof every child ran exactly once); `steals`
+	// is the direct reading of the mechanism this program exists for; `workers`
+	// proves more than one M went live; `cpucount` gives the driver ncpu.
+	print("aggregate={total}\n")
+	print("steals={steals}\n")
+	print("workers={workers}\n")
+	print("cpucount={cpus}\n")
+
+	// Fixed success ExitCode: deterministic across runs (so the exit-code
+	// identity assertion holds) and never 101 (the leak-check gate value).
+	return 42
+end 'main'
