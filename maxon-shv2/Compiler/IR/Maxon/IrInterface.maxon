@@ -99,11 +99,15 @@ export let WitnessDestroyFuncOffset = 8 as ByteOffset
 // ⚠⚠ **IT IS NOT ONE CALLEE, AND ASSUMING IT WAS WAS A MEASURED ACCESS VIOLATION.** A `String` LITERAL is a
 // wholly IMMORTAL `.rdata` record and shv2 deliberately has no `MmImmortalRefcount` sentinel — the invariant
 // (`Parser.emitManagedConstant`, `StringRuntime.stringBufferSlots`) is that such a record never reaches a
-// refcount write at all, upheld everywhere else by COPYING at the borrow→own boundary
-// (`Parser.promoteBorrowedToOwned` routes a byte record to `promoteToOwnedString` and only an aggregate to
-// the incref). So a byte-record conformer's protocol is COPY, never co-own: `__str_clone` hands back a fresh
-// OWNED heap record, which is what launders the literal. MEASURED with one hardcoded `__mm_incref`:
-// `widen("abc")` printed `A` and died with 0xC0000005 writing into `.rdata`.
+// refcount write at all. On the CONCRETE doors it is upheld at RUN TIME since `ca5169e231` (borrowed
+// Strings are retained, not copied): `__str_retain` reads the record's own `capacity@16` and CLONES an
+// immortal one where it increfs a heap one (`StringRuntime.buildStrRetain`). The existential path cannot
+// read the record — it dispatches through this word — so it splits the same fact one level up, per
+// CONFORMER at compile time: a byte-record conformer's protocol is `__str_clone`, never the incref, and the
+// fresh OWNED heap record it hands back is what launders the literal. ⚠ This paragraph used to say the
+// concrete doors upheld it "by COPYING at the borrow→own boundary" — true until `ca5169e231`, and the same
+// stale sentence sat in four specs (W211); the conclusion for THIS word never depended on it. MEASURED with
+// one hardcoded `__mm_incref`: `widen("abc")` printed `A` and died with 0xC0000005 writing into `.rdata`.
 export let WitnessRetainFuncOffset = 16 as ByteOffset
 
 // ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS (P1.7a-existentials slice 1).**
