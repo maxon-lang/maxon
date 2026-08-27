@@ -9,7 +9,9 @@ category: concurrency
 
 ## Documentation
 
-Maxon supports cooperative concurrency via `async` and `await` with green threads. Each `async` call spawns a lightweight green thread with a growable stack (starting at 2KB). Green threads are multiplexed over a POOL of OS worker threads — one per processor, up to the detected CPU count — so two green threads can be running at the same instant on different cores. Scheduling is still cooperative: a green thread yields the processor it is on only at an `await` or an I/O point, never by pre-emption.
+Maxon supports cooperative concurrency via `async` and `await`. ⚖ **An `async` call does NOT create a new green thread** (user ruling, 2026-08-27): it starts the callee as a **coroutine of the green thread that called it**, with a growable stack (starting at 2KB). The coroutine runs until it reaches a blocking operation, at which point it yields the green thread and that green thread's other coroutines run; `await` resumes the caller and collects the result. So "parallel work" below is overlapped **waiting**, not parallel execution, and a coroutine never leaves the OS thread its owner is running on. Creating a separately scheduled green thread is `spawn`, which is reserved and not built (`SERVICES_DESIGN.md`).
+
+⚠ The **bootstrap's** runtime still multiplexes each `async` onto a pool of OS worker threads; the self-hosted runtime does not. No case below distinguishes them, and the differential is recorded in `builtins-cpu-parallel.md`.
 
 ```text
 // Spawn a green thread
@@ -26,21 +28,26 @@ var r2 = await p2
 ```
 
 **Key properties:**
-- Worker pool — green threads run on OS worker threads, one per processor, spawned on demand as work
-  appears. `MAXON_MAX_PROCS` caps the count; `MAXON_MAX_PROCS=1` pins the program to one processor,
-  which is what makes a concurrent program's execution order reproducible.
-- Cooperative scheduling — a green thread keeps its processor until it reaches an `await` or an I/O
-  point. Cooperative is not the same as serial: other green threads run on the other processors
-  meanwhile.
+- One owner — a coroutine belongs to the green thread that created it, is driven only by that green
+  thread, and is never handed to another OS thread. A coroutine spawned by a coroutine belongs to the
+  same green thread, so every frame `async` creates, at any depth, has one owner.
+- Cooperative scheduling — a coroutine keeps the green thread until it reaches an `await`, a `sleep`
+  or an I/O point. What overlaps is the WAITING: N outstanding reads are in flight at once while their
+  coroutines are parked.
 - Growable stacks — 2KB initial, doubles when needed
-- Reference counting IS atomic — `mm_incref`/`mm_decref` use atomic read-modify-write, because two
-  worker threads can hold references to one object at the same time. Anything else shared between
-  green threads needs the same care.
-- Fire-and-forget safe — unawaited green threads are drained at program exit
+- Reference counting is PLAIN, not atomic — because one green thread owns every box its coroutines
+  touch, a retain or release has no second party to race. That is a language guarantee rather than a
+  thread count: it does not depend on `MAXON_MAX_PROCS`. State genuinely shared between OS threads —
+  the runtime's own counters and queues — is a different question and is protected as such.
+- Fire-and-forget safe — unawaited coroutines are drained at program exit
 
 **Restrictions:**
 - `async` can only be used on direct function calls (not closures or indirect calls)
-- `async` can only be used on functions that yield (contain I/O operations or await points)
+- `async` can only be used on functions that yield (contain I/O operations or await points).
+  **`E3073` is not a side condition — it is the model stated as a rule.** `async` buys overlapped
+  waiting, so spawning something that can never give up the green thread buys nothing at all: it would
+  simply run to completion at the spawn point. A CPU-bound function that legitimately never waits says
+  so with `__Builtins.parallelBoundary()` (see `builtins-parallel-boundary.md`).
 - Throwing async functions require `try await` to extract the result
 - `promise.cancel()` cancels the associated green thread
 - **`await` is LINEAR**: a promise is awaited exactly once, and a second await is a compile error (E3100)

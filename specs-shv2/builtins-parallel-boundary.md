@@ -34,6 +34,16 @@ waits: it computes. Under the plain rule it could only be spawned by pretending 
 `parallelBoundary` is the honest spelling of that intent. It compiles to a bare call to a runtime
 entry point with an empty body, and the emitted program pays one call and one return for it.
 
+⚠⚠ **AND SINCE EC10 THE MARKER BUYS NO PARALLELISM WHATEVER, WHICH IS WORTH SAYING OUT LOUD BECAUSE THE
+NAME SUGGESTS OTHERWISE.** ⚖ An `async` call creates a COROUTINE of the calling green thread (user
+ruling, 2026-08-27), so a CPU-bound function marked with this and spawned with `async` runs to
+completion on the caller's own OS thread, at the point the driver reaches it — sequentially, exactly as
+a direct call would, plus a coroutine's stack and switch. What the marker does is satisfy E3073 for a
+function that neither waits nor yields, and that is ALL it does. ⇒ **its natural future is as the marker
+on a `spawn` target** (`SERVICES_DESIGN.md`), where a CPU-bound body really would run on another M and
+the intent it spells becomes load-bearing. It is kept for that, and because `maxon-shv2/track0`'s
+torture programs need it today to make their CPU-bound tasks spawnable at all.
+
 ⚠ **IT IS A CHECKPOINT, NOT A YIELD.** It does not reschedule, it does not park, and it does not hand
 the processor to anybody — `Runtime.yield()` is the intrinsic that does (`__Builtins.yield`, see
 `builtins-sleep.md`'s neighbours). A future scheduler could hang a cooperative-yield check here; today

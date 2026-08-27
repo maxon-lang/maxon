@@ -55,7 +55,10 @@ steal and a worker loop schedule. Every unreached piece says so at its own decla
 measured.** It said *"at N>1 the allocator is one unsharded unlocked shard and the refcounts are a
 plain load/add/store"*, and that `alloc-torture` *"dies at `MAXON_MAX_PROCS=2` with exit 86"*. S5
 sharded the allocator per P and G2 made the refcount read-modify-write atomic, both long before this
-rung. **MEASURED on EC10's PARENT** — which is the tree that can still reach those paths —
+rung. ⚠ **AND THE REFCOUNT HALF MOVED AGAIN INSIDE EC10 ITSELF: slice 2 made the read-modify-write
+PLAIN, unconditionally**, because pinning `async` removed the second party G2's atomic was serialising
+against (`MmRuntime.emitAdjustRefcount` carries the argument and the committed control). **MEASURED on
+EC10's PARENT** — which is the tree that can still reach those paths —
 `pin-matrix.sh` runs `alloc-torture` at 1, 2, 7 and 12 with `workers` of 1, 2, 7 and 12, an identical
 `aggregate=205500` and exit 42 throughout. So the old sentence is false in both halves: the paths are
 CORRECT.

@@ -2932,6 +2932,13 @@ underneath it deliberately not; see "The scavenger" above for the `madvise` alig
 **Not built.** Passes are classified `wholeModule`/`perFunction` and the parser is already a pure
 function of its file, so both fan-out seams exist; nothing drives them yet.
 
+⚠ **AND `async` IS NOT WHAT WILL DRIVE THEM (EC10).** An `async` call is a coroutine of the green
+thread that made it — it overlaps *waiting*, never execution, and cannot leave its owner's OS thread.
+Fanning a `perFunction` pass across cores is `spawn`'s job (reserved, `SERVICES_DESIGN.md`), and it
+is what W212's ring, its stealing and its worker loop were built for: they are still here, correct
+and unreached. A fan-out written with `async` would compile, run every pass in sequence on one M,
+and read as a completed parallel driver.
+
 **The runtime underneath it is proven** (x64-windows). The C# emitter's green-thread scheduler and
 sharded allocator run correctly across many worker Ps: a 32-green-thread CPU/alloc burst runs on 16
 distinct worker Ps (P0–P15 = ncpu) unclamped and exactly 1 (P0) under `MAXON_MAX_PROCS=1`, both
@@ -3034,11 +3041,15 @@ per-test PASS/FAIL and `N passed, M failed`, and **exits non-zero iff any failed
 **The pool** (`SpecWorkerPool.maxon`). One spec is one *job*, and the suite runs on N **persistent
 worker subprocesses** — each of them this same executable, re-launched with `--worker-persistent`,
 reading `JOB:singles:<spec>` lines on stdin and writing one result record per test on stdout. The
-parent dispatches from a **slowest-first** queue, spawns an `async drainResultsThunk(child)` green
-thread per dispatch so all N overlapped stdout reads are in flight at once, and serves whichever
+parent dispatches from a **slowest-first** queue, spawns an `async drainResultsThunk(child)`
+coroutine per dispatch so all N overlapped stdout reads are in flight at once, and serves whichever
 drain completes first (`__Builtins.gtIsComplete` — a non-blocking peek, without which the parent
 would park on the heaviest spec while every other worker sat idle). *This is not about the seconds*
 (3.2 s → 0.6 s): `async` is a mechanism shv2 must eventually **emit**, and the pool is its dogfood.
+
+⚠ **THE PARALLELISM HERE IS THE N SUBPROCESSES AND THE N OVERLAPPED READS, NOT N THREADS** — which is
+exactly what `async` is for, and why the pool is unaffected by EC10's pin. Every coroutine above runs
+on the parent's one M; what is in flight concurrently is N kernel reads and N child processes.
 
 **Worker-count invariance is the gate.** `--workers=1` and `--workers=N` must print **byte-identical
 stdout**, so nothing is reported as it arrives: the parent knows each spec's ordered test list

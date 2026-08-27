@@ -2,6 +2,18 @@
 
 ## Context
 
+> ⚖ **DATED NOTE, 2026-08-27 (EC10).** `async` is settled and it is **not** a threading primitive:
+> an `async` call starts a COROUTINE of the green thread that made it, published only to that green
+> thread's own queue and driven only by its owner. It overlaps *waiting*, never execution, and a box
+> is therefore reachable from exactly one green thread — which is what lets reference counting be
+> plain rather than atomic (`MmRuntime.emitAdjustRefcount`; `SchedRuntime.maxon` states the
+> invariant). ⇒ **`spawn`, reserved below, is where threads first meet**, and it inherits two things:
+> the whole GMP substrate `async` no longer reaches (per-P rings, stealing, the worker loop — built,
+> correct, unreached), and the obligation to say what crossing a thread does to ownership. The
+> "Send is a MOVE" rule this document already reserves is that answer, and the plain refcount is what
+> makes it load-bearing rather than a style choice: a `spawn` that let two green threads hold one box
+> would not be slow, it would be wrong.
+
 Maxon has a faithful Go-style GMP green-thread runtime — per-P run queues, work stealing,
 `runnext`, Go's 61-tick fairness interval and `_StackMin`/`_StackGuard`, growable 2KB stacks,
 IOCP/kqueue I/O. **But it exposes zero communication primitives to user code.** No channels,

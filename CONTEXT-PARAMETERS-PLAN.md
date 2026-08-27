@@ -173,6 +173,15 @@ So a provider stays **alive** correctly regardless of how many green threads bor
 
 ### The real hazard, and the rule
 
+> ⚖ **DATED NOTE, 2026-08-27 (EC10) — THE PREMISE BELOW MOVED, THE RULE DID NOT.** The paragraph that
+> follows describes the **bootstrap's** runtime, and is accurate for it. In the self-hosted language an
+> `async` call no longer creates a green thread at all: it creates a **coroutine of the calling green
+> thread**, which never migrates and never reaches a P ring, so the "stolen onto another P" hazard does
+> not arise for `async` on that tier. It arises for **`spawn`** (reserved, `SERVICES_DESIGN.md`), which
+> is what W212's stealing tier was built for. ⇒ per-green-thread remains the only sound granularity and
+> ruling 7 stands, but the reason to re-read before extending this is that the *hazard* has moved to a
+> primitive that does not exist yet — not that it went away.
+
 Refcounting protects the *allocation*, not the *contents*. The scheduler is genuinely multi-threaded
 (`CreateThread` / `pthread_create`) **with work stealing** — `__gt_steal_work`
 ([RuntimeEmitter.Scheduler.cs:385](maxon-sharp/Compiler/MLIR/Runtime/RuntimeEmitter.Scheduler.cs:385)),

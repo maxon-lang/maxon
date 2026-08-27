@@ -382,6 +382,14 @@ is exact too, so this case passes either way and does not claim otherwise. That 
 `track0/alloc-torture.maxon` across `MAXON_MAX_PROCS ∈ {1, 2, 4, 12}`, where the leak gate (exit 101) IS
 the lost-update oracle — EC8 measured it clean with the atomic and exit 101 at 2, 4 and 12 with the
 atomic forced off, which is the positive control this case cannot be.
+
+⛔ **THAT MEASUREMENT STANDS AS HISTORY AND CANNOT BE RE-TAKEN ON THIS TREE (EC10).** `alloc-torture`
+reached a second M by spawning `async` tasks the scheduler handed to worker Ms; since `async` became a
+coroutine of its calling green thread there is no worker M to hand them to, so the program runs entirely
+on one M and `workers=1` at every `MAXON_MAX_PROCS`. It still proves determinism and leak-freedom; it no
+longer discriminates the `lock` prefix. ⚠ **This does NOT mean the counters went plain** — `emitGlobalAccumulate`
+keeps its `multiM` arm, and a `.data` word is reachable from the IOCP completion thread whatever `async`
+does. It means the ORACLE for that arm is waiting on `spawn`, which is where a second M comes back.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Count = int(0 to 65536)

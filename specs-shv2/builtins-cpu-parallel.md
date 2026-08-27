@@ -29,22 +29,30 @@ documents them together:
 - `schedMaxActiveWorkers` asks this compiler's own SCHEDULER how parallel a run WAS. It is a
   property of the emitted runtime and reaches no OS.
 
-### `schedMaxActiveWorkers` is exactly 1, because shv2 runs ONE M BY DEFAULT
+### `schedMaxActiveWorkers` is exactly 1, and since EC10 that is BY CONSTRUCTION rather than by a default
 
 shv2 HAS a worker M — `SchedRuntime.buildSchedWorkerLoop` — and a high-water counter that loop
 raises on every entry, which is what this intrinsic reads. What it does not have is a REASON to start
-one: `SchedRuntime.DefaultMaxProcs` is **1**, so `__sched_init_procs` builds a single processor, the
-spawn scan finds no free one to claim, and no worker OS thread is ever created. The high-water mark
-of a population that never exceeds one is 1 — at every observation point, in every program, whether
-or not it ever spawns an `async`.
+one, and the reason it does not have is now a stronger statement than a constant. ⚖ **An `async` call
+creates a COROUTINE of the calling green thread** (user ruling, 2026-08-27), published only to its
+owner's queue; a worker M schedules GREEN THREADS, of which there is exactly one and no producer of a
+second until a `spawn` primitive lands. So nothing calls `__sched_wake_or_spawn` — the two green-thread
+arms of `emitSchedPublishRunnable` are its only call sites and neither has a producer — and no worker
+OS thread is ever created **at any `MAXON_MAX_PROCS`**, not merely at the default of 1. The high-water
+mark of a population that never exceeds one is 1, in every program, whether or not it spawns an `async`.
+
+⚠ **`__Builtins.schedStealCount()` answers 0 for the same reason and not for a different one**: a steal
+takes a green thread out of another P's ring, and no `async` frame ever enters a ring. `sched-runqueue.md`
+carries that half.
 
 ⚠ **THAT IS A READING, NOT A PLACEHOLDER — AND IT USED TO BE A `ret 1`.** The body was a constant
 return for as long as the runtime had no worker loop to raise anything; it is now a `.data` load, and
 the slot is SEEDED TO 1 rather than written by an initializer, so a program that never installs the
-scheduler still reads the truth (one M: its own) with no code at all. `MAXON_MAX_PROCS=N` raises the
-ceiling for a deliberate multi-M run and the mark then reports what actually ran — MEASURED at
-`workers=2`, `7` and `11-12` under `MAXON_MAX_PROCS ∈ {2, 7, 12}` — but that knob is not a supported
-configuration (see `sched-processor.md`) and nothing below sets it.
+scheduler still reads the truth (one M: its own) with no code at all. ⚠ **The `workers=2, 7, 11-12`
+this used to report under `MAXON_MAX_PROCS ∈ {2, 7, 12}` was measured before EC10 pinned `async`, when
+a spawn published a green thread to the scheduler.** On this tree the same sweep reads **1 at every
+value** — `track0/pin-matrix.sh` asserts exactly that, over five programs, and is the gate that goes red
+the day `spawn` gives the worker loop a producer again.
 
 ⚠ **THE IOCP COMPLETION THREAD IS STILL NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS
 LOOK WRONG.** The OS thread `__io_init` creates drains completions and re-readies parked green
@@ -69,10 +77,14 @@ agrees exactly with the bootstrap PINNED TO ONE PROCESSOR — which is what shv2
 differs only where the bootstrap spawns worker Ms shv2 declines to. The third row is the harness's
 own determinism signal, and it is byte-identical across the two compilers.
 
-⚠ **THE shv2 COLUMN IS THE DEFAULT ONE AND CANNOT BE WIDENED HERE.** `MAXON_MAX_PROCS>1` really does
-give shv2 worker Ms — but this program frees a managed array on whichever M ran its task, and shv2's
-allocator is one unsharded unlocked shard until the rung that fixes it, so at `MAXON_MAX_PROCS=2` it
-dies with **exit 86** (`slabSpanExhaustedPastItsEnd`). See `sched-processor.md`.
+⛔ **THE NOTE HERE WAS STALE TWICE OVER AND BOTH CORRECTIONS ARE MEASURED.** It said
+*"`MAXON_MAX_PROCS>1` really does give shv2 worker Ms"* and that this program *"dies with exit 86
+(`slabSpanExhaustedPastItsEnd`) at `MAXON_MAX_PROCS=2`"* because the allocator was one unsharded shard.
+**S5 sharded the allocator per P**, so the second half was already false; and **EC10 pinned `async`**,
+so the first half is false too — this program's tasks are coroutines and no worker M is created at any
+value. MEASURED with `track0/pin-matrix.sh` on this tree: `aggregate=205500`, `workers=1`, exit 42 at
+`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}`. See `sched-processor.md`, which carries the same correction and the
+cost that comes with it (the cross-P allocator paths are correct and now UNREACHED).
 
 ⛔ **THAT DOES NOT MAKE `track0/validate.sh` AN shv2 GATE, AND POINTING IT AT shv2 WOULD READ AS A
 REGRESSION.** The harness validates the runtime the BOOTSTRAP emits (its default is
@@ -354,11 +366,12 @@ end 'main'
 
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one-under-async -->
 <!-- targets: x64-windows -->
-**THE CASE THAT SAYS THE COUNTER IS MAINTAINED AND STILL READS 1.** A program that spawns green
-threads, runs them and awaits them observes one worker M, because at `MAXON_MAX_PROCS=1` the spawn
-scan finds no free processor to claim and no second M is ever created. It goes red the day the
-DEFAULT stops being one — which is what pinning it is for — and not the day a worker loop exists,
-because one does. The bootstrap, whose default IS the processor count, answers 12 for the same SHAPE
+**THE CASE THAT SAYS THE COUNTER IS MAINTAINED AND STILL READS 1.** A program that spawns two
+coroutines, runs them and awaits them observes one worker M — since EC10 because a coroutine is never
+published where a worker M could take it, so nothing calls `__sched_wake_or_spawn` at all. It goes red
+the day `spawn` gives that call site a producer, and not the day a worker loop exists, because one does.
+⚠ It is a DEFAULT-`MAXON_MAX_PROCS` reading only because a spec case cannot set that variable; the
+sweep over `{1, 2, 7, 12}` is `track0/pin-matrix.sh`'s. The bootstrap, whose default IS the processor count, answers 12 for the same SHAPE
 on a 12-CPU host and 1 under `MAXON_MAX_PROCS=1` (MEASURED — see the differential table above): the
 two compilers agree on the contract, agree under the clamp, and differ only in what they default to.
 ```maxon

@@ -4250,7 +4250,11 @@ See `specs/typealias-collision.md` and `specs/namespaces.md` for the canonical t
 
 ## Async/Await (Concurrency)
 
-Maxon supports concurrency via `async` and `await` with green threads scheduled across multiple OS worker threads. Each `async` call spawns a lightweight green thread with a growable stack (starting at 2KB, doubling on demand). The runtime uses a GMP (Goroutine-Machine-Processor) scheduler with per-worker local queues, work stealing, and IOCP-based overlapped I/O.
+Maxon supports concurrency via `async` and `await`. An `async` call does **not** create a new thread of any kind: it starts the callee as a **coroutine of the green thread that called it**, with a growable stack (starting at 2KB, doubling on demand). The coroutine runs until it reaches a blocking operation, at which point it yields the green thread and the green thread's other coroutines run; `await` resumes the caller and collects the result. "Parallel work" is therefore overlapped **waiting**, not parallel execution.
+
+The restriction that an `async` target must yield (`E3073`, below) is the rule this model *is*: `async` exists to overlap waiting, so spawning something that can never give up the green thread buys nothing.
+
+Creating a green thread that is scheduled independently is `spawn`, which is reserved and not built (see `SERVICES_DESIGN.md`). The runtime carries the whole GMP (Goroutine-Machine-Processor) substrate a `spawn` needs — per-processor local queues, work stealing, IOCP-based overlapped I/O — and `async` reaches none of it.
 
 ### Spawning Green Threads
 
@@ -4344,14 +4348,13 @@ end 'join'
 
 ### Key Properties
 
-- **Multi-threaded** -- green threads are distributed across OS worker threads (one per CPU core)
-- **Work stealing** -- idle workers steal from busy workers' local queues for load balancing
+- **One owner** -- an `async` coroutine belongs to the green thread that created it, is driven only by that green thread, and never migrates to another OS thread
 - **Cooperative scheduling** -- context switches at `await` points, `sleep` calls, and I/O operations
 - **Growable stacks** -- 8KB initial (2KB for Maxon frames + a 6KB OS fault reserve), doubles when needed
-- **Thread-safe memory** -- atomic reference counting and lock-protected shared state
-- **Fire-and-forget safe** -- unawaited green threads are drained at program exit
+- **Plain reference counting** -- because one green thread owns everything its coroutines touch, a retain or release has no second party and needs no atomic. Shared state that genuinely crosses OS threads (the runtime's own counters and queues) is a different question and is protected accordingly.
+- **Fire-and-forget safe** -- unawaited coroutines are drained at program exit
 
-The properties above describe the native (x64/arm64) runtime. On `wasm32-wasi` -- which has neither OS threads nor native stack switching -- the same `async`/`await` semantics run on a **single-threaded cooperative scheduler** implemented with Binaryen Asyncify: a green thread suspends at an `await` by unwinding its live call stack into linear memory, and resumes by rewinding it. The multi-threaded properties (worker threads, work stealing) therefore do not apply on wasm.
+These properties are the same on every target. `wasm32-wasi` differs only in the *mechanism* of suspension -- having no native stack switching, it implements it with Binaryen Asyncify, unwinding a live call stack into linear memory at an `await` and rewinding it on resume -- and not in the semantics. There is no longer a multi-threaded carve-out to exclude it from: `async` reaches no worker thread and no work stealing on any target.
 
 ---
 
