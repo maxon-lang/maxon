@@ -294,7 +294,7 @@ export let POffRemoteFreeHead = 0x78 as ByteOffset
 //
 // Its `stackBase` is 0 (the slab's zero), which is load-bearing three ways: the syscall shim's guard reads
 // it as *"this is a real OS thread stack, call directly"*, the prologue stack guard reads it as *"nothing to
-// grow"*, and `__gt_drive_until`'s recycle gate reads it as *"never free this stack"*. Its TIB bounds are
+// grow"*, and `__gt_runner_done` reads it as *"never free this stack"*. Its TIB bounds are
 // captured by the first `__gt_context_switch` AWAY from it, exactly as GT0's are.
 //
 // ⚠ NOT exported: every reader is in this file (`emitSchedAdoptProc` and the worker loop's run arm), and an
@@ -1292,9 +1292,11 @@ function buildSchedRunqPut(module StdModule)
 	module.setTerminator(moveHdr, op: StdOp.condBranch(moved, thenBlockId: moveDone.id, elseBlockId: moveBody.id))
 
 	// Each claimed slot in turn. A thread whose promise was DROPPED while it sat here is reclaimed instead of
-	// moved — see `GtRuntime.GtStatusDropped`. Doing it here is what keeps a spawn-and-drop loop that never
+	// moved — see `GtRuntime.GtOffTeardown`. Doing it here is what keeps a spawn-and-drop loop that never
 	// schedules anything from filling the GLOBAL queue with tombstones: the drop sweeps the ring's own front,
-	// and this is the only other place a marked thread is looked at without being run.
+	// and this is the only other place a tombstone is looked at without being run. The slot is this P's own
+	// claimed range, so this M is its only reader — which is what makes the reclaim exclusive without a
+	// second claim on the thread itself.
 	let slotCounter = emitBin(module, block: moveBody, a: head, b: moveIndex, opcode: StdBinOpcode.add, ids: ids)
 	let movingGt = emitLoadField(module, block: moveBody, record: emitRunqSlotAddr(module, block: moveBody, p: p, counter: slotCounter, ids: ids), offset: 0, ids: ids)
 	let movingDropped = emitGtIsDropped(module, block: moveBody, gt: movingGt, ids: ids)
@@ -1303,7 +1305,7 @@ function buildSchedRunqPut(module StdModule)
 	emitSchedEnqueueLocked(module, block: moveKeep, gt: movingGt, ids: ids)
 	module.setTerminator(moveKeep, op: StdOp.branch(moveNext.id))
 
-	module.appendOp(moveDrop, op: StdOp.call(ids.mint(), callee: GtDisposeDroppedName, args: argsOf(movingGt)))
+	module.appendOp(moveDrop, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(movingGt)))
 	module.setTerminator(moveDrop, op: StdOp.branch(moveNext.id))
 
 	let moveStep = emitConst(module, block: moveNext, value: 1, ids: ids)
@@ -1523,10 +1525,16 @@ end 'emitUnsignedMod'
 // refusal) a property of the scheduler rather than of whichever caller remembered it.
 //
 // ⭐⭐ **AND IT IS WHERE A DROPPED THREAD IS REFUSED.** A ring cannot be spliced, so `__gt_promise_drop`
-// MARKS a never-run thread and leaves it queued (`GtRuntime.GtStatusDropped`); the candidate this function
-// is about to hand back is therefore checked, reclaimed if marked, and the selection re-run. Doing it here
-// rather than in each driver is what makes "a dropped thread never runs" true of every path at once —
-// including a thread that reached this P inside a STOLEN batch, which no drop could have reached.
+// renounces a never-run thread and leaves it queued as a tombstone (`GtRuntime.GtOffTeardown`); the candidate
+// this function is about to hand back is therefore checked, reclaimed if it is one, and the selection re-run.
+// Doing it here rather than in each driver is what makes "a dropped thread never runs" true of every path at
+// once — including a thread that reached this P inside a STOLEN batch, which no drop could have reached.
+//
+// ⚠ **THE CHECK IS NOT A CLAIM, AND IT DOES NOT NEED TO BE.** The POP is the claim: the ring's head CAS and
+// the global queue's lock each hand a given thread to exactly one taker, so the party that reads the
+// tombstone here is the only party that can. A promise renounced AFTER this read simply leaves a thread that
+// runs to completion and is reclaimed by its driver's hand-off — the rendezvous makes the late race a wasted
+// turn rather than a leak, which is the property that let this stay a plain load.
 //
 // ⚠ **THE VICTIM WALK IS A RANDOM START PLUS A FULL SEQUENTIAL SWEEP, WHERE GO USES A COPRIME STRIDE**
 // (`stealOrder.start(cheaprand())`, an `randomEnum` over a coprime step). Both visit every P exactly once
@@ -1728,7 +1736,7 @@ function buildSchedFindRunnable(module StdModule)
 	module.setTerminator(hand, op: StdOp.ret(found))
 
 	// Reclaim and look again. `localPop` rather than `entry` so the retry costs no second fairness tick.
-	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtDisposeDroppedName, args: argsOf(found)))
+	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(found)))
 	module.setTerminator(reclaim, op: StdOp.branch(localPop.id))
 
 	module.functions.push(func)
@@ -1765,11 +1773,13 @@ end 'buildSchedFindRunnable'
 // ⚠⚠ **THAT ARGUMENT COVERS THE ACTION AND NOT THE READ, AND THE READ IS THE ONE PLACE IN THIS FILE THAT
 // DEREFERENCES A THREAD IT HAS NOT YET CLAIMED.** Every other slot read here discards a lost race without
 // touching what it read (`__sched_runq_get` uses `g` only after winning; `__sched_steal` copies pointers
-// without following them); this one loads `GtOffStatus` THROUGH the peeked pointer first, because it may
-// only claim a thread it has already identified as dropped. Between the head load and that load a thief can
+// without following them); this one loads `GtOffTeardown` and `GtOffWaiter` THROUGH the peeked pointer
+// first, because it may only claim a thread it has already identified as a tombstone. Both words are in the
+// same 256-byte struct and therefore the same granule, so the two loads share one exposure, not two. Between the head load and that load a thief can
 // take the thread, run it to completion, and its awaiter can hand the struct back to the slab — so the load
-// can land on a freed slot. It cannot produce a wrong ACTION (a stale word that happens to read 4 loses the
-// CAS, because the head has moved) and, while the slab keeps its granules committed, it cannot fault either.
+// can land on a freed slot. It cannot produce a wrong ACTION (a stale word that happens to read the consumer
+// ticket alone loses the CAS, because the head has moved) and, while the slab keeps its granules committed,
+// it cannot fault either.
 // ⛔ **BUT S6's SCAVENGER DECOMMITS** (`SlabArena.__slab_arena_scavenge` → `osDecommitPages`), so a
 // concurrent `__Builtins.scavengeMemory()` that drops the granule between the two loads turns this into an
 // access violation. The window is a handful of instructions and needs a same-instant explicit scavenge, so
@@ -1810,7 +1820,7 @@ function buildSchedSweepDropped(module StdModule)
 	let lostRing = emitCasLost(module, block: ringTake, result: claimed, ids: ids)
 	module.setTerminator(ringTake, op: StdOp.condBranch(lostRing, thenBlockId: ringHdr.id, elseBlockId: ringFree.id))
 
-	module.appendOp(ringFree, op: StdOp.call(ids.mint(), callee: GtDisposeDroppedName, args: argsOf(peeked)))
+	module.appendOp(ringFree, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(peeked)))
 	module.setTerminator(ringFree, op: StdOp.branch(ringHdr.id))
 
 	// The global half. Under the lock the head cannot move, so the peek and the dequeue name one thread and
@@ -1827,7 +1837,7 @@ function buildSchedSweepDropped(module StdModule)
 	module.setTerminator(globalPeek, op: StdOp.condBranch(globalDropped, thenBlockId: globalFree.id, elseBlockId: doneBlock.id))
 
 	module.appendOp(globalFree, op: StdOp.call(ids.mint(), callee: GtDequeueName, args: ValueIdArray.create()))
-	module.appendOp(globalFree, op: StdOp.call(ids.mint(), callee: GtDisposeDroppedName, args: argsOf(globalHead)))
+	module.appendOp(globalFree, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(globalHead)))
 	module.setTerminator(globalFree, op: StdOp.branch(globalHdr.id))
 
 	emitSchedLockLeave(module, block: doneBlock, ids: ids)
@@ -1916,8 +1926,7 @@ function buildSchedWorkerLoop(module StdModule)
 	var entry = module.addBlock(func, label: b"entry")
 	var loopTop = module.addBlock(func, label: b"wloop")
 	var haveWork = module.addBlock(func, label: b"wrun")
-	var recycle = module.addBlock(func, label: b"wrecycle")
-	var freeStack = module.addBlock(func, label: b"wfreestack")
+	var handOff = module.addBlock(func, label: b"whandoff")
 	var park = module.addBlock(func, label: b"wpark")
 	var reDequeued = module.addBlock(func, label: b"wredeq")
 	var reallyPark = module.addBlock(func, label: b"wreallypark")
@@ -1971,7 +1980,7 @@ function buildSchedWorkerLoop(module StdModule)
 	// Run it, on this M's own scheduler context. The GT's waiter is this P's inline scheduler GT, so when it
 	// completes or parks the trampoline switches straight back to the block below the switch.
 	let mainThread = emitFieldAddr(module, block: haveWork, record: p, offset: POffMainThread, ids: ids)
-	emitGtRunOne(module, run: haveWork, recycle: recycle, freeStack: freeStack, g: runGt, selfGt: mainThread, p: p, continuation: loopTop, ids: ids)
+	emitGtRunOne(module, run: haveWork, handOff: handOff, g: runGt, selfGt: mainThread, p: p, continuation: loopTop, ids: ids)
 
 	// ⭐⭐ **THE PARK — A DEKKER PAIR, AND THE TWO HALVES MUST BE READ TOGETHER.** This M has just seen an
 	// empty queue. An enqueuer running concurrently publishes its GT and THEN reads `idleFlag`; this side

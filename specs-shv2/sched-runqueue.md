@@ -30,11 +30,27 @@ had never run still unrun"*.
 **The 61st schedule checks the global queue first.** Without it a ring that never empties starves
 everything the global queue holds, which is exactly what a ring overflow puts there.
 
-**A ring cannot be spliced.** `__gt_promise_drop` of a never-run thread therefore MARKS it
-(`GtStatusDropped`) and hands back the half it owns — the thread's managed arguments and its slot in
-`__gt_live_count` — while its stack and struct are freed by whoever pops it, which never runs it. The
-drop then sweeps the dropped threads off the FRONT of its own ring and of the global queue, so the
-common shape (spawn, drop, spawn, drop) reclaims immediately and a spawn-drop loop stays bounded.
+**A ring cannot be spliced**, so a dropped thread cannot be taken out of one — and a green thread is
+owned by TWO parties that finish at moments neither can observe. Every green thread therefore carries
+a **teardown rendezvous word**, and each party adds its own half-ticket to it exactly once:
+
+| Party | Who that is | What it does first | Ticket |
+|---|---|---|---|
+| the **consumer** | the promise's owner: `await`, `try await`, or `__gt_promise_drop` (and the `cancel` that routes through it) | takes the result, or renounces it; gives back the thread's slot in `__gt_live_count` | 1 |
+| the **runner** | whoever finishes with the thread's EXECUTION: the driver whose context switch came back from a `completed` thread, the scheduler party that takes a tombstone off a queue, or a dropper that has deregistered a PARKED thread from every store | frees the seed stack | 2 |
+
+**The party whose add hands back the OTHER ticket is SECOND, and the second party performs the
+teardown** — the releaser call and the struct free. Neither side has to know what the other is doing,
+and every read of the struct that precedes a party's own add is safe by construction, which is what
+makes the runner's stack-length load and the awaiter's `result` load race-free without a lock.
+
+A thread renounced while it was still QUEUED reads exactly `1` in that word, and that is the whole
+dropped-thread test: `__sched_find_runnable` refuses to hand such a thread back, the ring overflow
+reclaims it rather than moving it to the global queue, and `__sched_sweep_dropped` takes the ones
+sitting at either queue's front — which is what keeps a spawn-and-drop loop that never schedules
+anything bounded. **The word is a field of its own and not a status**, because the hand-assembled
+trampoline overwrites `status` with `completed` unconditionally and a park overwrites it with
+`waiting`: a mark left there is erased by exactly the events the rendezvous exists to meet.
 
 ⛔⛔ **A SPEC CASE CANNOT SET `MAXON_MAX_PROCS`, SO NOTHING BELOW EXERCISES TWO PROCESSORS.** The
 harness gives a case `Args:` and no environment, and the processor count is read once from
@@ -48,8 +64,22 @@ its own subject and for the same reason.
 
 What a ONE-processor program CAN reach, and what each case below is for: the ring's OVERFLOW into the
 global queue and back out of it, the index WRAP past 256, the 61-schedule fairness check, FIFO order
-within a processor, the yield's back-of-queue rule, and both halves of the dropped-thread protocol —
-the popper that refuses to run one and the sweep that reclaims one.
+within a processor, the yield's back-of-queue rule, both halves of the dropped-thread protocol — the
+popper that refuses to run one and the sweep that reclaims one — and **both ARRIVAL ORDERS of the
+teardown rendezvous that a single processor admits**: the consumer arriving first (a tombstone, which
+the popper or the sweep then reclaims) and the runner arriving first (a thread that completed while a
+DIFFERENT promise was being awaited, whose dropper then reclaims).
+
+⛔ **THE THIRD SHAPE — A PROMISE DROPPED WHILE ITS THREAD IS EXECUTING — IS UNREACHABLE FROM HERE, AND
+IT IS THE SHAPE THE RENDEZVOUS WAS BUILT FOR.** On one processor the dropper IS the only thread
+running, so nothing can be executing underneath it; reaching it needs a second M popping the thread
+out of the dropper's ring while the dropper is still spawning. **That gate is
+`maxon-shv2/track0/drop-running-torture.maxon`** driven across `MAXON_MAX_PROCS ∈ {1, 2, 7, 12}`,
+which reads `__Builtins.mmRawAllocLive()` across a spawn-delay-drop phase and asserts it returns to
+baseline. Before the rendezvous it stranded a GT struct for most of the threads a worker M had taken
+out of main's ring — **0 at one processor, 39-52 at seven and 53-72 at twelve, against 54-96 steals**
+— and the exit leak gate could not see one of them, because the drop had already debited the count
+that gate reads.
 
 ⚠ **EVERY CASE HERE IS `targets: x64-windows`, and that is a property of the subject.** They are all
 green-thread programs, and the green-thread substrate exists on exactly one lane —
@@ -406,6 +436,112 @@ end 'main'
 ```
 ```stdout
 ran=0 live=bounded
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.a-drop-that-arrives-after-completion-reclaims -->
+<!-- targets: x64-windows -->
+**THE RUNNER-FIRST ARRIVAL ORDER.** `p` is never awaited, but `await q` drives the scheduler past it, so
+`p` runs to completion and the driver's hand-off adds the RUNNER ticket while the promise is still live —
+the struct survives, because it still holds a result an un-awaited promise owns. The loop body's scope exit
+then drops `p`, and that dropper is the SECOND arrival: it finds the runner's ticket and reclaims. Three
+iterations, and `mmRawAllocLive()` is identical before and after, so every struct came back.
+`gtIsComplete` is what proves the case reached the order it names — a `p` that had NOT completed would be
+the tombstone order the two cases above cover instead.
+```maxon
+function done() returns int
+	Runtime.yield()
+	return 1
+end 'done'
+
+function main() returns ExitCode
+	var total = 0
+	var finished = 0
+	var i = 0
+
+	while i < 1 'warm'
+		let p = async done()
+		let q = async done()
+		total = total + await q
+		finished = finished + __Builtins.gtIsComplete(p)
+		i = i + 1
+	end 'warm'
+
+	let liveBefore = __Builtins.mmRawAllocLive()
+	var j = 0
+
+	while j < 3 'completedThenDropped'
+		let p = async done()
+		let q = async done()
+		total = total + await q
+		finished = finished + __Builtins.gtIsComplete(p)
+		j = j + 1
+	end 'completedThenDropped'
+
+	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	print("total={total} finished={finished} liveGrew={liveGrew}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+total=4 finished=4 liveGrew=0
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.a-drop-of-a-parked-thread-is-both-halves -->
+<!-- targets: x64-windows -->
+**THE ONE ARM WHERE ONE CALL IS BOTH PARTIES.** `s` parks on a 200 ms timer and `await f` returns long
+before it fires, so the loop body's scope exit drops a thread that is registered in the timer store and
+that no runner will ever come back for. The drop takes it out of the store under `__sched_lock` — and,
+having done so, is the only holder left, so it performs the RUNNER's half (the stack the parked thread is
+suspended on) and then the consumer's, which reclaims. Three iterations with no hang, because nothing ever
+waits on the 200 ms deadline, and `mmRawAllocLive()` returns to its baseline.
+```maxon
+function done() returns int
+	Runtime.yield()
+	return 1
+end 'done'
+
+function sleeper() returns int
+	sleep(200)
+	return 9
+end 'sleeper'
+
+function main() returns ExitCode
+	var total = 0
+	var stillParked = 0
+	var i = 0
+
+	while i < 1 'warm'
+		let s = async sleeper()
+		let f = async done()
+		total = total + await f
+		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s))
+		i = i + 1
+	end 'warm'
+
+	let liveBefore = __Builtins.mmRawAllocLive()
+	var j = 0
+
+	while j < 3 'parkedThenDropped'
+		let s = async sleeper()
+		let f = async done()
+		total = total + await f
+		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s))
+		j = j + 1
+	end 'parkedThenDropped'
+
+	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	print("total={total} stillParked={stillParked} liveGrew={liveGrew}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+total=4 stillParked=4 liveGrew=0
 ```
 ```exitcode
 0

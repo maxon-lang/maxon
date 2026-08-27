@@ -1,0 +1,320 @@
+// Test: sched-runqueue.a-drop-of-a-parked-thread-is-both-halves
+function done() returns int
+	Runtime.yield()
+	return 1
+end 'done'
+
+function sleeper() returns int
+	sleep(200)
+	return 9
+end 'sleeper'
+
+function main() returns ExitCode
+	var total = 0
+	var stillParked = 0
+	var i = 0
+
+	while i < 1 'warm'
+		let s = async sleeper()
+		let f = async done()
+		total = total + await f
+		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s))
+		i = i + 1
+	end 'warm'
+
+	let liveBefore = __Builtins.mmRawAllocLive()
+	var j = 0
+
+	while j < 3 'parkedThenDropped'
+		let s = async sleeper()
+		let f = async done()
+		total = total + await f
+		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s))
+		j = j + 1
+	end 'parkedThenDropped'
+
+	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	print("total={total} stillParked={stillParked} liveGrew={liveGrew}")
+	return 0 as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mm_alloc_total@8 = i64 0
+  __mm_alloc_bytes@16 = i64 0
+  __mm_raw_alloc_count@24 = i64 0
+  __mm_raw_live_count@32 = i64 0
+  __mm_raw_alloc_bytes@40 = i64 0
+  __gt_run_queue_head@48 = i64 0
+  __gt_run_queue_tail@56 = i64 0
+  __gt_init_done@64 = i64 0
+  __gt_timer_count@72 = i64 0
+  __gt_timer_heap_base@80 = i64 0
+  __gt_timer_capacity@88 = i64 0
+  __gt_trace_counter@96 = i64 0
+  __gt_proc_count@104 = i64 0
+  __gt_proc_handles_base@112 = i64 0
+  __gt_proc_gts_base@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_num_procs@176 = i64 0
+  __sched_shutdown_flag@184 = i64 0
+  __sched_lock@192 = i64 0
+  __slab_arena_list@200 = i64 0
+  __slab_arena_map_l1@208 = i64 0
+  __slab_state@216 = i64 0
+}
+
+func @done {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Runtime.yield
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @sleeper {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 200
+    x64.callDirect sleep
+    x64.movRegImm32 r8, 9
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 120
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp whilehdr#1
+  whilehdr#1:
+    x64.cmpRegImm32 r13, 1
+    x64.jcc less, warm
+    x64.jmp whileexit#3
+  warm:
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + done]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_await
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 r15, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_is_complete
+    x64.subRegReg r15, r15, r8
+    x64.leaRegRegReg r12, r12, r15
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_promise_drop
+    x64.jmp whilehdr#1
+  whileexit#3:
+    x64.callDirect __mm_counter_raw_alloc_live
+    x64.storeSlotReg slot10, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp whilehdr#4
+  whilehdr#4:
+    x64.cmpRegImm32 r13, 3
+    x64.jcc less, parkedThenDropped
+    x64.jmp whileexit#6
+  parkedThenDropped:
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + done]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_await
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 r15, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_is_complete
+    x64.subRegReg r15, r15, r8
+    x64.leaRegRegReg r12, r12, r15
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_promise_drop
+    x64.jmp whilehdr#4
+  whileexit#6:
+    x64.callDirect __mm_counter_raw_alloc_live
+    x64.loadRegSlot rax, slot10
+    x64.movRegReg r13, r8
+    x64.subRegReg r13, r8, rax
+    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot6, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_4]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_5]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot3, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot9, rax
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot8, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot2, r8
+    x64.leaRegRegReg rax, r14, rbx
+    x64.leaRegRegReg rax, rax, r15
+    x64.leaRegRegReg rax, rax, r12
+    x64.loadRegSlot rcx, slot9
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, r8
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 r13, r8, 56
+    x64.movRegReg rcx, r13
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r14, r13, r14
+    x64.movRegReg rcx, r14
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r14, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r15
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot r14, slot4
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot3
+    x64.loadRegSlot r12, slot9
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot r12, slot8
+    x64.movRegReg rdx, r12
+    x64.loadRegSlot r15, slot2
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r15
+    x64.loadRegSlot rbx, slot1
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Runtime.yield {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_resched
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @sleep {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_sleep
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

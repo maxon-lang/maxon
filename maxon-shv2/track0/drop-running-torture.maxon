@@ -1,0 +1,197 @@
+// Track-0 DROPPED-WHILE-RUNNING torture program (W212 follow-up) — the ONE shape
+// no spec case can reach.
+//
+// Why this exists: `__gt_promise_drop` has to settle what a dropped promise's
+// thread still owes, and above ONE processor the thread may be EXECUTING on
+// another M at the instant the promise is renounced. A spec case cannot reach
+// that state — `MAXON_MAX_PROCS` is read once at scheduler start and a case gets
+// `Args:` and no environment, so every spec runs on a single P where the dropper
+// IS the only thread running and nothing can be executing underneath it.
+// `specs-shv2/sched-runqueue.md` says the same thing about work stealing, and for
+// the same reason.
+//
+// ⭐ **MAIN BURNS CPU BETWEEN THE SPAWN AND THE DROP, AND THAT IS THE WHOLE
+// DIFFERENCE BETWEEN MEASURING THE PATH AND MISSING IT.** A promise spawned and
+// renounced back-to-back is normally still QUEUED when the drop reaches it — the
+// drop's own front-of-ring sweep then reclaims it before any worker M can take it.
+// Here the promise stays alive until the END of the loop body, and the body spends
+// `mainDelayWork` iterations before that point: long enough for a worker M to steal
+// the thread out of main's ring and START it, short enough that the thread — which
+// spins for `dropWork`, three times longer — is still mid-body when the drop lands.
+// That is the state under test.
+//
+// The reading: `__Builtins.mmRawAllocLive()` is taken twice, at two QUIESCENT points
+// whose live set is otherwise identical (see `drain`). `leaked` is their difference
+// and MUST be 0 at every processor count. A dropped thread's GT struct that nobody
+// reclaims shows up here and NOWHERE ELSE: the exit leak gate reads
+// `__gt_live_count`, which the drop has already debited, so a struct stranded this
+// way exits 0 while still being lost.
+//
+// ⚠ `started` and `steals` are legitimately 0 at MAXON_MAX_PROCS=1: main never
+// yields, so nothing is ever scheduled and every drop finds its thread queued and
+// never-run. The single-processor row is a CONTROL — it proves the program measures
+// nothing but the multi-processor path.
+
+typealias Integer = int(i64.min to i64.max)
+
+// How many spawn-delay-drop rounds are MEASURED, and how many run before the
+// baseline is taken. The warm-up rounds are not decoration: a worker M is CREATED on
+// demand by `__sched_wake_or_spawn` and needs on the order of a thread creation to
+// reach its first `__sched_find_runnable`, so on an idle box the first rounds race an
+// M that does not exist yet.
+let measuredRounds = 40
+let warmRounds = 10
+
+// ⛔⛔ **EIGHT SPAWNS PER ROUND, AND THE COUNT IS THE DIFFERENCE BETWEEN TWO AND
+// TWELVE LIVE Ms.** `__sched_wake_or_spawn` creates a worker only when no existing P
+// is idle, so a round that publishes ONE runnable thread never needs a second M —
+// MEASURED, that shape reported `workers=2` and `steals=0` on an idle box while
+// reporting `workers=12` and `steals=40` on a loaded one, which is a harness whose
+// coverage is decided by what else the machine is doing. Publishing a burst makes the
+// backlog real, so the Ms are created and the steals happen on any box.
+//
+// They are written out rather than looped because the promise must survive to THIS
+// body's scope exit: an inner loop would give each spawn a scope of its own and drop
+// it one statement later, which is the shape this program exists not to measure.
+let spawnsPerRound = 8
+
+// Each dropped task's spin. THREE TIMES `mainDelayWork`, so a task a worker M started
+// during main's delay is still executing when the drop lands.
+let dropWork = 900000
+
+// How long main burns between spawning a promise and renouncing it. Long enough for
+// a worker M to steal the thread and start it; short enough that it has not finished.
+// Main SPINS rather than yielding: a yield would drive the queued thread on main's
+// own processor and measure the single-processor path instead.
+let mainDelayWork = 300000
+
+// The settle one `drain` performs, in awaited rounds so the scheduler keeps cycling —
+// a single long spin would occupy one M and leave a task unfinished on another. Its
+// TOTAL must comfortably exceed one `dropWork`, because the last task a worker starts
+// begins as the last drop lands.
+let settleRounds = 10
+let settleWork = 500000
+
+let mixModulus = 7
+
+// Counts the tasks that actually EXECUTED. Several Ms increment this one non-atomic
+// word, so it UNDERCOUNTS and is an approximate reading; `steals` below is the exact
+// one. The ASSERTION is `leaked`.
+var started = 0
+
+function spin(work Integer, seed Integer) returns Integer
+	var acc = 0
+	var j = 0
+
+	while j < work 'spin'
+		acc = acc + ((seed + j) mod mixModulus)
+		j = j + 1
+	end 'spin'
+
+	return acc
+end 'spin'
+
+function dropped(idx Integer) returns Integer
+	// CPU-parallel checkpoint: marks this hand-written CPU-bound function as a
+	// legitimate `async` target (satisfies the E3073 yielding contract) without
+	// claiming fake I/O. No-op at runtime.
+	__Builtins.parallelBoundary()
+	started = started + 1
+
+	return spin(dropWork, seed: idx)
+end 'dropped'
+
+function settle(work Integer) returns Integer
+	__Builtins.parallelBoundary()
+
+	return spin(work, seed: 0)
+end 'settle'
+
+// Await enough work that every started task has completed. Each await DRIVES the
+// scheduler, so the queued tombstones are reclaimed here too. ONE spelling, used
+// before the baseline and after the measured window: the two readings are only
+// comparable if the same operation quiesced the system before each of them.
+//
+// ⚠ Without the FIRST of those two calls, `leaked` reads -1 on some runs — the
+// baseline is taken while a warm-up thread is still in flight, so it counts an
+// allocation the measured window then releases.
+function drain() returns Integer
+	var acc = 0
+	var round = 0
+
+	while round < settleRounds 'settlePhase'
+		acc = acc + await async settle(settleWork)
+		round = round + 1
+	end 'settlePhase'
+
+	return acc
+end 'drain'
+
+function main() returns ExitCode
+	// Warm-up: `warmRounds` spawn-delay-drop rounds, so every one-time runtime
+	// allocation (the timer store, the process store, the first span of each size
+	// class) is outstanding at the baseline AND every worker M this box will use has
+	// been created and has reached its loop.
+	var sink = 0
+	var w = 0
+
+	while w < warmRounds 'warm'
+		_ = async dropped(w)
+		_ = async dropped(w + 1)
+		_ = async dropped(w + 2)
+		_ = async dropped(w + 3)
+		_ = async dropped(w + 4)
+		_ = async dropped(w + 5)
+		_ = async dropped(w + 6)
+		_ = async dropped(w + 7)
+		sink = sink + spin(mainDelayWork, seed: w)
+		w = w + 1
+	end 'warm'
+
+	sink = sink + drain()
+
+	let baseline = __Builtins.mmRawAllocLive()
+	var i = 0
+
+	// ⭐ All `spawnsPerRound` promises are renounced at THIS BODY'S SCOPE EXIT, which is
+	// after the spin — see the header. Each iteration therefore drops a burst of threads
+	// the worker Ms have had `mainDelayWork` iterations to steal and start.
+	while i < measuredRounds 'spawnDelayDrop'
+		_ = async dropped(i)
+		_ = async dropped(i + 1)
+		_ = async dropped(i + 2)
+		_ = async dropped(i + 3)
+		_ = async dropped(i + 4)
+		_ = async dropped(i + 5)
+		_ = async dropped(i + 6)
+		_ = async dropped(i + 7)
+		sink = sink + spin(mainDelayWork, seed: i)
+		i = i + 1
+	end 'spawnDelayDrop'
+
+	sink = sink + drain()
+
+	let after = __Builtins.mmRawAllocLive()
+	let leaked = after - baseline
+	let ranCount = started
+	let steals = __Builtins.schedStealCount()
+	let workers = __Builtins.schedMaxActiveWorkers()
+	let cpus = __Builtins.cpuCount()
+
+	// The driver parses these. `leaked` is the ASSERTION. `steals` is the exact
+	// coverage reading — a steal is a worker M taking a thread out of MAIN's ring
+	// while main is still in its spawn-delay-drop loop, which is the only road to the
+	// state under test, and each P's counter is written by its own M so the sum is
+	// exact. `started` is the same question asked approximately; `workers` proves more
+	// than one M went live; `cpucount` gives the driver ncpu.
+	print("leaked={leaked}\n")
+	print("baseline={baseline} after={after} sink={sink}\n")
+	print("started={ranCount}\n")
+	print("steals={steals}\n")
+	print("workers={workers}\n")
+	print("cpucount={cpus}\n")
+
+	// Fixed success ExitCode, as every track-0 program uses: deterministic across
+	// runs and never 101 (the leak-check gate value).
+	return 42
+end 'main'
