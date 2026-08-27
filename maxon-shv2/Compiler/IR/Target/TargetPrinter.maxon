@@ -607,7 +607,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		// F2: per-ISA, exactly as the fill ladders and jump tables above — the four x64 forms are x64's, the
 		// three arm64 forms are arm64's. Two ranges rather than seven arms, which the band-append order makes
 		// exact: the x64 four are contiguous and the arm64 three follow them.
-		x64LockCmpxchg to x64TebSelfPointer gives false
+		x64LockCmpxchg to x64GsLoadRegBase gives false
 		arm64AtomicCas to arm64ThreadPointer gives true
 	end 'p'
 end 'opIsArm64Band'
@@ -828,6 +828,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns
 		x64LockXadd(dest, src, addrReg) gives "lock xadd [{vregName(addrReg)}], {vregName(dest)} <- {vregName(src)}"
 		x64LockAdd(addrReg, srcReg) gives "lock add [{vregName(addrReg)}], {vregName(srcReg)}"
 		x64TebSelfPointer(dest) gives "mov {vregName(dest)}, gs:[0x{hexByte(WindowsTebSelfPointerOffset)}]"
+		x64GsLoadRegBase(dest, base) gives "mov {vregName(dest)}, gs:[{vregName(base)}]"
 		// The arm64 macro-ops print their name and their operands rather than the six-instruction sequence
 		// they expand to — the choice `x64MemFill`/`arm64MemFill` already make, and for their reason: a golden
 		// records the OPS the allocator coloured, and the encoder's internal branches are not ops.

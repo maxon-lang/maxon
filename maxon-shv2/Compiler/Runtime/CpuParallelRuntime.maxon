@@ -18,8 +18,10 @@
 //     call's own span on every other target (E3104, `SemanticCheck.calleeNeedsWin32Substrate`, by the
 //     `__cpu_` PREFIX — so an entry point added to this band later is gated by construction rather than by
 //     memory).
-//   • `__sched_max_active_workers` reaches no OS at all: its whole body is a constant return, which lowers
-//     on every target shv2 emits. Refusing it would be refusing a `ret`.
+//   • `__sched_max_active_workers` reaches no OS at all: its whole body is one `.data` load and a `ret`,
+//     which lowers on every target shv2 emits. Refusing it would be refusing a load. (It WAS a constant
+//     return until G1 gave the mark a writer; the argument is unchanged, because a `.data` load reaches no
+//     more OS than a constant does.)
 //
 // ⇒ **ONE PREFIX CANNOT CARRY BOTH ANSWERS**, because the gate is a prefix test — which is exactly why
 // this file wears two `__` bands rather than the one its single subject would suggest. `ProcessRuntime`'s
@@ -41,32 +43,29 @@
 // in this tree: `__proc_pid` arrived after its predicate was written and needed no edit there.
 let CpuRuntimeCallPrefix = b"__cpu_"
 
-// The `__sched_` prefix — the "does this program ask the SCHEDULER about itself?" test. Deliberately NOT
-// `__gt_` (see the header) and deliberately its own band rather than a second name under `__cpu_`, because
-// the two bands answer the target question differently.
-//
 // ⚠ It is the BOOTSTRAP's spelling for this family (`__sched_active_workers`,
-// `__sched_max_active_workers`, `__sched_worker_loop`), taken so that the multi-M slice's port grafts onto
-// the name it already has rather than onto one invented here.
-let SchedRuntimeCallPrefix = b"__sched_"
+// `__sched_max_active_workers`, `__sched_worker_loop`), taken so that the multi-M port grafts onto the name
+// it already has rather than onto one invented here — and since G1 the band really does hold that family:
+// `SchedRuntime.maxon` adds `__sched_init_procs`, `__sched_worker_loop`, `__sched_wake_or_spawn` and
+// `__sched_drain_pending` beside this file's one query.
 
 // ⭐ **THE TWO ENTRY POINTS.**
 export let CpuCountName = b"__cpu_count"
 export let SchedMaxActiveWorkersName = b"__sched_max_active_workers"
 
-// ⚠ **TWO CONSTANTS, BOTH `1`, AND DELIBERATELY NOT ONE** — `CurrentProcessIdArity`'s rule, which this file
-// has the sharper case for: these two numbers answer different questions and only happen to agree today.
-// The floor is a permanent fact about what a processor COUNT can be; the worker count is a reading of
-// THIS runtime and changes the day multi-M lands. Shared, one of them would silently move with the other.
+// ⚠ **THE CLAMP FLOOR IS A CONSTANT AND THE WORKER COUNT IS NOT — that asymmetry is the point of the pair.**
+// The floor is a permanent fact about what a processor COUNT can be; the worker high-water mark is a READING
+// of this runtime, and since G1 it is a `.data` word two sites maintain.
 
-// The clamp floor `__cpu_count` never answers below. A real guard over a value that can be 0
+// The clamp floor a PROCESSOR COUNT never answers below. A real guard over a value that can be 0
 // (`GetActiveProcessorCount` on failure) or negative (`sysconf`), and the same guard both bootstrap
 // emitters spell in their own instruction set — a count is a divisor for callers, so a 0 must never escape.
-let MinimumProcessorCount = 1 as ParsedInt
-
-// How many green-thread worker Ms shv2's scheduler has ever had at once. ONE — see `buildSchedMaxActiveWorkers`,
-// which owns the argument for why that is a reading rather than a placeholder.
-let SingleThreadedWorkerCount = 1 as ParsedInt
+//
+// ⚠ **EXPORTED because `SchedRuntime` reads the same RAW op and owes the same floor.** It clamps
+// `MAXON_MAX_PROCS` against the machine and would otherwise size a `P*` array to zero — see
+// `emitResolveMaxProcs`, which records the wild write that costs. Two clamps over one op, from one number:
+// a second literal `1` there would be the guard's value written down twice.
+export let MinimumProcessorCount = 1 as ParsedInt
 
 // ⭐ **DOES THIS CALLEE ASK THE MACHINE FOR ITS PROCESSOR COUNT?** The `__cpu_`-only test, the exact twin of
 // `isClockRuntimeCallee`. Deliberately NARROW in the same way: it implies no scheduler, no heap and no leak
@@ -75,11 +74,20 @@ export function isCpuCountRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: CpuRuntimeCallPrefix)
 end 'isCpuCountRuntimeCallee'
 
-// ⭐ **DOES THIS CALLEE ASK THE SCHEDULER HOW MANY WORKER Ms IT HAS RUN?** The `__sched_`-only test.
+// ⭐ **DOES THIS CALLEE ASK THE SCHEDULER HOW MANY WORKER Ms IT HAS RUN?**
+//
+// ⛔⛔ **IT IS A NAME TEST AND IT USED TO BE A `__sched_` PREFIX TEST, WHICH G1 FALSIFIED.** The prefix was
+// chosen when the band held exactly this one entry, under a comment saying so; `SchedRuntime.maxon` then put
+// four scheduler INTERNALS in the same band, and a prefix test cannot tell a QUERY a program asked from
+// machinery the compiler installed. Nothing broke — the internals are named only by builder-built Std, which
+// `recordCallUsage` never scans — so this is the enumerated-door shape that fails OPEN: the day one of them
+// became reachable from a Maxon-tier op it would have silently set "this program asks how parallel it was"
+// and laid out a `.data` word for a question nobody asked. The name is what the bit is about.
+//
 // ⚠ It is NOT in `calleeNeedsWin32Substrate`, and that absence is the decision this file exists to make
 // rather than an omission — see the header.
 export function isSchedRuntimeCallee(callee ByteArray) returns bool
-	return bytesStartWith(callee, prefix: SchedRuntimeCallPrefix)
+	return callee.equals(SchedMaxActiveWorkersName)
 end 'isSchedRuntimeCallee'
 
 // ⚠ **ONE GUARD PER ENTRY, NOT ONE FOR THE FILE**, on `installProcessRuntime`'s terms: the two are
@@ -138,40 +146,36 @@ function buildCpuCount(module StdModule)
 end 'buildCpuCount'
 
 // ⭐⭐ **`__sched_max_active_workers() -> i64`** — the high-water mark of concurrently-active green-thread
-// worker Ms, and in shv2 that is the CONSTANT 1.
+// worker Ms, read out of `SchedRuntime`'s `.data` word.
 //
-// ⭐⭐ **THAT CONSTANT IS A READING OF THIS RUNTIME, NOT A PLACEHOLDER FOR A COUNTER NOBODY WROTE.**
-// `GtRuntime.maxon`'s opening paragraph is the measurement: *"SINGLE-M COOPERATIVE. One OS thread runs
-// everything … There are NO worker threads, NO work-stealing, NO per-P sharding."* A high-water mark over a
-// population of exactly one is 1, at every observation point, in every program. The bootstrap answers the
-// same 1 for every program whose scheduler stays single-threaded (`MAXON_MAX_PROCS=1`, and any program
-// that spawns nothing — MEASURED at `workers=1`); it answers more only where it has spawned worker Ms,
-// which shv2 has none of.
+// ⭐⭐ **IT WAS A `ret 1`, AND THAT WAS THE HONEST SPELLING RIGHT UP TO THE RUNG THAT GAVE IT A WRITER.**
+// The old body's argument was that a global with no writer is a constant wearing a variable's clothes: it
+// costs a `.data` word and a load, tells the next reader that something maintains it, and reads 0 rather than
+// 1 in any program whose scheduler never installs. Every clause of that was true while shv2 had no worker M.
+// G1 built one, `__sched_worker_loop` raises the mark on each entry, and the two objections that remained are
+// both answered where they arise rather than here: the slot is SEEDED TO 1 in `.data`
+// (`SchedRuntime.schedRuntimeGlobals`), so a program with no scheduler reads the truth with no code at all,
+// and it is laid out on `usesSchedMaxActiveWorkers` as well as on `usesGt`, so asking the question does not
+// require having spawned anything.
 //
-// ⚠ **THE IOCP COMPLETION THREAD IS NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS LOOK
-// WRONG.** `__gt_init` does create an OS thread (`osThreadCreate`), but it drains completions and re-readies
-// parked green threads — it never RUNS one. The bootstrap draws the line in exactly the same place: its
-// `__sched_active_workers` is incremented in `__sched_worker_loop` and nowhere else, and its own completion
-// thread is not counted there either.
+// ⚠ **THE IOCP COMPLETION THREAD IS STILL NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS LOOK
+// WRONG.** `__io_init` creates an OS thread, but it drains completions and re-readies parked green threads —
+// it never RUNS one, and it never adopts a P. The count is raised in `__sched_worker_loop` and nowhere else,
+// which is exactly where the bootstrap raises its own and exactly where it declines to count its completion
+// thread either.
 //
-// ⛔ **IT IS DELIBERATELY NOT A `.data` GLOBAL SEEDED TO 1, WHICH WAS THE OBVIOUS PORT.** The bootstrap
-// keeps `__sched_max_active_workers` in `.data` because two sites maintain it — `__gt_init` seeds it and
-// `__sched_worker_loop` raises it on each worker entry (`X86CodeEmitter.Runtime.cs:3541` and `:4733-4736`;
-// the arm64 twin at `ARM64CodeEmitter.Runtime.cs:2915` and `:3180-3183`).
-// shv2 has neither site. A global with no writer is the constant below wearing a variable's clothes: it
-// costs a `.data` word and a load, it tells the next reader that something maintains it, and it reads 0
-// rather than 1 in any program whose scheduler never installs. The honest spelling of *"this runtime has
-// one M"* is a `ret 1`.
-//
-// ⇒ **WHEN MULTI-M LANDS (PLAN B1b) THIS BODY BECOMES THE GLOBAL LOAD**, and the two maintenance sites
-// named above are where the port reads its raise protocol from. `specs-shv2/builtins-cpu-parallel.md`'s
-// `sched-max-active-workers-is-one-under-async` is what goes red on that day, which is why it is pinned.
+// ⚠ **AND IT STILL ANSWERS 1 BY DEFAULT**, because `SchedRuntime.DefaultMaxProcs` is 1 and no second M is ever
+// spawned without `MAXON_MAX_PROCS`. `specs-shv2/builtins-cpu-parallel.md`'s
+// `sched-max-active-workers-is-one-under-async` pins that, and it is what makes the mark a measurement rather
+// than a promise.
 function buildSchedMaxActiveWorkers(module StdModule)
 	var func = IrFunction.createFromStd(SchedMaxActiveWorkersName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry")
-	emitConstReturn(module, block: entry, value: SingleThreadedWorkerCount, ids: ids)
+	let markAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(markAddr, label: SchedMaxActiveWorkersLabel))
+	module.setTerminator(entry, op: StdOp.ret(emitLoadField(module, block: entry, record: markAddr, offset: 0, ids: ids)))
 
 	module.functions.push(func)
 end 'buildSchedMaxActiveWorkers'

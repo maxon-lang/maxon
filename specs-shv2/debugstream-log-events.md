@@ -124,6 +124,48 @@ log_phase_end compile unit=7
 0
 ```
 
+<!-- test: debugstream-log-events.a-green-thread-program-logs-before-its-scheduler-exists -->
+<!-- targets: x64-windows -->
+⛔⛔ **THE CASE THAT CATCHES A PRE-INITIALIZED SCHEDULER READ, AND IT WAS A SEGFAULT.** Every log
+entry stamps the green thread that authored it, which since the P landed (`sched-processor.md`) is
+`P->currentGt` — reached through this OS thread's TLS slot, at a byte offset `__sched_init_procs`
+computes. A program may log BEFORE its first `async`, i.e. before that offset exists, and this is the
+shape that does: three events, then a spawn.
+
+The offset's uninitialized value is 0, and `gs:[0]` on Win64 is `NT_TIB.ExceptionList` — a **non-null
+pointer**, not a null slot — so an unguarded read follows it and loads `ExceptionList + 0x18`.
+MEASURED under `maxon monitor`: exit 42 became a **SEGMENTATION FAULT**, reported by the monitor as
+`1 abandoned (producer died mid-entry)`. The `.data` word the P replaced read 0 before init and could
+not fail this way, which is why the discipline had never needed writing down.
+
+⭐ **THE `gt=` FIELD IS NORMALIZED OUT OF THE GOLDEN, SO THE ASSERTION IS THE EXIT CODE AND THE THREE
+LINES BEING THERE AT ALL** — which is exactly right: what went wrong was not a wrong thread id, it was
+the process dying while writing the entry. A run that survives to emit all three and then completes
+its `async` is the whole property.
+```maxon
+function work(n int) returns int
+	__Builtins.parallelBoundary()
+	return n * 2
+end 'work'
+
+function main() returns ExitCode
+	let phase = __DebugStream.nameId("early")
+	__DebugStream.phaseBegin(phase, 1)
+	__DebugStream.event(phase, 1, 2, 3, 4, 5)
+	__DebugStream.phaseEnd(phase, 1)
+	let p = async work(21)
+	return await p as ExitCode
+end 'main'
+```
+```log-trace
+log_phase_begin early unit=1
+log_event early cat=1 lvl=2 unit=3 a0=4 a1=5
+log_phase_end early unit=1
+```
+```exitcode
+42
+```
+
 <!-- test: debugstream-log-events.attached-answers-true -->
 The run-time gate, from inside the program: the same `enabled()` that printed `false` above prints
 `true` when a monitor is attached, and the event it guards is on the wire. The two cases together are

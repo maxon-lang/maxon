@@ -64,10 +64,13 @@ let ClockWallTicksLabel = b"__clock_wall_ticks"
 // `__thread_cpu_ticks`. Safe as a shared global for the wall clock's reason one line up — the function is
 // straight-line with no yield point between the write and the read, so it cannot be re-entered mid-read.
 //
-// ⚠ **THAT ARGUMENT IS ABOUT GREEN THREADS, AND shv2's SCHEDULER IS WHAT MAKES IT HOLD.** `GtRuntime`'s
-// first paragraph: SINGLE-M COOPERATIVE — one OS thread runs every green thread, and a straight-line body
-// offers no yield point for another to be scheduled at. The day multi-M lands (PLAN B1b) this word becomes
-// per-M, exactly as `__clock_wall_ticks` does, and for the same reason.
+// ⚠⚠ **THAT ARGUMENT IS ABOUT RE-ENTRY, AND SINCE G1 THE THING IT DEFENDS AGAINST IS NO LONGER THE ONLY
+// THING THERE IS.** It holds while one OS thread runs every green thread: a straight-line body offers no
+// yield point for another green thread to be scheduled at. It says nothing about two Ms, which do not need
+// a yield point to be inside this function at once — and `MAXON_MAX_PROCS>1` gives a program two.
+// ⇒ **BOTH OF THIS FILE'S SCRATCH WORDS ARE ITEM 5 ON `SchedRuntime.maxon`'s AUDIT LIST**, and the fix is
+// the one this comment always named: a per-P slot, which the P now exists to hold. Not done here because
+// the default is one M and flipping shared state is the rung after this one.
 let ThreadCpuTicksLabel = b"__thread_cpu_ticks_out"
 
 // A FILETIME counts 100-NANOSECOND intervals since 1601-01-01 00:00:00 UTC. Two facts turn that into Unix

@@ -2816,9 +2816,14 @@ now: 16 words on the reserving lane, 1 on the other.
 
 ⛔ **NO BACKGROUND SCAVENGER, and that is a property of this runtime rather than a preference.** Go's is a
 goroutine paced against the GC's heap goal at 1% of mutator time. shv2 has no GC and so no heap goal to
-pace against; its scheduler is single-M and cooperative with no timer to hang a background G on; and green
-threads exist on **one** of the lanes, so a scavenger built on them would not run in a wasm or POSIX
-program at all. What Go contributes and this does take is the shape *underneath* the pacing.
+pace against; its scheduler is cooperative with no timer to hang a background G on; and green threads exist
+on **one** of the lanes, so a scavenger built on them would not run in a wasm or POSIX program at all. What
+Go contributes and this does take is the shape *underneath* the pacing.
+
+⚠ This paragraph used to open its middle clause with *"its scheduler is single-M"*, which G1 made only
+half-true: shv2 has a worker M and runs one **by default**, not by construction. The clause that carries the
+argument is the other one — a cooperative scheduler has no preemption point to hang a background goroutine
+off, whatever its M count — so the stale half is simply gone rather than qualified.
 
 ⚠ **ON wasm32-wasi `osDecommitPages` EMITS NOTHING and the rest still runs.** Linear memory only grows, so
 there is no backing to drop — but the grace advances, the chunks go back to the arena, and any class can
@@ -2911,6 +2916,14 @@ The v1 implementation of all of the above is `stdlib/Internals.maxon` (the slab)
 `SlabArena.maxon`'s headers — the multi-OS-thread apparatus (the global lock, the per-P remote-free
 MPSC queues, the `owning_p` gate) is absent because `__slab_shard_row` answers one row today, and that is a
 decision to revisit when green threads can run the allocator on more than one OS thread, not an omission.
+
+⚠⚠ **THAT DAY IS NOW REACHABLE ON DEMAND, AND THE ALLOCATOR IS WHAT STOPS IT.** G1 gave shv2 a real
+processor structure and a real worker M; `MAXON_MAX_PROCS=N` runs green threads on N OS threads, and a
+green thread that only COMPUTES is correct there. One that ALLOCATES is not: `track0/alloc-torture.maxon`
+dies at `MAXON_MAX_PROCS=2` with **exit 86** (`slabSpanExhaustedPastItsEnd` — this allocator's own INV-1
+trap), which is the sharpest statement of the sentence above that exists. `SchedRuntime.maxon`'s header
+enumerates every other item in the same position, so the rung that shards this allocator has a list rather
+than a search.
 The **two-epoch scavenger** was on that list until S6 and is now taken — its GUARD verbatim, the mechanism
 underneath it deliberately not; see "The scavenger" above for the `madvise` alignment fact that decides it.
 

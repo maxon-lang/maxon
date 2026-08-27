@@ -1208,8 +1208,9 @@ type RangeCheckEmitter
 				memFill then break 'c'
 				// F1c: a reserve and a commit define a page base the OS chose, never a negated int constant.
 				osCommitPages to osReservePages then break 'c'
-				// F2: all three define a value the machine produces at run time, never a negated int constant.
-				atomicCas to currentThreadToken then break 'c'
+				// F2 + G1: every value-defining member of this range answers something the machine produces at run
+				// time, never a negated int constant.
+				atomicCas to osSetEvent then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1443,8 +1444,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		memFill gives false
 		// F1c: a reserve and a commit are body ops too, never the `ret` this asks about.
 		osCommitPages to osReservePages gives false
-		// F2: the two atomics and the thread token are body ops, never the `ret` this asks about.
-		atomicCas to currentThreadToken gives false
+		// F2 + G1: every member of this range is a body op, never the `ret` this asks about.
+		atomicCas to osSetEvent gives false
 	end 'term'
 end 'retMatchesValue'
 

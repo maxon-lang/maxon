@@ -92,6 +92,23 @@ export type IrModule uses Op
 	// itself has a byte-identical import table.
 	export var usesThreadCpuTicks as bool = false
 
+	// ⭐ **DOES THIS MODULE CARRY THE GREEN-THREAD SCHEDULER?** Set once by the driver from
+	// `RuntimeUsage.usesGt`, and read in exactly one place — the PE writer's OPTIONAL TRAILING IMPORT BAND.
+	// `usesThreadCpuTicks`'s twin one producer over: the five bits answer one question between them (*does
+	// this image reference the imports at the end of `IatSlot`*), and the band is emitted when ANY of them
+	// says yes (`isOptionalTrailingImport` carries why they cannot be gated apart).
+	//
+	// ⚠ **IT IS NOT `PassPipeline.usesGreenThreads`, THOUGH BOTH DERIVE FROM `RuntimeUsage.usesGt`.** That
+	// one is a PIPELINE fact read by a Std pass to decide whether stack promotion is legal; this one is a
+	// MODULE fact read by the PE writer to decide which imports the image carries. The two live on different
+	// objects with different lifetimes — the pipeline's is written before `run()`, this one after, because
+	// `lowerMaxonToStd` replaces `stdModule` in between — and folding them would put one of them on the
+	// module that gets thrown away.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program with no green
+	// threads has a byte-identical import table.
+	export var usesGt as bool = false
+
 	// ⭐ **DOES THIS IMAGE REACH THE SOCKET RUNTIME?** Set by the `__ms_` prefix scan, and read in exactly
 	// one place — the PE writer's `dllIsEmitted`, which decides whether the image carries a `ws2_32.dll`
 	// import directory entry at all.

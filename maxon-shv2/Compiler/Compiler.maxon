@@ -756,6 +756,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'gtGlobals'
+	// The P/M half's `.data` slots (G1). ⚠ **NO OUTER BIT TEST**, because the file it comes from has TWO gates
+	// and asks them itself: the P machinery rides `usesGt`, while the two worker counters also serve
+	// `__Builtins.schedMaxActiveWorkers()` in a program that never spawns a green thread. A gate spelled here
+	// as well would be a second copy of that condition — `clockRuntimeGlobals`'s reasoning, one file over.
+	for entry in schedRuntimeGlobals(usage) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
 	// The IOCP substrate's `.data` slots ride their OWN bit (P1.5 slice 1a-ii), so a plain async/timer/proc program's
 	// `.data` layout is unchanged — only a pipe-reading program lays them out.
 	if usage.usesIocp 'ioGlobals'
@@ -873,6 +880,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// three neighbours. `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of
 	// kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesThreadCpuTicks = usage.usesThreadCpuTicks
+	// ⭐ **AND THE FIFTH PRODUCER OF THAT BAND (G1)**, on the same seam and for the same measured reason as
+	// its four neighbours. The scheduler's per-P init reads `MAXON_MAX_PROCS` (`GetEnvironmentVariableA`) and
+	// the machine's processor count (`GetActiveProcessorCount`), and its `TlsAlloc`/`TlsSetValue` pair sits at
+	// the end of kernel32's run too — three separate reasons a green-thread image needs the whole band.
+	pipeline.stdModule.usesGt = usage.usesGt
 	// ⭐⭐ **AND WHETHER A RESERVATION IS FREE ON THIS TARGET**, which is what picks the slab arena's
 	// geometry (see `IrModule.hasPageReservation`). It sits on the same seam as its four neighbours for the
 	// same measured reason — `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag written any earlier

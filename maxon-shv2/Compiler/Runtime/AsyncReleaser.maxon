@@ -56,14 +56,23 @@
 // two arguments and so does not approach that gate — it is a guard against the spawn-site reference being
 // missing, not against arity.)
 //
-// ⛔ **MULTI-M IS NOT THIS SLICE, AND NOTHING HERE IS ATOMIC — DELIBERATELY.** Under single-M the awaiter and
-// the dropper are the same thread as every other Maxon frame, so the refcount decrements the releaser emits
-// need no more synchronization than any other decref in the program. Three steps become racy once a worker
-// pool exists: (1) the `gt.releaser` load / clear pair is a read-modify-write that two Ms could both win,
-// running the release twice; (2) the drop path's `threw`/`result` reads race a completion that lands on
-// another M between the status check and the load; (3) the refcounts the emitted drop callees touch are
-// plain loads and stores throughout the runtime, so they are the scheduler's problem and not this file's.
-// Making any of them atomic now would buy an unmeasured cost on the single-M path that ships.
+// ⭐ **MULTI-M: TWO OF THE THREE STEPS THIS BLOCK USED TO NAME ARE CLOSED (G2), AND THE THIRD IS NAMED
+// PRECISELY.**
+//   (1) **The `gt.releaser` load / clear pair** was a read-modify-write with the ENTIRE release inside it —
+//       two Ms could both observe the same non-null releaser and both run it, which is a DOUBLE FREE of every
+//       managed argument the spawn owned, not a lost count. It is a CAS now: whoever wins the swap to 0 is
+//       the one that calls. `GtRuntime.emitGtReleaserCall` carries the argument and the no-retry-loop proof.
+//   (3) **The refcounts the emitted drop callees touch** are atomic, through the one
+//       `MmRuntime.emitAdjustRefcount`, and the decref decides "am I the last owner?" from the value its own
+//       decrement displaced rather than from a prior read.
+//   (2) **The drop path's `threw`/`result` reads** are the one still open here, and they are a different
+//       shape from the other two: `__gt_promise_drop` reads `gt.status`, picks an arm, and then reads
+//       `gt.threw`/`gt.result` — while a completion landing on another M can move `status` in between. It is
+//       not a lost update (each word is one aligned machine word, written whole) but a torn VIEW across two
+//       of them, and closing it means publishing the completion as one transition the drop can test once —
+//       which is a GT state-machine change, not an atomic. ⚠ Reaching it needs a promise dropped by one M
+//       while another completes its thread, which per-await linearity makes unreachable for `await` and
+//       leaves open for `cancel`.
 
 // The symbol prefix. Its `__gt_` head puts a releaser inside the syscall-shim family exactly as the rest of
 // the green-thread runtime is, which matters because a drop callee it calls may reach a kernel call.

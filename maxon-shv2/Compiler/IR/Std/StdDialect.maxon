@@ -1259,9 +1259,19 @@ export union StdOp
 	// `osEventCreate()` = `CreateEventA(NULL, FALSE, FALSE, NULL)` — an AUTO-RESET, initially-unsignaled event (the
 	// netpoll's wake). No value operands; DEFINES the event handle.
 	osEventCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
-	// `osThreadCreate(entryPtr)` = `CreateThread(NULL, 0, entryPtr, NULL, 0, NULL)` — start the IOCP completion thread.
-	// One VALUE operand (the `.text` entry address, from a `funcAddr`); DEFINES the thread handle.
-	osThreadCreate(resultId ValueId, entryPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osThreadCreate(entryPtr, arg)` = `CreateThread(NULL, 0, entryPtr, arg, 0, NULL)` — start an OS thread on
+	// `entryPtr` with `arg` as its single `lpParameter`. TWO VALUE operands (the `.text` entry address, from a
+	// `funcAddr`; and the argument word); DEFINES the thread handle.
+	//
+	// ⚠ **`arg` IS A REAL OPERAND AND WAS A HARD-CODED `NULL` (G1).** The IOCP completion thread — the one
+	// caller until multi-M — reads all of its state from `.data` globals and wants nothing passed in, so the
+	// parameter had no producer and was written as a constant. A worker M cannot be served that way: EVERY M
+	// runs the SAME `__sched_worker_loop` and is told which P it owns through exactly this word, before it has
+	// any TLS to read one from. Both references pass it (v1 `X64Backend.maxon:8933`, the bootstrap's
+	// `SpawnWorker`), and the bootstrap's own comment records the bug that a stale register in this slot
+	// caused — `__sched_worker_loop` handed a stack pointer as its P*. A second `osThreadCreateWithArg` op
+	// would be this one plus a constant, which is the thin-wrapper rule in op form.
+	osThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 	// `osLockInit(lockPtr)` = `InitializeCriticalSection(lockPtr)`. One VALUE operand (the CRITICAL_SECTION region), no result.
 	osLockInit(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 	// `osLockEnter(lockPtr)` = `EnterCriticalSection(lockPtr)` — the run-queue guard's acquire at a main-thread mutation
@@ -2055,9 +2065,10 @@ export union StdOp
 	// DOWN.** `MmRuntime.emitRefcountCheckToLastOwner` is a plain load/add/store and its comment names "the
 	// day green threads land" as the day it must become atomic. Green threads HAVE landed and shv2 stayed
 	// correct, because a single-M cooperative scheduler switches only at explicit yield points and no two
-	// green threads ever execute a refcount update concurrently. The real trigger is MULTI-M — two OS
-	// threads running Maxon code at once — which is a later rung, and which is why this one delivers the
-	// vocabulary and changes no refcount.
+	// green threads ever execute a refcount update concurrently. The real trigger is MULTI-M — two OS threads
+	// running Maxon code at once — and G1 has since BUILT that, behind `MAXON_MAX_PROCS`, with the default left
+	// at one M precisely so this flip can be a rung of its own. ⇒ this file's refcount ops are item 2 on
+	// `SchedRuntime.maxon`'s audit list, and the day that default moves is the day they must have moved first.
 	//
 	// **`atomicCas(result, addr, expected, replacement)`** — a 64-bit compare-and-swap of the word at
 	// `addr`. ⚠ **`result` IS 1 ON SUCCESS AND 0 ON FAILURE — NOT THE PRIOR VALUE.** That is v1's stated
@@ -2119,6 +2130,55 @@ export union StdOp
 	// CREATION on Linux it can set the thread-pointer register itself, and these two lowerings collapse to
 	// one instruction each.
 	currentThreadToken(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// ⭐⭐ **THE FOUR MULTI-M OPS (G1) — THREE FOR PER-OS-THREAD STORAGE, ONE FOR THE WAKE.** ⚠ APPENDED AT
+	// THE VERY END OF THE UNION, past `currentThreadToken`, per the band-append invariant every entry above
+	// states: a mid-band insert is silently swallowed by a `… to X` range arm. All four carry
+	// `category: system`, placing them logically in the system band independent of this tail position.
+	//
+	// ⭐ **WHY TLS AND NOT `currentThreadToken` + A TABLE.** The token above answers *"which OS thread am
+	// I?"*; these answer *"what did THIS OS thread put here?"* — and the scheduler needs the second on the
+	// hottest path it has (every syscall shim entry reads the current P). A token would have to be a KEY
+	// into a table somebody searches; a TLS slot IS the storage, reached in two loads with no compare and
+	// no search. Both references make the same split and for the same reason: v1 keeps
+	// `__sched_tls_index`/`__sched_tls_teb_offset` beside its owner-token read, not instead of it.
+
+	// **`tlsAlloc(result) -> slot index`** = `TlsAlloc()`. Called ONCE, from `__gt_init`, before any thread
+	// but the main one exists. The index it answers is turned into a TEB byte offset ONCE and published;
+	// nothing calls this a second time, which is why there is no matching `TlsFree` op — the slot lives for
+	// the process, exactly as v1 and the bootstrap leave theirs.
+	tlsAlloc(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// **`tlsSetValue(index, value)`** = `TlsSetValue(index, value)` — publish this OS thread's P pointer.
+	// ⚠ **THE WRITE IS AN API CALL WHERE THE READ IS TWO LOADS, AND THAT ASYMMETRY IS DELIBERATE.** The
+	// `gs:`-relative read below is only valid for the first 64 slots; `TlsSetValue` is valid for every slot
+	// and is the only writer that keeps the expansion array coherent. The write happens twice per OS thread
+	// in the whole program's life (once in `__gt_init`, once per worker entry), so it is the cold half and
+	// buys correctness for nothing. Both references split it the same way.
+	tlsSetValue(indexId ValueId, valueId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// **`tlsSlotLoad(result, tebOffset)`** — read this OS thread's TLS slot: `mov result, gs:[tebOffset]`,
+	// where `tebOffset` is the PRECOMPUTED `index * 8 + 0x1480` a caller loaded from a `.data` word. TWO
+	// LOADS AND NO CALL, which is the whole point: `TlsGetValue` is an exported function with a range check,
+	// and this sits under every syscall shim entry and every current-GT read in the scheduler.
+	//
+	// ⚠ **`isCall: false` AND `isPure: false`.** It reaches no OS and clobbers no argument register, so it
+	// is not a call; and it must not be hoisted, for `currentThreadToken`'s reason one step stronger — a
+	// green thread resumed on a DIFFERENT M would keep the old M's P for ever.
+	//
+	// ⚠ **THE ENCODING TRAP THE REFERENCES BOTH HIT IS NOT REPRESENTABLE HERE.** `mov r, gs:[base]` with
+	// `base` = rbp/r13 encodes as mod=00 rm=101, which is RIP-relative rather than `[rbp]` — v1 panics on it
+	// and the C# bootstrap records a live bug from pinning R11 unconditionally. shv2's `encodeModRmBaseDisp`
+	// already emits the zero-`disp8` form for exactly those two registers (its own comment says so), so the
+	// x64 lowering routes through it and the allocator may colour the operand anywhere.
+	tlsSlotLoad(resultId ValueId, tebOffsetId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// **`osSetEvent(handle)`** = `SetEvent(handle)` — signal an auto-reset event. The wake half of the
+	// worker park's Dekker pair, and the twin of the `osWaitHandle` a parked worker blocks in.
+	//
+	// ⚠ It is a NEW op even though `SetEvent` was already an IAT slot: the only prior caller is the
+	// hand-assembled `__io_completion_loop`, which emits the import call as raw bytes because it is not a
+	// Std function at all. A builder-built caller cannot reach that, and the alternative — hand-assembling
+	// the worker loop — would put the scheduler's newest logic in the one form that gets no register
+	// allocation and no frame checking.
+	osSetEvent(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -2255,7 +2315,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr) then insertUseQuint(referenced, a: namePtr, b: saPtr, c: iocp, d: readPtr, e: writePtr)
 		osIocpCreate then break 'u'
 		osEventCreate then break 'u'
-		osThreadCreate(_, entryPtr) then referenced.insert(entryPtr)
+		osThreadCreate(_, entryPtr, arg) then insertUsePair(referenced, a: entryPtr, b: arg)
 		osLockInit(lockPtr) then referenced.insert(lockPtr)
 		osLockEnter(lockPtr) then referenced.insert(lockPtr)
 		osLockLeave(lockPtr) then referenced.insert(lockPtr)
@@ -2358,6 +2418,13 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		atomicRmw(_, addr, operand, _) then insertUsePair(referenced, a: addr, b: operand)
 		// The thread token reads no VALUE at all — its input is the OS thread it is asked on. It defines one.
 		currentThreadToken then break 'u'
+		// G1: `tlsAlloc` asks the OS for a slot and reads no value; the other three each read every operand
+		// they are given. `tlsSlotLoad`'s `tebOffset` is a genuine register read — it is the ADDRESS the `gs:`
+		// load indexes by — so omitting it would free a register the instruction still needs.
+		tlsAlloc then break 'u'
+		tlsSetValue(index, value) then insertUsePair(referenced, a: index, b: value)
+		tlsSlotLoad(_, tebOffset) then referenced.insert(tebOffset)
+		osSetEvent(handle) then referenced.insert(handle)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -2474,7 +2541,7 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osPipeCreate gives DefinedValueLookup.none
 		osIocpCreate(resultId) gives DefinedValueLookup.defines(resultId)
 		osEventCreate(resultId) gives DefinedValueLookup.defines(resultId)
-		osThreadCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osThreadCreate(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osLockInit to osLockLeave gives DefinedValueLookup.none
 		osReadOverlapped(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osLastError(resultId) gives DefinedValueLookup.defines(resultId)
@@ -2558,6 +2625,13 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		atomicCas(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		atomicRmw(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		currentThreadToken(resultId) gives DefinedValueLookup.defines(resultId)
+		// G1: the two READING ops define their answer (the slot index, the stored word); the two WRITING ones
+		// define nothing — `tlsSetValue` publishes into the OS thread's slot and `osSetEvent` into a kernel
+		// object, exactly as `osLockEnter`/`osLockLeave` do.
+		tlsAlloc(resultId) gives DefinedValueLookup.defines(resultId)
+		tlsSetValue gives DefinedValueLookup.none
+		tlsSlotLoad(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osSetEvent gives DefinedValueLookup.none
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -2698,7 +2772,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr) gives StdOp.osPipeCreate(remappedValue(namePtr, subst: subst), saPtrId: remappedValue(saPtr, subst: subst), iocpId: remappedValue(iocp, subst: subst), readPtrId: remappedValue(readPtr, subst: subst), writePtrId: remappedValue(writePtr, subst: subst))
 		osIocpCreate gives op
 		osEventCreate gives op
-		osThreadCreate(resultId, entryPtr) gives StdOp.osThreadCreate(resultId, entryPtrId: remappedValue(entryPtr, subst: subst))
+		osThreadCreate(resultId, entryPtr, arg) gives StdOp.osThreadCreate(resultId, entryPtrId: remappedValue(entryPtr, subst: subst), argId: remappedValue(arg, subst: subst))
 		osLockInit(lockPtr) gives StdOp.osLockInit(remappedValue(lockPtr, subst: subst))
 		osLockEnter(lockPtr) gives StdOp.osLockEnter(remappedValue(lockPtr, subst: subst))
 		osLockLeave(lockPtr) gives StdOp.osLockLeave(remappedValue(lockPtr, subst: subst))
@@ -2781,6 +2855,12 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		atomicCas(resultId, addr, expected, replacement) gives StdOp.atomicCas(resultId, addrId: remappedValue(addr, subst: subst), expectedId: remappedValue(expected, subst: subst), replacementId: remappedValue(replacement, subst: subst))
 		atomicRmw(resultId, addr, operand, opcode) gives StdOp.atomicRmw(resultId, addrId: remappedValue(addr, subst: subst), operandId: remappedValue(operand, subst: subst), opcode: opcode)
 		currentThreadToken(resultId) gives StdOp.currentThreadToken(resultId)
+		// G1: the exact mirror of `collectStdOpUses`'s four arms — every read is a rewrite, every result id is
+		// a DEF carried through unchanged.
+		tlsAlloc(resultId) gives StdOp.tlsAlloc(resultId)
+		tlsSetValue(index, value) gives StdOp.tlsSetValue(remappedValue(index, subst: subst), valueId: remappedValue(value, subst: subst))
+		tlsSlotLoad(resultId, tebOffset) gives StdOp.tlsSlotLoad(resultId, tebOffsetId: remappedValue(tebOffset, subst: subst))
+		osSetEvent(handle) gives StdOp.osSetEvent(remappedValue(handle, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

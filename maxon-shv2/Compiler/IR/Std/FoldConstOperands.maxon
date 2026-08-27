@@ -258,9 +258,10 @@ function classifyFoldableDef(op StdOp, def StdFoldableDef)
 		// F1c: both DO define a value, and it is an address the OS chose at RUN time — never a compile-time
 		// constant, exactly as `osAllocPages`'s page base is not.
 		osCommitPages to osReservePages then def.recordNeither()
-		// F2: all three define a value read out of memory or out of the machine at RUN time — a CAS's success
-		// boolean, an RMW's prior word, an OS thread's identity — so none is a compile-time constant.
-		atomicCas to currentThreadToken then def.recordNeither()
+		// F2 + G1: every value-defining member of this range answers something read out of memory or out of
+		// the machine at RUN time — a CAS's success boolean, an RMW's prior word, an OS thread's identity — so
+		// none is a compile-time constant.
+		atomicCas to osSetEvent then def.recordNeither()
 	end 'c'
 end 'classifyFoldableDef'
 
@@ -528,8 +529,9 @@ function tryFold(op StdOp, constMap ConstValueMap) returns StdOp
 		osCommitPages to osReservePages gives op
 		// F2: an atomic's operands are an ADDRESS and the words it compares and stores, and the ISAs' atomic
 		// forms take a register for each — `lock cmpxchg`/`lock xadd` have no immediate operand at all, and an
-		// LL/SC loop compares and stores registers. The thread token has no operand to fold.
-		atomicCas to currentThreadToken gives op
+		// LL/SC loop compares and stores registers. The thread token and `TlsAlloc` have no operand to fold at
+		// all, and the remaining G1 members hand theirs to an import in a register.
+		atomicCas to osSetEvent gives op
 	end 'f'
 end 'tryFold'
 

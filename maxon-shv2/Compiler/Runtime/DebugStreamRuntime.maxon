@@ -40,7 +40,7 @@
 // ⚠⚠ **THE LOCK IS A CRITICAL_SECTION, NOT THE REFERENCE'S TICKET SPINLOCK, AND THAT IS A DIVERGENCE
 // WITH A REASON.** A ticket lock is `atomic_xadd` twice, and the Std tier has NO ATOMIC OP AT ALL — not
 // one, in the whole dialect. shv2 already owns a real OS mutex (`osLockInit`/`osLockEnter`/`osLockLeave`,
-// the IOCP substrate's `__io_lock`), which serializes the critical section exactly as the ticket lock
+// the scheduler's `__sched_lock`), which serializes the critical section exactly as the ticket lock
 // does and needs no vocabulary this tier does not have. Reproducing the reference's spin would mean
 // adding atomics to the IR for one debug-only producer, which is the "a COPY needs a reason exactly as
 // much as a DIVERGENCE does" rule pointing the other way.
@@ -530,7 +530,7 @@ let DsBufSizeLabel = b"__ds_buf_size"
 // `buf_size - 1`, cached so the ring's modulo is one AND.
 let DsBufMaskLabel = b"__ds_buf_mask"
 let DsStartTsLabel = b"__ds_start_ts"
-// A POINTER to the slab-allocated CRITICAL_SECTION, exactly as `GtRuntime`'s `__io_lock` is a pointer to
+// A POINTER to the slab-allocated CRITICAL_SECTION, exactly as `SchedRuntime`'s `__sched_lock` is a pointer to
 // its own: `InitializeCriticalSection` needs a valid region to initialize in place, and a `.data` slot is
 // one machine word.
 let DsLockLabel = b"__ds_lock"
@@ -547,10 +547,9 @@ export let DsAllocIdLabel = b"__mm_alloc_id"
 //
 //   • the CRITICAL_SECTION is LIVE for the whole process, because every event site enters and leaves it until
 //     `__ds_shutdown` and there is no later moment at which nothing can be emitting. Never freeing it is not a
-//     leak, it is its lifetime — the same reading `__io_lock`'s region has.
+//     leak, it is its lifetime — the same reading `__sched_lock`'s region has.
 //   • the ENV BUFFER is dead the instant `OpenFileMappingA` has resolved the name into a handle, which happens
 //     inside `__ds_init`'s own entry block. It is freed there.
-let DsCriticalSectionBytes = 40
 // The monitor names its segments `maxon_ds_<pid>_<8 hex>`; 512 bytes is two orders of magnitude of head
 // room and one slab bump.
 let DsEnvBufferBytes = 512
@@ -560,12 +559,15 @@ let DsEnvBufferBytes = 512
 // `runtimeGlobals()` and GtRuntime's `gtRuntimeGlobals()`.
 export function debugStreamRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-	out.push(DataSectionEntry.create(String.from(DsBaseLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(DsBufSizeLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(DsBufMaskLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(DsStartTsLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(DsLockLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(DsAllocIdLabel), valueType: StdType.i64, value: 0))
+	// The first five are written by `__ds_init` alone, which the ENTRY STUB runs before `main` and therefore
+	// before any green thread, let alone any worker M. The ring itself is not among them: it lives in shared
+	// MEMORY and is guarded by the CRITICAL_SECTION `__ds_lock` points at.
+	pushRuntimeGlobal(out, label: DsBaseLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: DsBufSizeLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: DsBufMaskLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: DsStartTsLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: DsLockLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: DsAllocIdLabel, sharing: MultiMSharing.atomicStep)
 	return out
 end 'debugStreamRuntimeGlobals'
 
@@ -596,7 +598,7 @@ end 'buildCarriesDebugStream'
 // blob it renders is what the monitor reads names out of.
 //
 // ⚠ **`usesGt` IS TAKEN RATHER THAN GUESSED, AND IT DECIDES ONE FIELD.** Every LOG entry stamps the
-// emitting green thread, which lives in `__gt_current_gt` — a `.data` slot only a `usesGt` build lays out.
+// emitting green thread, which lives in `P->currentGt` — reached through a `.data` slot only a `usesGt` build lays out.
 // A producer that read it unconditionally would put a `globalAddr` for a slot the image does not have into
 // every scalar program's trace runtime, and the backend panics at the relocation rather than at the read.
 // See `emitStoreLogIdentity`.
@@ -664,8 +666,8 @@ function buildDsInit(module StdModule, envNameLabel ByteArray, rawFree ByteArray
 	// The two scratch regions. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing contract),
 	// which is what lets the env lookup below need no "was it set?" branch: an absent variable leaves the
 	// buffer naming the EMPTY string, and `OpenFileMappingA("")` fails exactly as a missing segment does. The
-	// lock outlives this function; the env buffer does not — see `DsCriticalSectionBytes`.
-	let lockSize = emitConst(module, block: entry, value: DsCriticalSectionBytes, ids: ids)
+	// lock outlives this function; the env buffer does not — see `CriticalSectionBytes`.
+	let lockSize = emitConst(module, block: entry, value: CriticalSectionBytes, ids: ids)
 	let lock = ids.mint()
 	module.appendOp(entry, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockSize)))
 	module.appendOp(entry, op: StdOp.osLockInit(lock))
@@ -753,23 +755,6 @@ function buildDsShutdown(module StdModule)
 end 'buildDsShutdown'
 
 
-// A `.data` machine word, loaded / stored. `MmRuntime`'s existing readers hoist the `globalAddr` across a
-// load-then-store PAIR and are deliberately left as they are; these two are for the single accesses below,
-// where a hoist would only widen a live range. `globalAddr` is `isPure: true` and freely rematerializable,
-// so the allocator is free to fold two of them back together.
-function emitLoadGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
-	let addr = ids.mint()
-	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
-	let value = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(value, addrId: addr, offset: 0, valueType: StdType.i64))
-	return value
-end 'emitLoadGlobalWord'
-
-function emitStoreGlobalWord(module StdModule, block IrBlock, label ByteArray, value ValueId, ids ValueMinter)
-	let addr = ids.mint()
-	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
-	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0, valueId: value, valueType: StdType.i64))
-end 'emitStoreGlobalWord'
 
 // `[base + offset] += 1` — the two ring counters the monitor's closing summary reads (`total_events`,
 // `dropped_events`). Both increments happen under the ring lock, which is why a plain read-modify-write is
@@ -1049,25 +1034,43 @@ end 'buildDsEmitMm'
 // pile. Read HERE rather than passed in from the call site, so a site costs only its own arguments and
 // there is one place to get it right.
 //
-// ⚠ **`p_id` IS ALWAYS ZERO, AND THAT IS A FACT ABOUT shv2 RATHER THAN A HOLE.** The reference schedules
-// green threads across N processors and stamps which one ran the event; shv2 is single-M — there is no `P`
-// to name — so the wire's zero IS the answer. `unit_id` is what shv2's own emitters demux by, and it is
-// carried on every one of these entries.
+// ⚠ **`p_id` IS ALWAYS ZERO, AND THAT IS NOW A CHOICE RATHER THAN AN ABSENCE.** The reference schedules
+// green threads across N processors and stamps which one ran the event; shv2 HAS a `P` since G1 (its id is
+// `SchedRuntime.POffId`) but runs one M by default, so every event would carry the same 0 and the field would
+// cost a TLS read per entry to say nothing. It becomes worth stamping the day more than one M runs by
+// default, which is the same day it stops being constant. `unit_id` is what shv2's own emitters demux by, and
+// it is carried on every one of these entries.
 //
-// ⚠ **`__gt_current_gt` IS READ ONLY WHEN THIS BUILD LAID THAT SLOT OUT.** It is `usesGt`'s `.data`
-// (`Compiler.maxon`'s `gtGlobals` arm), so a `globalAddr` naming it in a scalar program names a slot the
-// image does not have and the backend panics at the relocation — the trap `emitMmEvent`'s header records
-// for `__ds_base` in an untraced build, one family over. A scalar program HAS no green thread, so zero is
-// again the true answer rather than a stand-in for one.
-function emitStoreLogIdentity(module StdModule, block IrBlock, entryPtr ValueId, usesGt bool, ids ValueMinter)
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
+// ⚠ **THE CURRENT GT IS READ ONLY WHEN THIS BUILD CARRIES THE SCHEDULER.** The read goes through the P
+// (`SchedRuntime`), whose `.data` word is `usesGt`'s (`Compiler.maxon`'s `gtGlobals` arm), so naming it in a
+// scalar program would name a slot the image does not have and the backend would panic at the relocation —
+// the trap `emitMmEvent`'s header records for `__ds_base` in an untraced build, one family over. A scalar
+// program HAS no green thread, so zero is again the true answer rather than a stand-in.
+//
+// ⛔⛔ **AND IT IS THE `OrZero` READ, NOT THE PLAIN ONE, BECAUSE THIS IS THE ONE READER THAT CANNOT PROMISE
+// THE SCHEDULER EXISTS.** Every reader inside `GtRuntime` is downstream of a lazy `__gt_init`; a log event is
+// not — a program may log before its first `async`, and the tracing harness is exactly the situation in which
+// it does. MEASURED when this used the plain read: a `--debugstream` green-thread program that logs one event
+// before its first `async`, under `maxon monitor`, went from exit 42 to a SEGMENTATION FAULT, because the
+// uninitialized TEB offset addresses `NT_TIB.ExceptionList` rather than a null TLS slot. The `.data` word this
+// replaced could not fail that way, which is why the discipline had never had to be written down.
+//
+// It returns the block to continue in, because the guarded read branches.
+function emitStoreLogIdentity(module StdModule, func IrFunction, block IrBlock, entryPtr ValueId, usesGt bool, ids ValueMinter) returns IrBlock
+	var cur = block
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	var gt = zero
 	if usesGt 'scheduled'
-		gt = emitLoadGlobalWord(module, block: block, label: GtCurrentGtLabel, ids: ids)
+		let liveGt = ids.mint()
+		cur = emitLoadCurrentGtOrZero(module, func: func, cur: cur, gtId: liveGt, ids: ids)
+		gt = liveGt
 	end 'scheduled'
 
-	module.appendOp(block, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffGt, valueId: gt, valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffPid, valueId: zero, valueType: StdType.i64))
+	module.appendOp(cur, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffGt, valueId: gt, valueType: StdType.i64))
+	// ⚠ The zero the PID field stores is minted in `block`, which dominates `cur` on every arm above, so the
+	// branch the guarded read introduces cannot strand it.
+	module.appendOp(cur, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffPid, valueId: zero, valueType: StdType.i64))
+	return cur
 end 'emitStoreLogIdentity'
 
 // `value & mask` — one field of a packed word, narrowed to its wire width. `emitShiftedField`'s sibling,
@@ -1157,7 +1160,7 @@ function buildDsEmitLogPhase(module StdModule, usesGt bool)
 	let entryBytes = emitConst(module, block: entry, value: DsLogPhaseEntryBytes, ids: ids)
 	let entryPtr = emitLogEntryOpen(module, func: func, entry: entry, eventType: eventType, entryBytes: entryBytes, write: write, done: done, ids: ids)
 
-	emitStoreLogIdentity(module, block: write, entryPtr: entryPtr, usesGt: usesGt, ids: ids)
+	write = emitStoreLogIdentity(module, func: func, block: write, entryPtr: entryPtr, usesGt: usesGt, ids: ids)
 	let phaseId = emitMaskedField(module, block: write, value: nameId, mask: DsLogU16FieldMask, ids: ids)
 	let unitField = emitShiftedField(module, block: write, value: unitId, shift: DsLogUnitIdShift, ids: ids)
 	let fields = emitBin(module, block: write, a: phaseId, b: unitField, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -1195,7 +1198,7 @@ function buildDsEmitLogEvent(module StdModule, usesGt bool)
 	let entryBytes = emitConst(module, block: entry, value: DsLogEventEntryBytes, ids: ids)
 	let entryPtr = emitLogEntryOpen(module, func: func, entry: entry, eventType: eventType, entryBytes: entryBytes, write: write, done: done, ids: ids)
 
-	emitStoreLogIdentity(module, block: write, entryPtr: entryPtr, usesGt: usesGt, ids: ids)
+	write = emitStoreLogIdentity(module, func: func, block: write, entryPtr: entryPtr, usesGt: usesGt, ids: ids)
 	let fields = emitPackedLogFields(module, block: write, category: category, level: level, u16Field: nameId, unitId: unitId, ids: ids)
 	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffFields, valueId: fields, valueType: StdType.i64))
 	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffArg0, valueId: arg0, valueType: StdType.i64))
@@ -1265,7 +1268,7 @@ function buildDsEmitLogText(module StdModule, usesGt bool)
 	let eventType = emitConst(module, block: entry, value: DsEvLogText, ids: ids)
 	let entryPtr = emitLogEntryOpen(module, func: func, entry: entry, eventType: eventType, entryBytes: entryBytes, write: write, done: done, ids: ids)
 
-	emitStoreLogIdentity(module, block: write, entryPtr: entryPtr, usesGt: usesGt, ids: ids)
+	write = emitStoreLogIdentity(module, func: func, block: write, entryPtr: entryPtr, usesGt: usesGt, ids: ids)
 	let fields = emitPackedLogFields(module, block: write, category: category, level: level, u16Field: length, unitId: unitId, ids: ids)
 	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffFields, valueId: fields, valueType: StdType.i64))
 

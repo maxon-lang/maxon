@@ -357,6 +357,21 @@ export enum IatSlot
 	// nothing references still costs its IAT thunk, its import-lookup entry and its Hint/Name record, and a
 	// program that never measures its own CPU time should not pay for one.
 	QueryThreadCycleTime
+	// ⭐⭐ **THE TWO PER-OS-THREAD-STORAGE IMPORTS (G1).** APPENDED AFTER `QueryThreadCycleTime` for the reason
+	// every entry above states, and it is the LAST kernel32 append — the `ws2_32` note below still bounds it.
+	//
+	// `TlsAlloc` reserves the one slot the scheduler keeps its per-OS-thread `ProcContext*` in, once, at
+	// `__gt_init`; `TlsSetValue` publishes that pointer as each M adopts its P. There is deliberately no
+	// `TlsGetValue`: the READ is `mov reg, gs:[index*8 + 0x1480]`, two loads and no call at all, which is why
+	// it is an instruction (`TargetOp.x64GsLoadRegBase`) rather than an import. See `StdOp.tlsSlotLoad`.
+	//
+	// ⚠ It joins the OPTIONAL TRAILING BAND, exactly as the DebugStream four, the attached-subprocess two, the
+	// machine query and the thread-CPU read do. A green-thread program needs the band anyway — its scheduler
+	// init reads `MAXON_MAX_PROCS` through `GetEnvironmentVariableA` and its processor count through
+	// `GetActiveProcessorCount`, both already in it — so the two additions cost such a program nothing beyond
+	// themselves, and cost a program with no green threads nothing at all.
+	TlsAlloc
+	TlsSetValue
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -383,7 +398,7 @@ end 'IatSlot'
 // which would point its thunk at another library's Hint/Name entry.
 function slotDll(slot IatSlot) returns ImportDll
 	return match slot 'dll'
-		ExitProcess to QueryThreadCycleTime gives ImportDll.kernel32
+		ExitProcess to TlsSetValue gives ImportDll.kernel32
 		WSAStartup to closesocket gives ImportDll.ws2_32
 	end 'dll'
 end 'slotDll'
@@ -440,11 +455,11 @@ end 'iatSlotIndex'
 // silently-repointed import table — the trade is not close.
 //
 // ⚠ **THE COUNT IN THAT PARAGRAPH IS DERIVED FROM THE ENUM, NOT FROM THIS SENTENCE.** Count the band off
-// the `GetEnvironmentVariableA to QueryThreadCycleTime` range below rather than off the prose; a
+// the `GetEnvironmentVariableA to TlsSetValue` range below rather than off the prose; a
 // producer added later must extend the range (or fail this total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
-		GetEnvironmentVariableA to QueryThreadCycleTime gives true
+		GetEnvironmentVariableA to TlsSetValue gives true
 		ExitProcess to GetModuleFileNameA gives false
 		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
 		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
@@ -1074,7 +1089,12 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// Both the table builder and the relocation patcher must answer these two questions the SAME way — the
 	// builder decides where each thunk lands and the patcher points call sites at it, so a disagreement
 	// would aim every call at the wrong import. Read once, passed to both.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks
+	// ⚠ `usesGt` joins the four producers (G1): the scheduler's per-P init reads `MAXON_MAX_PROCS` through
+	// `GetEnvironmentVariableA` and the machine's processor count through `GetActiveProcessorCount`, and its
+	// TLS pair lives in this band too — so a green-thread program needs the whole band, exactly as a traced or
+	// spawning one does. A program with no green threads is unaffected, which is what keeps a non-async
+	// binary byte-identical across this rung.
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt
 	let sockets = codeResult.stdModule.usesSockets
 	let idata = buildImportSection(idataRva, optionalImports: optionalImports, sockets: sockets)
 	let idataSize = idata.data.count()

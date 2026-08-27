@@ -517,6 +517,9 @@ type StdToArm64Lowering
 			// system-register read on macOS and a ZERO-argument syscall on Linux, and a syscall never touches the
 			// stack. So none of the three needs an outgoing-argument region.
 			atomicCas to currentThreadToken gives 0
+			// G1: the three TLS ops and the event signal are x64-windows only and are REFUSED below rather than
+			// lowered, so no frame is reserved for arguments that will never be marshalled here.
+			tlsAlloc to osSetEvent gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -703,6 +706,11 @@ type StdToArm64Lowering
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.lowerAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId, dstRef: dstRef)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.lowerAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode, dstRef: dstRef)
 			currentThreadToken(resultId) then self.lowerCurrentThreadToken(resultId, dstRef: dstRef)
+			// G1: the multi-M substrate is x64-windows only, exactly like the IOCP ops above it — `TlsAlloc` /
+			// `TlsSetValue` / the `gs:`-relative slot read / `SetEvent` are Win32 shapes with no AAPCS64 analogue
+			// (Darwin's is `pthread_getspecific` + a libc this lane does not link), so a lowering here would be
+			// untested dead code no test could reach.
+			tlsAlloc to osSetEvent then panic("lowerStdToArm64: the per-OS-thread storage ops and the event signal are x64-windows only — the multi-M scheduler substrate is x64-windows-gated at this rung")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -765,6 +773,8 @@ type StdToArm64Lowering
 			// F2: all three are value-producing body ops. The CAS/RMW retry loop branches, but inside one macro-op's
 			// encoder — never between IR blocks, exactly as the fill ladder above.
 			atomicCas to currentThreadToken then panic("lowerStdToArm64: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
+			// G1: none of the four terminates a block; two produce a value and two are void side effects.
+			tlsAlloc to osSetEvent then panic("lowerStdToArm64: a TLS op or an event signal appeared as a block terminator (lowering bug — none of the four is a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

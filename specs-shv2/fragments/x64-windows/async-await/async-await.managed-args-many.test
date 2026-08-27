@@ -35,25 +35,28 @@ ExitCode: 8
 data {
   __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
   __mm_alloc_count@8 = i64 0
-  __gt_current_gt@16 = i64 0
-  __gt_run_queue_head@24 = i64 0
-  __gt_run_queue_tail@32 = i64 0
-  __gt_init_done@40 = i64 0
-  __gt_system_stack_top@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_trace_counter@80 = i64 0
-  __gt_trace_digits@88 = i64 0
-  __gt_clock_ticks@96 = i64 0
-  __gt_clock_freq@104 = i64 0
-  __gt_proc_count@112 = i64 0
-  __gt_proc_handles_base@120 = i64 0
-  __gt_proc_gts_base@128 = i64 0
-  __gt_live_count@136 = i64 0
-  __slab_arena_list@144 = i64 0
-  __slab_arena_map_l1@152 = i64 0
-  __slab_state@160 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __sched_active_workers@104 = i64 1
+  __sched_max_active_workers@112 = i64 1
+  __sched_tls_index@120 = i64 0
+  __sched_tls_teb_offset@128 = i64 0
+  __sched_procs@136 = i64 0
+  __sched_num_procs@144 = i64 0
+  __sched_shutdown_flag@152 = i64 0
+  __sched_lock@160 = i64 0
+  __slab_arena_list@168 = i64 0
+  __slab_arena_map_l1@176 = i64 0
+  __slab_state@184 = i64 0
 }
 
 func @joinArgs {
@@ -367,12 +370,15 @@ func @main {
     x64.callDirect __mm_incref
     x64.leaRegFunc rcx, [rip + joinArgs]
     x64.callDirect __gt_spawn
-    x64.storeBaseDispReg.word64 [r8 + 200], rbx
-    x64.storeBaseDispReg.word64 [r8 + 208], r12
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], rbx
+    x64.storeBaseDispReg.word64 [r13 + 208], r12
     x64.leaRegFunc rax, [rip + __gt_release_joinArgs]
-    x64.storeBaseDispReg.word64 [r8 + 176], rax
+    x64.storeBaseDispReg.word64 [r13 + 176], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
     x64.loadRegSlot rcx, slot0
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r13
     x64.callDirect __managed_push
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref

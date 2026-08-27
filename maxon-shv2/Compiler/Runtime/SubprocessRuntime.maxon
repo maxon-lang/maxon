@@ -232,24 +232,6 @@ let SubpErrorPrefix = b"win32 error "
 // The widest decimal an i64 can render to, plus its terminator — the scratch `__int_to_string` writes into.
 let DecimalDigitsMax = 24 as ParsedInt
 
-// ⭐ **A NUL-TERMINATED LITERAL, STORED BYTE BY BYTE INTO A FRESH SLAB BUFFER.** The compiler knows the bytes
-// at BUILD time, so this is a loop in the BUILDER that emits one `storeIndirect` per byte — not a loop in the
-// emitted program. An `.rdata` blob would need a symbol and a relocation for what is a handful of immediates,
-// and the runtime has no way to name one anyway (`rdataAddr` carries a label the parser interns).
-function emitSubpLiteralCString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
-	let sizeConst = emitConst(module, block: block, value: (text.count() + 1) as ParsedInt, ids: ids)
-	let buf = ids.mint()
-	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
-	for k in 0 upto text.count() 'each'
-		let ch = try text.get(k) otherwise panic("emitSubpLiteralCString: text.get OOB at {k}")
-		let byteConst = emitConst(module, block: block, value: ch, ids: ids)
-		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: k as ByteOffset, valueId: byteConst, valueType: StdType.u8))
-	end 'each'
-	// The terminator is the slab's own zeroing — the size arithmetic above is what reserves the byte for it.
-	return buf
-end 'emitSubpLiteralCString'
-
-
 // `ERROR_NOT_SUPPORTED` — what `subprocessLastErrorMessage()` reports for a request the runtime declines on
 // its own account rather than one the OS refused. Today that is exactly one request: a caller-built
 // environment block (see `buildSubpAttachedSpawn`).
@@ -1441,7 +1423,7 @@ function buildSubpLastError(module StdModule)
 	let code2 = emitLoadField(module, block: render, record: slotAddr2, offset: 0, ids: ids)
 	let digitCount = ids.mint()
 	module.appendOp(render, op: StdOp.call(digitCount, callee: IntToStringName, args: twoArgs(code2, second: digitsBuf)))
-	let prefix = emitSubpLiteralCString(module, block: render, ids: ids, text: SubpErrorPrefix)
+	let prefix = emitLiteralCString(module, block: render, ids: ids, text: SubpErrorPrefix)
 	let prefixLen = emitConst(module, block: render, value: SubpErrorPrefix.count() as ParsedInt, ids: ids)
 	let total = emitBin(module, block: render, a: prefixLen, b: digitCount, opcode: StdBinOpcode.add, ids: ids)
 	// The shared copy-out lays the PREFIX down and publishes `total` as the length; the digits are then
@@ -1615,12 +1597,18 @@ let CandidateSlackBytes = 4 as ParsedInt
 // unset. `GetEnvironmentVariableA` answers the size it NEEDS when the buffer is too small, so one retry at
 // exactly that size is provably enough and a second failure would be the OS contradicting itself
 // (`__md_current_path`'s straight-line retry, and not `__proc_exe_path`'s doubling loop).
+//
+// ⚠ **THE SAME THREE-ANSWER CONTRACT IS DECODED A SECOND TIME IN `SchedRuntime.emitResolveMaxProcs`, WITH THE
+// OPPOSITE POLICY, AND THAT DIFFERENCE IS THE POINT.** A `PATH` legitimately overflows any guess, so this one
+// RETRIES; a processor count that overflows 32 bytes is not a processor count, so that one DECLINES. What the
+// two share is the decoding — 0 means unset, `>= size` means too small — and they name each other so a change
+// to that reading is made in both.
 function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, varName ByteArray, outOffset ByteOffset, fallback ByteArray) returns IrBlock
 	var retry = module.addBlock(func, label: b"rpenvretry")
 	var useFallback = module.addBlock(func, label: b"rpenvnone")
 	let cont = module.addBlock(func, label: b"rpenvdone")
 
-	let nameBuf = emitSubpLiteralCString(module, block: cur, ids: ids, text: varName)
+	let nameBuf = emitLiteralCString(module, block: cur, ids: ids, text: varName)
 	let firstSize = emitConst(module, block: cur, value: EnvFirstGuessBytes, ids: ids)
 	let firstBuf = ids.mint()
 	module.appendOp(cur, op: StdOp.call(firstBuf, callee: SlabAllocName, args: argsOf(firstSize)))
@@ -1639,7 +1627,7 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	module.setTerminator(fits, op: StdOp.condBranch(tooSmall, thenBlockId: retry.id, elseBlockId: cont.id))
 
 	// The size Win32 named INCLUDES the terminator, so it is exactly what to allocate.
-	let nameBuf2 = emitSubpLiteralCString(module, block: retry, ids: ids, text: varName)
+	let nameBuf2 = emitLiteralCString(module, block: retry, ids: ids, text: varName)
 	let bigBuf = ids.mint()
 	module.appendOp(retry, op: StdOp.call(bigBuf, callee: SlabAllocName, args: argsOf(written)))
 	let written2 = ids.mint()
@@ -1647,7 +1635,7 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	emitStoreField(module, block: retry, record: state, offset: outOffset, value: bigBuf)
 	module.setTerminator(retry, op: StdOp.branch(cont.id))
 
-	let fallbackBuf = emitSubpLiteralCString(module, block: useFallback, ids: ids, text: fallback)
+	let fallbackBuf = emitLiteralCString(module, block: useFallback, ids: ids, text: fallback)
 	emitStoreField(module, block: useFallback, record: state, offset: outOffset, value: fallbackBuf)
 	module.setTerminator(useFallback, op: StdOp.branch(cont.id))
 	return cont

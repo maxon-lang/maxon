@@ -693,11 +693,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesParallelBoundary = true
 	end 'parallelBoundary'
 	// The two CPU-parallel QUERIES. Both declare nothing beside themselves, for the arm above's reason one
-	// family over: `__cpu_count` is an import call and a compare, `__sched_max_active_workers` is a constant
-	// return, and neither touches the heap, the scheduler or the leak gate. They are asked by PREFIX rather
-	// than by name because each prefix names one band with one entry today and the family test is what the
-	// E3104 gate reads for `__cpu_` anyway — the opposite trade from `__proc_`, whose two entries cost
-	// wildly different amounts and so must be asked for individually.
+	// family over: `__cpu_count` is an import call and a compare, `__sched_max_active_workers` is one `.data`
+	// load, and neither touches the heap, the scheduler or the leak gate.
+	//
+	// ⚠ **THEY ARE ASKED DIFFERENTLY, AND THE ASYMMETRY IS THE POINT.** `__cpu_` stays a PREFIX test because
+	// the E3104 gate reads the same family test anyway, so a second entry in that band is gated by
+	// construction. `__sched_` is a NAME test, because since G1 that band also holds four scheduler
+	// INTERNALS a program never writes — see `isSchedRuntimeCallee`, which carries what the prefix version
+	// would have got wrong.
 	if isCpuCountRuntimeCallee(callee) 'cpuCount'
 		usage.usesCpuCount = true
 	end 'cpuCount'

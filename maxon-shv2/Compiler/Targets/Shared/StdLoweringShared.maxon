@@ -614,7 +614,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osPipeCreate then break 'result'
 		osIocpCreate(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osEventCreate(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osThreadCreate(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osThreadCreate(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osLockInit to osLockLeave then break 'result'
 		osReadOverlapped(resultId, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osLastError(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -705,6 +705,12 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		atomicCas(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		atomicRmw(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		currentThreadToken(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// G1: the TLS slot index and the word read back out of the slot are both machine integers, so GPR; the
+		// two writing ops define nothing at all.
+		tlsAlloc(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		tlsSetValue then break 'result'
+		tlsSlotLoad(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osSetEvent then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

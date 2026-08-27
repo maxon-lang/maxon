@@ -549,7 +549,7 @@ end 'isSignaturelessCompilerCallee'
 // user's `var`, and the image writer renders them the same way. Nothing here is special-cased.
 export function runtimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-	out.push(DataSectionEntry.create(String.from(MmAllocCountLabel), valueType: StdType.i64, value: 0))
+	pushRuntimeGlobal(out, label: MmAllocCountLabel, sharing: MultiMSharing.atomicStep)
 
 	// The four traffic counters ride their OWN bit, so a program that never asks how much it allocated has
 	// the `.data` image it has always had — the same discipline every other runtime family's slots follow,
@@ -557,11 +557,11 @@ export function runtimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
 	// Their zero initializer is the honest starting state for a cumulative counter, exactly as
 	// `__slab_state`'s is for a region nothing has committed yet.
 	if usage.usesMmCounters 'trafficCounters'
-		out.push(DataSectionEntry.create(String.from(MmAllocTotalLabel), valueType: StdType.i64, value: 0))
-		out.push(DataSectionEntry.create(String.from(MmAllocBytesLabel), valueType: StdType.i64, value: 0))
-		out.push(DataSectionEntry.create(String.from(MmRawAllocCountLabel), valueType: StdType.i64, value: 0))
-		out.push(DataSectionEntry.create(String.from(MmRawLiveCountLabel), valueType: StdType.i64, value: 0))
-		out.push(DataSectionEntry.create(String.from(MmRawAllocBytesLabel), valueType: StdType.i64, value: 0))
+		pushRuntimeGlobal(out, label: MmAllocTotalLabel, sharing: MultiMSharing.atomicStep)
+		pushRuntimeGlobal(out, label: MmAllocBytesLabel, sharing: MultiMSharing.atomicStep)
+		pushRuntimeGlobal(out, label: MmRawAllocCountLabel, sharing: MultiMSharing.atomicStep)
+		pushRuntimeGlobal(out, label: MmRawLiveCountLabel, sharing: MultiMSharing.atomicStep)
+		pushRuntimeGlobal(out, label: MmRawAllocBytesLabel, sharing: MultiMSharing.atomicStep)
 	end 'trafficCounters'
 
 	return out
@@ -795,6 +795,17 @@ export function emitStoreField(module StdModule, block IrBlock, record ValueId, 
 	module.appendOp(block, op: StdOp.storeIndirect(record, offset: offset, valueId: value, valueType: StdType.i64))
 end 'emitStoreField'
 
+// ⭐⭐ **THE ADDRESS OF `record`'s FIELD AT `offset` — what an ATOMIC has to be handed (G2).**
+// `loadIndirect`/`storeIndirect` carry a field displacement and so never need this; `StdOp.atomicCas` and
+// `StdOp.atomicRmw` deliberately carry none — an atomic names ONE word and nothing else, which is stated at
+// those ops — so every atomic on a struct field has to compute the address first. Three sites were about to
+// spell those two ops out by hand (this file's refcount word, `SchedRuntime`'s P fields, `GtRuntime`'s
+// releaser slot), which is the same arithmetic written three times over three different structs.
+export function emitFieldAddr(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+	let displacement = emitConst(module, block: block, value: offset as ParsedInt, ids: ids)
+	return emitBin(module, block: block, a: record, b: displacement, opcode: StdBinOpcode.add, ids: ids)
+end 'emitFieldAddr'
+
 // ⭐ **ONE MACHINE-WORD SLOT — the stride every WORD-INDEXED buffer in the runtime uses.** A hash table's
 // `keys`/`states`/`hashes`/`values` columns, and the element buffer of any `Array` whose element is a managed
 // POINTER or a machine-word int, all address slot `i` at `base + i·8`.
@@ -889,23 +900,90 @@ export function emitUnary(module StdModule, block IrBlock, operand ValueId, opco
 	return v
 end 'emitUnary'
 
-// ⭐⭐ **`[label] = [label] <opcode> operand`, AND THE UPDATED VALUE — THE ONE SPELLING OF A `.data`
-// COUNTER UPDATE.** Six sites in this file maintain a counter word: the live allocation count on the alloc
-// and free paths, the four traffic columns, and the `--debugstream` allocation-id mint. Every one of them
-// was the identical five-op sequence, and six copies of `load / combine / store` is six chances to read one
-// slot and store another.
+// ⭐⭐ **`[label] += delta` AS ONE INDIVISIBLE STEP — THE ONE SPELLING OF A `.data` COUNTER UPDATE.**
+// Every counter word an emitted program maintains comes through here: this file's live allocation count and
+// four traffic columns, the `--debugstream` allocation-id mint, and the scheduler's four
+// (`GtRuntime`'s live count, trace dispenser, in-flight read count and pipe-name uniquifier), which spelled
+// the sequence by hand until G2 and are now this function's callers. One spelling of `load / combine /
+// store` is one chance to read one slot and store another instead of ten.
 //
-// ⚠ **IT ANSWERS THE UPDATED VALUE FOR THE ONE CALLER THAT NEEDS IT** — the allocation-id mint, whose
-// whole purpose is the number it just stored. The six counter updates are STATEMENTS and say so with `_ =`,
-// which is cheaper than a second entry point differing from this one only in having no `return`.
-function emitGlobalAccumulate(module StdModule, block IrBlock, label ByteArray, operand ValueId, opcode StdBinOpcode, ids ValueMinter) returns ValueId
+// ⭐⭐ **IT IS AN ATOMIC READ-MODIFY-WRITE (G2), AND THAT IS WHAT MAKES A COUNTER A COUNTER ONCE MORE THAN
+// ONE M RUNS.** A `.data` word is reachable from every OS thread by construction, so the plain
+// load/add/store this used to emit loses an update the moment two Ms credit the same column — and these
+// columns are not decoration: `__mm_alloc_count` is what the LEAK GATE reads (exit 101) and
+// `__gt_live_count` is what the green-thread gate reads (exit 75), so a lost update is a leak reported that
+// did not happen, or one hidden that did. `MAXON_MAX_PROCS>1` gives a program two Ms today.
+//
+// ⚠ **IT ANSWERS THE *PRIOR* VALUE, NOT THE UPDATED ONE, AND THE ASYMMETRY IS PAID FOR IN CODE SIZE.**
+// That is `StdOp.atomicRmw`'s contract, and adopting it verbatim is what lets the x64 isel pick `lock add`
+// — no destination register at all — for the eight callers that discard the answer, against the `lock xadd`
+// plus an allocator-supplied copy a read result forces (`lowerAtomicRmw` states the saving). The three
+// callers that want the number they just minted apply the delta again, which costs one ALU op on three cold
+// paths instead of a register on every allocation in the language.
+export function emitGlobalAccumulate(module StdModule, block IrBlock, label ByteArray, delta ValueId, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
-	let current = emitLoadField(module, block: block, record: addr, offset: 0, ids: ids)
-	let updated = emitBin(module, block: block, a: current, b: operand, opcode: opcode, ids: ids)
-	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0, valueId: updated, valueType: StdType.i64))
-	return updated
+	let prior = ids.mint()
+	module.appendOp(block, op: StdOp.atomicRmw(prior, addrId: addr, operandId: delta, opcode: StdAtomicRmwOpcode.add))
+	return prior
 end 'emitGlobalAccumulate'
+
+// ⭐ **A NUL-TERMINATED C STRING IN A FRESH SLAB REGION — the shape every Win32 `A` entry point takes.**
+// One `__slab_alloc` of `len + 1`, one `u8` store per byte, and the terminator is the allocator's own zero
+// (the `+ 1` is what reserves the byte for it).
+//
+// ⚠ **IT WAS `SubprocessRuntime.emitSubpLiteralCString` AND MOVED HERE (G1), because it acquired a second
+// caller.** The scheduler reads `MAXON_MAX_PROCS` through the same `GetEnvironmentVariableA` the PATH walk
+// does, and "a literal as a C string" is a property of the Std tier and of Win32's ABI, not of subprocess
+// spawning. It joins the other single-op emit helpers here for `emitConstReturn`'s stated reason.
+export function emitLiteralCString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
+	let sizeConst = emitConst(module, block: block, value: (text.count() + 1) as ParsedInt, ids: ids)
+	let buf = ids.mint()
+	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
+	for k in 0 upto text.count() 'each'
+		let ch = try text.get(k) otherwise panic("emitLiteralCString: text.get OOB at {k}")
+		let byteConst = emitConst(module, block: block, value: ch, ids: ids)
+		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: k as ByteOffset, valueId: byteConst, valueType: StdType.u8))
+	end 'each'
+	return buf
+end 'emitLiteralCString'
+
+// ⭐ **A `.data` MACHINE WORD, LOADED / STORED — the two-op pair, stated once.** `globalAddr` is
+// `isPure: true` and freely rematerializable, so a caller that does both around one word pays nothing for
+// asking twice; the readers that hoist the address across a load-then-store pair are deliberately left
+// alone, because there a hoist only widens a live range.
+//
+// ⚠ **THEY WERE `DebugStreamRuntime`'s PRIVATE PAIR AND ARE NOW SHARED (G1 review).** `SchedRuntime` wrote a
+// second private copy of the same two ops under different names, which is the one-fact-twice shape this
+// file's header exists to end — and the copies could not have disagreed usefully, which is exactly what makes
+// two of them pure cost.
+export function emitLoadGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
+	return emitLoadField(module, block: block, record: addr, offset: 0, ids: ids)
+end 'emitLoadGlobalWord'
+
+export function emitStoreGlobalWord(module StdModule, block IrBlock, label ByteArray, value ValueId, ids ValueMinter)
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
+	emitStoreField(module, block: block, record: addr, offset: 0, value: value)
+end 'emitStoreGlobalWord'
+
+// ⭐ **THE DECIMAL ALPHABET, ONE DECLARATION.** A radix and the ASCII codes that bound a digit — facts about
+// base ten and about ASCII, belonging to neither the String runtime that renders integers nor the scheduler
+// that parses an environment variable. ⚠ They were `StringRuntime`'s (`DecimalRadix`, `AsciiZeroDigit`) and
+// `SchedRuntime` declared a SECOND `DecimalRadix` under the identical name; two `let`s of one number in one
+// namespace is the shape `Testing/BoardIndex` exists to catch one level up.
+export let DecimalRadix = 10 as ParsedInt
+export let AsciiZeroDigit = 0x30 as ParsedInt
+export let AsciiNineDigit = 0x39 as ParsedInt
+
+// ⭐ **A Win64 CRITICAL_SECTION IS 40 BYTES — the size of the region `InitializeCriticalSection` initializes
+// in place.** ⚠ Declared once because getting it wrong is not a compile error: the kernel writes the struct
+// into whatever it is handed, so an under-allocated region corrupts whatever the allocator put after it. Two
+// runtime families slab-allocate one (the scheduler's run-queue lock, the DebugStream ring's), and they used
+// to carry a copy of the number each.
+export let CriticalSectionBytes = 40 as ParsedInt
 
 // A fresh i64 constant.
 export function emitConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter) returns ValueId
@@ -1056,6 +1134,15 @@ end 'buildStrCopy'
 // now that it is, the constants ride the same base layer every runtime family already depends on.
 export let PredicateTrue = 1 as ParsedInt
 export let PredicateFalse = 0 as ParsedInt
+
+// ⭐ **THE TWO DELTAS EVERY ATOMIC STEP IN THE EMITTED RUNTIME USES.** Named rather than written as a bare
+// `1` and a bare `-1` at the fourteen sites that step a counter or a refcount by one: the two are one
+// keystroke apart, and at a call site whose only other argument is a LABEL there is nothing else in the
+// line to say which direction was meant. They are `ParsedInt` deltas fed to `StdOp.atomicRmw`'s `add`, which
+// is why a debit is a NEGATIVE addend and not a second opcode — see `StdAtomicRmwOpcode`, which has one
+// member for exactly this reason.
+export let OneMore = 1 as ParsedInt
+export let OneFewer = -1 as ParsedInt
 
 // ⭐⭐ **THE COUNTED LOOP EVERY RUNTIME WALK IS, WRITTEN DOWN ONCE.** `i` from `from` up to (but excluding)
 // `to`, stepping by whatever the caller closes it with: a header carrying the induction variable as its own
@@ -1222,10 +1309,10 @@ end 'closeWordTailSplit'
 // subtraction would destroy. A live BYTE figure would need the freed region's size, which the free door is
 // not handed and the slot's class would only approximate.
 export function emitRawTrafficCredit(module StdModule, block IrBlock, bytes ValueId, ids ValueMinter)
-	let one = emitConst(module, block: block, value: 1, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocCountLabel, operand: one, opcode: StdBinOpcode.add, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: MmRawLiveCountLabel, operand: one, opcode: StdBinOpcode.add, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocBytesLabel, operand: bytes, opcode: StdBinOpcode.add, ids: ids)
+	let credit = emitConst(module, block: block, value: OneMore, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocCountLabel, delta: credit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: MmRawLiveCountLabel, delta: credit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocBytesLabel, delta: bytes, ids: ids)
 end 'emitRawTrafficCredit'
 
 // `__mm_raw_free(ptr)` — debit the raw live column, then hand the region to the slab. Built only in a
@@ -1239,8 +1326,8 @@ function buildMmRawFree(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
-	let one = emitConst(module, block: entry, value: 1, ids: ids)
-	_ = emitGlobalAccumulate(module, block: entry, label: MmRawLiveCountLabel, operand: one, opcode: StdBinOpcode.sub, ids: ids)
+	let debit = emitConst(module, block: entry, value: OneFewer, ids: ids)
+	_ = emitGlobalAccumulate(module, block: entry, label: MmRawLiveCountLabel, delta: debit, ids: ids)
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(ptr)))
 	module.setTerminator(entry, op: StdOp.retVoid)
 
@@ -1310,8 +1397,12 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	var base = allocation
 	var packedId = 0 as ValueId
 	if module.debugStream 'stampPackedId'
-		let one = emitConst(module, block: block, value: 1, ids: ids)
-		let allocId = emitGlobalAccumulate(module, block: block, label: DsAllocIdLabel, operand: one, opcode: StdBinOpcode.add, ids: ids)
+		let one = emitConst(module, block: block, value: OneMore, ids: ids)
+		// ⚠ The mint wants the id it just TOOK, and `emitGlobalAccumulate` answers the one before it (that
+		// function's header says why the prior value is the contract), so the step is re-applied here. Ids
+		// still run 1, 2, 3 in allocation order.
+		let priorAllocId = emitGlobalAccumulate(module, block: block, label: DsAllocIdLabel, delta: one, ids: ids)
+		let allocId = emitBin(module, block: block, a: priorAllocId, b: one, opcode: StdBinOpcode.add, ids: ids)
 		let shift = emitConst(module, block: block, value: DsMmPackedIdShift, ids: ids)
 		let shifted = emitBin(module, block: block, a: allocId, b: shift, opcode: StdBinOpcode.shl, ids: ids)
 		packedId = emitBin(module, block: block, a: shifted, b: tagIndex, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -1332,15 +1423,15 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	// v1's non-zeroing slab survive three bugs: every call site "handled" it locally, so nobody fixed the
 	// allocator. If this line ever becomes necessary, the allocator is broken, not this function.
 
-	let oneConst = emitConst(module, block: block, value: 1, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: MmAllocCountLabel, operand: oneConst, opcode: StdBinOpcode.add, ids: ids)
+	let credit = emitConst(module, block: block, value: OneMore, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: MmAllocCountLabel, delta: credit, ids: ids)
 
 	// The TRACKED traffic columns, in a build that reads them. `size` and not `total`: the figure is the
 	// payload the caller asked for, so it does not move when the header does and is identical across a
 	// traced and an untraced build (see `MmAllocTotalLabel`).
 	if usage.usesMmCounters 'trackedColumns'
-		_ = emitGlobalAccumulate(module, block: block, label: MmAllocTotalLabel, operand: oneConst, opcode: StdBinOpcode.add, ids: ids)
-		_ = emitGlobalAccumulate(module, block: block, label: MmAllocBytesLabel, operand: size, opcode: StdBinOpcode.add, ids: ids)
+		_ = emitGlobalAccumulate(module, block: block, label: MmAllocTotalLabel, delta: credit, ids: ids)
+		_ = emitGlobalAccumulate(module, block: block, label: MmAllocBytesLabel, delta: size, ids: ids)
 	end 'trackedColumns'
 
 	let payload = ids.mint()
@@ -1401,10 +1492,16 @@ end 'emitLoadPackedId'
 // trace that three compilers' readers compare.
 //
 // ⚠ **DECREF IS THE SUBTLE ONE, AND ITS EXPRESSION IS UNIFORM ONLY BECAUSE OF AN IDENTITY.** On the
-// SHARED path the stored count goes `n -> n-1`, so owners go `n+1 -> n`; on the LAST-OWNER path the count
-// is never touched and owners go `1 -> 0`. Both are `owners_after == stored_BEFORE` — the shared case by
-// arithmetic, the last-owner case because the stored value is 0 there. That identity is why the event is
-// emitted ONCE, in the block before the branch, instead of once per arm.
+// SHARED path the stored count goes `n -> n-1`, so owners go `n+1 -> n`; on the LAST-OWNER path the box
+// dies and owners go `1 -> 0`. Both are `owners_after == stored_BEFORE` — the shared case by arithmetic,
+// the last-owner case because the stored value is 0 there. That identity is why the event is emitted ONCE,
+// in the block before the branch, instead of once per arm.
+//
+// ⭐ **SINCE G2 THAT PRIOR COUNT IS HANDED IN RATHER THAN RE-READ, AND UNDER MULTI-M THAT IS THE ONLY WAY
+// TO GET IT.** The decrement is now an atomic RMW that answers the displaced value
+// (`emitRefcountCheckToLastOwner`), so the trace reports the count THIS decref displaced; a re-read of the
+// word would report whatever another M had done to it since — a trace whose `rc=` belonged to a different
+// event.
 //
 // The alloc event, with the requested USER size as its value — never the total, so the number in the
 // trace is the one the caller asked for and stays comparable across a header that grows. It is the one
@@ -1419,24 +1516,25 @@ function emitMmAllocEvent(module StdModule, func IrFunction, block IrBlock, pack
 	return emitMmEvent(module, func: func, block: block, eventType: DsEvMmAlloc, packedId: packedId, value: size, ids: ids)
 end 'emitMmAllocEvent'
 
-function emitMmDecrefEvent(module StdModule, func IrFunction, block IrBlock, ptr ValueId, ids ValueMinter) returns IrBlock
+function emitMmDecrefEvent(module StdModule, func IrFunction, block IrBlock, ptr ValueId, priorCount ValueId, ids ValueMinter) returns IrBlock
 	if not module.debugStream 'untracedBuild'
 		return block
 	end 'untracedBuild'
 
-	let ownersAfter = emitLoadRefcount(module, block: block, ptr: ptr, ids: ids)
 	let packedId = emitLoadPackedId(module, block: block, ptr: ptr, ids: ids)
-	return emitMmEvent(module, func: func, block: block, eventType: DsEvMmDecref, packedId: packedId, value: ownersAfter, ids: ids)
+	return emitMmEvent(module, func: func, block: block, eventType: DsEvMmDecref, packedId: packedId, value: priorCount, ids: ids)
 end 'emitMmDecrefEvent'
 
-// Called AFTER the increment, so the stored count is already the new one and owners are it plus one.
-function emitMmIncrefEvent(module StdModule, func IrFunction, block IrBlock, ptr ValueId, ids ValueMinter) returns IrBlock
+// Called with the count the increment DISPLACED, so the word now holds `priorCount + 1` and owners are that
+// plus one again — the `owners - 1` convention applied to the value this build actually wrote, rather than
+// to a re-read that another M may already have moved.
+function emitMmIncrefEvent(module StdModule, func IrFunction, block IrBlock, ptr ValueId, priorCount ValueId, ids ValueMinter) returns IrBlock
 	if not module.debugStream 'untracedBuild'
 		return block
 	end 'untracedBuild'
 
-	let stored = emitLoadRefcount(module, block: block, ptr: ptr, ids: ids)
-	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let one = emitConst(module, block: block, value: OneMore, ids: ids)
+	let stored = emitBin(module, block: block, a: priorCount, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let ownersAfter = emitBin(module, block: block, a: stored, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let packedId = emitLoadPackedId(module, block: block, ptr: ptr, ids: ids)
 	return emitMmEvent(module, func: func, block: block, eventType: DsEvMmIncref, packedId: packedId, value: ownersAfter, ids: ids)
@@ -1469,8 +1567,8 @@ end 'emitMmFreeEvent'
 // record never has two owners and the buffer's own count is unambiguous: non-zero means "someone is
 // viewing these bytes", which is precisely what `__managed_cow_detach` must ask before an in-place write.
 //
-// ⚠⚠ **NON-ATOMIC, DELIBERATELY** — the same decision the decref read-modify-write below carries, and it
-// becomes `LOCK`-prefixed on the same day for the same reason. See `emitRefcountCheckToLastOwner`.
+// ⚠⚠ **ATOMIC AS OF G2** — the same step the decref read-modify-write below takes, through the same
+// `emitAdjustRefcount`. A lost increment is the LOUD half of the race: it frees a box an owner still holds.
 //
 // There is no overflow check: the count is `owners - 1` in an i64, and a program cannot hold 2^63 views.
 function buildMmIncref(module StdModule)
@@ -1481,8 +1579,8 @@ function buildMmIncref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
-	emitAdjustRefcount(module, block: entry, ptr: ptr, opcode: StdBinOpcode.add, ids: ids)
-	var out = emitMmIncrefEvent(module, func: func, block: entry, ptr: ptr, ids: ids)
+	let priorCount = emitAdjustRefcount(module, block: entry, ptr: ptr, delta: OneMore, ids: ids)
+	var out = emitMmIncrefEvent(module, func: func, block: entry, ptr: ptr, priorCount: priorCount, ids: ids)
 	module.setTerminator(out, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1499,9 +1597,8 @@ end 'buildMmIncref'
 // `Parser.retainBorrowedAggregate`). The box is otherwise untouched — same pointer, count raised by
 // one — so the aggregate's aliasing (`q.x = 100` shows through to the caller) is preserved.
 //
-// ⚠⚠ **NON-ATOMIC, DELIBERATELY** — the same read-modify-write `buildMmIncref` and `__mm_decref`
-// carry, and it becomes `LOCK`-prefixed on the same day for the same reason. See
-// `emitRefcountCheckToLastOwner`.
+// ⚠⚠ **ATOMIC AS OF G2** — the same read-modify-write `buildMmIncref` and `__mm_decref` take, through the
+// one `emitAdjustRefcount`. See `emitRefcountCheckToLastOwner`.
 function buildMmRetain(module StdModule)
 	var func = IrFunction.createFromStd(MmRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1510,16 +1607,17 @@ function buildMmRetain(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
-	emitAdjustRefcount(module, block: entry, ptr: ptr, opcode: StdBinOpcode.add, ids: ids)
-	var out = emitMmIncrefEvent(module, func: func, block: entry, ptr: ptr, ids: ids)
+	let priorCount = emitAdjustRefcount(module, block: entry, ptr: ptr, delta: OneMore, ids: ids)
+	var out = emitMmIncrefEvent(module, func: func, block: entry, ptr: ptr, priorCount: priorCount, ids: ids)
 	module.setTerminator(out, op: StdOp.ret(ptr))
 
 	module.functions.push(func)
 end 'buildMmRetain'
 
 // The refcount word of the box `ptr` addresses — `[ptr - HeaderBytes + HeaderRefcountOffset]`. ONE of the
-// two places the header geometry is spelled (the other is the store in `emitAdjustRefcount`), so nothing
-// outside this file has to know a header exists.
+// two places the header geometry is spelled (the other is `emitRefcountAddr`, which reaches the same word
+// through this function's own `emitHeaderBase` rather than respelling the distance), so nothing outside
+// this file has to know a header exists.
 function emitLoadRefcount(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
 	let header = emitHeaderBase(module, block: block, ptr: ptr, ids: ids)
 	let rc = ids.mint()
@@ -1527,19 +1625,41 @@ function emitLoadRefcount(module StdModule, block IrBlock, ptr ValueId, ids Valu
 	return rc
 end 'emitLoadRefcount'
 
-// `refcount <opcode>= 1` — one more owner (`add`) or one fewer (`sub`). The incref and the not-last-owner
-// decref are the SAME four ops differing only in the opcode, so they are written once: a change to how the
-// count is maintained cannot be applied to one direction and missed on the other. The header address is
-// recomputed for the store rather than threaded out of `emitLoadRefcount`, which costs one `sub` and keeps
-// the geometry from leaking into either caller.
-function emitAdjustRefcount(module StdModule, block IrBlock, ptr ValueId, opcode StdBinOpcode, ids ValueMinter)
-	let rc = emitLoadRefcount(module, block: block, ptr: ptr, ids: ids)
-	let oneConst = ids.mint()
-	module.appendOp(block, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	let adjusted = ids.mint()
-	module.appendOp(block, op: StdOp.binOp(adjusted, lhs: rc, rhs: oneConst, opcode: opcode, operandType: StdType.i64))
-	let header = emitHeaderBase(module, block: block, ptr: ptr, ids: ids)
-	module.appendOp(block, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: adjusted, valueType: StdType.i64))
+// The ADDRESS of that word, which is what an atomic must be handed: `StdOp.atomicRmw` carries no field
+// displacement (see its header — an atomic names one word and nothing else), where `loadIndirect` does.
+// It walks the SAME two hops `emitLoadRefcount` walks, through the SAME `emitHeaderBase`, so a header that
+// grew a field is still a change to that one function and to nothing else.
+function emitRefcountAddr(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
+	return emitFieldAddr(module, block: block, record: emitHeaderBase(module, block: block, ptr: ptr, ids: ids), offset: HeaderRefcountOffset, ids: ids)
+end 'emitRefcountAddr'
+
+// ⭐⭐ **`refcount += delta` AS ONE INDIVISIBLE STEP, ANSWERING THE COUNT AS IT STOOD BEFORE.** One more
+// owner (`OneMore`) or one fewer (`OneFewer`) — the incref and the decref are the SAME three ops differing
+// only in the addend, so they are written once and a change to how the count is maintained cannot be
+// applied to one direction and missed on the other.
+//
+// ⭐⭐ **IT IS ATOMIC AS OF G2, AND THE TRIGGER WAS NOT THE ONE WRITTEN DOWN FOR YEARS.** The note this
+// function used to carry named *"the day green threads land"*. Green threads landed and shv2 stayed
+// correct, because a single-M cooperative scheduler switches only at explicit yield points and no two green
+// threads ever execute a refcount update concurrently. **The real trigger is MULTI-M** — two OS threads
+// running Maxon code at once — and G1 built that behind `MAXON_MAX_PROCS`. With a plain load/add/store a
+// shared box refcounted by two Ms loses updates in both directions, and the two losses are not equally
+// loud: a lost DECREF leaks the box, a lost INCREF frees it while an owner still holds it. MEASURED on the
+// tree as received, `temp/g2/rc-global.maxon` (twelve green threads storing one `String` into one
+// module-level slot, so every M retains and releases the SAME word): `MAXON_MAX_PROCS=1` is exit 42 with
+// `live=3` on every run, and at 2/4/12 it is **exit 101 (the leak gate) with `live=12..14`, or exit 139 (a
+// segfault)** — both halves of the race, in one program.
+//
+// ⚠ **THE PRIOR VALUE IS THE ANSWER BECAUSE THE DECREF NEEDS IT** — see `emitRefcountCheckToLastOwner`,
+// where "was I the last owner?" can only be decided from the value the decrement itself displaced. An
+// incref discards it, which is what lets the x64 isel drop the destination register entirely (`lock add`
+// rather than `lock xadd`; `lowerAtomicRmw` states the saving) on the path every retained value runs.
+function emitAdjustRefcount(module StdModule, block IrBlock, ptr ValueId, delta ParsedInt, ids ValueMinter) returns ValueId
+	let rcAddr = emitRefcountAddr(module, block: block, ptr: ptr, ids: ids)
+	let step = emitConst(module, block: block, value: delta, ids: ids)
+	let prior = ids.mint()
+	module.appendOp(block, op: StdOp.atomicRmw(prior, addrId: rcAddr, operandId: step, opcode: StdAtomicRmwOpcode.add))
+	return prior
 end 'emitAdjustRefcount'
 
 // ⭐ **DOES ANYONE BESIDES THIS OWNER HOLD `ptr`?** — ⭐ **THE ONE HOME OF THE `owners - 1` CONVENTION.**
@@ -1588,21 +1708,23 @@ end 'emitIsSharedAllocation'
 // only thing that emits a drop. The bootstrap panics here ("double-free"); shv2 gets the same
 // signal for free from the leak counter going negative, which the exit check reads as nonzero.
 //
-// ⚠⚠ **NON-ATOMIC, DELIBERATELY, AND THIS COMMENT IS THE DECISION RATHER THAN ITS ABSENCE.** The
-// bootstrap's refcount is `LOCK`-prefixed because it must be; shv2 is SINGLE-THREADED until **R3 @
-// P1.5** brings green threads, and a plain `sub` is the whole cost until then. **THE DAY GREEN
-// THREADS LAND, THIS — AND THE `__mm_incref` ABOVE — MUST BECOME `LOCK`-PREFIXED**:
-// a shared box refcounted by two threads with a plain read-modify-write loses updates and frees a
-// live object, which is a use-after-free that no test reproduces reliably. It is written here so
-// that day is reached by READING rather than by a race. (PLAN.md's R1 box exists to stop inertia
-// making this call quietly; this is the call, made out loud.)
+// ⭐⭐⭐ **IT DECREMENTS FIRST AND DECIDES FROM WHAT THE DECREMENT DISPLACED (G2), AND THAT ORDER — NOT THE
+// `LOCK` PREFIX — IS WHAT MAKES IT CORRECT UNDER MORE THAN ONE M.** This used to READ the count, branch on
+// it, and only then lower it, which is a check-then-act: two Ms each holding one of a box's two references
+// both observe `rc == 1`, both conclude *"somebody else still holds it"*, both decrement, and the box is
+// never freed. Making the store atomic and leaving the order alone fixes NOTHING — the stale read is the
+// bug. So the atomic RMW happens up front and the arm is chosen from the value it replaced: exactly one M
+// can observe a prior of 0, and that M is the last owner. (`__mm_incref` above is the mirror half, and it
+// is the loud one: a lost increment frees a box an owner still holds.)
 //
-// The note lives on THIS helper because it is now the ONE place the surviving refcount read-modify-
-// write is: `__mm_decref` and `__str_decref` both route through it, so `LOCK`-prefixing it that day
-// covers both, and a second RMW cannot hide from the note by living in its own function. `__mm_alloc`
-// and `__mm_free` do the same unlocked RMW on `__mm_alloc_count`, and they become `LOCK`-prefixed on
-// the same day for the same reason: a counter that loses an update reports a leak that did not
-// happen, or hides one that did.
+// This helper is where the order lives because it is the ONE place the surviving refcount read-modify-write
+// is — `__mm_decref` and `__str_decref` both route through it, and every `__destruct_<T>` cascade does too —
+// so a second RMW cannot hide from the rule by living in its own function.
+//
+// ⚠ **THE LAST OWNER LEAVES `-1` IN THE WORD, AND THAT IS SOUND BECAUSE NOTHING READS IT AGAIN.** The box is
+// dead the instant that arm is taken: `__mm_free` reads the destructor and the SIZE out of the header, never
+// the count, and the slot is poisoned and handed back to the slab before any other party can address it.
+// Under the old order the word was left at 0 instead; neither number is ever observed.
 // ⚠ **THE `mm_decref` EVENT IS EMITTED HERE, IN `entry`, BEFORE THE BRANCH — ONCE, NOT ONCE PER ARM.**
 // See `emitMmDecrefEvent` for the identity that makes one emission correct for both paths. Emitting it
 // before the branch also means the caller's `lastOwner` block is untouched by this function, which every
@@ -1611,16 +1733,22 @@ end 'emitIsSharedAllocation'
 // ⚠ `func` is needed only because the event SPLITS `entry` into new blocks; with `--debugstream` off it
 // is unread and not one op is emitted.
 export function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
-	var cur = emitMmDecrefEvent(module, func: func, block: entry, ptr: record, ids: ids)
+	let priorCount = emitAdjustRefcount(module, block: entry, ptr: record, delta: OneFewer, ids: ids)
+	var cur = emitMmDecrefEvent(module, func: func, block: entry, ptr: record, priorCount: priorCount, ids: ids)
 
-	// The test is `emitIsSharedAllocation` with its arms swapped, so "0 means one owner" is asserted in one
-	// place and read here rather than restated. `lower` reloads the count instead of threading it out of
-	// `entry`, which costs two ops on a path only a SHARED box takes — and under move-only ownership a
-	// RECORD is never shared, so at this rung that path belongs to array element buffers under a view.
-	let shared = emitIsSharedAllocation(module, block: cur, ptr: record, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(shared, thenBlockId: lower.id, elseBlockId: lastOwner.id))
+	// `0 means ONE owner` is `emitIsSharedAllocation`'s convention, asked here of the count as it stood
+	// BEFORE this decrement rather than of the word — the word no longer holds it. A prior of 0 means this
+	// caller was the only owner; anything else means at least one remains, and the decrement above has
+	// already accounted for this one leaving.
+	let noOwnerLeft = emitConst(module, block: cur, value: 0, ids: ids)
+	let wasShared = emitCmp(module, block: cur, a: priorCount, b: noOwnerLeft, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(wasShared, thenBlockId: lower.id, elseBlockId: lastOwner.id))
 
-	emitAdjustRefcount(module, block: lower, ptr: record, opcode: StdBinOpcode.sub, ids: ids)
+	// ⚠ **`lower` HOLDS NO OPS NOW, AND THE PARAMETER STAYS ANYWAY.** The decrement it used to carry has
+	// moved above the branch, so the not-last-owner arm has nothing left to do but return. Its NINE callers
+	// across seven runtime files each create and pass the block, so folding it into a `lastOwner`-only
+	// signature is a change to files this rung does not own; it is named as a follow-up in G2's report
+	// rather than done half-way here.
 	module.setTerminator(lower, op: StdOp.retVoid)
 end 'emitRefcountCheckToLastOwner'
 
@@ -1755,8 +1883,8 @@ function buildMmFree(module StdModule)
 	// exactly across a phase boundary and `PhaseProbe` can derive frees as `Δtotal − Δlive`. A free path that
 	// walked them back would report a phase that allocated and released a million boxes as having done
 	// nothing.
-	let oneConst = emitConst(module, block: entry, value: 1, ids: ids)
-	_ = emitGlobalAccumulate(module, block: entry, label: MmAllocCountLabel, operand: oneConst, opcode: StdBinOpcode.sub, ids: ids)
+	let debit = emitConst(module, block: entry, value: OneFewer, ids: ids)
+	_ = emitGlobalAccumulate(module, block: entry, label: MmAllocCountLabel, delta: debit, ids: ids)
 
 	// The payload size the alloc recorded in the header; the range to poison is exactly `[ptr, ptr + size)`.
 	// The fill itself is the shared `StdOp.memFill` (the slab's recycled-slot zeroer and the array

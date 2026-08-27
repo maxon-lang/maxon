@@ -203,6 +203,14 @@ end 'requireUnreachableStdlibStayedDead'
 //        makes the leak gate FIRE, so a gate that decided from the module instead would let this root's
 //        removal turn every exit-101 test silently green.
 //      * `__gt_enqueue` — the IOCP completion thread's cross-thread wake (`X64GtRuntime:772`).
+//      * `__sched_wake_or_spawn` — the SAME thread's other call, and it is rooted for `__gt_enqueue`'s
+//        reason with one extra twist worth stating: the completion loop names it unconditionally, while
+//        every STD caller of it sits behind `__gt_ready`, which a program that spawns no green thread does
+//        not reach. So a SUBPROCESS-only program — which installs the IOCP substrate and therefore the
+//        completion loop, but never spawns — reaches it from data alone. MEASURED by adding the call
+//        without this root: `panic at X64Backend.maxon:2294: resolveCallFixups: call to unknown function
+//        '__sched_wake_or_spawn'`, seventeen `subprocess-builtins` cases at once, exactly the shape
+//        `__mm_leak_check`'s note above predicts for a pruned root.
 //    They are rooted unconditionally: a name absent from this module is simply not found (a program
 //    with no heap has no `__mm_leak_check` to keep), so the root costs nothing where the runtime it
 //    belongs to was never installed.
@@ -239,6 +247,7 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(MmLeakCheckName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(GtEnqueueName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(SchedWakeOrSpawnName, project: project, index: index, reached: reached, worklist: worklist)
 	// ⭐ **THE DEBUGSTREAM PRODUCER'S TWO ENTRY-STUB CALLEES (O3).** `__ds_init` and `__ds_shutdown` are
 	// called from `mrt_start` and from nowhere else — exactly `__mm_leak_check`'s position — so nothing in
 	// the Std module reaches them and the prune would drop both, leaving the stub calling functions that
@@ -369,9 +378,11 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		// F1c: a reserve and a commit bottom out in `VirtualAlloc`, an `mmap` syscall or a `memory.grow` — never
 		// in a Maxon function, so neither keeps one live.
 		osCommitPages to osReservePages then break 'op'
-		// F2: the two atomics lower to INLINE machine code on every target, and the thread token to an inline
-		// read or a raw syscall — never to a Maxon function, so none of the three keeps one live.
-		atomicCas to currentThreadToken then break 'op'
+		// F2 + G1: the two atomics and the `gs:` TLS read lower to INLINE machine code, and the thread token,
+		// `TlsAlloc`, `TlsSetValue` and `SetEvent` to a raw syscall or an IMPORT — never to a Maxon function, so
+		// no member of this range keeps one live. (Count the members off the range, not off this sentence: it
+		// said "the three" for as long as there were three.)
+		atomicCas to osSetEvent then break 'op'
 	end 'op'
 end 'markCalleeOf'
 

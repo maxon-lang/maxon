@@ -1768,6 +1768,26 @@ export function encodeMovRegGsAbs(code ByteArray, dest X64Register, disp Imm32)
 	writeImm32Signed(code, value: disp)
 end 'encodeMovRegGsAbs'
 
+// `mov destReg, gs:[baseReg]` (64-bit) — a LOAD from a GS-segment address held in a REGISTER, which is what
+// makes a TLS slot readable in two loads and no call: the caller has the precomputed `index * 8 + 0x1480` in
+// `baseReg` and this dereferences it. The GT syscall shim and every current-GT read in the scheduler go
+// through it, so it is the hottest instruction the multi-M substrate has.
+//
+// ⚠ **IT DELEGATES ITS ModR/M TO `encodeModRmBaseDisp`, AND THAT IS THE WHOLE OF ITS CORRECTNESS.** A hand-
+// assembled `mod=00 | reg | rm=base` byte — which is what both reference compilers write — encodes `[rbp]`
+// and `[r13]` as RIP-RELATIVE, reading a constant out of the code stream instead of the thread's slot. v1
+// panics rather than emit it and the C# bootstrap avoids it by pinning one register; the shared assembler
+// already answers it for every base (a zero-`disp8` for rbp/r13, a SIB for rsp/r12), so this encoder inherits
+// the fix instead of restating it and the register allocator is left free to colour the operand anywhere.
+//
+// ⚠ The segment prefix must come BEFORE the REX byte — REX is required to be the last prefix — which is why
+// the push order here is not the one `encodeModRmBaseDisp` would produce on its own; the prefix is emitted
+// here and the rest delegated.
+export function encodeMovRegGsBase(code ByteArray, dest X64Register, base X64Register)
+	code.push(GsSegmentPrefix)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRegRm, regField: dest, base: base, disp: 0, wide: true)
+end 'encodeMovRegGsBase'
+
 // A raw Linux x86-64 supervisor call: `mov eax, number` then `syscall` (0F 05). The x86-64 Linux ABI
 // puts the number in eax/rax and arguments in rdi/rsi/rdx/r10/r8/r9 (which the isel pre-moved, exactly
 // as it pre-moves a call's arguments), and returns the result in rax. Exported so the Linux entry stub
@@ -1901,7 +1921,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// In a GT-scheduler module every Win32 IAT call is wrapped in the system-stack shim (P1.5-B1a′): a GT
 		// stack is too small for the kernel's deep usage, so the call runs on the global system stack. The shim
 		// is a runtime no-op off a GT stack (`currentGt == 0 || stackBase == 0` → direct), so wrapping every call
-		// is correct; a non-GT module has no `__gt_current_gt` global to reference, so it stays a bare `iatCall`.
+		// is correct; a non-GT module lays out no `__sched_tls_teb_offset` to reference, so it stays a bare `iatCall`.
 		iatCall(slotIndex) then emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, slotIndex: slotIndex, usesGt: usesGt)
 		cqo then encodeCqo(code)
 		// The two group-3 divides differ in the /ext field and in nothing else — same F7 opcode, same
@@ -2043,6 +2063,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// GS form the GT context switch reads NT_TIB StackBase/StackLimit through, so the segment-addressing
 		// bytes (prefix, REX, the no-base SIB) are stated once rather than a second time here.
 		x64TebSelfPointer(dest) then encodeMovRegGsAbs(code, dest: resolveGpr(dest), disp: WindowsTebSelfPointerOffset)
+		x64GsLoadRegBase(dest, base) then encodeMovRegGsBase(code, dest: resolveGpr(dest), base: resolveGpr(base))
 		// The arm64 atomics never reach this encoder (`buildBackend` dispatches on `target.cpu`), exactly as
 		// the arm64 `fmov` pair above does not — x64's own atomics are the three locked forms one line up.
 		arm64AtomicCas to arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd` and its thread token is `x64TebSelfPointer`")

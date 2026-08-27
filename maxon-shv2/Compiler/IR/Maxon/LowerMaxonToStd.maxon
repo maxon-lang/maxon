@@ -3889,16 +3889,26 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtSpawnName, args: argsOf(funcPtr)))
 
 		// Fill the struct's inline arg region: one store per argument at `result + GtOffArgInline + k * GtArgSlotBytes`.
-		// SAFE to fill AFTER the spawn: a spawned GT is only ENQUEUED, not run, until awaited (single-M), so the
-		// slots are written before the trampoline ever loads them. `__gt_spawn` set `gt.argBuf` to a self-pointer
-		// at `GtOffArgInline`, and the slab/memzero left the unfilled slots zero (harmlessly loaded into unread
-		// argument registers).
+		// `__gt_spawn` set `gt.argBuf` to a self-pointer at `GtOffArgInline`, and the allocator's zeroing left the
+		// unfilled slots at 0 (harmlessly loaded into unread argument registers).
+		//
+		// ⚠⚠ **THE GT IS NOT DISCOVERABLE UNTIL `__gt_ready` BELOW, AND THAT ORDER IS THE WHOLE OF THIS
+		// SEQUENCE'S CORRECTNESS.** These stores used to run AFTER `__gt_spawn` had already enqueued the thread,
+		// under a comment reading *"SAFE to fill AFTER the spawn: a spawned GT is only ENQUEUED, not run, until
+		// awaited (single-M)"*. A worker M falsifies that premise, and it was MEASURED doing so: at
+		// `MAXON_MAX_PROCS=12`, 600 threads each reading one integer argument summed to a DIFFERENT wrong total
+		// on every run, because a worker dequeued and ran them while this loop was still writing. Publishing
+		// last removes the premise rather than restating it — see `GtRuntime.GtReadyName`.
 		for k in 0 upto argIds.count() 'eachArg'
 			let argId = try argIds.get(k) otherwise panic("emitAsyncSpawn: argIds.get OOB at {k}")
 			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(result, offset: (GtOffArgInline + k * GtArgSlotBytes) as ByteOffset, valueId: argId, valueType: StdType.i64))
 		end 'eachArg'
 
 		self.emitAsyncReleaserStore(result, callee: callee, dstBlock: dstBlock)
+
+		// PUBLISH. Everything the trampoline and the releaser read is now written.
+		let readyResult = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(readyResult, callee: GtReadyName, args: argsOf(result)))
 	end 'emitAsyncSpawn'
 
 	// ⭐⭐ **LEAVE THE THREAD THE ADDRESS OF THE CODE THAT KNOWS HOW TO RELEASE IT (A2).** `gt.releaser` is

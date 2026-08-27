@@ -29,23 +29,28 @@ documents them together:
 - `schedMaxActiveWorkers` asks this compiler's own SCHEDULER how parallel a run WAS. It is a
   property of the emitted runtime and reaches no OS.
 
-### `schedMaxActiveWorkers` is exactly 1, because shv2's scheduler is SINGLE-M
+### `schedMaxActiveWorkers` is exactly 1, because shv2 runs ONE M BY DEFAULT
 
-`GtRuntime.maxon`'s first paragraph states the runtime this answers for: *"SINGLE-M COOPERATIVE. One
-OS thread runs everything; a `.data` global holds the currently-running GT and a single global FIFO
-run queue holds the ready ones. There are NO worker threads, NO work-stealing, NO per-P sharding."*
-The high-water mark of concurrently-active worker Ms in a runtime with exactly one M is therefore 1
-— at every observation point, in every program, whether or not it ever spawns an `async`.
+shv2 HAS a worker M — `SchedRuntime.buildSchedWorkerLoop` — and a high-water counter that loop
+raises on every entry, which is what this intrinsic reads. What it does not have is a REASON to start
+one: `SchedRuntime.DefaultMaxProcs` is **1**, so `__sched_init_procs` builds a single processor, the
+spawn scan finds no free one to claim, and no worker OS thread is ever created. The high-water mark
+of a population that never exceeds one is 1 — at every observation point, in every program, whether
+or not it ever spawns an `async`.
 
-⚠ **THAT IS A READING, NOT A PLACEHOLDER.** The one OS thread shv2's `__gt_init` does create is the
-IOCP completion thread, and it is not a worker M: it drains completions and re-readies parked green
-threads, it never runs one. The bootstrap counts the same way — its `__sched_active_workers` is
-incremented in `__sched_worker_loop` and nowhere else, and its own IOCP thread is not counted.
+⚠ **THAT IS A READING, NOT A PLACEHOLDER — AND IT USED TO BE A `ret 1`.** The body was a constant
+return for as long as the runtime had no worker loop to raise anything; it is now a `.data` load, and
+the slot is SEEDED TO 1 rather than written by an initializer, so a program that never installs the
+scheduler still reads the truth (one M: its own) with no code at all. `MAXON_MAX_PROCS=N` raises the
+ceiling for a deliberate multi-M run and the mark then reports what actually ran — MEASURED at
+`workers=2`, `7` and `11-12` under `MAXON_MAX_PROCS ∈ {2, 7, 12}` — but that knob is not a supported
+configuration (see `sched-processor.md`) and nothing below sets it.
 
-⚠ **IT MOVES WHEN MULTI-M LANDS (PLAN's B1b), AND THE CASE BELOW IS WHAT WILL SAY SO.** At that
-point the answer becomes a read of a high-water counter the worker loop raises, and
-`sched-max-active-workers.is-one-under-async` goes red on purpose — a spec that pins today's runtime
-is how the day it stops being true gets noticed.
+⚠ **THE IOCP COMPLETION THREAD IS STILL NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS
+LOOK WRONG.** The OS thread `__io_init` creates drains completions and re-readies parked green
+threads; it never RUNS one and it never adopts a P. The bootstrap counts the same way — its
+`__sched_active_workers` is incremented in `__sched_worker_loop` and nowhere else, and its own IOCP
+thread is not counted there either.
 
 ### What the two compilers answer for the SAME program — the differential
 
@@ -60,16 +65,22 @@ and it compiles and runs under either compiler. MEASURED on a 12-logical-CPU Win
 | exit code | 42 | 42 | 42 |
 
 `cpuCount` agrees EXACTLY, through a different Win32 entry point (see below). `schedMaxActiveWorkers`
-agrees exactly with the bootstrap PINNED TO ONE PROCESSOR — which is what shv2's scheduler is — and
-differs only where the bootstrap spawns worker Ms that shv2 has none of. The third row is the
-harness's own determinism signal, and it is byte-identical across the two compilers.
+agrees exactly with the bootstrap PINNED TO ONE PROCESSOR — which is what shv2 defaults to — and
+differs only where the bootstrap spawns worker Ms shv2 declines to. The third row is the harness's
+own determinism signal, and it is byte-identical across the two compilers.
+
+⚠ **THE shv2 COLUMN IS THE DEFAULT ONE AND CANNOT BE WIDENED HERE.** `MAXON_MAX_PROCS>1` really does
+give shv2 worker Ms — but this program frees a managed array on whichever M ran its task, and shv2's
+allocator is one unsharded unlocked shard until the rung that fixes it, so at `MAXON_MAX_PROCS=2` it
+dies with **exit 86** (`slabSpanExhaustedPastItsEnd`). See `sched-processor.md`.
 
 ⛔ **THAT DOES NOT MAKE `track0/validate.sh` AN shv2 GATE, AND POINTING IT AT shv2 WOULD READ AS A
 REGRESSION.** The harness validates the runtime the BOOTSTRAP emits (its default is
-`$REPO/bin/maxon.exe`), and its Check 2 asserts `schedMaxActiveWorkers >= 2` on an unclamped run
-plus `== 1` under `MAXON_MAX_PROCS=1` — a knob shv2's runtime does not read and a second worker M it
-does not have. shv2's obligation to that file is to COMPILE it, which it now does; the checks
-themselves become shv2's the rung multi-M lands.
+`$REPO/bin/maxon.exe`), and its Check 2 asserts `schedMaxActiveWorkers >= 2` on an UNCLAMPED run —
+which for shv2 means the default, and shv2's default is one M on purpose. Its Check 1 and Check 3
+would fail for a different reason again: this program allocates on its workers, which shv2's
+allocator does not yet survive. shv2's obligation to that file is to COMPILE and RUN it at the
+default, which it does; the multi-core checks become shv2's the rung its allocator is sharded.
 
 ### The two land on OPPOSITE sides of the target line, and that is the pair's sharpest property
 
@@ -82,8 +93,9 @@ band is gated by construction rather than by memory). A fabricated `1` on a lane
 OS would be a silent wrong answer, which is strictly worse than a refusal.
 
 `schedMaxActiveWorkers` is refused NOWHERE, and for a reason of its own rather than by omission: its
-whole body is a constant return, which lowers on every target shv2 emits — the same argument
-`__parallel_boundary`'s empty body makes for its own `__parallel_` band. It therefore wears the
+whole body is one `.data` load and a `ret`, which lowers on every target shv2 emits — the same
+argument `__parallel_boundary`'s empty body makes for its own `__parallel_` band, and a load reaches
+no more OS than the constant return this used to be. It therefore wears the
 `__sched_` band rather than `__cpu_`, because the two bands answer the question *"may this target
 run it"* differently and a prefix test can only give one answer per band.
 
@@ -314,10 +326,15 @@ error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: i
 
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one -->
 <!-- targets: x64-windows -->
-shv2's scheduler is single-M, so the high-water mark of concurrently-active worker Ms is 1 — and it
-is 1 in a program that never spawns anything, exactly as the bootstrap answers 1 for the same
-program (MEASURED: `workers=1`). The `>= 1` half is the contract's floor; the `== 1` half is this
-runtime's reading of it.
+shv2 runs one M by default, so the high-water mark of concurrently-active worker Ms is 1 — and it is
+1 in a program that never spawns anything, exactly as the bootstrap answers 1 for the same program
+(MEASURED: `workers=1`). The `>= 1` half is the contract's floor; the `== 1` half is this runtime's
+reading of it.
+
+⭐ **AND THIS PROGRAM INSTALLS NO SCHEDULER AT ALL, WHICH IS WHAT MAKES IT DISCRIMINATING NOW THAT
+THE ANSWER IS A `.data` LOAD.** Nothing here ever runs `__gt_init`, so nothing ever writes the
+counter; a mark that were SEEDED BY AN INITIALIZER instead of by `.data` would read 0 here and this
+case would go red. That ordering hazard is the reason the slot carries its 1 from the image.
 ```maxon
 function main() returns ExitCode
 	let workers = __Builtins.schedMaxActiveWorkers()
@@ -337,13 +354,13 @@ end 'main'
 
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one-under-async -->
 <!-- targets: x64-windows -->
-**THE CASE THAT SAYS WHY 1 IS A READING RATHER THAN A DEFAULT.** A program that spawns green
-threads, runs them and awaits them still observes one worker M, because shv2 never starts a second
-one. This is the case the multi-M slice (PLAN B1b) turns red the day it lands, which is the point of
-pinning it. The bootstrap, whose scheduler DOES spawn workers, answers 12 for the same SHAPE on a
-12-CPU host and 1 under `MAXON_MAX_PROCS=1` (MEASURED — see the differential table above) — the two
-compilers agree on the contract and differ on the runtime, and this case records which runtime shv2
-has.
+**THE CASE THAT SAYS THE COUNTER IS MAINTAINED AND STILL READS 1.** A program that spawns green
+threads, runs them and awaits them observes one worker M, because at `MAXON_MAX_PROCS=1` the spawn
+scan finds no free processor to claim and no second M is ever created. It goes red the day the
+DEFAULT stops being one — which is what pinning it is for — and not the day a worker loop exists,
+because one does. The bootstrap, whose default IS the processor count, answers 12 for the same SHAPE
+on a 12-CPU host and 1 under `MAXON_MAX_PROCS=1` (MEASURED — see the differential table above): the
+two compilers agree on the contract, agree under the clamp, and differ only in what they default to.
 ```maxon
 function work(n ExitCode) returns ExitCode
 	__Builtins.parallelBoundary()
@@ -382,8 +399,11 @@ error E3036: <fragment>:3:20: '__Builtins.schedMaxActiveWorkers' takes exactly 0
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-runs-on-wasm -->
 <!-- targets: wasm32-wasi -->
 **THE OTHER HALF OF THE TARGET PAIR, AND IT IS AN ACCEPTANCE.** The scheduler query reaches no OS —
-its whole body is a constant return — so it lowers on every target shv2 emits and is refused
-nowhere. Without this case, `cpu-count-rejected-on-wasm` would pass just as happily against a
+its whole body is one `.data` load and a `ret` — so it lowers on every target shv2 emits and is
+refused nowhere. ⭐ It is also the one case that proves the counter's `.data` slot is laid out for a
+program that installs NO scheduler: on a lane with no green threads at all, the load still has a slot
+to read, because `schedRuntimeGlobals` gates the two worker counters on the QUERY as well as on
+`usesGt`. Without this case, `cpu-count-rejected-on-wasm` would pass just as happily against a
 compiler that refused the entire family on wasm; with it, the gate has to be the narrow one.
 ```maxon
 function main() returns ExitCode

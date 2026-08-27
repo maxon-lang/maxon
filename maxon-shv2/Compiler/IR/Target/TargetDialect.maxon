@@ -1525,6 +1525,25 @@ export union TargetOp
 	//
 	// `isMemory: true` (it loads from the TEB), `isStore: false`, `isCall: false` — one plain def, no use.
 	x64TebSelfPointer(dest TargetVReg) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `mov dest, gs:[base]` (`65 REX.W 8B /r`) — a load from the GS segment at a RUNTIME byte offset, which is
+	// how `StdOp.tlsSlotLoad` reads this OS thread's TLS slot in two loads and no call: the caller loads the
+	// precomputed `index * 8 + 0x1480` into `base` and this dereferences it.
+	//
+	// ⭐ **IT IS THE SIBLING `x64TebSelfPointer` DECLINES TO BE, AND THE SPLIT IS THE ADDRESSING MODE.** That
+	// op reads ONE fixed offset and therefore takes the ABSOLUTE form; this one indexes by a register and
+	// therefore cannot. Sharing an op would mean an operand that is sometimes a register and sometimes a
+	// constant, which is two instructions wearing one name.
+	//
+	// ⚠ **THE rbp/r13 TRAP IS REAL FOR THIS FORM AND IS ALREADY CLOSED BY THE ENCODER.** `[rbp]`/`[r13]` with
+	// mod=00 means RIP-relative, so a naive encoder would read a constant out of the code stream instead of
+	// the TLS slot — v1 panics rather than encode it (`X64Backend.emitX64GtLoadCurrentP`) and the C# bootstrap
+	// pins R11 unconditionally, which its own comment records as a bug. shv2 needs neither: the encoder routes
+	// through `encodeModRmBaseDisp`, whose `chooseDispMod` emits a zero-`disp8` for exactly those two bases
+	// (and a SIB for rsp/r12), so EVERY colouring encodes correctly and the allocator is left unconstrained.
+	//
+	// `isMemory: true` (it loads through the segment), `isStore: false`, `isCall: false`; one use, one PLAIN
+	// def — `base` is dead after the load, so the def may legitimately reuse its register.
+	x64GsLoadRegBase(dest TargetVReg, base TargetVReg) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// The arm64 compare-and-swap, an `LDAXR`/`CMP`/`B.NE`/`STLXR`/`CBNZ` retry loop followed by a `CSET`,
 	// emitted as ONE macro-op for the reason stated at the head of this block. Three value USES and one
 	// plain def; the def is written by the closing `CSET` only, i.e. AFTER every operand's last read.

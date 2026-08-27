@@ -716,6 +716,9 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		// F2: the two atomics and the thread token are plain instruction sequences on this lane — no call, so no
 		// signature to intern.
 		atomicCas to currentThreadToken then break 'k'
+		// G1: the multi-M substrate names no wasm function and needs no import table entry — it is REFUSED at
+		// emission (below), so it contributes nothing to collect here.
+		tlsAlloc to osSetEvent then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1327,6 +1330,12 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		atomicCas(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		atomicRmw(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		currentThreadToken(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		// G1: the two value-defining TLS ops would answer i64 like every other machine word; the two void ones
+		// declare nothing. They are refused at emission, so this only keeps the local map total.
+		tlsAlloc(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		tlsSetValue then break 'def'
+		tlsSlotLoad(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osSetEvent then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1552,6 +1561,7 @@ type WasmFuncEmitter
 			osCommitPages to osReservePages then panic("emitStraightLineTerminator: a page reserve or commit is a body op, never a terminator")
 			memFill then panic("emitStraightLineTerminator: a `memFill` is a body op, never a terminator")
 			atomicCas to currentThreadToken then panic("emitStraightLineTerminator: an atomic or a thread-token read is a body op, never a terminator")
+			tlsAlloc to osSetEvent then panic("emitStraightLineTerminator: a TLS op or an event signal is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1641,6 +1651,7 @@ type WasmFuncEmitter
 			osCommitPages to osReservePages then panic("emitDispatcherTerminator: a page reserve or commit is a body op, never a terminator")
 			memFill then panic("emitDispatcherTerminator: a `memFill` is a body op, never a terminator")
 			atomicCas to currentThreadToken then panic("emitDispatcherTerminator: an atomic or a thread-token read is a body op, never a terminator")
+			tlsAlloc to osSetEvent then panic("emitDispatcherTerminator: a TLS op or an event signal is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1796,6 +1807,11 @@ type WasmFuncEmitter
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.emitAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.emitAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode)
 			currentThreadToken(resultId) then self.emitCurrentThreadToken(resultId)
+			// G1: a WASI component has ONE thread by construction, so per-OS-thread storage answers a question the
+			// lane cannot ask, and there is no event object to signal. That is the same reason `currentThreadToken`
+			// answers a constant here rather than reading anything — but a constant is the RIGHT answer for an
+			// identity and a WRONG one for storage, which would silently hand every reader the same slot.
+			tlsAlloc to osSetEvent then panic("emitBodyOp: the per-OS-thread storage ops and the event signal are x64-windows only — a WASI component has one thread and no kernel event object")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -3126,6 +3142,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osCommitPages to osReservePages then panic("decideDispatcher: a page reserve or commit is a body op, never a terminator")
 		memFill then panic("decideDispatcher: a `memFill` is a body op, never a terminator")
 		atomicCas to currentThreadToken then panic("decideDispatcher: an atomic or a thread-token read is a body op, never a terminator")
+		tlsAlloc to osSetEvent then panic("decideDispatcher: a TLS op or an event signal is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

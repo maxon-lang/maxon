@@ -1,0 +1,74 @@
+// Cross-P (remote) FREE torture — the half `track0/alloc-torture.maxon` turns out NOT to reach on shv2.
+//
+// alloc-torture hands a managed array to an `async` task and expects the task's M to perform the final
+// release. That is the C# bootstrap's ownership model; under shv2 a by-value managed argument is an ALIAS,
+// so the caller still owns it and the array is freed by MAIN — on the very P that allocated it. Measured:
+// a build whose remote-push path ABORTS runs alloc-torture to exit 42 at every proc count.
+//
+// This program forces the cross-P free from the other side: a green thread ALLOCATES managed objects,
+// then SLEEPS. The scheduler parks it and any idle M may resume it, so the scope-end release of everything
+// allocated before the sleep lands on a DIFFERENT P from the one that allocated it.
+//
+// The aggregate is an order-independent sum of index-derived values, exactly as alloc-torture's is.
+
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+let taskCount = 400
+let heldPerTask = 6
+let churnPerTask = 25
+
+function task(idx Integer) returns Integer
+	var acc = idx
+
+	// Allocated on whichever M starts this green thread.
+	var held = StringArray.create()
+
+	for k in 0 upto heldPerTask 'build'
+		held.push("held{idx}-slot{k}")
+	end 'build'
+
+	// The yield. This thread parks on a timer and is re-enqueued onto the GLOBAL run queue, so the M that
+	// resumes it is whichever one is idle — not necessarily the one above.
+	sleep(1)
+
+	for j in 0 upto churnPerTask 'churn'
+		let tmp = "task{idx}-churn-{j}"
+
+		if not tmp.isEmpty() 'nz'
+			acc = acc + 1
+		end 'nz'
+	end 'churn'
+
+	for h in held 'read'
+		if not h.isEmpty() 'ne'
+			acc = acc + 1
+		end 'ne'
+	end 'read'
+
+	// `held` and its six Strings are released HERE, on the post-sleep M.
+	return acc
+end 'task'
+
+function main() returns ExitCode
+	var promises = IntPromiseArray.create()
+
+	for i in 0 upto taskCount 'spawn'
+		promises.push(async task(i))
+	end 'spawn'
+
+	var total = 0
+
+	for p in promises 'await'
+		total = total + await p
+	end 'await'
+
+	let workers = __Builtins.schedMaxActiveWorkers()
+
+	print("aggregate={total}\n")
+	print("workers={workers}\n")
+
+	return 42
+end 'main'

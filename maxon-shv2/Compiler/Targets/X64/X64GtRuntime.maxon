@@ -7,12 +7,12 @@
 // encoders directly, like the `mrt_*` panic runtime (X64Runtime.maxon).
 //
 // ⭐ THE TWO CHUNKS TOUCH NO `.data` GLOBAL. The context switch passes the `to` GT through in rdx unchanged, so
-// the trampoline reads its own GT from rdx (not from `__gt_current_gt`); the drivers own the current-GT global
+// the trampoline reads its own GT from rdx (not from any current-GT word); the drivers own `P->currentGt`
 // (see GtRuntime.maxon's header). The context switch also repoints the NT_TIB stack bounds on every switch
 // (`gs:[0x08]`/`gs:[0x10]`, and the `to`/`from` GTs' saved-bounds fields via their rdx/rcx pointers) — a SEGMENT
 // and register-pointer accesses, still no rdata relocation, so both chunks stay pure register/stack/segment
-// code exactly like the panic runtime. The INLINE shim, by contrast, DOES reference the `__gt_current_gt` /
-// `__gt_system_stack_top` `.data` globals — through the ordinary `encodeLeaRegGlobal` rdata-relocation path the
+// code exactly like the panic runtime. The INLINE shim, by contrast, DOES reference the
+// `__sched_tls_teb_offset` `.data` word — and, through the P it finds there, `currentGt` and `systemStackSP` — through the ordinary `encodeLeaRegGlobal` rdata-relocation path the
 // backend already resolves, so no new relocation machinery is added for it.
 //
 // CALLING CONVENTION — Maxon's internal ABI (StdToX64Conversion): integer arguments in
@@ -277,7 +277,7 @@ end 'buildGtTrampolineChunk'
 // use is invisible. The args (rcx/rdx/r8/r9) are untouched BEFORE the call; the result (rax) is untouched
 // AFTER it — the post-call TIB restore uses rcx, which is dead once the call has returned.
 //
-// ⚠ NO NESTING. The shim switches to the FIXED `__gt_system_stack_top` (reset every entry, not a bump
+// ⚠ NO NESTING. The shim switches to THIS P's FIXED `systemStackSP` (reset every entry, not a bump
 // pointer). Safe only because a kernel call is a LEAF that never re-enters guarded Maxon code, and single-M
 // runs one thing at a time — a shimmed call must never reach another shimmed call on the same thread.
 
@@ -299,6 +299,61 @@ let ShimTibScratchReg = X64Register.rcx  // post-call TIB-restore scratch; dead 
 // only in the shim's own map and never collide with the enclosing function's block ids.
 let ShimDirectLabel = 0 as BlockId
 let ShimDoneLabel = 1 as BlockId
+
+// ⭐⭐ **`dest` = THE P THIS OS THREAD OWNS, BRANCHING TO `bail` IF THERE ISN'T ONE — the hand-assembled twin
+// of `SchedRuntime.emitLoadCurrentP`, and the ONE spelling both Target-tier readers share.** The syscall shim
+// and the prologue stack guard each need the running green thread, and since G1 that is `P->currentGt` rather
+// than a `.data` word; writing the sequence twice is exactly how the two would come to disagree about which
+// of its two null cases to test.
+//
+// **THE TWO NULLS ARE DIFFERENT QUESTIONS AND BOTH MUST BE ASKED:**
+//   * a ZERO TEB OFFSET means `__sched_init_procs` has not run — the scheduler does not exist yet, and
+//     `gs:[0]` is `NT_TIB.ExceptionList`, a NON-NULL pointer, so an unchecked read hands back garbage and the
+//     next field load faults. This is reachable: the prologue guard runs inside `main` before the first
+//     `async`.
+//   * a ZERO P means this OS thread owns none. That is reachable too, by a thread that runs real code: the
+//     IOCP completion thread is created by `__io_init`, never adopts a P, and calls builder-built
+//     `__gt_enqueue` — whose lock take is a shimmed `iatCall`.
+//
+// **THE THIRD IS THE GREEN THREAD ITSELF**, and it is inside this helper rather than at each caller for the
+// same reason the other two are: both callers ask it, both bail on it, and the version where one of them
+// forgot would be a load through a zeroed `currentGt` on an M running its own scheduler context.
+//
+// `pDest` keeps the P — the shim reads its syscall stack out of it after the branch, so the two registers are
+// separate; the guard passes the same register for both, which is exactly what "the P is dead after this"
+// looks like. All three bails go to the caller's own label, which in each caller means "take the un-scheduled
+// path".
+//
+// ⚠ **THE rbp/r13 ENCODING TRAP IS CLOSED BY THE ENCODER, NOT BY A REGISTER CHOICE HERE.** `[rbp]`/`[r13]`
+// with mod=00 means RIP-RELATIVE, so a hand-assembled ModR/M would read a constant out of the code stream
+// instead of the thread's slot — v1 PANICS rather than emit it and the C# bootstrap pins R11 unconditionally,
+// which its own comment records as a bug. `encodeMovRegGsBase` routes through the shared `encodeModRmBaseDisp`,
+// which emits the zero-`disp8` form for exactly those two bases, so either register may be anything.
+function emitLoadCurrentGtOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, pDest X64Register, gtDest X64Register, bail BlockId)
+	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: pDest, label: SchedTlsTebOffsetLabel)
+	encodeLoadRegBaseDisp(code, destReg: pDest, base: pDest, disp: 0, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: pDest, src: pDest, wide: true)
+	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
+	encodeMovRegGsBase(code, dest: pDest, base: pDest)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: pDest, src: pDest, wide: true)
+	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
+	encodeLoadRegBaseDisp(code, destReg: gtDest, base: pDest, disp: POffCurrentGt as Imm32, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: gtDest, src: gtDest, wide: true)
+	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
+end 'emitLoadCurrentGtOrBail'
+
+// ⭐ The P alone, where the caller has already PROVEN it exists and therefore has no branch to take.
+//
+// ⚠ **IT IS NOT A WEAKER VERSION OF THE ONE ABOVE, IT IS A DIFFERENT PRECONDITION, AND EACH OF ITS TWO
+// CALLERS STATES ITS OWN PROOF.** The shim's post-call TIB restore and the prologue guard's cold path both run
+// only after the guarded read above has already answered non-null, and neither can have lost its P since: a P
+// is released only by its own M's worker loop, and neither site is in that loop. A test here would need a
+// branch target that has no correct destination.
+function emitLoadCurrentPOrBailless(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register)
+	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: dest, label: SchedTlsTebOffsetLabel)
+	encodeLoadRegBaseDisp(code, destReg: dest, base: dest, disp: 0, wide: true)
+	encodeMovRegGsBase(code, dest: dest, base: dest)
+end 'emitLoadCurrentPOrBailless'
 
 // The count of true Win64 stack arguments (args 5+) a shimmed import takes — the words the shim copies from the
 // GT frame onto the system stack. Read from the ISEL's `*StackArgWords` single source (StdToX64Conversion), the
@@ -427,6 +482,13 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// runs on the same M whichever stack its frame sits on. Its out-param is a `.data` word rather than a
 		// stack slot besides, so the switch cannot move the buffer under it either.
 		QueryThreadCycleTime gives 0  // 2: ThreadHandle, CycleTime
+		// G1: both TLS imports are register-only. ⚠ **NEITHER IS EVER SHIMMED IN PRACTICE** — `TlsAlloc` runs
+		// once in `__gt_init` and `TlsSetValue` at each M's adoption, and every one of those sites executes on
+		// an OS thread whose current GT has `stackBase == 0`, which is exactly the shim's direct-call guard. The
+		// count is stated anyway because this match is TOTAL: an import with no arm is a compile error, which is
+		// what keeps a later >4-argument import from being handed a frame too small.
+		TlsAlloc gives 0  // 0
+		TlsSetValue gives 0  // 2: dwTlsIndex, lpTlsValue
 	end 'k'
 end 'gtShimStackArgWordsOf'
 
@@ -442,14 +504,16 @@ end 'emitGtGatedIatCall'
 // The shim itself. RSP is 16-aligned at entry (shv2's frame invariant at every call), and the switch makes RSP
 // 16-aligned at the `call` INDEPENDENTLY of the caller's alignment (it sets RSP = the page-aligned system-stack
 // top and reserves a frame chosen to land on 16). Disassembly of the CreateProcessA (6 stack args) path:
-//   lea r11,[rip+__gt_current_gt] ; mov r11,[r11] ; test r11,r11 ; jz direct   (no scheduler → direct)
-//   mov r11,[r11+0x18]            ; test r11,r11 ; jz direct                   (GT0/main, stackBase==0 → direct)
-//   push r10 ; mov r10,rsp ; lea rax,[rip+__gt_system_stack_top] ; mov rax,[rax] ; mov rsp,rax
+//   lea rax,[rip+__sched_tls_teb_offset] ; mov rax,[rax] ; test rax,rax ; jz direct  (no scheduler → direct)
+//   mov rax,gs:[rax]              ; test rax,rax ; jz direct                   (this OS thread owns no P)
+//   mov r11,[rax+0x18]            ; test r11,r11 ; jz direct                   (no current GT)
+//   mov r11,[r11+0x18]            ; test r11,r11 ; jz direct                   (stackBase==0 → real OS stack)
+//   push r10 ; mov r10,rsp ; mov rax,[rax+0x70] ; mov rsp,rax                  (this P's OWN syscall stack)
 //   push r10 ; sub rsp,0x58                                                    (shadow 0x20 + 6 args 0x30 + pad 8)
 //   (mov r11,[r10+0x28+k*8] ; mov [rsp+0x20+k*8],r11) for k in 0..6            (6 args → [rsp+0x20..0x48])
 //   mov gs:[0x08],rax ; sub rax,0x10000 ; mov gs:[0x10],rax                    (repoint TIB at the system stack)
 //   call [CreateProcessA]
-//   lea r11,[rip+__gt_current_gt] ; mov r11,[r11]
+//   lea r11,[rip+__sched_tls_teb_offset] ; mov r11,[r11] ; mov r11,gs:[r11] ; mov r11,[r11+0x18]
 //   mov rcx,[r11+0x90] ; mov gs:[0x08],rcx ; mov rcx,[r11+0x98] ; mov gs:[0x10],rcx   (restore TIB to this GT)
 //   add rsp,0x58 ; pop r10 ; mov rsp,r10 ; pop r10 ; jmp done                  (switch back to the GT stack)
 //   direct: call [CreateProcessA]
@@ -478,21 +542,23 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	var shimFixups = ChunkRel32FixupArray.create()
 	var shimLabels = BlockOffsetTable.create()
 
-	// Guard: no scheduler yet (currentGt == 0) or GT0/main thread (stackBase == 0) → run the call directly.
-	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, label: GtCurrentGtLabel)
-	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: 0, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: ShimGtReg, src: ShimGtReg, wide: true)
-	encodeJcc(code, rel32Fixups: shimFixups, cond: X64CondCode.equal, targetBlockId: ShimDirectLabel)
+	// Guard: no P (no scheduler yet, or an OS thread that owns none), no current GT, or a context already on a
+	// real OS-thread stack (`stackBase == 0` — GT0 and every M's inline scheduler GT) → run the call directly.
+	//
+	// ⭐ **rax HOLDS THE P ACROSS THE GUARD**, because the system-stack top is read out of it AFTER the two
+	// pushes below and re-reading TLS there would spend the sequence twice. rax is caller-saved and the coming
+	// call clobbers it anyway, and nothing between here and the `mov rsp` reads it.
+	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: shimFixups, pDest: X64Register.rax, gtDest: ShimGtReg, bail: ShimDirectLabel)
 	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: GtOffStackBase as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: ShimGtReg, src: ShimGtReg, wide: true)
 	encodeJcc(code, rel32Fixups: shimFixups, cond: X64CondCode.equal, targetBlockId: ShimDirectLabel)
 
-	// Switch RSP to the system stack. r10 = the GT rsp anchor (points at the pushed caller-r10 word); rax holds
-	// the system-stack top through the copy and the TIB repoint below.
+	// Switch RSP to THIS P's OWN system stack (G1 — it was one global region; `SchedRuntime.POffSystemStackSP`
+	// carries the silent interleaved corruption that removes). r10 = the GT rsp anchor (points at the pushed
+	// caller-r10 word); rax holds the system-stack top through the copy and the TIB repoint below.
 	encodePushReg(code, reg: ShimGtRspReg)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: ShimGtRspReg, src: X64Register.rsp, wide: true)
-	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, label: GtSystemStackTopLabel)
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rax, disp: 0, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rax, disp: POffSystemStackSP as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.rax, wide: true)
 	encodePushReg(code, reg: ShimGtRspReg)
 	// sub rsp, reserve — the outgoing-arg frame on the system stack. Shadow space plus one import's
@@ -520,11 +586,12 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 
-	// Restore the TIB to this GT's own bounds. Reload currentGt (the call clobbered r11) and use rcx as scratch,
-	// so rax — the kernel call's result, read by the op after the shim — survives. The restore IS a TIB-from-GT
-	// load, the same operation the context switch does on switch-in.
-	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, label: GtCurrentGtLabel)
-	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: 0, wide: true)
+	// Restore the TIB to this GT's own bounds. Reload the P (the call clobbered both r11 and rax), read
+	// `currentGt` back out of it, and use rcx as scratch so rax — the kernel call's RESULT, read by the op
+	// after the shim — survives. The restore IS a TIB-from-GT load, the same operation the context switch does
+	// on switch-in. It cannot bail; see `emitLoadCurrentPOrBailless`.
+	emitLoadCurrentPOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtReg)
+	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: POffCurrentGt as Imm32, wide: true)
 	emitLoadTibFromGt(code, gtReg: ShimGtReg, scratch: ShimTibScratchReg)
 
 	// Switch RSP back to the GT stack, restore the caller's r10, and skip the direct-call path.
@@ -869,11 +936,9 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 	var guardFixups = ChunkRel32FixupArray.create()
 	var guardLabels = BlockOffsetTable.create()
 
-	// r11 = currentGt ; no scheduler yet (0) → skip.
-	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, label: GtCurrentGtLabel)
-	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: 0, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: ShimGtReg, src: ShimGtReg, wide: true)
-	encodeJcc(code, rel32Fixups: guardFixups, cond: X64CondCode.equal, targetBlockId: GuardSkipLabel)
+	// r11 = this OS thread's green thread; no scheduler, no P and no current GT all mean "not on a green
+	// thread" → skip. The P is dead the moment it has answered, so it shares r11 with the GT.
+	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: guardFixups, pDest: ShimGtReg, gtDest: ShimGtReg, bail: GuardSkipLabel)
 
 	// projectedRsp (r10) = rsp - (frameBytes + margin) ; enough room (>= stackGuard) → skip.
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: ShimGtRspReg, src: X64Register.rsp, wide: true)
@@ -881,9 +946,12 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 	encodeCmpRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtReg, disp: GtOffStackGuard as Imm32)  // projected - stackGuard
 	encodeJcc(code, rel32Fixups: guardFixups, cond: X64CondCode.aboveEqual, targetBlockId: GuardSkipLabel)
 
-	// Cold path: r10 = system-stack top (the scratch stack __gt_morestack runs on), then grow.
-	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: ShimGtRspReg, label: GtSystemStackTopLabel)
-	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtRspReg, disp: 0, wide: true)
+	// Cold path: r10 = THIS P's system-stack top (the scratch stack `__gt_morestack` runs on), then grow.
+	// ⚠ The P is re-read rather than kept from the guard above, because r11 has since been repurposed to hold
+	// the current GT — which IS `__gt_morestack`'s entry contract and must not be disturbed — and the guard's
+	// hot path must not spend a second register to save a load on its cold one.
+	emitLoadCurrentPOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtRspReg)
+	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtRspReg, disp: POffSystemStackSP as Imm32, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtMorestackName)
 
 	// skip:
@@ -899,8 +967,10 @@ end 'emitGtStackGuard'
 //
 // ⭐ A HAND-ASSEMBLED chunk, NOT builder-built Std — like `__gt_context_switch`/`__gt_trampoline`/`__gt_morestack`,
 // and for the same reason both references hand-assemble it: it runs OUTSIDE the GT model, on its OWN OS-thread stack,
-// so its kernel calls must be DIRECT (never the syscall shim, which would read the main thread's `__gt_current_gt`
-// and race the single system stack). A builder-built version would be shimmed and stack-guarded — both wrong here.
+// so its kernel calls must be DIRECT — and since G1 they are so BY CONSTRUCTION rather than by care: this thread
+// never adopts a P, so the shim's own null-P test sends every one of its calls down the direct path. (Before the
+// P, the shim read a GLOBAL current-GT word and would have raced the one shared system stack.) A builder-built
+// version would still be shimmed and stack-guarded — both wrong here.
 //
 // `__io_completion_loop(rcx = lpParameter, ignored)` — the Win64 ThreadProc `__io_init` starts with CreateThread.
 // It loops: `GetQueuedCompletionStatus` blocks until an overlapped read completes; the completing packet's
@@ -908,7 +978,7 @@ end 'emitGtStackGuard'
 // It writes the byte count to `gt.io_result`, then — THE HANDSHAKE — SPIN-WAITS on `gt.ioParked == 1` (the reading GT
 // sets it only AFTER `status = waiting`, so this ordering guarantees the `status = ready` below lands AFTER the GT's
 // own waiting-write: no torn status, no lost wakeup). It sets `status = ready`; for a SPAWNED GT (`stackBase != 0`)
-// it re-enqueues under `__io_lock` (the run queue's sole cross-thread mutation); a GT0 self-driver (`stackBase == 0`)
+// it re-enqueues under `__sched_lock` (the run queue's sole cross-thread mutation); a GT0 self-driver (`stackBase == 0`)
 // is left for its own drive loop to notice via `status`. Either way it `SetEvent`s `__io_done_event` to wake the
 // netpoll's `WaitForSingleObject`. `__gt_enqueue` is PURE MEMORY (no shim), so calling it from this thread is safe.
 //
@@ -939,7 +1009,7 @@ let IoLoopAbandonedLabel = 5 as BlockId
 let IoLoopGlobalPtrReg = X64Register.r11
 
 // Load a `.data` global's VALUE into `dest` — `lea r11, [rip+label] ; mov dest, [r11]`. The completion loop reads
-// `__io_iocp`/`__io_lock`/`__io_done_event` this way, through the ordinary rdata-relocation path.
+// `__io_iocp`/`__sched_lock`/`__io_done_event` this way, through the ordinary rdata-relocation path.
 function emitIoLoopLoadGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
 	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: IoLoopGlobalPtrReg, label: label)
 	encodeLoadRegBaseDisp(code, destReg: dest, base: IoLoopGlobalPtrReg, disp: 0, wide: true)
@@ -984,15 +1054,15 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	// gt = overlapped - GtOffOverlapped ; spill to the frame.
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtOffOverlapped as Imm32)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopGtLocalDisp, srcReg: X64Register.rax)
-	// ⭐ LOCK __io_lock, held across the WHOLE decision below — so the completion thread's abandoned-vs-normal
+	// ⭐ LOCK __sched_lock, held across the WHOLE decision below — so the completion thread's abandoned-vs-normal
 	// branch and the `__gt_promise_drop` IO arm's in-flight-vs-already-fired branch are SERIALIZED, guaranteeing
 	// exactly one side frees the GT and neither dereferences it after free. `bytes` is still in [rbp-bytes]; gt in
 	// [rbp-gt].
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoLockLabel)
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.EnterCriticalSection))
 
 	// spin: wait until gt.ioParked != 0 — the reader committed to parking (state IoParkedInFlight, 1) or the drop
-	// arm abandoned it (IoParkedAbandoned, 2). Holding __io_lock does not block the reader (it sets ioParked without
+	// arm abandoned it (IoParkedAbandoned, 2). Holding __sched_lock does not block the reader (it sets ioParked without
 	// the lock), so this cannot deadlock; in practice ioParked is already set (the packet arrives long after park).
 	loopLabels.place(IoLoopSpinLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
@@ -1017,29 +1087,38 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffStackBase as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopSignalLabel)
-	// Spawned GT → __gt_enqueue(gt) (under the outer __io_lock; __gt_enqueue is pure memory).
+	// Spawned GT → __gt_enqueue(gt) (under the outer __sched_lock; __gt_enqueue is pure memory).
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtEnqueueName)
 
 	// signal (normal): gt.ioParked = IoParkedNormalDone(4) — so a drop RIGHT AFTER this completion reads 4 and
-	// unlinks the enqueued GT — then Leave __io_lock and SetEvent __io_done_event → loop_top.
+	// unlinks the enqueued GT — then Leave __sched_lock and SetEvent __io_done_event → loop_top.
 	loopLabels.place(IoLoopSignalLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedNormalDone)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoLockLabel)
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
+	// ⭐ **AND TELL AN IDLE M (G1).** `__io_done_event` wakes the DRIVER — the thread blocked in
+	// `__gt_drive_until`'s netpoll — and that was the whole wake set while one M ran everything. A worker M
+	// parks on its OWN per-P event, which this event does not touch, so a completion that re-readies a green
+	// thread must also go through `__sched_wake_or_spawn` or that thread waits out a parked worker's timeout.
+	//
+	// ⚠ **IT IS AFTER THE UNLOCK, and that is the Dekker ordering rather than lock hygiene** — the release is
+	// the StoreLoad fence between the queue publish above and the `idleFlag` reads inside the wake. This
+	// thread owns no P, which the wake does not care about: it reads `__sched_procs`, not TLS.
+	encodeCallDirect(code, callFixups: callFixups, targetName: SchedWakeOrSpawnName)
 	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoDoneEventLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.SetEvent))
 	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
 
-	// abandoned: gt.ioParked = IoParkedDrainDone(3) (the drop arm's spin target), Leave __io_lock, loop. No enqueue,
+	// abandoned: gt.ioParked = IoParkedDrainDone(3) (the drop arm's spin target), Leave __sched_lock, loop. No enqueue,
 	// no SetEvent — the drop arm spins on ioParked==3 on the main thread and owns the free.
 	loopLabels.place(IoLoopAbandonedLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedDrainDone)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoLockLabel)
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
 	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
 

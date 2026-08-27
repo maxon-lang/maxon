@@ -3936,8 +3936,9 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// refusal is stronger than "not yet": a lowering there could only fabricate a number, and a fabricated
 	// core count is a silent wrong answer rather than a missing feature.
 	// ⚠ **ITS BAND-MATE `__sched_max_active_workers` IS DELIBERATELY ABSENT**, which is why the two wear
-	// different prefixes at all: that entry reaches no OS — its whole body is a constant return, which
-	// lowers on every target shv2 emits — so gating it would refuse a `ret`.
+	// different prefixes at all: that entry reaches no OS — its whole body is one `.data` load and a `ret`,
+	// which lowers on every target shv2 emits — so gating it would refuse a load. (It WAS a constant return
+	// until G1 gave the worker high-water mark a writer; a `.data` load reaches no more OS than a constant.)
 	// `specs-shv2/builtins-cpu-parallel.md` pins BOTH halves, because the refusal case alone cannot tell a
 	// live gate from a compiler that refuses the whole family.
 	// The THREAD-COST query (`__Builtins.threadCpuTicks` ⇒ `__thread_cpu_ticks`) joins on the same terms and

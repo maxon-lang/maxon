@@ -957,6 +957,9 @@ type StdToX64Lowering
 			// inline load on Windows, and on Linux a ZERO-argument `gettid` syscall — a syscall never touches
 			// the stack, so the largest of the three still reserves no outgoing-argument region.
 			atomicCas to currentThreadToken gives 0
+			// G1: `TlsAlloc` takes none, `TlsSetValue` and `SetEvent` take two and one — all register-only under
+			// Win64 — and the `gs:` slot read is a single inline load that makes no call at all.
+			tlsAlloc to osSetEvent gives 0
 			const to param gives 0
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
@@ -1204,6 +1207,8 @@ type StdToX64Lowering
 				osCommitPages to osReservePages then break 'term'
 				// F2: the two atomics and the thread token are value-producing body ops, never terminators.
 				atomicCas to currentThreadToken then break 'term'
+				// G1: the TLS ops and the event signal are body ops, never terminators — nothing to fuse.
+				tlsAlloc to osSetEvent then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1302,6 +1307,10 @@ type StdToX64Lowering
 				// stops and fuses nothing; declining is always safe, and fusing across any of them would read
 				// flags the atomic has since overwritten.
 				atomicCas to currentThreadToken then break 'isTheCompare'
+				// G1: three of the four are import calls and clobber flags; the `gs:` slot read declares
+				// `clobbersFlags: false` and so cannot be the last flag-writer either. None is the compare, so the
+				// scan stops — declining to fuse is always safe.
+				tlsAlloc to osSetEvent then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1442,7 +1451,7 @@ type StdToX64Lowering
 			osPipeCreate(namePtrId, saPtrId, iocpId, readPtrId, writePtrId) then self.lowerOsPipeCreate(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
 			osIocpCreate(resultId) then self.lowerOsIocpCreate(resultId, dstBlock: dstBlock)
 			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstBlock: dstBlock)
-			osThreadCreate(resultId, entryPtrId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, dstBlock: dstBlock)
+			osThreadCreate(resultId, entryPtrId, argId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, argId: argId, dstBlock: dstBlock)
 			osLockInit(lockPtrId) then self.lowerOsWin64Call1(IatSlot.InitializeCriticalSection, arg0: lockPtrId, dstBlock: dstBlock)
 			osLockEnter(lockPtrId) then self.lowerOsWin64Call1(IatSlot.EnterCriticalSection, arg0: lockPtrId, dstBlock: dstBlock)
 			osLockLeave(lockPtrId) then self.lowerOsWin64Call1(IatSlot.LeaveCriticalSection, arg0: lockPtrId, dstBlock: dstBlock)
@@ -1502,6 +1511,12 @@ type StdToX64Lowering
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.lowerAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId, dstBlock: dstBlock)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.lowerAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
 			currentThreadToken(resultId) then self.lowerCurrentThreadToken(resultId, dstBlock: dstBlock)
+			// G1: the multi-M substrate. Three route through `x64OsCallKind` like every other Win32 lowering here;
+			// the `gs:` slot read is an ISA fact with no OS call in it, so it takes no route — see each lowering.
+			tlsAlloc(resultId) then self.lowerTlsAlloc(resultId, dstBlock: dstBlock)
+			tlsSetValue(indexId, valueId) then self.lowerTlsSetValue(indexId, valueId: valueId, dstBlock: dstBlock)
+			tlsSlotLoad(resultId, tebOffsetId) then self.lowerTlsSlotLoad(resultId, tebOffsetId: tebOffsetId, dstBlock: dstBlock)
+			osSetEvent(handleId) then self.lowerOsSetEvent(handleId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1569,6 +1584,7 @@ type StdToX64Lowering
 			// F2: all three are value-producing body ops. The arm64 CAS/RMW retry loop BRANCHES, but it does so
 			// inside one macro-op's encoder, never between IR blocks — the same division `memFill` states above.
 			atomicCas to currentThreadToken then panic("lowerStdToX64: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
+			tlsAlloc to osSetEvent then panic("lowerStdToX64: a TLS op or an event signal appeared as a block terminator (lowering bug — none of the four is a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -3336,25 +3352,75 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsEventCreateWin64'
 
-	// Lower `osThreadCreate(entryPtr)` to `CreateThread(NULL, 0, entryPtr, NULL, 0, NULL)` — start the IOCP completion
-	// thread on its own OS stack. `entryPtr` (arg 3, a `.text` address from a `funcAddr`) → r8; args 5-6 on the stack.
-	function lowerOsThreadCreate(resultId ValueId, entryPtrId ValueId, dstBlock IrBlock)
+	// Lower `osThreadCreate(entryPtr, arg)` to `CreateThread(NULL, 0, entryPtr, arg, 0, NULL)` — start an OS
+	// thread. `entryPtr` (arg 3, a `.text` address from a `funcAddr`) → r8, `arg` (arg 4, the `lpParameter`
+	// the new thread reads as its first parameter) → r9; args 5-6 on the stack.
+	function lowerOsThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsThreadCreateWin64(resultId, entryPtrId: entryPtrId, dstBlock: dstBlock)
+			importCall then self.lowerOsThreadCreateWin64(resultId, entryPtrId: entryPtrId, argId: argId, dstBlock: dstBlock)
 			syscall then panic("lowerOsThreadCreate: CreateThread is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
 		end 'route'
 	end 'lowerOsThreadCreate'
 
-	function lowerOsThreadCreateWin64(resultId ValueId, entryPtrId ValueId, dstBlock IrBlock)
+	function lowerOsThreadCreateWin64(resultId ValueId, entryPtrId ValueId, argId ValueId, dstBlock IrBlock)
 		self.emitWin64StackArgImm(dstBlock, slot: 0, value: ThreadRunImmediately)
 		self.emitWin64StackArgImm(dstBlock, slot: 1, value: NullPointer)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: ThreadDefaultStackSize))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(entryPtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(argId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateThread)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsThreadCreateWin64'
+
+	// --- G1: the multi-M substrate's four lowerings ---
+
+	// Lower `tlsAlloc(result)` to `TlsAlloc()` — no arguments, the slot INDEX captured out of RAX.
+	function lowerTlsAlloc(resultId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerTlsAllocWin64(resultId, dstBlock: dstBlock)
+			syscall then panic("lowerTlsAlloc: TlsAlloc is x64-windows only — the multi-M scheduler substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerTlsAlloc'
+
+	function lowerTlsAllocWin64(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.TlsAlloc)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerTlsAllocWin64'
+
+	// Lower `tlsSetValue(index, value)` to `TlsSetValue(index, value)` — args rcx/rdx, the BOOL result ignored.
+	function lowerTlsSetValue(indexId ValueId, valueId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call2(IatSlot.TlsSetValue, arg0: indexId, arg1: valueId, dstBlock: dstBlock)
+			syscall then panic("lowerTlsSetValue: TlsSetValue is x64-windows only — the multi-M scheduler substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerTlsSetValue'
+
+	// ⭐⭐ Lower `tlsSlotLoad(result, tebOffset)` to ONE instruction: `mov result, gs:[tebOffset]`.
+	//
+	// ⚠ **IT IS NOT ROUTED THROUGH `x64OsCallKind`, AND THAT IS THE POINT OF THE OP.** Every other Win32
+	// lowering in this file asks that question because it makes an import CALL; this one reaches no OS at all
+	// — `gs:` is the ISA's segment override and the TEB is where Windows happens to put a thread's slots. The
+	// op is refused on the other lanes by `calleeNeedsWin32Substrate` at the CALL's own span, one tier up,
+	// exactly as `__cpu_count` is; a `syscall` arm here would be an unreachable second refusal.
+	//
+	// ⚠ **THE OPERAND IS THE ADDRESSING BASE AND MAY BE COLOURED ANYWHERE, INCLUDING rbp/r13.** Both
+	// references pin a fixed register here to dodge the mod=00/rm=101 RIP-relative encoding those two take —
+	// v1 panics if it ever sees one, and the bootstrap records a live bug from pinning R11 unconditionally.
+	// shv2 needs neither dodge: `x64GsLoadRegBase`'s encoder goes through `encodeModRmBaseDisp`, which emits
+	// the zero-`disp8` form for exactly rbp and r13. The trap is closed by the ENCODER, for every caller,
+	// rather than by each lowering remembering a register.
+	function lowerTlsSlotLoad(resultId ValueId, tebOffsetId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64GsLoadRegBase(TargetVReg.virtual(resultId), base: TargetVReg.virtual(tebOffsetId)))
+	end 'lowerTlsSlotLoad'
+
+	// Lower `osSetEvent(handle)` to `SetEvent(handle)` — one register argument, the BOOL result ignored.
+	function lowerOsSetEvent(handleId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.SetEvent, arg0: handleId, dstBlock: dstBlock)
+			syscall then panic("lowerOsSetEvent: SetEvent is x64-windows only — the multi-M scheduler substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsSetEvent'
 
 	// Lower `osReadOverlapped(handle, buf, cap, bytesOutPtr, ovl)` to `ReadFile(handle, buf, cap, bytesOutPtr, ovl)`.
 	// `bytesOutPtr` (arg 4) → r9; `ovl` (arg 5) is the ONE stack argument. The BOOL result is captured into `resultId`.
@@ -3842,6 +3908,8 @@ type StdToX64Lowering
 			osCommitPages to osReservePages gives false
 			// F2: nor is an atomic or a thread-token read.
 			atomicCas to currentThreadToken gives false
+			// G1: nor is a TLS op or an event signal.
+			tlsAlloc to osSetEvent gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3999,6 +4067,7 @@ type StdToX64Lowering
 			osCommitPages to osReservePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a page reserve or commit, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			memFill panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `memFill`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			atomicCas to currentThreadToken panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an atomic or a thread-token read, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			tlsAlloc to osSetEvent panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a TLS op or an event signal, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

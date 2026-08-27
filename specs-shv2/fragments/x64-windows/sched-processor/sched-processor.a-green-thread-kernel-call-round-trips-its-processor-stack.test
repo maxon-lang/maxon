@@ -1,0 +1,112 @@
+// Test: sched-processor.a-green-thread-kernel-call-round-trips-its-processor-stack
+function napper(n int) returns int
+	__Builtins.sleep(2)
+	return n + 5
+end 'napper'
+
+function main() returns ExitCode
+	let first = async napper(1)
+	let second = async napper(2)
+	let a = await first
+	let b = await second
+	return (a + b) as ExitCode
+end 'main'
+---
+ExitCode: 13
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @napper {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 2
+    x64.callDirect __gt_sleep
+    x64.leaRegRegImm32 r8, rbx, 5
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.leaRegFunc rcx, [rip + napper]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegImm32 rbx, 2
+    x64.leaRegFunc rcx, [rip + napper]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], rbx
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_await
+    x64.leaRegRegReg r8, rbx, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -28,25 +28,28 @@ data {
   __mm_raw_alloc_count@24 = i64 0
   __mm_raw_live_count@32 = i64 0
   __mm_raw_alloc_bytes@40 = i64 0
-  __gt_current_gt@48 = i64 0
-  __gt_run_queue_head@56 = i64 0
-  __gt_run_queue_tail@64 = i64 0
-  __gt_init_done@72 = i64 0
-  __gt_system_stack_top@80 = i64 0
-  __gt_timer_count@88 = i64 0
-  __gt_timer_heap_base@96 = i64 0
-  __gt_timer_capacity@104 = i64 0
-  __gt_trace_counter@112 = i64 0
-  __gt_trace_digits@120 = i64 0
-  __gt_clock_ticks@128 = i64 0
-  __gt_clock_freq@136 = i64 0
-  __gt_proc_count@144 = i64 0
-  __gt_proc_handles_base@152 = i64 0
-  __gt_proc_gts_base@160 = i64 0
-  __gt_live_count@168 = i64 0
-  __slab_arena_list@176 = i64 0
-  __slab_arena_map_l1@184 = i64 0
-  __slab_state@192 = i64 0
+  __gt_run_queue_head@48 = i64 0
+  __gt_run_queue_tail@56 = i64 0
+  __gt_init_done@64 = i64 0
+  __gt_timer_count@72 = i64 0
+  __gt_timer_heap_base@80 = i64 0
+  __gt_timer_capacity@88 = i64 0
+  __gt_trace_counter@96 = i64 0
+  __gt_proc_count@104 = i64 0
+  __gt_proc_handles_base@112 = i64 0
+  __gt_proc_gts_base@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_num_procs@176 = i64 0
+  __sched_shutdown_flag@184 = i64 0
+  __sched_lock@192 = i64 0
+  __slab_arena_list@200 = i64 0
+  __slab_arena_map_l1@208 = i64 0
+  __slab_state@216 = i64 0
 }
 
 func @work {
@@ -108,8 +111,11 @@ func @main {
     x64.movRegImm32 rbx, 1
     x64.leaRegFunc rcx, [rip + work]
     x64.callDirect __gt_spawn
-    x64.storeBaseDispReg.word64 [r8 + 200], rbx
-    x64.movRegReg rcx, r8
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
     x64.callDirect __gt_await
     x64.movRegReg rbx, r8
     x64.callDirect __mm_counter_raw_alloc_total

@@ -1,0 +1,1264 @@
+// Runtime/SchedRuntime.maxon — ⭐⭐ **THE PROCESSOR (P) AND THE WORKER M — the GMP scheduler's structure,
+// built and DELIBERATELY LEFT AT ONE M (G1).**
+//
+// `GtRuntime.maxon` beside this file owns the GREEN THREAD (G): its struct, its stack, its run queue, its
+// timers. This file owns the two things G alone cannot express — **which OS thread is running it (M)** and
+// **the per-processor state that thread owns while it does (P)**. Go's model exactly, and both references'
+// (`GtLayout.cs:360-402` for the layout, `X64Backend.maxon:8990-9340` for the Win32 mechanics).
+//
+// ⛔⛔ **THE PROCESS STILL DEFAULTS TO ONE M, AND THAT IS NOW A POLICY RATHER THAN A PREREQUISITE.**
+// `DefaultMaxProcs` is **1**, so `__sched_init_procs` builds exactly one P, the claim scan finds no free one,
+// and **no worker OS thread is ever created** by a program that does not ask for one. G1 built the whole P/M
+// substrate — the CAS claim, the Dekker park, the wake, the per-P system stack — and left it turned off,
+// because what a green thread *does* was still full of state two Ms would have shared without discipline.
+// G2 is that audit, and it is discharged below.
+//
+// ⭐⭐ **THE AUDIT IS NO LONGER PROSE — IT IS `MultiMSharing`, A REQUIRED ARGUMENT ON EVERY RUNTIME `.data`
+// SLOT'S BIRTH (`pushRuntimeGlobal`, below).** This paragraph used to BE the audit: a list derived by grepping
+// the tree for *"safe because single-M"*, which is what found its last four items — and exactly the property
+// a list in a comment cannot keep, because nothing makes the next slot join it. Every slot the six producers
+// in this runtime lay out now states its own class where it is created, and a slot whose author has not
+// decided does not compile. The classes and what each promises are on the enum.
+//
+// ⚠⚠ **WHAT G2 FLIPPED, AND WHAT IT LEFT — THE SHORT FORM. The long form is at each slot.**
+//
+//   1. **THE REFCOUNT READ-MODIFY-WRITE.** `MmRuntime.emitAdjustRefcount` is a `lock`-prefixed atomic, and
+//      `emitRefcountCheckToLastOwner` now DECREMENTS FIRST and picks its arm from the value the decrement
+//      displaced — the order, not the prefix, is what makes it correct. MEASURED both ways on one binary
+//      (`temp/g2/rc-field.maxon`, twelve Ms retaining and releasing ONE box): with the flip, exit 42 at
+//      `MAXON_MAX_PROCS ∈ {1,2,4,12}`, twenty runs; with only that flip reverted, **exit 101 at 2 and 4 and
+//      exit 139 at 12**, five runs each.
+//   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which is now an
+//      `atomicRmw` and is what the four scheduler counters (`__gt_live_count`, `__gt_trace_counter`,
+//      `__io_pending`, `__io_pipe_seq`) call instead of each spelling load/add/store by hand.
+//   3. **THE TWO PARK STORES**, under `__sched_lock` — the timer store's count/base/capacity and the process
+//      store's count, plus the three swap-removes `__gt_promise_drop` reaches. What is indivisible there is a
+//      TRANSACTION over several words, which no atomic can express. The wake is deliberately outside the
+//      lock; `emitSchedEnqueueLocked` / `emitSchedWakeAnIdleM` carry that requirement in their names.
+//   4. **THE THREE OUT-PARAM SCRATCH REGIONS** (`__gt_trace_digits`, `__gt_clock_ticks`, `__gt_clock_freq`)
+//      are FRAME SLOTS now, not `.data` — per-call storage for a per-call need, which also deleted three
+//      globals and one `__slab_alloc`.
+//   5. **THE ASYNC RELEASER's CLAIM** is a CAS (`GtRuntime.emitGtReleaserCall`), the one item on the list
+//      whose failure was a DOUBLE FREE rather than a lost count.
+//   6. **THE SUBPROCESS HANDLE TABLE** — its lazy creation under the lock, its per-slot claim by CAS.
+//
+// ⛔ **TWO THINGS ARE STILL RACY ABOVE ONE M, AND NEITHER IS THIS FILE'S TO FIX.**
+//   • **THE ALLOCATOR.** `SlabRuntime`/`SlabArena` are ONE shard with no lock and no ownership gate; both
+//     files say so in their own headers. `maxon-shv2/track0/alloc-torture.maxon` dies at
+//     `MAXON_MAX_PROCS=2` and above with **exit 86** (`slabSpanExhaustedPastItsEnd`, INV-1) or a segfault,
+//     and it is clean at 1. It is the allocator rung's, and it BITES FIRST: it is why a green thread that
+//     allocates on a worker M still cannot be trusted, whatever this file has done.
+//   • **`ClockRuntime`'s `__clock_wall_ticks` and `__thread_cpu_ticks_out`** — the same out-param scratch
+//     shape item 4 fixed here, in a file G2 did not own. The fix is item 4's, applied one file over:
+//     `func.stackSize` plus two `StdOp.stackRecordAddr`s, and the two `.data` words deleted.
+//
+// ⇒ **at N>1 a green thread that ALLOCATES on a worker M still races**; one that retains, releases, sleeps,
+// spawns a child, traces or reads the monotonic clock no longer does.
+//
+// ⭐ **WHY A SEPARATE FILE FROM `GtRuntime`.** Not tidiness: the two answer different questions, and one of
+// them is read by code the other cannot see. `emitLoadCurrentGt` below is called from the x64 SHIM and the
+// x64 PROLOGUE GUARD — hand-assembled Target-tier chunks — as well as from a dozen Std builders, so the P
+// layout is a contract shared across the tier boundary exactly as the GT layout is. Buried in `GtRuntime`'s
+// 5,900 lines it would read as one more green-thread field.
+
+// ==========================================================================
+// ⭐⭐⭐ THE MULTI-M SHARING CLASS OF A RUNTIME `.data` WORD (G2)
+// ==========================================================================
+//
+// ⛔⛔ **A `.data` WORD IS REACHABLE FROM EVERY OS THREAD BY CONSTRUCTION, SO EVERY ONE OF THEM OWES AN
+// ANSWER — AND THE ANSWER IS A REQUIRED ARGUMENT RATHER THAN A COMMENT.** G1 left the audit as the prose
+// list this file's header used to carry, derived by grepping the tree for *"safe because single-M"*; the
+// grep is what found its last four items, which is exactly the property a prose list cannot keep. G2 turns
+// it into `pushRuntimeGlobal`'s `sharing` parameter: a slot that nobody has classified is not a slot the
+// compiler will build, because the call that creates it does not compile without one.
+//
+// ⚠ **THIS IS DELIBERATELY NOT A ROSTER + A CHECKER.** A table keyed by label would be a SECOND list of the
+// slots, kept in step with the producers by nothing, and its checker would have to run somewhere and could be
+// forgotten. The classification travels ON the slot's own creation, which is the shape `StdOpMeta` uses one
+// tier up — *"a new variant cannot be added without declaring all of it"* — and it has that shape's property:
+// there is no state at which the fact is missing, so there is nothing to check.
+export enum MultiMSharing
+	// Every mutation is `StdOp.atomicRmw` or `StdOp.atomicCas`. The counters
+	// (`MmRuntime.emitGlobalAccumulate`) and the claim words are here.
+	atomicStep
+	// Every read AND every mutation happens inside `__sched_lock`. A word whose transaction spans several
+	// words — the FIFO's head/tail pair, the timer store's count/base/capacity triple, the process store's
+	// count — cannot be made indivisible by an atomic, because what must be indivisible is not a word.
+	underSchedLock
+	// Written before any worker M can exist, and never after. Bring-up is single-threaded BY CONSTRUCTION and
+	// not by convention: the first `__gt_init` is reached by the only thread there is, because
+	// `__sched_init_procs` — which it calls — is what BUILDS the P array a worker is spawned onto, and the
+	// spawner (`__sched_wake_or_spawn`) is reachable only from an enqueue, which is reachable only after
+	// bring-up returns. A slot nothing writes at all (`__sched_shutdown_flag`, whose teardown does not exist
+	// yet) is sealed trivially and rides this class too.
+	sealedBeforeWorkers
+	// A plain read-modify-write whose lost update is BOUNDED and SELF-CORRECTING, argued at its own site.
+	// One member: `__sched_max_active_workers`, a monotone high-water mark — a lost sample loses a transient
+	// reading while the mark still converges to the true peak, and it can never UNDER-report two live
+	// workers, because the reader's own increment is already visible in the value it compares.
+	monotoneApproximation
+	// ONE aligned machine word, written whole and read whole, whose contract does not say WHICH writer's
+	// value a reader gets. No tearing is possible on any lane shv2 emits, so every observable value is a value
+	// somebody really wrote; what multi-M costs is precision, not safety. One member:
+	// `__subp_last_error`, whose own site argues why exactness there needs per-green-thread storage.
+	lastWriterWins
+	// ⛔ **THE ANSWER `pushRuntimeGlobal` REFUSES, and the reason it is a member rather than an omission is
+	// that "I do not know" is the answer a new slot arrives with.** A shared word with no discipline is the
+	// failure this whole rung exists to remove — a lost update nothing reproduces on demand — so a slot that
+	// wants this class is not a slot that may be added: fix it (one of the four above), or take the surface
+	// it belongs to as its own rung and put the slot in a file that owns it.
+	unclassified
+end 'MultiMSharing'
+
+// ⭐⭐ **THE ONE DOOR A RUNTIME `.data` SLOT IS BORN THROUGH**, and the only place the
+// `DataSectionEntry.create(String.from(<label>), valueType: StdType.i64, value: 0)` incantation is spelled —
+// it was written out at thirty sites across six producers, which is thirty chances to get the type or the
+// seed wrong and, until this rung, thirty slots whose sharing nobody had to state.
+//
+// `seed` defaults to 0 because the zero image IS the initial state for almost every slot (see
+// `gtRuntimeGlobals`); the two worker counters are the exception and say so by passing one.
+//
+// ⚠ **THE `usage`/`--debugstream` GATES STAY AT THE CALL SITES.** Whether a slot is laid out at all is a
+// question about the PROGRAM; this door answers a question about the SLOT.
+export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sharing MultiMSharing, seed ParsedInt = 0)
+	match sharing 'classified'
+		atomicStep to lastWriterWins then break 'classified'
+		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas), underSchedLock (every read and write inside `__sched_lock`), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
+	end 'classified'
+
+	out.push(DataSectionEntry.create(String.from(label), valueType: StdType.i64, value: seed))
+end 'pushRuntimeGlobal'
+
+// ==========================================================================
+// The ProcContext (P) struct
+// ==========================================================================
+//
+// ⭐ **BYTE-IDENTICAL TO `GtLayout.cs:360-402` THROUGH 0x80**, so the bootstrap's debug agent, its allocator
+// shard index and its netpoll all graft on without a field moving. Fields this rung does not use are
+// RESERVED rather than omitted, for the reason `GtRuntime` reserves the GT's 0x60–0xA0 window: a field added
+// later at a different offset is a layout fork, and a layout fork between two compilers that share a
+// debugger is a silent wrong answer.
+//
+// ⚠⚠ **THE TOTAL SIZE IS *NOT* THE BOOTSTRAP'S 376 BYTES, AND IT CANNOT BE.** `POffMainThread` holds an
+// INLINE GT, and shv2's GT struct is 0xF8 where the bootstrap's is 0xE8 — sixteen bytes more, because shv2
+// carries a `releaser`, a `traceId`, an `ioScratch` and a `MaxAsyncArgs`-slot inline argument region the
+// bootstrap has no equivalent of (`GtRuntime.GtOffArgInline` states why that region is inline). A struct
+// that embeds a bigger struct is bigger. What IS preserved is the property the byte-identity exists for:
+// every offset up to and including `POffMainThread` matches, so the header is portable, and only the tail —
+// which grafts onto nothing — differs.
+
+// The per-P LOCAL run-queue ring (Go's `runq`). ⚠ RESERVED AND UNUSED at this rung: shv2 has ONE global FIFO
+// (`GtRuntime`'s `__gt_run_queue_head`/`_tail`), and the per-P ring plus its work-stealing protocol is a
+// later rung. The three words are reserved so that rung is a body change rather than a layout change.
+let POffLocalQueueHead = 0x00 as ByteOffset
+let POffLocalQueueTail = 0x08 as ByteOffset
+let POffLocalQueueLen = 0x10 as ByteOffset
+
+// ⭐⭐ **THE GREEN THREAD THIS M IS RUNNING** — the field that replaces the single `.data` word shv2 kept it
+// in until this rung. A global cannot express it under more than one M by construction: two Ms run two
+// different green threads at the same instant, and every reader of *"the current GT"* — the syscall shim,
+// the prologue stack guard, `__gt_sleep`, both await drivers, the trace — would read whichever M wrote last.
+//
+// EXPORTED because those readers span both tiers: builder-built Std here and in `GtRuntime`, and the
+// hand-assembled x64 shim and prologue guard.
+export let POffCurrentGt = 0x18 as ByteOffset
+
+// This processor's index in `__sched_procs`, `0 .. numProcs-1`. It is also the shard index the sharded
+// allocator will key its mcache by (the bootstrap's `POffId` carries the same double duty), which is why it
+// is an INDEX rather than a pointer or a thread id.
+//
+// EXPORTED because that day arrived: the sharded allocator reads it to pick its mcache row.
+export let POffId = 0x20 as ByteOffset
+
+// The xorshift state a work-stealing P picks its victim with. ⚠ RESERVED AND UNUSED: stealing is a later
+// rung. Seeded to `id + 1` at init anyway, because a zero xorshift state is a fixed point — seeding is free
+// here, while a forgotten seed later would be a stealer that always picks P[0].
+let POffRng = 0x28 as ByteOffset
+
+// ⭐⭐ **THE PARK FLAG — one half of the Dekker pair.** 1 means *"this M has published that it is about to
+// block on `wakeEvent`"*. Written by the owning M (to 1, when parking; to 0, on every path that resumes) and
+// by an ENQUEUER (to 0, immediately before it signals). See `buildSchedWorkerLoop` for why the publish must
+// be an ATOMIC read-modify-write and not a plain store.
+let POffIdleFlag = 0x30 as ByteOffset
+
+// The auto-reset Win32 event this P's M blocks on when it has no work, and an enqueuer signals to wake it.
+// AUTO-reset (`osEventCreate`), so a signal that arrives while the M is still running is not lost — it
+// leaves the event signalled and the next `osWaitHandle` returns at once.
+let POffWakeEvent = 0x38 as ByteOffset
+
+// The `CreateThread` HANDLE of the worker M running on this P, or 0 for P[0] (the main OS thread, which we
+// never created). Stored rather than reserved because the handle is otherwise LOST: a reserved slot would
+// mean leaking one kernel handle per worker with no way to reach it. Nothing READS it at this rung; the
+// teardown that joins the workers out is a later rung's.
+let POffOsThreadHandle = 0x40 as ByteOffset
+
+// ⭐⭐ **THE CLAIM WORD — `PStatusUnused` (0) or `PStatusActive` (1).** A P struct exists for every processor
+// the program may ever run on, so *"does this P exist"* and *"is an M running on it"* are different
+// questions and only this one answers the second. **It is claimed by CAS and never by a plain store** — see
+// `emitSchedClaimProc`, which carries the heap corruption that mistake produced in the reference.
+let POffStatus = 0x48 as ByteOffset
+let PStatusUnused = 0 as ParsedInt
+let PStatusActive = 1 as ParsedInt
+
+// ⭐⭐ **THE DEFERRED RE-ENQUEUE SLOTS — the FRONT one.** A green thread handed a wakeup may not be made
+// discoverable until `__gt_context_switch` has finished SAVING ITS REGISTERS: between an enqueue and that
+// save it is on the run queue *while still executing on its own stack*, so a second M can pop it and resume
+// it onto a stale SP — two Ms running one stack. `GtRuntime.maxon` states that window in full, and the C#
+// bootstrap hit it as a documented `--workers>=5` crash. The waking side therefore parks the GT HERE and the
+// scheduler drains it AFTER the switch.
+//
+// ⚠ **IT IS THE FRONT OF THE QUEUE, AND ITS SIBLING BELOW IS THE BACK.** A woken AWAITER belongs at the
+// front: it is the thread this processor was waiting on.
+let POffPendingWaiter = 0x50 as ByteOffset
+
+// Go's `runnext` — the one green thread a P runs before consulting its local ring. ⚠ RESERVED AND UNUSED:
+// there is no local ring at this rung (see `POffLocalQueueHead`), so a `runnext` would be a second name for
+// the global queue's head.
+let POffRunnext = 0x58 as ByteOffset
+
+// The per-P GT-struct free list (Go's per-P reuse). ⚠ RESERVED AND UNUSED: `__gt_spawn` takes its struct
+// from `__slab_alloc`, whose zeroing contract answers the recycling trap a private free list has to answer
+// by hand (`GtRuntime.buildGtSpawn` carries that history).
+let POffFreeListHead = 0x60 as ByteOffset
+let POffFreeListLen = 0x68 as ByteOffset
+
+// ⭐⭐ **THIS P's OWN SYSCALL STACK — the field that DELETES a filed multi-M prerequisite rather than
+// documenting it.** Every Win32 call a green thread makes runs on a scratch stack instead of the GT's tiny
+// one (`X64GtRuntime`'s syscall shim). Until this rung that scratch stack was ONE GLOBAL REGION
+// (`__gt_system_stack_top`) whose safety invariant was prose: *"single-M runs one thing at a time"*.
+// **Multi-M falsifies that by definition** — two Ms inside shimmed calls concurrently would both set RSP to
+// the same top and write the same 64 KB — and the failure shape is silent interleaved corruption, not a
+// clean fault. shv2 had copied the SIZE from the bootstrap's PER-P constant and made the REGION global.
+//
+// Moving it here makes the invariant unrepresentable instead of forbidden: an M can only reach its own P.
+// EXPORTED because the shim (hand-assembled) reads it.
+export let POffSystemStackSP = 0x70 as ByteOffset
+
+// The head of this P's MPSC remote-free queue: where an M that frees a slot owned by ANOTHER P pushes it,
+// for the owner to drain on its next slow path. ⚠ RESERVED AND LEFT ZERO: shv2's slab has one shard and no
+// ownership gate (`SlabRuntime`'s header), so there is no cross-P free to queue. The slot is reserved
+// because the sharded allocator is a later rung and the bootstrap's layout puts it here.
+export let POffRemoteFreeHead = 0x78 as ByteOffset
+
+// ⭐ **THIS M's OWN SCHEDULER GREEN THREAD — an INLINE GT struct, not a pointer.** It is Go's `g0`: the
+// context the M runs its scheduler loop on, and the `from` half of every `__gt_context_switch` into a real
+// green thread. Inline because it is created with the P, lives exactly as long, and a pointer would be a
+// second allocation and a second lifetime for a struct that has neither.
+//
+// Its `stackBase` is 0 (the slab's zero), which is load-bearing three ways: the syscall shim's guard reads
+// it as *"this is a real OS thread stack, call directly"*, the prologue stack guard reads it as *"nothing to
+// grow"*, and `__gt_drive_until`'s recycle gate reads it as *"never free this stack"*. Its TIB bounds are
+// captured by the first `__gt_context_switch` AWAY from it, exactly as GT0's are.
+export let POffMainThread = 0x80 as ByteOffset
+
+// ⭐⭐ **THE DEFERRED RE-ENQUEUE SLOTS — the BACK one, and it may NOT share the front one's slot.**
+// `GtLayout.cs:388-402` states why, from a measured failure: a woken awaiter goes to the FRONT, which is
+// right; a YIELDER routed the same way lands in the slot it just vacated and the next dequeue hands it
+// straight back — *"a thousand yields from one green thread left a sibling that had never run still unrun"*.
+// One slot cannot carry both ends of a queue.
+//
+// ⚠⚠ **ONLY THIS SLOT HAS A PRODUCER TODAY, AND THE TWO DO NOT SHARE ITS SAFETY ARGUMENT.** The YIELDER
+// slot is written ONLY by the green thread currently running on this P (`__gt_resched`'s handoff, its one
+// writer) and drained ONLY by that same P's own scheduler loop, so no other M can see it and a plain store
+// is enough. `POffPendingWaiter` has no producer here yet, and when it gets one it will NOT inherit that
+// argument: the bootstrap's is written by whichever M completed the awaited thread, which is the whole
+// reason `GtLayout.cs:396-399` marks the single-writer property as the YIELDER's and calls it *"a stronger
+// property than POffPendingWaiter has"*. Whoever writes the waiter's producer owes the synchronisation this
+// slot does not.
+//
+// It sits AFTER the inline GT rather than in the header, because the header is full through 0x78 and every
+// one of those offsets is the bootstrap's.
+let POffPendingYielder = POffMainThread + (GtStructSize as ByteOffset)
+
+// One machine word — the stride of the `P*` array `__sched_procs` points at, and the width of every scalar
+// field above. Distinct from `GtRuntime.StackWordBytes` (a STACK word) and `GtArgSlotBytes` (an async
+// ARGUMENT slot) though all three are 8: three facts, three names, so moving one cannot move the others.
+let PointerSlotBytes = 8 as ParsedInt
+
+// 0x180 = 384 bytes. See the layout header for why this is not the bootstrap's 376.
+let PStructSize = ((POffPendingYielder as ParsedInt) + PointerSlotBytes) as ParsedInt
+
+// ==========================================================================
+// The `.data` slots
+// ==========================================================================
+
+// The `TlsAlloc` slot index, kept so a teardown rung can `TlsFree` it, and read once at adoption to publish
+// this OS thread's P. The per-read path never touches it — it reads the precomputed byte offset below.
+let SchedTlsIndexLabel = b"__sched_tls_index"
+
+// ⭐⭐ **THE PRECOMPUTED TEB BYTE OFFSET, `index * 8 + 0x1480` — what makes the current-P read TWO LOADS AND
+// NO CALL.** Windows keeps a thread's first 64 TLS slots inline in its TEB at `TEB + 0x1480`, and `gs:`
+// addresses the TEB, so `mov reg, gs:[thisOffset]` IS `TlsGetValue(index)` with no call, no range check and
+// no clobbered argument register. Both references precompute exactly this word and for exactly this reason.
+//
+// ⚠ **ZERO MEANS "THE SCHEDULER HAS NOT INITIALIZED YET", AND EVERY HAND-ASSEMBLED READER MUST TEST IT.**
+// Before `__sched_init_procs` runs, `gs:[0]` is `NT_TIB.ExceptionList` — a non-null pointer on Windows — so
+// reading through an unchecked zero offset hands back garbage and the next field load faults. The prologue
+// stack guard runs inside `main` before any spawn, so that is a reachable path and not a defensive one.
+export let SchedTlsTebOffsetLabel = b"__sched_tls_teb_offset"
+
+// The base of the `P*` array — `numProcs` machine words, one pointer per processor.
+let SchedProcsLabel = b"__sched_procs"
+
+// ⭐ **HOW MANY Ps EXIST — the bound every scan walks, and the ceiling on live Ms.** The reference keeps TWO
+// words here (`__sched_num_procs` beside `__sched_max_procs`) because a P can be retired without shrinking
+// the array; shv2 keeps ONE, because nothing retires a P and a second word with no writer is a variable's
+// clothes on a constant — the same argument `CpuParallelRuntime` made against a `.data` slot for a `ret 1`.
+// The day a P is retired, the pair splits here, in one place.
+let SchedNumProcsLabel = b"__sched_num_procs"
+
+// ⭐ **HOW MANY Ms ARE LIVE, AND THE HIGH-WATER MARK OF THAT COUNT.** The mark is what
+// `__Builtins.schedMaxActiveWorkers()` answers, which is the only way a program can observe that more than
+// one M ever ran. Both are seeded to **1** in `.data` rather than by an initializer — see
+// `schedRuntimeGlobals`.
+export let SchedActiveWorkersLabel = b"__sched_active_workers"
+export let SchedMaxActiveWorkersLabel = b"__sched_max_active_workers"
+
+// Set at teardown so a parked worker leaves its loop instead of blocking for ever. ⚠ Nothing writes it at
+// this rung — no worker is ever spawned by default, so there is none to shut down — and the worker loop
+// reads it TWICE anyway, because the second read is half of the missed-wakeup argument rather than a
+// duplicate of the first. See `buildSchedWorkerLoop`.
+let SchedShutdownFlagLabel = b"__sched_shutdown_flag"
+
+// ⭐ **THE ONE LOCK OVER THE RUN QUEUE — a `.data` word holding a slab-allocated CRITICAL_SECTION.** It was
+// `__io_lock`, allocated by `__io_init` and taken only when the program read a pipe, because the IOCP
+// completion thread was then the run queue's only cross-thread mutator. A worker M is a second one, so the
+// lock is now allocated by `__gt_init` for EVERY green-thread program and taken at every head/tail mutation.
+//
+// ⚠ **ONE LOCK RATHER THAN TWO, AND THAT IS A DEADLOCK ARGUMENT.** It also still guards the IOCP `ioParked`
+// state machine, which is what it guarded before. Two locks — one for the queue, one for the handshake —
+// would have to be held together on the completion thread's enqueue path, and two locks held together have
+// an ORDER that two files would each have to remember. A CRITICAL_SECTION is recursive, so one lock covering
+// both has no order to get wrong.
+export let SchedLockLabel = b"__sched_lock"
+
+// ==========================================================================
+// Entry points
+// ==========================================================================
+
+// `__sched_init_procs()` — reserve the TLS slot, size and build the P array, and adopt P[0] for the calling
+// (main) OS thread. Called once, from `__gt_init`, before that thread does anything else.
+export let SchedInitProcsName = b"__sched_init_procs"
+
+// `__sched_worker_loop(p)` — a worker M's whole life. The `lpParameter` `osThreadCreate` hands it IS its P.
+let SchedWorkerLoopName = b"__sched_worker_loop"
+
+// `__sched_wake_or_spawn()` — hand a newly-runnable green thread to an idle M, or start one on a free P.
+export let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
+
+// `__sched_drain_pending()` — move whatever the two deferred slots hold onto the run queue, now that the
+// context switch which made deferral necessary has completed.
+export let SchedDrainPendingName = b"__sched_drain_pending"
+
+// ==========================================================================
+// The TLS read — the one door to "which P am I on"
+// ==========================================================================
+
+// ⭐⭐ **P FOR THE CALLING OS THREAD, OR 0 — TWO LOADS AND NO CALL.** `globalAddr` + `loadIndirect` fetch the
+// precomputed TEB offset; `tlsSlotLoad` dereferences it through `gs:`. Every Std caller here runs after
+// `__sched_init_procs`, so none needs the zero test the two hand-assembled callers make explicitly (see
+// `SchedTlsTebOffsetLabel`).
+export function emitLoadCurrentP(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let offsetAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(offsetAddr, label: SchedTlsTebOffsetLabel))
+	let tebOffset = emitLoadField(module, block: block, record: offsetAddr, offset: 0, ids: ids)
+	let p = ids.mint()
+	module.appendOp(block, op: StdOp.tlsSlotLoad(p, tebOffsetId: tebOffset))
+	return p
+end 'emitLoadCurrentP'
+
+// ⭐ **THE GREEN THREAD THIS M IS RUNNING.** The one door every `GtRuntime` reader goes through, replacing
+// the `globalAddr __gt_current_gt` + `loadIndirect` pair it used to be. Stated once here so the P
+// indirection cannot be spelled differently at two of a dozen sites.
+//
+// ⛔⛔ **ITS PRECONDITION IS THAT THE SCHEDULER HAS INITIALIZED, AND THAT IS A REAL OBLIGATION RATHER THAN A
+// FORMALITY — IT WAS MEASURED AS A SEGFAULT.** The word this replaced was a `.data` slot that read 0 before
+// `__gt_init`, so a pre-init reader got a harmless zero; this reads `gs:[tebOffset]`, and before
+// `__sched_init_procs` that offset is 0, which addresses `NT_TIB.ExceptionList` — a NON-NULL pointer — so
+// the `currentGt` load lands on `ExceptionList + 0x18` and the process dies. **MEASURED: a `--debugstream`
+// green-thread program that logs one event before its first `async`, run under `maxon monitor`, went from
+// exit 42 to a SEGMENTATION FAULT** (`1 abandoned (producer died mid-entry)`).
+//
+// Every `GtRuntime` caller satisfies the precondition because the entry points that reach them all open with
+// a lazy `__gt_init` — `__gt_spawn`, `__gt_sleep`, `__gt_resched` and `__gt_io_park` each call it as their
+// first act, which is the discipline that made this safe before and still does. A caller that CANNOT make
+// that claim takes `emitLoadCurrentGtOrZero` below instead.
+export function emitLoadCurrentGt(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	return emitLoadField(module, block: block, record: emitLoadCurrentP(module, block: block, ids: ids), offset: POffCurrentGt, ids: ids)
+end 'emitLoadCurrentGt'
+
+// ⭐⭐ **THE SAME READ FOR A CALLER THAT MAY RUN BEFORE THE SCHEDULER EXISTS — or on an OS thread that owns
+// no P.** Answers the running green thread, or 0. It costs two branches, which is why it is not the door
+// above: every scheduler-internal reader has already run `__gt_init` and would pay them for nothing.
+//
+// **THE TWO ZEROS ARE DIFFERENT QUESTIONS AND BOTH MUST BE ASKED**, exactly as the hand-assembled twin in
+// `X64GtRuntime.emitLoadCurrentPOrBail` states: a zero TEB OFFSET means `__sched_init_procs` has not run (and
+// `gs:[0]` is not null, so reading through it is a wild load); a zero P means this OS thread owns none, which
+// the IOCP completion thread does for its whole life.
+//
+// It terminates `cur` and returns the block to CONTINUE IN, whose single block arg is the answer — the shape
+// every branching emit helper in this runtime uses, because the Std tier has no select.
+export function emitLoadCurrentGtOrZero(module StdModule, func IrFunction, cur IrBlock, gtId ValueId, ids ValueMinter) returns IrBlock
+	var haveOffset = module.addBlock(func, label: b"gtoffset")
+	var haveProc = module.addBlock(func, label: b"gtproc")
+	var merge = module.addBlock(func, label: b"gtmerge")
+	merge.blockArgs.push(IrBlockArg.create(gtId, argType: StdType.i64))
+
+	let offsetAddr = ids.mint()
+	module.appendOp(cur, op: StdOp.globalAddr(offsetAddr, label: SchedTlsTebOffsetLabel))
+	let tebOffset = emitLoadField(module, block: cur, record: offsetAddr, offset: 0, ids: ids)
+	let curZero = emitConst(module, block: cur, value: 0, ids: ids)
+	let noScheduler = emitCmp(module, block: cur, a: tebOffset, b: curZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(noScheduler, thenBlockId: merge.id, elseBlockId: haveOffset.id))
+	cur.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(curZero)))
+
+	let p = ids.mint()
+	module.appendOp(haveOffset, op: StdOp.tlsSlotLoad(p, tebOffsetId: tebOffset))
+	let offsetZero = emitConst(module, block: haveOffset, value: 0, ids: ids)
+	let noProc = emitCmp(module, block: haveOffset, a: p, b: offsetZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveOffset, op: StdOp.condBranch(noProc, thenBlockId: merge.id, elseBlockId: haveProc.id))
+	haveOffset.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(offsetZero)))
+
+	let gt = emitLoadField(module, block: haveProc, record: p, offset: POffCurrentGt, ids: ids)
+	module.setTerminator(haveProc, op: StdOp.branch(merge.id))
+	haveProc.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(gt)))
+
+	return merge
+end 'emitLoadCurrentGtOrZero'
+
+// ⚠ **THERE IS DELIBERATELY NO `emitStoreCurrentGt` TWIN.** The only writer is `GtRuntime.emitGtRunOne`,
+// which already HOLDS the P — it is handed one — so a helper that re-read TLS to store through it would be a
+// second TLS read on the dispatch path, dressed as symmetry. A one-line `emitStoreField(record: p, offset:
+// POffCurrentGt, …)` at a site that has `p` is the right spelling, and it is what that site uses.
+
+// ⚠ **AND NO Std-TIER READER OF `POffSystemStackSP` EITHER.** Both of its readers — the syscall shim and the
+// prologue stack guard's cold path — are hand-assembled Target-tier chunks that reach the field directly;
+// nothing in builder-built Std switches a stack. An exported helper here would have been a second spelling
+// with no caller, which reads to the next person as though the field had a Std consumer it does not have.
+
+// ==========================================================================
+// `.data` and installation
+// ==========================================================================
+
+// ⭐ **DEFAULT ONE M. See this file's header** — the machinery below is built, proven and not turned on, and
+// this constant is where that decision physically lives.
+let DefaultMaxProcs = 1 as ParsedInt
+
+// The environment variable that raises the ceiling for a deliberate multi-M run. ⚠ The bootstrap's spelling
+// (`X86CodeEmitter.Runtime.cs:3601-3631`), taken so a harness that drives both compilers needs one knob.
+//
+// ⚠⚠ **IT CLAMPS AGAINST THE MACHINE, WHERE THE REFERENCE CLAMPS AGAINST THE DETECTED COUNT — and the
+// difference is which number is the DEFAULT.** The bootstrap defaults to the processor count and lets the
+// variable only LOWER it; shv2 defaults to 1, so a variable that could only lower would have nothing to
+// lower to and the structure below could never be exercised at all. The ceiling neither may exceed is the
+// same: the machine's own processor count, because a P nothing can ever run on is a P nobody can schedule.
+let MaxProcsEnvName = b"MAXON_MAX_PROCS"
+
+// The scratch a `GetEnvironmentVariableA` for a decimal count needs. Far more than any processor count
+// spells, so the "buffer too small" answer is unreachable for a well-formed value; a value that overflows it
+// is not a processor count, and the read DECLINES rather than retrying.
+let MaxProcsEnvBufBytes = 32 as ParsedInt
+
+// The byte offset of a thread's first 64 TLS slots within its TEB. `gs:` addresses the TEB on Win64, so
+// `gs:[WindowsTebTlsSlotsOffset + index*8]` IS `TlsGetValue(index)` for those slots — which is the whole
+// reason the read costs no call. Both references bake exactly this number.
+let WindowsTebTlsSlotsOffset = 0x1480 as ParsedInt
+
+// ⭐ **THE PARK TIMEOUT, IN MILLISECONDS — v1's adaptive pair, and it is a MISSED-WAKEUP SAFETY NET rather
+// than a schedule.** A parked M is normally woken by `SetEvent`; the timeout bounds how long a wakeup that
+// went missing can wedge it. **2 ms when a sleep timer is pending**, so a deadline fires promptly even if no
+// enqueue happens to signal this P, and **100 ms otherwise**, which is idle. `X64Backend.maxon:9310-9316`.
+//
+// ⚠ **IT IS NOT WHAT MAKES THE PARK CORRECT, AND MUST NOT BE READ AS THOUGH IT WERE.** The Dekker pair in
+// `buildSchedWorkerLoop` is what closes the missed-wakeup window; this bounds the damage if that argument is
+// ever wrong. A sabotage that breaks the pair therefore shows up as LATENCY at these values and as a HANG
+// only with the timeout removed — which is exactly how the ordering was verified.
+let ParkTimeoutWithTimersMs = 2 as ParsedInt
+let ParkTimeoutIdleMs = 100 as ParsedInt
+
+// The scheduler's `.data` slots. TWO gates rather than one: the worker COUNTERS are readable by a program
+// that never spawns a green thread (`__Builtins.schedMaxActiveWorkers()`), while the P machinery is
+// meaningless without one.
+export function schedRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	// ⭐ **SEEDED TO 1 IN `.data`, NOT BY AN INITIALIZER.** A program with no scheduler runs on exactly one M
+	// — its own — so the true answer is already in the slot and costs no code. It also removes an ordering
+	// question a runtime seed would create: `__Builtins.schedMaxActiveWorkers()` may be called before the
+	// first `async`, i.e. before `__gt_init` has run at all.
+	if usage.usesSchedMaxActiveWorkers or usage.usesGt 'workerCounters'
+		pushRuntimeGlobal(out, label: SchedActiveWorkersLabel, sharing: MultiMSharing.atomicStep, seed: 1)
+		pushRuntimeGlobal(out, label: SchedMaxActiveWorkersLabel, sharing: MultiMSharing.monotoneApproximation, seed: 1)
+	end 'workerCounters'
+
+	if usage.usesGt 'procs'
+		// Every one of these six is written by `__sched_init_procs` and by nothing else — except
+		// `__sched_shutdown_flag`, which no teardown writes yet and is therefore sealed trivially.
+		pushRuntimeGlobal(out, label: SchedTlsIndexLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+		pushRuntimeGlobal(out, label: SchedTlsTebOffsetLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+		pushRuntimeGlobal(out, label: SchedProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+		pushRuntimeGlobal(out, label: SchedNumProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+		pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	end 'procs'
+
+	return out
+end 'schedRuntimeGlobals'
+
+// Install the P/M half of the scheduler. Called from `installGtRuntime`, so it rides `usesGt` exactly as the
+// green-thread half does — there is no program that wants one without the other.
+export function installSchedRuntime(module StdModule)
+	buildSchedInitProcs(module)
+	buildSchedDrainPending(module)
+	buildSchedWorkerLoop(module)
+	buildSchedWakeOrSpawn(module)
+end 'installSchedRuntime'
+
+// --- Shared single-op emitters ---
+
+// The address of `__sched_procs[index]`.
+function emitProcSlotAddr(module StdModule, block IrBlock, index ValueId, ids ValueMinter) returns ValueId
+	let procs = emitLoadGlobalWord(module, block: block, label: SchedProcsLabel, ids: ids)
+	return emitWordSlotAddr(module, block: block, base: procs, index: index, ids: ids)
+end 'emitProcSlotAddr'
+
+// `__sched_procs[index]` — the P struct at that index.
+function emitLoadProc(module StdModule, block IrBlock, index ValueId, ids ValueMinter) returns ValueId
+	return emitLoadField(module, block: block, record: emitProcSlotAddr(module, block: block, index: index, ids: ids), offset: 0, ids: ids)
+end 'emitLoadProc'
+
+// Take / release the one run-queue lock. Both are two ops, and both are spelled here so `GtRuntime`'s four
+// mutation sites and this file's two reach the same word the same way.
+export function emitSchedLockEnter(module StdModule, block IrBlock, ids ValueMinter)
+	module.appendOp(block, op: StdOp.osLockEnter(emitLoadGlobalWord(module, block: block, label: SchedLockLabel, ids: ids)))
+end 'emitSchedLockEnter'
+
+export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMinter)
+	module.appendOp(block, op: StdOp.osLockLeave(emitLoadGlobalWord(module, block: block, label: SchedLockLabel, ids: ids)))
+end 'emitSchedLockLeave'
+
+// ⭐⭐ **PUBLISH A RUNNABLE GREEN THREAD — the ONE door, and the reason it is one door is the WAKE.** Every
+// site that makes a green thread discoverable does exactly this: take the run-queue lock, append, release,
+// and only then tell an idle or absent M about it. Four sites spelled the first three steps by hand and none
+// of them could have told a reader that the fourth belongs with them.
+//
+// ⚠ **THE WAKE MUST BE OUTSIDE THE LOCK, AND THAT IS CORRECTNESS RATHER THAN CONTENTION.** The release IS the
+// StoreLoad fence the Dekker pair needs between the queue publish and the `idleFlag` reads — see
+// `buildSchedWakeOrSpawn`, which states the pairing in full. Moving the wake inside would remove the fence
+// and reintroduce the missed wakeup the pair exists to close.
+export function emitSchedPublishRunnable(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+	emitSchedLockEnter(module, block: block, ids: ids)
+	emitSchedEnqueueLocked(module, block: block, gt: gt, ids: ids)
+	emitSchedLockLeave(module, block: block, ids: ids)
+	emitSchedWakeAnIdleM(module, block: block, ids: ids)
+end 'emitSchedPublishRunnable'
+
+// ⭐⭐ **THE TWO HALVES OF THAT DOOR, SPLIT OUT SO A *BATCH* PUBLISHER CAN COMPOSE THEM DIFFERENTLY (G2), AND
+// NAMED FOR THE LOCK STATE EACH REQUIRES.** `__gt_timer_check` and `__gt_proc_check` walk a store under the
+// run-queue lock and may wake SEVERAL green threads in one pass, so they cannot call the door above: it takes
+// the lock they already hold, and its unlock would then be a recursive decrement that RELEASES NOTHING —
+// deleting the StoreLoad fence the wake depends on, which is a missed wakeup and, with an untimed park, a
+// hang. They enqueue through the first half inside their loop and call the second ONCE after the release.
+//
+// ⚠ The function names carry the requirement because nothing else can: `osLockEnter` is a Win32
+// CRITICAL_SECTION and therefore RECURSIVE, so taking it twice is not an error and getting this wrong
+// produces no diagnostic anywhere — only a wake that observes a stale `idleFlag`.
+export function emitSchedEnqueueLocked(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(gt)))
+end 'emitSchedEnqueueLocked'
+
+export function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeOrSpawnName, args: ValueIdArray.create()))
+end 'emitSchedWakeAnIdleM'
+
+// ⭐⭐ **TAKE THE NEXT RUNNABLE GREEN THREAD OFF THE QUEUE, OR 0 — the CONSUME twin of the door above, and it
+// is one door for the same reason.** Popping mutates head AND tail, which every other M and the IOCP
+// completion thread also mutate, so it is exactly as lock-bound as the append is.
+//
+// ⛔⛔ **IT EXISTS BECAUSE THE FOUR HAND COPIES HAD ALREADY DIVERGED.** Three sites spelled lock/dequeue/unlock
+// out (`__gt_drive_until`'s drive, and the worker loop's two) and the fourth — `__gt_resched`'s GT0 arm —
+// spelled the dequeue with NO LOCK AT ALL, which it had done since before there was a second M, so it was
+// already racing the completion thread in any pipe-reading program that also calls `Runtime.yield()`. That is
+// the divergence a copied idiom predicts, and it is a silent wrong answer rather than a compile error: a
+// concurrent pop and append can leave the FIFO's tail pointing at a node the head no longer reaches.
+export function emitSchedDequeueLocked(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	emitSchedLockEnter(module, block: block, ids: ids)
+	let g = ids.mint()
+	module.appendOp(block, op: StdOp.call(g, callee: GtDequeueName, args: ValueIdArray.create()))
+	emitSchedLockLeave(module, block: block, ids: ids)
+	return g
+end 'emitSchedDequeueLocked'
+
+// ⭐⭐ **HAND THE SCHEDULER A GREEN THREAD TO RE-QUEUE ONCE IT IS OFF ITS OWN STACK.** The producer for
+// `POffPendingYielder`, and the reason both slots exist. Its one caller is `__gt_resched`'s handoff arm —
+// a green thread that is still RUNNABLE, is about to context-switch to its driver, and must not be
+// discoverable until that switch has saved its registers.
+//
+// It is a plain store because the slot is per-P and single-writer: only the green thread currently running on
+// this P writes it, and only that same P's scheduler loop drains it (`__sched_drain_pending`). No other M can
+// see it, which is the property `POffPendingYielder`'s note calls stronger than the waiter slot's.
+export function emitSchedDeferYielder(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: emitLoadCurrentP(module, block: block, ids: ids), offset: POffPendingYielder, value: gt)
+end 'emitSchedDeferYielder'
+
+// ==========================================================================
+// `__sched_init_procs`
+// ==========================================================================
+
+// ⭐⭐ **`__sched_init_procs()` — the whole of scheduler bring-up that is about Ms rather than about green
+// threads.** Ports the C# `EmitSchedInit` (`X86CodeEmitter.Runtime.cs:3399`) and v1's `emitX64GtInit`
+// (`X64Backend.maxon:9000`), restricted to what a single-M-by-default rung needs and expressed in
+// builder-built Std rather than hand-assembled bytes — so it gets register allocation, a checked frame and
+// the leak-safe backend for free, exactly as `MmRuntime`'s reasoning one tier up.
+//
+// In order: reserve the TLS slot and publish its TEB offset; decide how many Ps to build; allocate the run-
+// queue lock and the `P*` array; build each P; adopt P[0] for this OS thread.
+//
+// ⚠ **THE RUN-QUEUE LOCK IS ALLOCATED HERE AND NOT IN `__io_init`.** It guards the queue for every M, not
+// only for the IOCP completion thread, so a green-thread program that never touches a pipe must still have
+// it. See `SchedLockLabel`.
+function buildSchedInitProcs(module StdModule)
+	var func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var settled = module.addBlock(func, label: b"procsettled")
+	var loopHdr = module.addBlock(func, label: b"ploop")
+	var loopBody = module.addBlock(func, label: b"pbody")
+	var adopt = module.addBlock(func, label: b"adopt")
+
+	// The TLS slot, and the `index * 8 + 0x1480` byte offset every later read indexes `gs:` by.
+	let tlsIndex = ids.mint()
+	module.appendOp(entry, op: StdOp.tlsAlloc(tlsIndex))
+	emitStoreGlobalWord(module, block: entry, label: SchedTlsIndexLabel, value: tlsIndex, ids: ids)
+	let slotStride = emitConst(module, block: entry, value: PointerSlotBytes, ids: ids)
+	let slotBytes = emitBin(module, block: entry, a: tlsIndex, b: slotStride, opcode: StdBinOpcode.mul, ids: ids)
+	let tebBase = emitConst(module, block: entry, value: WindowsTebTlsSlotsOffset, ids: ids)
+	emitStoreGlobalWord(module, block: entry, label: SchedTlsTebOffsetLabel, value: emitBin(module, block: entry, a: slotBytes, b: tebBase, opcode: StdBinOpcode.add, ids: ids), ids: ids)
+
+	// How many Ps: `DefaultMaxProcs` unless `MAXON_MAX_PROCS` names more, never above the machine's count.
+	// The answer arrives as `settled`'s block arg, because the decision is a four-way merge.
+	let numProcs = ids.mint()
+	settled.blockArgs.push(IrBlockArg.create(numProcs, argType: StdType.i64))
+	emitResolveMaxProcs(module, func: func, cur: entry, settled: settled, ids: ids)
+
+	emitStoreGlobalWord(module, block: settled, label: SchedNumProcsLabel, value: numProcs, ids: ids)
+
+	// The run-queue CRITICAL_SECTION, in a slab region whose pointer the `.data` word holds. Its lifetime is
+	// the process's, exactly as the completion port's and the wake events' are — see `SchedLockLabel`.
+	let lockBytes = emitConst(module, block: settled, value: CriticalSectionBytes, ids: ids)
+	let lock = ids.mint()
+	module.appendOp(settled, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockBytes)))
+	module.appendOp(settled, op: StdOp.osLockInit(lock))
+	emitStoreGlobalWord(module, block: settled, label: SchedLockLabel, value: lock, ids: ids)
+
+	// The `P*` array. `__slab_alloc` zeroes it, so a slot the loop has not reached yet reads as a null P
+	// rather than as garbage — which matters only until the loop fills every one, and costs nothing.
+	let arrayStride = emitConst(module, block: settled, value: PointerSlotBytes, ids: ids)
+	let arrayBytes = emitBin(module, block: settled, a: numProcs, b: arrayStride, opcode: StdBinOpcode.mul, ids: ids)
+	let procs = ids.mint()
+	module.appendOp(settled, op: StdOp.call(procs, callee: SlabAllocName, args: argsOf(arrayBytes)))
+	emitStoreGlobalWord(module, block: settled, label: SchedProcsLabel, value: procs, ids: ids)
+
+	// The build loop. Its index is the header's phi — the on-the-fly SSA shape every runtime builder here
+	// constructs directly, a runtime function having no parser.
+	let zero = emitConst(module, block: settled, value: 0, ids: ids)
+	let iterId = ids.mint()
+	loopHdr.blockArgs.push(IrBlockArg.create(iterId, argType: StdType.i64))
+	module.setTerminator(settled, op: StdOp.branch(loopHdr.id))
+	settled.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(zero)))
+
+	// ⚠ The bound is `settled`'s block arg rather than a re-read of `__sched_num_procs`: `settled` dominates
+	// this header, so the value is in scope, and reloading it every iteration would be the same fact read twice
+	// per turn from a word only this function writes.
+	let built = emitCmp(module, block: loopHdr, a: iterId, b: numProcs, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(loopHdr, op: StdOp.condBranch(built, thenBlockId: adopt.id, elseBlockId: loopBody.id))
+
+	// P[i] = a fresh zeroed struct, plus the four fields a zero would be wrong for.
+	let structBytes = emitConst(module, block: loopBody, value: PStructSize, ids: ids)
+	let p = ids.mint()
+	module.appendOp(loopBody, op: StdOp.call(p, callee: SlabAllocName, args: argsOf(structBytes)))
+	emitStoreField(module, block: loopBody, record: emitProcSlotAddr(module, block: loopBody, index: iterId, ids: ids), offset: 0, value: p)
+	emitStoreField(module, block: loopBody, record: p, offset: POffId, value: iterId)
+	let one = emitConst(module, block: loopBody, value: 1, ids: ids)
+	// `rng = id + 1` — non-zero, because zero is a fixed point of xorshift. Reserved for the stealer.
+	emitStoreField(module, block: loopBody, record: p, offset: POffRng, value: emitBin(module, block: loopBody, a: iterId, b: one, opcode: StdBinOpcode.add, ids: ids))
+	let wakeEvent = ids.mint()
+	module.appendOp(loopBody, op: StdOp.osEventCreate(wakeEvent))
+	emitStoreField(module, block: loopBody, record: p, offset: POffWakeEvent, value: wakeEvent)
+	// ⭐ This P's OWN syscall stack. `osAllocPages` rather than `__slab_alloc` so the region is its own
+	// PAGE-aligned commit — the top is then 16-aligned, which the shim relies on to land RSP 16-aligned at
+	// the `call` (the global region this replaces carried the same requirement).
+	let sysStackSize = emitConst(module, block: loopBody, value: GtSystemStackSize, ids: ids)
+	let sysStackBase = ids.mint()
+	module.appendOp(loopBody, op: StdOp.osAllocPages(sysStackBase, sizeId: sysStackSize))
+	emitStoreField(module, block: loopBody, record: p, offset: POffSystemStackSP, value: emitBin(module, block: loopBody, a: sysStackBase, b: sysStackSize, opcode: StdBinOpcode.add, ids: ids))
+	let nextIter = emitBin(module, block: loopBody, a: iterId, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(loopBody, op: StdOp.branch(loopHdr.id))
+	loopBody.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(nextIter)))
+
+	// Adopt P[0]: mark it active, point it at its own inline scheduler GT, and publish it in this OS
+	// thread's TLS slot.
+	//
+	// ⚠ **THE CLAIM HERE IS A PLAIN STORE AND NOT THE CAS THE SPAWN PATH USES, AND THE DIFFERENCE IS REAL
+	// RATHER THAN AN INCONSISTENCY.** This runs once, on the main OS thread, before any other thread of this
+	// process exists — there is nobody to contest it. The CAS exists because the spawn path runs with the
+	// run-queue lock RELEASED and several Ms can reach it at once; see `emitSchedClaimProc`.
+	let zeroIndex = emitConst(module, block: adopt, value: 0, ids: ids)
+	let p0 = emitLoadProc(module, block: adopt, index: zeroIndex, ids: ids)
+	emitSchedAdoptProc(module, block: adopt, p: p0, ids: ids)
+	module.setTerminator(adopt, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSchedInitProcs'
+
+// ⭐ **THE THREE STORES THAT MAKE A P THIS OS THREAD'S — stated once, because P[0] and every worker M do
+// exactly the same thing and a second copy is where they would come to disagree.** Mark the P active, point
+// its `currentGt` at its own inline scheduler GT, and publish the P in this thread's TLS slot.
+//
+// The inline GT arrives zeroed from the slab, and every one of those zeros is correct: `stackBase == 0` is
+// what tells the syscall shim and the prologue guard that this context runs on a real OS-thread stack, and
+// `waiter == 0` is what tells `__gt_sleep` that it is a top-level driver. Its TIB bounds are captured by the
+// first `__gt_context_switch` away from it.
+function emitSchedAdoptProc(module StdModule, block IrBlock, p ValueId, ids ValueMinter)
+	let active = emitConst(module, block: block, value: PStatusActive, ids: ids)
+	emitStoreField(module, block: block, record: p, offset: POffStatus, value: active)
+	let mainThread = emitFieldAddr(module, block: block, record: p, offset: POffMainThread, ids: ids)
+	emitStoreField(module, block: block, record: p, offset: POffCurrentGt, value: mainThread)
+	let tlsIndex = emitLoadGlobalWord(module, block: block, label: SchedTlsIndexLabel, ids: ids)
+	module.appendOp(block, op: StdOp.tlsSetValue(tlsIndex, valueId: p))
+end 'emitSchedAdoptProc'
+
+// ⭐ **HOW MANY Ps TO BUILD:** `DefaultMaxProcs`, unless `MAXON_MAX_PROCS` names a larger positive integer,
+// and never more than the machine reports. The answer reaches `settled` as its single block arg; every arm
+// below terminates in a branch that supplies it.
+//
+// ⚠ **A MALFORMED OR ABSENT VALUE IS THE DEFAULT, NEVER AN ERROR.** `osEnvRead` answers 0 for unset, and the
+// digit walk answers 0 for anything that does not start with a digit; both land on the same `< 1` test a
+// literal `0` lands on, which is what makes *"leave the default alone"* one predicate rather than three.
+function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, settled IrBlock, ids ValueMinter)
+	var lengthOk = module.addBlock(func, label: b"maxprocslen")
+	var parseStart = module.addBlock(func, label: b"maxprocsparse")
+	var parsed = module.addBlock(func, label: b"maxprocsparsed")
+	var clampToCpu = module.addBlock(func, label: b"maxprocsclamp")
+	var cpuFloor = module.addBlock(func, label: b"maxprocscpufloor")
+	var cpuKnown = module.addBlock(func, label: b"maxprocscpuok")
+	var takeCpu = module.addBlock(func, label: b"maxprocscpu")
+	var takeRequested = module.addBlock(func, label: b"maxprocsreq")
+
+	let nameBuf = emitLiteralCString(module, block: cur, ids: ids, text: MaxProcsEnvName)
+	let bufBytes = emitConst(module, block: cur, value: MaxProcsEnvBufBytes, ids: ids)
+	let buf = ids.mint()
+	module.appendOp(cur, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(bufBytes)))
+	let written = ids.mint()
+	module.appendOp(cur, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: buf, bufLenId: bufBytes))
+
+	// ⚠ **`osEnvRead` HAS THREE ANSWERS AND THIS SITE DECODES THEM DIFFERENTLY FROM ITS SIBLING, ON PURPOSE.**
+	// `GetEnvironmentVariableA` returns 0 for unset, the CHARACTERS WRITTEN when the value fits, and the size it
+	// NEEDS when the buffer is too small — and `SubprocessRuntime.emitSubpReadEnvInto` retries at exactly that
+	// size, because a `PATH` legitimately overflows any guess. A processor count does not: a value longer than
+	// 32 bytes is not one, so declining is the right answer and a retry would be machinery for a case that
+	// cannot occur. The two are one API contract decoded twice, which is why they name each other here.
+	//
+	// A value that did not fit is not a processor count — decline rather than retry at the size Win32 named.
+	let tooLong = emitCmp(module, block: cur, a: written, b: bufBytes, pred: StdCmpPred.ge, ids: ids)
+	let curDefault = emitConst(module, block: cur, value: DefaultMaxProcs, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(tooLong, thenBlockId: settled.id, elseBlockId: lengthOk.id))
+	cur.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(curDefault)))
+
+	let zero = emitConst(module, block: lengthOk, value: 0, ids: ids)
+	let unset = emitCmp(module, block: lengthOk, a: written, b: zero, pred: StdCmpPred.eq, ids: ids)
+	let lengthOkDefault = emitConst(module, block: lengthOk, value: DefaultMaxProcs, ids: ids)
+	module.setTerminator(lengthOk, op: StdOp.condBranch(unset, thenBlockId: settled.id, elseBlockId: parseStart.id))
+	lengthOk.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(lengthOkDefault)))
+
+	// The decimal walk hands its accumulator to `parsed` as that block's arg.
+	let requested = ids.mint()
+	parsed.blockArgs.push(IrBlockArg.create(requested, argType: StdType.i64))
+	emitParseUnsignedDecimal(module, func: func, cur: parseStart, cstr: buf, parsed: parsed, ids: ids)
+
+	let one = emitConst(module, block: parsed, value: 1, ids: ids)
+	let belowOne = emitCmp(module, block: parsed, a: requested, b: one, pred: StdCmpPred.lt, ids: ids)
+	let parsedDefault = emitConst(module, block: parsed, value: DefaultMaxProcs, ids: ids)
+	module.setTerminator(parsed, op: StdOp.condBranch(belowOne, thenBlockId: settled.id, elseBlockId: clampToCpu.id))
+	parsed.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(parsedDefault)))
+
+	// ⭐ Never above the machine. `osCpuCount` is read directly rather than through `__cpu_count`, which is a
+	// separate runtime entry a program opts into and which a scheduler must not drag in.
+	//
+	// ⛔⛔ **AND ITS FLOOR IS APPLIED HERE, BECAUSE `osCpuCount` IS THE RAW ANSWER AND THE RAW ANSWER CAN BE
+	// ZERO.** `GetActiveProcessorCount` returns 0 on failure and `sysconf` returns -1;
+	// `CpuParallelRuntime.buildCpuCount` clamps for exactly that reason and has the sabotage to prove the arm
+	// is reached. Excluding `requested < 1` one block up says nothing about `cpus`, and a `cpus` of 0 wins the
+	// `requested > cpus` test below — so `numProcs` would be 0, `__slab_alloc(0)` would size the `P*` array,
+	// the build loop would run zero times, and `adopt` would then read `__sched_procs[0]` out of a zero-byte
+	// region and write three fields through whatever it found. A wild write, from a comment that said the
+	// guard was unnecessary.
+	let cpus = ids.mint()
+	module.appendOp(clampToCpu, op: StdOp.osCpuCount(cpus))
+	let cpuFloorConst = emitConst(module, block: clampToCpu, value: MinimumProcessorCount, ids: ids)
+	let belowFloor = emitCmp(module, block: clampToCpu, a: cpus, b: cpuFloorConst, pred: StdCmpPred.lt, ids: ids)
+	let liveCpus = ids.mint()
+	cpuKnown.blockArgs.push(IrBlockArg.create(liveCpus, argType: StdType.i64))
+	module.setTerminator(clampToCpu, op: StdOp.condBranch(belowFloor, thenBlockId: cpuFloor.id, elseBlockId: cpuKnown.id))
+	clampToCpu.branchEdges.push(BranchEdge.create(cpuKnown.id, argIds: argsOf(cpus)))
+	let flooredCpus = emitConst(module, block: cpuFloor, value: MinimumProcessorCount, ids: ids)
+	module.setTerminator(cpuFloor, op: StdOp.branch(cpuKnown.id))
+	cpuFloor.branchEdges.push(BranchEdge.create(cpuKnown.id, argIds: argsOf(flooredCpus)))
+
+	let overCpu = emitCmp(module, block: cpuKnown, a: requested, b: liveCpus, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(cpuKnown, op: StdOp.condBranch(overCpu, thenBlockId: takeCpu.id, elseBlockId: takeRequested.id))
+
+	module.setTerminator(takeCpu, op: StdOp.branch(settled.id))
+	takeCpu.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
+	module.setTerminator(takeRequested, op: StdOp.branch(settled.id))
+	takeRequested.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(requested)))
+end 'emitResolveMaxProcs'
+
+// The unsigned decimal value of the NUL-terminated bytes at `cstr`, delivered as `parsed`'s block arg.
+// Ports the bootstrap's `EmitParseUnsignedCstrIntoRax`: the walk stops at the first non-digit (the
+// terminator included), so a trailing suffix is IGNORED rather than rejected, and a string that does not
+// start with a digit answers 0 — which every caller reads as *"leave the default alone"*.
+function emitParseUnsignedDecimal(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, parsed IrBlock, ids ValueMinter)
+	var scanHdr = module.addBlock(func, label: b"decscan")
+	var notBelow = module.addBlock(func, label: b"decnotbelow")
+	var scanStep = module.addBlock(func, label: b"decstep")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let indexId = ids.mint()
+	let accId = ids.mint()
+	scanHdr.blockArgs.push(IrBlockArg.create(indexId, argType: StdType.i64))
+	scanHdr.blockArgs.push(IrBlockArg.create(accId, argType: StdType.i64))
+	module.setTerminator(cur, op: StdOp.branch(scanHdr.id))
+	cur.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(zero, second: zero)))
+
+	// The digit band is tested at BOTH ends rather than by one unsigned wrap: the byte load zero-extends, so
+	// the wrap trick would work — and it would also rest on the load's width, which is exactly the kind of
+	// implicit dependency a later widening breaks silently. Two compares, no premise.
+	let ch = emitLoadByteIndexed(module, block: scanHdr, base: cstr, index: indexId, ids: ids)
+	let asciiZero = emitConst(module, block: scanHdr, value: AsciiZeroDigit, ids: ids)
+	let below = emitCmp(module, block: scanHdr, a: ch, b: asciiZero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(scanHdr, op: StdOp.condBranch(below, thenBlockId: parsed.id, elseBlockId: notBelow.id))
+	scanHdr.branchEdges.push(BranchEdge.create(parsed.id, argIds: argsOf(accId)))
+
+	let asciiNine = emitConst(module, block: notBelow, value: AsciiNineDigit, ids: ids)
+	let above = emitCmp(module, block: notBelow, a: ch, b: asciiNine, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(notBelow, op: StdOp.condBranch(above, thenBlockId: parsed.id, elseBlockId: scanStep.id))
+	notBelow.branchEdges.push(BranchEdge.create(parsed.id, argIds: argsOf(accId)))
+
+	let stepAsciiZero = emitConst(module, block: scanStep, value: AsciiZeroDigit, ids: ids)
+	let digit = emitBin(module, block: scanStep, a: ch, b: stepAsciiZero, opcode: StdBinOpcode.sub, ids: ids)
+	let radix = emitConst(module, block: scanStep, value: DecimalRadix, ids: ids)
+	let scaled = emitBin(module, block: scanStep, a: accId, b: radix, opcode: StdBinOpcode.mul, ids: ids)
+	let nextAcc = emitBin(module, block: scanStep, a: scaled, b: digit, opcode: StdBinOpcode.add, ids: ids)
+	let one = emitConst(module, block: scanStep, value: 1, ids: ids)
+	let nextIndex = emitBin(module, block: scanStep, a: indexId, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(scanStep, op: StdOp.branch(scanHdr.id))
+	scanStep.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(nextIndex, second: nextAcc)))
+end 'emitParseUnsignedDecimal'
+
+// ==========================================================================
+// `__sched_drain_pending`
+// ==========================================================================
+
+// ⭐⭐ **`__sched_drain_pending()` — the OTHER half of the deferred re-enqueue, and the reason there are TWO
+// slots.** It runs on this P's scheduler context, AFTER the context switch that made deferral necessary, and
+// moves whatever the two slots hold onto the run queue: the WAITER to the front, the YIELDER to the back.
+//
+// ⚠ **THE FRONT IS SPELLED AS A BACK-INSERT AT THIS RUNG, AND THAT IS A HONEST APPROXIMATION RATHER THAN A
+// SILENT ONE.** shv2 has ONE global FIFO with a tail-append primitive (`__gt_enqueue`) and no front-insert;
+// the reference's front lands in `P->runnext`, which is per-P machinery a later rung builds. Until then both
+// slots reach the queue through the same append, so the two differ in ORDER of drain (waiter first) rather
+// than in END. That is enough for correctness — a deferred GT reaches the queue exactly once, after its
+// registers are saved — and not enough for the fairness the reference's split buys, which is why the SLOTS
+// are already separate: the day `runnext` exists, only this function changes.
+//
+// ⚠ It takes the run-queue lock itself, because it is called from the scheduler loop rather than from a
+// site that already holds it.
+//
+// ⭐⭐ **THE YIELDER SLOT HAS A REAL PRODUCER — `__gt_resched`'s handoff — AND THAT IS THE WHOLE REASON THE
+// PAIR EXISTS.** A green thread yielding to its driver used to enqueue itself and THEN context-switch, which
+// leaves it discoverable on the run queue while it is still executing on its own stack: with a second M that
+// is two Ms on one stack, and the C# bootstrap hit exactly that (its documented `--workers>=5` crash). It now
+// leaves the note here instead, and this drain — which runs at the scheduler's loop TOP, i.e. after the
+// switch — puts it on the queue once its registers are saved.
+//
+// ⚠ **THE WAITER SLOT HAS NO PRODUCER YET, AND ITS ABSENCE IS DELIBERATE RATHER THAN UNFINISHED.** The
+// reference writes it from the netpoll's completion claim; shv2's completion thread solves the same problem
+// with the `ioParked` spin handshake instead (`GtRuntime`'s `IoParkedInFlight` state machine), so there is no
+// site here that needs it today. It is drained anyway, which costs one load and one compare, so the day a
+// producer appears it is a store and nothing else.
+function buildSchedDrainPending(module StdModule)
+	var func = IrFunction.createFromStd(SchedDrainPendingName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var yielderTest = module.addBlock(func, label: b"drainyielder")
+	var doneBlock = module.addBlock(func, label: b"done")
+
+	let p = emitLoadCurrentP(module, block: entry, ids: ids)
+	emitSchedDrainSlot(module, func: func, cur: entry, p: p, offset: POffPendingWaiter, cont: yielderTest, ids: ids)
+	emitSchedDrainSlot(module, func: func, cur: yielderTest, p: p, offset: POffPendingYielder, cont: doneBlock, ids: ids)
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSchedDrainPending'
+
+// One slot's drain: if it holds a green thread, clear it and enqueue that thread; either way continue at
+// `cont`. Stated once because the two slots differ only in their offset — and the day they differ in their
+// QUEUE END too, that difference will be an argument here rather than a copy.
+function emitSchedDrainSlot(module StdModule, func IrFunction, cur IrBlock, p ValueId, offset ByteOffset, cont IrBlock, ids ValueMinter)
+	var enqueue = module.addBlock(func, label: b"drainpush")
+
+	let pending = emitLoadField(module, block: cur, record: p, offset: offset, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let empty = emitCmp(module, block: cur, a: pending, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(empty, thenBlockId: cont.id, elseBlockId: enqueue.id))
+
+	// Clear BEFORE the enqueue: once the GT is discoverable another M may park a fresh deferral in this slot,
+	// and a clear afterwards would erase it.
+	let clear = emitConst(module, block: enqueue, value: 0, ids: ids)
+	emitStoreField(module, block: enqueue, record: p, offset: offset, value: clear)
+	emitSchedPublishRunnable(module, block: enqueue, gt: pending, ids: ids)
+	module.setTerminator(enqueue, op: StdOp.branch(cont.id))
+end 'emitSchedDrainSlot'
+
+// ==========================================================================
+// `__sched_worker_loop`
+// ==========================================================================
+
+// ⭐⭐ **`__sched_worker_loop(p)` — A WORKER M's WHOLE LIFE.** A `CreateThread` callback, so `p` arrives as
+// the single `lpParameter` — which is why `osThreadCreate` had to grow an argument operand: every M runs
+// THIS function and is told which P it owns through exactly this word, before it has any TLS to read one
+// from.
+//
+// It adopts `p`, then loops: drain the deferred slots, check for shutdown, dequeue a ready green thread and
+// context-switch into it — coming back here when that thread yields or completes — or, with nothing to run,
+// PARK on this P's wake event. On shutdown it drops the live-worker count, releases the P and returns 0.
+//
+// Ports v1's `emitX64SchedWorkerLoop` (`X64Backend.maxon:9205`) restricted to the global-queue subset shv2
+// has (no runnext, no local ring, no stealing) and written in builder-built Std rather than bytes.
+//
+// ⚠ **IT IS A `__`-PREFIXED RUNTIME FUNCTION, so `skipsGreenThreadStackGuard` keeps the prologue stack guard
+// off it — which is correct and load-bearing: it runs on a real OS-thread stack with megabytes to spare, and
+// a guard here would consult a `currentGt` that does not exist until three instructions later.**
+function buildSchedWorkerLoop(module StdModule)
+	var func = IrFunction.createFromStd(SchedWorkerLoopName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loopTop = module.addBlock(func, label: b"wloop")
+	var haveWork = module.addBlock(func, label: b"wrun")
+	var recycle = module.addBlock(func, label: b"wrecycle")
+	var freeStack = module.addBlock(func, label: b"wfreestack")
+	var park = module.addBlock(func, label: b"wpark")
+	var reDequeued = module.addBlock(func, label: b"wredeq")
+	var reallyPark = module.addBlock(func, label: b"wreallypark")
+	var timerBound = module.addBlock(func, label: b"wtimerbound")
+	var idleBound = module.addBlock(func, label: b"widlebound")
+	var doWait = module.addBlock(func, label: b"wdowait")
+	var exitBlock = module.addBlock(func, label: b"wexit")
+
+	emitParams(module, block: entry, count: 1)
+	let p = 0 as ValueId
+
+	// Adopt: this OS thread now owns `p`. `POffStatus` is ALREADY `PStatusActive` — the spawner's CAS set it
+	// before `CreateThread`, which is what makes the claim exclusive (see `emitSchedClaimProc`) — and
+	// `emitSchedAdoptProc` re-stores it rather than special-casing, because a store of the value already
+	// there is free and a second spelling of "which value means claimed" is not.
+	emitSchedAdoptProc(module, block: entry, p: p, ids: ids)
+
+	// ⭐ The live-worker count and its high-water mark. The count is an ATOMIC add: two Ms can enter and
+	// leave concurrently, and a lost update here would make the count drift for the process's life. The MARK
+	// is a plain load/compare/store, and that is deliberate — it is monotone, so a lost sample only ever
+	// loses a transient reading while the mark still converges to the true peak and can never UNDER-report
+	// two live workers, because this M's own increment is already visible in the reload. The bootstrap draws
+	// the line in exactly the same place and says so.
+	let activeAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(activeAddr, label: SchedActiveWorkersLabel))
+	let one = emitConst(module, block: entry, value: 1, ids: ids)
+	let priorActive = ids.mint()
+	module.appendOp(entry, op: StdOp.atomicRmw(priorActive, addrId: activeAddr, operandId: one, opcode: StdAtomicRmwOpcode.add))
+	let nowActive = emitBin(module, block: entry, a: priorActive, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitSchedRaiseHighWater(module, func: func, cur: entry, live: nowActive, cont: loopTop, ids: ids)
+
+	// loopTop: drain the deferred slots, then look for work.
+	let drainResult = ids.mint()
+	module.appendOp(loopTop, op: StdOp.call(drainResult, callee: SchedDrainPendingName, args: ValueIdArray.create()))
+	let shutdown = emitLoadGlobalWord(module, block: loopTop, label: SchedShutdownFlagLabel, ids: ids)
+	let zero = emitConst(module, block: loopTop, value: 0, ids: ids)
+	let stopping = emitCmp(module, block: loopTop, a: shutdown, b: zero, pred: StdCmpPred.ne, ids: ids)
+	var dequeue = module.addBlock(func, label: b"wdequeue")
+	module.setTerminator(loopTop, op: StdOp.condBranch(stopping, thenBlockId: exitBlock.id, elseBlockId: dequeue.id))
+
+	let g = emitSchedDequeueLocked(module, block: dequeue, ids: ids)
+	let dequeueZero = emitConst(module, block: dequeue, value: 0, ids: ids)
+	let empty = emitCmp(module, block: dequeue, a: g, b: dequeueZero, pred: StdCmpPred.eq, ids: ids)
+	// `haveWork` takes the dequeued GT as a block arg, because the park path re-dequeues and reaches the same
+	// block with a different value.
+	let runGt = ids.mint()
+	haveWork.blockArgs.push(IrBlockArg.create(runGt, argType: StdType.i64))
+	module.setTerminator(dequeue, op: StdOp.condBranch(empty, thenBlockId: park.id, elseBlockId: haveWork.id))
+	dequeue.branchEdges.push(BranchEdge.create(haveWork.id, argIds: argsOf(g)))
+
+	// Run it, on this M's own scheduler context. The GT's waiter is this P's inline scheduler GT, so when it
+	// completes or parks the trampoline switches straight back to the block below the switch.
+	let mainThread = emitFieldAddr(module, block: haveWork, record: p, offset: POffMainThread, ids: ids)
+	let runZero = emitConst(module, block: haveWork, value: 0, ids: ids)
+	emitGtRunOne(module, run: haveWork, recycle: recycle, freeStack: freeStack, g: runGt, selfGt: mainThread, p: p, zeroConst: runZero, continuation: loopTop, ids: ids)
+
+	// ⭐⭐ **THE PARK — A DEKKER PAIR, AND THE TWO HALVES MUST BE READ TOGETHER.** This M has just seen an
+	// empty queue. An enqueuer running concurrently publishes its GT and THEN reads `idleFlag`; this side
+	// publishes `idleFlag = 1` and THEN re-dequeues. Whichever order the two interleave, at least one sees
+	// the other: either the enqueuer reads 1 and signals, or this side's re-dequeue observes the published
+	// GT. Without the barrier between the two, x86's StoreLoad reordering lets BOTH miss — the enqueuer
+	// reads a stale 0 and does not signal, this M reads a queue whose publish is not yet visible and parks
+	// with work queued.
+	//
+	// ⚠ **THE PUBLISH IS AN ATOMIC CAS, WHERE THE REFERENCE USES `XCHG`, AND THE TWO ARE THE SAME
+	// INSTRUCTION FOR THIS PURPOSE.** What is needed is a LOCKED read-modify-write of the flag, because the
+	// LOCK prefix is the StoreLoad fence; `lock cmpxchg` carries it exactly as `xchg`-with-memory does, and
+	// carries it whether the compare succeeds or fails. The success boolean is deliberately UNREAD: the flag
+	// is 1 afterwards either way, since 1 is the only other value it can hold and this M is its only writer
+	// of 1. Spelling it as a CAS rather than adding an `xchg` opcode to `StdAtomicRmwOpcode` keeps the Std
+	// vocabulary to what a consumer needs — the rule that band's own header states.
+	let idleAddr = emitFieldAddr(module, block: park, record: p, offset: POffIdleFlag, ids: ids)
+	let idleExpected = emitConst(module, block: park, value: 0, ids: ids)
+	let idleSet = emitConst(module, block: park, value: 1, ids: ids)
+	let publishedIdle = ids.mint()
+	module.appendOp(park, op: StdOp.atomicCas(publishedIdle, addrId: idleAddr, expectedId: idleExpected, replacementId: idleSet))
+
+	// The RE-DEQUEUE that closes the window. Work found here is run at once, with the flag cleared first.
+	let g2 = emitSchedDequeueLocked(module, block: park, ids: ids)
+	let parkZero = emitConst(module, block: park, value: 0, ids: ids)
+	let stillEmpty = emitCmp(module, block: park, a: g2, b: parkZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(park, op: StdOp.condBranch(stillEmpty, thenBlockId: reallyPark.id, elseBlockId: reDequeued.id))
+
+	emitSchedClearIdle(module, block: reDequeued, p: p, ids: ids)
+	module.setTerminator(reDequeued, op: StdOp.branch(haveWork.id))
+	reDequeued.branchEdges.push(BranchEdge.create(haveWork.id, argIds: argsOf(g2)))
+
+	// ⭐ **THE SECOND SHUTDOWN READ IS NOT A DUPLICATE OF THE FIRST.** Between the loop top's read and this
+	// point the flag may have been set and this P's event already signalled-and-consumed by the wake; a
+	// blocking wait entered after that would never be woken again. Reading here — after `idleFlag` is
+	// published, so a setter that arrives later is guaranteed to signal us — is what makes the wait bounded
+	// by a real event rather than only by its timeout.
+	let shutdownAgain = emitLoadGlobalWord(module, block: reallyPark, label: SchedShutdownFlagLabel, ids: ids)
+	let reallyZero = emitConst(module, block: reallyPark, value: 0, ids: ids)
+	let stoppingAgain = emitCmp(module, block: reallyPark, a: shutdownAgain, b: reallyZero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(reallyPark, op: StdOp.condBranch(stoppingAgain, thenBlockId: exitBlock.id, elseBlockId: timerBound.id))
+
+	// The adaptive timeout — 2 ms while a sleep timer is pending, else 100 ms. See `ParkTimeoutWithTimersMs`.
+	let timerCount = emitLoadGlobalWord(module, block: timerBound, label: GtTimerCountLabel, ids: ids)
+	let timerZero = emitConst(module, block: timerBound, value: 0, ids: ids)
+	let noTimers = emitCmp(module, block: timerBound, a: timerCount, b: timerZero, pred: StdCmpPred.eq, ids: ids)
+	let timeoutMs = ids.mint()
+	doWait.blockArgs.push(IrBlockArg.create(timeoutMs, argType: StdType.i64))
+	let promptMs = emitConst(module, block: timerBound, value: ParkTimeoutWithTimersMs, ids: ids)
+	module.setTerminator(timerBound, op: StdOp.condBranch(noTimers, thenBlockId: idleBound.id, elseBlockId: doWait.id))
+	timerBound.branchEdges.push(BranchEdge.create(doWait.id, argIds: argsOf(promptMs)))
+	let idleMs = emitConst(module, block: idleBound, value: ParkTimeoutIdleMs, ids: ids)
+	module.setTerminator(idleBound, op: StdOp.branch(doWait.id))
+	idleBound.branchEdges.push(BranchEdge.create(doWait.id, argIds: argsOf(idleMs)))
+
+	let wakeEvent = emitLoadField(module, block: doWait, record: p, offset: POffWakeEvent, ids: ids)
+	let waitResult = ids.mint()
+	module.appendOp(doWait, op: StdOp.osWaitHandle(waitResult, handleId: wakeEvent, timeoutMsId: timeoutMs))
+	emitSchedClearIdle(module, block: doWait, p: p, ids: ids)
+	module.setTerminator(doWait, op: StdOp.branch(loopTop.id))
+
+	// ⭐⭐ **EXIT CLEARS BOTH `status` AND `idleFlag`, AND THE SECOND ONE IS THE ONE THAT IS EASY TO FORGET.**
+	// A worker leaving through the shutdown re-check above has `idleFlag == 1` PUBLISHED. Left set, it would
+	// mislead a later enqueue's idle scan into clearing the flag and signalling a DEAD P's event — a wakeup
+	// delivered to nobody, and the GT that prompted it left unrun until some other M happened to look.
+	// v1 records exactly this and fixes it the same way.
+	// `-1` is built as `0 - 1` because `emitConst` takes a `ParsedInt`, which has no negative literal — the
+	// same reason every other negative immediate in this runtime is a subtraction from zero.
+	let exitZero = emitConst(module, block: exitBlock, value: 0, ids: ids)
+	let exitOne = emitConst(module, block: exitBlock, value: 1, ids: ids)
+	let negOne = emitBin(module, block: exitBlock, a: exitZero, b: exitOne, opcode: StdBinOpcode.sub, ids: ids)
+	let exitActiveAddr = ids.mint()
+	module.appendOp(exitBlock, op: StdOp.globalAddr(exitActiveAddr, label: SchedActiveWorkersLabel))
+	let priorOnExit = ids.mint()
+	module.appendOp(exitBlock, op: StdOp.atomicRmw(priorOnExit, addrId: exitActiveAddr, operandId: negOne, opcode: StdAtomicRmwOpcode.add))
+	let unused = emitConst(module, block: exitBlock, value: PStatusUnused, ids: ids)
+	emitStoreField(module, block: exitBlock, record: p, offset: POffStatus, value: unused)
+	emitSchedClearIdle(module, block: exitBlock, p: p, ids: ids)
+	// A `CreateThread` callback returns a DWORD nobody reads; 0 is the conventional success.
+	let exitCode = emitConst(module, block: exitBlock, value: 0, ids: ids)
+	module.setTerminator(exitBlock, op: StdOp.ret(exitCode))
+
+	module.functions.push(func)
+end 'buildSchedWorkerLoop'
+
+// `p.idleFlag = 0` — the three paths that leave a park all clear it, so it is spelled once.
+function emitSchedClearIdle(module StdModule, block IrBlock, p ValueId, ids ValueMinter)
+	let clear = emitConst(module, block: block, value: 0, ids: ids)
+	emitStoreField(module, block: block, record: p, offset: POffIdleFlag, value: clear)
+end 'emitSchedClearIdle'
+
+// Raise `__sched_max_active_workers` to `live` if `live` is higher, then continue at `cont`. See the entry
+// comment in `buildSchedWorkerLoop` for why this is deliberately not atomic.
+function emitSchedRaiseHighWater(module StdModule, func IrFunction, cur IrBlock, live ValueId, cont IrBlock, ids ValueMinter)
+	var raise = module.addBlock(func, label: b"whiwater")
+
+	let mark = emitLoadGlobalWord(module, block: cur, label: SchedMaxActiveWorkersLabel, ids: ids)
+	let higher = emitCmp(module, block: cur, a: live, b: mark, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(higher, thenBlockId: raise.id, elseBlockId: cont.id))
+	emitStoreGlobalWord(module, block: raise, label: SchedMaxActiveWorkersLabel, value: live, ids: ids)
+	module.setTerminator(raise, op: StdOp.branch(cont.id))
+end 'emitSchedRaiseHighWater'
+
+// ==========================================================================
+// `__sched_wake_or_spawn`
+// ==========================================================================
+
+// ⭐⭐ **`__sched_wake_or_spawn()` — THE ENQUEUER'S HALF OF THE DEKKER PAIR.** Called once at the tail of
+// every `__gt_enqueue` site, with the run-queue lock ALREADY RELEASED: the GT is published, and this decides
+// who runs it. First scan `P[1..numProcs)` for an M that has published `idleFlag == 1` and signal it; if
+// none is idle, scan again for a P no M has claimed and start one on it.
+//
+// ⚠⚠ **THE ORDER — PUBLISH, THEN FENCE, THEN READ `idleFlag` — IS THE WHOLE CORRECTNESS ARGUMENT, and the
+// fence is not written here.** It is the LOCK RELEASE the caller has just performed: `LeaveCriticalSection`
+// is a full barrier, so the queue publish inside the lock cannot be reordered past the `idleFlag` reads
+// below. That is why this function is called AFTER the unlock rather than inside the critical section, and
+// why moving it inside would be a silent correctness regression rather than a scope change.
+//
+// ⚠ **AT `DefaultMaxProcs == 1` BOTH SCANS ARE EMPTY** — `numProcs` is 1 and both start at index 1 — so an
+// enqueue costs one load and one compare, and no worker is ever created. That is what "built and not turned
+// on" means in emitted code.
+function buildSchedWakeOrSpawn(module StdModule)
+	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var wakeHdr = module.addBlock(func, label: b"wakescan")
+	var wakeTest = module.addBlock(func, label: b"waketest")
+	var wakeIt = module.addBlock(func, label: b"wakeclaim")
+	var wakeSignal = module.addBlock(func, label: b"wakesignal")
+	var wakeNext = module.addBlock(func, label: b"wakenext")
+	var spawnHdr = module.addBlock(func, label: b"spawnscan")
+	var spawnTest = module.addBlock(func, label: b"spawntest")
+	var spawnIt = module.addBlock(func, label: b"spawnstart")
+	var spawnFailed = module.addBlock(func, label: b"spawnfailed")
+	var spawnNext = module.addBlock(func, label: b"spawnnext")
+	var doneBlock = module.addBlock(func, label: b"done")
+
+	// A shutdown in progress must start nothing and wake nobody: a worker signalled now would find the flag
+	// set and exit, and a worker CREATED now would have to be joined by a teardown that has already run.
+	let shutdown = emitLoadGlobalWord(module, block: entry, label: SchedShutdownFlagLabel, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let stopping = emitCmp(module, block: entry, a: shutdown, b: zero, pred: StdCmpPred.ne, ids: ids)
+	let one = emitConst(module, block: entry, value: 1, ids: ids)
+	let wakeIndex = ids.mint()
+	wakeHdr.blockArgs.push(IrBlockArg.create(wakeIndex, argType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(stopping, thenBlockId: doneBlock.id, elseBlockId: wakeHdr.id))
+	entry.branchEdges.push(BranchEdge.create(wakeHdr.id, argIds: argsOf(one)))
+
+	// ⭐ **THE SCANS START AT 1, NOT 0.** P[0] is the MAIN OS thread's, and the main thread is never parked on
+	// a wake event — it drives the scheduler itself through `__gt_drive_until`. Signalling its event would
+	// wake nobody, and claiming its P would hand a worker M the processor the main thread is already running
+	// on. Both references start at 1 for the same reason.
+	let wakeBound = emitLoadGlobalWord(module, block: wakeHdr, label: SchedNumProcsLabel, ids: ids)
+	let wakeDone = emitCmp(module, block: wakeHdr, a: wakeIndex, b: wakeBound, pred: StdCmpPred.ge, ids: ids)
+	let spawnIndex = ids.mint()
+	spawnHdr.blockArgs.push(IrBlockArg.create(spawnIndex, argType: StdType.i64))
+	let wakeHdrOne = emitConst(module, block: wakeHdr, value: 1, ids: ids)
+	module.setTerminator(wakeHdr, op: StdOp.condBranch(wakeDone, thenBlockId: spawnHdr.id, elseBlockId: wakeTest.id))
+	wakeHdr.branchEdges.push(BranchEdge.create(spawnHdr.id, argIds: argsOf(wakeHdrOne)))
+
+	let wakeProc = emitLoadProc(module, block: wakeTest, index: wakeIndex, ids: ids)
+	let idle = emitLoadField(module, block: wakeTest, record: wakeProc, offset: POffIdleFlag, ids: ids)
+	let testZero = emitConst(module, block: wakeTest, value: 0, ids: ids)
+	let notIdle = emitCmp(module, block: wakeTest, a: idle, b: testZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(wakeTest, op: StdOp.condBranch(notIdle, thenBlockId: wakeNext.id, elseBlockId: wakeIt.id))
+
+	// ⭐ **CLAIM THE FLAG WITH A CAS, THEN SIGNAL — and the CAS is what makes "claim" a true word.** A plain
+	// clear would let two enqueuers both pass the `idleFlag != 0` test above and both signal this P, which on an
+	// auto-reset event is a wasted `SetEvent` rather than a fault — but it also means neither of them then looks
+	// FURTHER, so a second parked M keeps sleeping while a second GT sits in the queue. Taking the flag 1→0
+	// atomically makes exactly one enqueuer the waker and sends the loser on to the next index.
+	//
+	// ⚠ The result is READ, unlike the park's publish CAS: there the flag's value afterwards is the point and
+	// the boolean is redundant; here the boolean IS the decision.
+	// ⚠ `wakeTest` dominates this block, so its `wakeProc` is reused — see `spawnIt`'s note.
+	let wakeItProc = wakeProc
+	let idleAddr = emitFieldAddr(module, block: wakeIt, record: wakeItProc, offset: POffIdleFlag, ids: ids)
+	let idleWas = emitConst(module, block: wakeIt, value: 1, ids: ids)
+	let idleNow = emitConst(module, block: wakeIt, value: 0, ids: ids)
+	let claimedIdle = ids.mint()
+	module.appendOp(wakeIt, op: StdOp.atomicCas(claimedIdle, addrId: idleAddr, expectedId: idleWas, replacementId: idleNow))
+	let lostIdle = emitCmp(module, block: wakeIt, a: claimedIdle, b: idleNow, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(wakeIt, op: StdOp.condBranch(lostIdle, thenBlockId: wakeNext.id, elseBlockId: wakeSignal.id))
+
+	let wakeEvent = emitLoadField(module, block: wakeSignal, record: wakeProc, offset: POffWakeEvent, ids: ids)
+	module.appendOp(wakeSignal, op: StdOp.osSetEvent(wakeEvent))
+	module.setTerminator(wakeSignal, op: StdOp.branch(doneBlock.id))
+
+	let wakeStep = emitConst(module, block: wakeNext, value: 1, ids: ids)
+	let wakeNextIndex = emitBin(module, block: wakeNext, a: wakeIndex, b: wakeStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(wakeNext, op: StdOp.branch(wakeHdr.id))
+	wakeNext.branchEdges.push(BranchEdge.create(wakeHdr.id, argIds: argsOf(wakeNextIndex)))
+
+	// Nobody idle: start an M on the first unclaimed P.
+	let spawnBound = emitLoadGlobalWord(module, block: spawnHdr, label: SchedNumProcsLabel, ids: ids)
+	let spawnDone = emitCmp(module, block: spawnHdr, a: spawnIndex, b: spawnBound, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(spawnHdr, op: StdOp.condBranch(spawnDone, thenBlockId: doneBlock.id, elseBlockId: spawnTest.id))
+
+	let spawnProc = emitLoadProc(module, block: spawnTest, index: spawnIndex, ids: ids)
+	let claimed = emitSchedClaimProc(module, block: spawnTest, p: spawnProc, ids: ids)
+	let claimZero = emitConst(module, block: spawnTest, value: 0, ids: ids)
+	let lost = emitCmp(module, block: spawnTest, a: claimed, b: claimZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(spawnTest, op: StdOp.condBranch(lost, thenBlockId: spawnNext.id, elseBlockId: spawnIt.id))
+
+	// ⚠ `spawnTest` dominates this block, so `spawnProc` is in scope and is reused rather than re-derived —
+	// the index→P mapping is spelled once per scan.
+	let spawnItProc = spawnProc
+	let entryPtr = ids.mint()
+	module.appendOp(spawnIt, op: StdOp.funcAddr(entryPtr, funcName: SchedWorkerLoopName))
+	let threadHandle = ids.mint()
+	module.appendOp(spawnIt, op: StdOp.osThreadCreate(threadHandle, entryPtrId: entryPtr, argId: spawnItProc))
+	emitStoreField(module, block: spawnIt, record: spawnItProc, offset: POffOsThreadHandle, value: threadHandle)
+	// ⭐ **A `CreateThread` THAT FAILED MUST GIVE THE P BACK, and the claim above is what makes that
+	// necessary.** The CAS already marked this P `active`, so a null handle would leave a processor that no M
+	// will ever adopt and that no later spawn can claim — the machine quietly losing a core for the life of the
+	// process. Nothing hangs (the main thread's driver still services the queue), which is exactly why the leak
+	// would go unnoticed. Releasing it is one store, and the next enqueue's scan simply tries again.
+	let spawnZero = emitConst(module, block: spawnIt, value: 0, ids: ids)
+	let threadFailed = emitCmp(module, block: spawnIt, a: threadHandle, b: spawnZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(spawnIt, op: StdOp.condBranch(threadFailed, thenBlockId: spawnFailed.id, elseBlockId: doneBlock.id))
+
+	let unusedAgain = emitConst(module, block: spawnFailed, value: PStatusUnused, ids: ids)
+	emitStoreField(module, block: spawnFailed, record: spawnProc, offset: POffStatus, value: unusedAgain)
+	module.setTerminator(spawnFailed, op: StdOp.branch(doneBlock.id))
+
+	let spawnStep = emitConst(module, block: spawnNext, value: 1, ids: ids)
+	let spawnNextIndex = emitBin(module, block: spawnNext, a: spawnIndex, b: spawnStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(spawnNext, op: StdOp.branch(spawnHdr.id))
+	spawnNext.branchEdges.push(BranchEdge.create(spawnHdr.id, argIds: argsOf(spawnNextIndex)))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSchedWakeOrSpawn'
+
+// ⭐⭐ **CLAIM `p` FOR A NEW WORKER M — `CAS(p.status, unused -> active)`, ANSWERING 1 IF THIS THREAD WON.**
+//
+// ⛔⛔ **IT MUST BE A CAS, AND A PLAIN TEST-AND-SET HERE IS A HEAP-CORRUPTION BUG WITH A NAME.** The whole
+// wake/spawn phase runs with the run-queue lock RELEASED (see `buildSchedWakeOrSpawn`), so several Ms reach
+// this scan at once. With a read/test/store, two of them observe `status == 0` and both `CreateThread` a
+// worker on the SAME P — two Ms sharing one P id, hence one allocator shard, whose lockless same-P
+// allocations then hand THE SAME SLOT to both threads. v1 records that failure verbatim
+// (`X64Backend.maxon:8910-8919`) and both of its backends fixed it independently; the shared C# emitter
+// **still has the plain test-and-set**, which is why this is the one place in this file that does not follow
+// the bootstrap.
+//
+// The loser's answer is 0 and its caller simply moves to the next index, so exactly one M spawns.
+function emitSchedClaimProc(module StdModule, block IrBlock, p ValueId, ids ValueMinter) returns ValueId
+	let statusAddr = emitFieldAddr(module, block: block, record: p, offset: POffStatus, ids: ids)
+	let expected = emitConst(module, block: block, value: PStatusUnused, ids: ids)
+	let replacement = emitConst(module, block: block, value: PStatusActive, ids: ids)
+	let won = ids.mint()
+	module.appendOp(block, op: StdOp.atomicCas(won, addrId: statusAddr, expectedId: expected, replacementId: replacement))
+	return won
+end 'emitSchedClaimProc'

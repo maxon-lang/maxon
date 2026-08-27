@@ -21,25 +21,28 @@ ExitCode: 3
 ---
 data {
   __mm_alloc_count@0 = i64 0
-  __gt_current_gt@8 = i64 0
-  __gt_run_queue_head@16 = i64 0
-  __gt_run_queue_tail@24 = i64 0
-  __gt_init_done@32 = i64 0
-  __gt_system_stack_top@40 = i64 0
-  __gt_timer_count@48 = i64 0
-  __gt_timer_heap_base@56 = i64 0
-  __gt_timer_capacity@64 = i64 0
-  __gt_trace_counter@72 = i64 0
-  __gt_trace_digits@80 = i64 0
-  __gt_clock_ticks@88 = i64 0
-  __gt_clock_freq@96 = i64 0
-  __gt_proc_count@104 = i64 0
-  __gt_proc_handles_base@112 = i64 0
-  __gt_proc_gts_base@120 = i64 0
-  __gt_live_count@128 = i64 0
-  __slab_arena_list@136 = i64 0
-  __slab_arena_map_l1@144 = i64 0
-  __slab_state@152 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
 }
 
 func @makeValue {
@@ -63,7 +66,8 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
     x64.jmp whilehdr
@@ -74,8 +78,11 @@ func @main {
   await:
     x64.leaRegFunc rcx, [rip + makeValue]
     x64.callDirect __gt_spawn
-    x64.storeBaseDispReg.word64 [r8 + 200], rbx
-    x64.movRegReg rcx, r8
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], rbx
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r13
     x64.callDirect __gt_await
     x64.leaRegRegReg r12, r12, r8
     x64.leaRegRegImm32 rbx, rbx, 1
@@ -93,14 +100,16 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

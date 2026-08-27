@@ -473,6 +473,10 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// The two thread-identity reads: ONE plain def, no use. Their input is the OS thread they run on — a
 		// segment-relative address on Windows and a system register on Darwin, neither of which is an operand.
 		x64TebSelfPointer(dest) then pushDef(buf, vreg: dest)
+		// The GS-relative slot read: one register READ (the byte offset it indexes by) and one PLAIN def, which
+		// is `loadRegBaseDisp`'s shape exactly — same helper, same reason (the base dies here, so the def may
+		// land in its register).
+		x64GsLoadRegBase(dest, base) then pushDefFromUse(buf, dest: dest, src: base)
 		arm64ThreadPointer(dest) then pushDef(buf, vreg: dest)
 		// The arm64 LL/SC macro-ops: every operand stays VIRTUAL (the loop reads them wherever they were
 		// coloured) and the result is a PLAIN def, never a reuse — see `TargetDialect.arm64AtomicCas` for why
