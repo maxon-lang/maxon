@@ -29,16 +29,16 @@ end 'main'
 ExitCode: 242
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @eat {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, boom
     x64.jmp ifcont
@@ -46,13 +46,11 @@ func @eat {
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.callDirect __managed_count
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -151,10 +149,9 @@ func @main {
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp whilehdr
   whileexit:
-    x64.imulRegRegImm32 r12, r12, 10
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r12, r12, r8
+    x64.imulRegRegImm32 rax, r12, 10
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.leaRegRegReg r12, rax, rcx
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

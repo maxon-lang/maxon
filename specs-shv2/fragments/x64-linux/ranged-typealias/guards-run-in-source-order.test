@@ -64,10 +64,57 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rcx, 500
+    x64.jmp __il_body#12
+  __il_body#12:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow#17
+    x64.jmp __rc_chk#14
+  __rc_chk#14:
+    x64.cmpRegImm32 rcx, 100000
+    x64.jcc greater, __il_slow#17
+    x64.jmp __rc_ok#13
+  __rc_ok#13:
+    x64.leaRegRegImm32 rbx, rcx, 1
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __il_slow#17
+    x64.jmp __rc_chk#16
+  __rc_chk#16:
+    x64.cmpRegImm32 rbx, 100000
+    x64.jcc greater, __il_slow#17
+    x64.jmp __rc_ok#15
+  __il_slow#17:
     x64.callDirect widen
     x64.movRegReg rbx, r8
+    x64.jmp __il_cont#11
+  __rc_ok#15:
+    x64.jmp __il_cont#11
+  __il_cont#11:
     x64.movRegImm32 rcx, 900
+    x64.jmp __il_body#18
+  __il_body#18:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow#23
+    x64.jmp __rc_chk#20
+  __rc_chk#20:
+    x64.cmpRegImm32 rcx, 100000
+    x64.jcc greater, __il_slow#23
+    x64.jmp __rc_ok#19
+  __rc_ok#19:
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#23
+    x64.jmp __rc_chk#22
+  __rc_chk#22:
+    x64.cmpRegImm32 rax, 100000
+    x64.jcc greater, __il_slow#23
+    x64.jmp __rc_ok#21
+  __il_slow#23:
     x64.callDirect widen
+    x64.jmp __il_cont#10
+  __rc_ok#21:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#10
+  __il_cont#10:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#2
     x64.jmp __rc_chk#3
@@ -84,7 +131,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok#1:
-    x64.leaRegRegImm32 rax, rbx, 0
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#5
     x64.jmp __rc_chk#6
@@ -101,8 +147,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok#4:
-    x64.leaRegRegImm32 rcx, r8, 0
-    x64.leaRegRegReg r8, rax, rcx
+    x64.leaRegRegReg r8, rbx, r8
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#8
     x64.jmp __rc_chk#9

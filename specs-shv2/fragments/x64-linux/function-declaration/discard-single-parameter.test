@@ -12,23 +12,16 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @useSecond {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rdx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 10
-    x64.movRegImm32 rdx, 42
-    x64.callDirect useSecond
+    x64.movRegImm32 r8, 42
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

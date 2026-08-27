@@ -73,25 +73,81 @@ func @main {
     x64.prologue 40
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 rcx, 5
+    x64.jmp __il_body#12
+  __il_body#12:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow#19
+    x64.jmp __rc_chk#16
+  __rc_chk#16:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc greater, __il_slow#19
+    x64.jmp __rc_ok#15
+  __rc_ok#15:
+    x64.jmp matchdefault#13
+  matchdefault#13:
+    x64.movRegImm32 rax, 7
+    x64.jmp matchcont#14
+  matchcont#14:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#19
+    x64.jmp __rc_chk#18
+  __rc_chk#18:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc greater, __il_slow#19
+    x64.jmp __rc_ok#17
+  __il_slow#19:
     x64.callDirect only
+    x64.jmp __il_cont#11
+  __rc_ok#17:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#11
+  __il_cont#11:
     x64.cmpRegImm32 r8, 7
     x64.jcc equal, a
-    x64.jmp critsplit#11
+    x64.jmp critsplit#29
   a:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp ifcont#2
-  critsplit#11:
+  critsplit#29:
     x64.jmp ifcont#2
   ifcont#2:
     x64.movRegImm32 rcx, 0
+    x64.jmp __il_body#21
+  __il_body#21:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow#28
+    x64.jmp __rc_chk#25
+  __rc_chk#25:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc greater, __il_slow#28
+    x64.jmp __rc_ok#24
+  __rc_ok#24:
+    x64.jmp matchdefault#22
+  matchdefault#22:
+    x64.movRegImm32 rax, 7
+    x64.jmp matchcont#23
+  matchcont#23:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#28
+    x64.jmp __rc_chk#27
+  __rc_chk#27:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc greater, __il_slow#28
+    x64.jmp __rc_ok#26
+  __il_slow#28:
     x64.callDirect only
+    x64.jmp __il_cont#20
+  __rc_ok#26:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#20
+  __il_cont#20:
     x64.cmpRegImm32 r8, 7
     x64.jcc equal, b
-    x64.jmp critsplit#12
+    x64.jmp critsplit#30
   b:
     x64.leaRegRegImm32 r8, rbx, 1
     x64.jmp ifcont#4
-  critsplit#12:
+  critsplit#30:
     x64.movRegReg r8, rbx
     x64.jmp ifcont#4
   ifcont#4:

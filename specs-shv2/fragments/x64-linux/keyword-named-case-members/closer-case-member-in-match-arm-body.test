@@ -26,58 +26,48 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @tagOf {
+func @pick {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, matcharm#1
-    x64.jmp matchnext#5
+    x64.jmp matchdefault
   matcharm#1:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  matchnext#5:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchnext#6
-  matcharm#2:
-    x64.movRegImm32 r8, 2
-    x64.popReg rbp
-    x64.ret
-  matchnext#6:
-    x64.cmpRegImm32 rcx, 2
-    x64.jcc equal, matcharm#3
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#6
+    x64.jmp matchnext#10
+  matcharm#6:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont
+  matchnext#10:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#7
+    x64.jmp matchnext#11
+  matcharm#7:
+    x64.movRegImm32 rax, 2
+    x64.jmp __il_cont
+  matchnext#11:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm#8
     x64.jmp matchdead
-  matcharm#3:
-    x64.movRegImm32 r8, 3
+  matcharm#8:
+    x64.movRegImm32 rax, 3
+    x64.jmp __il_cont
+  __il_cont:
+    x64.imulRegRegImm32 r8, rax, 21
     x64.popReg rbp
     x64.ret
   matchdead:
-  matchcont:
-}
-
-func @pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdefault
-  matcharm:
-    x64.movRegImm32 rcx, 1
-    x64.callDirect tagOf
-    x64.imulRegRegImm32 r8, r8, 21
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
   matchdefault:
     x64.movRegImm32 r8, 9
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchcont:
+  matchcont#3:
+  matchcont#12:
 }
 
 func @main {

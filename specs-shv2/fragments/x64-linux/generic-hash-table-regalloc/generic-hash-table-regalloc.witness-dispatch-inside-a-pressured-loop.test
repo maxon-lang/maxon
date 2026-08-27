@@ -65,18 +65,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @bump {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 r8, rcx, 1
-    x64.popReg rbp
-    x64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Mixer.mix {
@@ -136,9 +128,11 @@ func @Mixer.mix {
     x64.jcc less, loop
     x64.jmp whileexit
   loop:
-    x64.movRegReg rcx, r15
-    x64.callDirect bump
-    x64.movRegReg r13, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 r13, r15, 1
+    x64.jmp __il_cont
+  __il_cont:
     x64.loadRegSlot r14, slot0
     x64.movRegReg rcx, r14
     x64.callMem [rbx + 24]

@@ -60,9 +60,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Chunk.create {
@@ -152,16 +153,6 @@ func @Store.refresh {
     x64.ret
 }
 
-func @Store.readSaved {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 0]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @obtainMaker {
   entry:
     x64.pushReg rbp
@@ -207,9 +198,12 @@ func @main {
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp whilehdr
   whileexit:
-    x64.movRegReg rcx, rbx
-    x64.callDirect Store.readSaved
-    x64.movRegReg rbx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc

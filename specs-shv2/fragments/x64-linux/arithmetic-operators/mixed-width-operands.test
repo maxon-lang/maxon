@@ -14,26 +14,15 @@ end 'main'
 ---
 ExitCode: 15
 ---
-func @base {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 5
-    x64.popReg rbp
-    x64.ret
-}
-
 func @widen {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.callDirect base
-    x64.leaRegRegReg r8, r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 r8, rcx, 5
     x64.popReg rbp
     x64.ret
 }

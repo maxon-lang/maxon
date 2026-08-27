@@ -51,22 +51,21 @@ end 'main'
 ExitCode: 23
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Unit.score#Integer {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.callDirect Unit.base
-    x64.leaRegRegReg r8, r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 r8, rdx, 1
     x64.popReg rbp
     x64.ret
 }
@@ -75,11 +74,11 @@ func @Unit.score#bool {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.callDirect Unit.base
-    x64.cmpRegImm32 rbx, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, ternarytrue
     x64.jmp ternaryfalse
   ternarytrue:
@@ -89,9 +88,7 @@ func @Unit.score#bool {
     x64.movRegImm32 rax, 0
     x64.jmp matchcont
   matchcont:
-    x64.leaRegRegReg r8, r8, rax
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.leaRegRegImm32 r8, rax, 1
     x64.popReg rbp
     x64.ret
 }
@@ -109,27 +106,15 @@ func @Unit.make {
     x64.ret
 }
 
-func @Unit.base {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Unit.score#Weight {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.callDirect Unit.base
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.imulRegReg r8, r8, rax
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.loadRegBaseDisp.word64 r8, [rdx + 0]
     x64.popReg rbp
     x64.ret
 }

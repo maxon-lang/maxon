@@ -56,19 +56,22 @@ end 'main'
 ExitCode: 43
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @MarkerFirst.heldPlusOne {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect MarkerFirst.held
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.epilogue 32
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 r8, rax, 1
     x64.popReg rbp
     x64.ret
 }
@@ -77,28 +80,12 @@ func @HeldFirst.heldPlusOne {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect HeldFirst.held
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @MarkerFirst.held {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
-    x64.popReg rbp
-    x64.ret
-}
-
-func @HeldFirst.held {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 r8, rax, 1
     x64.popReg rbp
     x64.ret
 }

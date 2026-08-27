@@ -21,41 +21,32 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @Toggle.flipped {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, isOff
-    x64.jmp ifcont
-  isOff:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 0
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect Toggle.flipped
-    x64.cmpRegImm32 r8, 1
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, isOff
+    x64.jmp ifcont#6
+  isOff:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont
+  ifcont#6:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 1
     x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   ok:
     x64.movRegImm32 r8, 42
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

@@ -38,9 +38,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @S0.make {
@@ -81,15 +82,6 @@ func @Box.create {
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
     x64.epilogue 40
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @takes {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
 }
@@ -388,11 +380,12 @@ func @main {
     x64.callDirect Box.create
     x64.movRegReg rcx, r8
     x64.callDirect Box.create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect takes
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
+    x64.jmp __il_body
+  __il_body:
+    x64.movRegImm32 r12, 0
+    x64.jmp __il_cont
+  __il_cont:
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Box_Box_S0
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Box_N0
@@ -402,7 +395,7 @@ func @main {
     x64.callDirect __destruct_Box_Box_S0
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_Box_N0
-    x64.movRegReg r8, r13
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14

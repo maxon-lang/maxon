@@ -16,34 +16,26 @@ end 'main'
 ---
 ExitCode: 7
 ---
-func @isSentinel {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, -1
-    x64.setccReg equal, r8
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm rcx, 18446744073709551615
-    x64.callDirect isSentinel
-    x64.cmpRegImm32 r8, 0
+    x64.movRegImm rax, 18446744073709551615
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, -1
+    x64.setccReg equal, rax
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, yes
     x64.jmp ifcont
   yes:
     x64.movRegImm32 r8, 7
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

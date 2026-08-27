@@ -1,0 +1,126 @@
+// Test: a-merged-count-is-not-proven-around-a-loop
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias Bits = int(0 to 63)
+
+function main() returns ExitCode
+	var n = 1 as Bits
+	var i = 0 as Num
+	while i < 7 'step'
+		n = n + 10
+		i = i + 1
+	end 'step'
+
+	// The premise, asserted before it is spent: the merge really does hold a value its alias cannot.
+	if n != 71 'reached'
+		return 1
+	end 'reached'
+
+	if 1 shl n != 0 'shl'
+		return 2
+	end 'shl'
+	let negative = 0 - 4
+	if negative shr n != 0 - 1 'shrSign'
+		return 3
+	end 'shrSign'
+
+	let w = u64.max as Word
+	if w shr n != 0 'shrZeroFill'
+		return 4
+	end 'shrZeroFill'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rcx, 7
+    x64.jcc less, step
+    x64.jmp whileexit
+  step:
+    x64.leaRegRegImm32 rax, rax, 10
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 rax, 71
+    x64.jcc notEqual, reached
+    x64.jmp ifcont#5
+  reached:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont#5:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegReg rsi, rcx
+    x64.sarRegImm8 rsi, rcx, 63
+    x64.movRegReg rcx, rax
+    x64.shlRegCl rdx, rdx
+    x64.notReg rsi, rsi
+    x64.andRegReg rdx, rdx, rsi
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, shl
+    x64.jmp ifcont#7
+  shl:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont#7:
+    x64.movRegImm32 rcx, 0
+    x64.leaRegRegImm32 rdx, rcx, -4
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.sarRegImm8 rcx, rcx, 63
+    x64.movRegReg rsi, rax
+    x64.orRegReg rsi, rax, rcx
+    x64.movRegReg rcx, rsi
+    x64.sarRegCl rdx, rdx
+    x64.movRegImm32 rsi, 0
+    x64.leaRegRegImm32 rsi, rsi, -1
+    x64.cmpRegReg rdx, rsi
+    x64.jcc notEqual, shrSign
+    x64.jmp ifcont#9
+  shrSign:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont#9:
+    x64.movRegImm rdx, 18446744073709551615
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegReg rsi, rcx
+    x64.sarRegImm8 rsi, rcx, 63
+    x64.movRegReg rcx, rax
+    x64.shrRegCl rdx, rdx
+    x64.notReg rsi, rsi
+    x64.andRegReg rdx, rdx, rsi
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, shrZeroFill
+    x64.jmp ifcont#11
+  shrZeroFill:
+    x64.movRegImm32 r8, 4
+    x64.popReg rbp
+    x64.ret
+  ifcont#11:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

@@ -19,31 +19,10 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @digits6 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.imulRegRegImm32 rcx, rcx, 100000
-    x64.imulRegRegImm32 rdx, rdx, 10000
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.imulRegRegImm32 rax, rax, 1000
-    x64.leaRegRegReg rax, rcx, rax
-    x64.imulRegRegImm32 rcx, r9, 100
-    x64.leaRegRegReg rax, rax, rcx
-    x64.imulRegRegImm32 rcx, rsi, 10
-    x64.leaRegRegReg rax, rax, rcx
-    x64.leaRegRegReg r8, rax, rdi
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
     x64.movRegImm32 rcx, 100
     x64.movRegImm32 rsi, 45
     x64.movRegImm32 rdi, 23
@@ -57,11 +36,11 @@ func @main {
     x64.movRegReg rax, rcx
     x64.cqo
     x64.idivReg r8
-    x64.movRegReg r8, rdx
+    x64.movRegReg rcx, rdx
     x64.movRegReg rax, rsi
     x64.cqo
     x64.idivReg r9
-    x64.movRegReg rbx, rax
+    x64.movRegReg r8, rax
     x64.movRegReg rax, rsi
     x64.cqo
     x64.idivReg r9
@@ -69,32 +48,33 @@ func @main {
     x64.movRegReg rax, rdi
     x64.cqo
     x64.idivReg r10
-    x64.movRegReg r12, rax
+    x64.movRegReg r9, rax
     x64.movRegReg rax, rdi
     x64.cqo
     x64.idivReg r10
-    x64.movRegReg rdi, rdx
-    x64.movRegReg rcx, r11
-    x64.movRegReg rdx, r8
-    x64.movRegReg rax, rbx
-    x64.movRegReg r9, rsi
-    x64.movRegReg rsi, r12
-    x64.callDirect digits6
-    x64.cmpRegImm32 r8, 846325
+    x64.jmp __il_body
+  __il_body:
+    x64.imulRegRegImm32 rax, r11, 100000
+    x64.imulRegRegImm32 rcx, rcx, 10000
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, r8, 1000
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, rsi, 100
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, r9, 10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, rdx
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 846325
     x64.jcc equal, ok
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

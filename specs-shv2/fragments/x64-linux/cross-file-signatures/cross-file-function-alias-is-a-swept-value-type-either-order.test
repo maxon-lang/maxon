@@ -29,9 +29,10 @@ export typealias UnaryOp = function(Int) returns Int
 ExitCode: 42
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @twice {
@@ -60,15 +61,6 @@ func @Holder.create {
     x64.ret
 }
 
-func @pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegFunc r8, [rip + __fnref_twice]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -79,8 +71,11 @@ func @main {
     x64.prologue 40
     x64.callDirect Holder.create
     x64.movRegReg rbx, r8
-    x64.callDirect pick
-    x64.movRegReg r12, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegFunc r12, [rip + __fnref_twice]
+    x64.jmp __il_cont
+  __il_cont:
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.movRegImm32 rcx, 7
     x64.movRegImm32 rdx, 0

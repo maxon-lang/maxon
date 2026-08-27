@@ -25,18 +25,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @ident {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @quotient {
@@ -135,9 +127,11 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 104
-    x64.movRegImm32 rcx, 100
-    x64.callDirect ident
-    x64.movRegReg rbx, r8
+    x64.movRegImm32 rbx, 100
+    x64.jmp __il_body#7
+  __il_body#7:
+    x64.jmp __il_cont#6
+  __il_cont#6:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#2
     x64.jmp __rc_chk
@@ -159,9 +153,12 @@ func @main {
     x64.ret
   __rc_ok#1:
     x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rcx, rax, -3
-    x64.callDirect ident
-    x64.cmpRegImm32 r8, -1
+    x64.leaRegRegImm32 r12, rax, -3
+    x64.jmp __il_body#9
+  __il_body#9:
+    x64.jmp __il_cont#8
+  __il_cont#8:
+    x64.cmpRegImm32 r12, -1
     x64.jcc greater, __rc_panic#5
     x64.jmp __rc_ok#4
   __rc_panic#5:
@@ -177,7 +174,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok#4:
-    x64.leaRegRegImm32 r12, r8, 0
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot7, rcx

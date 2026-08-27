@@ -22,31 +22,24 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 5
-    x64.jcc greater, bright
-    x64.jmp ifcont
-  bright:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 0
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 7
-    x64.callDirect pick
-    x64.leaRegRegImm32 r8, r8, 0
+    x64.movRegImm32 rax, 7
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc greater, bright
+    x64.jmp ifcont
+  bright:
+    x64.movRegImm32 r8, 1
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

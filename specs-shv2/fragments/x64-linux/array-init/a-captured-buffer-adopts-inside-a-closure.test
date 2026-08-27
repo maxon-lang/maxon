@@ -18,9 +18,10 @@ end 'main'
 ExitCode: 72
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @apply {
@@ -91,10 +92,9 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rax, r13
     x64.callDirect apply
-    x64.imulRegRegImm32 r12, r8, 10
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r12, r12, r8
+    x64.imulRegRegImm32 rax, r8, 10
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.leaRegRegReg r12, rax, rcx
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -131,20 +131,16 @@ func @main$closure_0 {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
     x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_count
-    x64.leaRegRegReg rbx, r8, rbx
-    x64.movRegReg rcx, r12
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.leaRegRegReg rbx, rax, rbx
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

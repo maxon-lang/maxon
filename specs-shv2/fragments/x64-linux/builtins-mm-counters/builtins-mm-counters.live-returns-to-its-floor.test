@@ -28,13 +28,15 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-  __mm_alloc_total@24 = i64 0
-  __mm_alloc_bytes@32 = i64 0
-  __mm_raw_alloc_count@40 = i64 0
-  __mm_raw_alloc_bytes@48 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __mm_alloc_total@8 = i64 0
+  __mm_alloc_bytes@16 = i64 0
+  __mm_raw_alloc_count@24 = i64 0
+  __mm_raw_live_count@32 = i64 0
+  __mm_raw_alloc_bytes@40 = i64 0
+  __slab_arena_list@48 = i64 0
+  __slab_arena_map_l1@56 = i64 0
+  __slab_state@64 = i64 0
 }
 
 func @fill {
@@ -102,16 +104,17 @@ func @main {
     x64.jcc greater, totalDidNotComeBack
     x64.jmp critsplit#9
   totalDidNotComeBack:
-    x64.leaRegRegImm32 rax, rax, 4
+    x64.leaRegRegImm32 r8, rax, 4
     x64.jmp ifcont#4
   critsplit#9:
+    x64.movRegReg r8, rax
     x64.jmp ifcont#4
   ifcont#4:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rax, 255
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -125,7 +128,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r8, rax, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

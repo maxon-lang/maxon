@@ -33,28 +33,26 @@ end 'main'
 ExitCode: 35
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Five.score {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect Five.tag
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect Five.bonus
-    x64.leaRegRegReg r8, r12, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
+    x64.jmp __il_body#3
+  __il_body#3:
+    x64.movRegImm32 rax, 5
+    x64.jmp __il_cont#2
+  __il_cont#2:
+    x64.jmp __il_body#4
+  __il_body#4:
+    x64.jmp __il_cont#1
+  __il_cont#1:
+    x64.leaRegRegImm32 r8, rax, 30
     x64.popReg rbp
     x64.ret
 }
@@ -68,24 +66,6 @@ func @Five.make {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Five.tag {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 5
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Five.bonus {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 30
     x64.popReg rbp
     x64.ret
 }

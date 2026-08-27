@@ -28,39 +28,34 @@ end 'main'
 ExitCode: 42
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @workFunc {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.cmpRegImm32 r8, 0
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, empty
     x64.jmp ifcont
   empty:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -94,7 +89,7 @@ func @main {
     x64.jcc equal, matcharm
     x64.jmp matchdead
   matcharm:
-    x64.movRegImm32 rax, 42
+    x64.movRegImm32 r8, 42
     x64.jmp matchcont
   matchcont:
     x64.jmp tryblkcont
@@ -102,14 +97,14 @@ func @main {
   tryblkok:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.movRegReg rax, rbx
+    x64.movRegReg r8, rbx
     x64.jmp tryblkcont
   tryblkcont:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rax, 255
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -123,7 +118,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r8, rax, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

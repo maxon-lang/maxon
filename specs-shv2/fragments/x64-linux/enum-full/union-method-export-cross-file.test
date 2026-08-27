@@ -24,9 +24,10 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Outcome.statusCode {
@@ -85,18 +86,48 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r12 + 0], rax
     x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#6
+    x64.jmp matchnext
+  matcharm#6:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#7
+    x64.jmp matchdead
+  matcharm#7:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow
+    x64.jmp __rc_chk#12
+  __rc_chk#12:
+    x64.cmpRegImm32 rax, 1000
+    x64.jcc greater, __il_slow
+    x64.jmp __rc_ok#11
+  __il_slow:
     x64.movRegReg rcx, r12
     x64.callDirect Outcome.statusCode
     x64.movRegReg rbx, r8
+    x64.jmp __il_cont
+  __rc_ok#11:
+    x64.movRegReg rbx, rax
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
+    x64.jmp __rc_chk#3
+  __rc_chk#3:
     x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jmp __rc_ok#1
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -106,11 +137,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#1:
     x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  matchdead:
 }

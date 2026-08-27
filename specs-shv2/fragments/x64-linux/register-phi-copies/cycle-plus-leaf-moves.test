@@ -26,13 +26,16 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @cycleAndLeaf {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 rax, rcx, 1
-    x64.leaRegRegImm32 rdx, rcx, 2
-    x64.leaRegRegImm32 rsi, rcx, 3
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 rcx, rax, 1
+    x64.leaRegRegImm32 rdx, rax, 2
+    x64.leaRegRegImm32 rsi, rax, 3
     x64.movRegImm32 rdi, 0
     x64.jmp whilehdr
   whilehdr:
@@ -41,39 +44,28 @@ func @cycleAndLeaf {
     x64.jmp whileexit
   loop:
     x64.leaRegRegImm32 rdi, rdi, 1
-    x64.movRegReg rcx, rax
-    x64.xchgRegReg rax, rdx
+    x64.movRegReg rax, rcx
+    x64.xchgRegReg rcx, rdx
     x64.xchgRegReg rdx, rsi
     x64.jmp whilehdr
   whileexit:
-    x64.imulRegRegImm32 rax, rax, 1000
+    x64.imulRegRegImm32 rcx, rcx, 1000
     x64.imulRegRegImm32 rdx, rdx, 100
-    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
     x64.imulRegRegImm32 rdx, rsi, 10
-    x64.leaRegRegReg rax, rax, rdx
-    x64.leaRegRegReg r8, rax, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect cycleAndLeaf
-    x64.cmpRegImm32 r8, 2311
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 2311
     x64.jcc equal, ok
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

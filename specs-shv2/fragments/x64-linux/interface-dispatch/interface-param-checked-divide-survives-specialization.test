@@ -32,9 +32,10 @@ end 'main'
 ExitCode: 14
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Alpha.score {
@@ -60,15 +61,6 @@ func @Alpha.create {
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
     x64.epilogue 40
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @opaque {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
     x64.popReg rbp
     x64.ret
 }
@@ -120,11 +112,13 @@ func @main {
     x64.movRegImm32 rcx, 21
     x64.callDirect Alpha.create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 3
-    x64.callDirect opaque
+    x64.movRegImm32 rdx, 3
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.leaRegRdata rax, [rip + __witness_Alpha.Scorer]
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
     x64.callDirect ratioVia
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r12, 0

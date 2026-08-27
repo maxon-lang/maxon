@@ -51,20 +51,6 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @sink4 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.imulRegRegImm32 rcx, rcx, 1000
-    x64.imulRegRegImm32 rdx, rdx, 100
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.imulRegRegImm32 rax, rax, 10
-    x64.leaRegRegReg rax, rcx, rax
-    x64.leaRegRegReg r8, rax, r9
-    x64.popReg rbp
-    x64.ret
-}
-
 func @f {
   entry:
     x64.pushReg rbp
@@ -74,7 +60,7 @@ func @f {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 168
+    x64.prologue 128
     x64.storeSlotReg slot1, rcx
     x64.leaRegRegImm32 rax, rcx, 7
     x64.storeSlotReg slot0, rax
@@ -160,15 +146,24 @@ func @f {
     x64.loadRegSlot rdx, slot15
     x64.leaRegRegReg rax, rax, rdx
     x64.leaRegRegReg rax, rax, r15
-    x64.leaRegRegReg rbx, rax, rcx
-    x64.loadRegSlot rax, slot1
-    x64.leaRegRegImm32 rcx, rax, 1
-    x64.leaRegRegImm32 rdx, rax, 2
-    x64.leaRegRegImm32 rax, rax, 3
-    x64.loadRegSlot r9, slot0
-    x64.callDirect sink4
-    x64.leaRegRegReg r8, rbx, r8
-    x64.epilogue 168
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegImm32 rdx, rcx, 1
+    x64.leaRegRegImm32 rsi, rcx, 2
+    x64.leaRegRegImm32 rcx, rcx, 3
+    x64.jmp __il_body
+  __il_body:
+    x64.imulRegRegImm32 rdx, rdx, 1000
+    x64.imulRegRegImm32 rsi, rsi, 100
+    x64.leaRegRegReg rdx, rdx, rsi
+    x64.imulRegRegImm32 rcx, rcx, 10
+    x64.leaRegRegReg rcx, rdx, rcx
+    x64.loadRegSlot rdx, slot0
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 128
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

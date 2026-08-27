@@ -20,53 +20,62 @@ data {
   __data_sideEffectCount@0 = i64 0
 }
 
-func @trackAndReturn {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegGlobal rax, __data_sideEffectCount
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.leaRegGlobal rdx, __data_sideEffectCount
-    x64.storeBaseDispReg.word64 [rdx + 0], rax
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect trackAndReturn
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, critsplit#10
-    x64.jmp orrhs#1
-  critsplit#10:
-    x64.jmp scmerge#2
-  orrhs#1:
-    x64.movRegImm32 rcx, 1
-    x64.callDirect trackAndReturn
-    x64.movRegReg rax, r8
-    x64.jmp scmerge#2
-  scmerge#2:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body#11
+  __il_body#11:
+    x64.leaRegGlobal rcx, __data_sideEffectCount
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegGlobal rdx, __data_sideEffectCount
+    x64.storeBaseDispReg.word64 [rdx + 0], rcx
+    x64.jmp __il_cont#10
+  __il_cont#10:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#11
+    x64.jcc notEqual, critsplit#17
+    x64.jmp orrhs#1
+  critsplit#17:
+    x64.jmp scmerge#2
+  orrhs#1:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_body#13
+  __il_body#13:
+    x64.leaRegGlobal rcx, __data_sideEffectCount
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegGlobal rdx, __data_sideEffectCount
+    x64.storeBaseDispReg.word64 [rdx + 0], rcx
+    x64.jmp __il_cont#12
+  __il_cont#12:
+    x64.movRegReg rcx, rax
+    x64.jmp scmerge#2
+  scmerge#2:
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#16
     x64.jmp orrhs#3
-  critsplit#11:
+  critsplit#16:
     x64.jmp scmerge#4
   orrhs#3:
-    x64.movRegImm32 rcx, 0
-    x64.callDirect trackAndReturn
-    x64.movRegReg rcx, r8
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body#15
+  __il_body#15:
+    x64.leaRegGlobal rcx, __data_sideEffectCount
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegGlobal rdx, __data_sideEffectCount
+    x64.storeBaseDispReg.word64 [rdx + 0], rcx
+    x64.jmp __il_cont#14
+  __il_cont#14:
     x64.jmp scmerge#4
   scmerge#4:
-    x64.xorRegImm32 rcx, rcx, 1
-    x64.cmpRegImm32 rcx, 0
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, r
     x64.jmp ifcont
   r:

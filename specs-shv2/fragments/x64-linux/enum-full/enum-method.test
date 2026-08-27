@@ -22,47 +22,39 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @Direction.isNorth {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
-  matcharm#1:
-    x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
-  matcharm#2:
-    x64.movRegImm32 r8, 0
-    x64.jmp matchcont
-  matchcont:
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect Direction.isNorth
-    x64.cmpRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#5
+    x64.jmp matchnext
+  matcharm#5:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#6
+    x64.jmp matchdead
+  matcharm#6:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, test
     x64.jmp ifcont
   test:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  matchdead:
 }

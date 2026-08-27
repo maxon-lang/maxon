@@ -25,63 +25,52 @@ end 'main'
 ---
 ExitCode: 20
 ---
-func @tagOf {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext#5
-  matcharm#1:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  matchnext#5:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchnext#6
-  matcharm#2:
-    x64.movRegImm32 r8, 2
-    x64.popReg rbp
-    x64.ret
-  matchnext#6:
-    x64.cmpRegImm32 rcx, 2
-    x64.jcc equal, matcharm#3
-    x64.jmp matchdead
-  matcharm#3:
-    x64.movRegImm32 r8, 3
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-  matchcont:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rbx, 0
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r8, 0
     x64.jmp whilehdr
   whilehdr:
     x64.movRegImm32 rcx, 1
-    x64.callDirect tagOf
-    x64.cmpRegReg rbx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm#9
+    x64.jmp matchnext#13
+  matcharm#9:
+    x64.movRegImm32 rcx, 1
+    x64.jmp __il_cont
+  matchnext#13:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm#10
+    x64.jmp matchnext#14
+  matcharm#10:
+    x64.movRegImm32 rcx, 2
+    x64.jmp __il_cont
+  matchnext#14:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm#11
+    x64.jmp matchdead
+  matcharm#11:
+    x64.movRegImm32 rcx, 3
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegReg rax, rcx
     x64.jcc less, spin
     x64.jmp whileexit
   spin:
-    x64.leaRegRegImm32 r12, r12, 10
-    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.leaRegRegImm32 r8, r8, 10
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp whilehdr
   whileexit:
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r12, 255
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -89,15 +78,12 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r8, r12, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  matchdead:
+  matchcont:
 }

@@ -20,35 +20,23 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @sink {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 r8, rcx, 1
-    x64.popReg rbp
-    x64.ret
-}
-
 func @f {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegRegImm32 rbx, rcx, 100
-    x64.movRegImm32 rcx, 7
-    x64.movRegReg rax, rbx
+    x64.leaRegRegImm32 rcx, rcx, 100
+    x64.movRegImm32 rsi, 7
+    x64.movRegReg rax, rcx
     x64.cqo
-    x64.idivReg rcx
-    x64.movRegReg r12, rax
-    x64.movRegImm32 rcx, 3
-    x64.callDirect sink
-    x64.leaRegRegReg rax, rbx, r12
-    x64.leaRegRegReg r8, rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
+    x64.idivReg rsi
+    x64.movRegImm32 rdx, 3
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg r8, rax, rdx
     x64.popReg rbp
     x64.ret
 }

@@ -27,42 +27,30 @@ end 'main'
 ExitCode: 51
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @Box.getValue#__static {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 9
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Box.getValue {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
-    x64.popReg rbp
-    x64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
+    x64.prologue 48
     x64.movRegImm32 rax, 42
     x64.leaRegSlot rcx, slot0
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.callDirect Box.getValue
-    x64.movRegReg rbx, r8
-    x64.callDirect Box.getValue#__static
-    x64.leaRegRegReg r8, rbx, r8
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.jmp __il_body#7
+  __il_body#7:
+    x64.jmp __il_cont#4
+  __il_cont#4:
+    x64.leaRegRegImm32 r8, rax, 9
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -74,13 +62,11 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
 }

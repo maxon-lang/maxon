@@ -6,7 +6,8 @@ function mrt_not_a_chunk() returns Integer
 end 'mrt_not_a_chunk'
 
 function main() returns ExitCode
-	return mrt_not_a_chunk() as ExitCode
+	let emitted = mrt_not_a_chunk
+	return emitted() as ExitCode
 end 'main'
 ---
 ExitCode: 7
@@ -24,8 +25,11 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect mrt_not_a_chunk
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegFunc rbx, [rip + __fnref_mrt_not_a_chunk]
+    x64.movRegImm32 rcx, 0
+    x64.callReg rbx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -37,11 +41,13 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

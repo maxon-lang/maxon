@@ -134,10 +134,72 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rcx, 1
+    x64.jmp __il_body#5
+  __il_body#5:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm#6
+    x64.jmp matchnext
+  matcharm#6:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#10
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm#7
+    x64.jmp matchdead#8
+  matcharm#7:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont#10
+  matchcont#10:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#13
+    x64.jmp __rc_chk#12
+  __rc_chk#12:
+    x64.cmpRegImm32 rax, 125
+    x64.jcc greater, __il_slow#13
+    x64.jmp __rc_ok#11
+  __il_slow#13:
     x64.callDirect classify
     x64.movRegReg rbx, r8
+    x64.jmp __il_cont#4
+  __rc_ok#11:
+    x64.movRegReg rbx, rax
+    x64.jmp __il_cont#4
+  __il_cont#4:
     x64.movRegImm32 rcx, 2
+    x64.jmp __il_body#14
+  __il_body#14:
+    x64.jumpTable rcx, default=matchdead#20 [[0]=matcharm#15, [1]=matcharm#16, [2]=matcharm#17, [3]=matcharm#18, [4]=matcharm#19] @__jumptable_3
+  matchdead#20:
+  matcharm#15:
+    x64.movRegImm32 rax, 10
+    x64.jmp matchcont#21
+  matcharm#16:
+    x64.movRegImm32 rax, 20
+    x64.jmp matchcont#21
+  matcharm#17:
+    x64.movRegImm32 rax, 30
+    x64.jmp matchcont#21
+  matcharm#18:
+    x64.movRegImm32 rax, 40
+    x64.jmp matchcont#21
+  matcharm#19:
+    x64.movRegImm32 rax, 50
+    x64.jmp matchcont#21
+  matchcont#21:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#24
+    x64.jmp __rc_chk#23
+  __rc_chk#23:
+    x64.cmpRegImm32 rax, 125
+    x64.jcc greater, __il_slow#24
+    x64.jmp __rc_ok#22
+  __il_slow#24:
     x64.callDirect describeBig
+    x64.jmp __il_cont#3
+  __rc_ok#22:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#3
+  __il_cont#3:
     x64.cmpRegImm32 r8, 30
     x64.jcc equal, bigOk
     x64.jmp ifcont
@@ -153,4 +215,5 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  matchdead#8:
 }

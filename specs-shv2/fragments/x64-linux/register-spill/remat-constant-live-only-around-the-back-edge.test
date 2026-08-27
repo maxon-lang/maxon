@@ -34,71 +34,47 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @leaf {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 r8, rcx, 1
-    x64.popReg rbp
-    x64.ret
-}
-
 func @loopDivisor {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 56
-    x64.movRegImm32 rbx, 7
-    x64.leaRegRegImm32 r12, rcx, 1
-    x64.leaRegRegImm32 r13, rcx, 2
-    x64.leaRegRegImm32 r14, rcx, 3
-    x64.leaRegRegImm32 r15, rcx, 4
-    x64.leaRegRegImm32 rax, rcx, 5
+    x64.movRegImm32 rsi, 7
+    x64.leaRegRegImm32 rdi, rcx, 1
+    x64.leaRegRegImm32 r8, rcx, 2
+    x64.leaRegRegImm32 r9, rcx, 3
+    x64.leaRegRegImm32 r10, rcx, 4
+    x64.leaRegRegImm32 r11, rcx, 5
     x64.leaRegRegImm32 rcx, rcx, 6
-    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rbx, 0
     x64.jmp whilehdr
   whilehdr:
-    x64.storeSlotReg slot2, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot0, rsi
-    x64.movRegReg rax, rsi
+    x64.movRegReg rax, rbx
     x64.cqo
-    x64.idivReg rbx
+    x64.idivReg rsi
     x64.cmpRegImm32 rdx, 3
     x64.jcc less, loop
     x64.jmp whileexit
   loop:
-    x64.movRegReg rcx, rsi
-    x64.callDirect leaf
-    x64.leaRegRegReg r12, r12, r8
-    x64.leaRegRegReg r13, r13, r12
-    x64.leaRegRegReg r14, r14, r13
-    x64.leaRegRegReg r15, r15, r14
-    x64.loadRegSlot rax, slot2
-    x64.leaRegRegReg rax, rax, r15
-    x64.loadRegSlot rcx, slot1
-    x64.leaRegRegReg rcx, rcx, rax
-    x64.loadRegSlot rdx, slot0
-    x64.leaRegRegImm32 rsi, rdx, 1
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 rax, rbx, 1
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegReg rdi, rdi, rax
+    x64.leaRegRegReg r8, r8, rdi
+    x64.leaRegRegReg r9, r9, r8
+    x64.leaRegRegReg r10, r10, r9
+    x64.leaRegRegReg r11, r11, r10
+    x64.leaRegRegReg rcx, rcx, r11
+    x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp whilehdr
   whileexit:
-    x64.leaRegRegReg rax, r12, r13
-    x64.leaRegRegReg rax, rax, r14
-    x64.leaRegRegReg rax, rax, r15
-    x64.loadRegSlot rcx, slot2
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegReg rax, rdi, r8
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
     x64.leaRegRegReg r8, rax, rcx
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

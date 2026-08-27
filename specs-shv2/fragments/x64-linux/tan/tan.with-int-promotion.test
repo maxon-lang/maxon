@@ -37,38 +37,6 @@ func @main {
     x64.ret
 }
 
-func @Math.reduceToPiRange {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.jmp whilehdr#1
-  whilehdr#1:
-    x64.movsdRegRip xmm1, [rip + __fconst_4]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc above, reduce_pos
-    x64.jmp whileexit#3
-  reduce_pos:
-    x64.movsdRegRip xmm1, [rip + __fconst_5]
-    x64.subsdRegReg xmm0, xmm0, xmm1
-    x64.jmp whilehdr#1
-  whileexit#3:
-    x64.jmp whilehdr#4
-  whilehdr#4:
-    x64.movsdRegRip xmm1, [rip + __fconst_4]
-    x64.movsdRegRip xmm2, [rip + __fconst_3]
-    x64.subsdRegReg xmm2, xmm2, xmm1
-    x64.ucomisdRegReg xmm2, xmm0
-    x64.jcc above, reduce_neg
-    x64.jmp whileexit#6
-  reduce_neg:
-    x64.movsdRegRip xmm1, [rip + __fconst_5]
-    x64.addsdRegReg xmm0, xmm0, xmm1
-    x64.jmp whilehdr#4
-  whileexit#6:
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Math.sin {
   entry:
     x64.pushReg rbp
@@ -90,25 +58,52 @@ func @Math.sin {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.callDirect Math.reduceToPiRange
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp whilehdr#10
+  whilehdr#10:
+    x64.movsdRegRip xmm1, [rip + __fconst_7]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, reduce_pos
+    x64.jmp whileexit#12
+  reduce_pos:
+    x64.movsdRegRip xmm1, [rip + __fconst_8]
+    x64.subsdRegReg xmm0, xmm0, xmm1
+    x64.jmp whilehdr#10
+  whileexit#12:
+    x64.jmp whilehdr#13
+  whilehdr#13:
+    x64.movsdRegRip xmm1, [rip + __fconst_7]
+    x64.movsdRegRip xmm2, [rip + __fconst_3]
+    x64.subsdRegReg xmm2, xmm2, xmm1
+    x64.ucomisdRegReg xmm2, xmm0
+    x64.jcc above, reduce_neg
+    x64.jmp whileexit#15
+  reduce_neg:
+    x64.movsdRegRip xmm1, [rip + __fconst_8]
+    x64.addsdRegReg xmm0, xmm0, xmm1
+    x64.jmp whilehdr#13
+  whileexit#15:
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg xmm1, xmm0
     x64.mulsdRegReg xmm1, xmm0, xmm0
-    x64.movsdRegRip xmm2, [rip + __fconst_6]
-    x64.movsdRegRip xmm3, [rip + __fconst_7]
+    x64.movsdRegRip xmm2, [rip + __fconst_5]
+    x64.movsdRegRip xmm3, [rip + __fconst_6]
     x64.movRegReg xmm4, xmm2
     x64.movRegReg xmm2, xmm0
-    x64.jmp whilehdr
-  whilehdr:
+    x64.jmp whilehdr#3
+  whilehdr#3:
     x64.ucomisdRegReg xmm3, xmm4
     x64.jcc above, series
-    x64.jmp whileexit
+    x64.jmp whileexit#5
   series:
-    x64.movsdRegRip xmm5, [rip + __fconst_8]
+    x64.movsdRegRip xmm5, [rip + __fconst_4]
     x64.mulsdRegReg xmm5, xmm5, xmm4
     x64.movsdRegRip xmm6, [rip + __fconst_3]
     x64.subsdRegReg xmm6, xmm6, xmm1
     x64.mulsdRegReg xmm0, xmm0, xmm6
-    x64.movsdRegRip xmm6, [rip + __fconst_6]
+    x64.movsdRegRip xmm6, [rip + __fconst_5]
     x64.movRegReg xmm7, xmm5
     x64.addsdRegReg xmm7, xmm5, xmm6
     x64.mulsdRegReg xmm5, xmm5, xmm7
@@ -134,10 +129,10 @@ func @Math.sin {
     x64.ret
   tryok:
     x64.addsdRegReg xmm2, xmm2, xmm0
-    x64.movsdRegRip xmm5, [rip + __fconst_6]
+    x64.movsdRegRip xmm5, [rip + __fconst_5]
     x64.addsdRegReg xmm4, xmm4, xmm5
-    x64.jmp whilehdr
-  whileexit:
+    x64.jmp whilehdr#3
+  whileexit#5:
     x64.movRegReg xmm0, xmm2
     x64.loadRegSlot xmm6, slot0
     x64.loadRegSlot xmm7, slot1
@@ -161,31 +156,58 @@ func @Math.cos {
     x64.jcc equal, zero
     x64.jmp ifcont
   zero:
-    x64.movsdRegRip xmm0, [rip + __fconst_6]
+    x64.movsdRegRip xmm0, [rip + __fconst_5]
     x64.loadRegSlot xmm6, slot0
     x64.loadRegSlot xmm7, slot1
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.callDirect Math.reduceToPiRange
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp whilehdr#10
+  whilehdr#10:
+    x64.movsdRegRip xmm1, [rip + __fconst_7]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, reduce_pos
+    x64.jmp whileexit#12
+  reduce_pos:
+    x64.movsdRegRip xmm1, [rip + __fconst_8]
+    x64.subsdRegReg xmm0, xmm0, xmm1
+    x64.jmp whilehdr#10
+  whileexit#12:
+    x64.jmp whilehdr#13
+  whilehdr#13:
+    x64.movsdRegRip xmm1, [rip + __fconst_7]
+    x64.movsdRegRip xmm2, [rip + __fconst_3]
+    x64.subsdRegReg xmm2, xmm2, xmm1
+    x64.ucomisdRegReg xmm2, xmm0
+    x64.jcc above, reduce_neg
+    x64.jmp whileexit#15
+  reduce_neg:
+    x64.movsdRegRip xmm1, [rip + __fconst_8]
+    x64.addsdRegReg xmm0, xmm0, xmm1
+    x64.jmp whilehdr#13
+  whileexit#15:
+    x64.jmp __il_cont
+  __il_cont:
     x64.mulsdRegReg xmm0, xmm0, xmm0
-    x64.movsdRegRip xmm1, [rip + __fconst_6]
-    x64.movsdRegRip xmm2, [rip + __fconst_6]
-    x64.movsdRegRip xmm3, [rip + __fconst_6]
-    x64.movsdRegRip xmm4, [rip + __fconst_7]
-    x64.jmp whilehdr
-  whilehdr:
+    x64.movsdRegRip xmm1, [rip + __fconst_5]
+    x64.movsdRegRip xmm2, [rip + __fconst_5]
+    x64.movsdRegRip xmm3, [rip + __fconst_5]
+    x64.movsdRegRip xmm4, [rip + __fconst_6]
+    x64.jmp whilehdr#3
+  whilehdr#3:
     x64.ucomisdRegReg xmm4, xmm3
     x64.jcc above, series
-    x64.jmp whileexit
+    x64.jmp whileexit#5
   series:
-    x64.movsdRegRip xmm5, [rip + __fconst_8]
+    x64.movsdRegRip xmm5, [rip + __fconst_4]
     x64.mulsdRegReg xmm5, xmm5, xmm3
     x64.movsdRegRip xmm6, [rip + __fconst_3]
     x64.subsdRegReg xmm6, xmm6, xmm0
     x64.mulsdRegReg xmm1, xmm1, xmm6
-    x64.movsdRegRip xmm6, [rip + __fconst_6]
+    x64.movsdRegRip xmm6, [rip + __fconst_5]
     x64.movRegReg xmm7, xmm5
     x64.subsdRegReg xmm7, xmm5, xmm6
     x64.mulsdRegReg xmm7, xmm7, xmm5
@@ -211,10 +233,10 @@ func @Math.cos {
     x64.ret
   tryok:
     x64.addsdRegReg xmm2, xmm2, xmm1
-    x64.movsdRegRip xmm5, [rip + __fconst_6]
+    x64.movsdRegRip xmm5, [rip + __fconst_5]
     x64.addsdRegReg xmm3, xmm3, xmm5
-    x64.jmp whilehdr
-  whileexit:
+    x64.jmp whilehdr#3
+  whileexit#5:
     x64.movRegReg xmm0, xmm2
     x64.loadRegSlot xmm6, slot0
     x64.loadRegSlot xmm7, slot1

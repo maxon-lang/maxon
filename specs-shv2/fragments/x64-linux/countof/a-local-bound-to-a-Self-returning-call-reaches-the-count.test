@@ -25,18 +25,10 @@ end 'main'
 ExitCode: 3
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @Vector.capacity {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rdx
-    x64.popReg rbp
-    x64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Vector.dup {
@@ -67,21 +59,18 @@ func @Vector.twice {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegReg rbx, rax
     x64.movRegReg rax, rbx
     x64.callDirect Vector.dup
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
-    x64.callDirect Vector.capacity
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

@@ -38,9 +38,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Box.viaSelf {
@@ -93,8 +94,67 @@ func @firstOf {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word
+    x64.jmp __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rsi
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rsi, rsi, rax
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __il_slow
+    x64.jmp __im_load#9
+  __im_load#9:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegRegImm32 rsi, rdx, 8
+    x64.leaRegRegReg rax, rax, rsi
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte
+    x64.jmp __il_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rsi
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rsi, rsi, rax
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __il_slow
+    x64.jmp __im_load#10
+  __im_load#10:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_loaded:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, __im_empty
+    x64.jmp critsplit#12
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_slow
+    x64.jmp critsplit#13
+  critsplit#13:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont
+  critsplit#12:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont
+  __il_slow:
     x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rsi, r10
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
@@ -308,9 +368,9 @@ func @__int_fromString {
     x64.callDirect __destruct_CodepointView
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r15, 0
-    x64.jcc equal, critsplit#22
+    x64.jcc equal, critsplit#24
     x64.jmp forempty
-  critsplit#22:
+  critsplit#24:
     x64.loadRegSlot r13, slot0
     x64.jmp forhdr
   forhdr:
@@ -318,9 +378,12 @@ func @__int_fromString {
     x64.jcc equal, chars
     x64.jmp forexit
   chars:
-    x64.movRegReg rcx, r14
-    x64.callDirect CodepointIterator.current
-    x64.cmpRegImm32 r8, 45
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 45
     x64.jcc equal, minus
     x64.jmp ifelse#9
   minus:
@@ -345,18 +408,18 @@ func @__int_fromString {
     x64.movRegImm32 rbx, 1
     x64.jmp ifcont#16
   ifelse#9:
-    x64.cmpRegImm32 r8, 48
+    x64.cmpRegImm32 rax, 48
     x64.jcc greaterEqual, maybe_digit
     x64.jmp ifelse#14
   maybe_digit:
-    x64.cmpRegImm32 r8, 57
+    x64.cmpRegImm32 rax, 57
     x64.jcc lessEqual, is_digit
     x64.jmp ifelse#12
   is_digit:
     x64.movRegImm32 r12, 1
-    x64.imulRegRegImm32 rax, r13, 10
-    x64.leaRegRegImm32 rcx, r8, -48
-    x64.leaRegRegReg r13, rax, rcx
+    x64.imulRegRegImm32 rcx, r13, 10
+    x64.leaRegRegImm32 rax, rax, -48
+    x64.leaRegRegReg r13, rcx, rax
     x64.jmp ifcont#13
   ifcont#13:
     x64.jmp ifcont#15
@@ -429,13 +492,13 @@ func @__int_fromString {
   ifcont#19:
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, negate
-    x64.jmp critsplit#23
+    x64.jmp critsplit#25
   negate:
     x64.movRegImm32 rcx, 0
     x64.subRegReg rcx, rcx, rax
     x64.movRegReg r8, rcx
     x64.jmp ifcont#21
-  critsplit#23:
+  critsplit#25:
     x64.movRegReg r8, rax
     x64.jmp ifcont#21
   ifcont#21:
@@ -1082,15 +1145,6 @@ func @CodepointIterator.create {
     x64.ret
 }
 
-func @CodepointIterator.current {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 16]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @CodepointIterator.advance {
   entry:
     x64.pushReg rbp
@@ -1150,9 +1204,7 @@ func @String.byteLength {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __managed_count
-    x64.epilogue 32
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

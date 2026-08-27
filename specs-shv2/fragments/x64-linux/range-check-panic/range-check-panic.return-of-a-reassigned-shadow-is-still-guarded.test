@@ -18,15 +18,6 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @opaque {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @check {
   entry:
     x64.pushReg rbp
@@ -47,8 +38,11 @@ func @check {
     x64.popReg rbp
     x64.ret
   __rc_ok#1:
-    x64.movRegImm32 rcx, 99
-    x64.callDirect opaque
+    x64.movRegImm32 r8, 99
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#5
     x64.jmp __rc_chk#6

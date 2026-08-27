@@ -17,39 +17,31 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @negs {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 rax, rcx, 7
-    x64.movRegReg rcx, rax
-    x64.negReg rcx, rax
-    x64.negReg rcx, rcx
-    x64.negReg rcx, rcx
-    x64.imulRegRegImm32 r8, rax, 100
-    x64.subRegReg r8, r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect negs
-    x64.cmpRegImm32 r8, 707
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+    x64.negReg rcx, rcx
+    x64.negReg rcx, rcx
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.subRegReg rax, rax, rcx
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 707
     x64.jcc equal, ok
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

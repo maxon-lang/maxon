@@ -35,9 +35,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Walker.create {
@@ -69,15 +70,6 @@ func @Walker.create {
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
     x64.epilogue 40
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Walker.current {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
     x64.popReg rbp
     x64.ret
 }
@@ -125,9 +117,11 @@ func @main {
     x64.storeSlotReg slot0, rbx
     x64.movRegReg rcx, rbx
     x64.callDirect Walker.retreat
-    x64.movRegReg rcx, rbx
-    x64.callDirect Walker.current
-    x64.movRegReg rbx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc

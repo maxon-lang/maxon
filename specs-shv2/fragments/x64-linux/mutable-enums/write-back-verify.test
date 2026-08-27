@@ -25,33 +25,10 @@ end 'main'
 ExitCode: 99
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @readValue {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#2
-    x64.jmp matchnext
-  matcharm#2:
-    x64.movRegImm32 r8, 0
-    x64.popReg rbp
-    x64.ret
-  matchnext:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#1
-    x64.jmp matchdead
-  matcharm#1:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-  matchcont:
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -59,44 +36,55 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegImm32 rbx, 5
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r12 + 0], rax
-    x64.storeBaseDispReg.word64 [r12 + 8], rbx
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, matcharm#2
-    x64.jmp matchnext
+    x64.jmp matchnext#4
   matcharm#2:
     x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchnext#4:
     x64.cmpRegImm32 rax, 1
     x64.jcc equal, matcharm#1
-    x64.jmp matchdead
+    x64.jmp matchdead#3
   matcharm#1:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.movRegImm32 rax, 99
-    x64.storeBaseDispReg.word64 [r12 + 8], rax
-    x64.jmp matchcont
-  matchcont:
-    x64.movRegReg rcx, r12
-    x64.callDirect readValue
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.jmp matchcont#5
+  matchcont#5:
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#12
+    x64.jmp matchnext#14
+  matcharm#12:
+    x64.movRegImm32 rbx, 0
+    x64.jmp __il_cont
+  matchnext#14:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#11
+    x64.jmp matchdead#13
+  matcharm#11:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.jmp __il_cont
+  __il_cont:
+    x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
@@ -109,17 +97,17 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
     x64.movRegReg r8, rbx
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchdead:
+  matchdead#13:
+  matchdead#3:
+  matchcont#15:
 }

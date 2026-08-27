@@ -1,0 +1,54 @@
+// Test: slab-scavenger.an-idle-heap-releases-nothing
+function main() returns ExitCode
+	let first = __Builtins.scavengeMemory()
+	if first != 0 'releasedSomething'
+		return 1
+	end 'releasedSomething'
+
+	let second = __Builtins.scavengeMemory()
+	if second != 0 'releasedSomethingLater'
+		return 2
+	end 'releasedSomethingLater'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __slab_scavenge
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, releasedSomething
+    x64.jmp ifcont#2
+  releasedSomething:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.callDirect __slab_scavenge
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, releasedSomethingLater
+    x64.jmp ifcont#4
+  releasedSomethingLater:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

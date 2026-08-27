@@ -23,43 +23,37 @@ end 'main'
 ---
 ExitCode: 2
 ---
-func @colorCode {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext#5
-  matcharm#1:
-    x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-  matchnext#5:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchnext#6
-  matcharm#2:
-    x64.movRegImm32 r8, 2
-    x64.jmp matchcont
-  matchnext#6:
-    x64.cmpRegImm32 rcx, 2
-    x64.jcc equal, matcharm#3
-    x64.jmp matchdead
-  matcharm#3:
-    x64.movRegImm32 r8, 3
-    x64.jmp matchcont
-  matchcont:
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 1
-    x64.callDirect colorCode
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#6
+    x64.jmp matchnext#10
+  matcharm#6:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext#10:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#7
+    x64.jmp matchnext#11
+  matcharm#7:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matchnext#11:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm#8
+    x64.jmp matchdead
+  matcharm#8:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matchcont:
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -78,4 +72,5 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  matchdead:
 }

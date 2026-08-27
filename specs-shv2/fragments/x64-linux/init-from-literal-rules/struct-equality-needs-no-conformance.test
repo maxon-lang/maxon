@@ -29,9 +29,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Box.make {
@@ -67,18 +68,6 @@ func @Box.make {
     x64.ret
 }
 
-func @Box.equals {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
-    x64.cmpRegReg rax, rcx
-    x64.setccReg equal, r8
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -97,10 +86,15 @@ func @main {
     x64.movRegImm32 rcx, 2
     x64.callDirect Box.make
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect Box.equals
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegReg rax, rcx
+    x64.setccReg equal, rax
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, eq
     x64.jmp ifcont#2
   eq:
@@ -108,11 +102,16 @@ func @main {
     x64.callDirect print
     x64.jmp ifcont#2
   ifcont#2:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.callDirect Box.equals
-    x64.xorRegImm32 r8, r8, 1
-    x64.cmpRegImm32 r8, 0
+    x64.jmp __il_body#8
+  __il_body#8:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.cmpRegReg rax, rcx
+    x64.setccReg equal, rax
+    x64.jmp __il_cont#7
+  __il_cont#7:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, neq
     x64.jmp ifcont#4
   neq:

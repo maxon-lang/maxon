@@ -28,18 +28,17 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @bufLength {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __managed_count
-    x64.epilogue 32
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }
@@ -79,9 +78,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_count
-    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 r13, [r12 + 8]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
     x64.movRegReg r14, r8
@@ -90,14 +87,11 @@ func @main {
     x64.leaRegRegReg r13, r13, r8
     x64.movRegReg rcx, rbx
     x64.callDirect bufferOf
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r13, r13, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.leaRegRegReg r13, r13, r8
-    x64.movRegReg rcx, r15
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.leaRegRegReg rax, r13, rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.leaRegRegReg r13, rax, rcx
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref

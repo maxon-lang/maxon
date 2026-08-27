@@ -26,9 +26,10 @@ ExitCode: 42
 ---
 data {
   __data_cfg@0 = i64 0
-  __slab_cursor@8 = i64 0
-  __slab_end@16 = i64 0
-  __mm_alloc_count@24 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @Config.create {
@@ -48,33 +49,26 @@ func @Config.create {
     x64.ret
 }
 
-func @check {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegGlobal rax, __data_cfg
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.cmpRegReg rcx, rax
-    x64.jcc greater, high
-    x64.jmp ifcont
-  high:
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 0
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 42
-    x64.callDirect check
+    x64.movRegImm32 r8, 42
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegGlobal rax, __data_cfg
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 42
+    x64.jcc less, high
+    x64.jmp ifcont
+  high:
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

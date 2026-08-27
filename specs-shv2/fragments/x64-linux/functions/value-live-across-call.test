@@ -14,28 +14,16 @@ end 'main'
 ---
 ExitCode: 110
 ---
-func @add {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegRegReg r8, rcx, rdx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @compute {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rdx, 100
-    x64.movRegReg rcx, rbx
-    x64.callDirect add
-    x64.leaRegRegReg r8, rbx, r8
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegRegImm32 rax, rcx, 100
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegReg r8, rcx, rax
     x64.popReg rbp
     x64.ret
 }

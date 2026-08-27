@@ -19,9 +19,10 @@ ExitCode: 0
 ---
 data {
   __data_key@0 = i64 0
-  __slab_cursor@8 = i64 0
-  __slab_end@16 = i64 0
-  __mm_alloc_count@24 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @probe {
@@ -215,13 +216,14 @@ func @spreadHash {
     x64.andRegReg rcx, rcx, rax
     x64.movRegReg rax, rcx
     x64.sarRegImm8 rax, rcx, 16
-    x64.xorRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rax
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#5
     x64.jmp __rc_chk#6
   __rc_chk#6:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rcx, rax
+    x64.cmpRegReg r8, rax
     x64.jcc greater, __rc_panic#5
     x64.jmp __rc_ok#4
   __rc_panic#5:
@@ -232,7 +234,6 @@ func @spreadHash {
     x64.popReg rbp
     x64.ret
   __rc_ok#4:
-    x64.leaRegRegImm32 r8, rcx, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -309,14 +310,73 @@ func @Map.get {
     x64.jmp ifcont#5
   found:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word
+    x64.jmp __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg less, rdx
+    x64.cmpRegReg r8, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow
+    x64.jmp __im_load#12
+  __im_load#12:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegRegImm32 rdx, r8, 8
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte
+    x64.jmp __il_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg less, rdx
+    x64.cmpRegReg r8, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow
+    x64.jmp __im_load#13
+  __im_load#13:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, r8
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_loaded:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_empty
+    x64.jmp critsplit#15
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_slow
+    x64.jmp critsplit#16
+  critsplit#16:
+    x64.xchgRegReg rdx, rax
+    x64.jmp __il_cont
+  critsplit#15:
+    x64.xchgRegReg rdx, rax
+    x64.jmp __il_cont
+  __il_slow:
     x64.movRegReg rdx, r8
     x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rdx, r8
+    x64.movRegReg rax, r10
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, get_value
     x64.jmp ifelse
   get_value:
     x64.leaRegRegImm32 rcx, r13, 72
-    x64.movRegReg rdx, r8
     x64.callDirect __retain_type_param
     x64.movRegImm32 r10, 0
     x64.epilogue 40
@@ -450,16 +510,73 @@ func @Map.findSlot {
     x64.jmp whileexit
   probe:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word#57
+    x64.jmp __im_stride#59
+  __im_word#57:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg less, rdx
+    x64.cmpRegReg r14, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow#56
+    x64.jmp __im_load#61
+  __im_load#61:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegRegImm32 rdx, r14, 8
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#60
+  __im_stride#59:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte#58
+    x64.jmp __il_slow#56
+  __im_byte#58:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg less, rdx
+    x64.cmpRegReg r14, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow#56
+    x64.jmp __im_load#62
+  __im_load#62:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded#60
+  __im_loaded#60:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_empty#63
+    x64.jmp critsplit#85
+  __im_empty#63:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_slow#56
+    x64.jmp critsplit#86
+  critsplit#86:
+    x64.jmp __il_cont#55
+  critsplit#85:
+    x64.jmp __il_cont#55
+  __il_slow#56:
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rax, r8
+    x64.movRegReg rdx, r10
+    x64.jmp __il_cont#55
+  __il_cont#55:
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, tryerr#7
     x64.jmp tryok#6
   tryerr#7:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#8
   tryok#6:
-    x64.movRegReg rax, r8
     x64.jmp trycont#8
   trycont#8:
     x64.cmpRegImm32 rax, 0
@@ -489,11 +606,11 @@ func @Map.findSlot {
   empty_slot:
     x64.cmpRegImm32 r15, 0
     x64.jcc greaterEqual, use_deleted
-    x64.jmp critsplit#55
+    x64.jmp critsplit#82
   use_deleted:
     x64.movRegReg rax, r15
     x64.jmp ifcont#18
-  critsplit#55:
+  critsplit#82:
     x64.movRegReg rax, r14
     x64.jmp ifcont#18
   ifcont#18:
@@ -532,22 +649,22 @@ func @Map.findSlot {
     x64.movRegImm32 rdx, 0
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, andrhs
-    x64.jmp critsplit#56
+    x64.jmp critsplit#83
   andrhs:
     x64.cmpRegImm32 r15, 0
     x64.setccReg less, rcx
     x64.jmp scmerge
-  critsplit#56:
+  critsplit#83:
     x64.movRegReg rcx, rdx
     x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, mark_deleted
-    x64.jmp critsplit#57
+    x64.jmp critsplit#84
   mark_deleted:
     x64.movRegReg rcx, r14
     x64.jmp ifcont#30
-  critsplit#57:
+  critsplit#84:
     x64.movRegReg rcx, r15
     x64.jmp ifcont#30
   ifcont#30:
@@ -578,16 +695,73 @@ func @Map.findSlot {
     x64.jmp ifcont#49
   check_key:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word#66
+    x64.jmp __im_stride#68
+  __im_word#66:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg less, rdx
+    x64.cmpRegReg r14, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow#65
+    x64.jmp __im_load#70
+  __im_load#70:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegRegImm32 rdx, r14, 8
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#69
+  __im_stride#68:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte#67
+    x64.jmp __il_slow#65
+  __im_byte#67:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg less, rdx
+    x64.cmpRegReg r14, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow#65
+    x64.jmp __im_load#71
+  __im_load#71:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded#69
+  __im_loaded#69:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_empty#72
+    x64.jmp critsplit#87
+  __im_empty#72:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_slow#65
+    x64.jmp critsplit#88
+  critsplit#88:
+    x64.jmp __il_cont#64
+  critsplit#87:
+    x64.jmp __il_cont#64
+  __il_slow#65:
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rax, r8
+    x64.movRegReg rdx, r10
+    x64.jmp __il_cont#64
+  __il_cont#64:
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, tryerr#40
     x64.jmp tryok#39
   tryerr#40:
     x64.movRegReg rax, r13
     x64.jmp trycont#41
   tryok#39:
-    x64.movRegReg rax, r8
     x64.jmp trycont#41
   trycont#41:
     x64.cmpRegReg rax, r13
@@ -595,13 +769,72 @@ func @Map.findSlot {
     x64.jmp ifcont#48
   hash_match:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word#75
+    x64.jmp __im_stride#77
+  __im_word#75:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg less, rdx
+    x64.cmpRegReg r14, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow#74
+    x64.jmp __im_load#79
+  __im_load#79:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegRegImm32 rdx, r14, 8
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#78
+  __im_stride#77:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte#76
+    x64.jmp __il_slow#74
+  __im_byte#76:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg less, rdx
+    x64.cmpRegReg r14, rax
+    x64.setccReg greaterEqual, rax
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow#74
+    x64.jmp __im_load#80
+  __im_load#80:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded#78
+  __im_loaded#78:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_empty#81
+    x64.jmp critsplit#89
+  __im_empty#81:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_slow#74
+    x64.jmp critsplit#90
+  critsplit#90:
+    x64.movRegReg rcx, rax
+    x64.jmp __il_cont#73
+  critsplit#89:
+    x64.movRegReg rcx, rax
+    x64.jmp __il_cont#73
+  __il_slow#74:
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r10
+    x64.jmp __il_cont#73
+  __il_cont#73:
+    x64.cmpRegImm32 rdx, 0
     x64.jcc equal, get_existing
     x64.jmp ifelse
   get_existing:
-    x64.movRegReg rcx, r8
     x64.movRegReg rdx, r12
     x64.loadRegSlot r15, slot3
     x64.callMem [r15 + 24]
@@ -736,9 +969,7 @@ func @String.byteLength {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __managed_count
-    x64.epilogue 32
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

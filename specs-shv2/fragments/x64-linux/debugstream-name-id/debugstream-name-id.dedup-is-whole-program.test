@@ -21,36 +21,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @first {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-}
-
-func @middle {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 2
-    x64.popReg rbp
-    x64.ret
-}
-
-func @second {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -63,8 +37,11 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 104
-    x64.callDirect first
-    x64.movRegReg rbx, r8
+    x64.jmp __il_body#4
+  __il_body#4:
+    x64.movRegImm32 rbx, 1
+    x64.jmp __il_cont#3
+  __il_cont#3:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -78,8 +55,11 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.callDirect middle
-    x64.movRegReg r14, r8
+    x64.jmp __il_body#5
+  __il_body#5:
+    x64.movRegImm32 r14, 2
+    x64.jmp __il_cont#2
+  __il_cont#2:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -93,8 +73,11 @@ func @main {
     x64.storeSlotReg slot4, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot7, rax
-    x64.callDirect second
-    x64.movRegReg r15, r8
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.movRegImm32 r15, 1
+    x64.jmp __il_cont#1
+  __il_cont#1:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc

@@ -27,34 +27,10 @@ end 'main'
 ExitCode: 1
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @process {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 0
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
-  matcharm#1:
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#3
-    x64.jmp matchdead
-  matcharm#3:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.jmp matchcont
-  matchcont:
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-  afterbreak:
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -63,40 +39,69 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg rbx, r8
     x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect process
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.jmp __il_body#7
+  __il_body#7:
+    x64.movRegImm32 rbx, 0
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#8
+    x64.jmp matchnext#12
+  matcharm#8:
+    x64.jmp matchcont#13
+  matchnext#12:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#10
+    x64.jmp matchdead#11
+  matcharm#10:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.jmp matchcont#13
+  matchcont#13:
+    x64.jmp __il_cont#6
+  __il_cont#6:
+    x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.movRegImm32 rbx, 42
+    x64.movRegImm32 r12, 42
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r13 + 0], rax
-    x64.storeBaseDispReg.word64 [r13 + 8], rbx
-    x64.movRegReg rcx, r13
-    x64.callDirect process
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r13
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.jmp __il_body#14
+  __il_body#14:
+    x64.movRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#15
+    x64.jmp matchnext#19
+  matcharm#15:
+    x64.jmp matchcont#20
+  matchnext#19:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#17
+    x64.jmp matchdead#18
+  matcharm#17:
+    x64.loadRegBaseDisp.word64 r12, [r8 + 8]
+    x64.jmp matchcont#20
+  matchcont#20:
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 rbx, 0
     x64.movRegImm32 rax, 0
     x64.jcc equal, andrhs
     x64.jmp critsplit
   andrhs:
-    x64.cmpRegImm32 rbx, 42
+    x64.cmpRegImm32 r12, 42
     x64.setccReg equal, rax
     x64.jmp scmerge
   critsplit:
@@ -107,18 +112,20 @@ func @main {
     x64.jmp ifcont
   check:
     x64.movRegImm32 r8, 1
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  matchdead#18:
+  matchdead#11:
+  afterbreak#9:
+  afterbreak#16:
 }

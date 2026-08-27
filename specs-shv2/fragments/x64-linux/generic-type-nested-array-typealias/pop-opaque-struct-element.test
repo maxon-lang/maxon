@@ -42,9 +42,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Pair.create {
@@ -226,11 +227,8 @@ func @Array.pop {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_count
-    x64.movRegReg r12, r8
-    x64.cmpRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
+    x64.cmpRegImm32 rbx, 0
     x64.jcc equal, empty
     x64.jmp ifcont
   empty:
@@ -243,21 +241,20 @@ func @Array.pop {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
-    x64.leaRegRegImm32 rdx, r12, -1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_remove
     x64.movRegReg r12, r8
+    x64.leaRegRegImm32 rdx, rbx, -1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_remove
+    x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegImm32 r12, 0
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.leaRegRegImm32 r10, r12, 1
+    x64.leaRegRegImm32 r10, rbx, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
@@ -265,10 +262,10 @@ func @Array.pop {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegImm32 r10, 0
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

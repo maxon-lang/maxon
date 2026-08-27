@@ -36,9 +36,10 @@ end 'main'
 ExitCode: 5
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Bag.tallyTwice {
@@ -46,38 +47,27 @@ func @Bag.tallyTwice {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegImm32 rax, 4
     x64.movRegReg rcx, rdx
     x64.movRegReg rdx, rax
     x64.callDirect Vector.create
-    x64.movRegReg r12, r8
-    x64.movRegImm32 rdx, 4
-    x64.movRegReg rcx, r12
-    x64.callDirect Vector.count
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect Bag.tally
-    x64.leaRegRegReg rbx, r13, r8
-    x64.movRegReg rcx, r12
+    x64.jmp __il_body#3
+  __il_body#3:
+    x64.jmp __il_cont#2
+  __il_cont#2:
+    x64.jmp __il_body#4
+  __il_body#4:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jmp __il_cont#1
+  __il_cont#1:
+    x64.leaRegRegImm32 rbx, rax, 4
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Bag.tally {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
     x64.popReg rbp
     x64.ret
 }
@@ -132,15 +122,6 @@ func @Vector.create {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Vector.count {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rdx
     x64.popReg rbp
     x64.ret
 }

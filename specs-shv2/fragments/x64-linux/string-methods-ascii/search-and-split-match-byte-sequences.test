@@ -19,9 +19,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -114,9 +115,7 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect String.split
     x64.storeSlotReg slot1, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_count
-    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -241,15 +240,6 @@ func @print {
     x64.ret
 }
 
-func @String.hasSingleByteGraphemes {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.byte r8, [rcx + 48]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @String.fromOwnedBytes {
   entry:
     x64.pushReg rbp
@@ -312,9 +302,7 @@ func @String.byteLength {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __managed_count
-    x64.epilogue 32
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }
@@ -884,11 +872,13 @@ func @StringBuilder.append {
     x64.movRegReg rcx, r12
     x64.callDirect String.addressableBytes
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect String.hasSingleByteGraphemes
+    x64.jmp __il_body
+  __il_body:
+    x64.loadRegBaseDisp.byte rax, [r12 + 48]
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
-    x64.movRegReg rax, r8
     x64.callDirect StringBuilder.appendBytes
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref

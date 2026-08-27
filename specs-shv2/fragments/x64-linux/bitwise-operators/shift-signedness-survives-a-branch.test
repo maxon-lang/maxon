@@ -31,77 +31,59 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @afterBranch {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, taken
-    x64.jmp ifcont
-  taken:
-    x64.movRegReg r8, rcx
-    x64.shrRegImm8 r8, rcx, 60
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 0
-    x64.popReg rbp
-    x64.ret
-}
-
-func @insideLoop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 rax, 0
-    x64.jmp whilehdr
-  whilehdr:
-    x64.cmpRegReg rax, rdx
-    x64.jcc less, each
-    x64.jmp whileexit
-  each:
-    x64.movRegReg rsi, rcx
-    x64.shrRegImm8 rsi, rcx, 60
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.movRegReg r8, rsi
-    x64.jmp whilehdr
-  whileexit:
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm rcx, 18446744073709551615
-    x64.movRegImm32 rdx, 1
-    x64.callDirect afterBranch
-    x64.cmpRegImm32 r8, 15
+    x64.movRegImm rax, 18446744073709551615
+    x64.movRegImm32 rcx, 1
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, taken
+    x64.jmp ifcont#8
+  taken:
+    x64.shrRegImm8 rax, rax, 60
+    x64.jmp __il_cont#5
+  ifcont#8:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#5
+  __il_cont#5:
+    x64.cmpRegImm32 rax, 15
     x64.jcc notEqual, branch
     x64.jmp ifcont#2
   branch:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#2:
-    x64.movRegImm rcx, 18446744073709551615
-    x64.movRegImm32 rdx, 3
-    x64.callDirect insideLoop
-    x64.cmpRegImm32 r8, 15
+    x64.movRegImm rax, 18446744073709551615
+    x64.jmp __il_body#10
+  __il_body#10:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rdx, 3
+    x64.jcc less, each
+    x64.jmp whileexit
+  each:
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 60
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.jmp __il_cont#9
+  __il_cont#9:
+    x64.cmpRegImm32 rcx, 15
     x64.jcc notEqual, loop
     x64.jmp ifcont#4
   loop:
     x64.movRegImm32 r8, 2
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#4:
     x64.movRegImm32 r8, 42
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

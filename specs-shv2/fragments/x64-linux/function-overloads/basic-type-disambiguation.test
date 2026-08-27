@@ -16,18 +16,10 @@ end 'main'
 ExitCode: 42
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @process {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.imulRegRegImm32 r8, rcx, 2
-    x64.popReg rbp
-    x64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -35,8 +27,12 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 21
-    x64.callDirect process
+    x64.movRegImm32 rax, 21
+    x64.jmp __il_body
+  __il_body:
+    x64.imulRegRegImm32 r8, rax, 2
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

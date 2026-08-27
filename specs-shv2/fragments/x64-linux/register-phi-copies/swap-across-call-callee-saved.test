@@ -26,44 +26,29 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @sink {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @swapAcrossCall {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.leaRegRegImm32 rbx, rcx, 1
-    x64.leaRegRegImm32 r12, rcx, 2
-    x64.movRegImm32 r13, 0
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.leaRegRegImm32 rcx, rcx, 2
+    x64.movRegImm32 rdx, 0
     x64.jmp whilehdr
   whilehdr:
-    x64.cmpRegImm32 r13, 3
+    x64.cmpRegImm32 rdx, 3
     x64.jcc less, loop
     x64.jmp whileexit
   loop:
-    x64.movRegImm32 rcx, 1
-    x64.callDirect sink
-    x64.leaRegRegReg r13, r13, r8
-    x64.xchgRegReg rbx, r12
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.xchgRegReg rax, rcx
     x64.jmp whilehdr
   whileexit:
-    x64.imulRegRegImm32 rax, rbx, 10
-    x64.leaRegRegReg r8, rax, r12
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.leaRegRegReg r8, rax, rcx
     x64.popReg rbp
     x64.ret
 }

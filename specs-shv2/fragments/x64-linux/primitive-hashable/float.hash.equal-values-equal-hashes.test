@@ -21,13 +21,69 @@ func @main {
     x64.movsdRegRip xmm6, [rip + __fconst_2]
     x64.movsdRegRip xmm1, [rip + __fconst_3]
     x64.divsdRegReg xmm6, xmm6, xmm1
+    x64.jmp __il_body#5
+  __il_body#5:
+    x64.movqGprXmm rax, xmm0
+    x64.movRegImm rcx, 9223372036854775809
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, negzero#6
+    x64.jmp ifcont#7
+  negzero#6:
+    x64.movRegImm32 rbx, 0
+    x64.jmp __il_cont#4
+  ifcont#7:
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#10
+    x64.jmp __rc_chk#9
+  __rc_chk#9:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __il_slow#10
+    x64.jmp __rc_ok#8
+  __il_slow#10:
     x64.callDirect float.hash
     x64.movRegReg rbx, r8
+    x64.jmp __il_cont#4
+  __rc_ok#8:
+    x64.movRegReg rbx, rax
+    x64.jmp __il_cont#4
+  __il_cont#4:
+    x64.jmp __il_body#11
+  __il_body#11:
+    x64.movqGprXmm rax, xmm6
+    x64.movRegImm rcx, 9223372036854775809
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, negzero#12
+    x64.jmp ifcont#13
+  negzero#12:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#3
+  ifcont#13:
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#16
+    x64.jmp __rc_chk#15
+  __rc_chk#15:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __il_slow#16
+    x64.jmp __rc_ok#14
+  __il_slow#16:
     x64.movRegReg xmm0, xmm6
     x64.callDirect float.hash
-    x64.cmpRegReg rbx, r8
+    x64.movRegReg rax, r8
+    x64.jmp __il_cont#3
+  __rc_ok#14:
+    x64.jmp __il_cont#3
+  __il_cont#3:
+    x64.cmpRegReg rbx, rax
     x64.jcc notEqual, differ
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   differ:
     x64.movRegImm32 r8, 1
     x64.loadRegSlot xmm6, slot0
@@ -35,7 +91,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegImm32 r8, 0
     x64.loadRegSlot xmm6, slot0
     x64.epilogue 40

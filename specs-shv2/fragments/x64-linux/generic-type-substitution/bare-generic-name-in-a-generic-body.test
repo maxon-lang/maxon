@@ -37,9 +37,10 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Inner.make {
@@ -76,7 +77,66 @@ func @Inner.first {
     x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __im_word
+    x64.jmp __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rsi
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rsi, rsi, rax
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __il_slow
+    x64.jmp __im_load#9
+  __im_load#9:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegRegImm32 rsi, rdx, 8
+    x64.leaRegRegReg rax, rax, rsi
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, __im_byte
+    x64.jmp __il_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg less, rsi
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg lessEqual, rax
+    x64.orRegReg rsi, rsi, rax
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __il_slow
+    x64.jmp __im_load#10
+  __im_load#10:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_loaded:
+    x64.movRegImm32 r10, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_empty
+    x64.jmp critsplit#12
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_slow
+    x64.jmp critsplit#13
+  critsplit#13:
+    x64.movRegReg rdx, rax
+    x64.jmp __il_cont
+  critsplit#12:
+    x64.movRegReg rdx, rax
+    x64.jmp __il_cont
+  __il_slow:
     x64.callDirect __managed_get
+    x64.movRegReg rdx, r8
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -88,7 +148,6 @@ func @Inner.first {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
     x64.callDirect __retain_type_param
     x64.movRegImm32 r10, 0
     x64.epilogue 40

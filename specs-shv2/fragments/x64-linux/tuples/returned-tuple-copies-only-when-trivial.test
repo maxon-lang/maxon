@@ -26,9 +26,10 @@ end 'main'
 ExitCode: 108
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @echoTrivial {
@@ -71,7 +72,7 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 232
+    x64.prologue 216
     x64.movRegImm32 rbx, 1
     x64.movRegImm32 r12, 2
     x64.movRegImm32 rcx, 16
@@ -88,36 +89,17 @@ func @main {
     x64.movRegImm32 rax, 99
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.leaRegRdata r12, [rip + __str_rec_5]
+    x64.movRegImm32 r14, 3
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeSlotReg slot2, r14
-    x64.loadRegBaseDisp.word64 r15, [r12 + 0]
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.storeSlotReg slot23, rax
-    x64.leaRegRegImm32 rcx, rax, 57
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeSlotReg slot19, r8
-    x64.leaRegRegImm32 r12, r8, 56
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot2, r15
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r15
-    x64.loadRegSlot r15, slot23
-    x64.movRegReg rax, r15
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r12, r15
-    x64.loadRegSlot rax, slot19
-    x64.storeBaseDispReg.word64 [rax + 0], r12
-    x64.storeBaseDispReg.word64 [rax + 8], r15
-    x64.movRegImm rcx, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rax + 16], rcx
-    x64.movRegImm32 rcx, 1
-    x64.storeBaseDispReg.word64 [rax + 24], rcx
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.movRegImm32 rax, 3
-    x64.storeBaseDispReg.word64 [r14 + 8], rax
-    x64.movRegReg rcx, r14
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r15 + 0], r8
+    x64.storeBaseDispReg.word64 [r15 + 8], r14
+    x64.movRegReg rcx, r15
     x64.callDirect echoManaged
     x64.movRegReg r12, r8
     x64.storeSlotReg slot1, r12
@@ -127,7 +109,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot14, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.storeSlotReg slot21, rax
+    x64.storeSlotReg slot20, rax
     x64.loadRegBaseDisp.word64 r13, [r13 + 8]
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -137,7 +119,7 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __int_to_string
     x64.movRegReg r13, r8
-    x64.storeSlotReg slot20, r13
+    x64.storeSlotReg slot19, r13
     x64.leaRegRdata rax, [rip + __str_rec_7]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot12, rcx
@@ -158,7 +140,7 @@ func @main {
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot15, rax
-    x64.loadRegBaseDisp.word64 r14, [r14 + 8]
+    x64.loadRegBaseDisp.word64 r14, [r15 + 8]
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -181,8 +163,8 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __int_to_string
-    x64.storeSlotReg slot24, r8
-    x64.loadRegSlot r12, slot21
+    x64.storeSlotReg slot22, r8
+    x64.loadRegSlot r12, slot20
     x64.leaRegRegReg rax, r12, r13
     x64.loadRegSlot r13, slot18
     x64.leaRegRegReg rax, rax, r13
@@ -191,7 +173,7 @@ func @main {
     x64.leaRegRegReg rax, rax, rbx
     x64.leaRegRegReg rax, rax, r14
     x64.leaRegRegReg rax, rax, r15
-    x64.loadRegSlot r14, slot24
+    x64.loadRegSlot r14, slot22
     x64.leaRegRegReg rax, rax, r14
     x64.storeSlotReg slot9, rax
     x64.leaRegRegImm32 rcx, rax, 57
@@ -199,7 +181,7 @@ func @main {
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot16, r8
     x64.leaRegRegImm32 r15, r8, 56
-    x64.storeSlotReg slot22, r15
+    x64.storeSlotReg slot21, r15
     x64.movRegReg rcx, r15
     x64.loadRegSlot rdx, slot14
     x64.movRegReg rax, r12
@@ -207,7 +189,7 @@ func @main {
     x64.leaRegRegReg r12, r15, r12
     x64.movRegReg rcx, r12
     x64.loadRegSlot rdx, slot13
-    x64.loadRegSlot r15, slot20
+    x64.loadRegSlot r15, slot19
     x64.movRegReg rax, r15
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r12, r15
@@ -248,7 +230,7 @@ func @main {
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
     x64.loadRegSlot rbx, slot16
-    x64.loadRegSlot rax, slot22
+    x64.loadRegSlot rax, slot21
     x64.storeBaseDispReg.word64 [rbx + 0], rax
     x64.loadRegSlot rax, slot9
     x64.storeBaseDispReg.word64 [rbx + 8], rax
@@ -285,7 +267,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_10]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 232
+    x64.epilogue 216
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -303,7 +285,7 @@ func @main {
     x64.loadRegSlot rcx, slot3
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 232
+    x64.epilogue 216
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

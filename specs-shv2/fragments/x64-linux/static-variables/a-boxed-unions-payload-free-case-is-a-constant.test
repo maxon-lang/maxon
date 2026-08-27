@@ -19,9 +19,10 @@ ExitCode: 0
 ---
 data {
   __data_boxedCase@0 = i64 0
-  __slab_cursor@8 = i64 0
-  __slab_end@16 = i64 0
-  __mm_alloc_count@24 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -43,12 +44,12 @@ func @main {
     x64.jcc equal, matcharm#2
     x64.jmp matchdead
   matcharm#2:
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 r8, [rax + 8]
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#7
     x64.jmp __rc_chk#8
   __rc_chk#8:
-    x64.cmpRegImm32 rax, 255
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic#7
     x64.jmp __rc_ok#6
   __rc_panic#7:
@@ -59,7 +60,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok#6:
-    x64.leaRegRegImm32 r8, rax, 0
     x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r8, 0

@@ -54,9 +54,10 @@ end 'main'
 ExitCode: unpinned
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @next {
@@ -88,15 +89,6 @@ func @next {
     x64.ret
   matchdead:
   matchcont:
-}
-
-func @pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.leaRegFunc r8, [rip + __fnref_next]
-    x64.popReg rbp
-    x64.ret
 }
 
 func @callThrough {
@@ -206,8 +198,11 @@ func @main {
     x64.callDirect show
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.callDirect pick
-    x64.movRegReg rbx, r8
+    x64.jmp __il_body
+  __il_body:
+    x64.leaRegFunc rbx, [rip + __fnref_next]
+    x64.jmp __il_cont
+  __il_cont:
     x64.movRegImm32 rcx, 2
     x64.movRegImm32 rdx, 0
     x64.callReg rbx

@@ -38,9 +38,10 @@ end 'main'
 ExitCode: 9
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Held.create {
@@ -50,15 +51,13 @@ func @Held.create {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
     x64.prologue 40
-    x64.storeSlotReg slot0, rcx
-    x64.cmpRegImm32 rcx, 0
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rcx, 100
+    x64.cmpRegImm32 rbx, 100
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -66,44 +65,23 @@ func @Held.create {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRdata rbx, [rip + __str_rec_2]
+    x64.leaRegRdata r12, [rip + __str_rec_2]
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
-    x64.leaRegRegImm32 rcx, rbx, 57
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 56
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r13
-    x64.movRegReg rax, rbx
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r15, rbx
-    x64.storeBaseDispReg.word64 [r14 + 0], r15
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r14 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r14 + 24], rax
-    x64.storeBaseDispReg.word64 [r12 + 0], r14
-    x64.loadRegSlot rax, slot0
-    x64.storeBaseDispReg.word64 [r12 + 8], rax
-    x64.movRegReg r8, r12
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
+    x64.movRegReg r8, r13
     x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -124,15 +102,6 @@ func @Box.create {
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
     x64.epilogue 40
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Box.tag {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 5
     x64.popReg rbp
     x64.ret
 }
@@ -183,9 +152,11 @@ func @main {
     x64.jcc equal, matcharm#1
     x64.jmp matchnext
   matcharm#1:
-    x64.movRegReg rcx, rbx
-    x64.callDirect Box.tag
-    x64.movRegReg r12, r8
+    x64.jmp __il_body#10
+  __il_body#10:
+    x64.movRegImm32 r12, 5
+    x64.jmp __il_cont#9
+  __il_cont#9:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Box_String
     x64.movRegReg rcx, rbx
@@ -203,24 +174,25 @@ func @main {
     x64.jcc equal, matcharm#2
     x64.jmp matchdead
   matcharm#2:
-    x64.loadRegBaseDisp.word64 r12, [r13 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r13 + 8], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect Box.tag
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.leaRegRegReg r14, r8, rax
-    x64.movRegReg rcx, r12
+    x64.jmp __il_body#12
+  __il_body#12:
+    x64.jmp __il_cont#11
+  __il_cont#11:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 r12, rax, 5
     x64.callDirect __destruct_Held
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Box_String
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct___Box_String
-    x64.cmpRegImm32 r14, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r14, 255
+    x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -235,7 +207,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, r14
+    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

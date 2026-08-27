@@ -12,22 +12,16 @@ end 'main'
 ---
 ExitCode: 77
 ---
-func @int.hash {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 77
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 5
-    x64.callDirect int.hash
+    x64.jmp __il_body
+  __il_body:
+    x64.movRegImm32 r8, 77
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

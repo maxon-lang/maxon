@@ -17,18 +17,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @ident {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rcx
-    x64.popReg rbp
-    x64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -42,45 +34,51 @@ func @main {
     x64.pushReg r15
     x64.prologue 104
     x64.movRegImm rcx, 4198346131161219195
-    x64.callDirect ident
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 1000000000
-    x64.callDirect ident
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg equal, rcx
-    x64.movRegReg rsi, r8
-    x64.orRegReg rsi, r8, rcx
-    x64.movRegReg rax, rbx
+    x64.jmp __il_body#9
+  __il_body#9:
+    x64.jmp __il_cont#8
+  __il_cont#8:
+    x64.movRegImm32 rsi, 1000000000
+    x64.jmp __il_body#10
+  __il_body#10:
+    x64.jmp __il_cont#7
+  __il_cont#7:
+    x64.cmpRegImm32 rsi, 0
+    x64.setccReg equal, rdi
+    x64.movRegReg r8, rdi
+    x64.orRegImm32 r8, rdi, 1000000000
+    x64.movRegReg rax, rcx
     x64.cqo
-    x64.idivReg rsi
-    x64.cmpRegImm32 rcx, 0
+    x64.idivReg r8
+    x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, tryerr#2
     x64.jmp tryok#1
   tryerr#2:
-    x64.movRegImm32 r12, 77
+    x64.movRegImm32 rbx, 77
     x64.jmp trycont#3
   tryok#1:
-    x64.movRegReg r12, rax
+    x64.movRegReg rbx, rax
     x64.jmp trycont#3
   trycont#3:
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg equal, rcx
-    x64.cmpRegImm32 r8, -1
+    x64.cmpRegImm32 rsi, 0
+    x64.setccReg equal, rdi
+    x64.cmpRegImm32 rsi, -1
     x64.setccReg equal, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.andRegReg rbx, rbx, rax
-    x64.orRegReg r8, r8, rcx
-    x64.movRegReg rax, rbx
+    x64.andRegReg rcx, rcx, rax
+    x64.movRegReg rsi, rdi
+    x64.orRegImm32 rsi, rdi, 1000000000
+    x64.movRegReg rax, rcx
     x64.cqo
-    x64.idivReg r8
-    x64.cmpRegImm32 rcx, 0
+    x64.idivReg rsi
+    x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, tryerr#5
     x64.jmp tryok#4
   tryerr#5:
-    x64.movRegImm32 rbx, 77
+    x64.movRegImm32 r12, 77
     x64.jmp trycont#6
   tryok#4:
-    x64.movRegReg rbx, rdx
+    x64.movRegReg r12, rdx
     x64.jmp trycont#6
   trycont#6:
     x64.leaRegRdata rax, [rip + __str_rec_3]
@@ -91,10 +89,10 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot6, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __int_to_string
-    x64.movRegReg r12, r8
+    x64.movRegReg rbx, r8
     x64.leaRegRdata rax, [rip + __str_rec_4]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot5, rcx
@@ -103,7 +101,7 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r15, r8
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
     x64.callDirect __int_to_string
     x64.storeSlotReg slot4, r8
@@ -112,7 +110,7 @@ func @main {
     x64.storeSlotReg slot3, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot2, rax
-    x64.leaRegRegReg rcx, r13, r12
+    x64.leaRegRegReg rcx, r13, rbx
     x64.leaRegRegReg rcx, rcx, r14
     x64.leaRegRegReg rcx, rcx, r8
     x64.leaRegRegReg rax, rcx, rax
@@ -121,49 +119,49 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot1, r8
-    x64.leaRegRegImm32 rbx, r8, 56
-    x64.movRegReg rcx, rbx
+    x64.leaRegRegImm32 r12, r8, 56
+    x64.movRegReg rcx, r12
     x64.loadRegSlot rdx, slot7
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg r13, rbx, r13
+    x64.leaRegRegReg r13, r12, r13
     x64.movRegReg rcx, r13
     x64.loadRegSlot rdx, slot6
-    x64.movRegReg rax, r12
+    x64.movRegReg rax, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r13, r12
-    x64.movRegReg rcx, r12
+    x64.leaRegRegReg rbx, r13, rbx
+    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot5
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r12, r14
-    x64.movRegReg rcx, r12
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.loadRegSlot r13, slot4
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r12, r13
-    x64.movRegReg rcx, r12
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot3
     x64.loadRegSlot r13, slot2
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r12, r13
-    x64.loadRegSlot r12, slot1
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.leaRegRegReg rax, rbx, r13
+    x64.loadRegSlot rbx, slot1
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
     x64.loadRegSlot rax, slot0
-    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.loadRegSlot rcx, slot6
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect print
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
     x64.epilogue 104

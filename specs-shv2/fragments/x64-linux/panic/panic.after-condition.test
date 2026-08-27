@@ -42,7 +42,18 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm rcx, 18446744073709551615
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+    x64.jmp ifcont
+  __il_slow:
     x64.callDirect check
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegReg r8, rcx
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

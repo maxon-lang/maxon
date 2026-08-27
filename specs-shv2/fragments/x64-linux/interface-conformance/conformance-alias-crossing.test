@@ -28,9 +28,10 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Widget.process {
@@ -68,14 +69,29 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.movRegImm32 rdx, 7
+    x64.jmp __il_body
+  __il_body:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __il_slow
+    x64.jmp __rc_chk#7
+  __rc_chk#7:
+    x64.cmpRegImm32 rdx, 100
+    x64.jcc greater, __il_slow
+    x64.jmp __rc_ok#6
+  __il_slow:
     x64.callDirect Widget.process
+    x64.jmp __il_cont
+  __rc_ok#6:
+    x64.movRegReg r8, rdx
+    x64.jmp __il_cont
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
+    x64.jmp __rc_chk#3
+  __rc_chk#3:
     x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jmp __rc_ok#1
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -83,7 +99,7 @@ func @main {
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#1:
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
