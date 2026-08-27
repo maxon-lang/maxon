@@ -1761,6 +1761,20 @@ end 'buildSchedFindRunnable'
 // asked it to schedule. The peek is safe against the CAS window for a reason worth stating: slot `h` is
 // rewritten only by a push at tail counter `h + 256k`, which requires the head to have already passed `h` —
 // so a WON CAS on `head: h -> h+1` proves the slot still holds the thread that was peeked.
+//
+// ⚠⚠ **THAT ARGUMENT COVERS THE ACTION AND NOT THE READ, AND THE READ IS THE ONE PLACE IN THIS FILE THAT
+// DEREFERENCES A THREAD IT HAS NOT YET CLAIMED.** Every other slot read here discards a lost race without
+// touching what it read (`__sched_runq_get` uses `g` only after winning; `__sched_steal` copies pointers
+// without following them); this one loads `GtOffStatus` THROUGH the peeked pointer first, because it may
+// only claim a thread it has already identified as dropped. Between the head load and that load a thief can
+// take the thread, run it to completion, and its awaiter can hand the struct back to the slab — so the load
+// can land on a freed slot. It cannot produce a wrong ACTION (a stale word that happens to read 4 loses the
+// CAS, because the head has moved) and, while the slab keeps its granules committed, it cannot fault either.
+// ⛔ **BUT S6's SCAVENGER DECOMMITS** (`SlabArena.__slab_arena_scavenge` → `osDecommitPages`), so a
+// concurrent `__Builtins.scavengeMemory()` that drops the granule between the two loads turns this into an
+// access violation. The window is a handful of instructions and needs a same-instant explicit scavenge, so
+// it has never been observed — it is written down because the invariant that makes it rare is the
+// ALLOCATOR'S, not this function's, and nothing here would notice the day that changes.
 function buildSchedSweepDropped(module StdModule)
 	var func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
