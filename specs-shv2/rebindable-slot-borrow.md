@@ -154,7 +154,17 @@ store into a field, element or column both take a REFERENCE instead
 semantics and a copy the author did not write makes the caller's value stop being the callee's.
 Nor does the immortal-record argument force a copy any more: `__str_retain` tells an immortal
 `.rdata` record from a heap one at RUN TIME, off `capacity@16`, and clones only the former, so
-no door needs an unconditional copy to stay off read-only memory. What the `binding` door
+no door needs an unconditional copy to stay off read-only memory.
+
+⚠ **THE `binding` DOOR IS NOT THE ONLY ONE STILL COPYING, AND A LIST OF WHAT RETAINS IS NOT A
+LIST OF EVERY DOOR.** A CONSUMED ARGUMENT — a borrowed `String` handed to a callee that STORES
+it — takes `transferConsumedArg`'s byte-record arm, which is `promoteToOwnedString` as well.
+MEASURED: `relay(s String) returns Rec` whose whole body is `return Rec.create(s)` emits
+`__mm_alloc` + `__str_copy` on `s` BEFORE the call, and `let r = relay(v)` followed by
+`v.append("XY")` prints `v=abXY name=ab` — where the direct store of the same shape,
+`dst.name = src.name`, emits `__str_retain` and the two names share one record. So the answer a
+borrowed `String` gets at a durable sink still depends on whether it crossed a call boundary to
+reach it. What the `binding` door
 should do is a separate, still-open question about a REFUSAL rather than about a cost
 (`ownedFormOfBorrowedValue` states it), and this case is indifferent to the answer: a retain
 would keep the old record alive across the rebind exactly as the copy does — what must never
