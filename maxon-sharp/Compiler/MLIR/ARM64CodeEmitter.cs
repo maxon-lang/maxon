@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler.Ir.Dialects;
+﻿using MaxonSharp.Compiler.Ir.Dialects;
 using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
 
 namespace MaxonSharp.Compiler.Ir;
@@ -708,6 +708,11 @@ public partial class ARM64CodeEmitter() {
       case 1:
         EmitLoadStoreUnsignedImm(0x39000000, src, ARM64Register.X29, displacement, 1);
         break;
+      // A size with no encoding here used to fall out of the switch and emit NOTHING — a store
+      // silently dropped, where the load twin below already threw. The only asymmetric arm in the
+      // pair, and the one whose failure is a stale slot rather than a crash.
+      default:
+        throw new ArgumentException($"Invalid store size: {sizeInBytes}");
     }
   }
 
