@@ -15,8 +15,10 @@
 #   exit 139 = segfault                        — the LOST-INCREF half, freed early
 #
 # ⚠ THE RACE IS INTERMITTENT, WHICH IS WHY THIS EXISTS AND A SINGLE RUN DOES NOT.
-# On EC10's parent with PLAIN refcounts it read 101 seven times and 139 five times
-# out of twelve at N=2; a one-shot driver would have called that "sometimes fine".
+# MEASURED at EC10 slice 2, 24 runs per cell, on the FINISHED tree with the pin
+# undone at one publish site: N=2 read 101 twice out of 24 while N=4 read 101
+# fifteen times and 139 nine times — 24 of 24. A one-shot driver pointed at N=2
+# would have called that "fine" five times out of six.
 #
 # Usage:  refcount-race.sh [reps]        (default 12)
 #         MAXON=<path to shv2 binary>    to drive a staged build (e.g. a parent)

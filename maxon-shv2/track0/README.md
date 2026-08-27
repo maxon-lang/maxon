@@ -21,7 +21,7 @@ question to ask of any reading from here is *which compiler produced the binary*
 |---|---|---|
 | `validate.sh` | **the C# BOOTSTRAP** (`$REPO/bin/maxon.exe`) | is the bootstrap's per-P sharded allocator + multi-M scheduler correct above one P? |
 | `pin-matrix.sh` | **shv2** (`maxon-shv2/.maxon/maxon-shv2.exe`) | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at every `MAXON_MAX_PROCS`? |
-| `refcount-race.sh` | **shv2** | does a contended refcount word survive, and is a plain load/add/store able to break it? |
+| `refcount-race.sh` | **shv2** | does a contended refcount word survive, and can the pin be removed to break it? |
 
 ⚠ **`validate.sh` DOES NOT MEASURE SHV2 AND NEVER DID.** It defaults `MAXON` to
 `$REPO/bin/maxon.exe`, and one of its checks calls `maxon monitor`, which shv2
@@ -80,10 +80,12 @@ covering them.
 - **`refcount-torture.maxon`** — twelve `async` tasks all handed the SAME heap
   `String`, each pushing it into a local container in a loop: `push` emits
   `__str_retain` and the container's scope end decrefs every element, so one round
-  is N increfs and N decrefs of ONE word. It is the program that justifies the
-  `lock` prefix on `emitAdjustRefcount`, rebuilt after the original was lost to a
-  `temp/` path in a comment. **The exit code is the only discriminator** — the
-  aggregate is byte-identical in passing and crashing runs.
+  is N increfs and N decrefs of ONE word. It justified the `lock` prefix on
+  `emitAdjustRefcount` at G2 and justifies its REMOVAL at EC10 — rebuilt after the
+  original was lost to a `temp/` path in a comment, which is why it is committed
+  here. **The exit code is the only discriminator** — the aggregate is
+  byte-identical in passing and crashing runs. The three measured builds, and the
+  one-line sabotage that reddens it (48 of 96 runs), are tabulated in its header.
 - **`validate.sh`** — compiles `alloc-torture` once with the BOOTSTRAP (a plain
   build + a `--debugstream` build), then runs the four checks below.
 

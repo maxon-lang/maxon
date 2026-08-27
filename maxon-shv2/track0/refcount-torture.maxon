@@ -1,5 +1,6 @@
-// Track-0 REFCOUNT-RACE control (EC10) — the program that justifies the `lock`
-// prefix on every retain and release in the language.
+// Track-0 REFCOUNT-RACE control (EC10) — the program that justified the `lock`
+// prefix on every retain and release in the language, and now justifies its
+// REMOVAL. Same program, three builds; the exit codes are below.
 //
 // ⭐⭐ WHY IT LIVES HERE AND NOT IN `temp/`. `MmRuntime.emitAdjustRefcount`'s
 // header cited `temp/g2/rc-global.maxon` as the measurement that made the
@@ -29,23 +30,34 @@
 // element, so one round is `chunk` increfs and `chunk` decrefs of the SAME
 // refcount word — and every task is handed the SAME String.
 //
-// ⇒ THE THREE READINGS, ALL MEASURED, 12 runs per cell at
-//   MAXON_MAX_PROCS in {1, 2, 4, 12}:
-//   1. **EC10's parent, ATOMIC refcounts** — exit 42, 48/48.
-//   2. **EC10's parent, PLAIN load/add/store** — 42 at N=1, and at N >= 2
-//      **0 of 36 runs clean**: exit 101 (leak) or 139 (segfault), both halves of
-//      the race. Two negative controls on the SAME plain build — a private
-//      per-task String, and the shared box with no churn — are 42x48 each, so
-//      the failure is contention on ONE refcount word and not multi-M
-//      allocation, scheduling or spawning.
-//   3. **EC10's tip (`async` pinned) + PLAIN** — exit 42, 48/48. The pin removes
-//      the second party rather than the race: with `async` creating a coroutine
-//      of the calling green thread, no worker M is ever started and no second OS
-//      thread can reach the word.
+// ⇒ THE THREE READINGS, ALL MEASURED, **24 runs per cell** at
+//   MAXON_MAX_PROCS in {1, 2, 4, 12}. Readings 1 and 3 are the SHIPPED builds;
+//   reading 2 is the sabotage that makes them mean something.
 //
-// Reading 2 is the one that makes the other two mean anything — a control that
-// cannot be made to fail is not a control. Reading 3 is what SLICE 2 cashes in
-// when it makes `emitAdjustRefcount` a plain load/add/store unconditionally.
+//   | build                                | N=1   | N=2          | N=4            | N=12          |
+//   |--------------------------------------|-------|--------------|----------------|---------------|
+//   | 1. atomic RMW, `async` PINNED        | 42x24 | 42x24        | 42x24          | 42x24         |
+//   | 2. plain, pin UNDONE at `__gt_ready` | 42x24 | 42x22, 101x2 | 101x15, 139x9  | 101x4, 139x20 |
+//   | 3. plain, `async` PINNED  (SHIPPED)  | 42x24 | 42x24        | 42x24          | 42x24         |
+//
+//   **48 of 96 runs crashed without the pin; 0 of 96 with it, and 0 of 96 with
+//   the atomic.** Reading 2 was taken on the FINISHED tree by routing
+//   `buildGtReady`'s publish back to `SchedQueueEnd.localRing` — one line,
+//   nothing else changed — and the binary rebuilt after reverting that line is
+//   BYTE-IDENTICAL to the one before it, so the two arms differ in exactly that.
+//
+// ⚠ READING 2's `42` ROWS ARE NOT CLEAN RUNS. It is a HALF sabotage: the publish
+// goes to the ring but the DRIVER still looks in the owner's queue, so at N=1,
+// where no worker M is ever created, nothing runs the coroutines at all and the
+// program bails with `aggregate=0`. The discriminator is the 101/139 count, and
+// the N=4 rows show the mechanism directly: `workers=4 steals=6`, with a
+// byte-identical `aggregate=576522` on the runs that reached the leak gate.
+//
+// ⇒ Reading 3 is what SLICE 2 cashed in: `emitAdjustRefcount` is a plain
+// load/add/store unconditionally, and reading 2 is why that is safe rather than
+// merely untested. The pin removes the second party rather than the race — with
+// `async` creating a coroutine of the calling green thread, no worker M is ever
+// started and no second OS thread can reach the word.
 //
 // ⛔ `live=` IS NOT THE LEAK SIGNAL, AND THE OLD HEADER SAID IT WAS. MEASURED:
 // `mmRawAllocLive()` reads 8/9/11/19 at N=1/2/4/12 identically in PASSING and
