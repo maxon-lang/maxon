@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler;
+﻿using MaxonSharp.Compiler;
 using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 using MaxonSharp.Compiler.Ir.Passes;
@@ -223,9 +223,27 @@ public static partial class MaxonToStandardConversion {
         block.AddOp(new StdStoreI64Op(i64, varName));
         varTypes[varName] = "i64";
         break;
+      // ⭐⭐ A VARIABLE SLOT RECORDS A WIDTH AND NOT A SIGNEDNESS, SO A NARROW VALUE IS WIDENED
+      // HERE — THE LAST PLACE THAT STILL KNOWS WHICH EXTENSION IS THE RIGHT ONE.
+      //
+      // A slot of "i32" was a slot whose contents were neither reading of themselves, and it gave a
+      // SILENT wrong answer in both directions. MEASURED, one 15-line program each:
+      //
+      //   • signed: `var q = offset / 8` with `offset` an `int(i32.min to i32.max)` holding -65
+      //     stored 4 bytes and reloaded with a ZERO-extending `mov r32, [rbp+d]` (`ldr w` on arm64),
+      //     so the -8 came back as 4294967288 at every 64-bit consumer.
+      //   • unsigned: `let e = big - 1` on an `int(0 to u32.max)` came back as an <c>StdI32</c>
+      //     — the slot could not say it had been an <see cref="StdU32"/> — and the next consumer
+      //     that widens (an interpolation does) SIGN-extended it: 3999999999 printed as -294967297.
+      //
+      // <see cref="EnsureI64"/> is the one decider of which extension a narrow value owes, and it is
+      // the same one every other consumer asks. Widening at the store makes the slot hold the value's
+      // 64-bit reading, which is what every reader of a variable was already written on — and it
+      // costs no stack space, because a variable slot is floored to 8 bytes on x64 and is a flat 8 on
+      // arm64 regardless. `specs/ranged-typealias.md` pins both directions.
       case StdI32 i32:
-        block.AddOp(new StdStoreI32Op(i32, varName));
-        varTypes[varName] = "i32";
+        block.AddOp(new StdStoreI64Op(EnsureI64(i32, block), varName));
+        varTypes[varName] = "i64";
         break;
       case StdF64 f64:
         block.AddOp(new StdStoreF64Op(f64, varName));
@@ -986,11 +1004,6 @@ public static partial class MaxonToStandardConversion {
         block.AddOp(loadOp);
         return loadOp.Result;
       }
-      case "i32": {
-        var loadOp = new StdLoadI32Op(varName);
-        block.AddOp(loadOp);
-        return loadOp.Result;
-      }
       case "ptr": {
         var loadOp = new StdLoadPtrOp(varName);
         block.AddOp(loadOp);
@@ -1007,7 +1020,6 @@ public static partial class MaxonToStandardConversion {
     "f64" => IrType.F64,
     "f32" => IrType.F32,
     "i1" => IrType.I1,
-    "i32" => IrType.I32,
     "ptr" => IrType.I64,
     _ => throw new InvalidOperationException($"Unsupported var type for IrType conversion: {varType}"),
   };

@@ -1519,11 +1519,11 @@ public static partial class MaxonToStandardConversion {
                 if (!valueMap.TryGetValue(assignOp.Value, out var mappedValue_))
                   throw new InvalidOperationException($"assign value %{assignOp.Value.Id} (kind={assignOp.Value.GetType().Name}) not in valueMap; assigning to '{assignOp.VarName}' in function '{func.Name}'");
                 var mappedValue = mappedValue_;
-                // Widen I32/U32 to I64 when the variable was previously stored as I64
-                // (e.g., try...otherwise where the default is I64 but the call result is U32)
-                if (mappedValue is StdI32 && varTypes.TryGetValue(assignOp.VarName, out var prevType) && prevType == "i64") {
-                  mappedValue = EnsureI64(mappedValue, newBlock);
-                }
+                // A narrow value assigned to a variable used to be widened HERE, but only when the
+                // slot had already been written at i64 (a `try ... otherwise` whose default is i64
+                // and whose call result is a u32). EmitStore now widens EVERY narrow store, so the
+                // condition this arm tested — "the slot's previous width" — no longer exists: a
+                // variable slot is always i64. One decider, not two that had to agree.
                 // A re-declaration of a name that a previous scope registered as
                 // managed (e.g. two sibling `try ... otherwise (e) 'a'/'b'` blocks
                 // with different error-enum types) needs to clear the stale

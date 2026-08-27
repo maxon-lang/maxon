@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler.Ir.Core;
+﻿using MaxonSharp.Compiler.Ir.Core;
 
 namespace MaxonSharp.Compiler.Ir.Dialects;
 
@@ -35,8 +35,6 @@ public enum StdOpKind {
   TruncI64ToI32,
   SiToFpI32,
   UiToFpI32,
-  StoreI32,
-  LoadI32,
   RemI64,
   MulI64,
   DivI64,
@@ -468,27 +466,22 @@ public sealed class StdUiToFpI32Op(StdI32 input) : StandardOp {
 
 // === I32 Memory Operations ===
 
-public sealed class StdStoreI32Op(StdI32 value, string varName) : StandardOp, IStoreOp {
-  public override StdOpKind Kind => StdOpKind.StoreI32;
-  public override string Mnemonic => $"memref.store {Value}, {VarName}";
-  public StdI32 Value { get; } = value;
-  StdValue IStoreOp.Value => Value;
-  public string VarName { get; } = varName;
-  public IrType StoredType => IrType.I32;
-  public override List<StdValue> ReadValues => [Value];
-  public override int PureResultId => -1;
-}
-
-public sealed class StdLoadI32Op(string varName) : StandardOp, ILoadOp {
-  public override StdOpKind Kind => StdOpKind.LoadI32;
-  public override string Mnemonic => $"memref.load {VarName} : i32";
-  public string VarName { get; } = varName;
-  public StdI32 Result { get; } = new StdI32(IrContext.Current.NextStdId());
-  StdValue ILoadOp.Result => Result;
-  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override List<StdValue> ReadValues => [];
-  public override int PureResultId => Result.Id;
-}
+// ⭐ THERE IS NO 32-BIT VARIABLE STORE OR LOAD, AND THERE MAY NOT BE ONE — for the same reason
+// there is no 32-bit shift op above: a narrow variable SLOT is an illegal state, and the cheapest way
+// to keep it out of the IR is to give the compiler no way to spell it.
+//
+// There were two (`StdStoreI32Op` / `StdLoadI32Op`), reached whenever a narrow ranged binop's result
+// was assigned to a local, and they were a silent wrong answer in BOTH directions. A slot recorded a
+// WIDTH and not a SIGNEDNESS, so its contents were neither reading of themselves: the 4-byte store
+// paired with a ZERO-extending 4-byte load (`mov r32, [rbp+d]`; `ldr w` on arm64), which read a
+// negative `int(i32.min to i32.max)` quotient of -8 back as 4294967288 — and the load's result was a
+// plain <see cref="StdI32"/> even when an <see cref="StdU32"/> had been stored, so the next consumer
+// that widens SIGN-extended it and printed 3999999999 as -294967297.
+//
+// MaxonToStandardConversion.EmitStore is now the only builder of a variable store, and it widens
+// through `EnsureI64` — the one decider of which extension a narrow value owes — so every variable
+// slot is i64 and holds the value's own 64-bit reading. It costs no stack space: a slot is floored to
+// 8 bytes on x64 and is a flat 8 on arm64 either way.
 
 public sealed class StdRemI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override StdOpKind Kind => StdOpKind.RemI64;

@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler.Ir.Core;
+﻿using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler.Ir.Passes;
@@ -103,7 +103,6 @@ public static class StoreForwardingPass {
   private static StandardOp CreateStore(StdValue value, string varName) {
     return value switch {
       StdI64 v => new StdStoreI64Op(v, varName),
-      StdI32 v => new StdStoreI32Op(v, varName),
       StdF64 v => new StdStoreF64Op(v, varName),
       StdF32 v => new StdStoreF32Op(v, varName),
       StdBool v => new StdStoreI1Op(v, varName),

@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler.Ir.Core;
+﻿using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler.Ir.Conversion;
@@ -284,17 +284,6 @@ public static class StandardToARM64Conversion {
       case StdLoadI64Op load64:
         if (varOffsets.TryGetValue(load64.VarName, out var loadOffset64))
           regManager.EmitLoadFromStack(load64.Result, loadOffset64, 8, block);
-        break;
-
-      // === Store/Load (I32) ===
-      case StdStoreI32Op store32:
-        if (varOffsets.TryGetValue(store32.VarName, out var storeOffset32))
-          regManager.EmitStoreToStack(store32.Value, storeOffset32, 4, block);
-        break;
-
-      case StdLoadI32Op load32:
-        if (varOffsets.TryGetValue(load32.VarName, out var loadOffset32))
-          regManager.EmitLoadFromStack(load32.Result, loadOffset32, 4, block);
         break;
 
       // === Store/Load (I1 - bool) ===

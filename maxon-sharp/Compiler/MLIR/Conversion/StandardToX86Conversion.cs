@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler.Ir.Core;
+﻿using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler.Ir.Conversion;
@@ -365,12 +365,6 @@ public static class StandardToX86Conversion {
             regManager.EmitStoreToStack(paramOp.Result, value3, 1, x86Block);
             preHandledOps.Add(storeI1);
           }
-          var storeI32 = srcBlock.Operations.OfType<StdStoreI32Op>()
-            .FirstOrDefault(s => s.Value.Equals(paramOp.Result) && s.VarName == paramOp.Name);
-          if (storeI32 != null && varOffsets.TryGetValue(storeI32.VarName, out int value4)) {
-            regManager.EmitStoreToStack(paramOp.Result, value4, 4, x86Block);
-            preHandledOps.Add(storeI32);
-          }
         }
       }
 
@@ -599,17 +593,6 @@ public static class StandardToX86Conversion {
             lastCmpResult = cmpU32Op.Result;
             lastCmpKind = ComparisonKind.UnsignedInteger;
             lastCmpPredicate = cmpU32Op.Predicate;
-            break;
-
-          // === I32 Store/Load ===
-
-          case StdStoreI32Op storeI32Op:
-            if (!deadStoreOps.Contains(op))
-              regManager.EmitStoreToStack(storeI32Op.Value, varOffsets[storeI32Op.VarName], 4, x86Block);
-            break;
-
-          case StdLoadI32Op loadI32Op:
-            regManager.EmitLoadFromStack(loadI32Op.Result, varOffsets[loadI32Op.VarName], 4, x86Block);
             break;
 
           // === I32 Width Conversion ===

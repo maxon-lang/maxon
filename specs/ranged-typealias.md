@@ -542,6 +542,118 @@ magnitude=8
 0
 ```
 
+### A narrow value SURVIVES A VARIABLE, in both signednesses
+
+⭐ **A LOCAL'S SLOT RECORDS A WIDTH AND NOT A SIGNEDNESS, SO A NARROW VALUE IS WIDENED ON THE WAY
+IN.** The rule above chooses the machine operation a `/` runs at; it does not license a narrow PLACE
+to keep the answer. A slot that held 32 bits was a slot whose contents were neither reading of
+themselves, and it answered wrongly in BOTH directions: the 4-byte store paired with a ZERO-extending
+4-byte load (`mov r32, [rbp+d]` on x64, `ldr w` on arm64) lost a negative value's sign, and the load's
+result could not say an UNSIGNED value had been stored, so the next consumer that widens sign-extended
+a `u32` above `i32.max`.
+
+⚠ **AND IT IS NOT ABOUT DIVISION.** `/` is the one operator whose emitted WIDTH is real, but `+`,
+`-`, `*`, `and`, `or` and `xor` between narrow operands produce a narrow VALUE just the same, and it
+reached the same slot. The second case below is a subtraction.
+
+⚠ **WHICH CONSUMER READS THE VALUE DECIDES WHETHER THE ANSWER LOOKS RIGHT**, which is what kept
+this hidden and is why the two signednesses need opposite cases. A consumer that sign-extends first
+— an interpolation does — undoes the zero-extending load and prints a NEGATIVE narrow value
+correctly, so the signed cases hand the value to a 64-bit consumer instead. For an UNSIGNED value that
+same interpolation is the consumer that gets it wrong, so the third case prints directly.
+
+<!-- test: narrow-local-keeps-a-negative-quotient -->
+#### A quotient assigned to a local is still `-8` when the local is read
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Imm32 = int(i32.min to i32.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function widen(v Integer) returns Integer
+	return v
+end 'widen'
+
+function main() returns ExitCode
+	let offset = ident(0 - 65) as Imm32
+	let q = offset / 8
+	let r = offset mod 8
+	if offset < 0 'neg'
+		print("q={widen(q)} r={widen(r)}\n")
+	end 'neg'
+	return 0
+end 'main'
+```
+```stdout
+q=-8 r=-1
+```
+```exitcode
+0
+```
+
+<!-- test: narrow-local-keeps-a-negative-difference -->
+#### …and a SUBTRACTION owes the same, with no narrowed instruction involved at all
+`-` is emitted at 64 bits whatever its operands' ranged types say, so the register holding
+`offset - 1` already reads `-66`. The slot is what lost it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Imm32 = int(i32.min to i32.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function widen(v Integer) returns Integer
+	return v
+end 'widen'
+
+function main() returns ExitCode
+	let offset = ident(0 - 65) as Imm32
+	let difference = offset - 1
+	if offset < 0 'neg'
+		print("difference={widen(difference)}\n")
+	end 'neg'
+	return 0
+end 'main'
+```
+```stdout
+difference=-66
+```
+```exitcode
+0
+```
+
+<!-- test: narrow-local-keeps-an-unsigned-value-above-i32-max -->
+#### The other direction — a value the slot must NOT sign-extend
+`int(0 to u32.max)` admits values with bit 31 set. Sign-extending one is as wrong as failing to
+sign-extend a negative, and the same slot did both, so an unsigned case has to stand beside a signed
+one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Unsigned32 = int(0 to u32.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let big = ident(4000000000) as Unsigned32
+	let difference = big - 1
+	if big > 0 'pos'
+		print("difference={difference}\n")
+	end 'pos'
+	return 0
+end 'main'
+```
+```stdout
+difference=3999999999
+```
+```exitcode
+0
+```
+
 ### Ranged type in struct field
 
 <!-- test: struct-field -->
