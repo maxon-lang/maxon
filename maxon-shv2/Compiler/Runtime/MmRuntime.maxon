@@ -932,9 +932,10 @@ end 'emitUnary'
 // the sequence by hand until G2 and are now this function's callers. One spelling of `load / combine /
 // store` is one chance to read one slot and store another instead of ten.
 //
-// ⭐⭐ **IT IS AN ATOMIC READ-MODIFY-WRITE (G2), AND THAT IS WHAT MAKES A COUNTER A COUNTER ONCE MORE THAN
-// ONE M RUNS.** A `.data` word is reachable from every OS thread by construction, so the plain
-// load/add/store this used to emit loses an update the moment two Ms credit the same column — and these
+// ⭐⭐ **IT IS AN ATOMIC READ-MODIFY-WRITE WHEREVER A SECOND M CAN EXIST (G2, NARROWED BY EC8), AND THAT IS
+// WHAT MAKES A COUNTER A COUNTER ONCE MORE THAN ONE M RUNS.** A `.data` word is reachable from every OS
+// thread the process has, so the plain load/add/store this used to emit — the arm EC8 brought back for the
+// programs that have exactly one — loses an update the moment two Ms credit the same column, and these
 // columns are not decoration: `__mm_alloc_count` is what the LEAK GATE reads (exit 101) and
 // `__gt_live_count` is what the green-thread gate reads (exit 75), so a lost update is a leak reported that
 // did not happen, or one hidden that did. `MAXON_MAX_PROCS>1` gives a program two Ms today.
@@ -1189,12 +1190,13 @@ end 'buildStrCopy'
 export let PredicateTrue = 1 as ParsedInt
 export let PredicateFalse = 0 as ParsedInt
 
-// ⭐ **THE TWO DELTAS EVERY ATOMIC STEP IN THE EMITTED RUNTIME USES.** Named rather than written as a bare
-// `1` and a bare `-1` at the fourteen sites that step a counter or a refcount by one: the two are one
-// keystroke apart, and at a call site whose only other argument is a LABEL there is nothing else in the
-// line to say which direction was meant. They are `ParsedInt` deltas fed to `StdOp.atomicRmw`'s `add`, which
-// is why a debit is a NEGATIVE addend and not a second opcode — see `StdAtomicRmwOpcode`, which has one
-// member for exactly this reason.
+// ⭐ **THE TWO DELTAS EVERY COUNTER AND REFCOUNT STEP IN THE EMITTED RUNTIME USES.** Named rather than
+// written as a bare `1` and a bare `-1` at the fourteen sites that step a counter or a refcount by one:
+// the two are one keystroke apart, and at a call site whose only other argument is a LABEL there is
+// nothing else in the line to say which direction was meant. They are `ParsedInt` deltas fed to
+// `StdOp.atomicRmw`'s `add` — or, on `emitGlobalAccumulate`'s single-threaded arm, to the plain `binOp add`
+// that answers identically — which is why a debit is a NEGATIVE addend and not a second opcode: see
+// `StdAtomicRmwOpcode`, which has one member for exactly this reason.
 export let OneMore = 1 as ParsedInt
 export let OneFewer = -1 as ParsedInt
 

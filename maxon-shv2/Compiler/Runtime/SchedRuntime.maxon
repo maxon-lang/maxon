@@ -28,9 +28,12 @@
 //      (`temp/g2/rc-field.maxon`, twelve Ms retaining and releasing ONE box): with the flip, exit 42 at
 //      `MAXON_MAX_PROCS ∈ {1,2,4,12}`, twenty runs; with only that flip reverted, **exit 101 at 2 and 4 and
 //      exit 139 at 12**, five runs each.
-//   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which is now an
-//      `atomicRmw` and is what the four scheduler counters (`__gt_live_count`, `__gt_trace_counter`,
-//      `__io_pending`, `__io_pipe_seq`) call instead of each spelling load/add/store by hand.
+//   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which is what the four
+//      scheduler counters (`__gt_live_count`, `__gt_trace_counter`, `__io_pending`, `__io_pipe_seq`) call
+//      instead of each spelling load/add/store by hand. ⚠ Since EC8 that door emits an `atomicRmw` only
+//      where a second OS thread can exist (`multiM`, which is `usage.usesGt`) — the four above are built
+//      only under `usesGt`, so THEY are always atomic; what stopped being atomic is the box layer's
+//      counters in a program that has one thread, where there is no second writer to serialise against.
 //   3. **THE TWO PARK STORES**, under `__sched_lock` — the timer store's count/base/capacity and the process
 //      store's count, plus the three swap-removes `__gt_promise_drop` reaches. What is indivisible there is a
 //      TRANSACTION over several words, which no atomic can express. The wake is deliberately outside the
