@@ -44555,9 +44555,15 @@ export type Parser
 	//
 	//   **VALUE.** A folded count is rewritten into the shift its semantics define, so no count
 	//   above `MaxUnguardedShiftCount` ever reaches codegen and the hardware's masking is never
-	//   consulted. A count that could NOT be folded gets the GUARD, which saturates it at run time
-	//   — to the SAME answer. That the two agree is not a coincidence: both are readings of
-	//   `evalShift`.
+	//   consulted. A count that could neither be folded NOR PROVEN gets the GUARD, which saturates
+	//   it at run time — to the SAME answer. That the two agree is not a coincidence: both are
+	//   readings of `evalShift`.
+	//
+	//   ⭐ **PROVEN is the third answer, and it is a TYPE's** — see `shiftCountIsProvenUnguarded`. A
+	//   count the parser cannot see the VALUE of, it may still see the BOUNDS of; when those bounds
+	//   lie inside the counts the instruction takes as written, the saturation is dead code and the
+	//   shift is emitted bare. It is the same instruction a folded in-range count gets below, because
+	//   it is the same fact — only who established it differs.
 	function emitShift(lhs ValueId, count ValueId, op MaxonBinOp, opTok Token, countStart TokenIndex, countEnd TokenIndex) returns ValueId throws ParseError
 		// The SHIFT's OWN operand rule, asked BEFORE anything is emitted. `emitBinOp` would ask it
 		// too, but by then the guard's ops are already in the IR — and the FIRST of them is an
@@ -44577,6 +44583,14 @@ export type Parser
 		let shiftOp = shiftOpcodeFor(op, signFills: signFills)
 
 		if not self.constIsKnown(count) 'dynamic'
+			// A count nobody can FOLD may still be one nobody can put OUT OF RANGE. Then the guard
+			// below would compute a saturation that provably never fires, so the operand goes to the
+			// instruction exactly as a folded in-range count does at the end of this function — one
+			// unguarded shift, reached by two routes to the same bound.
+			if self.shiftCountIsProvenUnguarded(count) 'proven'
+				return try self.emitBinOp(lhs, rhs: count, op: shiftOp, opTok: opTok)
+			end 'proven'
+
 			return try self.emitGuardedShift(lhs, count: count, op: shiftOp, opTok: opTok)
 		end 'dynamic'
 
@@ -44624,8 +44638,43 @@ export type Parser
 		return result
 	end 'emitShift'
 
-	// A shift whose count the compiler could NOT fold — the runtime half of THE SHIFT RULE, and
-	// the half that has to fight the hardware.
+	// ⭐⭐ **DOES THIS COUNT'S DECLARED TYPE ALREADY PROVE THE GUARD DEAD?** — the one question that
+	// lets a count the parser cannot FOLD reach the instruction unguarded.
+	//
+	// `emitGuardedShift`'s 6-7 ops exist to fold a count OUTSIDE `MinShiftCount..MaxUnguardedShiftCount`
+	// back to the answer `evalShift` defines. A count whose alias cannot HOLD such a value is already
+	// there, so every one of those ops is dead — computed, and then thrown away by a mask that is
+	// always zero. `RegBits.RegNum` (`int(0 to 63)`) is the shape that pays for it: `regMaskContains`
+	// is one `shr` carrying the whole of `emitGuardedShift`'s cost — stated once, there — at fourteen
+	// inlined call sites.
+	//
+	// ⚠ **IT COMPOSES `TypeRules.shiftCountIsUnguarded`, ONCE PER BOUND, AND SPELLS NO NUMBER.** That
+	// predicate IS "a count the instruction takes as written"; `foldConstOperands` asks it of a count's
+	// VALUE and this asks it of a count's BOUNDS, so the fold and the elision cannot come to disagree
+	// about where the span ends. Restating `0..63` here would be another copy of the operand width,
+	// which `MaxUnguardedShiftCount`'s header already records the cost of.
+	//
+	// ⚠ **A FLOAT ALIAS IS REFUSED BEFORE ITS BOUNDS ARE READ, BECAUSE THEY ARE NOT NUMBERS.** They are
+	// IEEE-754 bit patterns — the fork `aliasIsFloat` exists for — and `float(0.0 to 0.0)` rides as
+	// `low == 0, high == 0`, a pair that reads as two perfectly good shift counts and is neither.
+	//
+	// ⚠ **WHAT THE `true` ANSWER RESTS ON** is the induction `TypeRules.rangeCoversDenotedRange`'s header
+	// states: a value denoting alias `A` is IN `A`'s range, because a cast site guards its result, a
+	// parameter is guarded at the callee's entry and a `return` before its `ret`. Its one recorded
+	// producer of a value that crossed no door — `Array.resize`'s zero-initialized slot — cannot reach a
+	// wrong shift through here, because what it exposes is `0` and `0` is itself a count the instruction
+	// takes as written.
+	function shiftCountIsProvenUnguarded(count ValueId) returns bool
+		return match self.declaredAliasOfValue(count) 'count'
+			// A bare `int`, a loop counter, an arithmetic result: none states any bounds, so none
+			// proves anything, and the guard stays exactly where it was.
+			undeclared gives false
+			declared(alias) gives not aliasIsFloat(alias) and shiftCountIsUnguarded(alias.low) and shiftCountIsUnguarded(alias.high)
+		end 'count'
+	end 'shiftCountIsProvenUnguarded'
+
+	// A shift whose count the compiler could neither fold NOR PROVE (`shiftCountIsProvenUnguarded`) —
+	// the runtime half of THE SHIFT RULE, and the half that has to fight the hardware.
 	//
 	// x64 masks a 64-bit shift's count to its low 6 bits, so the instruction cannot be handed the
 	// count as written: `x shl 64` would compute `x shl 0` (x, UNCHANGED) and `x shl 100` would
@@ -44650,7 +44699,9 @@ export type Parser
 	// of it but a reading of its result.
 	//
 	// Cost, on top of the shift: 4 ops for the mask, plus 2 (zero-fill) or 1 (sign-fill). Only a
-	// count the compiler cannot see pays it — every `x shr 8` and `x shl 3` is folded and untouched.
+	// count the compiler can neither SEE nor BOUND pays it — every `x shr 8` and `x shl 3` is folded
+	// and untouched, and so is every `x shr n` whose `n` denotes an alias inside the counts the
+	// instruction takes as written (`emitShift`, via `shiftCountIsProvenUnguarded`).
 	//
 	// ⚠ TODO — Go PANICS on a negative count at run time ("if the shift count is negative at run
 	// time, a run-time panic occurs"), and shv2 still does not — but ⚠ **NOT FOR THE REASON THIS

@@ -1,0 +1,394 @@
+// Test: a-count-whose-alias-reaches-below-zero-keeps-the-guard
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias Small = int(-1 to 5)
+
+function shlBy(value Num, n Small) returns Num
+	return value shl n
+end 'shlBy'
+
+function shrBy(value Num, n Small) returns Num
+	return value shr n
+end 'shrBy'
+
+function shrWordBy(value Word, n Small) returns Word
+	return value shr n
+end 'shrWordBy'
+
+function below(step Num) returns Small
+	return (0 - step) as Small
+end 'below'
+
+function main() returns ExitCode
+	let negative = below(1)
+
+	if shlBy(1, n: negative) != 0 'shl'
+		return 1
+	end 'shl'
+	if shrBy(0 - 4, n: negative) != 0 - 1 'shrSign'
+		return 2
+	end 'shrSign'
+	if shrWordBy(u64.max, n: negative) != 0 'shrZeroFill'
+		return 3
+	end 'shrZeroFill'
+
+	// The in-range end of the same alias, so the case cannot pass by refusing the whole type.
+	if shlBy(1, n: below(0 - 5)) != 32 'shlInRange'
+		return 4
+	end 'shlInRange'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shlBy {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.cmpRegImm32 rdx, -1
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 5
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rdx
+    x64.andRegImm32 rcx, rdx, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegReg rsi, rcx
+    x64.sarRegImm8 rsi, rcx, 63
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.movRegReg r8, rax
+    x64.andRegReg r8, rax, rsi
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @shrBy {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg r8, rcx
+    x64.cmpRegImm32 rdx, -1
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 5
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rax, rdx
+    x64.andRegImm32 rax, rdx, -64
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+    x64.orRegReg rax, rax, rcx
+    x64.sarRegImm8 rax, rax, 63
+    x64.movRegReg rcx, rdx
+    x64.orRegReg rcx, rdx, rax
+    x64.sarRegCl r8, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @shrWordBy {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.cmpRegImm32 rdx, -1
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 5
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rdx
+    x64.andRegImm32 rcx, rdx, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegReg rsi, rcx
+    x64.sarRegImm8 rsi, rcx, 63
+    x64.movRegReg rcx, rdx
+    x64.shrRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.movRegReg r8, rax
+    x64.andRegReg r8, rax, rsi
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @below {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.subRegReg r8, r8, rcx
+    x64.cmpRegImm32 r8, -1
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 5
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.jmp __il_body#11
+  __il_body#11:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rbx, rax, -1
+    x64.cmpRegImm32 rbx, -1
+    x64.jcc less, __il_slow#14
+    x64.jmp __rc_chk#13
+  __rc_chk#13:
+    x64.cmpRegImm32 rbx, 5
+    x64.jcc greater, __il_slow#14
+    x64.jmp __rc_ok#12
+  __il_slow#14:
+    x64.callDirect below
+    x64.movRegReg rbx, r8
+    x64.jmp __il_cont#10
+  __rc_ok#12:
+    x64.jmp __il_cont#10
+  __il_cont#10:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_body#15
+  __il_body#15:
+    x64.cmpRegImm32 rbx, -1
+    x64.jcc less, __il_slow#18
+    x64.jmp __rc_chk#17
+  __rc_chk#17:
+    x64.cmpRegImm32 rbx, 5
+    x64.jcc greater, __il_slow#18
+    x64.jmp __rc_ok#16
+  __il_slow#18:
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, rbx
+    x64.callDirect shlBy
+    x64.jmp __il_cont#9
+  __rc_ok#16:
+    x64.movRegReg rcx, rbx
+    x64.andRegImm32 rcx, rbx, -64
+    x64.movRegReg rdx, rcx
+    x64.negReg rdx, rcx
+    x64.orRegReg rcx, rcx, rdx
+    x64.movRegReg rdx, rcx
+    x64.sarRegImm8 rdx, rcx, 63
+    x64.movRegReg rcx, rbx
+    x64.shlRegCl rax, rax
+    x64.notReg rdx, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#9
+  __il_cont#9:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, shl
+    x64.jmp ifcont#2
+  shl:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -4
+    x64.jmp __il_body#20
+  __il_body#20:
+    x64.cmpRegImm32 rbx, -1
+    x64.jcc less, __il_slow#23
+    x64.jmp __rc_chk#22
+  __rc_chk#22:
+    x64.cmpRegImm32 rbx, 5
+    x64.jcc greater, __il_slow#23
+    x64.jmp __rc_ok#21
+  __il_slow#23:
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, rbx
+    x64.callDirect shrBy
+    x64.jmp __il_cont#19
+  __rc_ok#21:
+    x64.movRegReg rcx, rbx
+    x64.andRegImm32 rcx, rbx, -64
+    x64.movRegReg rdx, rcx
+    x64.negReg rdx, rcx
+    x64.orRegReg rcx, rcx, rdx
+    x64.sarRegImm8 rcx, rcx, 63
+    x64.movRegReg rdx, rbx
+    x64.orRegReg rdx, rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.sarRegCl rax, rax
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#19
+  __il_cont#19:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, shrSign
+    x64.jmp ifcont#4
+  shrSign:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm rax, 18446744073709551615
+    x64.jmp __il_body#25
+  __il_body#25:
+    x64.cmpRegImm32 rbx, -1
+    x64.jcc less, __il_slow#28
+    x64.jmp __rc_chk#27
+  __rc_chk#27:
+    x64.cmpRegImm32 rbx, 5
+    x64.jcc greater, __il_slow#28
+    x64.jmp __rc_ok#26
+  __il_slow#28:
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, rbx
+    x64.callDirect shrWordBy
+    x64.jmp __il_cont#24
+  __rc_ok#26:
+    x64.movRegReg rcx, rbx
+    x64.andRegImm32 rcx, rbx, -64
+    x64.movRegReg rdx, rcx
+    x64.negReg rdx, rcx
+    x64.orRegReg rcx, rcx, rdx
+    x64.movRegReg rdx, rcx
+    x64.sarRegImm8 rdx, rcx, 63
+    x64.movRegReg rcx, rbx
+    x64.shrRegCl rax, rax
+    x64.notReg rdx, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#24
+  __il_cont#24:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, shrZeroFill
+    x64.jmp ifcont#6
+  shrZeroFill:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, rax, -5
+    x64.jmp __il_body#31
+  __il_body#31:
+    x64.movRegImm32 rax, 0
+    x64.subRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, -1
+    x64.jcc less, __il_slow#34
+    x64.jmp __rc_chk#33
+  __rc_chk#33:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc greater, __il_slow#34
+    x64.jmp __rc_ok#32
+  __il_slow#34:
+    x64.callDirect below
+    x64.movRegReg rdx, r8
+    x64.jmp __il_cont#30
+  __rc_ok#32:
+    x64.movRegReg rdx, rax
+    x64.jmp __il_cont#30
+  __il_cont#30:
+    x64.jmp __il_body#35
+  __il_body#35:
+    x64.cmpRegImm32 rdx, -1
+    x64.jcc less, __il_slow#38
+    x64.jmp __rc_chk#37
+  __rc_chk#37:
+    x64.cmpRegImm32 rdx, 5
+    x64.jcc greater, __il_slow#38
+    x64.jmp __rc_ok#36
+  __il_slow#38:
+    x64.movRegReg rcx, rbx
+    x64.callDirect shlBy
+    x64.jmp __il_cont#29
+  __rc_ok#36:
+    x64.movRegReg rax, rdx
+    x64.andRegImm32 rax, rdx, -64
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+    x64.orRegReg rax, rax, rcx
+    x64.sarRegImm8 rax, rax, 63
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rbx, rbx
+    x64.notReg rax, rax
+    x64.andRegReg rbx, rbx, rax
+    x64.movRegReg r8, rbx
+    x64.jmp __il_cont#29
+  __il_cont#29:
+    x64.cmpRegImm32 r8, 32
+    x64.jcc notEqual, shlInRange
+    x64.jmp ifcont#8
+  shlInRange:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

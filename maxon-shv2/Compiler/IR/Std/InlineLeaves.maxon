@@ -47,18 +47,21 @@
 // Counted over all of a callee's blocks with terminators included and `param` ops excluded (a `param`
 // becomes the call's argument rather than an instruction).
 //
-// ⛔⛔ **24, BECAUSE `regMaskContains` IS 23 STD OPS AND 16 REFUSED IT — the whole rung's headline
-// function, refused by its own budget.** The count is not the 15 a reading of its x64 body suggests, and
-// the difference is where THE SHIFT RULE lives: `Parser.emitGuardedShift` saturates a shift whose count
-// the compiler cannot fold, and it does so at the MAXON tier, in ops — 6 for the out-of-range mask plus 2
-// or 3 for the shift itself. So `((mask shr regNum) and 1) != 0` is 14 Std ops before its `int(0 to 63)`
-// entry guard adds 9. (EC6, the range-blind-shift row, is exactly the rung that deletes those 6: the
-// count's declared type ALREADY says `0 to 63`. When it lands, this budget can come back down.)
+// ⛔⛔ **THE REASON 24 WAS CHOSEN IS GONE. THE NUMBER IS NOT — IT NOW RESTS ON A DIFFERENT MEASUREMENT,
+// AND THE TWO MUST NOT BE CONFUSED.** It was 24 because `regMaskContains` was 23 Std ops and 16 refused
+// it: the headline function of the rung that set this budget, refused by its own budget. What put it at
+// 23 was where THE SHIFT RULE lives — `Parser.emitGuardedShift` saturates a shift whose count the
+// compiler cannot fold, at the MAXON tier, in ops. **EC6 deleted that for this leaf**: a count whose
+// DECLARED alias lies inside the counts the instruction takes as written is now emitted bare
+// (`Parser.shiftCountIsProvenUnguarded`), `regNum` is `int(0 to 63)`, and `((mask shr regNum) and 1) != 0`
+// **fits inside 16** — MEASURED, not inferred: the leaf inlines at a budget of 16.
 //
-// MEASURED on the self-compile at 16 (2026-08-26): **3,016 sites inlined, 963 refused by size across 123
-// callees, of which 452 sites / 75 callees fit inside 24.** So 24 buys +15% sites — and among them the
-// 14 that carry 21.07% of the profile. 452 splices of ≤ 24 ops is ~11k extra Std ops against a module of
-// 1.34M, i.e. under 1%.
+// ⭐ **WHAT HOLDS 24 UP TODAY IS THE SITE COUNT ALONE.** MEASURED on the self-compile (2026-08-27, both
+// arms after EC6): at **24**, 3,673 sites inlined across 418 eligible callees, 512 refused by size across
+// 49 callees; at **16**, 3,286 sites across 349 callees, 899 refused across 118, of which 387 sites / 69
+// callees a budget of 24 would admit. **24 buys 387 sites and 69 callees over 16** — a tenth more
+// inlining. That is not a rounding error, so LOWERING this back is a change in its own right and owes its
+// own CPU A/B; it may not ride on the justification above, which has been spent.
 //
 // The pass reports what `ReportedLargerLeafBudget` would additionally admit, so the next person to ask
 // has the number for THIS compile instead of a guess.

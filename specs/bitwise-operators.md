@@ -1074,3 +1074,236 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: proven-count-at-the-boundary -->
+⭐ **A COUNT WHOSE DECLARED TYPE CANNOT PUT IT OUT OF RANGE NEEDS NO RUNTIME GUARD — AND MUST STILL
+ANSWER THE SAME.** The saturation a shift by an unfoldable count carries exists to fold a count
+outside `0..63` back to the answer the folded form gives. A count declared `int(0 to 63)` can never
+BE outside `0..63`, so the whole of it computes a mask that is always zero, and maxon-shv2 hands the
+operand straight to the instruction (`Parser.shiftCountIsProvenUnguarded`). The answers below are
+what makes that sound rather than merely cheaper: **both ends of the range, all three fills.**
+
+The count reaches the shift as a PARAMETER, which is where the proof lives — the declared type, not
+the argument. `boundary` is what stops the caller's side folding, so no shift here is a folded one.
+
+⚠ `shr-signedness-is-the-left-operand-only` above already declares this exact `int(0 to 63)` and is
+the shape this builds on; it pins the FILL a ranged count must not decide, and this pins the OPS a
+ranged count does decide.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias Bits = int(0 to 63)
+
+function shlBy(value Num, n Bits) returns Num
+	return value shl n
+end 'shlBy'
+
+function shrBy(value Num, n Bits) returns Num
+	return value shr n
+end 'shrBy'
+
+function shrWordBy(value Word, n Bits) returns Word
+	return value shr n
+end 'shrWordBy'
+
+function boundary(step Num) returns Bits
+	return (step * 63) as Bits
+end 'boundary'
+
+function main() returns ExitCode
+	let low = boundary(0)
+	let high = boundary(1)
+
+	if shlBy(1, n: low) != 1 'shlZero'
+		return 1
+	end 'shlZero'
+	if shlBy(1, n: high) != 0 - 9223372036854775807 - 1 'shlTop'
+		return 2
+	end 'shlTop'
+	if shrBy(0 - 8, n: low) != 0 - 8 'shrZero'
+		return 3
+	end 'shrZero'
+	if shrBy(0 - 8, n: high) != 0 - 1 'shrTop'
+		return 4
+	end 'shrTop'
+	if shrWordBy(u64.max, n: low) != u64.max 'shrWordZero'
+		return 5
+	end 'shrWordZero'
+	if shrWordBy(u64.max, n: high) != 1 'shrWordTop'
+		return 6
+	end 'shrWordTop'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-count-whose-alias-reaches-64-keeps-the-guard -->
+⚠ **THE BOUND IS `0..63`, NOT "SOMETHING SMALL", AND ONE PAST IT IS THE WHOLE DIFFERENCE.** `int(0
+to 64)` differs from `int(0 to 63)` by exactly one value, and that value is the one the hardware
+masks: unguarded, `7 shl 64` is `7 shl 0` — **7**, the operand UNCHANGED — and `u64.max shr 64` is
+`u64.max`. Every answer here is the saturated one, which is the same answer the folded `shl 64`
+gives above.
+
+This is the case that fails if the elision reads its upper bound off anything but the count the
+instruction takes as written.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias UpTo64 = int(0 to 64)
+
+function shlBy(value Num, n UpTo64) returns Num
+	return value shl n
+end 'shlBy'
+
+function shrBy(value Num, n UpTo64) returns Num
+	return value shr n
+end 'shrBy'
+
+function shrWordBy(value Word, n UpTo64) returns Word
+	return value shr n
+end 'shrWordBy'
+
+function widen(step Num) returns UpTo64
+	return (step * 64) as UpTo64
+end 'widen'
+
+function main() returns ExitCode
+	let past = widen(1)
+
+	if shlBy(7, n: past) != 0 'shl'
+		return 1
+	end 'shl'
+	if shrBy(0 - 1, n: past) != 0 - 1 'shrSign'
+		return 2
+	end 'shrSign'
+	if shrWordBy(u64.max, n: past) != 0 'shrZeroFill'
+		return 3
+	end 'shrZeroFill'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-bare-int-count-keeps-the-guard -->
+**A VALUE THAT DECLARES NO BOUNDS PROVES NOTHING**, and a loop counter is the commonest one: `n`
+here is a bare `int`, so nothing states where it can reach and the guard stays exactly where it was.
+Masked, `7 shl 68` would be `7 shl 4` = **112** and `1024 shr 68` would be `1024 shr 4` = **64**;
+both are 0.
+
+⚠ Its twin is `shift-by-parameter-count` above, which keeps the guard for the OTHER reason — a count
+declared `int(i64.min to i64.max)` states bounds, and they reach far outside what the instruction
+takes. Two different arms of one question, and neither implies the other.
+```maxon
+function main() returns ExitCode
+	var seen = 0
+	for n in 68 upto 72 'each'
+		if 7 shl n != 0 'shl'
+			return 1
+		end 'shl'
+		if 1024 shr n != 0 'shr'
+			return 2
+		end 'shr'
+		seen = seen + 1
+	end 'each'
+
+	if seen != 4 'iterations'
+		return 3
+	end 'iterations'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-byte-operand-with-a-proven-count-is-still-64-bit -->
+⭐ **A PROVEN COUNT CHANGES THE COUNT'S OPS, NEVER THE SHIFT'S WIDTH.**
+`shift-ranged-operand-is-64-bit` pins that a narrow ranged LEFT operand decides a shift's fill and
+never its width; this is that rule under a count whose declared type let the compiler drop the
+saturation. Losing the width here would be the same wrong answer arriving by a new route: `200 shl
+10` needs 18 bits and `255 shl 56` needs all 64, so an 8-bit shift would answer 0 for both.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bits = int(0 to 63)
+
+function shlLowByte(n Bits) returns Num
+	let b = 200 as Byte
+	return b shl n
+end 'shlLowByte'
+
+function shlTopByte(n Bits) returns Num
+	let b = 255 as Byte
+	return b shl n
+end 'shlTopByte'
+
+function shrLowByte(n Bits) returns Num
+	let b = 200 as Byte
+	return b shr n
+end 'shrLowByte'
+
+function bits(step Num) returns Bits
+	return step as Bits
+end 'bits'
+
+function main() returns ExitCode
+	if shlLowByte(bits(10)) != 204800 'tenBits'
+		return 1
+	end 'tenBits'
+	if shlTopByte(bits(56)) != 0 - 72057594037927936 'topByte'
+		return 2
+	end 'topByte'
+	if shrLowByte(bits(3)) != 25 'shrByte'
+		return 3
+	end 'shrByte'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-proven-count-through-a-cast-site -->
+**THE CAST SITE IS THE PROOF.** A parameter is guarded at the callee's entry; an `as` is guarded at
+the cast. Both leave a value that denotes its alias and is inside it, so a count minted by `i as
+Bits` inside a loop is as proven as one that arrived declared — and if it were not, the cast's own
+range check would have refused the value before the shift ever saw it.
+
+The counts are the loop's, so no shift here is folded; the sums are the answers, and the second one
+reaches the top of the range.
+```maxon
+typealias Bits = int(0 to 63)
+
+function main() returns ExitCode
+	var acc = 0
+	for i in 0 upto 8 'lowBits'
+		let n = i as Bits
+		acc = acc + (1 shl n)
+	end 'lowBits'
+	if acc != 255 'sum'
+		return 1
+	end 'sum'
+
+	var top = 0
+	for i in 0 upto 2 'boundary'
+		let n = (i * 63) as Bits
+		top = top + (1 shl n)
+	end 'boundary'
+	if top != 0 - 9223372036854775807 'topSum'
+		return 2
+	end 'topSum'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
