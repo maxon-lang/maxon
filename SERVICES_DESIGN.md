@@ -202,11 +202,20 @@ rule for promises.
 reference this at once?"* — a question about **sharing**. Under move-only transfer there is never a
 second reference, so the question does not arise. Three further reasons it would be wrong here:
 Maxon's marker interfaces are singleton compiler hooks (the compiler scans for *the one* conformer),
-not a conformance-set mechanism; `Array with T` would need conditional conformance, not emitted
-until P2.2; and **refcounts are already unconditionally atomic** (`RuntimeEmitter.MemoryManager.cs:409,515`),
-so there is no non-atomic fast path to opt out of. What remains is a smaller structural
-transfer-shape rule, checked rather than declared — which is how Maxon does structural properties
-everywhere else.
+not a conformance-set mechanism; and `Array with T` would need conditional conformance, not emitted
+until P2.2. What remains is a smaller structural transfer-shape rule, checked rather than declared —
+which is how Maxon does structural properties everywhere else.
+
+> ⚠ **A THIRD REASON USED TO STAND HERE AND EC10 REVERSED IT, WHICH STRENGTHENS THE CONCLUSION RATHER
+> THAN WEAKENING IT.** It read *"refcounts are already unconditionally atomic
+> (`RuntimeEmitter.MemoryManager.cs:409,515`), so there is no non-atomic fast path to opt out of"* — true
+> of the BOOTSTRAP, and **false of the self-hosted compiler since 2026-08-27**, where the refcount step is
+> a plain load/add/store (`MmRuntime.emitAdjustRefcount`). So there IS a non-atomic fast path now, and it
+> is the only path. ⇒ move-only transfer stops being a simplification and becomes **the thing that keeps
+> the plain refcount correct**: a `spawn` that let two green threads hold one box would not be slow, it
+> would corrupt the heap. The `Sendable` deletion still stands — under move-only transfer there is never
+> a second reference, so the question it answers still does not arise — but this rule is now load-bearing
+> and must be CHECKED, not assumed.
 
 **Move is also simpler than the existing `managed_mask` protocol.** `LowerAsyncCall` increfs each
 managed arg at the spawn site and decrefs in the trampoline *because `async f(x)` does not move* —
@@ -597,3 +606,13 @@ threads run on a single OS thread"*; line 32: *"No atomics needed — reference 
 non-atomic."* Both false — `__sched_max_procs` is seeded from CPU count, `EmitGtStealWork` is
 emitted, and `RuntimeEmitter.MemoryManager.cs:409,515` emit `AtomicInc`/`AtomicDec` unconditionally.
 Anyone reasoning about concurrency from that spec reasons from a runtime that no longer exists.
+
+> ⚖ **RESOLVED 2026-08-27 (EC10), AND NOT IN THE DIRECTION THIS ENTRY EXPECTED — READ THIS BEFORE
+> "FIXING" THAT SPEC.** The spec was rewritten, but toward the model this entry called false, because the
+> USER RULED that is what `async` means: an `async` call creates a COROUTINE of the calling green thread,
+> which never leaves its owner's OS thread, so one green thread owns every box its coroutines touch and
+> **reference counting is plain**. The two sentences quoted above are therefore substantially RIGHT for the
+> self-hosted tier and remain wrong only for the BOOTSTRAP, whose runtime is unchanged and still multiplexes
+> `async` onto worker threads. The rewritten spec says which is which; `builtins-cpu-parallel.md` carries the
+> measured differential. ⇒ the residual defect this entry names is real but is the BOOTSTRAP's divergence
+> from the ruling, not the spec's text.

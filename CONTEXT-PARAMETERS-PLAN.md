@@ -159,10 +159,14 @@ needing a ruling.
   the caller's scope-end decref before the GT actually runs." A hard assert at
   [:84-87](maxon-sharp/Compiler/MLIR/Conversion/MaxonToStandardConversion.Async.cs:84) throws at compile
   time on any mask/incref asymmetry rather than corrupting refcounts.
-- **Concurrent refcounting is atomic** — LDAXR/STLXR exclusive loop on ARM64, LOCK-prefixed RMW on x86. The
-  emitter comment ([ARM64CodeEmitter.Backend.cs:276-282](maxon-sharp/Compiler/MLIR/ARM64CodeEmitter.Backend.cs:276))
+- **Concurrent refcounting is atomic — IN THE BOOTSTRAP** — LDAXR/STLXR exclusive loop on ARM64,
+  LOCK-prefixed RMW on x86. The emitter comment
+  ([ARM64CodeEmitter.Backend.cs:276-282](maxon-sharp/Compiler/MLIR/ARM64CodeEmitter.Backend.cs:276))
   names the failure it prevents: "concurrent refcount inc/dec lose updates -> premature free / leak -> heap
-  corruption."
+  corruption." ⚠ **The self-hosted compiler is PLAIN as of EC10 (2026-08-27) and needs no atomic**, because
+  an `async` call there is a coroutine of the calling green thread and a box is never reachable from two of
+  them — see the dated note below. Same failure, prevented by removing the second party rather than by
+  serialising against it.
 - **Retention analysis covers synthetics for free.** `ParameterRetentionAnalysisPass` indexes parameters
   positionally via `StdParamOp.Index`, so synthetic contextual params are indistinguishable from declared
   ones. Its conservative rules — unknown callee ⇒ retained, and **indirect calls retain every argument**
