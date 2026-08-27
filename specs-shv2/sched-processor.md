@@ -22,33 +22,55 @@ green thread alone cannot express:
 Go's model, and both reference compilers': the bootstrap's layout is `GtLayout.cs:360-402` and v1's
 Win32 mechanics are `X64Backend.maxon:8990-9340`.
 
-### The process is single-M BY DEFAULT, not by construction
+### The process is single-M BY CONSTRUCTION for everything `async` creates
 
-`SchedRuntime.DefaultMaxProcs` is **1**, so an ordinary program builds exactly one P, never finds a
-free one to claim, and **never creates a worker OS thread**. `MAXON_MAX_PROCS=N` raises the ceiling
-to `min(N, cpuCount)` for a deliberate multi-M run.
+⚖ **AN `async f(…)` CALL DOES NOT CREATE A GREEN THREAD** (user, 2026-08-27). It creates a COROUTINE
+of the green thread that called it, published only to that green thread's coroutine queue and driven
+only by its chain of drivers — `sched-runqueue.md` is where that is stated in full. **Nothing an
+`async` program does publishes a GT to a P**, so nothing calls `__sched_wake_or_spawn` and **no worker
+OS thread is ever created, at any `MAXON_MAX_PROCS`.** `SchedRuntime.DefaultMaxProcs` is still 1, so an
+ordinary program still builds exactly one P; raising `MAXON_MAX_PROCS=N` still builds `min(N,
+cpuCount)` of them, and now they simply sit unclaimed.
 
-⚠ **THE STRUCTURE IS REAL EITHER WAY; WHAT THE SUITE EXERCISES IS NOT ALL OF IT.** Exactly two of the
-four pieces run at the default and are therefore covered by the cases below: the **P indirection**
-(every green thread reaches `currentGt` through TLS, which is every async case in the corpus) and the
-**per-P syscall stack** (`a-green-thread-kernel-call-round-trips-its-processor-stack`). The **CAS
-claim** and the **Dekker park** live in code no thread enters at `MAXON_MAX_PROCS=1`, and the
-**waiter** half of the deferred pair has no producer yet at all — its yielder half does
-(`__gt_resched`'s handoff) and runs on every `Runtime.yield()`. Those three were proved by hand, and
-by sabotage; the numbers are in the rung's report, not in this suite.
+⭐ **MEASURED, and it is the difference the pin makes rather than a claim about it.**
+`maxon-shv2/track0/pin-matrix.sh` drives the five `track0` programs across `MAXON_MAX_PROCS ∈ {1, 2, 7,
+12}`. `steal-torture` reads `workers=1 steals=0` at every one; on the commit before the pin, on the
+same box, it read `workers=8 steals=3996` at N=12.
 
-⚠⚠ **THE KNOB IS NOT A SUPPORTED CONFIGURATION AND THIS SPEC DOES NOT PIN IT.** At `N>1` the
-SCHEDULER is correct, but the allocator is one unsharded unlocked shard and the refcounts are a plain
-load/add/store; `SchedRuntime.maxon`'s header enumerates every such item. A green thread that only
-COMPUTES is safe there and one that ALLOCATES is not — measured, and the runtime says which:
-`maxon-shv2/track0/alloc-torture.maxon` dies at `MAXON_MAX_PROCS=2` with **exit 86**,
-`slabSpanExhaustedPastItsEnd`, the slab's own INV-1 trap.
+⚠ **THE STRUCTURE IS REAL EITHER WAY; WHAT ANY PROGRAM NOW EXERCISES IS LESS OF IT.** Two of the four
+pieces run and are covered by the cases below: the **P indirection** (every green thread reaches
+`currentGt` through TLS, which is every async case in the corpus) and the **per-P syscall stack**
+(`a-green-thread-kernel-call-round-trips-its-processor-stack`). The **CAS claim**, the **Dekker park**
+and the whole run-queue hierarchy behind them are code no thread enters — dead-code elimination now
+takes `__sched_runq_put`, `__sched_find_runnable`, `__sched_steal`, `__sched_worker_loop`,
+`__sched_wake_or_spawn`, `__gt_enqueue` and `__gt_dequeue` out of an async program's emitted binary
+entirely. The **waiter** half of the deferred pair has no producer either; its yielder half does
+(`__gt_resched`'s handoff) and runs on every `Runtime.yield()`.
 
-⛔ **AND THE SUITE STRUCTURALLY CANNOT REACH IT.** A spec case has no way to set an environment
-variable for the program it runs — the harness has an `Args:` marker and no `Env:` one — so every
-case below runs at `MAXON_MAX_PROCS=1`. What they pin is that the P INDIRECTION is correct, which is
-the part that every program pays for; the `N>1` behaviour is proved by hand and recorded here rather
-than gated by the suite.
+⚠⚠ **THEY ARE NOT DELETED, BECAUSE `spawn` IS THEIR PRODUCER.** A `spawn` primitive
+(`SERVICES_DESIGN.md:62-160`, *"Send is a MOVE"*) creates real green threads, which is what a ring, a
+steal and a worker loop schedule. Every unreached piece says so at its own declaration.
+
+⛔ **WHAT THE ALLOCATOR NOTE HERE USED TO SAY IS STALE TWICE OVER, and both corrections are
+measured.** It said *"at N>1 the allocator is one unsharded unlocked shard and the refcounts are a
+plain load/add/store"*, and that `alloc-torture` *"dies at `MAXON_MAX_PROCS=2` with exit 86"*. S5
+sharded the allocator per P and G2 made the refcount read-modify-write atomic, both long before this
+rung. **MEASURED on EC10's PARENT** — which is the tree that can still reach those paths —
+`pin-matrix.sh` runs `alloc-torture` at 1, 2, 7 and 12 with `workers` of 1, 2, 7 and 12, an identical
+`aggregate=205500` and exit 42 throughout. So the old sentence is false in both halves: the paths are
+CORRECT.
+
+⚠ **AND ON THIS TREE THEY ARE NO LONGER REACHABLE.** With no worker M, `alloc-torture` and
+`remote-free-torture` run entirely on one M and stop touching the per-P mcache handoff, the remote-free
+MPSC queue and the span ownership gate. A green run of either here does not cover them; `spawn` is what
+gives them a producer again. `maxon-shv2/track0/README.md` states that cost once, where the programs
+are.
+
+⛔ **AND THE SUITE STRUCTURALLY CANNOT SET THE KNOB.** A spec case has no way to set an environment
+variable for the program it runs — the harness has an `Args:` marker and no `Env:` one — so every case
+below runs at `MAXON_MAX_PROCS=1`. Since the pin that costs less than it used to, because the answers
+at N=1 are the answers everywhere; what still needs a harness program is showing that raising the knob
+changes NOTHING, which is `pin-matrix.sh`.
 
 ### What the P replaced, and why a `.data` word could not stay
 
