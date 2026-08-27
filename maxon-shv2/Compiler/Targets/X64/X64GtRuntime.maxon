@@ -1087,27 +1087,41 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffStackBase as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopSignalLabel)
-	// Spawned GT → __gt_enqueue(gt) (under the outer __sched_lock; __gt_enqueue is pure memory).
+	// Spawned coroutine → __gt_coro_enqueue(gt), which appends it to gt.owner's coroutine queue (under the
+	// outer __sched_lock, which is exactly the lock that function requires of its caller; it is pure memory).
+	//
+	// ⭐ **IT WAS `__gt_enqueue` — THE GLOBAL QUEUE — UNTIL EC10, AND THAT WAS THE ONE PATH BY WHICH A P-LESS
+	// OS THREAD PUBLISHED AN `async` FRAME WHERE ANY M COULD TAKE IT.** The parked reader is a coroutine of one
+	// green thread and only that green thread's drivers may run it; this thread knows which, because the GT it
+	// recovered from the OVERLAPPED carries its owner in a field. Same signature, one pointer in rcx, so no
+	// byte around this call moved.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
-	encodeCallDirect(code, callFixups: callFixups, targetName: GtEnqueueName)
+	encodeCallDirect(code, callFixups: callFixups, targetName: GtCoroEnqueueName)
 
 	// signal (normal): gt.ioParked = IoParkedNormalDone(4) — so a drop RIGHT AFTER this completion reads 4 and
-	// unlinks the enqueued GT — then Leave __sched_lock and SetEvent __io_done_event → loop_top.
+	// knows the GT is queued rather than in flight — then Leave __sched_lock and SetEvent __io_done_event →
+	// loop_top. ⚠ It does NOT unlink: W212 removed that (a ring cannot be spliced) and the drop renounces the
+	// GT in place, leaving a tombstone the queue's popper reclaims. `emitGtIoCancelArm` carries the protocol.
 	loopLabels.place(IoLoopSignalLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedNormalDone)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
 	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
-	// ⭐ **AND TELL AN IDLE M (G1).** `__io_done_event` wakes the DRIVER — the thread blocked in
-	// `__gt_drive_until`'s netpoll — and that was the whole wake set while one M ran everything. A worker M
-	// parks on its OWN per-P event, which this event does not touch, so a completion that re-readies a green
-	// thread must also go through `__sched_wake_or_spawn` or that thread waits out a parked worker's timeout.
+	// ⭐ **AND WAKE THE DRIVER.** `__io_done_event` wakes the thread blocked in `__gt_drive_until`'s netpoll,
+	// which is the green thread that owns the coroutine just re-readied — so it is the whole wake set, and
+	// after EC10 that is true by construction rather than by there happening to be one M.
 	//
-	// ⚠ **IT IS AFTER THE UNLOCK, and that is the Dekker ordering rather than lock hygiene** — the release is
-	// the StoreLoad fence between the queue publish above and the `idleFlag` reads inside the wake. This
-	// thread owns no P, which the wake does not care about: it reads `__sched_procs`, not TLS.
-	encodeCallDirect(code, callFixups: callFixups, targetName: SchedWakeOrSpawnName)
+	// ⛔ **THE `__sched_wake_or_spawn` CALL THAT USED TO SIT HERE IS DELETED, AND THE DEKKER NOTE WENT WITH
+	// IT.** It was here because *"a worker M parks on its OWN per-P event, which this event does not touch"*,
+	// so a completion that re-readied a GREEN THREAD had to tell one or it would wait out a parked worker's
+	// timeout. After the pin no worker M can be running the coroutine's owner — no worker M is started at all
+	// — so the wake would find nobody who could run it and its SPAWN arm would start an OS thread that idles
+	// for the life of the process. ⚠ **The ordering note that stood here (*"it is AFTER the unlock, and that
+	// is the Dekker ordering rather than lock hygiene"*) was about THAT call and not about the `SetEvent`
+	// below**, which is not half of a Dekker pair and needs no fence argument; leaving it attached would have
+	// left a false invariant in a file nobody re-reads. It comes back with the wake, on
+	// `SchedRuntime.emitSchedPublishToGlobalTail`, when `spawn` gives the green-thread tier a producer.
 	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoDoneEventLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.SetEvent))
 	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)

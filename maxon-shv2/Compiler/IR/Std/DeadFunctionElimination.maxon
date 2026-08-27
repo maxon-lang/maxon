@@ -202,15 +202,18 @@ end 'requireUnreachableStdlibStayedDead'
 //        in `StdToWasm.appendLeakGate`. ⚠ Restore that property if you touch a gate: no committed spec
 //        makes the leak gate FIRE, so a gate that decided from the module instead would let this root's
 //        removal turn every exit-101 test silently green.
-//      * `__gt_enqueue` — the IOCP completion thread's cross-thread wake (`X64GtRuntime:772`).
-//      * `__sched_wake_or_spawn` — the SAME thread's other call, and it is rooted for `__gt_enqueue`'s
-//        reason with one extra twist worth stating: the completion loop names it unconditionally, while
-//        every STD caller of it sits behind `__gt_ready`, which a program that spawns no green thread does
-//        not reach. So a SUBPROCESS-only program — which installs the IOCP substrate and therefore the
-//        completion loop, but never spawns — reaches it from data alone. MEASURED by adding the call
-//        without this root: `panic at X64Backend.maxon:2294: resolveCallFixups: call to unknown function
-//        '__sched_wake_or_spawn'`, seventeen `subprocess-builtins` cases at once, exactly the shape
-//        `__mm_leak_check`'s note above predicts for a pruned root.
+//      * `__gt_coro_enqueue` — the IOCP completion thread's re-ready of a parked coroutine onto its owning
+//        green thread's queue (`X64GtRuntime.buildIoCompletionLoopChunk`). The chunk names it
+//        UNCONDITIONALLY, while every Std caller of the coroutine queue sits behind `__gt_ready`, which a
+//        program that spawns no coroutine does not reach — so a SUBPROCESS-only program, which installs the
+//        IOCP substrate and therefore the completion loop but never spawns, reaches it from data alone.
+//        MEASURED for its predecessor by adding the call without a root: `panic at X64Backend.maxon:2294:
+//        resolveCallFixups: call to unknown function '__sched_wake_or_spawn'`, seventeen
+//        `subprocess-builtins` cases at once, exactly the shape `__mm_leak_check`'s note above predicts.
+//        ⚠ **IT WAS `__gt_enqueue` AND `__sched_wake_or_spawn` UNTIL EC10 — TWO ROOTS, NOT ONE — and both
+//        went when the chunk's calls changed.** A coroutine goes to its owner's queue rather than the
+//        global one, and it takes no wake because no worker M can run it. Neither of the two has a
+//        cross-tier caller any more, so the prune correctly takes both out.
 //    They are rooted unconditionally: a name absent from this module is simply not found (a program
 //    with no heap has no `__mm_leak_check` to keep), so the root costs nothing where the runtime it
 //    belongs to was never installed.
@@ -224,8 +227,8 @@ end 'requireUnreachableStdlibStayedDead'
 //    the only correct answer: the slot survives, so its target must be there to fill it.
 //
 // ⭐⭐ **KIND 2 CARRIES A PROVENANCE PREMISE OF ITS OWN, AND IT IS THE SECOND DOOR ONTO A1t's DEFECT (A1w).**
-// Those four names are the COMPILER's, and rooting one asserts that whatever answers to it is the compiler's
-// function. `main` asserts the opposite — it must be the author's — so the two kinds cannot go through one
+// Every one of those names is the COMPILER's, and rooting one asserts that whatever answers to it is the
+// compiler's function. `main` asserts the opposite — it must be the author's — so the two kinds cannot go through one
 // door. Neither premise was checked, and the `__` half was reachable and LOUD IN THE WRONG WAY: MEASURED, a
 // `stdlib/Builtins.maxon` declaration of `__mm_leak_check` / `__module_init` / `__gt_enqueue` in a program
 // that installs NO runtime under that name panicked in `requireUnreachableStdlibStayedDead` above, with no
@@ -246,8 +249,18 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	try markCompilerOwnedRoot(ModuleInitName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(MmLeakCheckName, project: project, index: index, reached: reached, worklist: worklist)
-	try markCompilerOwnedRoot(GtEnqueueName, project: project, index: index, reached: reached, worklist: worklist)
-	try markCompilerOwnedRoot(SchedWakeOrSpawnName, project: project, index: index, reached: reached, worklist: worklist)
+	// ⭐ **THE IOCP COMPLETION LOOP's CALLEE (EC10).** That loop is a hand-assembled Target-tier chunk, so no
+	// Std caller reaches what it calls and the prune would drop it — leaving a pipe-reading program calling a
+	// function that was never laid out, which is a LINK failure and not a compile error, in exactly the
+	// programs that read pipes (`Testing/SpecWorkerPool.maxon`, i.e. the compiler's own harness).
+	//
+	// ⚠ **IT WAS `GtEnqueueName` PLUS `SchedWakeOrSpawnName` UNTIL EC10, AND BOTH CHANGED FOR THE SAME
+	// REASON: THE CHUNK's CALLS CHANGED.** The loop now appends a re-readied COROUTINE to its owner's queue
+	// (`__gt_coro_enqueue`) instead of to the global one, and it no longer wakes an idle M at all — a worker M
+	// cannot run a coroutine. `__gt_enqueue` and `__sched_wake_or_spawn` keep only in-file callers inside
+	// `SchedRuntime`'s unreached green-thread tier, so the prune correctly takes both out of every program
+	// that cannot reach them.
+	try markCompilerOwnedRoot(GtCoroEnqueueName, project: project, index: index, reached: reached, worklist: worklist)
 	// ⭐ **THE DEBUGSTREAM PRODUCER'S TWO ENTRY-STUB CALLEES (O3).** `__ds_init` and `__ds_shutdown` are
 	// called from `mrt_start` and from nowhere else — exactly `__mm_leak_check`'s position — so nothing in
 	// the Std module reaches them and the prune would drop both, leaving the stub calling functions that
@@ -261,7 +274,7 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	end 'eachRdataSlot'
 end 'seedRoots'
 
-// Root one of the four names the compiler owns, refusing a declaration that took it. The provenance test is
+// Root one of the names the compiler owns, refusing a declaration that took it. The provenance test is
 // the SAME one `refuseDuplicateFunctionName` makes and reads the same field for the same reason: a parsed
 // function carries a `sourceFilePath` and a synthesized one cannot.
 function markCompilerOwnedRoot(name ByteArray, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError

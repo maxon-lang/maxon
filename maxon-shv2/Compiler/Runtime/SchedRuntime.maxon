@@ -6,12 +6,35 @@
 // **the per-processor state that thread owns while it does (P)**. Go's model exactly, and both references'
 // (`GtLayout.cs:360-402` for the layout, `X64Backend.maxon:8990-9340` for the Win32 mechanics).
 //
-// ⛔⛔ **THE PROCESS STILL DEFAULTS TO ONE M, AND THAT IS NOW A POLICY RATHER THAN A PREREQUISITE.**
-// `DefaultMaxProcs` is **1**, so `__sched_init_procs` builds exactly one P, the claim scan finds no free one,
-// and **no worker OS thread is ever created** by a program that does not ask for one. G1 built the whole P/M
-// substrate — the CAS claim, the Dekker park, the wake, the per-P system stack — and left it turned off,
-// because what a green thread *does* was still full of state two Ms would have shared without discipline.
-// G2 is that audit, and it is discharged below.
+// ⭐⭐⭐ **THE INVARIANT THIS FILE EXISTS TO STATE, AND IT IS WRITTEN DOWN HERE ONCE (EC10).**
+//
+// > **A COROUTINE — what this runtime calls a GT that `async` created — is owned by one green thread and is
+// > driven ONLY by that green thread's chain of drivers; it is published only to its owner's coroutine queue
+// > and never to a P ring or the global queue. A green thread runs on one M at a time. Therefore every
+// > refcount read-modify-write on a box happens on the M running that box's one owning green thread, and
+// > refcounts are plain (`MmRuntime.emitAdjustRefcount`). The cross-thread writers that remain — the IOCP
+// > completion loop re-readying a parked coroutine onto its owner's queue, and (once `spawn` exists) worker
+// > Ms publishing, popping and stealing GREEN THREADS — touch queues, status words, counters and claims,
+// > every one of which states its `MultiMSharing` class; none touches a refcount.**
+//
+// ⚖ **USER, 2026-08-27:** *"async is not supposed to create a new green thread. it allows a function to yield
+// the current green thread while waiting for a blocking operation"*, and *"the language is supposed to
+// guarantee that only 1 green thread can hold references to a box at a time"*. Crossing threads is actors,
+// which is not built. `GtRuntime.GtOffOwner` is where the ownership is a FIELD rather than a convention.
+//
+// ⛔⛔ **THE PROCESS RUNS ON ONE M, AND SINCE EC10 THAT IS A CONSEQUENCE RATHER THAN A POLICY.**
+// `DefaultMaxProcs` is **1**, so `__sched_init_procs` builds exactly one P — but raising `MAXON_MAX_PROCS`
+// no longer starts a worker either, because the only thing that starts one is `__sched_wake_or_spawn` and
+// **nothing calls it**: the two green-thread arms of `emitSchedPublishRunnable` are its only remaining call
+// sites and neither has a producer until `spawn`. G1 built the whole P/M substrate — the CAS claim, the
+// Dekker park, the wake, the per-P system stack — and W212 built the run-queue hierarchy on top of it;
+// EC10 leaves both intact and UNREACHED, which is a stronger statement than *"turned off by a constant"*
+// and is what makes the refcount argument above hold at every `MAXON_MAX_PROCS`.
+//
+// ⚠ **EVERY UNREACHED PIECE SAYS SO AT ITS OWN DECLARATION AND NAMES `spawn`**, which is this file's
+// existing idiom for *"built, waiting for its producer"* (`POffRunnext`, `POffPendingWaiter`, the P
+// free-list slots). G2's audit below is unchanged and still discharged: it is what will still be true the
+// day `spawn` gives the tier its producer back.
 //
 // ⭐⭐ **THE AUDIT IS NO LONGER PROSE — IT IS `MultiMSharing`, A REQUIRED ARGUMENT ON EVERY RUNTIME `.data`
 // SLOT'S BIRTH (`pushRuntimeGlobal`, below).** This paragraph used to BE the audit: a list derived by grepping
@@ -175,10 +198,14 @@ end 'pushRuntimeGlobal'
 // twice — which is exactly how a queue comes to disagree with itself. It stays reserved rather than being
 // reused so the bootstrap's debug agent, which reads this header, still finds its own field where it left it.
 //
-// ⚠ NEITHER IS EXPORTED. Both were, so that `GtRuntime`'s yield arm could ask whether this P had anything
-// queued; that question is `emitRunqAnyQueued` now, and with it gone the counters have no reader outside
-// this file — which is what the SELF-COMPILE's E3092 refuses, and the shape the ring's representation
-// should have had from the start.
+// ⚠ NEITHER IS EXPORTED, AND SINCE EC10 NEITHER HAS A CROSS-FILE QUESTION TO ANSWER AT ALL. Both were
+// exported so `GtRuntime`'s yield arm could ask whether this P had anything queued; W212 made that question
+// an `emitRunqAnyQueued` door, and the pin removed the asker — a yield now asks its OWNER's coroutine queue,
+// which is the only place work it may run can be. The door went with its caller rather than being kept
+// uncalled: *"is this ring empty"* is two loads and a compare, and a `spawn` rung that needs it back will
+// need Go's re-read loop as well (`runqempty` re-reads because a `runnext` can hold a thread while the two
+// counters agree — `POffRunnext` names the rung that builds one), so what survives here is the ARGUMENT and
+// not four lines nothing calls.
 let POffRunqHead = 0x00 as ByteOffset
 let POffRunqTail = 0x08 as ByteOffset
 let POffReservedLocalQueueLen = 0x10 as ByteOffset
@@ -236,11 +263,13 @@ let PStatusActive = 1 as ParsedInt
 // bootstrap hit it as a documented `--workers>=5` crash. The waking side therefore parks the GT HERE and the
 // scheduler drains it AFTER the switch.
 //
-// ⚠ **IT IS THE SOONEST END OF THE HIERARCHY, AND ITS SIBLING BELOW IS THE FURTHEST.** A woken AWAITER is
-// the thread this processor was waiting on, so it drains to `SchedQueueEnd.localRing` — this P's own ring,
-// which `__sched_find_runnable` consults before anything else. ⚠ Since W212 that is a ring TAIL and not a
-// queue front: with no `runnext` (`POffRunnext`) there is no front to put anything at, and "soonest" means
-// "on the tier that is read first".
+// ⚠ **IT HAS NO PRODUCER, AND SINCE EC10 IT NO LONGER HAS A DISTINCT END EITHER.** It was the SOONEST end
+// of the hierarchy: a woken AWAITER is the thread this processor was waiting on, so it drained to
+// `SchedQueueEnd.localRing` — this P's own ring, which `__sched_find_runnable` consults before anything
+// else — while the yielder went to the global tail. What a promise names is a COROUTINE now, and a
+// coroutine goes to its owner's queue, of which there is exactly one per owner: `__sched_drain_pending`
+// passes `SchedQueueEnd.ownerCoroutines` for BOTH slots. The two ends come back with the day this slot's
+// producer does, which is `spawn`; until then the distinction is real in the enum and not in the drain.
 let POffPendingWaiter = 0x50 as ByteOffset
 
 // Go's `runnext` — the one green thread a P runs before consulting its local ring.
@@ -464,7 +493,12 @@ export let SchedInitProcsName = b"__sched_init_procs"
 let SchedWorkerLoopName = b"__sched_worker_loop"
 
 // `__sched_wake_or_spawn()` — hand a newly-runnable green thread to an idle M, or start one on a free P.
-export let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
+//
+// ⚠ **NOT EXPORTED SINCE EC10, AND UNREACHED UNTIL `spawn`.** Its cross-file readers were the
+// hand-assembled IOCP completion loop, which called it by name after re-readying a parked thread, and the
+// `DeadFunctionElimination` root that kept it alive for that call. A coroutine cannot be run by a worker M,
+// so the completion loop no longer wakes one and neither root nor symbol has a consumer outside this file.
+let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
 
 // `__sched_drain_pending()` — move whatever the two deferred slots hold onto the run queue, now that the
 // context switch which made deferral necessary has completed.
@@ -493,8 +527,13 @@ let SchedStealName = b"__sched_steal"
 let SchedFindRunnableName = b"__sched_find_runnable"
 
 // `__sched_sweep_dropped()` — reclaim the dropped green threads sitting at the FRONT of this P's ring and of
-// the global queue. Called by `__gt_promise_drop`, which is what puts one there.
-export let SchedSweepDroppedName = b"__sched_sweep_dropped"
+// the global queue.
+//
+// ⚠ **NOT EXPORTED SINCE EC10, AND UNREACHED UNTIL `spawn`.** Its caller was `__gt_promise_drop`, which
+// renounces a promise — and what a promise names is a COROUTINE, whose tombstone sits in its owner's queue
+// rather than in a ring. That drop calls `GtRuntime.__gt_coro_sweep_dropped` now. This one is the same
+// mechanism for a GREEN THREAD, which nothing produces yet.
+let SchedSweepDroppedName = b"__sched_sweep_dropped"
 
 // ⭐ `__sched_steal_count() -> i64` — the sum of every P's steal counter, and the floor of
 // `__Builtins.schedStealCount()`. It is the only way a Maxon program can observe that work stealing
@@ -508,18 +547,27 @@ export let SchedSweepDroppedName = b"__sched_sweep_dropped"
 // `usesGt` — asking it installs the scheduler, because asking it is a question ABOUT the scheduler.
 export let SchedStealCountName = b"__sched_steal_count"
 
-// ⭐⭐ **WHICH END OF THE HIERARCHY A DEFERRED GREEN THREAD IS DRAINED TO, and the reason it is an argument
-// rather than two copies of a drain.** `emitSchedDrainSlot`'s two callers have always differed in this and
-// have never been able to say so: shv2 had ONE queue with one end, so the difference lived in a comment.
-// With a ring in front of the global queue the two ends exist, and they are Go's
-// (`goready` → `runqput`, `Gosched` → `globrunqput`).
+// ⭐⭐ **WHICH QUEUE A RUNNABLE GT IS PUBLISHED TO, and the reason it is an argument rather than three copies
+// of a publish.** `emitSchedDrainSlot`'s two callers have always differed in this and could not say so: shv2
+// had ONE queue with one end, so the difference lived in a comment.
+//
+// ⭐⭐ **SINCE EC10 THE FIRST QUESTION THE ARGUMENT ANSWERS IS *WHICH KIND OF GT*, NOT *WHICH END*.** A
+// COROUTINE and a GREEN THREAD are scheduled by different machinery — one queue owned by one green thread
+// against three tiers owned by the processors — and the two green-thread arms have no producer until a
+// `spawn` primitive creates a second green thread. Keeping them as arms rather than deleting them is the
+// user's ruling on W212's tier, and it costs exactly the enum member: an arm nothing selects emits nothing.
 export enum SchedQueueEnd
-	// The CURRENT P's ring tail — the soonest place there is, because the ring is consulted before the
-	// global queue. Where a SPAWN and a woken AWAITER belong.
+	// A GREEN THREAD, on the CURRENT P's ring tail — the soonest place there is, because the ring is
+	// consulted before the global queue. Go's `goready` → `runqput`. ⚠ NO PRODUCER UNTIL `spawn`.
 	localRing
-	// The GLOBAL queue's tail — behind every runnable green thread on every P. Where a YIELDER belongs, and
-	// the whole content of *"let someone else have a turn"*.
+	// A GREEN THREAD, on the GLOBAL queue's tail — behind every runnable green thread on every P. Go's
+	// `Gosched` → `globrunqput`. ⚠ NO PRODUCER UNTIL `spawn`.
 	globalTail
+	// A COROUTINE, on its owning green thread's queue tail — the only arm anything selects today, and the
+	// only queue an `async` frame ever enters. Where a SPAWN, a woken AWAITER and a YIELDER all belong,
+	// because for one FIFO *"the soonest place"* and *"behind everything runnable"* are the same place and
+	// the tail is the one that does not hand a yielder straight back.
+	ownerCoroutines
 end 'SchedQueueEnd'
 
 // ==========================================================================
@@ -715,35 +763,62 @@ export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMin
 	module.appendOp(block, op: StdOp.osLockLeave(emitLoadGlobalWord(module, block: block, label: SchedLockLabel, ids: ids)))
 end 'emitSchedLockLeave'
 
-// ⭐⭐ **PUBLISH A RUNNABLE GREEN THREAD AT `queueEnd` — the ONE door, and the reason it is one door is the
-// WAKE.** Every site that makes a green thread discoverable makes it discoverable AND tells an idle or
-// absent M about it, and no site has ever been able to say that the second belongs with the first.
+// ⭐⭐ **PUBLISH A RUNNABLE GT AT `queueEnd` — the ONE door, and the reason it is one door is the WAKE.**
+// Every site that makes a GREEN THREAD discoverable makes it discoverable AND tells an idle or absent M
+// about it, and no site has ever been able to say that the second belongs with the first.
 //
-// ⚠⚠ **THE STORELOAD FENCE BETWEEN THE PUBLISH AND THE WAKE IS NOW SPELLED DIFFERENTLY ON THE TWO ARMS, AND
-// BOTH SPELL IT.** The Dekker pair in `buildSchedWakeOrSpawn` needs the queue publish to be visible before
-// the `idleFlag` reads, and x86 reorders a plain store past a later load. On `globalTail` the fence is the
-// LOCK RELEASE, as it always was. On `localRing` there is no lock to release, so the fence is the ring
-// tail's own publish — an `atomicRmw add`, i.e. a `lock xadd`, which is both the store-release that makes
-// the slot visible to a thief and the full barrier the reads below need. See `buildSchedRunqPut`, which
-// states it at the instruction.
+// ⛔⛔ **AND THE COROUTINE ARM MUST NOT TAKE THE WAKE — THAT IS THE ONE THING THIS DOOR NOW DISCRIMINATES
+// (EC10).** A worker M cannot run a coroutine: it is driven only by its owner's chain of drivers, which is
+// running on the M that just published it. So waking an idle M for one is a park/unpark that finds nothing,
+// and `__sched_wake_or_spawn`'s SPAWN arm would start an OS thread that idles for the life of the process.
+// The wake therefore belongs to the two GREEN-THREAD arms and travels WITH them — which is why each of those
+// gets a named emitter that publishes AND wakes rather than the wake sitting after the `match`. A match arm
+// carries ONE statement (this file's own rule), and the three names are what "which queue" means in emitted
+// code.
+//
+// ⚠⚠ **THE STORELOAD FENCE ARGUMENT BELONGS TO THE TWO GREEN-THREAD ARMS AND IS STATED WITH THEM.** The
+// Dekker pair in `buildSchedWakeOrSpawn` needs the queue publish to be visible before the `idleFlag` reads,
+// and x86 reorders a plain store past a later load; `globalTail`'s fence is the LOCK RELEASE and
+// `localRing`'s is the ring tail's own `lock xadd`. The coroutine arm has NO wake, so it has no such pair
+// and no fence to name — leaving the paragraph attached to all three arms would read as though it covered
+// the one that has none.
 export function emitSchedPublishRunnable(module StdModule, block IrBlock, gt ValueId, queueEnd SchedQueueEnd, ids ValueMinter)
 	match queueEnd 'queueEnd'
-		localRing then emitSchedRunqPut(module, block: block, gt: gt, ids: ids)
-		globalTail then emitSchedEnqueueGlobalTail(module, block: block, gt: gt, ids: ids)
+		localRing then emitSchedPublishToRing(module, block: block, gt: gt, ids: ids)
+		globalTail then emitSchedPublishToGlobalTail(module, block: block, gt: gt, ids: ids)
+		ownerCoroutines then emitGtPublishToOwner(module, block: block, gt: gt, ids: ids)
 	end 'queueEnd'
-
-	emitSchedWakeAnIdleM(module, block: block, ids: ids)
 end 'emitSchedPublishRunnable'
 
-// The GLOBAL tier's publish, lock and all — the exact counterpart of `emitSchedRunqPut` below, and the arm
-// `SchedQueueEnd.globalTail` selects. It is spelled here rather than inside the `match` above because a match
-// arm carries ONE statement, and it is worth its own name for the same reason its ring twin is: the two are
-// what "which end" means in emitted code.
-function emitSchedEnqueueGlobalTail(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+// ⚠ **UNREACHED UNTIL `spawn`** — the RING tier's publish plus its wake, the arm `SchedQueueEnd.localRing`
+// selects. The fence between the two is `emitRunqPublishTail`'s `lock xadd`, which that function states at
+// the instruction; there is no lock here to release and therefore none to be the fence.
+function emitSchedPublishToRing(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+	emitSchedRunqPut(module, block: block, gt: gt, ids: ids)
+	emitSchedWakeAnIdleM(module, block: block, ids: ids)
+end 'emitSchedPublishToRing'
+
+// ⚠ **UNREACHED UNTIL `spawn`** — the GLOBAL tier's publish plus its wake, lock and all, the arm
+// `SchedQueueEnd.globalTail` selects. The wake sits AFTER the release because that release IS the StoreLoad
+// fence the Dekker pair needs; moving it inside the critical section would be a silent correctness
+// regression rather than a scope change.
+function emitSchedPublishToGlobalTail(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
 	emitSchedLockEnter(module, block: block, ids: ids)
 	emitSchedEnqueueLocked(module, block: block, gt: gt, ids: ids)
 	emitSchedLockLeave(module, block: block, ids: ids)
-end 'emitSchedEnqueueGlobalTail'
+	emitSchedWakeAnIdleM(module, block: block, ids: ids)
+end 'emitSchedPublishToGlobalTail'
+
+// ⭐⭐ **THE ONLY LIVE ARM — a COROUTINE onto its owning green thread's queue (EC10), and no wake.**
+// `__gt_coro_enqueue` requires its caller to hold `__sched_lock` (the IOCP completion thread appends to the
+// same queue), so this arm takes it; the two callers that already hold it — `__gt_timer_check` and
+// `__gt_proc_check`, walking their stores — call the runtime function directly instead, exactly as they
+// bypass the door above rather than re-entering a recursive CRITICAL_SECTION for nothing.
+function emitGtPublishToOwner(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+	emitSchedLockEnter(module, block: block, ids: ids)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(gt)))
+	emitSchedLockLeave(module, block: block, ids: ids)
+end 'emitGtPublishToOwner'
 
 // ⭐⭐ **THE GLOBAL QUEUE'S APPEND, AND THE WAKE, SPLIT OUT SO A *BATCH* PUBLISHER CAN COMPOSE THEM
 // DIFFERENTLY (G2), AND NAMED FOR THE LOCK STATE EACH REQUIRES.** A caller that already holds
@@ -756,32 +831,46 @@ end 'emitSchedEnqueueGlobalTail'
 // CRITICAL_SECTION and therefore RECURSIVE, so taking it twice is not an error and getting this wrong
 // produces no diagnostic anywhere — only a wake that observes a stale `idleFlag`.
 //
-// ⚠ **ITS ONE CALLER SINCE W212 IS THE RING'S OVERFLOW (`buildSchedRunqPut`), WHICH IS IN THIS FILE — SO IT
-// IS NO LONGER EXPORTED.** That call moves half a full ring to the global queue under the lock. The timer
-// and process walks, which were its other callers, now push to the RING instead — a push that takes no lock
-// at all, so their recursive-entry problem is one they no longer have.
+// ⚠ **BOTH ITS CALLERS ARE IN THIS FILE — SO IT IS NOT EXPORTED — AND BOTH ARE UNREACHED UNTIL `spawn`.**
+// They are the ring's OVERFLOW (`buildSchedRunqPut`, moving half a full ring to the global queue under the
+// lock) and `emitSchedPublishToGlobalTail`, the arm a YIELDING GREEN THREAD would take. The timer and
+// process walks, which were its other callers before W212, publish COROUTINES now
+// (`GtRuntime.__gt_coro_enqueue`) under the lock they already hold, so their recursive-entry problem is one
+// they no longer have.
 function emitSchedEnqueueLocked(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(gt)))
 end 'emitSchedEnqueueLocked'
 
-export function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueMinter)
+// ⚠ **NOT EXPORTED SINCE EC10, AND UNREACHED UNTIL `spawn`.** Both of its remaining callers are the
+// green-thread publish arms above, in this file. A COROUTINE publish deliberately does not wake — see
+// `emitSchedPublishRunnable` for why waking an M that cannot run one is a park/unpark at best and a
+// permanently idle OS thread at worst.
+function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeOrSpawnName, args: ValueIdArray.create()))
 end 'emitSchedWakeAnIdleM'
 
-// ⭐ **THE RING PUSH WITHOUT THE WAKE — the local-ring counterpart of `emitSchedEnqueueLocked`, and it
-// exists for the same caller.** `__gt_timer_check` and `__gt_proc_check` may ready SEVERAL green threads in
-// one pass and wake ONCE at the end, so they need the publish half on its own. Unlike its global twin this
-// one requires NO lock state of its caller: the ring push takes no lock, and an overflow's recursive entry
-// into `__sched_lock` is safe (see `buildSchedRunqPut`).
-export function emitSchedRunqPut(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+// ⭐ **THE RING PUSH WITHOUT THE WAKE.** Unlike its global twin it requires NO lock state of its caller: the
+// ring push takes no lock, and an overflow's recursive entry into `__sched_lock` is safe (see
+// `buildSchedRunqPut`).
+//
+// ⚠ **NOT EXPORTED SINCE EC10, AND UNREACHED UNTIL `spawn`.** Its cross-file callers were
+// `__gt_timer_check` and `__gt_proc_check`, which readied several GREEN THREADS in one pass and woke once at
+// the end; both ready COROUTINES now and call `__gt_coro_enqueue` under the lock they already hold. The only
+// caller left is `emitSchedPublishToRing` above, in this file — which is what E3092 refuses an `export`
+// for, and is the shape the ring's publish should have had once the door existed.
+function emitSchedRunqPut(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedRunqPutName, args: argsOf(gt)))
 end 'emitSchedRunqPut'
 
-// ⭐⭐ **ASK THE SCHEDULER WHAT RUNS NEXT — the CONSUME door, and the reason it is one door is that the
-// answer is a POLICY** (fairness, stealing, the dropped-thread refusal) rather than a queue read. Its three
-// callers are the three drivers: `__gt_drive_until`, `__sched_worker_loop` (twice, around its park) and
-// `__gt_resched`'s GT0 arm.
-export function emitSchedFindRunnable(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+// ⭐⭐ **ASK THE SCHEDULER WHICH GREEN THREAD RUNS NEXT — the CONSUME door, and the reason it is one door is
+// that the answer is a POLICY** (fairness, stealing, the dropped-thread refusal) rather than a queue read.
+//
+// ⚠ **NOT EXPORTED SINCE EC10, AND UNREACHED UNTIL `spawn`.** Its cross-file callers were the two drivers
+// in `GtRuntime` — `__gt_drive_until` and `__gt_resched`'s GT0 arm — and both drive COROUTINES now, so both
+// ask `__gt_coro_next` instead: an `async` frame never enters any of the three tiers this consults, and
+// asking them would be asking about work belonging to another green thread. The one caller left is
+// `__sched_worker_loop` (twice, around its park), in this file, and no worker M is started today.
+function emitSchedFindRunnable(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let g = ids.mint()
 	module.appendOp(block, op: StdOp.call(g, callee: SchedFindRunnableName, args: ValueIdArray.create()))
 	return g
@@ -937,15 +1026,27 @@ end 'buildSchedInitProcs'
 // exactly the same thing and a second copy is where they would come to disagree.** Mark the P active, point
 // its `currentGt` at its own inline scheduler GT, and publish the P in this thread's TLS slot.
 //
-// The inline GT arrives zeroed from the slab, and every one of those zeros is correct: `stackBase == 0` is
-// what tells the syscall shim and the prologue guard that this context runs on a real OS-thread stack, and
-// `waiter == 0` is what tells `__gt_sleep` that it is a top-level driver. Its TIB bounds are captured by the
-// first `__gt_context_switch` away from it.
+// The inline GT arrives zeroed from the slab, and almost every one of those zeros is correct: `stackBase ==
+// 0` is what tells the syscall shim and the prologue guard that this context runs on a real OS-thread stack,
+// `waiter == 0` is what tells `__gt_sleep` that it is a top-level driver, and both coroutine-queue ends are
+// *"empty"*. Its TIB bounds are captured by the first `__gt_context_switch` away from it.
+//
+// ⭐⭐⭐ **THE ONE ZERO THAT IS NOT CORRECT IS `owner`, AND STAMPING IT IS THE FOURTH STORE (EC10).** This
+// inline GT IS a green thread — the only kind there is until `spawn` — and **a green thread's owner is
+// ITSELF**. That is what closes the recursion `GtRuntime.buildGtSpawn` opens by copying the spawner's owner:
+// every coroutine, at any nesting depth, chases its owner chain to exactly one green thread, and this is the
+// one place a green thread is born. A zero left here would be a green thread owned by nobody and the first
+// `__gt_coro_enqueue` onto it would write through a null pointer.
+//
+// ⚠ It is stamped for EVERY P adopted, not only P[0]: a worker M's own scheduler context is a green thread
+// on the same terms, so the day `spawn` starts one it is already its own owner and this function does not
+// grow an arm.
 function emitSchedAdoptProc(module StdModule, block IrBlock, p ValueId, ids ValueMinter)
 	let active = emitConst(module, block: block, value: PStatusActive, ids: ids)
 	emitStoreField(module, block: block, record: p, offset: POffStatus, value: active)
 	let mainThread = emitFieldAddr(module, block: block, record: p, offset: POffMainThread, ids: ids)
 	emitStoreField(module, block: block, record: p, offset: POffCurrentGt, value: mainThread)
+	emitStoreField(module, block: block, record: mainThread, offset: GtOffOwner, value: mainThread)
 	let tlsIndex = emitLoadGlobalWord(module, block: block, label: SchedTlsIndexLabel, ids: ids)
 	module.appendOp(block, op: StdOp.tlsSetValue(tlsIndex, valueId: p))
 end 'emitSchedAdoptProc'
@@ -1084,19 +1185,30 @@ end 'emitParseUnsignedDecimal'
 
 // ⭐⭐ **`__sched_drain_pending()` — the OTHER half of the deferred re-enqueue, and the reason there are TWO
 // slots.** It runs on this P's scheduler context, AFTER the context switch that made deferral necessary, and
-// moves whatever the two slots hold onto the run queue: the WAITER to the front, the YIELDER to the back.
+// publishes whatever the two slots hold.
 //
-// ⭐⭐ **THE TWO ENDS ARE REAL NOW, AND THIS IS THE FUNCTION THAT CHANGED WHEN THEY BECAME SO (W212).** Until
-// the per-P ring existed shv2 had ONE queue with one end, so both slots reached it through the same append
-// and the difference between a waiter and a yielder lived in a comment. The hierarchy gives the waiter the
-// CURRENT P's ring — the soonest place there is, because the ring is consulted before the global queue — and
-// the yielder the GLOBAL queue's tail, which is behind every runnable thread on every P. That is Go's own
-// split (`goready` → `runqput`, `Gosched` → `globrunqput`) and the bootstrap's
-// (`__gt_enqueue` vs `__gt_enqueue_back`), and it is `SchedQueueEnd`, passed as an argument.
+// ⭐⭐ **BOTH SLOTS DRAIN TO `ownerCoroutines` SINCE EC10, AND THAT IS ONE QUEUE RATHER THAN TWO ENDS.** W212
+// split them across the hierarchy — the waiter to the current P's ring (consulted first) and the yielder to
+// the global tail (behind everything) — which was Go's own split (`goready` → `runqput`, `Gosched` →
+// `globrunqput`). What the slots hold is a COROUTINE, and a coroutine goes to its owner's queue; with ONE
+// FIFO per owner, *"the soonest place"* and *"behind everything runnable"* are the same place.
 //
-// ⚠ Neither arm takes the run-queue lock HERE: the ring push takes none at all, and the global append takes
-// it inside `emitSchedPublishRunnable`. This function is called from the scheduler loop rather than from a
-// site that already holds it, so either is safe.
+// ⛔⛔ **THE YIELD-GOES-BEHIND RULE IS THEREFORE NOT WHAT IT WAS, AND THE HALF THAT MATTERS SURVIVES.** The
+// bootstrap's measured failure was a yielder routed to the FRONT: *"a thousand yields from one green thread
+// left a sibling that had never run still unrun"*. The TAIL is what refuses that, and the tail is where both
+// slots go — `sched-runqueue.a-yield-hands-the-processor-to-a-never-run-sibling` is that case and it stays
+// green. What does NOT survive is the two-TIER ordering (a coroutine queued AFTER the yielder was drained
+// running BEFORE it), which was a property of having a ring in front of a global queue rather than a
+// property of yielding; EC10 deleted the case that pinned it, having first watched it go red for its own
+// text.
+//
+// ⚠ The `SchedQueueEnd` argument stays, and stays passed at both sites, because the two slots are the shape
+// `spawn` needs: a real green thread deferred here is Go's split again, and a drain that had hard-coded one
+// queue would have to grow the argument back.
+//
+// ⚠ Neither arm takes the run-queue lock HERE: `emitSchedPublishRunnable` takes it on the coroutine arm and
+// on the global arm, and the ring arm needs none. This function is called from the scheduler loop rather
+// than from a site that already holds it, so any of the three is safe.
 //
 // ⭐⭐ **THE YIELDER SLOT HAS A REAL PRODUCER — `__gt_resched`'s handoff — AND THAT IS THE WHOLE REASON THE
 // PAIR EXISTS.** A green thread yielding to its driver used to enqueue itself and THEN context-switch, which
@@ -1119,16 +1231,16 @@ function buildSchedDrainPending(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"done")
 
 	let p = emitLoadCurrentP(module, block: entry, ids: ids)
-	emitSchedDrainSlot(module, func: func, cur: entry, p: p, offset: POffPendingWaiter, queueEnd: SchedQueueEnd.localRing, cont: yielderTest, ids: ids)
-	emitSchedDrainSlot(module, func: func, cur: yielderTest, p: p, offset: POffPendingYielder, queueEnd: SchedQueueEnd.globalTail, cont: doneBlock, ids: ids)
+	emitSchedDrainSlot(module, func: func, cur: entry, p: p, offset: POffPendingWaiter, queueEnd: SchedQueueEnd.ownerCoroutines, cont: yielderTest, ids: ids)
+	emitSchedDrainSlot(module, func: func, cur: yielderTest, p: p, offset: POffPendingYielder, queueEnd: SchedQueueEnd.ownerCoroutines, cont: doneBlock, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildSchedDrainPending'
 
-// One slot's drain: if it holds a green thread, clear it and publish that thread at `queueEnd`; either way
-// continue at `cont`. Stated once because the two slots differ only in their offset and their end — and
-// that day has arrived, so the end is an ARGUMENT here rather than a copy of this function.
+// One slot's drain: if it holds a GT, clear it and publish it at `queueEnd`; either way continue at `cont`.
+// Stated once because the two slots differ only in their offset and their queue — which since EC10 is the
+// same queue for both, the argument being kept for the day `spawn` puts a green thread in one of them.
 function emitSchedDrainSlot(module StdModule, func IrFunction, cur IrBlock, p ValueId, offset ByteOffset, queueEnd SchedQueueEnd, cont IrBlock, ids ValueMinter)
 	var enqueue = module.addBlock(func, label: b"drainpush")
 
@@ -1157,27 +1269,6 @@ function emitRunqSlotAddr(module StdModule, block IrBlock, p ValueId, counter Va
 	let index = emitBin(module, block: block, a: counter, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitWordSlotAddr(module, block: block, base: emitFieldAddr(module, block: block, record: p, offset: POffRunqBase, ids: ids), index: index, ids: ids)
 end 'emitRunqSlotAddr'
-
-// ⭐⭐ **DOES `p` HAVE ANYTHING IN ITS RING? — THE DOOR THE OTHER FILE ASKS THROUGH, and the reason it is a
-// door is that the ANSWER IS DUE TO CHANGE.** `tail != head` is Go's `runqempty` negated, MINUS the re-read
-// loop that function carries (`proc.go:7499`) — and that loop exists for exactly one reason: a `runnext` can
-// hold a thread while the two counters agree. shv2 deliberately has no `runnext` (`POffRunnext`), so the day
-// **W213** builds one this answer stops being true, and it stops SILENTLY: a scheduler that concludes
-// "nobody is queued here" polls where it should have handed the processor over, which is a latency bug no
-// suite goes red over.
-//
-// ⛔ **BEFORE THIS DOOR, `GtRuntime.buildGtResched`'s YIELD ARM READ THE TWO COUNTERS ITSELF** — so where the
-// ring keeps its head and tail, and what makes it empty, were facts a second file knew. That is the shape
-// this project keeps paying for, and W213 is already scheduled to falsify it.
-//
-// ⚠ The two askers INSIDE this file (`__sched_runq_get`, `__sched_sweep_dropped`) deliberately do not come
-// through here: each needs the very `head` it compared, to address a slot and then to compare-and-swap it,
-// and a door that re-loaded the word would hand them a head they had not tested.
-export function emitRunqAnyQueued(module StdModule, block IrBlock, p ValueId, ids ValueMinter) returns ValueId
-	let head = emitLoadField(module, block: block, record: p, offset: POffRunqHead, ids: ids)
-	let tail = emitLoadField(module, block: block, record: p, offset: POffRunqTail, ids: ids)
-	return emitCmp(module, block: block, a: tail, b: head, pred: StdCmpPred.ne, ids: ids)
-end 'emitRunqAnyQueued'
 
 // ⭐⭐ **PUBLISH THE RING TAIL — AND THIS ONE INSTRUCTION IS THE DEKKER PAIR'S FENCE.** It advances
 // `p.runqTail` by `delta` with a `lock xadd` where a plain store would do, because on x86 a plain store may
@@ -2094,9 +2185,17 @@ end 'emitSchedRaiseHighWater'
 // ==========================================================================
 
 // ⭐⭐ **`__sched_wake_or_spawn()` — THE ENQUEUER'S HALF OF THE DEKKER PAIR.** Called once at the tail of
-// every `__gt_enqueue` site, with the run-queue lock ALREADY RELEASED: the GT is published, and this decides
-// who runs it. First scan `P[1..numProcs)` for an M that has published `idleFlag == 1` and signal it; if
-// none is idle, scan again for a P no M has claimed and start one on it.
+// every GREEN-THREAD publish, with the run-queue lock ALREADY RELEASED: the GT is published, and this
+// decides who runs it. First scan `P[1..numProcs)` for an M that has published `idleFlag == 1` and signal
+// it; if none is idle, scan again for a P no M has claimed and start one on it.
+//
+// ⛔⛔ **IT IS UNREACHED UNTIL `spawn`, AND IT IS THE FUNCTION THAT MAKES "NO WORKER M EXISTS" TRUE RATHER
+// THAN LIKELY (EC10).** It is the ONLY thing in the runtime that creates an OS thread, and its two callers
+// are the two green-thread arms of `emitSchedPublishRunnable` — neither of which has a producer, because
+// `async` creates a COROUTINE and a coroutine is published to its owner's queue with no wake at all. So no
+// worker M is started at ANY `MAXON_MAX_PROCS`, and `maxon-shv2/track0/pin-matrix.sh` reads that off the
+// runtime's own counters: `workers=1` at 1, 2, 7 and 12, against `workers=8 steals=3996` at N=12 on the
+// commit before the pin.
 //
 // ⚠⚠ **THE ORDER — PUBLISH, THEN FENCE, THEN READ `idleFlag` — IS THE WHOLE CORRECTNESS ARGUMENT, the fence
 // is not written here, and SINCE W212 IT IS A DIFFERENT INSTRUCTION ON EACH ARM.** Both arms have one:
@@ -2112,9 +2211,9 @@ end 'emitSchedRaiseHighWater'
 // releases nothing (`osLockEnter` is a recursive CRITICAL_SECTION). The `lock xadd` is what covers it, which
 // is why `__gt_timer_check` and `__gt_proc_check` may publish inside their walk and wake once after it.
 //
-// ⚠ **AT `DefaultMaxProcs == 1` BOTH SCANS ARE EMPTY** — `numProcs` is 1 and both start at index 1 — so an
-// enqueue costs one load and one compare, and no worker is ever created. That is what "built and not turned
-// on" means in emitted code.
+// ⚠ **AT `DefaultMaxProcs == 1` BOTH SCANS WOULD BE EMPTY ANYWAY** — `numProcs` is 1 and both start at
+// index 1 — so even a call would cost one load and one compare. Since EC10 that is the WEAKER of the two
+// reasons no worker is created; the stronger one is above, and it does not depend on a constant.
 function buildSchedWakeOrSpawn(module StdModule)
 	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)

@@ -1,18 +1,32 @@
 // Runtime/GtRuntime.maxon — the emitted GREEN-THREAD scheduler runtime (Workstream R3, slice P1.5-B1a).
 //
-// ⭐ COOPERATIVE, AND SINGLE-M **BY DEFAULT** RATHER THAN BY CONSTRUCTION (G1). `SchedRuntime.maxon` beside
-// this file owns the PROCESSOR (P) each OS thread runs green threads on, the TLS door that finds it, the
-// worker M and its park. `DefaultMaxProcs` is 1, so an ordinary program still runs everything on one thread
-// and creates no worker — but the structure is real, `MAXON_MAX_PROCS` exercises it, and this file no longer
-// holds "the currently-running GT" in a `.data` word (it is `P->currentGt`) or its syscall stack in one
-// global region (it is `P->systemStackSP`).
+// ⭐⭐⭐ COOPERATIVE, AND — FOR EVERYTHING `async` CREATES — SINGLE-M **BY CONSTRUCTION** (EC10). This file
+// now holds TWO kinds of GT, and the whole of the pin is the difference between them:
 //
-// ⭐⭐ **AND THE RUN QUEUE IS NO LONGER ONE GLOBAL FIFO (W212).** It is Go's hierarchy: a 256-slot LOCK-FREE
-// RING per P, this global FIFO behind it, and WORK STEALING behind that, with a fairness check every 61
-// schedules so the global half cannot starve. The queue this file still owns — `__gt_enqueue`/`__gt_dequeue`
-// and the head/tail `.data` pair — is the GLOBAL tier: where a ring overflows to, where a YIELDER goes, and
-// where the P-less IOCP completion thread publishes. `SchedRuntime.buildSchedFindRunnable` is the one place
-// the three tiers are consulted, and every driver here asks IT rather than reading a queue.
+//   • a **GREEN THREAD** is a schedulable unit the P/M tier may hand to any M. There is exactly ONE today
+//     (GT0, a P's inline scheduler context, adopted by `__sched_init_procs`) and **no producer of a second
+//     until a `spawn` primitive lands** (`SERVICES_DESIGN.md:62-160`, *"Send is a MOVE"*).
+//   • a **COROUTINE** is what `async f(…)` creates. ⚖ USER, 2026-08-27: *"async is not supposed to create a
+//     new green thread. it allows a function to yield the current green thread while waiting for a blocking
+//     operation."* So a coroutine is owned by the green thread that called it (`GtOffOwner`), is published
+//     ONLY to that green thread's coroutine queue (`GtOffCoroHead`), and is driven ONLY by that green
+//     thread's chain of drivers. It is not a unit the scheduler may hand to another M, and there is no path
+//     by which it becomes one.
+//
+// ⇒ **every refcount read-modify-write on a box happens on the M running that box's one owning green
+// thread.** `SchedRuntime.maxon`'s header states the invariant in full and is where it is written down once.
+//
+// `SchedRuntime.maxon` beside this file owns the PROCESSOR (P) each OS thread runs green threads on, the TLS
+// door that finds it, the worker M and its park. This file no longer holds "the currently-running GT" in a
+// `.data` word (it is `P->currentGt`) or its syscall stack in one global region (it is `P->systemStackSP`).
+//
+// ⭐⭐ **THE GREEN-THREAD RUN QUEUE IS GO's THREE-TIER HIERARCHY (W212), AND IT IS BUILT AND UNREACHED.** A
+// 256-slot LOCK-FREE RING per P, the global FIFO behind it (`__gt_enqueue`/`__gt_dequeue` and the head/tail
+// `.data` pair this file still owns), and WORK STEALING behind that, with a fairness check every 61 schedules
+// so the global half cannot starve. `SchedRuntime.buildSchedFindRunnable` is the one place the three tiers
+// are consulted. **Since EC10 no driver here asks it** — they ask `__gt_coro_next`, because what they may run
+// is coroutines — and the tier waits for `spawn`, which is its producer. Every piece of it says so at its own
+// declaration, in the idiom `POffRunnext` and `POffPendingWaiter` already use.
 // **`runnext` is deliberately NOT built** — Go refuses it without a `sysmon` to break the ping-pong pair it
 // creates, and shv2 has none; `SchedRuntime.POffRunnext` carries the argument and names the rung.
 //
@@ -280,8 +294,10 @@ export let GtOffArgInline = 0xC8
 //     (E3100) and `Parser.consumePromiseThread` make it EXACTLY ONE of those, exactly once.
 //   • the **RUNNER** — whoever finishes with the thread's EXECUTION. That is the driver whose
 //     `__gt_context_switch` came back from a `completed` thread, or — for a thread that never ran — the
-//     scheduler party that takes it out of a queue (`__sched_find_runnable`, the ring overflow, the sweep),
-//     or the dropper itself once it has deregistered a PARKED thread from every store.
+//     scheduler party that takes it out of a queue (`__gt_coro_next` and `__gt_coro_sweep_dropped` for a
+//     COROUTINE; `__sched_find_runnable`, the ring overflow and `__sched_sweep_dropped` for a GREEN THREAD,
+//     all three unreached until `spawn`), or the dropper itself once it has deregistered a PARKED thread
+//     from every store.
 //
 // Each adds its own half-ticket exactly once with ONE `lock xadd`; **the party whose add returns the OTHER
 // ticket is SECOND, and the second party performs the teardown** (`__gt_reclaim`: the releaser call and the
@@ -311,12 +327,47 @@ let GtOffTeardown = GtOffArgInline + ArgBufBytes
 // either silently moves the other.
 let GtTeardownBytes = 8
 
-// 0x100 = 256 bytes = 0xC8 header + ArgBufBytes (0x30) inline arg region + the teardown word. The header
-// words 0x60–0xA0 remain RESERVED (the reference's io_result/io_handle/cancel/tib fields), slab-zeroed and
-// unused until the subprocess/IOCP slice fills them. Must be a multiple of 8 (whole-word fields).
+// One machine word — the width of each of the three pointer-valued GT fields EC10 appends below. NAMED for
+// `GtTeardownBytes`' reason: a literal `8` spelled three times is one fact written three times, and an edit
+// to any one of them would silently move the other two.
+let PointerFieldBytes = 8
+
+// ⭐⭐ **THE GREEN THREAD THIS GT BELONGS TO — THE FIELD THE WHOLE PIN RESTS ON (EC10).** A GT that `async`
+// created is a COROUTINE: it is driven only by its owner's chain of drivers and is published only to its
+// owner's coroutine queue below, never to a P ring or the global queue. A GREEN THREAD's owner is ITSELF,
+// which is what makes the relation total rather than a special case with a null in it — `emitSchedAdoptProc`
+// stamps a P's inline scheduler GT with its own address, and `__gt_spawn` copies the SPAWNER's owner, so a
+// coroutine spawned by a coroutine belongs to the same green thread and the chain is transitive.
+//
+// EXPORTED because `SchedRuntime.emitSchedAdoptProc` is where a green thread is born and therefore where
+// the self-ownership is stamped. ⚠ The hand-assembled IOCP loop does NOT spell it: it calls
+// `__gt_coro_enqueue(gt)`, which reads the field itself, so the chunk stays offset-free here.
+export let GtOffOwner = GtOffTeardown + GtTeardownBytes
+
+// ⭐⭐ **THE OWNER'S COROUTINE QUEUE — an intrusive FIFO through the EXISTING `GtOffNext`.** A GT sits in at
+// most one queue, so the chain field is not doubled; these two are the queue's ends and they are meaningful
+// only on a GREEN THREAD. On a coroutine both stay at the slab's zero, which is exactly right: an empty
+// queue, for a GT nothing will ever publish to.
+//
+// ⚠ NOT exported. Their four readers (`__gt_coro_enqueue`, `__gt_coro_dequeue`, `__gt_coro_sweep_dropped`
+// and `__gt_resched`'s yield arm) are all in this file, and an `export` with no cross-file reader is what
+// E3092 refuses.
+let GtOffCoroHead = GtOffOwner + PointerFieldBytes
+let GtOffCoroTail = GtOffCoroHead + PointerFieldBytes
+
+// 0x118 = 280 bytes = 0xC8 header + ArgBufBytes (0x30) inline arg region + the teardown word + EC10's three
+// (owner, coroHead, coroTail). The header words 0x60–0xA0 remain RESERVED (the reference's
+// io_result/io_handle/cancel/tib fields), slab-zeroed and unused until the subprocess/IOCP slice fills them.
+// Must be a multiple of 8 (whole-word fields).
+//
+// ⚠ **EC10 GREW IT 0x100 → 0x118, APPEND-ONLY, AND THAT IS WHY NOTHING W212 PLACED MOVED.** Every field of
+// the authoritative GtLayout (0x00–0xA8) and every offset a hand-assembled chunk spells is BELOW 0xC8, and
+// `SchedRuntime`'s P fields after the inline GT are each DERIVED from the one before — so the growth walks
+// them all along correctly and no number is restated anywhere.
+//
 // EXPORTED because `SchedRuntime`'s P struct embeds a whole GT inline as its M's scheduler context, so the
 // P's own size and its `pendingYielder` offset are DERIVED from this number rather than restating it.
-export let GtStructSize = GtOffTeardown + GtTeardownBytes
+export let GtStructSize = GtOffCoroTail + PointerFieldBytes
 
 // ⭐ **THE TWO HALF-TICKETS.** Distinct so `xadd`'s prior value names WHO was already there, and powers of
 // two so the sum is unambiguous: 0 = neither, 1 = the consumer alone, 2 = the runner alone, 3 = both (and
@@ -570,10 +621,44 @@ export let GtSpawnName = b"__gt_spawn"
 // same shape both references reach by a different route — the bootstrap's `__gt_spawn` takes `(func, argc,
 // argbuf)` and copies the arguments in BEFORE its own enqueue, so its publish is last too.
 export let GtReadyName = b"__gt_ready"
+
+// ⭐⭐ **THE GLOBAL FIFO's TWO DOORS — STILL BUILT, AND UNREACHED UNTIL `spawn` (EC10).** They are the
+// GREEN-THREAD tier's overflow queue: where a full per-P ring spills to, and where a P-less thread once
+// published. After the pin an `async` frame is a COROUTINE and goes to its owner's queue instead
+// (`__gt_coro_enqueue` below), so the only remaining caller of either is inside `SchedRuntime` — the ring
+// overflow and the batch grab — and neither of THOSE has a producer until a `spawn` primitive creates real
+// green threads (`SERVICES_DESIGN.md:62-160`). Both names stay exported for those two in-tier callers, and
+// `DeadFunctionElimination` prunes the pair out of every program that cannot reach them.
 export let GtEnqueueName = b"__gt_enqueue"
 // EXPORTED because the worker M's loop (`SchedRuntime.buildSchedWorkerLoop`) is the second driver that pops
 // the global run queue — the first being `__gt_drive_until` here.
 export let GtDequeueName = b"__gt_dequeue"
+
+// ⭐⭐⭐ **THE COROUTINE QUEUE's FOUR DOORS (EC10) — the per-green-thread counterparts of the four above and
+// of `SchedRuntime`'s ring, and the ONLY tier an `async` frame ever enters.**
+//
+// ⚠ **THEY DIFFER FROM THEIR GLOBAL TWINS IN EXACTLY ONE WAY: the head and tail are read off the OWNER's GT
+// struct instead of off two `.data` labels.** Everything else — the `next = 0` seed, the empty/append split,
+// the tail clear when the queue drains — is `__gt_enqueue`/`__gt_dequeue`'s shape, deliberately, so a reader
+// who knows one knows the other.
+//
+// `__gt_coro_enqueue(gt)` appends `gt` to `gt.owner`'s queue and `__gt_coro_dequeue(owner)` pops that
+// queue's head; **both require the CALLER to hold `__sched_lock`**, because the IOCP completion thread
+// appends here too (that is the whole of the cross-thread traffic a coroutine queue has). The names carry
+// the requirement for `emitSchedEnqueueLocked`'s reason: `osLockEnter` is a RECURSIVE CRITICAL_SECTION, so
+// taking it twice is not an error and getting this wrong produces no diagnostic anywhere.
+//
+// `__gt_coro_next(owner)` is the CONSUME door — the coroutine counterpart of `__sched_find_runnable`, lock
+// and tombstone refusal included — and it takes the lock itself. `__gt_coro_sweep_dropped(owner)` is
+// `__sched_sweep_dropped`'s counterpart and the same.
+//
+// ⚠ `__gt_coro_enqueue` is EXPORTED for two readers outside this file: the hand-assembled IOCP completion
+// loop (`X64GtRuntime.buildIoCompletionLoopChunk`, which calls it by name) and the root that keeps it alive
+// for that call (`DeadFunctionElimination.seedRoots`). The other three have no cross-file reader.
+export let GtCoroEnqueueName = b"__gt_coro_enqueue"
+let GtCoroDequeueName = b"__gt_coro_dequeue"
+let GtCoroNextName = b"__gt_coro_next"
+let GtCoroSweepDroppedName = b"__gt_coro_sweep_dropped"
 export let GtAwaitName = b"__gt_await"
 export let GtTryAwaitName = b"__gt_try_await"
 
@@ -592,9 +677,10 @@ export let GtPromiseDropName = b"__gt_promise_drop"
 // frees the seed stack (the thread has switched off it, or never switched on to it) and adds the runner
 // ticket; if the consumer was already there it performs the teardown. Its callers are the driver whose
 // context switch came back from a `completed` thread (`emitGtRunOne`), the SCHEDULER parties that take a
-// renounced thread out of a queue rather than running it (`__sched_find_runnable`, the ring overflow,
-// `__sched_sweep_dropped`), and `__gt_promise_drop`'s waiting arm once it has deregistered a parked thread
-// from every store. EXPORTED for the three scheduler callers.
+// renounced thread out of a queue rather than running it (`__gt_coro_next` and `__gt_coro_sweep_dropped`
+// here; `__sched_find_runnable`, the ring overflow and `__sched_sweep_dropped` over in `SchedRuntime`, none
+// of which has a producer until `spawn`), and `__gt_promise_drop`'s waiting arm once it has deregistered a
+// parked thread from every store. EXPORTED for the three in `SchedRuntime`.
 //
 // **`__gt_owner_done(gt)` — THE CONSUMER's half: the promise is finished with.** It gives back the thread's
 // slot in `__gt_live_count` and adds the consumer ticket; if the runner was already there it performs the
@@ -1621,6 +1707,14 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtReady(module)
 	buildGtEnqueue(module)
 	buildGtDequeue(module)
+	// The coroutine queue's four doors, beside the global FIFO's two they are modelled on (EC10). ⚠ They are
+	// installed unconditionally, exactly as the pair above is: whether a program can REACH one is
+	// `DeadFunctionElimination`'s question, and answering it here would be a second reachability analysis
+	// that could disagree with the real one.
+	buildGtCoroEnqueue(module)
+	buildGtCoroDequeue(module)
+	buildGtCoroNext(module)
+	buildGtCoroSweepDropped(module)
 	buildGtNowNs(module)
 	buildGtTimerAdd(module, rawFree: rawFree)
 	buildGtTimerEarliest(module)
@@ -1818,6 +1912,22 @@ function buildGtSpawn(module StdModule, asyncTrace bool, tags GtTraceTags)
 	module.appendOp(initBlock, op: StdOp.binOp(argInlinePtr, lhs: gt, rhs: argInlineOffConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argInlinePtr, valueType: StdType.i64))
 
+	// ⭐⭐⭐ **gt.owner = currentGt.owner — THE STAMP THE WHOLE PIN RESTS ON (EC10), AND A ZERO HERE IS NOT A
+	// BENIGN DEFAULT.** The struct arrives ZEROED from the slab and every other zero in it is the correct
+	// initial state (`GtOffStatus` is `ready`, `GtOffWaiter` is *"no driver yet"*, the coroutine-queue ends are
+	// *"empty"*) — this one is not. An owner of 0 is a coroutine owned by NOBODY, and the first
+	// `__gt_coro_enqueue` of it writes its head/tail through a null pointer. So it is stamped in the same block
+	// as the other seed fields rather than left to the allocator's contract.
+	//
+	// ⭐ **THE SPAWNER's OWNER, NOT THE SPAWNER.** A coroutine spawned by a coroutine belongs to the SAME green
+	// thread, which is what makes the relation transitive and is the property the invariant rests on: every
+	// frame `async` ever creates, at any nesting depth, lands in exactly one queue and is driven by exactly one
+	// green thread's chain of drivers. `emitSchedAdoptProc` closes the recursion by making a green thread its
+	// own owner.
+
+	let spawnerOwner = emitLoadField(module, block: initBlock, record: emitLoadCurrentGt(module, block: initBlock, ids: ids), offset: GtOffOwner, ids: ids)
+	emitStoreField(module, block: initBlock, record: gt, offset: GtOffOwner, value: spawnerOwner)
+
 	// ⭐ COMMIT A FRESH GtStackSize STACK (P1.5-B1a′). The STACK is variable-sized (the relocating morestack grows
 	// it), so it is NOT recycled with the struct — a completed GT's stack is RELEASED (`__gt_drive_until`) and a
 	// fresh seed is committed here every spawn (`MEM_COMMIT`, demand-paged so untouched pages cost nothing).
@@ -1883,24 +1993,29 @@ function buildGtSpawn(module StdModule, asyncTrace bool, tags GtTraceTags)
 	module.functions.push(func)
 end 'buildGtSpawn'
 
-// `__gt_ready(gt)` — make a spawned green thread discoverable: push it onto the SPAWNER's own run-queue ring
-// and tell an idle M about it. See `GtReadyName` for why this is not the tail of `__gt_spawn`.
+// `__gt_ready(gt)` — make a spawned COROUTINE discoverable: append it to its owning green thread's coroutine
+// queue. See `GtReadyName` for why this is not the tail of `__gt_spawn`.
 //
-// ⭐ **THE RING AND NOT THE GLOBAL QUEUE (W212), which is Go's `newproc` → `runqput`.** A spawn is work this
-// processor has just created, so this processor is the one most likely to run it while it is still warm —
-// and the push costs no lock at all, where the global append cost one every spawn. The FIFO order a spec can
-// observe is unchanged: the ring is a queue, and it is consulted before anything else.
+// ⭐⭐ **THE OWNER's QUEUE AND NOT A P RING (EC10), AND THAT IS THE PIN.** `async f(…)` does not create a
+// green thread — it creates a coroutine of the green thread that called it, which yields that green thread
+// at a blocking operation and is driven only by its chain of drivers. A frame published to a P ring is a
+// frame a worker M may take, which is what made every refcount read-modify-write concurrent; published here
+// it cannot leave the M its owner is running on. W212's ring publish (`SchedQueueEnd.localRing`) is still
+// built and is what a later `spawn` primitive will use.
+//
+// ⚠ The FIFO order a spec can observe is unchanged: this is a queue, and it is the only one an `async`
+// frame ever enters.
 //
 // ⚠ It is a separate FUNCTION rather than an inline emit at the one lowering site, because the publish is a
-// call plus a wake and inlining it would put both into every spawn's caller for no benefit — the same
-// reasoning that keeps `__gt_enqueue` a function.
+// lock, a call and an unlock, and inlining it would put all three into every spawn's caller for no benefit —
+// the same reasoning that keeps `__gt_enqueue` a function.
 function buildGtReady(module StdModule)
 	var func = IrFunction.createFromStd(GtReadyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
 	emitParams(module, block: entry, count: 1)
-	emitSchedPublishRunnable(module, block: entry, gt: 0 as ValueId, queueEnd: SchedQueueEnd.localRing, ids: ids)
+	emitSchedPublishRunnable(module, block: entry, gt: 0 as ValueId, queueEnd: SchedQueueEnd.ownerCoroutines, ids: ids)
 	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1984,6 +2099,199 @@ function buildGtDequeue(module StdModule)
 	module.setTerminator(doneBlock, op: StdOp.ret(head))
 	module.functions.push(func)
 end 'buildGtDequeue'
+
+// ⭐⭐⭐ **`__gt_coro_enqueue(gt)` — APPEND A COROUTINE TO ITS OWNER'S QUEUE (EC10).** `__gt_enqueue`'s shape
+// exactly, with the head/tail read off `gt.owner` instead of off two `.data` labels — see `GtCoroEnqueueName`
+// for the one difference and for the lock the caller owes.
+//
+// ⛔ **THE OWNER IS READ OFF THE GT AND NOT FROM TLS, AND THAT IS WHAT LETS THE IOCP COMPLETION THREAD CALL
+// IT.** That thread owns no P, so `emitLoadCurrentP` would answer 0 there; the GT it recovered from the
+// OVERLAPPED knows which green thread it belongs to, which is the whole reason the owner is a FIELD.
+function buildGtCoroEnqueue(module StdModule)
+	var func = IrFunction.createFromStd(GtCoroEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var appendBlock = module.addBlock(func, label: b"append")
+	var emptyBlock = module.addBlock(func, label: b"empty")
+
+	emitParams(module, block: entry, count: 1)
+	let g = 0 as ValueId
+
+	// g.next = 0 — a GT sits in at most one queue, so this is the SAME chain field the global FIFO uses.
+	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
+	emitStoreField(module, block: entry, record: g, offset: GtOffNext, value: zeroConst)
+
+	let owner = emitLoadField(module, block: entry, record: g, offset: GtOffOwner, ids: ids)
+	let tail = emitLoadField(module, block: entry, record: owner, offset: GtOffCoroTail, ids: ids)
+	let tailNull = emitCmp(module, block: entry, a: tail, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(tailNull, thenBlockId: emptyBlock.id, elseBlockId: appendBlock.id))
+
+	// Non-empty: tail.next = g; owner.coroTail = g.
+	emitStoreField(module, block: appendBlock, record: tail, offset: GtOffNext, value: g)
+	emitStoreField(module, block: appendBlock, record: owner, offset: GtOffCoroTail, value: g)
+	module.setTerminator(appendBlock, op: StdOp.retVoid)
+
+	// Empty: head = tail = g.
+	emitStoreField(module, block: emptyBlock, record: owner, offset: GtOffCoroHead, value: g)
+	emitStoreField(module, block: emptyBlock, record: owner, offset: GtOffCoroTail, value: g)
+	module.setTerminator(emptyBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtCoroEnqueue'
+
+// `__gt_coro_dequeue(owner) -> gt | 0` — pop the head of `owner`'s coroutine queue, clearing the tail when
+// the queue empties. `__gt_dequeue`'s shape, off the owner struct. The caller holds `__sched_lock`.
+function buildGtCoroDequeue(module StdModule)
+	var func = IrFunction.createFromStd(GtCoroDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var popBlock = module.addBlock(func, label: b"pop")
+	var clearTail = module.addBlock(func, label: b"cleartail")
+	var doneBlock = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 1)
+	let owner = 0 as ValueId
+
+	let head = emitLoadField(module, block: entry, record: owner, offset: GtOffCoroHead, ids: ids)
+	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
+	let headNull = emitCmp(module, block: entry, a: head, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	// `head` is minted in `entry`, which dominates every block, so `done` returns it in both cases: 0 when
+	// the queue was empty, the popped coroutine otherwise.
+	module.setTerminator(entry, op: StdOp.condBranch(headNull, thenBlockId: doneBlock.id, elseBlockId: popBlock.id))
+
+	let next = emitLoadField(module, block: popBlock, record: head, offset: GtOffNext, ids: ids)
+	emitStoreField(module, block: popBlock, record: owner, offset: GtOffCoroHead, value: next)
+	let nextNull = emitCmp(module, block: popBlock, a: next, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(popBlock, op: StdOp.condBranch(nextNull, thenBlockId: clearTail.id, elseBlockId: doneBlock.id))
+
+	emitStoreField(module, block: clearTail, record: owner, offset: GtOffCoroTail, value: zeroConst)
+	module.setTerminator(clearTail, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.ret(head))
+	module.functions.push(func)
+end 'buildGtCoroDequeue'
+
+// ⭐⭐⭐ **`__gt_coro_next(owner) -> gt | 0` — WHAT THIS GREEN THREAD RUNS NEXT, and 0 when its queue is
+// empty.** The CONSUME door, and the coroutine counterpart of `SchedRuntime.buildSchedFindRunnable`: every
+// driver in this file asks IT rather than reading a queue, so the tombstone refusal is a property of the
+// scheduler and not of whichever driver remembered it.
+//
+// ⭐ **IT IS THAT FUNCTION'S `checkDropped`/`reclaim`/`hand` TAIL AND NOTHING ELSE.** A coroutine renounced
+// while it was still queued is a TOMBSTONE (`emitGtIsDropped`), and handing one back would run a thread
+// whose promise is gone — so the pop is followed by the test, a reclaim, and another pop.
+//
+// ⚠ **THE LOOP IS SIMPLER THAN THE RING TWIN'S AND THE MISSING PART IS DELIBERATE.** `__sched_find_runnable`
+// retries at `localPop` rather than at `entry` so a reclaimed thread costs no second FAIRNESS TICK; there is
+// no fairness tick here, because there are no tiers to be fair between — one owner, one FIFO — so the retry
+// is simply the top of this function's own loop. Copying the split would have been copying machinery for a
+// mechanism this queue does not have.
+//
+// ⚠ **THE RECLAIM RUNS WITH THE LOCK RELEASED**, exactly as `__sched_find_runnable`'s does: `__gt_runner_done`
+// frees a stack (a `VirtualFree` through the syscall shim) and may run a releaser, and holding the one lock
+// the IOCP completion thread needs across a syscall is latency nobody has to pay. The POP is the claim, so a
+// coroutine this function has taken off the queue is unreachable by anyone else while it is being reclaimed.
+function buildGtCoroNext(module StdModule)
+	var func = IrFunction.createFromStd(GtCoroNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var pop = module.addBlock(func, label: b"cnpop")
+	var candidate = module.addBlock(func, label: b"cncandidate")
+	var checkDropped = module.addBlock(func, label: b"cncheckdropped")
+	var reclaim = module.addBlock(func, label: b"cnreclaim")
+	var hand = module.addBlock(func, label: b"cnhand")
+	var noWork = module.addBlock(func, label: b"cnnowork")
+
+	emitParams(module, block: entry, count: 1)
+	let owner = 0 as ValueId
+	module.setTerminator(entry, op: StdOp.branch(pop.id))
+
+	// The popped coroutine reaches `candidate` as its single block arg — `pop` is the retry target, so the
+	// answer cannot be a value minted in a block that no longer dominates it.
+	let found = ids.mint()
+	candidate.blockArgs.push(IrBlockArg.create(found, argType: StdType.i64))
+
+	emitSchedLockEnter(module, block: pop, ids: ids)
+	let popped = ids.mint()
+	module.appendOp(pop, op: StdOp.call(popped, callee: GtCoroDequeueName, args: argsOf(owner)))
+	emitSchedLockLeave(module, block: pop, ids: ids)
+	module.setTerminator(pop, op: StdOp.branch(candidate.id))
+	pop.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(popped)))
+
+	let candidateZero = emitConst(module, block: candidate, value: 0, ids: ids)
+	let nothingFound = emitCmp(module, block: candidate, a: found, b: candidateZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(candidate, op: StdOp.condBranch(nothingFound, thenBlockId: noWork.id, elseBlockId: checkDropped.id))
+	emitConstReturn(module, block: noWork, value: 0, ids: ids)
+
+	let wasDropped = emitGtIsDropped(module, block: checkDropped, gt: found, ids: ids)
+	module.setTerminator(checkDropped, op: StdOp.condBranch(wasDropped, thenBlockId: reclaim.id, elseBlockId: hand.id))
+	module.setTerminator(hand, op: StdOp.ret(found))
+
+	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(found)))
+	module.setTerminator(reclaim, op: StdOp.branch(pop.id))
+
+	module.functions.push(func)
+end 'buildGtCoroNext'
+
+// ⭐⭐ **`__gt_coro_sweep_dropped(owner)` — RECLAIM THE TOMBSTONES AT THE FRONT OF THIS GREEN THREAD's
+// COROUTINE QUEUE.** Its one caller is `__gt_promise_drop`, which is what puts one there, and it is
+// `SchedRuntime.buildSchedSweepDropped`'s counterpart.
+//
+// ⛔⛔ **IT IS WHAT KEEPS A NEVER-SCHEDULED PROGRAM's MEMORY BOUNDED, and without it the mark-and-skip
+// protocol would be a leak with a spec that still passed.** `__gt_promise_drop` hands back the half a
+// dropped coroutine's promise owns — its managed arguments and its slot in `__gt_live_count` — but the STACK
+// and the STRUCT can only be freed by a party allowed to take it out of a queue, which is the popper. A
+// program that spawns and drops in a loop and never awaits anything drives NOTHING, so nothing would ever
+// pop them; sweeping the front at the drop reclaims them in that shape immediately, because the coroutine
+// just marked is normally the newest AND the only one. `sched-runqueue.a-spawn-drop-loop-stays-bounded` is
+// that measurement (W212 measured the same hole one queue over as exit 75, unbounded).
+//
+// ⚠ **THE FRONT ONLY, and the bound is what makes that right.** It stops at the first live coroutine rather
+// than scanning, so the work is O(coroutines actually reclaimed) and each is reclaimed at most once ever — a
+// drop can never be more than amortised O(1). A tombstone sitting BEHIND a live one is left for
+// `__gt_coro_next` to refuse and reclaim.
+//
+// ⭐⭐ **IT IS SIMPLER THAN ITS RING TWIN, AND THE REASON IS THE PIN.** `__sched_sweep_dropped`'s ring half is
+// a peek-then-CAS, and it is *"the one site that dereferences a thread it has not yet claimed"* — a hazard
+// that exists because a THIEF races the sweeper for the victim's head. Nothing races an owner's coroutine
+// queue: only the owner itself and the IOCP completion thread touch it, and the completion thread holds
+// `__sched_lock`. So the lock IS the claim, the peek and the pop name the same coroutine, and the sweep is a
+// plain locked walk — the shape the sweep's GLOBAL half already has, for the same reason.
+function buildGtCoroSweepDropped(module StdModule)
+	var func = IrFunction.createFromStd(GtCoroSweepDroppedName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loopHdr = module.addBlock(func, label: b"cshdr")
+	var peek = module.addBlock(func, label: b"cspeek")
+	var free = module.addBlock(func, label: b"csfree")
+	var doneBlock = module.addBlock(func, label: b"csdone")
+
+	emitParams(module, block: entry, count: 1)
+	let owner = 0 as ValueId
+
+	emitSchedLockEnter(module, block: entry, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
+
+	let head = emitLoadField(module, block: loopHdr, record: owner, offset: GtOffCoroHead, ids: ids)
+	let zero = emitConst(module, block: loopHdr, value: 0, ids: ids)
+	let queueEmpty = emitCmp(module, block: loopHdr, a: head, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(loopHdr, op: StdOp.condBranch(queueEmpty, thenBlockId: doneBlock.id, elseBlockId: peek.id))
+
+	let headDropped = emitGtIsDropped(module, block: peek, gt: head, ids: ids)
+	module.setTerminator(peek, op: StdOp.condBranch(headDropped, thenBlockId: free.id, elseBlockId: doneBlock.id))
+
+	module.appendOp(free, op: StdOp.call(ids.mint(), callee: GtCoroDequeueName, args: argsOf(owner)))
+	module.appendOp(free, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(head)))
+	module.setTerminator(free, op: StdOp.branch(loopHdr.id))
+
+	emitSchedLockLeave(module, block: doneBlock, ids: ids)
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtCoroSweepDropped'
 
 // `__gt_now_ns() -> i64` — the monotonic clock, nanoseconds since boot. `osReadClock` reads the QPC counter
 // and QPF frequency into two `.data` scratch words; the ticks→ns scale is done HERE in builder-built Std, via
@@ -2359,10 +2667,10 @@ function buildGtTimerCheck(module StdModule)
 	module.appendOp(fire, op: StdOp.cmp(isCurrent, lhs: gt, rhs: curGt, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(fire, op: StdOp.condBranch(isCurrent, thenBlockId: afterFire.id, elseBlockId: doEnqueue.id))
 
-	// doEnqueue: put the woken GT back on THIS P's ring — it is work this processor just created, exactly as
-	// a spawn is, and the push needs no lock even though this walk holds one for the timer store. The wake is
-	// one call after the release, for the whole batch.
-	emitSchedRunqPut(module, block: doEnqueue, gt: gt, ids: ids)
+	// doEnqueue: put the woken coroutine back on its OWNER's queue (EC10). This walk already holds
+	// `__sched_lock` for the timer store, which is exactly the lock `__gt_coro_enqueue` requires of its caller
+	// — so the append rides the critical section it is already inside rather than taking one of its own.
+	module.appendOp(doEnqueue, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(gt)))
 	module.setTerminator(doEnqueue, op: StdOp.branch(afterFire.id))
 
 	// afterFire: remove entry i — copy the last live entry over it, count--, re-examine i (don't advance).
@@ -2392,14 +2700,13 @@ function buildGtTimerCheck(module StdModule)
 	let doneCountAddr = ids.mint()
 	module.appendOp(doneBlock, op: StdOp.globalAddr(doneCountAddr, label: GtTimerCountLabel))
 	module.appendOp(doneBlock, op: StdOp.storeIndirect(doneCountAddr, offset: 0, valueId: doneCount, valueType: StdType.i64))
-	// ⭐⭐ **RELEASE, THEN WAKE — ONCE FOR THE WHOLE PASS, AND UNCONDITIONALLY.** The release is the StoreLoad
-	// fence between the enqueues above and the `idleFlag` reads inside the wake (`buildSchedWakeOrSpawn` states
-	// the pairing), so the two may not be reordered and the wake may not sit inside the critical section. It is
-	// unconditional rather than gated on "did anything fire" because a wake that finds nothing costs a parked M
-	// one turn round its loop, on a path that is already the scheduler's slowest — while a `woke` flag would be
-	// a third block argument threaded through a loop whose two existing ones are its whole state.
+	// ⚠ **THERE IS NO WAKE AFTER THIS RELEASE ANY MORE (EC10).** Until the pin every publish ended with
+	// `__sched_wake_or_spawn`, because a re-readied green thread might belong to a parked or absent worker M.
+	// A COROUTINE cannot: it is driven only by its owner's chain of drivers, which is running on this M — so a
+	// wake here would park-and-unpark an M that may not run it, and its SPAWN arm would start an OS thread that
+	// idles for the life of the process. The wake comes back with `spawn`, on the green-thread arms of
+	// `SchedRuntime.emitSchedPublishRunnable`, which is where the StoreLoad-fence argument lives with it.
 	emitSchedLockLeave(module, block: doneBlock, ids: ids)
-	emitSchedWakeAnIdleM(module, block: doneBlock, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -2493,6 +2800,11 @@ function buildGtDriveUntil(module StdModule, usesIocp bool)
 	// arms address `currentGt` through the same pointer rather than re-reading TLS at each of them.
 	let driverProc = emitLoadCurrentP(module, block: entry, ids: ids)
 	let selfGt = emitLoadField(module, block: entry, record: driverProc, offset: POffCurrentGt, ids: ids)
+	// ⭐⭐ **THE GREEN THREAD WHOSE COROUTINES THIS DRIVER MAY RUN (EC10)** — read here for the same reason
+	// `selfGt` is: `entry` dominates every block. `selfGt` is a driver in a CHAIN (GT0 for a top-level await, a
+	// coroutine for a nested one) and every link of that chain has the SAME owner, so the queue this loop
+	// drains is one queue however deep the nesting goes.
+	let owner = emitLoadField(module, block: entry, record: selfGt, offset: GtOffOwner, ids: ids)
 	let zeroConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
 	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
@@ -2512,10 +2824,14 @@ function buildGtDriveUntil(module StdModule, usesIocp bool)
 	module.appendOp(loopHdr, op: StdOp.cmp(reached, lhs: status, rhs: targetStatus, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(loopHdr, op: StdOp.condBranch(reached, thenBlockId: doneBlock.id, elseBlockId: drive.id))
 
-	// drive: ask the scheduler what runs next; 0 → netpoll, else → run. Since W212 that question has ONE
-	// answerer (`__sched_find_runnable`) rather than a lock/dequeue/unlock spelled here, so this driver gets
-	// the ring, the fairness check, the global batch and the stealing without knowing they exist.
-	let g = emitSchedFindRunnable(module, block: drive, ids: ids)
+	// drive: ask what this green thread runs next; 0 → netpoll, else → run. The question has ONE answerer
+	// (`__gt_coro_next`) rather than a lock/dequeue/unlock spelled here, so this driver gets the lock and the
+	// tombstone refusal without knowing they exist. ⚠ **Since EC10 that answerer is the OWNER's coroutine
+	// queue and not `__sched_find_runnable`**: an `async` frame is a coroutine of this green thread, so the
+	// ring, the global queue and the stealing rounds hold nothing a driver may run and asking them would be
+	// asking about somebody else's work.
+	let g = ids.mint()
+	module.appendOp(drive, op: StdOp.call(g, callee: GtCoroNextName, args: argsOf(owner)))
 	let gNull = ids.mint()
 	module.appendOp(drive, op: StdOp.cmp(gNull, lhs: g, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(drive, op: StdOp.condBranch(gNull, thenBlockId: netpoll.id, elseBlockId: run.id))
@@ -2593,23 +2909,31 @@ function buildGtDriveUntil(module StdModule, usesIocp bool)
 	module.appendOp(timerOnly, op: StdOp.cmp(noTimers, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(timerOnly, op: StdOp.condBranch(noTimers, thenBlockId: otherMs.id, elseBlockId: timerDecide.id))
 
-	// ⭐⭐ **THE DEADLOCK BAIL IS NOW CONDITIONAL ON THIS BEING THE ONLY M (G1), AND WITHOUT THAT IT IS A WRONG
-	// ANSWER RATHER THAN A HANG.** Reaching here means: the run queue is empty, no child is parked and no timer
-	// is pending. Under ONE M that is a genuine deadlock and returning is right — the awaiting caller reads its
-	// result and the program makes what progress it can, which is what this arm has always done. Under more
-	// than one M it is not a deadlock at all: the green thread this driver is waiting for may be RUNNING on
-	// another M right now, off the queue and out of every store, and bailing would hand `__gt_await` the result
-	// slot of a thread that has not written it.
+	// ⭐⭐ **THE DEADLOCK BAIL IS CONDITIONAL ON THIS BEING THE ONLY M (G1).** Reaching here means: this green
+	// thread's coroutine queue is empty, no child is parked and no timer is pending. That is a genuine
+	// deadlock and returning is right — the awaiting caller reads its result and the program makes what
+	// progress it can, which is what this arm has always done.
 	//
+	// ⚠⚠ **THE `awaitOtherM` ARM's PREMISE IS FALSE FOR A COROUTINE SINCE EC10, AND THE ARM IS KEPT
+	// DELIBERATELY.** It used to read *"the green thread this driver is waiting for may be RUNNING on another M
+	// right now"*. Under the pin it cannot be: an `async` frame is a coroutine of THIS green thread, is
+	// published only here and is driven only by this chain of drivers, so no other M can be running it. The arm
+	// is nevertheless kept rather than deleted, and both halves of that are decisions:
+	//   • **it costs one load and one compare**, and it is never taken — no worker M is created at all after
+	//     the pin (`__sched_wake_or_spawn` has no live caller until `spawn`), so `__sched_active_workers` is 1,
+	//     `aloneHere` is true and control goes straight to `doneBlock`, exactly as it did at the default before;
+	//   • **it is the arm `spawn` needs back verbatim.** A real green thread created by `spawn` CAN be running
+	//     on another M while this driver waits on it, which is precisely the sentence above — deleting the arm
+	//     would make the `spawn` rung pay twice for one argument.
 	// So when another M is live, sleep a millisecond and re-poll instead. The loop's own exit condition
 	// (`targetGt.status == targetStatus`, tested at `loophdr`) is what ends the wait, so it terminates exactly
 	// when the other M finishes — bounded by the sleep, not by it.
 	//
-	// ⚠ **A GENUINE MULTI-M DEADLOCK THEREFORE HANGS WHERE A SINGLE-M ONE RETURNS**, and that is the honest
-	// trade: `__sched_active_workers` counts a PARKED worker as live, so this cannot distinguish "another M is
-	// about to answer me" from "every M is waiting on something that will never come". Distinguishing them
-	// needs a count of green threads currently EXECUTING on some M, which is a scheduler-state rung rather
-	// than this one. At the default `MAXON_MAX_PROCS=1` the count is 1 and this arm is never taken.
+	// ⚠ **A GENUINE MULTI-M DEADLOCK WOULD THEREFORE HANG WHERE A SINGLE-M ONE RETURNS**, and that is the
+	// honest trade the day `spawn` produces one: `__sched_active_workers` counts a PARKED worker as live, so
+	// this cannot distinguish "another M is about to answer me" from "every M is waiting on something that will
+	// never come". Distinguishing them needs a count of green threads currently EXECUTING on some M, which is a
+	// scheduler-state rung rather than this one.
 	let liveMs = emitLoadGlobalWord(module, block: otherMs, label: SchedActiveWorkersLabel, ids: ids)
 	let oneM = emitConst(module, block: otherMs, value: 1, ids: ids)
 	let aloneHere = emitCmp(module, block: otherMs, a: liveMs, b: oneM, pred: StdCmpPred.le, ids: ids)
@@ -3157,13 +3481,19 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool, rawFree ByteArray)
 	module.setTerminator(soleOwner, op: StdOp.branch(queuedArm.id))
 
 	// queuedArm: the consumer's half, and the ONE exit of this function. The sweep after it reclaims the
-	// tombstones sitting at the FRONT of this P's ring and of the global queue, which in the common shape
-	// (spawn, drop, spawn, drop) is the one just renounced — see `SchedRuntime.buildSchedSweepDropped` for
-	// why the front alone is the right bound. It is called on the `soleOwner` road too, where it finds
-	// nothing and costs two loads: a sweep guarded by which arm arrived would be a second copy of the arm
-	// choice, in the one place a wrong copy is a thread run after its promise was dropped.
+	// tombstones sitting at the FRONT of the dropped coroutine's OWN owner's queue, which in the common shape
+	// (spawn, drop, spawn, drop) is the one just renounced — see `buildGtCoroSweepDropped` for why the front
+	// alone is the right bound. It is called on the `soleOwner` road too, where it finds nothing and costs two
+	// loads: a sweep guarded by which arm arrived would be a second copy of the arm choice, in the one place a
+	// wrong copy is a coroutine run after its promise was dropped.
+	//
+	// ⚠ **THE OWNER IS READ OFF THE DROPPED COROUTINE AND NOT FROM TLS (EC10)**, so the sweep rests on no
+	// claim about which green thread is dropping. Per-await linearity (E3100) already makes the dropper the
+	// spawner, and therefore the two owners equal — but a sweep that read the CURRENT green thread's queue
+	// would be resting on that theorem, where reading the field rests on nothing.
+	let dropOwner = emitLoadField(module, block: queuedArm, record: gt, offset: GtOffOwner, ids: ids)
 	module.appendOp(queuedArm, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(gt)))
-	module.appendOp(queuedArm, op: StdOp.call(ids.mint(), callee: SchedSweepDroppedName, args: ValueIdArray.create()))
+	module.appendOp(queuedArm, op: StdOp.call(ids.mint(), callee: GtCoroSweepDroppedName, args: argsOf(dropOwner)))
 	module.setTerminator(queuedArm, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -3177,8 +3507,10 @@ end 'buildGtPromiseDrop'
 //
 //   • Under `__sched_lock`, read `ioParked`. `IoParkedNormalDone` (4) ⇒ the read ALREADY completed and the completion
 //     thread enqueued the GT (a promise dropped just after its read finished — rare, but reachable on a loaded box):
-//     clean up, then RENOUNCE it in place (`queuedCont`) — it is on the GLOBAL queue and W212 removed the unlink,
-//     because the ring the other producers use cannot be unlinked from and one operation may not have two mechanisms.
+//     clean up, then RENOUNCE it in place (`queuedCont`) — it is on its owner's COROUTINE queue and there is no
+//     unlink. W212 removed the one this arm used to do, because the ring the other producers use cannot be spliced
+//     and one operation may not have two mechanisms; EC10 moved the queue without changing that. The tombstone is
+//     reclaimed by `__gt_coro_next` or by the sweep the drop performs on its way out.
 //   • Otherwise (`IoParkedInFlight`, 1): set `ioParked = IoParkedAbandoned` (2) UNDER the lock, release, then
 //     `CancelIoEx(readEnd, ovl)`. The completion thread's next packet (ERROR_OPERATION_ABORTED, or a natural
 //     completion that raced) sees `ioParked == 2`, sets `ioParked = IoParkedDrainDone` (3), and touches the GT no
@@ -3322,13 +3654,14 @@ end 'emitGtIoCancelArm'
 
 // ⭐⭐ **`__gt_runner_done(gt)` — THE RUNNER's HALF OF THE TEARDOWN RENDEZVOUS: this party is finished with
 // the thread's EXECUTION.** Free the seed stack, arrive at the word, and reclaim if the consumer was already
-// there. Its four callers are every way a green thread's execution can end:
+// there. Its callers are every way a GT's execution can end:
 //
 //   • `emitGtRunOne`, when the context switch comes back from a `completed` thread — the common road.
-//   • `__sched_find_runnable`, refusing to hand back a tombstone; the ring OVERFLOW, reclaiming one rather
-//     than moving it to the global queue; and `__sched_sweep_dropped`, taking one off a queue's front. In
-//     all three the thread never ran and never will, which is exactly what "finished with its execution"
-//     means for it.
+//   • the tombstone reclaims: `__gt_coro_next`, refusing to hand back a renounced COROUTINE, and
+//     `__gt_coro_sweep_dropped`, taking the ones off the front of an owner's queue. Their GREEN-THREAD
+//     counterparts — `__sched_find_runnable`, the ring OVERFLOW and `__sched_sweep_dropped` — call it for
+//     the same reason and are unreached until `spawn`. In all of them the thread never ran and never will,
+//     which is exactly what "finished with its execution" means for it.
 //   • `__gt_promise_drop`'s `soleOwner` arm, once it has taken a PARKED thread out of every store — after
 //     which no driver can ever reach it, so its dropper is the party that ends its execution.
 //
@@ -4102,6 +4435,9 @@ function buildGtResched(module StdModule)
 
 	let reschedProc = emitLoadCurrentP(module, block: entry, ids: ids)
 	let selfGt = emitLoadField(module, block: entry, record: reschedProc, offset: POffCurrentGt, ids: ids)
+	// The green thread whose coroutines this yield may hand the processor to — `__gt_drive_until`'s `owner`,
+	// read for the same reason and in the block that dominates both arms below.
+	let owner = emitLoadField(module, block: entry, record: selfGt, offset: GtOffOwner, ids: ids)
 	let zeroConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
 
@@ -4115,37 +4451,23 @@ function buildGtResched(module StdModule)
 	// spawned: hand off only if somebody is queued; otherwise there is nobody to yield TO and the poll is the
 	// only progress available.
 	//
-	// ⭐⭐ **"ANYBODY QUEUED" IS RE-DERIVED FOR THE HIERARCHY (W212), AND IT MEANS *ON THIS PROCESSOR OR IN THE
-	// GLOBAL QUEUE*.** Until W212 there was one queue and one word to read. Now a runnable thread can be in
-	// this P's ring (`tail != head`), in the global queue, or in ANOTHER P's ring — and the third is
-	// deliberately not consulted: a yield gives up THIS processor, and a thread on another P is already being
-	// run by the M that owns it. Handing our processor over for its sake would be handing it to nobody. The
-	// two we do read are exactly the two `__sched_find_runnable` would take from without stealing.
+	// ⭐⭐ **"ANYBODY QUEUED" IS ONE LOAD AND ONE COMPARE AGAIN (EC10), AND IT MEANS *IN MY OWNER's COROUTINE
+	// QUEUE*.** W212 made it two reads — this P's ring and the global queue — because a runnable thread could
+	// be in either. After the pin an `async` frame enters exactly one queue, so the two collapse back into one,
+	// and the collapse is not a simplification: reading the ring or the global queue here would be asking
+	// whether somebody ELSE's work exists, and a yield gives up this processor only for a coroutine this same
+	// chain of drivers can run.
 	//
-	// ⚠ **BOTH READS ARE UNLOCKED, AND THAT IS ARGUED RATHER THAN OVERLOOKED.** Each is one aligned machine
-	// word and together they decide only WHICH ARM a yield takes, both of which are correct whatever they
-	// answer: read as non-empty when the last thread has just been taken, we defer ourselves and switch, and
-	// the driver finds nothing and drives on; read as empty when something has just arrived, we poll and
-	// return promptly, which is exactly what a yield promises (*"let someone else have a turn IF anyone wants
-	// one"*). Taking the lock here would put an uncontended critical section on the yield fast path to sharpen
-	// an answer neither arm needs sharp.
-	//
-	// ⚠ **THE RING HALF IS ASKED THROUGH `SchedRuntime.emitRunqAnyQueued` AND IS NOT SPELLED HERE**, because
-	// where the ring keeps its counters and what makes it empty belong to the file that owns the P. That
-	// answer is due to change — Go's `runqempty` re-reads because a `runnext` can hold a thread while the
-	// counters agree, and W213 is the rung that builds one — and a copy in this file would go on answering the
-	// old question in silence.
-	var spawnedRing = module.addBlock(func, label: b"spawnedring")
-	let ringHasWork = emitRunqAnyQueued(module, block: spawnedBlock, p: reschedProc, ids: ids)
-	module.setTerminator(spawnedBlock, op: StdOp.condBranch(ringHasWork, thenBlockId: handoffBlock.id, elseBlockId: spawnedRing.id))
-
-	let headAddr = ids.mint()
-	module.appendOp(spawnedRing, op: StdOp.globalAddr(headAddr, label: GtRunQueueHeadLabel))
-	let head = ids.mint()
-	module.appendOp(spawnedRing, op: StdOp.loadIndirect(head, addrId: headAddr, offset: 0, valueType: StdType.i64))
-	let queueEmpty = ids.mint()
-	module.appendOp(spawnedRing, op: StdOp.cmp(queueEmpty, lhs: head, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(spawnedRing, op: StdOp.condBranch(queueEmpty, thenBlockId: pollBlock.id, elseBlockId: handoffBlock.id))
+	// ⚠ **THE READ IS UNLOCKED, AND THAT IS ARGUED RATHER THAN OVERLOOKED.** It is one aligned machine word
+	// and it decides only WHICH ARM a yield takes, both of which are correct whatever it answers: read as
+	// non-empty when the last coroutine has just been taken, we defer ourselves and switch, and the driver
+	// finds nothing and drives on; read as empty when something has just arrived, we poll and return promptly,
+	// which is exactly what a yield promises (*"let someone else have a turn IF anyone wants one"*). Taking the
+	// lock here would put an uncontended critical section on the yield fast path to sharpen an answer neither
+	// arm needs sharp.
+	let coroHead = emitLoadField(module, block: spawnedBlock, record: owner, offset: GtOffCoroHead, ids: ids)
+	let queueEmpty = emitCmp(module, block: spawnedBlock, a: coroHead, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(spawnedBlock, op: StdOp.condBranch(queueEmpty, thenBlockId: pollBlock.id, elseBlockId: handoffBlock.id))
 
 	// ⭐⭐ **gt0drive: GT0 DRIVES ONE QUEUED GREEN THREAD — THE HALF THAT WAS MISSING.** GT0 is never on the run
 	// queue and cannot context-switch to itself, so an earlier cut concluded it could only poll. MEASURED, that
@@ -4155,7 +4477,8 @@ function buildGtResched(module StdModule)
 	// BOUNDED form of what `await` and `sleep` already do from GT0: dequeue exactly one ready thread, switch into
 	// it, and come back when it yields or completes. One turn, then return — bounding it is the whole difference
 	// between a yield and an await.
-	let dequeued = emitSchedFindRunnable(module, block: gt0Drive, ids: ids)
+	let dequeued = ids.mint()
+	module.appendOp(gt0Drive, op: StdOp.call(dequeued, callee: GtCoroNextName, args: argsOf(owner)))
 	let nothingReady = ids.mint()
 	module.appendOp(gt0Drive, op: StdOp.cmp(nothingReady, lhs: dequeued, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(gt0Drive, op: StdOp.condBranch(nothingReady, thenBlockId: pollBlock.id, elseBlockId: runBlock.id))
@@ -4305,8 +4628,9 @@ function buildGtProcCheck(module StdModule)
 	module.appendOp(fire, op: StdOp.cmp(isCurrent, lhs: gt, rhs: curGt, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(fire, op: StdOp.condBranch(isCurrent, thenBlockId: afterFire.id, elseBlockId: doEnqueue.id))
 
-	// doEnqueue: put the woken GT back on this P's ring. The publish half only — see `__gt_timer_check`.
-	emitSchedRunqPut(module, block: doEnqueue, gt: gt, ids: ids)
+	// doEnqueue: put the woken coroutine back on its OWNER's queue, under the lock this walk already holds —
+	// see `__gt_timer_check`.
+	module.appendOp(doEnqueue, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(gt)))
 	module.setTerminator(doEnqueue, op: StdOp.branch(afterFire.id))
 
 	// afterFire: remove entry i — copy the last live entry over it in BOTH arrays, count--, re-examine i.
@@ -4330,9 +4654,8 @@ function buildGtProcCheck(module StdModule)
 	let doneCountAddr = ids.mint()
 	module.appendOp(doneBlock, op: StdOp.globalAddr(doneCountAddr, label: GtProcCountLabel))
 	module.appendOp(doneBlock, op: StdOp.storeIndirect(doneCountAddr, offset: 0, valueId: doneCount, valueType: StdType.i64))
-	// Release, then wake — see `__gt_timer_check`'s `doneBlock` for why that order is correctness.
+	// Release, and no wake — see `__gt_timer_check`'s `doneBlock` for why a coroutine publish has none.
 	emitSchedLockLeave(module, block: doneBlock, ids: ids)
-	emitSchedWakeAnIdleM(module, block: doneBlock, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
