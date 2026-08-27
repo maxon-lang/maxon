@@ -1,0 +1,240 @@
+// Test: a-byte-operand-with-a-proven-count-is-still-64-bit
+typealias Num = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bits = int(0 to 63)
+
+function shlLowByte(n Bits) returns Num
+	let b = 200 as Byte
+	return b shl n
+end 'shlLowByte'
+
+function shlTopByte(n Bits) returns Num
+	let b = 255 as Byte
+	return b shl n
+end 'shlTopByte'
+
+function shrLowByte(n Bits) returns Num
+	let b = 200 as Byte
+	return b shr n
+end 'shrLowByte'
+
+function bits(step Num) returns Bits
+	return step as Bits
+end 'bits'
+
+function main() returns ExitCode
+	if shlLowByte(bits(10)) != 204800 'tenBits'
+		return 1
+	end 'tenBits'
+	if shlTopByte(bits(56)) != 0 - 72057594037927936 'topByte'
+		return 2
+	end 'topByte'
+	if shrLowByte(bits(3)) != 25 'shrByte'
+		return 3
+	end 'shrByte'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @shlLowByte(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov rdx, 63
+    x64.cmp rcx, rdx
+    x64.jg shlLowByte.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl shlLowByte.__range_panic_0
+    x64.jmp shlLowByte.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, 200
+    x64.mov rsi, [rbp-8]
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
+    x64.jge shlLowByte.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov rdi, 64
+    x64.cmp rsi, rdi
+    x64.setb rdi
+    x64.movzx rdi, rdib
+    x64.mov rcx, rsi
+    x64.mov r8, rbx
+    x64.shl r8, cl
+    x64.xor ecx, ecx
+    x64.test rdi, rdi
+    x64.mov rax, rcx
+    x64.cmovne rax, r8
+    x64.epilogue
+    x64.ret
+  }
+  func @shlTopByte(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov rdx, 63
+    x64.cmp rcx, rdx
+    x64.jg shlTopByte.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl shlTopByte.__range_panic_0
+    x64.jmp shlTopByte.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, 255
+    x64.mov rsi, [rbp-8]
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
+    x64.jge shlTopByte.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov rdi, 64
+    x64.cmp rsi, rdi
+    x64.setb rdi
+    x64.movzx rdi, rdib
+    x64.mov rcx, rsi
+    x64.mov r8, rbx
+    x64.shl r8, cl
+    x64.xor ecx, ecx
+    x64.test rdi, rdi
+    x64.mov rax, rcx
+    x64.cmovne rax, r8
+    x64.epilogue
+    x64.ret
+  }
+  func @shrLowByte(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov rdx, 63
+    x64.cmp rcx, rdx
+    x64.jg shrLowByte.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl shrLowByte.__range_panic_0
+    x64.jmp shrLowByte.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, 200
+    x64.mov rsi, [rbp-8]
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
+    x64.jge shrLowByte.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov rdi, 64
+    x64.cmp rsi, rdi
+    x64.setb rdi
+    x64.movzx rdi, rdib
+    x64.mov rcx, rsi
+    x64.mov r8, rbx
+    x64.shr r8, cl
+    x64.xor ecx, ecx
+    x64.test rdi, rdi
+    x64.mov rax, rcx
+    x64.cmovne rax, r8
+    x64.epilogue
+    x64.ret
+  }
+  func @bits(step: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov rdx, 63
+    x64.cmp rcx, rdx
+    x64.jg bits.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl bits.__range_panic_0
+    x64.jmp bits.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov rsi, 63
+    x64.cmp rcx, rsi
+    x64.jg bits.__range_panic_1
+    x64.cmp rcx, rbx
+    x64.jl bits.__range_panic_1
+    x64.jmp bits.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 10
+    x64.call bits
+    x64.mov rcx, rax
+    x64.call shlLowByte
+    x64.mov rcx, 204800
+    x64.cmp rax, rcx
+    x64.je main.tenBits_0.after
+  tenBits_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  tenBits_0.after:
+    x64.mov rcx, 56
+    x64.call bits
+    x64.mov rcx, rax
+    x64.call shlTopByte
+    x64.xor ecx, ecx
+    x64.mov rdx, 72057594037927936
+    x64.sub rcx, rdx
+    x64.cmp rax, rcx
+    x64.je main.topByte_0.after
+  topByte_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  topByte_0.after:
+    x64.mov rcx, 3
+    x64.call bits
+    x64.mov rcx, rax
+    x64.call shrLowByte
+    x64.mov rcx, 25
+    x64.cmp rax, rcx
+    x64.je main.shrByte_0.after
+  shrByte_0:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  shrByte_0.after:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+}
+---

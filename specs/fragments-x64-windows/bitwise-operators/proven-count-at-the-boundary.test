@@ -1,0 +1,306 @@
+// Test: proven-count-at-the-boundary
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias Bits = int(0 to 63)
+
+function shlBy(value Num, n Bits) returns Num
+	return value shl n
+end 'shlBy'
+
+function shrBy(value Num, n Bits) returns Num
+	return value shr n
+end 'shrBy'
+
+function shrWordBy(value Word, n Bits) returns Word
+	return value shr n
+end 'shrWordBy'
+
+function boundary(step Num) returns Bits
+	return (step * 63) as Bits
+end 'boundary'
+
+function main() returns ExitCode
+	let low = boundary(0)
+	let high = boundary(1)
+
+	if shlBy(1, n: low) != 1 'shlZero'
+		return 1
+	end 'shlZero'
+	if shlBy(1, n: high) != 0 - 9223372036854775807 - 1 'shlTop'
+		return 2
+	end 'shlTop'
+	if shrBy(0 - 8, n: low) != 0 - 8 'shrZero'
+		return 3
+	end 'shrZero'
+	if shrBy(0 - 8, n: high) != 0 - 1 'shrTop'
+		return 4
+	end 'shrTop'
+	if shrWordBy(u64.max, n: low) != u64.max 'shrWordZero'
+		return 5
+	end 'shrWordZero'
+	if shrWordBy(u64.max, n: high) != 1 'shrWordTop'
+		return 6
+	end 'shrWordTop'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @shlBy(value: i64, n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 63
+    x64.cmp rdx, rbx
+    x64.jg shlBy.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl shlBy.__range_panic_0
+    x64.jmp shlBy.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-16]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.jge shlBy.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov r8, 64
+    x64.cmp rdi, r8
+    x64.setb r8
+    x64.movzx r8, r8b
+    x64.mov rcx, rdi
+    x64.mov r9, rsi
+    x64.shl r9, cl
+    x64.xor ecx, ecx
+    x64.test r8, r8
+    x64.mov rax, rcx
+    x64.cmovne rax, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @shrBy(value: i64, n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 63
+    x64.cmp rdx, rbx
+    x64.jg shrBy.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl shrBy.__range_panic_0
+    x64.jmp shrBy.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-16]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.jge shrBy.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov r8, 64
+    x64.cmp rdi, r8
+    x64.setb r8
+    x64.movzx r8, r8b
+    x64.mov r9, 63
+    x64.test r8, r8
+    x64.mov rax, r9
+    x64.cmovne rax, rdi
+    x64.mov rcx, rax
+    x64.mov rdi, rsi
+    x64.sar rdi, cl
+    x64.mov rax, rdi
+    x64.epilogue
+    x64.ret
+  }
+  func @shrWordBy(value: i64, n: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 63
+    x64.cmp rdx, rbx
+    x64.jg shrWordBy.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl shrWordBy.__range_panic_0
+    x64.jmp shrWordBy.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-16]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.jge shrWordBy.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov r8, 64
+    x64.cmp rdi, r8
+    x64.setb r8
+    x64.movzx r8, r8b
+    x64.mov rcx, rdi
+    x64.mov r9, rsi
+    x64.shr r9, cl
+    x64.xor ecx, ecx
+    x64.test r8, r8
+    x64.mov rax, rcx
+    x64.cmovne rax, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @boundary(step: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 63
+    x64.imul rcx, rax
+    x64.xor eax, eax
+    x64.mov rdx, 63
+    x64.cmp rcx, rdx
+    x64.jg boundary.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl boundary.__range_panic_0
+    x64.jmp boundary.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov rsi, 63
+    x64.cmp rcx, rsi
+    x64.jg boundary.__range_panic_1
+    x64.cmp rcx, rbx
+    x64.jl boundary.__range_panic_1
+    x64.jmp boundary.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor ecx, ecx
+    x64.call boundary
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.call boundary
+    x64.mov [rbp-16], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, 1
+    x64.call shlBy
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.je main.shlZero_0.after
+  shlZero_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  shlZero_0.after:
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, 1
+    x64.call shlBy
+    x64.xor ecx, ecx
+    x64.mov rdx, 9223372036854775807
+    x64.sub rcx, rdx
+    x64.mov rbx, 1
+    x64.sub rcx, rbx
+    x64.cmp rax, rcx
+    x64.je main.shlTop_0.after
+  shlTop_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  shlTop_0.after:
+    x64.xor eax, eax
+    x64.mov rcx, 8
+    x64.sub rax, rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, rax
+    x64.call shrBy
+    x64.xor ebx, ebx
+    x64.mov rsi, 8
+    x64.sub rbx, rsi
+    x64.cmp rax, rbx
+    x64.je main.shrZero_0.after
+  shrZero_0:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  shrZero_0.after:
+    x64.xor eax, eax
+    x64.mov rcx, 8
+    x64.sub rax, rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, rax
+    x64.call shrBy
+    x64.xor ebx, ebx
+    x64.mov rsi, 1
+    x64.sub rbx, rsi
+    x64.cmp rax, rbx
+    x64.je main.shrTop_0.after
+  shrTop_0:
+    x64.mov rax, 4
+    x64.epilogue
+    x64.ret
+  shrTop_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, -1
+    x64.call shrWordBy
+    x64.mov rcx, -1
+    x64.cmp rax, rcx
+    x64.je main.shrWordZero_0.after
+  shrWordZero_0:
+    x64.mov rax, 5
+    x64.epilogue
+    x64.ret
+  shrWordZero_0.after:
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, -1
+    x64.call shrWordBy
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.je main.shrWordTop_0.after
+  shrWordTop_0:
+    x64.mov rax, 6
+    x64.epilogue
+    x64.ret
+  shrWordTop_0.after:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+}
+---

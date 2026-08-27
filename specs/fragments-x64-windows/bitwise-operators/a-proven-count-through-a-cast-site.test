@@ -1,0 +1,174 @@
+// Test: a-proven-count-through-a-cast-site
+typealias Bits = int(0 to 63)
+
+function main() returns ExitCode
+	var acc = 0
+	for i in 0 upto 8 'lowBits'
+		let n = i as Bits
+		acc = acc + (1 shl n)
+	end 'lowBits'
+	if acc != 255 'sum'
+		return 1
+	end 'sum'
+
+	var top = 0
+	for i in 0 upto 2 'boundary'
+		let n = (i * 63) as Bits
+		top = top + (1 shl n)
+	end 'boundary'
+	if top != 0 - 9223372036854775807 'topSum'
+		return 2
+	end 'topSum'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov rdx, 8
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.jmp main.lowBits_0.header
+  lowBits_0.header:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.cmp rax, rcx
+    x64.jge main.lowBits_0.exit
+  lowBits_0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov rdx, 63
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, 1
+    x64.xor esi, esi
+    x64.cmp rax, rsi
+    x64.jge main.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov rsi, 64
+    x64.cmp rax, rsi
+    x64.setb rsi
+    x64.movzx rsi, rsib
+    x64.mov rcx, rax
+    x64.mov rdi, rbx
+    x64.shl rdi, cl
+    x64.xor eax, eax
+    x64.test rsi, rsi
+    x64.mov rcx, rax
+    x64.cmovne rcx, rdi
+    x64.mov rax, [rbp-8]
+    x64.add rax, rcx
+    x64.mov [rbp-8], rax
+    x64.jmp main.lowBits_0.incr
+  lowBits_0.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp main.lowBits_0.header
+  lowBits_0.exit:
+    x64.mov rax, 255
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.je main.sum_0.after
+  sum_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  sum_0.after:
+    x64.xor eax, eax
+    x64.mov [rbp-32], rax
+    x64.xor ecx, ecx
+    x64.mov rdx, 2
+    x64.mov [rbp-40], rdx
+    x64.mov [rbp-48], rcx
+    x64.jmp main.boundary_0.header
+  boundary_0.header:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.cmp rax, rcx
+    x64.jge main.boundary_0.exit
+  boundary_0:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, 63
+    x64.imul rax, rcx
+    x64.xor edx, edx
+    x64.mov rbx, 63
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rcx, 1
+    x64.xor esi, esi
+    x64.cmp rax, rsi
+    x64.jge main.__shift_count_ok_1
+  __shift_count_panic_1:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_1:
+    x64.mov rsi, 64
+    x64.cmp rax, rsi
+    x64.setb rsi
+    x64.movzx rsi, rsib
+    x64.mov rdi, rcx
+    x64.mov rcx, rax
+    x64.shl rdi, cl
+    x64.xor eax, eax
+    x64.test rsi, rsi
+    x64.mov rcx, rax
+    x64.cmovne rcx, rdi
+    x64.mov rax, [rbp-32]
+    x64.add rax, rcx
+    x64.mov [rbp-32], rax
+    x64.jmp main.boundary_0.incr
+  boundary_0.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-48]
+    x64.add rcx, rax
+    x64.mov [rbp-48], rcx
+    x64.jmp main.boundary_0.header
+  boundary_0.exit:
+    x64.xor eax, eax
+    x64.mov rcx, 9223372036854775807
+    x64.sub rax, rcx
+    x64.mov rdx, [rbp-32]
+    x64.cmp rdx, rax
+    x64.je main.topSum_0.after
+  topSum_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  topSum_0.after:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+}
+---

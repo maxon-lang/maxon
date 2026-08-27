@@ -1,0 +1,126 @@
+// Test: a-bare-int-count-keeps-the-guard
+function main() returns ExitCode
+	var seen = 0
+	for n in 68 upto 72 'each'
+		if 7 shl n != 0 'shl'
+			return 1
+		end 'shl'
+		if 1024 shr n != 0 'shr'
+			return 2
+		end 'shr'
+		seen = seen + 1
+	end 'each'
+
+	if seen != 4 'iterations'
+		return 3
+	end 'iterations'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 68
+    x64.mov rdx, 72
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.jmp main.each_0.header
+  each_0.header:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.cmp rax, rcx
+    x64.jge main.each_0.exit
+  each_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, 7
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.jge main.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov rdx, 64
+    x64.cmp rax, rdx
+    x64.setb rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, rcx
+    x64.mov rcx, rax
+    x64.shl rbx, cl
+    x64.xor eax, eax
+    x64.test rdx, rdx
+    x64.mov rcx, rax
+    x64.cmovne rcx, rbx
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.je main.shl_0.after
+  shl_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  shl_0.after:
+    x64.mov rax, 1024
+    x64.mov rcx, [rbp-32]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.jge main.__shift_count_ok_1
+  __shift_count_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_1:
+    x64.mov rdx, 64
+    x64.cmp rcx, rdx
+    x64.setb rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, 63
+    x64.test rdx, rdx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rcx
+    x64.mov rcx, rsi
+    x64.mov rdx, rax
+    x64.sar rdx, cl
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.shr_0.after
+  shr_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  shr_0.after:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.each_0.incr
+  each_0.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp main.each_0.header
+  each_0.exit:
+    x64.mov rax, 4
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.je main.iterations_0.after
+  iterations_0:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  iterations_0.after:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+}
+---

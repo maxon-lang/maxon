@@ -1,0 +1,249 @@
+// Test: a-count-whose-alias-reaches-64-keeps-the-guard
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias UpTo64 = int(0 to 64)
+
+function shlBy(value Num, n UpTo64) returns Num
+	return value shl n
+end 'shlBy'
+
+function shrBy(value Num, n UpTo64) returns Num
+	return value shr n
+end 'shrBy'
+
+function shrWordBy(value Word, n UpTo64) returns Word
+	return value shr n
+end 'shrWordBy'
+
+function widen(step Num) returns UpTo64
+	return (step * 64) as UpTo64
+end 'widen'
+
+function main() returns ExitCode
+	let past = widen(1)
+
+	if shlBy(7, n: past) != 0 'shl'
+		return 1
+	end 'shl'
+	if shrBy(0 - 1, n: past) != 0 - 1 'shrSign'
+		return 2
+	end 'shrSign'
+	if shrWordBy(u64.max, n: past) != 0 'shrZeroFill'
+		return 3
+	end 'shrZeroFill'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @shlBy(value: i64, n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 64
+    x64.cmp rdx, rbx
+    x64.jg shlBy.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl shlBy.__range_panic_0
+    x64.jmp shlBy.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-16]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.jge shlBy.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov r8, 64
+    x64.cmp rdi, r8
+    x64.setb r8
+    x64.movzx r8, r8b
+    x64.mov rcx, rdi
+    x64.mov r9, rsi
+    x64.shl r9, cl
+    x64.xor ecx, ecx
+    x64.test r8, r8
+    x64.mov rax, rcx
+    x64.cmovne rax, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @shrBy(value: i64, n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 64
+    x64.cmp rdx, rbx
+    x64.jg shrBy.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl shrBy.__range_panic_0
+    x64.jmp shrBy.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-16]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.jge shrBy.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov r8, 64
+    x64.cmp rdi, r8
+    x64.setb r8
+    x64.movzx r8, r8b
+    x64.mov r9, 63
+    x64.test r8, r8
+    x64.mov rax, r9
+    x64.cmovne rax, rdi
+    x64.mov rcx, rax
+    x64.mov rdi, rsi
+    x64.sar rdi, cl
+    x64.mov rax, rdi
+    x64.epilogue
+    x64.ret
+  }
+  func @shrWordBy(value: i64, n: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 64
+    x64.cmp rdx, rbx
+    x64.jg shrWordBy.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl shrWordBy.__range_panic_0
+    x64.jmp shrWordBy.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-16]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.jge shrWordBy.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov r8, 64
+    x64.cmp rdi, r8
+    x64.setb r8
+    x64.movzx r8, r8b
+    x64.mov rcx, rdi
+    x64.mov r9, rsi
+    x64.shr r9, cl
+    x64.xor ecx, ecx
+    x64.test r8, r8
+    x64.mov rax, rcx
+    x64.cmovne rax, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @widen(step: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 64
+    x64.imul rcx, rax
+    x64.xor eax, eax
+    x64.mov rdx, 64
+    x64.cmp rcx, rdx
+    x64.jg widen.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl widen.__range_panic_0
+    x64.jmp widen.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov rsi, 64
+    x64.cmp rcx, rsi
+    x64.jg widen.__range_panic_1
+    x64.cmp rcx, rbx
+    x64.jl widen.__range_panic_1
+    x64.jmp widen.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.call widen
+    x64.mov [rbp-8], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, 7
+    x64.call shlBy
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.je main.shl_0.after
+  shl_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  shl_0.after:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.sub rax, rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, rax
+    x64.call shrBy
+    x64.xor ebx, ebx
+    x64.mov rsi, 1
+    x64.sub rbx, rsi
+    x64.cmp rax, rbx
+    x64.je main.shrSign_0.after
+  shrSign_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  shrSign_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, -1
+    x64.call shrWordBy
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.je main.shrZeroFill_0.after
+  shrZeroFill_0:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  shrZeroFill_0.after:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+}
+---
