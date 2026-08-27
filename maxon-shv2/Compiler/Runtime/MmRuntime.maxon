@@ -813,11 +813,18 @@ end 'emitFieldAddr'
 // because the second copy's failure mode is not a wrong shape — it is the right shape carrying the wrong
 // width, which reads correct at both sites and is a silent misalignment at one of them.
 //
-// ⚠ **`width` MUST BE A POWER OF TWO.** `-width` is the "clear the low bits" mask only then, and a width
-// that is not one raises to a boundary that does not exist. Both widths are constants their own geometry
-// check already proves are powers of two, by asserting each against the shift that divides by it
-// (`checkSlabClassTable` for `SlabPageBytes`, `checkSlabArenaGeometry` for the commit granule).
+// ⚠ **`width` MUST BE A POWER OF TWO, AND THAT IS ASKED HERE RATHER THAN LEFT TO THE CALLER'S OWN CHECK.**
+// `-width` is the "clear the low bits" mask only then, and a width that is not one raises to a boundary that
+// does not exist — silently, in emitted code, on whichever lane happens to exercise it. Today's two widths
+// are each proven a power of two by their own geometry check, against the shift that divides by them
+// (`checkSlabClassTable` for `SlabPageBytes`, `checkSlabArenaGeometry` for the commit granule); this is what
+// makes a THIRD caller arriving with some other width a compile failure instead of a misaligned pointer,
+// since nothing about those two checks reaches this signature.
 export function emitAlignUp(module StdModule, block IrBlock, value ValueId, width ParsedInt, ids ValueMinter) returns ValueId
+	if width < 1 or (width and (width - 1)) != 0 'widthNotAPowerOfTwo'
+		panic("emitAlignUp: a width of {width} is not a positive power of two, so `0 - {width}` is not the mask that clears its low bits")
+	end 'widthNotAPowerOfTwo'
+
 	let bias = emitConst(module, block: block, value: width - 1, ids: ids)
 	let raised = emitBin(module, block: block, a: value, b: bias, opcode: StdBinOpcode.add, ids: ids)
 	let mask = emitConst(module, block: block, value: 0 - width, ids: ids)

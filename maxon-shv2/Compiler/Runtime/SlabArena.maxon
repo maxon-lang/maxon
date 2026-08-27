@@ -238,9 +238,9 @@ end 'SlabArenaGeometry'
 // ⭐ **WHERE A RESERVATION IS FREE, SO IS THE SLACK; WHERE IT IS NOT, THERE IS NOTHING TO RAISE.** This is
 // `hasPageReservation` read from both sides, and it is ONE fact rather than a lane test wearing two hats:
 // the lane that answers *no* answers no because its reservation IS its allocation — `memory.grow`, whose
-// unit is `LargestTargetPageBytes` — and a base handed out in whole grow units is already granule-aligned,
-// which is exactly what makes the align-up the identity there. Slack on that lane would be 64 KiB of
-// CHARGED linear memory on a 512 KiB arena (+12.5%), against the 5.22 / 11.10 MiB the header measures.
+// unit is `UnreservedLaneGrowUnitBytes` — and a base handed out in whole grow units is already
+// granule-aligned, which is exactly what makes the align-up the identity there. Slack there would be 64 KiB
+// of CHARGED linear memory on a 512 KiB arena (+12.5%), against the 5.22 / 11.10 MiB the header measures.
 // `checkArenaGeometryForLane` asserts the arithmetic half of that premise rather than trusting it.
 function arenaAlignSlackBytes(hasPageReservation bool) returns ParsedInt
 	if hasPageReservation 'reserves'
@@ -293,6 +293,23 @@ let SlabArenaCommitGranuleShift = SlabPageShift + SlabArenaCommitGranuleChunksSh
 // Asserted rather than left in a comment, which is where the 16 KiB lived until the arena acquired a second
 // geometry to check it against.
 let LargestTargetPageBytes = 65536
+
+// ⭐⭐ **THE UNIT THE NON-RESERVING LANE'S PAGE SOURCE HANDS OUT — wasm's `memory.grow` PAGE.** It is 64 KiB
+// by the wasm specification, and `StdToWasm.emitOsAllocPages` answers `prevPages shl 16`, so EVERY base that
+// lane can hand `__slab_arena_new` is already a whole multiple of it. That is the premise
+// `arenaAlignSlackBytes` rests on when it gives that lane ZERO slack, and `checkArenaReservationSlack` asks
+// it as arithmetic rather than trusting it.
+//
+// ⛔⛔ **IT IS NOT `LargestTargetPageBytes`, THOUGH THE TWO ARE THE SAME NUMBER TODAY — one name for two
+// facts is how the slack check would come to FAIL OPEN.** That one is a MAXIMUM over every lane; this one is
+// ONE lane's unit, and the two checks that read them want OPPOSITE divisibility: a granule must be a whole
+// number of the widest page, and the grow unit must be a whole number of granules. Written as one constant
+// the pair holds only while wasm HAPPENS to be the widest lane — add a lane with a wider page and
+// `granuleSplitsAPage` correctly forces the granule up with it, a max-based slack test still passes, and
+// wasm's unchanged 64 KiB base stops being granule-aligned on the one lane that reserves no slack to absorb
+// it. `checkSlabArenaGeometry` asserts this one cannot exceed the maximum, which is what keeps a stale pair
+// from surviving a lane change quietly.
+let UnreservedLaneGrowUnitBytes = 65536
 
 // ⭐ **CHUNK 0 IS THE ARENA'S OWN METADATA, so its bit is never free and it is never handed out.** That
 // costs one chunk in 8192 (0.01%) and buys two things: the metadata needs no second mapping, and a returned
@@ -496,6 +513,14 @@ function checkSlabArenaGeometry()
 		panic("slab arena: a commit granule of {SlabArenaCommitGranuleBytes} bytes is not a whole number of {LargestTargetPageBytes}-byte pages, so a committed range would split a page on the widest-page lane")
 	end 'granuleSplitsAPage'
 
+	// The non-reserving lane's grow unit IS one of the lanes' page sizes, so it can never be wider than the
+	// widest of them. Asserted because the two constants hold the same number today and
+	// `checkArenaReservationSlack` reads THIS one: a grow unit left stale by a lane change would make that
+	// check answer for a page source no lane has, which is the shape its own header calls failing open.
+	if UnreservedLaneGrowUnitBytes > LargestTargetPageBytes 'growUnitAboveWidestPage'
+		panic("slab arena: the non-reserving lane's {UnreservedLaneGrowUnitBytes}-byte grow unit is wider than the {LargestTargetPageBytes}-byte widest page any lane has, so one of the two is stale")
+	end 'growUnitAboveWidestPage'
+
 	// `__slab_arena_new` clears the metadata chunks' bits by storing `-(1 shl ArenaMetadataChunks)` into
 	// bitmap word 0, which is only the right answer while those bits all live in word 0. A fact about the
 	// metadata reservation and the word width, and about neither arena's size.
@@ -581,10 +606,10 @@ end 'checkArenaGeometryForLane'
 function checkArenaReservationSlack(geometry SlabArenaGeometry, lane String)
 	if not geometry.hasPageReservation 'noSlackToSpend'
 		// The lane pays for its reservation, so it reserves EXACTLY the arena — which is only sound because
-		// its page source hands out whole `LargestTargetPageBytes` units and a granule divides one, making
-		// the align-up the identity. That divisibility is the premise, and it is arithmetic.
-		if LargestTargetPageBytes mod SlabArenaCommitGranuleBytes != 0 'growUnitIsNotWholeGranules'
-			panic("slab arena ({lane}): a page source handing out {LargestTargetPageBytes}-byte units does not answer a whole number of {SlabArenaCommitGranuleBytes}-byte commit granules, so `__slab_arena_new`'s align-up could move a base this lane reserves no room for")
+		// its page source hands out whole `UnreservedLaneGrowUnitBytes` units and a granule divides one,
+		// making the align-up the identity. That divisibility is the premise, and it is arithmetic.
+		if UnreservedLaneGrowUnitBytes mod SlabArenaCommitGranuleBytes != 0 'growUnitIsNotWholeGranules'
+			panic("slab arena ({lane}): a page source handing out {UnreservedLaneGrowUnitBytes}-byte units does not answer a whole number of {SlabArenaCommitGranuleBytes}-byte commit granules, so `__slab_arena_new`'s align-up could move a base this lane reserves no room for")
 		end 'growUnitIsNotWholeGranules'
 
 		if geometry.reservationBytes != geometry.bytes 'unreservedLaneOverReserves'
@@ -744,12 +769,12 @@ function buildSlabArenaNew(module StdModule, geometry SlabArenaGeometry)
 	module.appendOp(entry, op: StdOp.call(reserved, callee: SlabAssertOsAllocName, args: argsOf(raw)))
 
 	// ⛔⛔ **THE ARENA STARTS AT THE NEXT COMMIT GRANULE, NOT AT THE ADDRESS THE OS ANSWERED — AND TAKING
-	// THE OS's ANSWER WAS AN UNSTATED ALIGNMENT ASSUMPTION THAT ONLY WINDOWS AND wasm HAPPENED TO SATISFY.**
+	// THE OS's ANSWER WAS AN UNSTATED ALIGNMENT ASSUMPTION THAT THE LANES WITH A 4 KiB PAGE DO NOT SATISFY.**
 	// `osReservePages` promises the LANE'S page granularity and nothing more: 64 KiB on Windows (the
-	// allocation granularity) and on wasm (the grow unit), 16 KiB on arm64-macOS — but **4 KiB on x64-linux,
-	// HALF a chunk.** The reverse map indexes by `addr shr SlabPageShift`, so an arena whose base is 4096 mod
-	// 8192 puts the chunk grid out of phase with the map's page grid, and the map then describes a heap that
-	// is not the one the allocator hands out:
+	// allocation granularity) and on wasm (the grow unit), 16 KiB on arm64-macOS — but **4 KiB on BOTH LINUX
+	// LANES, HALF a chunk** (`ElfWriter.ElfPageSize` is the 0x1000 they share). The reverse map indexes by
+	// `addr shr SlabPageShift`, so an arena whose base is 4096 mod 8192 puts the chunk grid out of phase with
+	// the map's page grid, and the map then describes a heap that is not the one the allocator hands out:
 	//
 	//   • `__slab_arena_map_set(spanBase, numPages, span)` registers exactly `numPages` page indices while
 	//     the span's BYTE range touches `numPages + 1` of them — so the tail of every span is unregistered,
@@ -759,18 +784,44 @@ function buildSlabArenaNew(module StdModule, geometry SlabArenaGeometry)
 	//     — so a slot at the end of one span resolves to its NEIGHBOUR's span record and is pushed onto the
 	//     wrong free list, which is a silent wrong answer and then a fault.
 	//
-	// MEASURED (W215): `spec-test --target=x64-linux --filter=slab` failed 4 of 16 on one run and a
-	// DIFFERENT 6 of 16 on the next, because the set moved with ASLR; a probe aborting on a misaligned base
-	// showed the failing runs were exactly the ones where `mmap` answered 4096 mod 8192, and `setarch -R`
-	// — which pins the base — failed 15 of 15.
+	// MEASURED (W215) on x64-linux: `spec-test --target=x64-linux --filter=slab` failed 4 of 16 on one run
+	// and a DIFFERENT 6 of 16 on the next, because the set moved with ASLR; a probe aborting on a misaligned
+	// base showed the failing runs were exactly the ones where `mmap` answered 4096 mod 8192, and
+	// `setarch -R` — which pins the base — failed 15 of 15. **The SCOPE is wider than the measurement:**
+	// arm64-linux is the same 4 KiB page reached through the same raw `mmap`, and is cured by the same
+	// statement; it is not separately measured because that lane's runs are remote.
+	//
+	// ⚠ **arm64-macOS WAS NOT AFFECTED, AND SAYING SO IS THE POINT OF NAMING THE PAGE SIZES ABOVE.** 16 KiB
+	// is a whole multiple of a chunk, so that lane's `mmap` answer already put the chunk grid in phase and
+	// every granule range it named was already page-aligned. What it did NOT satisfy is the stronger GRANULE
+	// alignment established below — and nothing before required that, which is why this is a fix for the
+	// 4 KiB lanes and a no-op everywhere else.
 	//
 	// ⭐⭐ **THE GRANULE IS THE ALIGNMENT, NOT THE CHUNK, AND THAT IS ONE FACT COVERING BOTH OBLIGATIONS.**
 	// Every range this file names to the OS is a whole granule at a granule offset from this base, so a
-	// granule-aligned base is what makes each one page-aligned on EVERY lane — including arm64-macOS's
-	// 16 KiB page, which an 8 KiB-aligned base would split (`mmap` refuses that, and `checkSlabArenaGeometry`
-	// already asserts the granule is a whole number of the widest page). A granule is also a whole number of
-	// chunks, so the map's grid follows from the same statement instead of needing a second one.
+	// granule-aligned base is what keeps each one page-aligned on EVERY lane no matter which base the OS
+	// answers — including arm64-macOS's 16 KiB page, which a merely CHUNK-aligned base would split (`mmap`
+	// refuses that, and `checkSlabArenaGeometry` already asserts the granule is a whole number of the widest
+	// page). A granule is also a whole number of chunks, so the map's grid follows from the same statement
+	// instead of needing a second one.
 	let base = emitAlignUp(module, block: entry, value: reserved, width: SlabArenaCommitGranuleBytes, ids: ids)
+
+	// ⛔⛔ **`reserved` DIES HERE, AND THE DAY ANYTHING RELEASES AN ARENA IT IS THE VALUE THAT MUST COME
+	// BACK.** Nothing in this file frees an arena — `__slab_arena_list` is prepended to and never unlinked,
+	// and the only `osFreePages` the slab emits is `__slab_os_direct_free`'s, over an `osAllocPages` region
+	// that never went through here — so today there is no address to keep and no place to keep it. **What
+	// makes that worth writing down is that `base` is the value in scope and the wrong one to release:**
+	// Windows' `VirtualFree(MEM_RELEASE)` REQUIRES the address `VirtualAlloc` answered and REFUSES any other,
+	// and a POSIX `munmap(base, bytes)` would unmap the arena while leaking the align-up's head slack and the
+	// reservation's tail. A teardown therefore has to carry `reserved` and `geometry.reservationBytes`, which
+	// means storing the raw base in the metadata chunk — it cannot be recovered from `base`, since the
+	// align-up is not injective. ⇒ **FOLLOW-UP, NAMED: an arena teardown starts by giving the metadata chunk
+	// a `reservedBase` word.**
+	//
+	// ⭐ Everything the arena DOES name to the OS after this point stays inside the reservation without it:
+	// the scavenger's decommit and `emitCommitGranulesFor`'s commit are both `[base + g·granule, +granule)`
+	// for `g < granuleCount`, so their union is exactly `[base, base + bytes)`, and
+	// `checkArenaReservationSlack` is what makes that a subrange of `[reserved, reserved + reservationBytes)`.
 
 	// The first granule, before ANY store below: the metadata chunk is inside it (asserted by
 	// `checkSlabArenaGeometry`), and until it is committed the arena's own base is not writable.
