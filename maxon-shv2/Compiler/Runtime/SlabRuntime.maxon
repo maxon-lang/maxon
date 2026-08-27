@@ -278,6 +278,11 @@ let SlabStateMetaFreeOffset = 16 as ByteOffset
 let SlabStateLockOffset = 24 as ByteOffset
 let SlabStateMcentralOffset = ((SlabStateLockOffset as ParsedInt) + CriticalSectionBytes) as ByteOffset
 
+// The value the state `.data` word holds until the region is committed. Named because it is READ in two
+// places (the probe below) and WRITTEN in one (`buildSlabStateBase`'s publishing store), and a bare 0 at
+// three sites is three chances for one of them to stop meaning the same thing as the others.
+let SlabStateUncommitted = 0 as ParsedInt
+
 // Whether THIS allocation took `__slab_lock` on its way in, carried across the pop as a block argument so
 // that exactly one copy of the pop serves both arms — see `buildSlabAllocEntry`. Named rather than 1/0
 // because the value's meaning is *"there is a `Leave` outstanding"*, which a bare literal at the release
@@ -795,6 +800,23 @@ end 'emitSlabRemotePush'
 
 // --- The bodies ---
 
+// ⭐⭐ **"HAS THE STATE REGION BEEN COMMITTED YET?" — the `.data` word read and tested, ONE SPELLING.**
+// It answers the PREDICATE and leaves the word itself in `currentId` and its address in `addrId`, both of
+// which the callers need for different things: `buildSlabStateBase` returns the word on its hit arm and
+// stores THROUGH the address on its commit arm; `emitSlabStateBase` carries the word into a merge block.
+//
+// ⚠ **THE TWO CALLERS CANNOT COLLAPSE INTO ONE, WHICH IS PRECISELY WHY THIS EXISTS.** `emitSlabStateBase`'s
+// COLD arm is a call to `__slab_state_base`, so the function cannot be written as one emission of the
+// emitter — it would call itself. The read is therefore the one part that would otherwise be written twice,
+// and two spellings of it is how one of them ends up testing a sentinel the other stopped writing.
+function emitSlabStateWordRead(module StdModule, block IrBlock, addrId ValueId, currentId ValueId, ids ValueMinter) returns ValueId
+	module.appendOp(block, op: StdOp.globalAddr(addrId, label: SlabStateLabel))
+	module.appendOp(block, op: StdOp.loadIndirect(currentId, addrId: addrId, offset: 0, valueType: StdType.i64))
+
+	let absent = emitConst(module, block: block, value: SlabStateUncommitted, ids: ids)
+	return emitCmp(module, block: block, a: currentId, b: absent, pred: StdCmpPred.eq, ids: ids)
+end 'emitSlabStateWordRead'
+
 // `__slab_state_base() -> base` — the allocator's mutable state, committed on first use.
 //
 // ⭐ **THE REGION IS CHUNKS FROM THE ARENA, NOT A FRESH `osAllocPages`.** This sits ON the arena, so taking
@@ -820,10 +842,8 @@ function buildSlabStateBase(module StdModule, sharded bool)
 	var have = module.addBlock(func, label: b"have")
 
 	let stateAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(stateAddr, label: SlabStateLabel))
-	let current = emitLoadField(module, block: entry, record: stateAddr, offset: 0, ids: ids)
-	let absent = emitConst(module, block: entry, value: 0, ids: ids)
-	let uncommitted = emitCmp(module, block: entry, a: current, b: absent, pred: StdCmpPred.eq, ids: ids)
+	let current = ids.mint()
+	let uncommitted = emitSlabStateWordRead(module, block: entry, addrId: stateAddr, currentId: current, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(uncommitted, thenBlockId: commit.id, elseBlockId: have.id))
 
 	let chunks = emitConst(module, block: commit, value: slabStateChunks(), ids: ids)
@@ -852,18 +872,17 @@ end 'buildSlabStateBase'
 // so every subsequent allocation and every free reads a non-zero word and is done. Reproducing the commit
 // here — the arena request, the `memFill`, the `osLockInit`, the publishing store, in the order that
 // publishes LAST — would be that sequence written twice, and it is the sequence whose ORDER is the
-// argument. So the cold arm calls `__slab_state_base`, which re-reads the word and commits it; the
-// duplicated read costs one load on the once-per-process path.
+// argument. So the cold arm calls `__slab_state_base`, which re-reads the word and commits it; that second
+// read costs one load on the once-per-process path, and it is the SAME read — `emitSlabStateWordRead` is
+// the one spelling both this and the function's own entry use.
 function emitSlabStateBase(module StdModule, func IrFunction, cur IrBlock, stateId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
 	var commit = module.addBlock(func, label: label)
 	var merge = module.addBlock(func, label: label)
 	merge.blockArgs.push(IrBlockArg.create(stateId, argType: StdType.i64))
 
 	let stateAddr = ids.mint()
-	module.appendOp(cur, op: StdOp.globalAddr(stateAddr, label: SlabStateLabel))
-	let current = emitLoadField(module, block: cur, record: stateAddr, offset: 0, ids: ids)
-	let absent = emitConst(module, block: cur, value: 0, ids: ids)
-	let uncommitted = emitCmp(module, block: cur, a: current, b: absent, pred: StdCmpPred.eq, ids: ids)
+	let current = ids.mint()
+	let uncommitted = emitSlabStateWordRead(module, block: cur, addrId: stateAddr, currentId: current, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(uncommitted, thenBlockId: commit.id, elseBlockId: merge.id))
 	cur.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(current)))
 

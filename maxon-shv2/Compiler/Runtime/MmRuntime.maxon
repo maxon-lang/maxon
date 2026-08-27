@@ -947,12 +947,17 @@ end 'emitUnary'
 // same one the whole slab layer keys its locks, its CAS and its P lookup on (`SlabRuntime`'s `sharded` —
 // its file header carries the argument in full), read ONCE per install and handed down, never re-derived.
 //
-// ⚠ **THE DEFAULT IS THE ATOMIC, AND IT IS NOT A CONVENIENCE — IT IS THE ANSWER THAT IS NEVER WRONG,
-// ONLY EVER SLOWER.** The scheduler's four counters (`GtRuntime`'s live count, trace dispenser, in-flight
-// read count and pipe-name uniquifier) are built ONLY by `installGtRuntime`, which runs only under
-// `usesGt`, so `true` is their answer by construction and spelling it at those six sites would be
-// restating their own install gate. Every caller whose build can go either way — this file's and the
-// slab's — passes the bit explicitly.
+// ⛔⛔ **`multiM` HAS NO DEFAULT, AND IT HAD ONE UNTIL THIS RUNG's REVIEW.** `= true` was the answer that
+// is never WRONG — only ever slower — which is exactly what makes omitting it UNDETECTABLE: a counter
+// added here tomorrow without the argument would put a `lock add` back on every allocation of every
+// single-threaded program, and no spec, no leak gate and no fixpoint would go red. A default whose
+// omission nothing can observe is a decision the compiler stops asking for. Compare `emitCmp`'s
+// `operandType`, which keeps its default precisely because a wrong one fails a float spec on the spot.
+// ⇒ Every caller states the bit. The scheduler's four counters (`GtRuntime`'s live count, trace
+// dispenser, in-flight read count and pipe-name uniquifier — SEVEN call sites, the pending count having
+// three) are built ONLY by `installGtRuntime`, which runs only under `usesGt`, so they pass a literal
+// `true`; this file's and the slab's callers pass `usage.usesGt`/`sharded`, the one bit, read once per
+// install and handed down.
 //
 // ⚠ **BOTH ARMS ANSWER THE *PRIOR* VALUE, NOT THE UPDATED ONE, AND THE ASYMMETRY IS PAID FOR IN CODE
 // SIZE.** That is `StdOp.atomicRmw`'s contract, and adopting it verbatim is what lets the x64 isel pick
@@ -961,7 +966,7 @@ end 'emitUnary'
 // The three callers that want the number they just minted apply the delta again, which costs one ALU op on
 // three cold paths instead of a register on every allocation in the language. The plain arm keeps the same
 // contract so that no caller has to know which arm it got.
-export function emitGlobalAccumulate(module StdModule, block IrBlock, label ByteArray, delta ValueId, multiM bool = true, ids ValueMinter) returns ValueId
+export function emitGlobalAccumulate(module StdModule, block IrBlock, label ByteArray, delta ValueId, multiM bool, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 

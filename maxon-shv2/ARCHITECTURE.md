@@ -2684,9 +2684,9 @@ fails DEADLY."* Every new raw-buffer call site was another chance to reopen the 
 
 ⚠ **`needzero` is a BUILD-time argument here, not a runtime parameter.** v1 threads a flag through
 `__slab_alloc_needzero → __slab_alloc_class`, which puts a branch on the hot path of every allocation in the
-language and an extra argument in every call. shv2 builds two bodies from one builder
-(`buildSlabAllocClass(name, zeroed:)`), and `DeadFunctionElimination` means no program that uses one carries
-the other.
+language and an extra argument in every call. Since EC8 shv2 has no `__slab_alloc_class` at all: the pop is
+`emitSlabAllocClass`, emitted INLINE into each entry door (`buildSlabAllocEntry(name, zeroed:)`), so the two
+spellings are two emissions of ONE emitter and no program carries the arm it never takes.
 
 A slot reaches a caller from one of two places, and they differ in whether the memory is
 dirty:

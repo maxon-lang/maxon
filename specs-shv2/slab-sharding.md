@@ -16,7 +16,7 @@ program, which is what the cases below drive:
 
 | Mechanism | What it decides |
 |---|---|
-| **the shard row** | `__slab_shard_p()` answers the running P; its clamped `id` is the mcache row, and an OS thread that owns NO P gets the dedicated RAW row (255), never row 0 |
+| **the shard row** | the P read (`emitSlabCurrentP`, emitted inline into `__slab_alloc`/`__slab_free` since EC8) answers the running P; its clamped `id` is the mcache row, and an OS thread that owns NO P gets the dedicated RAW row (255), never row 0 |
 | **the ownership stamp** | every span carries the P that owns it; a cached span owned by somebody else is a MISS, not something to pop |
 | **the remote-free queue** | a free by a P that does not own the slot's span CAS-pushes it onto the OWNER's Treiber stack, and the owner replays the chain on its next allocation slow path |
 
@@ -130,7 +130,7 @@ end 'main'
 <!-- test: slab-sharding.a-slot-allocated-before-the-scheduler-is-freed-after-it -->
 <!-- targets: x64-windows -->
 **THE RAW ROW, AND THE ONE ARM OF THE LOCK A SINGLE-THREADED PROGRAM REACHES.** Everything allocated
-before the first `async` is allocated with NO processor: `__slab_shard_p()` answers "none", the spans
+before the first `async` is allocated with NO processor: the P read answers "none", the spans
 land on the dedicated raw row and are stamped as owned by nobody. Once the scheduler exists those same
 spans are shared, in principle, by every OS thread that owns no P — so a free of one of their slots
 takes the serialised path.

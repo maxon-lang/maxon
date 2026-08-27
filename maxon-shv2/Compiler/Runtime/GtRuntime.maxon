@@ -11,7 +11,10 @@
 // ⭐⭐ **EVERY `.data` WORD THIS FILE LAYS OUT NOW STATES ITS MULTI-M SHARING CLASS WHERE IT IS CREATED
 // (G2)** — see `SchedRuntime.MultiMSharing` and `pushRuntimeGlobal`, which is the door all three of this
 // file's producers go through and which does not compile without an answer. The counters step atomically
-// through `MmRuntime.emitGlobalAccumulate`; the run queue and the two park stores are `__sched_lock`'s; the
+// through `MmRuntime.emitGlobalAccumulate` — every call here passes `multiM: true` as a LITERAL, because
+// that door emits the plain load/add/store when no second OS thread can exist and everything in this file
+// is built by `installGtRuntime`, which runs only under `usesGt`, so the answer is `true` by construction
+// rather than by a bit somebody could hand it; the run queue and the two park stores are `__sched_lock`'s; the
 // three out-param scratch regions became FRAME slots and left `.data` entirely. What is still racy above one
 // M is the ALLOCATOR underneath this file, which is its own rung — `SchedRuntime.maxon`'s header says which
 // is which and how each was measured.
@@ -1757,11 +1760,11 @@ function buildGtSpawn(module StdModule, asyncTrace bool, tags GtTraceTags)
 	// created by `__gt_init` via `__slab_alloc`, never through here). Every reclaim — the `__gt_await`
 	// tail and `__gt_promise_drop` — lowers it by one, so a clean exit balances it to zero.
 	let spawnCredit = emitConst(module, block: initBlock, value: OneMore, ids: ids)
-	_ = emitGlobalAccumulate(module, block: initBlock, label: GtLiveCountLabel, delta: spawnCredit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: initBlock, label: GtLiveCountLabel, delta: spawnCredit, multiM: true, ids: ids)
 
 	// The trace id: pre-increment the dispenser and stamp it on the GT, so ids run 1, 2, 3 in SPAWN order.
 	// Stored unconditionally — the FIELD is not gated, only the trace CALL below is (see `GtOffTraceId`).
-	let traceSeen = emitGlobalAccumulate(module, block: initBlock, label: GtTraceCounterLabel, delta: spawnCredit, ids: ids)
+	let traceSeen = emitGlobalAccumulate(module, block: initBlock, label: GtTraceCounterLabel, delta: spawnCredit, multiM: true, ids: ids)
 	let traceId = emitBin(module, block: initBlock, a: traceSeen, b: spawnCredit, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffTraceId, valueId: traceId, valueType: StdType.i64))
 	emitGtTraceLine(module, block: initBlock, traced: asyncTrace, tag: tags.spawn, gtId: traceId, suffix: GtTraceTag.absent(), ids: ids)
@@ -2758,7 +2761,7 @@ end 'emitGtReleaserCall'
 function emitGtStructReclaim(module StdModule, block IrBlock, ids ValueMinter, gt ValueId, rawFree ByteArray)
 	// __gt_live_count -= 1 (the leak gate's balance — one down per reclaim, matching `__gt_spawn`'s +1).
 	let reclaimDebit = emitConst(module, block: block, value: OneFewer, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: GtLiveCountLabel, delta: reclaimDebit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: GtLiveCountLabel, delta: reclaimDebit, multiM: true, ids: ids)
 	// The struct goes back to the span it came from.
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(gt)))
 end 'emitGtStructReclaim'
@@ -3063,7 +3066,7 @@ function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, s
 
 	// ioPendingDec: __io_pending-- ; → cont (freeStack). Runs for owned and shared alike.
 	let dropPendingDebit = emitConst(module, block: ioPendingDec, value: OneFewer, ids: ids)
-	_ = emitGlobalAccumulate(module, block: ioPendingDec, label: IoPendingLabel, delta: dropPendingDebit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: ioPendingDec, label: IoPendingLabel, delta: dropPendingDebit, multiM: true, ids: ids)
 	// ⭐ **AND THE ABANDONED READ'S BUFFER GOES BACK.** `__gt_io_read` published it to `gt.ioScratch` before
 	// issuing the read and will never return to free it — this is the only site that can. It runs AFTER the
 	// drain handshake above, which is what proves the completion thread has finished writing into it. A
@@ -4354,7 +4357,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 
 	// seq = (*__io_pipe_seq)++ ; uniquifier = (pid << 32) | (seq & 0xFFFFFFFF).
 	let seqCredit = emitConst(module, block: startBlock, value: OneMore, ids: ids)
-	let seq = emitGlobalAccumulate(module, block: startBlock, label: IoPipeSeqLabel, delta: seqCredit, ids: ids)
+	let seq = emitGlobalAccumulate(module, block: startBlock, label: IoPipeSeqLabel, delta: seqCredit, multiM: true, ids: ids)
 	let pid = ids.mint()
 	module.appendOp(startBlock, op: StdOp.osGetPid(pid))
 	let pidShiftConst = ids.mint()
@@ -4981,7 +4984,7 @@ function buildSubpYieldRead(module StdModule)
 
 	// park: __io_pending++ ; status=waiting ; io_handle=readEnd ; ioParked=1 (publish AFTER waiting) ; yield.
 	let parkPendingCredit = emitConst(module, block: park, value: OneMore, ids: ids)
-	_ = emitGlobalAccumulate(module, block: park, label: IoPendingLabel, delta: parkPendingCredit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: park, label: IoPendingLabel, delta: parkPendingCredit, multiM: true, ids: ids)
 	let waitingConst = emitConst(module, block: park, value: GtStatusWaiting, ids: ids)
 	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
 	// Tag pipe ownership into io_handle's spare low bit (1 = one-shot/owned, 0 = streaming/table) — the drop
@@ -5008,7 +5011,7 @@ function buildSubpYieldRead(module StdModule)
 	let clearParked = emitConst(module, block: resume, value: 0, ids: ids)
 	module.appendOp(resume, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: clearParked, valueType: StdType.i64))
 	let resumePendingDebit = emitConst(module, block: resume, value: OneFewer, ids: ids)
-	_ = emitGlobalAccumulate(module, block: resume, label: IoPendingLabel, delta: resumePendingDebit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: resume, label: IoPendingLabel, delta: resumePendingDebit, multiM: true, ids: ids)
 	let bytesRead = emitLoadField(module, block: resume, record: selfGt, offset: GtOffIoResult, ids: ids)
 	module.setTerminator(resume, op: StdOp.ret(bytesRead))
 

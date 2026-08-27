@@ -441,7 +441,7 @@ death pushes that slot back onto its span's free list. Two thousand of them are 
 here, so one class's slots are pushed and popped thousands of times over, and a run of survivors built
 the same way is verified afterwards.
 
-⚠ It hammers the RECYCLED arm of `__slab_alloc_class` — the arm that must zero a dirty slot, where the
+⚠ It hammers the RECYCLED arm of `__slab_alloc`'s pop — the arm that must zero a dirty slot, where the
 virgin arm gets its zeroes free. A pop that failed to unlink, or a push of the wrong pointer, hands one
 slot to two buffers, and the survivors are what shows it. (Before S4 this was the ONE case here that
 reached that arm at all, because `__mm_free`'s own buckets served every other shape. Now every case
