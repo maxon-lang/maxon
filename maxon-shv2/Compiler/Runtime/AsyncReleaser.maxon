@@ -62,9 +62,11 @@
 //       two Ms could both observe the same non-null releaser and both run it, which is a DOUBLE FREE of every
 //       managed argument the spawn owned, not a lost count. It is a CAS now: whoever wins the swap to 0 is
 //       the one that calls. `GtRuntime.emitGtReleaserCall` carries the argument and the no-retry-loop proof.
-//   (3) **The refcounts the emitted drop callees touch** are atomic, through the one
-//       `MmRuntime.emitAdjustRefcount`, and the decref decides "am I the last owner?" from the value its own
-//       decrement displaced rather than from a prior read.
+//   (3) **The refcounts the emitted drop callees touch** were made atomic here and are PLAIN again since
+//       EC10 — a releaser runs on the M of the green thread that owns the spawn, which is the only party
+//       that ever holds those boxes (`MmRuntime.emitAdjustRefcount`; `SchedRuntime.maxon` states the
+//       invariant). What survived the flip back is the half that was doing the work: the decref decides "am
+//       I the last owner?" from the value its own decrement displaced rather than from a prior read.
 //   (2) **The drop path's `threw`/`result` reads** are the one still open here, and they are a different
 //       shape from the other two: `__gt_promise_drop` reads `gt.status`, picks an arm, and then reads
 //       `gt.threw`/`gt.result` — while a completion landing on another M can move `status` in between. It is

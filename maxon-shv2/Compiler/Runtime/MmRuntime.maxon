@@ -801,6 +801,11 @@ end 'emitStoreField'
 // those ops — so every atomic on a struct field has to compute the address first. Three sites were about to
 // spell those two ops out by hand (this file's refcount word, `SchedRuntime`'s P fields, `GtRuntime`'s
 // releaser slot), which is the same arithmetic written three times over three different structs.
+//
+// ⚠ **THE REFCOUNT WORD IS NO LONGER ONE OF THEM (EC10).** `emitAdjustRefcount` is a plain load/add/store
+// now, and `loadIndirect`/`storeIndirect` displace from the header base themselves — so it needs no address
+// and the helper that computed one for it is gone. What is left are words genuinely SHARED between OS
+// threads, which is the population this function was always for.
 export function emitFieldAddr(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let displacement = emitConst(module, block: block, value: offset as ParsedInt, ids: ids)
 	return emitBin(module, block: block, a: record, b: displacement, opcode: StdBinOpcode.add, ids: ids)
@@ -954,6 +959,15 @@ end 'emitUnary'
 // the raw trio) to serialise against a thread that cannot exist. The bit is `usage.usesGt`, which is the
 // same one the whole slab layer keys its locks, its CAS and its P lookup on (`SlabRuntime`'s `sharded` —
 // its file header carries the argument in full), read ONCE per install and handed down, never re-derived.
+//
+// ⛔ **THIS DOOR KEEPS ITS `multiM` ARM AND THE REFCOUNT DOOR DROPPED ITS ATOMIC OUTRIGHT (EC10), AND THE
+// TWO ARE NOT ONE RULE TO BE SIMPLIFIED INTO EACH OTHER.** What this function steps is a `.data` word,
+// which is reachable from every OS thread the process has — including the IOCP completion thread and, the
+// day `spawn` lands, a worker M — so "can a second OS thread exist" is exactly the right question and
+// `multiM` is exactly the right shape for it. What `emitAdjustRefcount` steps is a word inside a BOX, and a
+// box is owned by one green thread which runs on one M: it has no second party at any `MAXON_MAX_PROCS`,
+// so there is no bit to gate on. A future rung that gives this door the refcount door's unconditional
+// answer would put a lost update back into the leak gate's own counter.
 //
 // ⛔⛔ **`multiM` HAS NO DEFAULT, AND IT HAD ONE UNTIL THIS RUNG's REVIEW.** `= true` was the answer that
 // is never WRONG — only ever slower — which is exactly what makes omitting it UNDETECTABLE: a counter
@@ -1200,10 +1214,11 @@ export let PredicateFalse = 0 as ParsedInt
 // ⭐ **THE TWO DELTAS EVERY COUNTER AND REFCOUNT STEP IN THE EMITTED RUNTIME USES.** Named rather than
 // written as a bare `1` and a bare `-1` at the fourteen sites that step a counter or a refcount by one:
 // the two are one keystroke apart, and at a call site whose only other argument is a LABEL there is
-// nothing else in the line to say which direction was meant. They are `ParsedInt` deltas fed to
-// `StdOp.atomicRmw`'s `add` — or, on `emitGlobalAccumulate`'s single-threaded arm, to the plain `binOp add`
-// that answers identically — which is why a debit is a NEGATIVE addend and not a second opcode: see
-// `StdAtomicRmwOpcode`, which has one member for exactly this reason.
+// nothing else in the line to say which direction was meant. They are `ParsedInt` deltas fed to a plain
+// `binOp add` — every refcount step (`emitAdjustRefcount`) and `emitGlobalAccumulate`'s single-threaded arm
+// — or to `StdOp.atomicRmw`'s `add` on that door's multi-M arm, which answers identically. That is why a
+// debit is a NEGATIVE addend and not a second opcode: see `StdAtomicRmwOpcode`, which has one member for
+// exactly this reason.
 export let OneMore = 1 as ParsedInt
 export let OneFewer = -1 as ParsedInt
 
@@ -1560,11 +1575,12 @@ end 'emitLoadPackedId'
 // the last-owner case because the stored value is 0 there. That identity is why the event is emitted ONCE,
 // in the block before the branch, instead of once per arm.
 //
-// ⭐ **SINCE G2 THAT PRIOR COUNT IS HANDED IN RATHER THAN RE-READ, AND UNDER MULTI-M THAT IS THE ONLY WAY
-// TO GET IT.** The decrement is now an atomic RMW that answers the displaced value
-// (`emitRefcountCheckToLastOwner`), so the trace reports the count THIS decref displaced; a re-read of the
-// word would report whatever another M had done to it since — a trace whose `rc=` belonged to a different
-// event.
+// ⭐ **SINCE G2 THAT PRIOR COUNT IS HANDED IN RATHER THAN RE-READ, AND IT IS STILL THE ONLY WAY TO GET IT.**
+// The decrement happens before the branch and answers the value it displaced
+// (`emitRefcountCheckToLastOwner`), so the trace reports the count THIS decref displaced. G2's reason was
+// that another M could move the word in between; EC10 removed that M and the conclusion is unchanged for a
+// nearer one — the decrement has already STORED the new count, so a re-read answers the count after this
+// event rather than before it.
 //
 // The alloc event, with the requested USER size as its value — never the total, so the number in the
 // trace is the one the caller asked for and stays comparable across a header that grows. It is the one
@@ -1630,8 +1646,9 @@ end 'emitMmFreeEvent'
 // record never has two owners and the buffer's own count is unambiguous: non-zero means "someone is
 // viewing these bytes", which is precisely what `__managed_cow_detach` must ask before an in-place write.
 //
-// ⚠⚠ **ATOMIC AS OF G2** — the same step the decref read-modify-write below takes, through the same
-// `emitAdjustRefcount`. A lost increment is the LOUD half of the race: it frees a box an owner still holds.
+// ⚠⚠ **PLAIN AS OF EC10** — the same step the decref read-modify-write below takes, through the same
+// `emitAdjustRefcount`, which carries the argument. It was atomic between G2 and EC10, and the half it
+// guarded is the LOUD one: a lost increment frees a box an owner still holds.
 //
 // There is no overflow check: the count is `owners - 1` in an i64, and a program cannot hold 2^63 views.
 function buildMmIncref(module StdModule)
@@ -1660,8 +1677,8 @@ end 'buildMmIncref'
 // `Parser.retainBorrowedAggregate`). The box is otherwise untouched — same pointer, count raised by
 // one — so the aggregate's aliasing (`q.x = 100` shows through to the caller) is preserved.
 //
-// ⚠⚠ **ATOMIC AS OF G2** — the same read-modify-write `buildMmIncref` and `__mm_decref` take, through the
-// one `emitAdjustRefcount`. See `emitRefcountCheckToLastOwner`.
+// ⚠⚠ **PLAIN AS OF EC10** — the same read-modify-write `buildMmIncref` and `__mm_decref` take, through the
+// one `emitAdjustRefcount`, which carries the argument. See `emitRefcountCheckToLastOwner`.
 function buildMmRetain(module StdModule)
 	var func = IrFunction.createFromStd(MmRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1678,50 +1695,92 @@ function buildMmRetain(module StdModule)
 end 'buildMmRetain'
 
 // The refcount word of the box `ptr` addresses — `[ptr - HeaderBytes + HeaderRefcountOffset]`. ONE of the
-// two places the header geometry is spelled (the other is `emitRefcountAddr`, which reaches the same word
-// through this function's own `emitHeaderBase` rather than respelling the distance), so nothing outside
-// this file has to know a header exists.
+// two places the header geometry is spelled (the other is `emitAdjustRefcount`, which reaches the same word
+// through this function's own `emitHeaderBase` and needs the base itself because it also STORES), so
+// nothing outside this file has to know a header exists.
 function emitLoadRefcount(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
-	let header = emitHeaderBase(module, block: block, ptr: ptr, ids: ids)
-	let rc = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
-	return rc
+	return emitLoadField(module, block: block, record: emitHeaderBase(module, block: block, ptr: ptr, ids: ids), offset: HeaderRefcountOffset, ids: ids)
 end 'emitLoadRefcount'
 
-// The ADDRESS of that word, which is what an atomic must be handed: `StdOp.atomicRmw` carries no field
-// displacement (see its header — an atomic names one word and nothing else), where `loadIndirect` does.
-// It walks the SAME two hops `emitLoadRefcount` walks, through the SAME `emitHeaderBase`, so a header that
-// grew a field is still a change to that one function and to nothing else.
-function emitRefcountAddr(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
-	return emitFieldAddr(module, block: block, record: emitHeaderBase(module, block: block, ptr: ptr, ids: ids), offset: HeaderRefcountOffset, ids: ids)
-end 'emitRefcountAddr'
-
-// ⭐⭐ **`refcount += delta` AS ONE INDIVISIBLE STEP, ANSWERING THE COUNT AS IT STOOD BEFORE.** One more
-// owner (`OneMore`) or one fewer (`OneFewer`) — the incref and the decref are the SAME three ops differing
-// only in the addend, so they are written once and a change to how the count is maintained cannot be
-// applied to one direction and missed on the other.
+// ⭐⭐ **`refcount += delta`, ANSWERING THE COUNT AS IT STOOD BEFORE.** One more owner (`OneMore`) or one
+// fewer (`OneFewer`) — the incref and the decref are the SAME four ops differing only in the addend, so they
+// are written once and a change to how the count is maintained cannot be applied to one direction and missed
+// on the other.
 //
-// ⭐⭐ **IT IS ATOMIC AS OF G2, AND THE TRIGGER WAS NOT THE ONE WRITTEN DOWN FOR YEARS.** The note this
-// function used to carry named *"the day green threads land"*. Green threads landed and shv2 stayed
-// correct, because a single-M cooperative scheduler switches only at explicit yield points and no two green
-// threads ever execute a refcount update concurrently. **The real trigger is MULTI-M** — two OS threads
-// running Maxon code at once — and G1 built that behind `MAXON_MAX_PROCS`. With a plain load/add/store a
-// shared box refcounted by two Ms loses updates in both directions, and the two losses are not equally
-// loud: a lost DECREF leaks the box, a lost INCREF frees it while an owner still holds it. MEASURED on the
-// tree as received, `temp/g2/rc-global.maxon` (twelve green threads storing one `String` into one
-// module-level slot, so every M retains and releases the SAME word): `MAXON_MAX_PROCS=1` is exit 42 with
-// `live=3` on every run, and at 2/4/12 it is **exit 101 (the leak gate) with `live=12..14`, or exit 139 (a
-// segfault)** — both halves of the race, in one program.
+// ⭐⭐⭐ **IT IS A PLAIN LOAD/ADD/STORE AS OF EC10, AND THE REASON IS THE LANGUAGE'S GUARANTEE RATHER THAN A
+// THREAD COUNT.** This note has now named the trigger twice and been wrong once, so it is worth having both
+// corrections in one place:
 //
-// ⚠ **THE PRIOR VALUE IS THE ANSWER BECAUSE THE DECREF NEEDS IT** — see `emitRefcountCheckToLastOwner`,
-// where "was I the last owner?" can only be decided from the value the decrement itself displaced. An
-// incref discards it, which is what lets the x64 isel drop the destination register entirely (`lock add`
-// rather than `lock xadd`; `lowerAtomicRmw` states the saving) on the path every retained value runs.
+//   * for years it said *"the day green threads land"*. Green threads landed and shv2 stayed correct,
+//     because a single-M cooperative scheduler switches only at explicit yield points.
+//   * G2 corrected that to **MULTI-M** — two OS threads running Maxon code at once, which G1 had built
+//     behind `MAXON_MAX_PROCS` — and made the step a `lock`-prefixed `atomicRmw`. That was right for the
+//     runtime as it then stood: `async` published a green thread to the SCHEDULER, so a worker M really did
+//     run Maxon code that retained and released another M's box.
+//   * ⚖ EC10 removed the second party instead of serialising against it. **An `async` frame is a COROUTINE
+//     of the green thread that called it** (USER, 2026-08-27: *"async … allows a function to yield the
+//     current green thread"*, and *"only 1 green thread can hold references to a box at a time"*), published
+//     only to its owner's queue and driven only by its owner's chain of drivers. `SchedRuntime.maxon`'s
+//     header states the invariant in full and is where it belongs; it is not restated here.
+//
+// ⇒ **The box a refcount belongs to has ONE owning green thread, that green thread runs on ONE M, so the
+// read-modify-write below has no second party.** That is a property of the language, not of
+// `MAXON_MAX_PROCS`, which is why there is no `multiM` argument here as there is on `emitGlobalAccumulate`:
+// a `.data` counter really is reachable from every OS thread the process has and keeps its atomic; a
+// refcount is not and never was.
+//
+// ⚠ **THE ONE OS THREAD THAT IS NOT THE OWNER'S M REACHES EXACTLY TWO FUNCTIONS, AND THIS IS NOT ONE OF
+// THEM.** An emitted program creates OS threads at exactly two `osThreadCreate` sites: the IOCP completion
+// thread (`GtRuntime.buildIoInit`) and a worker M (`SchedRuntime.emitSchedWakeOrSpawn`, which has had no
+// caller with a producer since EC10 and waits for `spawn`). MEASURED from the emitted bytes of a program
+// using `async`, a subprocess and a heap `String` — the completion thread's whole call graph is
+// `__io_completion_loop` → `__gt_coro_enqueue`, five Win32 IAT calls, one direct call, no other Maxon
+// function and not one `lock` prefix. A queue append is all it does; it never touches a box.
+//
+// ⭐ **THE CONTROL IS COMMITTED, BECAUSE THE LAST ONE WAS NOT.** G2's measurement lived in
+// `temp/g2/rc-global.maxon`, and `temp/` is gitignored and swept — so the evidence for a `lock` prefix on
+// every retain and release in the language survived only as a path in a comment. It is
+// `maxon-shv2/track0/refcount-torture.maxon` now, driven by `track0/refcount-race.sh`.
+//
+// ⚠ **AND THE SHAPE G2's NOTE DESCRIBED GENERATES NO CONTENDED TRAFFIC AT ALL** — twelve green threads
+// *storing* one `String` into a module-level slot is a deep CLONE per reader (`__mm_alloc` + `__str_copy` +
+// a decref of the FRESH record), and a non-escaping borrow is erased outright. Contention needs a borrow
+// that ESCAPES: `bag.push(s)` retains into a container that outlives the statement, and the container's
+// scope end decrefs every element, so one round is N increfs and N decrefs of the SAME word. That is what
+// the committed program does. MEASURED HERE, on THIS change, 24 runs per cell — the middle row taken by
+// routing `buildGtReady`'s publish back to `SchedQueueEnd.localRing` on the finished tree and rebuilding,
+// after which the reverted build came back BYTE-IDENTICAL to the one before it:
+//
+//   | build                          | N=1   | N=2          | N=4            | N=12          |
+//   |--------------------------------|-------|--------------|----------------|---------------|
+//   | atomic RMW, `async` pinned     | 42×24 | 42×24        | 42×24          | 42×24         |
+//   | PLAIN, pin undone at one site  | 42×24 | 42×22, 101×2 | 101×15, 139×9  | 101×4, 139×20 |
+//   | PLAIN, `async` pinned (SHIPPED)| 42×24 | 42×24        | 42×24          | 42×24         |
+//
+// **48 of 96 runs crashed without the pin; 0 of 96 with it, and 0 of 96 under the atomic.** ⚠ The middle
+// row's `42`s are not clean runs: the sabotage moves the PUBLISH and leaves the driver looking in the
+// owner's queue, so at N=1 nothing runs the coroutines at all and the program bails with `aggregate=0`.
+// The 101/139 count is the discriminator, and the N=4 rows name the mechanism — `workers=4 steals=6`.
+//
+// ⛔ **`live=` IS NOT THE SIGNAL AND G2's NOTE SAID IT WAS.** `mmRawAllocLive()` reads the same in passing
+// and in segfaulting runs — it counts the P structs bring-up allocated, so it grows with the processor count
+// whatever the Ms did. So does `aggregate=` deceive: it is byte-identical either way, because the ANSWER
+// stays deterministic and only memory management breaks. **THE EXIT CODE IS THE DISCRIMINATOR** — 101 is the
+// leak gate (a lost decref) and 139 a segfault (a lost incref, freeing a box under a live holder).
+//
+// ⚠ **THE PRIOR VALUE IS STILL THE ANSWER, AND NOW IT IS THE ONLY WAY TO GET IT** — see
+// `emitRefcountCheckToLastOwner`, where "was I the last owner?" can only be decided from the value the
+// decrement displaced. Under the atomic that was one op's contract; here the STORE has already overwritten
+// the word, so a re-read would answer the new count. ⚠ The old note argued that DISCARDING it bought the
+// increfs a cheaper instruction (`lock add` rather than `lock xadd`; `lowerAtomicRmw` states that saving).
+// That trade is simply gone: the load's result feeds the add whether or not the caller wants it, so the two
+// increfs pay nothing for answering it on an untraced build.
 function emitAdjustRefcount(module StdModule, block IrBlock, ptr ValueId, delta ParsedInt, ids ValueMinter) returns ValueId
-	let rcAddr = emitRefcountAddr(module, block: block, ptr: ptr, ids: ids)
+	let header = emitHeaderBase(module, block: block, ptr: ptr, ids: ids)
+	let prior = emitLoadField(module, block: block, record: header, offset: HeaderRefcountOffset, ids: ids)
 	let step = emitConst(module, block: block, value: delta, ids: ids)
-	let prior = ids.mint()
-	module.appendOp(block, op: StdOp.atomicRmw(prior, addrId: rcAddr, operandId: step, opcode: StdAtomicRmwOpcode.add))
+	let stepped = emitBin(module, block: block, a: prior, b: step, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: header, offset: HeaderRefcountOffset, value: stepped)
 	return prior
 end 'emitAdjustRefcount'
 
@@ -1771,14 +1830,16 @@ end 'emitIsSharedAllocation'
 // only thing that emits a drop. The bootstrap panics here ("double-free"); shv2 gets the same
 // signal for free from the leak counter going negative, which the exit check reads as nonzero.
 //
-// ⭐⭐⭐ **IT DECREMENTS FIRST AND DECIDES FROM WHAT THE DECREMENT DISPLACED (G2), AND THAT ORDER — NOT THE
-// `LOCK` PREFIX — IS WHAT MAKES IT CORRECT UNDER MORE THAN ONE M.** This used to READ the count, branch on
-// it, and only then lower it, which is a check-then-act: two Ms each holding one of a box's two references
-// both observe `rc == 1`, both conclude *"somebody else still holds it"*, both decrement, and the box is
-// never freed. Making the store atomic and leaving the order alone fixes NOTHING — the stale read is the
-// bug. So the atomic RMW happens up front and the arm is chosen from the value it replaced: exactly one M
-// can observe a prior of 0, and that M is the last owner. (`__mm_incref` above is the mirror half, and it
-// is the loud one: a lost increment frees a box an owner still holds.)
+// ⭐⭐⭐ **IT DECREMENTS FIRST AND DECIDES FROM WHAT THE DECREMENT DISPLACED (G2), AND THAT ORDER OUTLIVED
+// THE `LOCK` PREFIX THAT ARRIVED WITH IT.** This used to READ the count, branch on it, and only then lower
+// it, which is a check-then-act: two Ms each holding one of a box's two references both observe `rc == 1`,
+// both conclude *"somebody else still holds it"*, both decrement, and the box is never freed. G2's note
+// said the order and not the prefix was what fixed that, and EC10 is the experiment: the prefix is gone
+// (`emitAdjustRefcount` — an `async` frame is a coroutine of its owning green thread, so a refcount has no
+// second party) and **the order stays, now for a nearer reason.** The step below STORES the new count, so
+// after it the word no longer holds what this caller displaced; reading the word to pick the arm would ask
+// the question of the wrong number even on one thread. The arm is chosen from the value the decrement
+// replaced: a prior of 0 means this caller was the last owner. (`__mm_incref` above is the mirror half.)
 //
 // This helper is where the order lives because it is the ONE place the surviving refcount read-modify-write
 // is — `__mm_decref` and `__str_decref` both route through it, and every `__destruct_<T>` cascade does too —

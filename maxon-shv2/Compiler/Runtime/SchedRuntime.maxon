@@ -17,6 +17,15 @@
 // > Ms publishing, popping and stealing GREEN THREADS — touch queues, status words, counters and claims,
 // > every one of which states its `MultiMSharing` class; none touches a refcount.**
 //
+// ⭐ **THE LAST CLAUSE IS MEASURED, NOT ASSERTED, AND IT HAD TO BE — the plain refcount rests on it.** An
+// emitted program creates an OS thread at exactly two `osThreadCreate` sites: `buildIoInit`'s completion
+// thread and `emitSchedWakeOrSpawn`'s worker M, which since EC10 has no caller with a producer. So there is
+// ONE non-owning OS thread today, and its whole Maxon call graph — read off the emitted bytes of a program
+// using `async`, a subprocess and a heap `String` — is `__io_completion_loop` → `__gt_coro_enqueue`: one
+// direct call, five Win32 IAT calls, no further Maxon function, and not one `lock` prefix. A queue append
+// is the entire job. ⚠ **A rung that gives that thread more to do owes this measurement again** — the
+// refcount door's argument is exactly this graph.
+//
 // ⚖ **USER, 2026-08-27:** *"async is not supposed to create a new green thread. it allows a function to yield
 // the current green thread while waiting for a blocking operation"*, and *"the language is supposed to
 // guarantee that only 1 green thread can hold references to a box at a time"*. Crossing threads is actors,
@@ -45,12 +54,15 @@
 //
 // ⚠⚠ **WHAT G2 FLIPPED, AND WHAT IT LEFT — THE SHORT FORM. The long form is at each slot.**
 //
-//   1. **THE REFCOUNT READ-MODIFY-WRITE.** `MmRuntime.emitAdjustRefcount` is a `lock`-prefixed atomic, and
-//      `emitRefcountCheckToLastOwner` now DECREMENTS FIRST and picks its arm from the value the decrement
-//      displaced — the order, not the prefix, is what makes it correct. MEASURED both ways on one binary
-//      (`temp/g2/rc-field.maxon`, twelve Ms retaining and releasing ONE box): with the flip, exit 42 at
-//      `MAXON_MAX_PROCS ∈ {1,2,4,12}`, twenty runs; with only that flip reverted, **exit 101 at 2 and 4 and
-//      exit 139 at 12**, five runs each.
+//   1. **THE REFCOUNT READ-MODIFY-WRITE — G2 MADE IT ATOMIC AND ⭐ EC10 TOOK THE PREFIX BACK OFF**, because
+//      the invariant at the top of this file removed the second party rather than serialising against it.
+//      What SURVIVES from G2 is the half that was load-bearing: `emitRefcountCheckToLastOwner` DECREMENTS
+//      FIRST and picks its arm from the value the decrement displaced — *the order, not the prefix, is what
+//      makes it correct*, which G2's own note said and EC10 is the experiment for. `MmRuntime.
+//      emitAdjustRefcount` carries the argument and the measurement. ⚠ G2 cited its reproducer as
+//      `temp/g2/rc-field.maxon`; `temp/` is gitignored and swept, so that file no longer exists and the
+//      measurement is now `maxon-shv2/track0/refcount-torture.maxon`, COMMITTED, driven by
+//      `track0/refcount-race.sh`.
 //   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which is what the four
 //      scheduler counters (`__gt_live_count`, `__gt_trace_counter`, `__io_pending`, `__io_pipe_seq`) call
 //      instead of each spelling load/add/store by hand. ⚠ Since EC8 that door emits an `atomicRmw` only

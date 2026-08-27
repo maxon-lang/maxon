@@ -2061,14 +2061,24 @@ export union StdOp
 	// three orderings genuinely do not cover (a store-load pair with no CAS between them is the shape to
 	// watch for), and it should arrive WITH that use, not ahead of it.
 	//
-	// ⛔ **THE REFCOUNT OPS ARE DELIBERATELY NOT FLIPPED TO THESE, AND THE TRIGGER IS NOT THE ONE WRITTEN
-	// DOWN.** `MmRuntime.emitRefcountCheckToLastOwner` is a plain load/add/store and its comment names "the
-	// day green threads land" as the day it must become atomic. Green threads HAVE landed and shv2 stayed
-	// correct, because a single-M cooperative scheduler switches only at explicit yield points and no two
-	// green threads ever execute a refcount update concurrently. The real trigger is MULTI-M — two OS threads
-	// running Maxon code at once — and G1 has since BUILT that, behind `MAXON_MAX_PROCS`, with the default left
-	// at one M precisely so this flip can be a rung of its own. ⇒ this file's refcount ops are item 2 on
-	// `SchedRuntime.maxon`'s audit list, and the day that default moves is the day they must have moved first.
+	// ⛔ **THE REFCOUNT STEP IS DELIBERATELY NOT ONE OF THESE, AND THIS NOTE NAMED THE WRONG TRIGGER TWICE —
+	// SO IT NOW RECORDS THE HISTORY RATHER THAN PREDICTING THE NEXT FLIP.** For years it read *"the day green
+	// threads land"*; green threads landed and shv2 stayed correct, because a single-M cooperative scheduler
+	// switches only at explicit yield points. G2 corrected the trigger to MULTI-M — two OS threads running
+	// Maxon code at once, which G1 had built behind `MAXON_MAX_PROCS` — and duly made
+	// `MmRuntime.emitAdjustRefcount` an `atomicRmw`. ⭐ **EC10 made it plain again, unconditionally**, by
+	// removing the second party instead of serialising against it: an `async` frame is a COROUTINE of the
+	// green thread that called it, so a box has one owning green thread, that green thread runs on one M, and
+	// its count has nobody to race. ⇒ **that is a property of the language rather than of `MAXON_MAX_PROCS`**,
+	// and it does not lapse the day the default moves: `spawn` will schedule real green threads across Ms
+	// without ever giving two of them a reference to one box. `SchedRuntime.maxon`'s header states the
+	// invariant; `MmRuntime.emitAdjustRefcount` carries the measurement and names the committed control.
+	//
+	// ⚠ **A `.data` COUNTER IS THE OTHER STORY AND KEEPS ITS ATOMIC** where a second OS thread can exist
+	// (`MmRuntime.emitGlobalAccumulate`'s `multiM` arm — item 2 on `SchedRuntime.maxon`'s audit list). A word
+	// in a BOX and a word in `.data` differ in exactly the way that matters here, and collapsing them into one
+	// rule is a bug in either direction: one way puts a `lock` back on every retain in the language, the other
+	// puts a lost update into the leak gate's own counter.
 	//
 	// **`atomicCas(result, addr, expected, replacement)`** — a 64-bit compare-and-swap of the word at
 	// `addr`. ⚠ **`result` IS 1 ON SUCCESS AND 0 ON FAILURE — NOT THE PRIOR VALUE.** That is v1's stated
