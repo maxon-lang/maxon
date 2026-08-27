@@ -276,10 +276,30 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
     EmitDivOperation32(lhs, rhs, result, X86Register.Rdx, block);
   }
 
+  /// ⭐⭐ A NARROWED SIGNED DIVIDE IS THE ONE OP THAT LEAVES HALF A REGISTER UNDEFINED, AND
+  /// EVERY CONSUMER ABOVE IT ASSUMES OTHERWISE.
+  ///
+  /// `idiv r/m32` defines only `EAX`/`EDX`, and a 32-bit write ZERO-extends into its 64-bit register.
+  /// So a NEGATIVE quotient or remainder arrives as `0x00000000FFFFFFF8` — `4294967288`, not `-8` — for
+  /// anything that reads the value at 64 bits.
+  ///
+  /// ⭐ **AND IT IS THE ONLY NARROWED OP THAT IS ACTUALLY NARROW**, which is what makes that reachable:
+  /// every other <see cref="Ir.Dialects.StdBinaryI32Op"/> — add, sub, mul, and, or, xor — lowers to its
+  /// 64-BIT instruction (the `EmitBinaryRegReg` arms in `StandardToX86Conversion`), so an `StdI32` in a
+  /// register is otherwise always its own 64-bit reading and every consumer was written on that. Making
+  /// it true again HERE, at the one instruction that breaks it, is why this is not a per-consumer rule:
+  /// a consumer that widens first reads CORRECTLY, so the wrong ones are exactly the ones nobody wrote a
+  /// test for. That is how a quotient PRINTED as `-8` — an interpolation sign-extends before formatting
+  /// — and was refused by a range check one line later. `specs/ranged-typealias.md` pins both readings.
+  ///
+  /// ⚠ <see cref="EmitDivOperation32"/> deliberately has NO counterpart: `div r/m32` produces an
+  /// UNSIGNED 32-bit result, whose correct 64-bit reading IS the zero-extension the hardware already
+  /// wrote. Sign-extending it would turn a `u32` above `i32.max` into a negative number.
   private void EmitIdivOperation32(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, IrBlock<X86Op> block) {
     var rhsReg = PrepareDivisionRegisters(lhs, rhs, block);
     block.AddOp(new X86CdqOp());
     block.AddOp(new X86IdivReg32Op(rhsReg));
+    block.AddOp(new X86MovsxdOp(resultRegister, resultRegister));
     Assign(resultRegister, result);
   }
 

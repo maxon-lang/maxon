@@ -462,6 +462,86 @@ end 'main'
 0
 ```
 
+<!-- test: div-narrowed-signed-divide-sign-extends-its-result -->
+#### A narrowing that IS licensed still owes a SIGN-EXTENDED result
+Two ranges that both fit `i32` genuinely do license the narrower divide, and on x64 that is a real
+`idiv r/m32` — an instruction that defines only `EAX`/`EDX`. Every 32-bit write ZERO-extends into its
+64-bit register, so a NEGATIVE quotient comes back as `0x00000000FFFFFFF8`: `4294967288`, not `-8`,
+for anything that reads the value at 64 bits. A remainder is the same instruction and the same hazard.
+
+⚠ **THE SAME VALUE CAN READ CORRECTLY AT ONE CONSUMER AND WRONGLY AT THE NEXT**, which is what kept
+this hidden: an interpolation sign-extends before formatting, so the number PRINTS as `-8` while the
+call one line later receives `4294967288`. That is why these cases hand the quotient to a 64-bit
+consumer instead of asserting on what it prints.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Imm32 = int(i32.min to i32.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function widen(v Integer) returns Integer
+	return v
+end 'widen'
+
+function quotient(byteOffset Imm32) returns Integer
+	return widen(byteOffset / 8)
+end 'quotient'
+
+function remainder(byteOffset Imm32) returns Integer
+	return widen(byteOffset mod 8)
+end 'remainder'
+
+function main() returns ExitCode
+	let offset = ident(0 - 65) as Imm32
+	print("q={quotient(offset)} r={remainder(offset)}\n")
+	return 0
+end 'main'
+```
+```stdout
+q=-8 r=-1
+```
+```exitcode
+0
+```
+
+<!-- test: div-narrowed-signed-divide-result-is-in-range-for-its-own-type -->
+#### …and `-8` is inside the `int(i32.min to i32.max)` it was divided out of
+The zero-extended reading is not, so a consumer that RANGE-CHECKS the quotient rejects a value
+plainly inside the range. That is the shape this was first found as — a compiler that printed the
+offset as `-8` and panicked on the very next parameter bind.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Imm32 = int(i32.min to i32.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function magnitude(imm Imm32) returns Integer
+	if imm >= 0 'nonNeg'
+		return imm
+	end 'nonNeg'
+	return 0 - imm
+end 'magnitude'
+
+function main() returns ExitCode
+	let offset = ident(0 - 64) as Imm32
+	let units = (offset / 8) as Imm32
+	print("units={units}\n")
+	print("magnitude={magnitude(units)}\n")
+	return 0
+end 'main'
+```
+```stdout
+units=-8
+magnitude=8
+```
+```exitcode
+0
+```
+
 ### Ranged type in struct field
 
 <!-- test: struct-field -->

@@ -929,23 +929,31 @@ end 'arm64EmitWideFrameSlot'
 // place the two signed-offset memory forms below turn an `Imm32` into the immediate their encoding carries:
 // STUR/LDUR's simm9 (scale 1, 9 bits) and STP/LDP's imm7 (scale 8 — one transferred register — 7 bits).
 //
-// ⛔⛔ **IT WORKS ON THE MAGNITUDE AND RE-APPLIES THE SIGN, AND THAT IS NOT STYLE — THE OBVIOUS SPELLING
-// FAILS AT RUN TIME IN THIS FILE.** `imm32ToWord((byteOffset / scale) as Imm32)` — divide the signed
-// offset, re-narrow, hand it on — dies on `imm32ToWord`'s OWN `Imm32` parameter bind for a legitimately
-// in-range NEGATIVE value. MEASURED on an `arm64-macos` emission: `byteOffset = -64` computes `units = -8`,
-// which PRINTS as `-8` on the line before, and the very next bind panics *"Range check failed: value
-// outside typealias 'Imm32'"*.
+// ⛔⛔ **THIS USED TO SAY THE OBVIOUS SPELLING "FAILS AT RUN TIME IN THIS FILE" AND "COULD NOT BE
+// REDUCED". THE PANIC WAS REAL AND BOTH EXPLANATIONS WERE WRONG** — replaced rather than deleted,
+// because the shape is still worth knowing. MEASURED, then: `byteOffset = -64` produced a quotient that
+// PRINTED as `-8` and was refused by the very next `Imm32` parameter bind, *"Range check failed"*. It was
+// about neither this file nor `imm32ToWord`: the BOOTSTRAP that compiles shv2 narrowed a `/` whose two
+// operand ranges both fit `i32` into a 32-bit `idiv`, and `idiv r/m32` defines only `EAX` — a 32-bit write
+// ZERO-extends, so a NEGATIVE quotient read as `4294967288` at 64 bits. The range check was merely the
+// first consumer to look; a consumer that sign-extended first (an interpolation does) saw `-8`, which is
+// how one value printed correctly and was rejected one line later. Fixed at the instruction that breaks
+// the invariant (`RegisterManager.EmitIdivOperation32`) and pinned by `specs/ranged-typealias.md`.
 //
-// ⚠ **IT COULD NOT BE REDUCED, AND THAT IS RECORDED HERE RATHER THAN GUESSED AT.** The identical chain in a
-// standalone program — an `Imm32` parameter narrowed from a wider sum, divided by a positive constant,
-// re-narrowed and passed to another `Imm32` parameter, with `imm32ToWord`'s body copied verbatim — runs
-// CORRECTLY for every one of those offsets. So the trigger is something about compiling THIS file, not
-// about the shape, and the underlying defect is reported separately instead of being explained by a
-// sentence nobody measured.
+// ⚠ **THE "COULD NOT BE REDUCED" HALF DID NOT HOLD EITHER, AND WHY THAT REDUCTION PASSED IS NOT
+// RECOVERABLE.** The shape it describes — an `Imm32` parameter, divided by a positive constant,
+// re-narrowed and handed to another `Imm32` parameter — IS `specs/ranged-typealias.md`'s case, and it
+// fails. What is measurable is which divisors license the narrowing, and that answer names this
+// signature: a literal, a module-level `let` and a local `let` all fold to a range fitting `i32` and take
+// the 32-bit `idiv`, while a `NonZeroWord` divisor — `int(1 to u64.max)`, which has no signed reading to
+// union with `Imm32` — keeps the divide at 64 bits. So the parameter below would not trip it today; the
+// failing draft must have divided by one of this file's folded scale constants.
 //
-// Building the field out of `arm64AddSubImmMagnitude` — the idiom `arm64EmitCmpImm` already uses for a
-// signed immediate — never forms a negative intermediate at all, so it is correct today AND independent of
-// whatever that turns out to be.
+// ⭐ The magnitude spelling stays, now on its merits rather than as a route around that. It reuses
+// `arm64AddSubImmMagnitude` — the idiom `arm64EmitCmpImm` already uses for a signed immediate, and the one
+// home of the magnitude rule — and it folds the sign through `modulus`, the number this field genuinely
+// wraps at. `imm32ToWord((byteOffset / scale) as Imm32) and (modulus - 1)` is correct too, but only while
+// every modulus is a power of two, and nothing here says that.
 function arm64SignedMemField(byteOffset Imm32, scale NonZeroWord, modulus MachineWord) returns MachineWord
 	let units = arm64AddSubImmMagnitude(byteOffset) / scale
 	if byteOffset < 0 'negative'
