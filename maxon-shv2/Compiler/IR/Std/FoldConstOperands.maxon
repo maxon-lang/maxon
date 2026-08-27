@@ -654,11 +654,20 @@ end 'foldableCmpImm'
 //       INSTRUCTION takes as written (TypeRules' `shiftCountIsUnguarded` — ASKED here rather than
 //       restated). Those are exactly the counts on which the imm8 form and the `cl` form provably
 //       agree, because the hardware's mask is a no-op on them.
-//       A count outside it never reaches this pass as a constant: the parser has already folded it
-//       (`x shl 100` IS the constant 0) or GUARDED it (`Parser.emitGuardedShift`), because the
-//       hardware would otherwise mask it and answer a different question. If one somehow did, it
-//       would keep its register operand and go through `cl` — where the guard the parser emitted
-//       is what makes that correct.
+//       A count outside it never reaches this pass as a constant, and the parser has THREE routes to
+//       that — not two, which is what this paragraph said before EC6 added the third:
+//         FOLDED  — the parser saw the value (`x shl 100` IS the constant 0), so no count above the
+//                   window survives as a shift at all.
+//         GUARDED — the parser saw neither the value nor a bound, so it saturated the count at run
+//                   time (`Parser.emitGuardedShift`).
+//         PROVEN  — the parser saw the count's declared BOUNDS and they lie inside the window
+//                   (`Parser.shiftCountIsProvenUnguarded`), so a constant this pass discovers for it
+//                   is one this window already covers.
+//       ⚠ The three do NOT all leave the same fallback. If a count outside the window somehow reached
+//       here it would keep its register operand and go through `cl`, and that is correct for a GUARDED
+//       count because the guard the parser emitted saturates it first — a PROVEN count has no guard,
+//       so for it the fallback is correct only because the bound it was proven against IS this window.
+//       That is why both ask TypeRules' one predicate rather than restating it.
 function constFitsBinOpImmediate(v ParsedInt, opcode StdBinOpcode) returns bool
 	return match opcode 'o'
 		add gives fitsImm32(v)

@@ -1419,3 +1419,162 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: a-merged-count-is-not-proven-around-a-loop -->
+⛔⛔ **A MERGE'S DECLARED ALIAS IS NOT A PROOF, AND A SHIFT COUNT IS THE THIRD READER THAT MUST NOT
+SPEND IT AS ONE (G14).** The cases above prove a count through a PARAMETER (guarded at the callee's
+entry) and through an `as` (guarded at the cast). A `var` reassigned around a loop crosses NEITHER:
+an assignment is a door on no tier, so the loop's header phi keeps the name `Bits` while the body
+hands it whatever it computed. `n` below is declared `int(0 to 63)` and holds **71**.
+
+⚠ **THIS IS THE CASE THAT SEPARATES "DECLARED" FROM "PROVEN", AND NOTHING ELSE IN THIS FILE CAN
+SEE IT.** Every other count here really is inside its alias, so an elision reading the DECLARED type
+answers those identically whether or not it is sound. Read as a proof, this count elides the
+saturation and the hardware masks 71 to 7: `1 shl 71` becomes **128** and `0 - 4` shifted right by
+71 becomes `0 - 1` by luck rather than by rule. Both compilers answer the saturated value.
+
+⚠ Its expectation rides on the same non-door assignment G14 records. If an assignment to a ranged
+alias ever becomes a door, this program panics at `n = n + 10` instead, and the case moves to that
+expectation — exactly as `a-count-whose-alias-reaches-below-zero-keeps-the-guard` moves when the
+negative-count panic lands.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias Bits = int(0 to 63)
+
+function main() returns ExitCode
+	var n = 1 as Bits
+	var i = 0 as Num
+	while i < 7 'step'
+		n = n + 10
+		i = i + 1
+	end 'step'
+
+	// The premise, asserted before it is spent: the merge really does hold a value its alias cannot.
+	if n != 71 'reached'
+		return 1
+	end 'reached'
+
+	if 1 shl n != 0 'shl'
+		return 2
+	end 'shl'
+	let negative = 0 - 4
+	if negative shr n != 0 - 1 'shrSign'
+		return 3
+	end 'shrSign'
+
+	let w = u64.max as Word
+	if w shr n != 0 'shrZeroFill'
+		return 4
+	end 'shrZeroFill'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-merged-count-is-not-proven-through-a-fallback -->
+⚠ **THE SECOND MERGE THAT CAN CARRY A COUNT ITS ALIAS NEVER ADMITTED: `try … otherwise <variable>`.**
+The ok edge is the callee's own guarded `return`, so a `try f() otherwise 0` merge IS provable and
+keeps its elision — but a VARIABLE fallback is not range-checked, so the merge below denotes `Bits`
+while holding **100**. One rule covers both: the edge proves, or the claim is withheld.
+
+Masked, `1 shl 100` would be `1 shl 36` = **68719476736**. It is 0 here, on both compilers.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias Bits = int(0 to 63)
+
+union Missing implements Error
+	nothing
+end 'Missing'
+
+function firstBit(ok bool) returns Bits throws Missing
+	if not ok 'absent'
+		throw Missing.nothing
+	end 'absent'
+
+	return 3
+end 'firstBit'
+
+function main() returns ExitCode
+	// Stepped so the fallback is not a literal: `requireOtherwiseInRangedReturn` refuses an
+	// out-of-range LITERAL fallback outright, which is the only fallback shape that is checked.
+	var wide = 90 as Num
+	wide = wide + 10
+
+	let n = try firstBit(false) otherwise wide
+
+	if n != 100 'reached'
+		return 1
+	end 'reached'
+
+	if 1 shl n != 0 'shl'
+		return 2
+	end 'shl'
+	let negative = 0 - 4
+	if negative shr n != 0 - 1 'shrSign'
+		return 3
+	end 'shrSign'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-runtime-narrow-operand-under-a-proven-count -->
+⚠ **THE OPERAND THE COMPILER CANNOT FOLD, WHICH IS THE HALF EVERY OTHER WIDTH CASE HERE MISSES.**
+`shift-ranged-operand-is-64-bit` and `a-byte-operand-with-a-proven-count-is-still-64-bit` both hold a
+narrow ranged operand the parser can FOLD (`let b = 200 as Byte`), so both are answered by the
+folding path. Here the operand ARRIVES as a `Byte` parameter and the count as a `Bits` parameter, so
+neither is folded and the emitted instruction is the whole answer: `200 shl 10` is **204800** and
+`200 shr 5` is **6**, at 64 bits, whatever the two declared ranges are.
+
+⛔ **THIS CASE IS `specs-shv2`-ONLY BECAUSE THE BOOTSTRAP GETS IT WRONG, AND THAT IS A MEASUREMENT.**
+MEASURED 2026-08-27 on `bin/maxon.exe`: with the operand AND the count both arriving as narrow ranged
+parameters it answers **2** for `1 shl 10`, **51200** for `200 shl 10` and **0** for `200 shr 3` —
+three wrong answers, none of which the folded spellings above can reach. It is a maxon-sharp defect,
+it predates this rung (this rung changes no maxon-sharp code, and the pre-rung shv2 binary answers
+204800 / 6 exactly as this tree does), and the C# suite is its gate — so the correct answer is pinned
+HERE, where it is green, rather than filed as a red case in `specs`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bits = int(0 to 63)
+
+function shlByteByBits(b Byte, n Bits) returns Num
+	return b shl n
+end 'shlByteByBits'
+
+function shrByteByBits(b Byte, n Bits) returns Num
+	return b shr n
+end 'shrByteByBits'
+
+function byteOf(step Num) returns Byte
+	return (step * 100) as Byte
+end 'byteOf'
+
+function bitsOf(step Num) returns Bits
+	return (step * 5) as Bits
+end 'bitsOf'
+
+function main() returns ExitCode
+	if shlByteByBits(byteOf(2), n: bitsOf(2)) != 204800 'shl'
+		return 1
+	end 'shl'
+	if shrByteByBits(byteOf(2), n: bitsOf(0)) != 200 'shrZero'
+		return 2
+	end 'shrZero'
+	if shrByteByBits(byteOf(2), n: bitsOf(1)) != 6 'shr'
+		return 3
+	end 'shr'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```

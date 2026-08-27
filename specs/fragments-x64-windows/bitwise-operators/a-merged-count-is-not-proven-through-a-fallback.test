@@ -1,0 +1,158 @@
+// Test: a-merged-count-is-not-proven-through-a-fallback
+typealias Num = int(i64.min to i64.max)
+typealias Bits = int(0 to 63)
+
+union Missing implements Error
+	nothing
+end 'Missing'
+
+function firstBit(ok bool) returns Bits throws Missing
+	if not ok 'absent'
+		throw Missing.nothing
+	end 'absent'
+
+	return 3
+end 'firstBit'
+
+function main() returns ExitCode
+	// Stepped so the fallback is not a literal: `requireOtherwiseInRangedReturn` refuses an
+	// out-of-range LITERAL fallback outright, which is the only fallback shape that is checked.
+	var wide = 90 as Num
+	wide = wide + 10
+
+	let n = try firstBit(false) otherwise wide
+
+	if n != 100 'reached'
+		return 1
+	end 'reached'
+
+	if 1 shl n != 0 'shl'
+		return 2
+	end 'shl'
+	let negative = 0 - 4
+	if negative shr n != 0 - 1 'shrSign'
+		return 3
+	end 'shrSign'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @firstBit(ok: i1) -> u8 {
+  entry:
+    x64.mov rax, 1
+    x64.xor rcx, rax
+    x64.test rcx, rcx
+    x64.je firstBit.absent_0.after
+  absent_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  absent_0.after:
+    x64.mov rax, 3
+    x64.xor edx, edx
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 90
+    x64.mov rcx, 10
+    x64.add rax, rcx
+    x64.mov [rbp-32], rax
+    x64.xor ecx, ecx
+    x64.call firstBit
+    x64.mov rcx, [rbp-32]
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, 100
+    x64.cmp rax, rcx
+    x64.je main.reached_0.after
+  reached_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  reached_0.after:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.jge main.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov rdx, 64
+    x64.cmp rcx, rdx
+    x64.setb rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, rax
+    x64.shl rbx, cl
+    x64.xor eax, eax
+    x64.test rdx, rdx
+    x64.mov rcx, rax
+    x64.cmovne rcx, rbx
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.je main.shl_0.after
+  shl_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  shl_0.after:
+    x64.xor eax, eax
+    x64.mov rcx, 4
+    x64.sub rax, rcx
+    x64.mov rdx, [rbp-24]
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
+    x64.jge main.__shift_count_ok_1
+  __shift_count_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_1:
+    x64.mov rcx, 64
+    x64.cmp rdx, rcx
+    x64.setb rcx
+    x64.movzx rcx, rcxb
+    x64.mov rbx, 63
+    x64.test rcx, rcx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.mov rcx, rsi
+    x64.mov rdx, rax
+    x64.sar rdx, cl
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.sub rax, rcx
+    x64.cmp rdx, rax
+    x64.je main.shrSign_0.after
+  shrSign_0:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  shrSign_0.after:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+}
+---

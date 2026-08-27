@@ -44592,6 +44592,13 @@ export type Parser
 			// the two would put `folded` inside a block, so `recordConst` would owe a SECOND
 			// `constOf(count)` read — one repeated call traded for another, in the half of this function
 			// where the legality diagnostics live.
+			//
+			// ⚠ **AND THE TWO CALLS CANNOT COME TO DISAGREE, WHICH IS THE HALF THAT DECIDES IT.** What a
+			// duplicated emission risks is one site quietly gaining a clause the other never does; there is
+			// no clause here to gain. `signFills` and `shiftOp` are derived ONCE above and CARRIED to every
+			// arm — the discipline this function's header states — so both calls hand the instruction the
+			// same opcode from the same derivation, and the same two operands this function was given. The
+			// THIRD `emitBinOp` below is not a copy of either: it shifts by `clamped`, not by `count`.
 			if self.shiftCountIsProvenUnguarded(count) 'proven'
 				return try self.emitBinOp(lhs, rhs: count, op: shiftOp, opTok: opTok)
 			end 'proven'
@@ -44676,10 +44683,27 @@ export type Parser
 	// producer of a value that crossed no door — `Array.resize`'s zero-initialized slot — cannot reach a
 	// wrong shift through here, because what it exposes is `0` and `0` is itself a count the instruction
 	// takes as written.
+	//
+	// ⛔⛔ **`valueDenotedAlias`, NOT `declaredAliasOfValue` — A MERGE'S DECLARED ALIAS IS NOT A PROOF, AND
+	// SPENDING IT AS ONE HERE COSTS THE ANSWER (G14; caught by EC6's review).** The list the paragraph above
+	// ends with names `Array.resize` as the one producer that crossed no door; **a phi is the second, and it
+	// is far more reachable** — an ASSIGNMENT is a door on no tier, so a `var` of a ranged alias reassigned
+	// around a loop carries whatever the body computed while its header phi keeps the alias's NAME. This
+	// function is a PROOF reader by its own name, so it takes the proof-aware spelling every other proof
+	// reader takes (`divisorProof`, `returnGuardIsDead`, E3010): a recorded cast target first — an `as`
+	// emits the guard, which is what makes `i as Bits` inside a loop a genuine proof — then
+	// `provenAliasOfValue`, which withholds a merge nothing lifted (`recordMergeAliasProof`).
+	//
+	// MEASURED with `declaredAliasOfValue` here, against the bootstrap AND the pre-rung shv2, which both
+	// answer `0`: `var n = 1 as Bits` stepped to 71 around a `while` printed `1 shl n` as **128** (the
+	// hardware's masked `1 shl 7`), and `try f() otherwise w` with `w == 100` printed **68719476736**
+	// (`1 shl 36`). Both are pinned by `bitwise-operators.md`'s `a-merged-count-is-not-proven-*` cases,
+	// which go RED on this line alone (sabotage-proved: restoring `declaredAliasOfValue` fails exactly
+	// those two, at their `'shl'` assertion, and nothing else in the suite).
 	function shiftCountIsProvenUnguarded(count ValueId) returns bool
-		return match self.declaredAliasOfValue(count) 'count'
-			// A bare `int`, a loop counter, an arithmetic result: none states any bounds, so none
-			// proves anything, and the guard stays exactly where it was.
+		return match self.valueDenotedAlias(count) 'count'
+			// A bare `int`, a loop counter, an arithmetic result, a merge nothing proved: none states any
+			// bounds this value must satisfy, so none proves anything, and the guard stays where it was.
 			undeclared gives false
 			declared(alias) gives not aliasIsFloat(alias) and shiftCountIsUnguarded(alias.low) and shiftCountIsUnguarded(alias.high)
 		end 'count'
