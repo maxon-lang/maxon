@@ -163,17 +163,17 @@ export enum RuntimeAbort
 	slabChunkRangeOutOfArena = 84
 	// `__slab_refill`: a class whose span holds NO objects was asked for one. Only class 0 — the ladder's
 	// sentinel, size 0 — can answer that description, and the only request that reaches it is a ZERO-BYTE
-	// one. It is refused HERE, on the refill path, rather than in `__slab_class_index_for`, because the class
+	// one. It is refused HERE, on the refill path, rather than at the class lookup, because that lookup
 	// lookup is on the hot path of every allocation in the language and this case has no caller: a mcache row
 	// for the sentinel class is always empty, so a zero-byte request always arrives here on the first try.
 	// Unguarded it computes a zero-chunk span and lands on `slabChunkRunUnsatisfiable`, which is a true
 	// statement about the arena and a misleading one about the fault.
 	slabClassServesNoObject = 85
-	// ⭐⭐ `__slab_alloc_class`: **INV-1 IS BROKEN.** The span reported free slots (`free_count > 0`), its
-	// free list was empty, and its virgin bump region was exhausted — so the three sources of a free slot
-	// disagree about how many there are. v1 traps at the identical point and states why: the alternative is
-	// handing out a slot PAST the span's last one, which writes into whatever the arena placed in the next
-	// chunk and surfaces later, somewhere else, as one slot owned by two objects.
+	// ⭐⭐ `__slab_alloc`'s pop (`emitSlabAllocClass`): **INV-1 IS BROKEN.** The span reported free slots
+	// (`free_count > 0`), its free list was empty, and its virgin bump region was exhausted — so the three
+	// sources of a free slot disagree about how many there are. v1 traps at the identical point and states
+	// why: the alternative is handing out a slot PAST the span's last one, which writes into whatever the
+	// arena placed in the next chunk and surfaces later, somewhere else, as one slot owned by two objects.
 	slabSpanExhaustedPastItsEnd = 86
 	// `__slab_os_direct_free`: a pointer whose 16-byte prefix does not carry the allocator's magic word — a
 	// double free, or a pointer that never came from the OS-direct tier. It is the guard v1 gets out of

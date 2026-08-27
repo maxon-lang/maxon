@@ -126,8 +126,8 @@ end 'boxPrefixBytes'
 //
 // They are gone rather than kept beside the slab because a second size-class ladder over a real one is not
 // a cache, it is a FORK: two granularities, two reuse policies, and a dead box whose bytes could be live in
-// either. What replaced each piece is one layer down — the rounding is `__slab_class_index_for`, the bucket
-// is the owning span's own free list, and the lazily-committed table is `__slab_state`.
+// either. What replaced each piece is one layer down — the rounding is `emitSlabClassIndex`'s reverse-table
+// read, the bucket is the owning span's own free list, and the lazily-committed table is `__slab_state`.
 
 // The `.data` slot the BOX layer owns. It is `__`-prefixed, which is what keeps it out of the spec
 // goldens (`TargetPrinter.isRuntimeFunction`'s twin for data) and what guarantees no user name can
@@ -617,7 +617,7 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 
 	buildMmAlloc(module, usage: usage)
 	buildMmDecref(module)
-	buildMmFree(module)
+	buildMmFree(module, multiM: usage.usesGt)
 	buildMmLeakCheck(module, usage: usage)
 	if usage.usesIncref or usage.usesManagedMemory 'incref'
 		buildMmIncref(module)
@@ -650,7 +650,7 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	// `rawSlabFreeCallee` sends its callers straight to `__slab_free`.
 	if usage.usesMmCounters 'trafficCounters'
 		buildMmCounterAccessors(module)
-		buildMmRawFree(module)
+		buildMmRawFree(module, multiM: usage.usesGt)
 	end 'trafficCounters'
 end 'installMmRuntime'
 
@@ -939,15 +939,39 @@ end 'emitUnary'
 // `__gt_live_count` is what the green-thread gate reads (exit 75), so a lost update is a leak reported that
 // did not happen, or one hidden that did. `MAXON_MAX_PROCS>1` gives a program two Ms today.
 //
-// ⚠ **IT ANSWERS THE *PRIOR* VALUE, NOT THE UPDATED ONE, AND THE ASYMMETRY IS PAID FOR IN CODE SIZE.**
-// That is `StdOp.atomicRmw`'s contract, and adopting it verbatim is what lets the x64 isel pick `lock add`
-// — no destination register at all — for the eight callers that discard the answer, against the `lock xadd`
-// plus an allocator-supplied copy a read result forces (`lowerAtomicRmw` states the saving). The three
-// callers that want the number they just minted apply the delta again, which costs one ALU op on three cold
-// paths instead of a register on every allocation in the language.
-export function emitGlobalAccumulate(module StdModule, block IrBlock, label ByteArray, delta ValueId, ids ValueMinter) returns ValueId
+// ⭐⭐ **`multiM` IS "CAN A SECOND OS THREAD EXIST AT ALL", AND ON `false` THE STEP IS A PLAIN
+// LOAD/ADD/STORE (EC8).** `atomicRmw` is a `lock`-prefixed RMW on x64 — a full barrier and a locked
+// cache-line round trip — and a program with no green threads pays it on **every allocation in the
+// language** (`__mm_alloc` credits the live count, and on a counted build the total, the byte volume and
+// the raw trio) to serialise against a thread that cannot exist. The bit is `usage.usesGt`, which is the
+// same one the whole slab layer keys its locks, its CAS and its P lookup on (`SlabRuntime`'s `sharded` —
+// its file header carries the argument in full), read ONCE per install and handed down, never re-derived.
+//
+// ⚠ **THE DEFAULT IS THE ATOMIC, AND IT IS NOT A CONVENIENCE — IT IS THE ANSWER THAT IS NEVER WRONG,
+// ONLY EVER SLOWER.** The scheduler's four counters (`GtRuntime`'s live count, trace dispenser, in-flight
+// read count and pipe-name uniquifier) are built ONLY by `installGtRuntime`, which runs only under
+// `usesGt`, so `true` is their answer by construction and spelling it at those six sites would be
+// restating their own install gate. Every caller whose build can go either way — this file's and the
+// slab's — passes the bit explicitly.
+//
+// ⚠ **BOTH ARMS ANSWER THE *PRIOR* VALUE, NOT THE UPDATED ONE, AND THE ASYMMETRY IS PAID FOR IN CODE
+// SIZE.** That is `StdOp.atomicRmw`'s contract, and adopting it verbatim is what lets the x64 isel pick
+// `lock add` — no destination register at all — for the eight callers that discard the answer, against the
+// `lock xadd` plus an allocator-supplied copy a read result forces (`lowerAtomicRmw` states the saving).
+// The three callers that want the number they just minted apply the delta again, which costs one ALU op on
+// three cold paths instead of a register on every allocation in the language. The plain arm keeps the same
+// contract so that no caller has to know which arm it got.
+export function emitGlobalAccumulate(module StdModule, block IrBlock, label ByteArray, delta ValueId, multiM bool = true, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
+
+	if not multiM 'soleThread'
+		let current = emitLoadField(module, block: block, record: addr, offset: 0, ids: ids)
+		let stepped = emitBin(module, block: block, a: current, b: delta, opcode: StdBinOpcode.add, ids: ids)
+		emitStoreField(module, block: block, record: addr, offset: 0, value: stepped)
+		return current
+	end 'soleThread'
+
 	let prior = ids.mint()
 	module.appendOp(block, op: StdOp.atomicRmw(prior, addrId: addr, operandId: delta, opcode: StdAtomicRmwOpcode.add))
 	return prior
@@ -1333,17 +1357,17 @@ end 'closeWordTailSplit'
 // columns (`Δtotal − Δlive`), and a byte volume answers "how much did this phase move", which a
 // subtraction would destroy. A live BYTE figure would need the freed region's size, which the free door is
 // not handed and the slot's class would only approximate.
-export function emitRawTrafficCredit(module StdModule, block IrBlock, bytes ValueId, ids ValueMinter)
+export function emitRawTrafficCredit(module StdModule, block IrBlock, bytes ValueId, multiM bool, ids ValueMinter)
 	let credit = emitConst(module, block: block, value: OneMore, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocCountLabel, delta: credit, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: MmRawLiveCountLabel, delta: credit, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocBytesLabel, delta: bytes, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocCountLabel, delta: credit, multiM: multiM, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: MmRawLiveCountLabel, delta: credit, multiM: multiM, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocBytesLabel, delta: bytes, multiM: multiM, ids: ids)
 end 'emitRawTrafficCredit'
 
 // `__mm_raw_free(ptr)` — debit the raw live column, then hand the region to the slab. Built only in a
 // counted build (see `MmRawFreeName`); `rawSlabFreeCallee` is what routes callers to `__slab_free`
 // otherwise, so an uncounted build carries exactly one free door, as it always has.
-function buildMmRawFree(module StdModule)
+function buildMmRawFree(module StdModule, multiM bool)
 	var func = IrFunction.createFromStd(MmRawFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -1352,7 +1376,7 @@ function buildMmRawFree(module StdModule)
 	let ptr = 0 as ValueId
 
 	let debit = emitConst(module, block: entry, value: OneFewer, ids: ids)
-	_ = emitGlobalAccumulate(module, block: entry, label: MmRawLiveCountLabel, delta: debit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: entry, label: MmRawLiveCountLabel, delta: debit, multiM: multiM, ids: ids)
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(ptr)))
 	module.setTerminator(entry, op: StdOp.retVoid)
 
@@ -1426,7 +1450,7 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 		// ⚠ The mint wants the id it just TOOK, and `emitGlobalAccumulate` answers the one before it (that
 		// function's header says why the prior value is the contract), so the step is re-applied here. Ids
 		// still run 1, 2, 3 in allocation order.
-		let priorAllocId = emitGlobalAccumulate(module, block: block, label: DsAllocIdLabel, delta: one, ids: ids)
+		let priorAllocId = emitGlobalAccumulate(module, block: block, label: DsAllocIdLabel, delta: one, multiM: usage.usesGt, ids: ids)
 		let allocId = emitBin(module, block: block, a: priorAllocId, b: one, opcode: StdBinOpcode.add, ids: ids)
 		let shift = emitConst(module, block: block, value: DsMmPackedIdShift, ids: ids)
 		let shifted = emitBin(module, block: block, a: allocId, b: shift, opcode: StdBinOpcode.shl, ids: ids)
@@ -1442,21 +1466,21 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	module.appendOp(block, op: StdOp.storeIndirect(base, offset: HeaderSizeOffset, valueId: size, valueType: StdType.i64))
 	// ⭐ THE REFCOUNT IS NOT WRITTEN, AND ITS ABSENCE IS THE ZEROING CONTRACT DOING ITS JOB. The slab
 	// guarantees zeroed memory — a VIRGIN slot because its pages came straight from the OS, a RECYCLED one
-	// because `__slab_alloc_class` re-zeroes the whole slot on the way out — and 0 is exactly the initial
-	// refcount this model wants (see `__mm_decref`: 0 means ONE owner). Storing it anyway would be the
+	// because `__slab_alloc`'s recycled arm re-zeroes the whole slot on the way out — and 0 is exactly the
+	// initial refcount this model wants (see `__mm_decref`: 0 means ONE owner). Storing it anyway would be the
 	// caller re-establishing a guarantee the allocator already makes, which is the precise habit that let
 	// v1's non-zeroing slab survive three bugs: every call site "handled" it locally, so nobody fixed the
 	// allocator. If this line ever becomes necessary, the allocator is broken, not this function.
 
 	let credit = emitConst(module, block: block, value: OneMore, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: MmAllocCountLabel, delta: credit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: block, label: MmAllocCountLabel, delta: credit, multiM: usage.usesGt, ids: ids)
 
 	// The TRACKED traffic columns, in a build that reads them. `size` and not `total`: the figure is the
 	// payload the caller asked for, so it does not move when the header does and is identical across a
 	// traced and an untraced build (see `MmAllocTotalLabel`).
 	if usage.usesMmCounters 'trackedColumns'
-		_ = emitGlobalAccumulate(module, block: block, label: MmAllocTotalLabel, delta: credit, ids: ids)
-		_ = emitGlobalAccumulate(module, block: block, label: MmAllocBytesLabel, delta: size, ids: ids)
+		_ = emitGlobalAccumulate(module, block: block, label: MmAllocTotalLabel, delta: credit, multiM: usage.usesGt, ids: ids)
+		_ = emitGlobalAccumulate(module, block: block, label: MmAllocBytesLabel, delta: size, multiM: usage.usesGt, ids: ids)
 	end 'trackedColumns'
 
 	let payload = ids.mint()
@@ -1863,7 +1887,7 @@ end 'emitBoxAllocationBase'
 // ⭐⭐ **AND THEN IT GOES TO `__slab_free`, WHICH IS WHAT MAKES THE POISON PAIR WITH SOMETHING.** The
 // two are the halves of one contract and they live one layer apart on purpose: the poison is a
 // MANAGED-BOX discipline (it wants the caller's size, and it is meaningless for a green-thread stack), the
-// re-zero is an ALLOCATOR obligation (`__slab_alloc_class`'s recycled arm memFills the whole slot, which is
+// re-zero is an ALLOCATOR obligation (`__slab_alloc`'s recycled arm memFills the whole slot, which is
 // what lets `__mm_alloc` still decline to write the refcount). Neither can be folded into the other, and
 // the invariant they hold between them is the one this file's alloc side leans on: **every box a caller
 // sees is zero.**
@@ -1886,7 +1910,7 @@ end 'emitBoxAllocationBase'
 // before the poison is the local change. It is NOT written now — every struct at this rung is trivially
 // owned, so the pointer is always 0 and the call would be emitted-but-never-taken, the `mintPhi` failure
 // exactly.
-function buildMmFree(module StdModule)
+function buildMmFree(module StdModule, multiM bool)
 	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -1909,7 +1933,7 @@ function buildMmFree(module StdModule)
 	// walked them back would report a phase that allocated and released a million boxes as having done
 	// nothing.
 	let debit = emitConst(module, block: entry, value: OneFewer, ids: ids)
-	_ = emitGlobalAccumulate(module, block: entry, label: MmAllocCountLabel, delta: debit, ids: ids)
+	_ = emitGlobalAccumulate(module, block: entry, label: MmAllocCountLabel, delta: debit, multiM: multiM, ids: ids)
 
 	// The payload size the alloc recorded in the header; the range to poison is exactly `[ptr, ptr + size)`.
 	// The fill itself is the shared `StdOp.memFill` (the slab's recycled-slot zeroer and the array

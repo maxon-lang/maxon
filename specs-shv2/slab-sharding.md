@@ -42,9 +42,9 @@ What a ONE-processor program CAN reach, and what each case below is for:
   89) rather than pushing onto a span that is already fully free.
 
 ⚠ **WHAT IS NOT REACHABLE FROM HERE, STATED SO NOBODY READS SILENCE AS COVERAGE**: the remote-free
-Treiber push and its drain, the ownership gate actually REJECTING a span, and two threads contending for
-the raw row. All three need a second OS thread. They were verified by measurement instead — see the
-rung's report and `track0/`.
+Treiber push and its drain, the ownership gate actually REJECTING a span, two threads contending for the
+raw row, and — since EC8 — whether the traffic counters are stepped ATOMICALLY. All four need a second OS
+thread. They were verified by measurement instead — see the rung's report and `track0/`.
 
 ⚠ **EVERY CASE HERE IS `targets: x64-windows`, AND THAT IS A PROPERTY OF THE SUBJECT RATHER THAN A
 CONVENIENCE.** All four are green-thread programs, because sharding is only compiled into a program that
@@ -357,4 +357,88 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: slab-sharding.the-traffic-counters-are-exact-across-green-threads -->
+<!-- targets: x64-windows -->
+**THE COUNTERS, READ THROUGH THE SHARDED ALLOCATOR.** Every traffic column an emitted program keeps is
+stepped inside `__mm_alloc`/`__mm_free`, which since EC8 reach their slot through a `__slab_alloc` that
+carries the class lookup, the processor read, the shard row, the state region and the pop in ONE body
+— and a SHARDED build's copy of that body is a different emission from the single-threaded one (it
+carries the ownership gate, the remote drain and the lock arm). This drives two waves of green-thread
+allocations through it and asks the two tracked columns the only questions that are EXACT: the LIVE
+count comes back to the number it started at, and two identical waves credit the CUMULATIVE column by
+the identical amount.
+
+⚠ The warm-up wave is load-bearing: the first `async` in a process brings the scheduler up, and
+bring-up allocates. Measuring from after it is what makes `first == second` an equality rather than an
+inequality with a fudge factor.
+
+⚠⚠ **WHAT THIS DOES NOT PIN, BECAUSE THE HARNESS CANNOT: THE `lock` PREFIX.** `emitGlobalAccumulate`
+emits an `atomicRmw` when the program has green threads and a plain load/add/store when it does not, and
+telling those two apart needs a second M crediting the same column at the same instant — which needs
+`MAXON_MAX_PROCS>1`, which a spec case cannot set (see the note above). At one processor the plain form
+is exact too, so this case passes either way and does not claim otherwise. That half is measured with
+`track0/alloc-torture.maxon` across `MAXON_MAX_PROCS ∈ {1, 2, 4, 12}`, where the leak gate (exit 101) IS
+the lost-update oracle — EC8 measured it clean with the atomic and exit 101 at 2, 4 and 12 with the
+atomic forced off, which is the positive control this case cannot be.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Count = int(0 to 65536)
+
+function churn(seed Count) returns Integer
+	var acc = 0
+	for j in 0 upto 400 'alloc'
+		let tmp = "count-{seed}-{j}"
+		if not tmp.isEmpty() 'nonEmpty'
+			acc = acc + 1
+		end 'nonEmpty'
+	end 'alloc'
+	return acc
+end 'churn'
+
+function wave(base Count) returns Integer
+	let a = async churn(base)
+	let b = async churn((base + 1) as Count)
+	return (await a) + (await b)
+end 'wave'
+
+function main() returns ExitCode
+	// Bring the scheduler up before anything is measured.
+	if wave(0) != 800 'warmupLost'
+		return 1
+	end 'warmupLost'
+
+	let liveBefore = __Builtins.mmAllocLive()
+	let totalBefore = __Builtins.mmAllocTotal()
+
+	if wave(10) != 800 'firstLost'
+		return 2
+	end 'firstLost'
+	let totalMid = __Builtins.mmAllocTotal()
+
+	if wave(20) != 800 'secondLost'
+		return 3
+	end 'secondLost'
+	let totalAfter = __Builtins.mmAllocTotal()
+	let liveAfter = __Builtins.mmAllocLive()
+
+	let first = totalMid - totalBefore
+	let second = totalAfter - totalMid
+
+	var score = 0
+	if liveAfter == liveBefore 'liveCameBack'
+		score = score + 1
+	end 'liveCameBack'
+	if first == second 'wavesAgree'
+		score = score + 2
+	end 'wavesAgree'
+	if first > 0 'itMoved'
+		score = score + 4
+	end 'itMoved'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```

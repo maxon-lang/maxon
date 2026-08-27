@@ -1695,7 +1695,8 @@ function buildSlabArenaMapSet(module StdModule)
 	module.functions.push(func)
 end 'buildSlabArenaMapSet'
 
-// `__slab_arena_map_get(ptr) -> span` — the span registered for the page holding `ptr`, or `ArenaMapNoSpan`.
+// **THE SPAN REGISTERED FOR THE PAGE HOLDING `ptr`, or `ArenaMapNoSpan`** — emitted INTO the caller's
+// blocks, answering in `spanId`, the merge block's single argument.
 //
 // ⭐⭐ **THE MISS IS AN ANSWER, NOT A DEFAULT.** Three levels can be absent, and every one of them means the
 // same thing: nothing registered this address, so it did not come from a span — it came straight from the
@@ -1703,25 +1704,25 @@ end 'buildSlabArenaMapSet'
 // and the consumer cannot disagree about it. This is the one place in this file a zero return is not a
 // sentinel standing in for a failure, and it is spelled out because it reads exactly like one.
 //
+// ⭐ **IT IS THE FIRST QUESTION EVERY FREE ASKS, AND SINCE EC8 `__slab_free` ASKS IT WITHOUT A CALL.** The
+// walk is four loads and three tests over tables nothing ever overwrites — call-free by construction — so a
+// frame around it was pure overhead on the path of every free in the language. `__slab_free_to_span`'s note
+// makes the same argument for the push that follows it.
+//
 // It takes no lock and needs none even once the mutation paths take one: a published level pointer is never
 // overwritten, so a reader either sees 0 or sees a fully zeroed table.
-function buildSlabArenaMapGet(module StdModule)
-	var func = IrFunction.createFromStd(SlabArenaMapGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var atL2 = module.addBlock(func, label: b"atl2")
-	var atL3 = module.addBlock(func, label: b"atl3")
-	var atPage = module.addBlock(func, label: b"atpage")
-	var miss = module.addBlock(func, label: b"miss")
-
-	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
+export function emitSlabArenaMapGet(module StdModule, func IrFunction, cur IrBlock, ptr ValueId, spanId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+	var atL2 = module.addBlock(func, label: label)
+	var atL3 = module.addBlock(func, label: label)
+	var atPage = module.addBlock(func, label: label)
+	var miss = module.addBlock(func, label: label)
+	var merge = module.addBlock(func, label: label)
+	merge.blockArgs.push(IrBlockArg.create(spanId, argType: StdType.i64))
 
 	let l1SlotAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(l1SlotAddr, label: SlabArenaMapL1Label))
-	let l1 = emitLoadField(module, block: entry, record: l1SlotAddr, offset: 0, ids: ids)
-	emitBranchOnPresent(module, block: entry, pointer: l1, present: atL2, absent: miss, ids: ids)
+	module.appendOp(cur, op: StdOp.globalAddr(l1SlotAddr, label: SlabArenaMapL1Label))
+	let l1 = emitLoadField(module, block: cur, record: l1SlotAddr, offset: 0, ids: ids)
+	emitBranchOnPresent(module, block: cur, pointer: l1, present: atL2, absent: miss, ids: ids)
 
 	let l2SlotAddr = emitMapSlotAddr(module, block: atL2, tableBase: l1, addr: ptr, shift: ArenaMapL1Shift, mask: ArenaMapL1Mask, ids: ids)
 	let l2 = emitLoadField(module, block: atL2, record: l2SlotAddr, offset: 0, ids: ids)
@@ -1733,9 +1734,31 @@ function buildSlabArenaMapGet(module StdModule)
 
 	let pageSlotAddr = emitMapSlotAddr(module, block: atPage, tableBase: l3, addr: ptr, shift: SlabPageShift, mask: ArenaMapLevelMask, ids: ids)
 	let span = emitLoadField(module, block: atPage, record: pageSlotAddr, offset: 0, ids: ids)
-	module.setTerminator(atPage, op: StdOp.ret(span))
+	module.setTerminator(atPage, op: StdOp.branch(merge.id))
+	atPage.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(span)))
 
-	emitConstReturn(module, block: miss, value: ArenaMapNoSpan, ids: ids)
+	let absent = emitConst(module, block: miss, value: ArenaMapNoSpan, ids: ids)
+	module.setTerminator(miss, op: StdOp.branch(merge.id))
+	miss.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(absent)))
+
+	return merge
+end 'emitSlabArenaMapGet'
+
+// `__slab_arena_map_get(ptr) -> span` — the same walk behind a frame, for `__slab_drain_remote`, whose
+// replay loop asks it once per queued slot. That loop is a MISS path, so a frame there costs a program
+// nothing it would notice and saves the walk being written into the emitted image a second time.
+function buildSlabArenaMapGet(module StdModule)
+	var func = IrFunction.createFromStd(SlabArenaMapGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	let span = ids.mint()
+	var answered = emitSlabArenaMapGet(module, func: func, cur: entry, ptr: ptr, spanId: span, ids: ids, label: b"map")
+	module.setTerminator(answered, op: StdOp.ret(span))
 
 	module.functions.push(func)
 end 'buildSlabArenaMapGet'

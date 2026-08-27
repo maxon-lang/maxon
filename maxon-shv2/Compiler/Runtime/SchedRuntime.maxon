@@ -78,8 +78,14 @@
 // tier up — *"a new variant cannot be added without declaring all of it"* — and it has that shape's property:
 // there is no state at which the fact is missing, so there is nothing to check.
 export enum MultiMSharing
-	// Every mutation is `StdOp.atomicRmw` or `StdOp.atomicCas`. The counters
-	// (`MmRuntime.emitGlobalAccumulate`) and the claim words are here.
+	// Every mutation is `StdOp.atomicRmw` or `StdOp.atomicCas` IN EVERY BUILD WHERE A SECOND M CAN EXIST.
+	// The counters (`MmRuntime.emitGlobalAccumulate`) and the claim words are here.
+	//
+	// ⚠ **THE QUALIFIER IS EC8's AND IT IS NOT A LOOPHOLE.** `emitGlobalAccumulate` emits a plain
+	// load/add/store when `usage.usesGt` is false — a program with no green threads has ONE OS thread, so
+	// there is no second writer for an atomic to serialise against and the `lock` prefix is paid on every
+	// allocation in the language to guard a race that cannot occur. The class states the discipline a slot
+	// owes WHEN THE HAZARD EXISTS; it never claimed a prefix is emitted where no thread can race.
 	atomicStep
 	// Every read AND every mutation happens inside `__sched_lock`. A word whose transaction spans several
 	// words — the FIFO's head/tail pair, the timer store's count/base/capacity triple, the process store's
@@ -123,7 +129,7 @@ end 'MultiMSharing'
 export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sharing MultiMSharing, seed ParsedInt = 0)
 	match sharing 'classified'
 		atomicStep to lastWriterWins then break 'classified'
-		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas), underSchedLock (every read and write inside `__sched_lock`), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
+		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas wherever a second M can exist), underSchedLock (every read and write inside `__sched_lock`), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
 	end 'classified'
 
 	out.push(DataSectionEntry.create(String.from(label), valueType: StdType.i64, value: seed))

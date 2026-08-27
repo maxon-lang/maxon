@@ -13,7 +13,7 @@
 // ONE unsharded mcache row. At 7 it segfaulted outright. The allocator naming its own invariant is what
 // localised that to this file rather than leaving a mystery fault in the scheduler.
 //
-// **THE SHAPE, IN FOUR SENTENCES.** Each P owns its own mcache ROW (`__slab_shard_p` answers the P, the row
+// **THE SHAPE, IN FOUR SENTENCES.** Each P owns its own mcache ROW (`emitSlabCurrentP` answers the P, the row
 // is its clamped `id`) and is the SOLE WRITER of every span cached there, so the pop is lockless. A span
 // carries the P that owns it (`MspanOwningPOffset`), and a cached span whose owner is not me is a MISS — not
 // something to pop — which is the one check a `free_count` test structurally cannot make. A free by a P that
@@ -278,6 +278,13 @@ let SlabStateMetaFreeOffset = 16 as ByteOffset
 let SlabStateLockOffset = 24 as ByteOffset
 let SlabStateMcentralOffset = ((SlabStateLockOffset as ParsedInt) + CriticalSectionBytes) as ByteOffset
 
+// Whether THIS allocation took `__slab_lock` on its way in, carried across the pop as a block argument so
+// that exactly one copy of the pop serves both arms — see `buildSlabAllocEntry`. Named rather than 1/0
+// because the value's meaning is *"there is a `Leave` outstanding"*, which a bare literal at the release
+// site would not say.
+let SlabLockTaken = 1
+let SlabLockNotTaken = 0
+
 // --- Entry points ---
 
 // The public allocator door. `MmRuntime` owns the two names because `__mm_alloc` chooses between them (the
@@ -301,11 +308,7 @@ let SlabStateMcentralOffset = ((SlabStateLockOffset as ParsedInt) + CriticalSect
 let SlabAllocRawName = b"__slab_alloc_raw"
 export let SlabFreeName = b"__slab_free"
 
-let SlabAllocClassName = b"__slab_alloc_class"
-let SlabAllocClassRawName = b"__slab_alloc_class_raw"
-let SlabClassIndexForName = b"__slab_class_index_for"
 let SlabRoundedSizeName = b"__slab_rounded_size"
-let SlabShardPName = b"__slab_shard_p"
 let SlabStateName = b"__slab_state_base"
 let SlabMetaAllocName = b"__slab_meta_alloc"
 let SlabMetaFreeName = b"__slab_meta_free"
@@ -391,23 +394,19 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	let sharded = usage.usesGt
 
 	buildSlabStateBase(module, sharded: sharded)
-	if sharded 'shardSelector'
-		buildSlabShardP(module)
+	if sharded 'remoteQueue'
 		buildSlabDrainRemote(module)
-	end 'shardSelector'
-	buildSlabClassIndexFor(module)
+	end 'remoteQueue'
 	buildSlabRoundedSize(module)
 	buildSlabMetaAlloc(module)
 	buildSlabMetaFree(module)
 	buildSlabRefill(module, sharded: sharded)
-	buildSlabAllocClass(module, name: SlabAllocClassName, zeroed: true, sharded: sharded)
-	buildSlabAllocClass(module, name: SlabAllocClassRawName, zeroed: false, sharded: sharded)
-	buildSlabAllocEntry(module, name: SlabAllocName, countRaw: usage.usesMmCounters, classCallee: SlabAllocClassName, sharded: sharded)
-	buildSlabAllocEntry(module, name: SlabAllocRawName, countRaw: usage.usesMmCounters, classCallee: SlabAllocClassRawName, sharded: sharded)
+	buildSlabAllocEntry(module, name: SlabAllocName, countRaw: usage.usesMmCounters, zeroed: true, sharded: sharded)
+	buildSlabAllocEntry(module, name: SlabAllocRawName, countRaw: usage.usesMmCounters, zeroed: false, sharded: sharded)
 	// The uncounted twin, in a counted build only — the one `__slab_alloc` caller whose bytes are already
 	// reported as a TRACKED box (see `MmRuntime.SlabAllocBoxName`).
 	if usage.usesMmCounters 'boxTwin'
-		buildSlabAllocEntry(module, name: SlabAllocBoxName, countRaw: false, classCallee: SlabAllocClassName, sharded: sharded)
+		buildSlabAllocEntry(module, name: SlabAllocBoxName, countRaw: false, zeroed: true, sharded: sharded)
 	end 'boxTwin'
 	buildSlabSpanReturn(module, sharded: sharded)
 	buildSlabSpanDestroy(module)
@@ -618,17 +617,54 @@ end 'emitMcacheSlotAddr'
 // shared emitter exists to make impossible.
 
 // ⭐ **THE ONE DOOR TO "WHICH P IS RUNNING ME" — a P pointer, or `MspanOwningPNone` for an OS thread that
-// owns none.** ⚠ In an UNSHARDED build it is a CONSTANT rather than a call: there is no `__sched_procs`, no
-// `__sched_tls_teb_offset` `.data` word to read (`schedRuntimeGlobals` gates it on the same bit) and no
-// second thread, so the honest answer is known at build time and the hot path pays nothing to be told it.
-function emitSlabCurrentP(module StdModule, block IrBlock, sharded bool, ids ValueMinter) returns ValueId
+// owns none.** It answers in `pId`, the merge block's single argument. ⚠ In an UNSHARDED build it is a
+// CONSTANT and no block at all: there is no `__sched_procs`, no `__sched_tls_teb_offset` `.data` word to
+// read (`schedRuntimeGlobals` gates it on the same bit) and no second thread, so the honest answer is known
+// at build time and the hot path pays nothing to be told it.
+//
+// ⭐⭐ **TWO LOADS AND NO CALL INTO THE SCHEDULER: `gs:[__sched_tls_teb_offset]` IS `TlsGetValue`.**
+// `SchedRuntime.SchedTlsTebOffsetLabel` carries the derivation of that precomputed offset in full.
+//
+// ⭐⭐ **IT WAS `__slab_shard_p`, A FUNCTION, UNTIL EC8.** Six ops behind a `call`/`ret` pair and a frame,
+// on the path of every allocation AND every free of a SHARDED build — and a sharded build is what the
+// compiler itself is (its spec runner drives a worker pool over `async`). The ops are unchanged; what went
+// is the frame. Its two callers were both in this file, so no name outside it could depend on the symbol.
+//
+// ⛔⛔ **THE ZERO TEST IS NOT DEFENSIVE — IT IS THE DIFFERENCE BETWEEN A P AND A WILD LOAD.** Before
+// `__sched_init_procs` runs, the offset word reads 0, and `gs:[0]` is `NT_TIB.ExceptionList` — a NON-NULL
+// pointer on Windows — so reading through it hands back a garbage "P" whose `POffId` load faults. The
+// allocator reaches this path on the very first allocation of every program, which is long before any
+// `async`, so that is the COMMON case rather than an edge. `SchedRuntime.emitLoadCurrentGtOrZero` and
+// `X64GtRuntime.emitLoadCurrentPOrBail` make the identical two-zero argument for the identical read.
+//
+// ⚠ **BOTH ZEROS ANSWER THE SAME THING HERE, AND THAT IS DELIBERATE.** *"No scheduler yet"* and *"an OS
+// thread that owns no P"* (the IOCP completion thread, for its whole life) are different facts, but the
+// allocator's question is only *"is there a P whose row I may own"* — and for both the answer is no. The one
+// place the difference matters is whether another thread can EXIST, which is a separate predicate
+// (`emitSlabSchedulerExists`) asked only where the lock decision needs it.
+function emitSlabCurrentP(module StdModule, func IrFunction, cur IrBlock, sharded bool, pId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
 	if not sharded 'noScheduler'
-		return emitConst(module, block: block, value: MspanOwningPNone, ids: ids)
+		module.appendOp(cur, op: StdOp.const(pId, value: MspanOwningPNone, valueType: StdType.i64))
+		return cur
 	end 'noScheduler'
 
+	var haveOffset = module.addBlock(func, label: label)
+	var merge = module.addBlock(func, label: label)
+	merge.blockArgs.push(IrBlockArg.create(pId, argType: StdType.i64))
+
+	let tebOffset = emitLoadGlobalWord(module, block: cur, label: SchedTlsTebOffsetLabel, ids: ids)
+	let never = emitConst(module, block: cur, value: 0, ids: ids)
+	let noScheduler = emitCmp(module, block: cur, a: tebOffset, b: never, pred: StdCmpPred.eq, ids: ids)
+	let noProc = emitConst(module, block: cur, value: MspanOwningPNone, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(noScheduler, thenBlockId: merge.id, elseBlockId: haveOffset.id))
+	cur.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(noProc)))
+
 	let p = ids.mint()
-	module.appendOp(block, op: StdOp.call(p, callee: SlabShardPName, args: ValueIdArray.create()))
-	return p
+	module.appendOp(haveOffset, op: StdOp.tlsSlotLoad(p, tebOffsetId: tebOffset))
+	module.setTerminator(haveOffset, op: StdOp.branch(merge.id))
+	haveOffset.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(p)))
+
+	return merge
 end 'emitSlabCurrentP'
 
 // ⭐⭐ **HAS A SCHEDULER EVER EXISTED IN THIS PROCESS?** — the one question that separates *"I am the only
@@ -727,7 +763,7 @@ end 'emitSlabLockLeave'
 
 // ⭐⭐ **CAS-PUSH `slot` ONTO P `target`'s REMOTE-FREE QUEUE — a Treiber stack at `POffRemoteFreeHead`, many
 // producers and exactly one consumer.** The link rides in the slot's own first word, which is the same word
-// the span free list threads its links through and the same word `__slab_alloc_class` overwrites when it
+// the span free list threads its links through and the same word the allocation pop overwrites when it
 // hands the slot back out, so the queue costs no storage of its own.
 //
 // ⛔⛔ **NO FENCE IS NEEDED HERE AND NONE MAY BE ADDED "TO BE SAFE".** The store of the old head into
@@ -808,51 +844,51 @@ function buildSlabStateBase(module StdModule, sharded bool)
 	module.functions.push(func)
 end 'buildSlabStateBase'
 
-// `__slab_shard_p() -> P*` — the processor this OS thread is running on, or `MspanOwningPNone`.
+// ⭐⭐ **THE SAME ANSWER WITHOUT A FRAME: the `.data` word, tested, with the COMMIT left as the call it
+// already is** (EC8). It answers in `stateId`, the merge block's single argument.
 //
-// ⭐⭐ **TWO LOADS AND NO CALL INTO THE SCHEDULER: `gs:[__sched_tls_teb_offset]` IS `TlsGetValue`.**
-// `SchedRuntime.SchedTlsTebOffsetLabel` carries the derivation of that precomputed offset in full.
-//
-// ⛔⛔ **THE ZERO TEST IS NOT DEFENSIVE — IT IS THE DIFFERENCE BETWEEN A P AND A WILD LOAD.** Before
-// `__sched_init_procs` runs, the offset word reads 0, and `gs:[0]` is `NT_TIB.ExceptionList` — a NON-NULL
-// pointer on Windows — so reading through it hands back a garbage "P" whose `POffId` load faults. The
-// allocator reaches this path on the very first allocation of every program, which is long before any
-// `async`, so that is the COMMON case rather than an edge. `SchedRuntime.emitLoadCurrentGtOrZero` and
-// `X64GtRuntime.emitLoadCurrentPOrBail` make the identical two-zero argument for the identical read.
-//
-// ⚠ **BOTH ZEROS ANSWER THE SAME THING HERE, AND THAT IS DELIBERATE.** *"No scheduler yet"* and *"an OS
-// thread that owns no P"* (the IOCP completion thread, for its whole life) are different facts, but the
-// allocator's question is only *"is there a P whose row I may own"* — and for both the answer is no. The one
-// place the difference matters is whether another thread can EXIST, which is a separate predicate
-// (`emitSlabSchedulerExists`) asked only where the lock decision needs it.
-function buildSlabShardP(module StdModule)
-	var func = IrFunction.createFromStd(SlabShardPName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
+// ⭐ **THE HOT ARM IS FOUR OPS AND THE COLD ONE IS A CALL, WHICH IS THE WHOLE OF WHY THIS IS NOT A SECOND
+// COPY OF THE BODY.** The region is committed by the FIRST allocation a process makes and never released,
+// so every subsequent allocation and every free reads a non-zero word and is done. Reproducing the commit
+// here — the arena request, the `memFill`, the `osLockInit`, the publishing store, in the order that
+// publishes LAST — would be that sequence written twice, and it is the sequence whose ORDER is the
+// argument. So the cold arm calls `__slab_state_base`, which re-reads the word and commits it; the
+// duplicated read costs one load on the once-per-process path.
+function emitSlabStateBase(module StdModule, func IrFunction, cur IrBlock, stateId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+	var commit = module.addBlock(func, label: label)
+	var merge = module.addBlock(func, label: label)
+	merge.blockArgs.push(IrBlockArg.create(stateId, argType: StdType.i64))
 
-	var entry = module.addBlock(func, label: b"entry")
-	var haveOffset = module.addBlock(func, label: b"offset")
-	var none = module.addBlock(func, label: b"noproc")
+	let stateAddr = ids.mint()
+	module.appendOp(cur, op: StdOp.globalAddr(stateAddr, label: SlabStateLabel))
+	let current = emitLoadField(module, block: cur, record: stateAddr, offset: 0, ids: ids)
+	let absent = emitConst(module, block: cur, value: 0, ids: ids)
+	let uncommitted = emitCmp(module, block: cur, a: current, b: absent, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(uncommitted, thenBlockId: commit.id, elseBlockId: merge.id))
+	cur.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(current)))
 
-	let tebOffset = emitLoadGlobalWord(module, block: entry, label: SchedTlsTebOffsetLabel, ids: ids)
-	let never = emitConst(module, block: entry, value: 0, ids: ids)
-	let noScheduler = emitCmp(module, block: entry, a: tebOffset, b: never, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(noScheduler, thenBlockId: none.id, elseBlockId: haveOffset.id))
+	let committed = ids.mint()
+	module.appendOp(commit, op: StdOp.call(committed, callee: SlabStateName, args: ValueIdArray.create()))
+	module.setTerminator(commit, op: StdOp.branch(merge.id))
+	commit.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(committed)))
 
-	emitConstReturn(module, block: none, value: MspanOwningPNone, ids: ids)
+	return merge
+end 'emitSlabStateBase'
 
-	let p = ids.mint()
-	module.appendOp(haveOffset, op: StdOp.tlsSlotLoad(p, tebOffsetId: tebOffset))
-	module.setTerminator(haveOffset, op: StdOp.ret(p))
-
-	module.functions.push(func)
-end 'buildSlabShardP'
-
-// `__slab_class_index_for(size) -> classIdx` — the smallest class whose slot holds `size` bytes, in O(1).
+// **`classIdx` = the smallest class whose slot holds `size` bytes, in O(1)** — emitted INTO the caller's
+// blocks, answering in `classId`, the merge block's single argument.
 //
 // ⛔⛔ **v1 SCANS THE LADDER AND THAT DOES NOT PORT.** Its `__slab_class_index_for` walks up to 18 classes
 // per allocation calling `__slab_class_size` — itself an 18-arm if-ladder — so a 1 KiB request costs ~15
 // compares before a byte is served, on the hot path of every allocation in the language. Go answers the
 // same question with TWO reverse tables and one indexed byte load, which is what this emits.
+//
+// ⭐⭐ **IT WAS A FUNCTION (`__slab_class_index_for`) UNTIL EC8, AND A NINE-OP LEAF IS NOT WORTH A FRAME.**
+// The whole body is two compares, four ALU ops, an `.rdata` address and a byte load — LESS than the
+// prologue, the argument move, the `call`, the `ret` and the epilogue that reached it, and it sits on the
+// path of every allocation in the language. Emitting it inline is what makes `__slab_alloc`'s hit path one
+// frame; the two callers (the allocator's entry and the sizing answer) are both inside this file, so there
+// is no name for anything else to have depended on.
 //
 // ⚠ **THE TWO TABLES ARE DERIVED, NOT TRANSCRIBED** (`SlabClassTable.slabSizeToClass8Table`), and their
 // defining property is asserted at build time.
@@ -860,35 +896,35 @@ end 'buildSlabShardP'
 // ⚠ **A CALLER MUST HAVE ROUTED `size > SlabMaxSmallSize` AWAY** — `emitSlabSizeRouting` is what does it.
 // A request of 0 reaches class 0, the ladder's sentinel, whose span holds no objects; `__slab_refill`'s
 // guard is where that is caught, on the COLD path, so the hot path pays nothing for a case no caller has.
-function buildSlabClassIndexFor(module StdModule)
-	var func = IrFunction.createFromStd(SlabClassIndexForName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
+function emitSlabClassIndex(module StdModule, func IrFunction, cur IrBlock, size ValueId, classId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+	var smallTable = module.addBlock(func, label: label)
+	var largeTable = module.addBlock(func, label: label)
+	var merge = module.addBlock(func, label: label)
+	merge.blockArgs.push(IrBlockArg.create(classId, argType: StdType.i64))
 
-	var entry = module.addBlock(func, label: b"entry")
-	var smallTable = module.addBlock(func, label: b"small")
-	var largeTable = module.addBlock(func, label: b"large")
+	let tableBoundary = emitConst(module, block: cur, value: SlabSmallTableMaxSize, ids: ids)
+	let aboveSmallTable = emitCmp(module, block: cur, a: size, b: tableBoundary, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(aboveSmallTable, thenBlockId: largeTable.id, elseBlockId: smallTable.id))
 
-	emitParams(module, block: entry, count: 1)
-	let size = 0 as ValueId
+	let small = emitReverseTableLookup(module, block: smallTable, size: size, subtract: 0, divShift: SlabSmallSizeDivShift, divisor: SlabSmallSizeDiv, label: SlabSizeToClass8Label, ids: ids)
+	module.setTerminator(smallTable, op: StdOp.branch(merge.id))
+	smallTable.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(small)))
 
-	let tableBoundary = emitConst(module, block: entry, value: SlabSmallTableMaxSize, ids: ids)
-	let aboveSmallTable = emitCmp(module, block: entry, a: size, b: tableBoundary, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(aboveSmallTable, thenBlockId: largeTable.id, elseBlockId: smallTable.id))
+	let large = emitReverseTableLookup(module, block: largeTable, size: size, subtract: SlabSmallSizeMax, divShift: SlabLargeSizeDivShift, divisor: SlabLargeSizeDiv, label: SlabSizeToClass128Label, ids: ids)
+	module.setTerminator(largeTable, op: StdOp.branch(merge.id))
+	largeTable.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(large)))
 
-	emitReverseTableLookup(module, block: smallTable, size: size, subtract: 0, divShift: SlabSmallSizeDivShift, divisor: SlabSmallSizeDiv, label: SlabSizeToClass8Label, ids: ids)
-	emitReverseTableLookup(module, block: largeTable, size: size, subtract: SlabSmallSizeMax, divShift: SlabLargeSizeDivShift, divisor: SlabLargeSizeDiv, label: SlabSizeToClass128Label, ids: ids)
+	return merge
+end 'emitSlabClassIndex'
 
-	module.functions.push(func)
-end 'buildSlabClassIndexFor'
-
-// One reverse-table read and its `ret`: `table[ceil((size - subtract) / divisor)]`. Both arms are the same
-// four ops over different constants, which is why they are one emitter — writing them out twice is how one
-// of the two ends up dividing by the other's stride.
+// One reverse-table read: `table[ceil((size - subtract) / divisor)]`. Both arms are the same four ops over
+// different constants, which is why they are one emitter — writing them out twice is how one of the two
+// ends up dividing by the other's stride.
 //
 // The rounding is `(x + divisor - 1) shr divShift`, and it is exact for both arms because every value
 // reaching either is positive: the small arm sees `size <= 1016` and the large arm sees `size >= 1017`, so
 // `size - 1024 + 127 >= 120`.
-function emitReverseTableLookup(module StdModule, block IrBlock, size ValueId, subtract ParsedInt, divShift ParsedInt, divisor ParsedInt, label String, ids ValueMinter)
+function emitReverseTableLookup(module StdModule, block IrBlock, size ValueId, subtract ParsedInt, divShift ParsedInt, divisor ParsedInt, label String, ids ValueMinter) returns ValueId
 	let bias = emitConst(module, block: block, value: divisor - 1 - subtract, ids: ids)
 	let raised = emitBin(module, block: block, a: size, b: bias, opcode: StdBinOpcode.add, ids: ids)
 	let shift = emitConst(module, block: block, value: divShift, ids: ids)
@@ -896,8 +932,7 @@ function emitReverseTableLookup(module StdModule, block IrBlock, size ValueId, s
 
 	let base = ids.mint()
 	module.appendOp(block, op: StdOp.rdataAddr(base, label: label.toByteArray()))
-	let class = emitLoadByteIndexed(module, block: block, base: base, index: index, ids: ids)
-	module.setTerminator(block, op: StdOp.ret(class))
+	return emitLoadByteIndexed(module, block: block, base: base, index: index, ids: ids)
 end 'emitReverseTableLookup'
 
 // `__slab_rounded_size(size) -> bytes` — the number of bytes `__slab_alloc(size)` actually serves.
@@ -935,9 +970,9 @@ function buildSlabRoundedSize(module StdModule)
 	module.setTerminator(osDirect, op: StdOp.ret(usable))
 
 	let class = ids.mint()
-	module.appendOp(small, op: StdOp.call(class, callee: SlabClassIndexForName, args: argsOf(size)))
-	let geom = emitClassGeometry(module, block: small, classIdx: class, ids: ids)
-	module.setTerminator(small, op: StdOp.ret(emitGeomSlotSize(module, block: small, geom: geom, ids: ids)))
+	var classReady = emitSlabClassIndex(module, func: func, cur: small, size: size, classId: class, ids: ids, label: b"cls")
+	let geom = emitClassGeometry(module, block: classReady, classIdx: class, ids: ids)
+	module.setTerminator(classReady, op: StdOp.ret(emitGeomSlotSize(module, block: classReady, geom: geom, ids: ids)))
 
 	module.functions.push(func)
 end 'buildSlabRoundedSize'
@@ -1100,7 +1135,7 @@ function buildSlabRefill(module StdModule, sharded bool)
 	let totalSlots = emitGeomTotalSlots(module, block: grow, geom: geom, ids: ids)
 	// Class 0 is the ladder's sentinel: size 0, no objects. Only a zero-byte request reaches it, and it can
 	// only reach it through the class lookup, so this is where such a request is refused — on the COLD path,
-	// which is why `__slab_class_index_for` needs no guard of its own.
+	// which is why the class lookup needs no guard of its own.
 	let oneSlot = emitConst(module, block: grow, value: 1, ids: ids)
 	let servesNothing = emitCmp(module, block: grow, a: totalSlots, b: oneSlot, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(grow, op: StdOp.condBranch(servesNothing, thenBlockId: emptyClass.id, elseBlockId: cut.id))
@@ -1148,7 +1183,19 @@ function buildSlabRefill(module StdModule, sharded bool)
 	module.functions.push(func)
 end 'buildSlabRefill'
 
-// `__slab_alloc_class(classIdx, myP, row) -> slot` — the hot path: pop a slot from `row`'s cached span.
+// **POP A SLOT FROM `row`'s CACHED SPAN — the hot path**, emitted INTO the caller's blocks and answering in
+// `slotId`, the returned block's single argument.
+//
+// ⭐⭐ **IT WAS `__slab_alloc_class(classIdx, myP, row)`, A FUNCTION, UNTIL EC8 — AND WITH IT WENT THE LAST
+// FRAME ON THE HIT PATH.** One allocation used to be FIVE nested frames (`__mm_alloc` → `__slab_alloc` →
+// `__slab_class_index_for` → `__slab_alloc_class` → `__slab_state_base`, plus `__slab_shard_p` on a sharded
+// build); it is now two, and only the first is a call the box layer makes. What is emitted is the same ops
+// in the same order — the probe, the two arms, the INV-1 trap, the consume, the eviction — so every
+// argument below is unchanged. `zeroed` and `sharded` are still BUILD-time, so neither costs a branch.
+//
+// ⚠ **THE CALLER OWES `state`.** It is hoisted out because a SHARDED entry needs the state region's address
+// BEFORE this body runs — that is where `__slab_lock` lives — so fetching it here as well would be the same
+// `.data` word read twice on one path. `emitSlabStateBase` is the one spelling either caller uses.
 //
 // ⭐⭐ **THE TWO ARMS ARE THE DESIGN.** A RECYCLED slot comes off the free list and is DIRTY, so the
 // zeroing build fills it; a VIRGIN slot is carved off the bump cursor and still holds the OS's zeroes, so it
@@ -1157,8 +1204,9 @@ end 'buildSlabRefill'
 //
 // ⭐ **`zeroed` IS A BUILD-TIME ARGUMENT, NOT A RUNTIME `needzero` PARAMETER.** v1 threads a flag through
 // `__slab_alloc_needzero` → `__slab_alloc_class`, which puts a branch on the hot path of every allocation in
-// the language and an extra argument in every call. Two bodies from one builder cost code size in a program
-// that uses both — and `DFE` means no program that uses one carries the other.
+// the language and an extra argument in every call. Here the two spellings are two EMISSIONS of one emitter,
+// into the entry doors that differ by exactly that bit, so no program carries the arm it never takes and no
+// allocation tests for it.
 //
 // ⭐⭐ **THE MISS PATH IS TWO-PHASE IN A SHARDED BUILD, AND THE SECOND PHASE IS NOT AN OPTIMISATION.**
 // A miss first DRAINS this P's remote-free queue and probes again: slots other Ps freed back to us are put
@@ -1167,49 +1215,39 @@ end 'buildSlabRefill'
 // replayed slot can complete a span, and `__slab_span_return` then clears the very mcache entry the first
 // probe read.
 //
-// ⚠ **NOTHING HERE TAKES THE LOCK.** Every word this function writes belongs to a span `myP` solely owns
+// ⚠ **NOTHING HERE TAKES THE LOCK.** Every word this emits belongs to a span `myP` solely owns
 // (`emitSlabProbe`'s ownership gate is what establishes that) or to `row`'s own mcache entry. The one caller
 // whose row is NOT solely owned — a thread on the shared raw row — is serialised by `buildSlabAllocEntry`
 // before it ever gets here.
-function buildSlabAllocClass(module StdModule, name ByteArray, zeroed bool, sharded bool)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(3)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var refill = module.addBlock(func, label: b"refill")
-	var ready = module.addBlock(func, label: b"ready")
-	var recycled = module.addBlock(func, label: b"recycled")
-	var virgin = module.addBlock(func, label: b"virgin")
-	var handOut = module.addBlock(func, label: b"handout")
-	var pastEnd = module.addBlock(func, label: b"pastend")
-	var consumed = module.addBlock(func, label: b"consumed")
-	var evict = module.addBlock(func, label: b"evict")
-	var done = module.addBlock(func, label: b"done")
-
-	emitParams(module, block: entry, count: 3)
-	let classIdx = 0 as ValueId
-	let myP = 1 as ValueId
-	let row = 2 as ValueId
+function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, classIdx ValueId, myP ValueId, row ValueId, state ValueId, zeroed bool, sharded bool, slotId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+	var refill = module.addBlock(func, label: label)
+	var ready = module.addBlock(func, label: label)
+	var recycled = module.addBlock(func, label: label)
+	var virgin = module.addBlock(func, label: label)
+	var handOut = module.addBlock(func, label: label)
+	var pastEnd = module.addBlock(func, label: label)
+	var consumed = module.addBlock(func, label: label)
+	var evict = module.addBlock(func, label: label)
+	var done = module.addBlock(func, label: label)
+	done.blockArgs.push(IrBlockArg.create(slotId, argType: StdType.i64))
 
 	let span = ids.mint()
 	ready.blockArgs.push(IrBlockArg.create(span, argType: StdType.i64))
 
-	let state = ids.mint()
-	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
-	let mcacheSlot = emitMcacheSlotAddr(module, block: entry, state: state, row: row, classIdx: classIdx, ids: ids)
+	let mcacheSlot = emitMcacheSlotAddr(module, block: cur, state: state, row: row, classIdx: classIdx, ids: ids)
 
 	if sharded 'drainBeforeRefill'
-		var drain = module.addBlock(func, label: b"drain")
-		var reprobe = module.addBlock(func, label: b"reprobe")
+		var drain = module.addBlock(func, label: label)
+		var reprobe = module.addBlock(func, label: label)
 
-		emitSlabProbe(module, func: func, cur: entry, mcacheSlot: mcacheSlot, myP: myP, sharded: sharded, hit: ready, miss: drain, ids: ids, label: b"probe")
+		emitSlabProbe(module, func: func, cur: cur, mcacheSlot: mcacheSlot, myP: myP, sharded: sharded, hit: ready, miss: drain, ids: ids, label: label)
 
 		module.appendOp(drain, op: StdOp.call(ids.mint(), callee: SlabDrainRemoteName, args: argsOf(myP)))
 		module.setTerminator(drain, op: StdOp.branch(reprobe.id))
 
-		emitSlabProbe(module, func: func, cur: reprobe, mcacheSlot: mcacheSlot, myP: myP, sharded: sharded, hit: ready, miss: refill, ids: ids, label: b"reprobe")
+		emitSlabProbe(module, func: func, cur: reprobe, mcacheSlot: mcacheSlot, myP: myP, sharded: sharded, hit: ready, miss: refill, ids: ids, label: label)
 	end 'drainBeforeRefill' else 'refillOnMiss'
-		emitSlabProbe(module, func: func, cur: entry, mcacheSlot: mcacheSlot, myP: myP, sharded: sharded, hit: ready, miss: refill, ids: ids, label: b"probe")
+		emitSlabProbe(module, func: func, cur: cur, mcacheSlot: mcacheSlot, myP: myP, sharded: sharded, hit: ready, miss: refill, ids: ids, label: label)
 	end 'refillOnMiss'
 
 	let fresh = ids.mint()
@@ -1268,6 +1306,7 @@ function buildSlabAllocClass(module StdModule, name ByteArray, zeroed bool, shar
 	let empty = emitConst(module, block: consumed, value: 0, ids: ids)
 	let drainedNow = emitCmp(module, block: consumed, a: remaining, b: empty, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(consumed, op: StdOp.condBranch(drainedNow, thenBlockId: evict.id, elseBlockId: done.id))
+	consumed.branchEdges.push(BranchEdge.create(done.id, argIds: argsOf(slot)))
 
 	// Drop a drained span from the mcache so the next call refills cleanly.
 	//
@@ -1277,11 +1316,10 @@ function buildSlabAllocClass(module StdModule, name ByteArray, zeroed bool, shar
 	let uncached = emitConst(module, block: evict, value: 0, ids: ids)
 	emitStoreField(module, block: evict, record: mcacheSlot, offset: 0, value: uncached)
 	module.setTerminator(evict, op: StdOp.branch(done.id))
+	evict.branchEdges.push(BranchEdge.create(done.id, argIds: argsOf(slot)))
 
-	module.setTerminator(done, op: StdOp.ret(slot))
-
-	module.functions.push(func)
-end 'buildSlabAllocClass'
+	return done
+end 'emitSlabAllocClass'
 
 // ⭐⭐ **ONE PROBE OF THE mcache ENTRY — the three questions that decide hit from miss, spelled ONCE.**
 // v1 writes this out twice inside one function and its second copy's comment says so out loud (*"Same
@@ -1338,14 +1376,20 @@ end 'emitSlabProbe'
 // `__slab_alloc(size) -> ptr` and its two siblings — the public doors.
 //
 // ⭐ **`countRaw` DECIDES WHETHER THIS BODY MAINTAINS THE RAW TRAFFIC COLUMNS**, which is what lets one
-// builder serve `__slab_alloc` and its uncounted twin `__slab_alloc_box`; `classCallee` decides whether a
+// builder serve `__slab_alloc` and its uncounted twin `__slab_alloc_box`; `zeroed` decides whether a
 // recycled slot is zeroed. Both are BUILD-time, so neither costs a branch or an argument at run time.
 //
 // The columns are credited in the entry block — before the routing, because the request is counted whichever
 // tier serves it and `size` is the number either way.
 //
-// ⭐⭐ **THIS IS WHERE "WHICH P AM I" IS ANSWERED, ONCE PER ALLOCATION, AND HANDED DOWN.** `__slab_alloc_class`
-// and `__slab_refill` both need the P and its row and neither re-derives them; v1 reads its TLS slot in the
+// ⭐⭐ **THE WHOLE HIT PATH IS THIS ONE BODY (EC8): the class lookup, the P, the row, the state region and
+// the pop, with a call left only where the path is COLD.** What survives as a `call` is exactly what a hit
+// never reaches — `__slab_os_direct_alloc` (a mapping of its own), `__slab_state_base`'s commit (once per
+// process), `__slab_refill` (a fresh span) and `__slab_drain_remote` (a miss on a sharded build). Everything
+// else is emitted here, so an allocation that hits its mcache entry enters ONE frame and leaves it.
+//
+// ⭐⭐ **THIS IS WHERE "WHICH P AM I" IS ANSWERED, ONCE PER ALLOCATION, AND HANDED DOWN.** The pop and
+// `__slab_refill` both need the P and its row and neither re-derives them; v1 reads its TLS slot in the
 // entry AND again in the class allocator AND clamps in both, which is one fact computed three times, with
 // three chances for two of them to disagree about which row a span was stamped for.
 //
@@ -1356,10 +1400,18 @@ end 'emitSlabProbe'
 // which is v1's argument (*"no raw thread ever takes the unlocked path"* — `__gt_init` runs on main before
 // any worker exists) with shv2's own monotonic predicate in place of its P[0] probe.
 //
-// ⚠ **THE LOCK IS RECURSIVE AND THAT IS LOAD-BEARING**, exactly as it is in v1: the class-alloc under it can
-// miss and call `__slab_refill`, which takes the same lock again. A non-recursive mutex here is a deadlock,
-// not a performance question.
-function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, classCallee ByteArray, sharded bool)
+// ⚠ **THE LOCK IS RECURSIVE AND THAT IS LOAD-BEARING**, exactly as it is in v1: the pop under it can miss
+// and call `__slab_refill`, which takes the same lock again. A non-recursive mutex here is a deadlock, not a
+// performance question.
+//
+// ⭐⭐ **THE LOCK IS TAKEN AND RELEASED AROUND ONE COPY OF THE POP, NOT AROUND TWO — `heldLock` IS WHY.**
+// Serialised and sole-writer differ in exactly one thing: whether `__slab_lock` is held across the pop. With
+// the pop emitted inline, spelling that as two arms would emit the body TWICE per entry door — three doors
+// in a counted build, so six copies of it — for a difference of two ops. The two arms therefore converge on
+// one `serve` block carrying `SlabLockTaken`/`SlabLockNotTaken`, and the release re-reads that flag. It is
+// the honest form of the question too: *"did I take it"* is a fact about this call, and re-deriving it after
+// the pop from `row` and the scheduler word would be asking two predicates to agree about one event.
+function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, zeroed bool, sharded bool)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -1371,7 +1423,7 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, cl
 	let size = 0 as ValueId
 
 	if countRaw 'rawColumns'
-		emitRawTrafficCredit(module, block: entry, bytes: size, ids: ids)
+		emitRawTrafficCredit(module, block: entry, bytes: size, multiM: sharded, ids: ids)
 	end 'rawColumns'
 
 	emitSlabSizeRouting(module, block: entry, size: size, osDirect: osDirect, small: small, ids: ids)
@@ -1386,42 +1438,65 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, cl
 	module.setTerminator(osDirect, op: StdOp.ret(mapped))
 
 	let class = ids.mint()
-	module.appendOp(small, op: StdOp.call(class, callee: SlabClassIndexForName, args: argsOf(size)))
-	let myP = emitSlabCurrentP(module, block: small, sharded: sharded, ids: ids)
+	var classReady = emitSlabClassIndex(module, func: func, cur: small, size: size, classId: class, ids: ids, label: b"cls")
+
+	let myP = ids.mint()
+	var pReady = emitSlabCurrentP(module, func: func, cur: classReady, sharded: sharded, pId: myP, ids: ids, label: b"myp")
 
 	let row = ids.mint()
-	var rowReady = emitSlabShardRow(module, func: func, cur: small, myP: myP, sharded: sharded, rowId: row, ids: ids, label: b"row")
+	var rowReady = emitSlabShardRow(module, func: func, cur: pReady, myP: myP, sharded: sharded, rowId: row, ids: ids, label: b"row")
+
+	// The state region is fetched HERE rather than inside the pop because the serialised arm needs
+	// `__slab_lock`'s address before the pop runs — see `emitSlabAllocClass`'s note on who owes `state`.
+	let state = ids.mint()
+	var stateReady = emitSlabStateBase(module, func: func, cur: rowReady, stateId: state, ids: ids, label: b"state")
 
 	if not sharded 'noSharedRow'
 		let slot = ids.mint()
-		module.appendOp(rowReady, op: StdOp.call(slot, callee: classCallee, args: threeArgs(class, second: myP, third: row)))
-		module.setTerminator(rowReady, op: StdOp.ret(slot))
+		var served = emitSlabAllocClass(module, func: func, cur: stateReady, classIdx: class, myP: myP, row: row, state: state, zeroed: zeroed, sharded: sharded, slotId: slot, ids: ids, label: b"pop")
+		module.setTerminator(served, op: StdOp.ret(slot))
 		module.functions.push(func)
 		return
 	end 'noSharedRow'
 
 	var maybeShared = module.addBlock(func, label: b"maybeshared")
-	var serialised = module.addBlock(func, label: b"serialised")
+	var takeLock = module.addBlock(func, label: b"serialised")
 	var soleWriter = module.addBlock(func, label: b"solewriter")
+	var serve = module.addBlock(func, label: b"serve")
 
-	let sharedRow = emitConst(module, block: rowReady, value: SlabRawShardRow, ids: ids)
-	let onSharedRow = emitCmp(module, block: rowReady, a: row, b: sharedRow, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(rowReady, op: StdOp.condBranch(onSharedRow, thenBlockId: maybeShared.id, elseBlockId: soleWriter.id))
+	let heldLock = ids.mint()
+	serve.blockArgs.push(IrBlockArg.create(heldLock, argType: StdType.i64))
+
+	let sharedRow = emitConst(module, block: stateReady, value: SlabRawShardRow, ids: ids)
+	let onSharedRow = emitCmp(module, block: stateReady, a: row, b: sharedRow, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(stateReady, op: StdOp.condBranch(onSharedRow, thenBlockId: maybeShared.id, elseBlockId: soleWriter.id))
 
 	let threadsPossible = emitSlabSchedulerExists(module, block: maybeShared, ids: ids)
-	module.setTerminator(maybeShared, op: StdOp.condBranch(threadsPossible, thenBlockId: serialised.id, elseBlockId: soleWriter.id))
+	module.setTerminator(maybeShared, op: StdOp.condBranch(threadsPossible, thenBlockId: takeLock.id, elseBlockId: soleWriter.id))
 
-	let state = ids.mint()
-	module.appendOp(serialised, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
-	emitSlabLockEnter(module, block: serialised, state: state, sharded: sharded, ids: ids)
-	let sharedSlot = ids.mint()
-	module.appendOp(serialised, op: StdOp.call(sharedSlot, callee: classCallee, args: threeArgs(class, second: myP, third: row)))
-	emitSlabLockLeave(module, block: serialised, state: state, sharded: sharded, ids: ids)
-	module.setTerminator(serialised, op: StdOp.ret(sharedSlot))
+	emitSlabLockEnter(module, block: takeLock, state: state, sharded: sharded, ids: ids)
+	let taken = emitConst(module, block: takeLock, value: SlabLockTaken, ids: ids)
+	module.setTerminator(takeLock, op: StdOp.branch(serve.id))
+	takeLock.branchEdges.push(BranchEdge.create(serve.id, argIds: argsOf(taken)))
 
-	let ownSlot = ids.mint()
-	module.appendOp(soleWriter, op: StdOp.call(ownSlot, callee: classCallee, args: threeArgs(class, second: myP, third: row)))
-	module.setTerminator(soleWriter, op: StdOp.ret(ownSlot))
+	let untaken = emitConst(module, block: soleWriter, value: SlabLockNotTaken, ids: ids)
+	module.setTerminator(soleWriter, op: StdOp.branch(serve.id))
+	soleWriter.branchEdges.push(BranchEdge.create(serve.id, argIds: argsOf(untaken)))
+
+	let slot = ids.mint()
+	var served = emitSlabAllocClass(module, func: func, cur: serve, classIdx: class, myP: myP, row: row, state: state, zeroed: zeroed, sharded: sharded, slotId: slot, ids: ids, label: b"pop")
+
+	var release = module.addBlock(func, label: b"release")
+	var handBack = module.addBlock(func, label: b"handback")
+
+	let notTaken = emitConst(module, block: served, value: SlabLockNotTaken, ids: ids)
+	let wasSerialised = emitCmp(module, block: served, a: heldLock, b: notTaken, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(served, op: StdOp.condBranch(wasSerialised, thenBlockId: release.id, elseBlockId: handBack.id))
+
+	emitSlabLockLeave(module, block: release, state: state, sharded: sharded, ids: ids)
+	module.setTerminator(release, op: StdOp.ret(slot))
+
+	module.setTerminator(handBack, op: StdOp.ret(slot))
 
 	module.functions.push(func)
 end 'buildSlabAllocEntry'
@@ -1663,45 +1738,61 @@ end 'buildSlabScavenge'
 //
 // **PUSH: `[slot] = free_list; free_list = slot; free_count += 1`** — the other half of INV-1.
 //
-// ⭐⭐ **THE COMMON SINK FOR EVERY FREE THAT REACHES A SPAN, AND IT IS A FUNCTION BECAUSE IT HAS THREE
+// ⭐⭐ **THE COMMON SINK FOR EVERY FREE THAT REACHES A SPAN, AND IT IS ONE EMITTER BECAUSE IT HAS THREE
 // CALLERS THAT CANNOT SHARE A BLOCK.** `__slab_free`'s own local push, its serialised push for a slot on the
-// shared raw row (which must run inside the lock), and the remote-queue replay in `__slab_drain_remote` are
-// in three different functions; emitting the sequence at each would be v1's own duplication with better
-// manners. v1 factors it identically and for the identical reason (`__slab_free_class_with_mspan`).
+// shared raw row (which must run inside the lock), and the remote-queue replay in `__slab_drain_remote`;
+// spelling the sequence at each would be v1's own duplication with better manners. v1 factors it
+// identically and for the identical reason (`__slab_free_class_with_mspan`).
+//
+// ⭐ **THE HOT CALLER EMITS IT INLINE AND THE COLD ONES STILL CALL `__slab_free_to_span` (EC8).** A local
+// push is ~12 ops — less than the frame that reached it — and it is the arm every free of a program with
+// one thread takes. The two cold arms (a slot on the shared raw row, which runs under `__slab_lock`, and
+// the drain's replay loop, which runs the push once per queued slot) keep the call, so the function still
+// exists and this is one spelling emitted twice, not two spellings.
 //
 // ⚠⚠ **EVERY CALLER MUST BE THE SPAN'S SOLE WRITER, AND EACH ESTABLISHES THAT DIFFERENTLY** — that is the
-// contract this function cannot check and its callers exist to satisfy. `__slab_free`'s local arm has
-// compared `owning_p` against its own P; its raw arm holds `__slab_lock`; the drain runs on the owner by
+// contract this cannot check and its callers exist to satisfy. `__slab_free`'s local arm has compared
+// `owning_p` against its own P; its raw arm holds `__slab_lock`; the drain runs on the owner by
 // construction, because a remote push targets the owner's queue and nobody else's.
+function emitSlabFreeToSpan(module StdModule, func IrFunction, cur IrBlock, slot ValueId, span ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+	var fullyFree = module.addBlock(func, label: label)
+	let done = module.addBlock(func, label: label)
+
+	let head = emitLoadField(module, block: cur, record: span, offset: MspanFreeListOffset, ids: ids)
+	emitStoreField(module, block: cur, record: slot, offset: 0, value: head)
+	emitStoreField(module, block: cur, record: span, offset: MspanFreeListOffset, value: slot)
+	let live = emitLoadField(module, block: cur, record: span, offset: MspanFreeCountOffset, ids: ids)
+	let one = emitConst(module, block: cur, value: 1, ids: ids)
+	let released = emitBin(module, block: cur, a: live, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: cur, record: span, offset: MspanFreeCountOffset, value: released)
+
+	let classIdx = emitLoadField(module, block: cur, record: span, offset: MspanClassIdxOffset, ids: ids)
+	let geom = emitClassGeometry(module, block: cur, classIdx: classIdx, ids: ids)
+	let totalSlots = emitGeomTotalSlots(module, block: cur, geom: geom, ids: ids)
+	let spanIsEmpty = emitCmp(module, block: cur, a: released, b: totalSlots, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(spanIsEmpty, thenBlockId: fullyFree.id, elseBlockId: done.id))
+
+	module.appendOp(fullyFree, op: StdOp.call(ids.mint(), callee: SlabSpanReturnName, args: argsOf(span)))
+	module.setTerminator(fullyFree, op: StdOp.branch(done.id))
+
+	return done
+end 'emitSlabFreeToSpan'
+
+// `__slab_free_to_span(slot, span)` — the same push behind a frame, for the two COLD arms: the serialised
+// one (a slot on the shared raw row, freed once a scheduler exists) and `__slab_drain_remote`'s replay
+// loop. Neither is on any program's hot path, so the frame costs them nothing they would notice and saves
+// the push being written into the emitted image two more times.
 function buildSlabFreeToSpan(module StdModule)
 	var func = IrFunction.createFromStd(SlabFreeToSpanName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var fullyFree = module.addBlock(func, label: b"fullyfree")
-	var done = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 2)
 	let slot = 0 as ValueId
 	let span = 1 as ValueId
 
-	let head = emitLoadField(module, block: entry, record: span, offset: MspanFreeListOffset, ids: ids)
-	emitStoreField(module, block: entry, record: slot, offset: 0, value: head)
-	emitStoreField(module, block: entry, record: span, offset: MspanFreeListOffset, value: slot)
-	let live = emitLoadField(module, block: entry, record: span, offset: MspanFreeCountOffset, ids: ids)
-	let one = emitConst(module, block: entry, value: 1, ids: ids)
-	let released = emitBin(module, block: entry, a: live, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: entry, record: span, offset: MspanFreeCountOffset, value: released)
-
-	let classIdx = emitLoadField(module, block: entry, record: span, offset: MspanClassIdxOffset, ids: ids)
-	let geom = emitClassGeometry(module, block: entry, classIdx: classIdx, ids: ids)
-	let totalSlots = emitGeomTotalSlots(module, block: entry, geom: geom, ids: ids)
-	let spanIsEmpty = emitCmp(module, block: entry, a: released, b: totalSlots, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(spanIsEmpty, thenBlockId: fullyFree.id, elseBlockId: done.id))
-
-	module.appendOp(fullyFree, op: StdOp.call(ids.mint(), callee: SlabSpanReturnName, args: argsOf(span)))
-	module.setTerminator(fullyFree, op: StdOp.branch(done.id))
-
+	var done = emitSlabFreeToSpan(module, func: func, cur: entry, slot: slot, span: span, ids: ids, label: b"push")
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1837,10 +1928,10 @@ function buildSlabFree(module StdModule, sharded bool)
 	let ptr = 0 as ValueId
 
 	let span = ids.mint()
-	module.appendOp(entry, op: StdOp.call(span, callee: SlabArenaMapGetName, args: argsOf(ptr)))
-	let noSpan = emitConst(module, block: entry, value: ArenaMapNoSpan, ids: ids)
-	let unmapped = emitCmp(module, block: entry, a: span, b: noSpan, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(unmapped, thenBlockId: osDirect.id, elseBlockId: toSpan.id))
+	var mapped = emitSlabArenaMapGet(module, func: func, cur: entry, ptr: ptr, spanId: span, ids: ids, label: b"map")
+	let noSpan = emitConst(module, block: mapped, value: ArenaMapNoSpan, ids: ids)
+	let unmapped = emitCmp(module, block: mapped, a: span, b: noSpan, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(mapped, op: StdOp.condBranch(unmapped, thenBlockId: osDirect.id, elseBlockId: toSpan.id))
 
 	// ⚠ **NO LOCK, WHERE v1 TAKES ONE** — see `buildSlabAllocEntry`'s note: shv2's OS-direct tier keeps its
 	// length in the mapping's own prefix and shares no state with any other thread.
@@ -1848,8 +1939,8 @@ function buildSlabFree(module StdModule, sharded bool)
 	module.setTerminator(osDirect, op: StdOp.retVoid)
 
 	if not sharded 'soleThread'
-		module.appendOp(toSpan, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(ptr, second: span)))
-		module.setTerminator(toSpan, op: StdOp.retVoid)
+		var pushed = emitSlabFreeToSpan(module, func: func, cur: toSpan, slot: ptr, span: span, ids: ids, label: b"push")
+		module.setTerminator(pushed, op: StdOp.retVoid)
 		module.functions.push(func)
 		return
 	end 'soleThread'
@@ -1883,12 +1974,13 @@ function buildSlabFree(module StdModule, sharded bool)
 
 	emitRuntimeAbort(module, func: func, block: parked, abort: RuntimeAbort.slabFreeOfParkedSpan, ids: ids)
 
-	let myP = emitSlabCurrentP(module, block: mine, sharded: sharded, ids: ids)
-	let isMine = emitCmp(module, block: mine, a: owner, b: myP, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(mine, op: StdOp.condBranch(isMine, thenBlockId: local.id, elseBlockId: remote.id))
+	let myP = ids.mint()
+	var pKnown = emitSlabCurrentP(module, func: func, cur: mine, sharded: sharded, pId: myP, ids: ids, label: b"myp")
+	let isMine = emitCmp(module, block: pKnown, a: owner, b: myP, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(pKnown, op: StdOp.condBranch(isMine, thenBlockId: local.id, elseBlockId: remote.id))
 
-	module.appendOp(local, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(ptr, second: span)))
-	module.setTerminator(local, op: StdOp.retVoid)
+	var locallyPushed = emitSlabFreeToSpan(module, func: func, cur: local, slot: ptr, span: span, ids: ids, label: b"push")
+	module.setTerminator(locallyPushed, op: StdOp.retVoid)
 
 	var pushed = emitSlabRemotePush(module, func: func, cur: remote, target: owner, slot: ptr, ids: ids)
 	module.setTerminator(pushed, op: StdOp.retVoid)
