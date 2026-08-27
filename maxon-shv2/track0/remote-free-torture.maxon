@@ -11,6 +11,21 @@
 //
 // The aggregate is an order-independent sum of index-derived values, exactly as alloc-torture's is.
 
+// ⛔⛔ **SINCE EC10 THIS PROGRAM RUNS ON ONE M AT EVERY `MAXON_MAX_PROCS`, SO ITS
+// CROSS-P SUBJECT HAS NO PRODUCER.** An `async f(...)` call creates a COROUTINE of
+// the green thread that called it — published only to that green thread's queue,
+// never to a P ring — so `__sched_wake_or_spawn` is never called and no worker M is
+// created. `workers=1` at N=1, 2, 7 and 12, against the parent commit's 1, 2, 7 and
+// 9 on the same box (`maxon-shv2/track0/pin-matrix.sh`; a high-water mark, so it is
+// how many Ms were NEEDED rather than how many were allowed).
+//
+// ⇒ **WHAT IT STILL MEASURES:** determinism of the aggregate, leak-freedom, and the
+// allocator's single-shard path under heavy churn. **WHAT IT NO LONGER MEASURES:**
+// anything cross-P — the per-P mcache handoff, the remote-free MPSC queue, the span
+// ownership gate. Those are S5's subject and they are correct code with no way to
+// reach them from Maxon until a `spawn` primitive creates a second green thread.
+// **Do not read a green run below as covering them.**
+
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
 typealias IntPromise = Promise with Integer

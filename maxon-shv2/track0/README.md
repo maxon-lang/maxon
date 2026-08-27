@@ -11,15 +11,49 @@ in the repo had ever raced them. This harness builds a torture program that
 forces the cross-P paths and asserts the runtime stays correct as the core count
 varies.
 
-## Run it
+## ⛔ THREE DRIVERS, AND THEY MEASURE TWO DIFFERENT COMPILERS
+
+This directory holds programs that no spec case can run, because a spec case
+cannot set an environment variable. It holds **three** drivers, and the first
+question to ask of any reading from here is *which compiler produced the binary*.
+
+| Driver | Compiler it drives | What it answers |
+|---|---|---|
+| `validate.sh` | **the C# BOOTSTRAP** (`$REPO/bin/maxon.exe`) | is the bootstrap's per-P sharded allocator + multi-M scheduler correct above one P? |
+| `pin-matrix.sh` | **shv2** (`maxon-shv2/.maxon/maxon-shv2.exe`) | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at every `MAXON_MAX_PROCS`? |
+| `refcount-race.sh` | **shv2** | does a contended refcount word survive, and is a plain load/add/store able to break it? |
+
+⚠ **`validate.sh` DOES NOT MEASURE SHV2 AND NEVER DID.** It defaults `MAXON` to
+`$REPO/bin/maxon.exe`, and one of its checks calls `maxon monitor`, which shv2
+does not have. Everything it says is about the bootstrap's emitted runtime. The
+two shv2 drivers were added by EC10 because W212 drove these programs under shv2
+BY HAND ("240 runs at 1/2/7/12") and left no script, so its readings could not be
+reproduced.
 
 ```
-bash maxon-shv2/track0/validate.sh
+bash maxon-shv2/track0/validate.sh          # the bootstrap; REPS=N, default 15
+bash maxon-shv2/track0/pin-matrix.sh        # shv2; PROCS_LIST=, PROGRAMS=, MAXON=
+bash maxon-shv2/track0/refcount-race.sh 12  # shv2; reps as argv[1], MAXON=
 ```
 
-Exits `0` iff every check passes; prints `PASS`/`FAIL` per assertion and exits
-non-zero on any failure. Override the compiler with `MAXON=/path/to/maxon.exe`
-and the sweep repetition count with `REPS=N` (default 15).
+Each exits `0` iff every check passes (`refcount-race.sh` records rather than
+asserts — see its header for why). Override the compiler with `MAXON=<path>`,
+which is how a PARENT-commit reading is taken; the binary must sit inside a
+checkout, because it locates `stdlib/` relative to itself.
+
+### ⭐⭐ WHAT EC10's PIN COST THIS HARNESS, STATED ONCE
+
+`alloc-torture` and `remote-free-torture` reach the allocator's CROSS-P paths by
+getting worker Ms to run their tasks. Since EC10 an `async f(...)` call creates a
+COROUTINE of the calling green thread — published only to that green thread's
+queue, never to a P ring — so **no worker M is ever created at any
+`MAXON_MAX_PROCS`** and both programs run entirely on one M. They still prove
+determinism, leak-freedom and single-shard churn; they no longer reach the per-P
+mcache handoff, the remote-free MPSC queue or the span ownership gate **in shv2**.
+`validate.sh` still reaches all three **in the bootstrap**, whose scheduler is
+unchanged. Those paths regain a shv2 producer when a `spawn` primitive lands
+(`SERVICES_DESIGN.md:62-160`); until then, do not read a green shv2 run as
+covering them.
 
 ## Pieces
 
@@ -35,8 +69,23 @@ and the sweep repetition count with `REPS=N` (default 15).
   matter how many cores ran the work. Passing **any CLI argument** selects a small
   workload used only by the mm-trace check (so the debugstream ring captures a
   complete, drop-free trace).
-- **`validate.sh`** — compiles the program once (a plain build + a `--debugstream`
-  build), then runs the four checks below.
+- **`steal-torture.maxon`** — all of its work is created by ONE green thread, so
+  before EC10 the only way a second P could run any of it was the stealing rounds.
+  `steals=` is a direct reading of that mechanism. Since the pin it reads 0 at
+  every processor count, which is the pin.
+- **`drop-running-torture.maxon`** — a promise dropped while its thread EXECUTES
+  on another M, the one shape the teardown rendezvous was built for and the one no
+  spec case can reach. Since the pin it is unreachable for a coroutine too; the
+  program stays because `spawn` re-creates the shape.
+- **`refcount-torture.maxon`** — twelve `async` tasks all handed the SAME heap
+  `String`, each pushing it into a local container in a loop: `push` emits
+  `__str_retain` and the container's scope end decrefs every element, so one round
+  is N increfs and N decrefs of ONE word. It is the program that justifies the
+  `lock` prefix on `emitAdjustRefcount`, rebuilt after the original was lost to a
+  `temp/` path in a comment. **The exit code is the only discriminator** — the
+  aggregate is byte-identical in passing and crashing runs.
+- **`validate.sh`** — compiles `alloc-torture` once with the BOOTSTRAP (a plain
+  build + a `--debugstream` build), then runs the four checks below.
 
 ## Knobs (all read once at scheduler init)
 

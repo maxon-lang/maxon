@@ -5,9 +5,11 @@
 // lands on a run queue somebody is already looking at, and a global FIFO would
 // serve them just as well. Neither can tell a stealing scheduler from a fair
 // one. This program can, because ALL of its work is created by ONE green
-// thread and therefore enters ONE processor's local ring: every other P starts
-// with an empty ring and an empty global queue, so the only way it can ever run
-// anything is `__sched_find_runnable`'s stealing rounds.
+// thread and therefore enters ONE queue: every other P starts with an empty ring
+// and an empty global queue, so the only way it can ever run anything is
+// `__sched_find_runnable`'s stealing rounds. ⚠ Since EC10 that queue is the
+// owner's COROUTINE queue and a thief cannot reach it at all — see the note
+// below, which is the reading rather than a caveat on it.
 //
 // Mechanism: main spawns a single `producer`, which spawns `childCount`
 // short-lived children onto whichever P is running IT and only then awaits any
@@ -23,9 +25,25 @@
 // MAXON_MAX_PROCS in {1, 2, 7, 12} — which is what makes a stolen thread having
 // run EXACTLY ONCE a checked property rather than a hope.
 //
-// ⚠ `steals=` is legitimately 0 at MAXON_MAX_PROCS=1: there is nobody to steal
-// from. The stealing rounds still RUN there (a P reaches them whenever it finds
-// nothing), so the zero is a measurement of an executed path.
+// ⛔⛔ **SINCE EC10 IT READS `steals=0 workers=1` AT EVERY PROCESSOR COUNT, AND
+// THAT IS THE MEASUREMENT RATHER THAN A FAILURE.** An `async f(...)` call creates
+// a COROUTINE of the green thread that called it, not a green thread: it is
+// published only to its owner's coroutine queue, never to a P ring or the global
+// queue, so `__sched_wake_or_spawn` is never called, no worker M is ever created,
+// and there is nothing anywhere for a thief to find. `producer` still creates all
+// of the work and `aggregate` is still the proof that every child ran exactly
+// once — what changed is that the work never leaves the M its owner is running on.
+//
+// The parent-commit reading of this same program, same box, same binary shape:
+// `workers=1 steals=0` at N=1, `2 / 24` at N=2, `7 / 3997` at N=7 and `8 / 3996`
+// at N=12. `maxon-shv2/track0/pin-matrix.sh` is the driver that takes both.
+//
+// ⚠ **AND THE ASSERTION FLIPS BACK WHEN `spawn` LANDS.** A `spawn` primitive
+// (`SERVICES_DESIGN.md:62-160`, *"Send is a MOVE"*) creates real green threads,
+// which are exactly what W212's ring, its stealing and its worker loop schedule —
+// all still built, none of it deleted. That rung re-points this program's
+// `producer` at `spawn` and restores `steals > 0`; until then the zero is what a
+// correct scheduler answers.
 
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

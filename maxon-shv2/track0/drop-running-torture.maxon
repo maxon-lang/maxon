@@ -2,13 +2,15 @@
 // no spec case can reach.
 //
 // Why this exists: `__gt_promise_drop` has to settle what a dropped promise's
-// thread still owes, and above ONE processor the thread may be EXECUTING on
-// another M at the instant the promise is renounced. A spec case cannot reach
-// that state — `MAXON_MAX_PROCS` is read once at scheduler start and a case gets
-// `Args:` and no environment, so every spec runs on a single P where the dropper
-// IS the only thread running and nothing can be executing underneath it.
-// `specs-shv2/sched-runqueue.md` says the same thing about work stealing, and for
-// the same reason.
+// thread still owes, and a thread may be EXECUTING on another M at the instant the
+// promise is renounced. A spec case cannot reach that state — `MAXON_MAX_PROCS` is
+// read once at scheduler start and a case gets `Args:` and no environment, so every
+// spec runs on a single P where the dropper IS the only thread running and nothing
+// can be executing underneath it. `specs-shv2/sched-runqueue.md` says the same
+// thing about work stealing, and for the same reason.
+//
+// ⚠ SINCE EC10 THE ENVIRONMENT VARIABLE NO LONGER REACHES IT EITHER — see the
+// note below, which is this program's current standing and not a caveat.
 //
 // ⭐ **MAIN BURNS CPU BETWEEN THE SPAWN AND THE DROP, AND THAT IS THE WHOLE
 // DIFFERENCE BETWEEN MEASURING THE PATH AND MISSING IT.** A promise spawned and
@@ -27,10 +29,23 @@
 // `__gt_live_count`, which the drop has already debited, so a struct stranded this
 // way exits 0 while still being lost.
 //
-// ⚠ `started` and `steals` are legitimately 0 at MAXON_MAX_PROCS=1: main never
-// yields, so nothing is ever scheduled and every drop finds its thread queued and
-// never-run. The single-processor row is a CONTROL — it proves the program measures
-// nothing but the multi-processor path.
+// ⛔⛔ **SINCE EC10 THE SUBJECT IS UNREACHABLE AND THE PROGRAM READS ITS CONTROL ROW
+// AT EVERY PROCESSOR COUNT — `started=0 steals=0 workers=1 leaked=0`.** A promise
+// dropped while its thread EXECUTES needs a second M to be executing it, and an
+// `async` frame is now a COROUTINE of the green thread that spawned it: published
+// only to that green thread's queue, driven only by its chain of drivers, never
+// handed to a worker M. `main` never yields, so nothing is ever scheduled and every
+// drop finds its coroutine queued and never-run — which is what the N=1 row always
+// showed and is now what every row shows.
+//
+// The parent-commit reading, same box: `steals=0` at N=1, `6` at N=2, `35` at N=7
+// and `51` at N=12, with `leaked=0` throughout.
+//
+// ⚠ **IT IS NOT DELETED, AND MUST NOT BE.** The teardown rendezvous it gates is
+// what makes a dropped-while-running thread safe, and `spawn` re-creates exactly
+// that shape for real green threads. This is that rung's gate, and W218's. Until
+// then it is a program whose subject has no producer, run for the leak reading it
+// still gives.
 
 typealias Integer = int(i64.min to i64.max)
 

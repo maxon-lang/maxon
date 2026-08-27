@@ -1,0 +1,163 @@
+// Track-0 REFCOUNT-RACE control (EC10) — the program that justifies the `lock`
+// prefix on every retain and release in the language.
+//
+// ⭐⭐ WHY IT LIVES HERE AND NOT IN `temp/`. `MmRuntime.emitAdjustRefcount`'s
+// header cited `temp/g2/rc-global.maxon` as the measurement that made the
+// refcount read-modify-write atomic at G2. `temp/` is gitignored and is swept,
+// so that file is GONE and the measurement survived only as a path in a comment
+// — which is the defect, not an accident of housekeeping. This is the program
+// rebuilt, and it is COMMITTED beside the four torture programs so the next
+// person re-measures rather than re-derives. Drive it with
+// `maxon-shv2/track0/refcount-race.sh`.
+//
+// ⭐⭐ THE SHAPE IS NOT THE HEADER'S SHAPE, AND THAT IS A MEASURED CORRECTION.
+// The header describes "twelve green threads storing one `String` into one
+// module-level slot". MEASURED 2026-08-27: that shape produces NO refcount
+// traffic on the shared box at all. Reading a module-level heap `String` —
+// `let copy = shared` — emits `__mm_alloc` + `__str_copy` (a byte BLIT) +
+// `__str_decref` of the FRESH record: a deep CLONE. The shared record's
+// refcount word is never read or written, so there is nothing to race, and a
+// plain load/add/store passes that program every time. shv2's static ownership
+// also erases a NON-ESCAPING borrow entirely (`let copy = arr; copy.count()`
+// on a parameter compiles to one field load and no calls).
+//
+// ⇒ Contended traffic needs a borrow that genuinely ESCAPES. `bag.push(s)`,
+// where `s` is a String the task holds and `bag` is a local container, is such
+// a feed: it emits `x64.callDirect __str_retain` INSIDE the loop, which takes
+// `__mm_incref`'s co-own arm on a heap record, i.e. `emitAdjustRefcount`. The
+// bag's scope-end `__managed_decref` then runs `__str_decref` over every
+// element, so one round is `chunk` increfs and `chunk` decrefs of the SAME
+// refcount word — and every task is handed the SAME String.
+//
+// ⇒ THE THREE READINGS, ALL MEASURED, 12 runs per cell at
+//   MAXON_MAX_PROCS in {1, 2, 4, 12}:
+//   1. **EC10's parent, ATOMIC refcounts** — exit 42, 48/48.
+//   2. **EC10's parent, PLAIN load/add/store** — 42 at N=1, and at N >= 2
+//      **0 of 36 runs clean**: exit 101 (leak) or 139 (segfault), both halves of
+//      the race. Two negative controls on the SAME plain build — a private
+//      per-task String, and the shared box with no churn — are 42x48 each, so
+//      the failure is contention on ONE refcount word and not multi-M
+//      allocation, scheduling or spawning.
+//   3. **EC10's tip (`async` pinned) + PLAIN** — exit 42, 48/48. The pin removes
+//      the second party rather than the race: with `async` creating a coroutine
+//      of the calling green thread, no worker M is ever started and no second OS
+//      thread can reach the word.
+//
+// Reading 2 is the one that makes the other two mean anything — a control that
+// cannot be made to fail is not a control. Reading 3 is what SLICE 2 cashes in
+// when it makes `emitAdjustRefcount` a plain load/add/store unconditionally.
+//
+// ⛔ `live=` IS NOT THE LEAK SIGNAL, AND THE OLD HEADER SAID IT WAS. MEASURED:
+// `mmRawAllocLive()` reads 8/9/11/19 at N=1/2/4/12 identically in PASSING and
+// FAILING runs — it tracks how many P structs `__sched_init_procs` built, which
+// grows with the processor count whatever the Ms do (the pinned tip reads 19 at
+// N=12 too). **THE EXIT CODE IS THE DISCRIMINATOR.** So is `aggregate=`
+// deceptive: it is byte-identical in failing and passing runs, because the
+// ANSWER stays deterministic and only memory management breaks — an
+// aggregate-only assertion would call a segfaulting run correct.
+
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+// One green thread per M the word is plausibly raced from. 12 is the count the
+// original reading was taken at, and it is the default worker pool size.
+let taskCount = 12
+
+// Rounds of churn per task. Each round is one `chunk`-sized bag built and
+// dropped, so a task performs `rounds * chunk` increfs and as many decrefs. The
+// race window is a handful of instructions wide, so the count has to be large
+// enough that thousands of entries overlap across Ms.
+let rounds = 6000
+
+// Increfs per round. Small enough that the bag is built and dropped promptly —
+// which keeps the shared count OSCILLATING rather than climbing monotonically,
+// and an oscillating count is what lets a lost incref reach the "last owner"
+// arm and free the box under a live holder (the segfault half).
+let chunk = 8
+
+// ⭐ ONE ROUND OF CHURN ON THE SHARED BOX. `bag.push(s)` is the escaping-borrow
+// feed: it retains `s` per push. `bag` dies at this function's scope end, and
+// its `__str_decref` destructor lowers the same count once per element.
+//
+// It is a separate function rather than an inner block so the drop point is
+// unambiguous — the bag cannot be kept alive past the round by a scope rule
+// this program did not intend.
+function churnRound(s String, n Integer) returns Integer
+	var bag = StringArray.create()
+
+	var j = 0
+
+	while j < n 'push'
+		bag.push(s)
+		j = j + 1
+	end 'push'
+
+	return bag.count()
+end 'churnRound'
+
+// ⭐ THE RACING TASK. Every one of the `taskCount` tasks is handed the SAME
+// heap `String`, so every incref and every decref below lands on ONE word.
+function hammer(idx Integer, s String, roundCount Integer, perRound Integer) returns Integer
+	// Marks this CPU-bound function a legitimate `async` target (the E3073
+	// yielding contract) without claiming fake I/O. No-op at runtime.
+	__Builtins.parallelBoundary()
+
+	var acc = 0
+	var r = 0
+
+	while r < roundCount 'round'
+		acc = acc + churnRound(s, n: perRound)
+		r = r + 1
+	end 'round'
+
+	// ⭐ READ THE BOX AFTER THE CHURN. The lost-incref half frees the record
+	// while this task still holds it; touching the bytes here turns that into a
+	// fault or a wrong answer rather than a quiet pass.
+	acc = acc + s.byteLength()
+
+	// Index-derived so the aggregate changes if a task ran twice or not at all.
+	return acc + idx
+end 'hammer'
+
+function main() returns ExitCode
+	// ⚠ A HEAP record is required: an immortal `.rdata` literal takes
+	// `__str_retain`'s CLONE arm and never touches a refcount, and an inline
+	// small string has no box. Interpolation forces the allocation.
+	var shared = "the one box every task refcounts"
+	shared = "{shared} :: {taskCount}"
+
+	var promises = IntPromiseArray.create()
+
+	// Spawn every task before awaiting any, so the scheduler spins up worker Ms
+	// to service the backlog — that is what puts more than one M on the word.
+	for i in 0 upto taskCount 'spawn'
+		promises.push(async hammer(i, s: shared, roundCount: rounds, perRound: chunk))
+	end 'spawn'
+
+	var total = 0
+
+	for p in promises 'await'
+		total = total + await p
+	end 'await'
+
+	// ⚠ `live` IS PRINTED FOR THE RECORD AND IS **NOT** A SIGNAL — see the header.
+	// It reads the same in a passing run and a segfaulting one, and it grows with
+	// `MAXON_MAX_PROCS` even under the pin, because what it counts is the P structs
+	// bring-up allocated rather than anything this program leaked.
+	let live = __Builtins.mmRawAllocLive()
+	let workers = __Builtins.schedMaxActiveWorkers()
+	let steals = __Builtins.schedStealCount()
+	let cpus = __Builtins.cpuCount()
+
+	print("aggregate={total}\n")
+	print("live={live}\n")
+	print("workers={workers}\n")
+	print("steals={steals}\n")
+	print("cpucount={cpus}\n")
+
+	// Fixed, and never 101: the leak gate owns that value, so a clean run must
+	// not be able to produce it by accident.
+	return 42
+end 'main'
