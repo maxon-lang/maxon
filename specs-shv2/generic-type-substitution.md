@@ -668,19 +668,26 @@ end 'main'
 
 <!-- test: substituted-return-of-a-built-record-is-already-owned -->
 ### A substituted return the shared body BUILT is already owned, and the caller must not co-own it
-⭐⭐ **THE CALLER'S `+1` IS OWED FOR AN OPAQUE `T` AND FOR NOTHING ELSE.** A shared generic body cannot
-classify a bare `T` — an unconditional retain there would fault on a trivial instantiation's raw scalar —
-so `Walker.current() returns T` hands the caller a BORROW and the caller takes the reference itself
-(`Parser.coOwnSubstitutedCallResult`). That premise is a property of the **opaque** return, not of
-substitution: a return type that is a CONCRETE managed record — a tuple `(T, T)`, whose shape the body
-knows whichever type `T` is — is classified by `emitOwnedValueReturn` like any other, so the body already
-promotes-or-passes-through an OWNED record and the hand-off is discharged before the caller sees it.
+⭐⭐ **THE EXTRA `+1` IS OWED FOR AN OPAQUE `T` AND FOR NOTHING ELSE.** A shared generic body cannot classify
+a bare `T` — an unconditional retain there would fault on a trivial instantiation's raw scalar — so
+`Walker.current() returns T` needs a descriptor-gated one. That obligation is a property of the **opaque**
+return, not of substitution: a return type that is a CONCRETE managed record — a tuple `(T, T)`, whose shape
+the body knows whichever type `T` is — is classified by `emitOwnedValueReturn` like any other, so the body
+already promotes-or-passes-through an OWNED record and the hand-off is discharged before the caller sees it.
 
-⛔ **Co-owning one anyway leaks it, once per call.** The caller minted a SECOND reference — a trivial
-tuple gets a whole fresh record (`copyTupleValue`), a managed-element one an `__mm_retain` — and then
-dropped only that one, while the record the body actually built was adopted by nobody. The answer stays
-correct and the leak gate is the only thing that can see it, which is why this case asserts an exit code
-that is only reachable through `__mm_leak_check`.
+⚠ **WHO TAKES THAT `+1` MOVED, AND THIS PARAGRAPH NAMED THE OLD PARTY.** It said the CALLER took it
+(`Parser.coOwnSubstitutedCallResult`); `582d9c45b9` (P1.7 slice 3b-vi-a) deleted that function and made the
+`+1` the CALLEE's, emitted in `emitOwnedValueReturn` through `coOwnBorrowedOpaque` → `__retain_type_param`.
+The discrimination this case is about therefore now lives at that one door: `emitOwnedValueReturn` promotes
+only a BORROWED value, and the tuple the body just built is already owned. Measured on this program:
+`Holder.pair` `__mm_alloc`s the pair record and `__retain_type_param`s each opaque ELEMENT into it, and
+`main` spends exactly one `__mm_decref` on the result and takes no reference of its own.
+
+⛔ **Co-owning the record anyway leaks it, once per call, and that is what the exit code is for.** The caller
+minted a SECOND reference — a trivial tuple got a whole fresh record (`copyTupleValue`), a managed-element
+one an `__mm_retain` — and then dropped only that one, while the record the body actually built was adopted
+by nobody. The answer stays correct either way and the leak gate is the only thing that can see it, which is
+why this case asserts an exit code that is only reachable through `__mm_leak_check`.
 
 The reaching program needs no loop, no iterator and no `Map`: one generic method whose substituted return
 type is a freshly built tuple, called once. Returns `42`, and exits 101 if the record is leaked.

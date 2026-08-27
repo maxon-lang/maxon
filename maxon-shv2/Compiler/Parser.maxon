@@ -28512,7 +28512,8 @@ export type Parser
 	// nested block would delete a below-mark entry, shift every block-local drop down one slot, and
 	// strand a block-local binding to be dropped at function exit on a path where its value is not even
 	// defined (a register-allocator "use dominates def" panic, verified). Promoting the literal to an
-	// owned heap copy — the SAME fused-record copy a borrowed `return` makes (`promoteToOwnedString`) —
+	// owned heap copy — the SAME fused-record copy the `binding` door itself makes (`promoteToOwnedString`;
+	// a borrowed `return` RETAINS instead since `ca5169e231`, and this sentence named that door until then) —
 	// keeps every reassignment of an owned binding a uniform owned→owned: the binding never moves, and
 	// an `if`/loop merge is handled by the phi machinery exactly as for any other carried value.
 	// ⭐ **ALLOCATE A CELL — one machine word on the heap, with the trivial destructor every shv2 box carries.**
@@ -30358,12 +30359,14 @@ export type Parser
 	// result unconditionally (`enrolOwnedCallTemp`). So the callee must return something OWNED and must not
 	// drop it — two adjustments, in this order, BEFORE the scope drops:
 	//
-	//   • PROMOTE a borrowed return. `return "hi"` is an immortal rdata literal (capacity == -2), not owned
-	//     heap; handed back as-is, the caller would `__mm_decref` read-only data. Copying its bytes into a
-	//     fresh owned record — the same single-`__mm_alloc` fused-record path an interpolation builds, with
-	//     the source as its one part — gives the caller a box it may safely drop. `return "{x}"` and
-	//     `return t` are already owned, so they pass through here. This half is return-specific and stays
-	//     here; the MOVE below is the shared hand-off cleanup.
+	//   • PROMOTE a borrowed return. `return "hi"` is an immortal rdata literal
+	//     (`capacity@16 == ImmortalRecordCapacity`), not owned heap; handed back as-is, the caller would
+	//     `__mm_decref` read-only data. `retainBorrowedByteRecord` (`__str_retain`) is what makes it
+	//     droppable without making it a COPY: it reads that capacity at RUN TIME and clones an immortal
+	//     record where it increfs a heap one, so the caller adopts an independently-droppable record either
+	//     way and a borrowed HEAP String is handed back as ITSELF. `return "{x}"` and `return t` are already
+	//     owned, so they pass through here. This half is return-specific and stays here; the MOVE below is
+	//     the shared hand-off cleanup.
 	//   • MOVE the owned return OUT of both drop sets — the shared `emitHandoffExitDrops` (the throw twin
 	//     performs the SAME move). It belongs to the caller now: out of `ownedBindings` so `emitScopeDrops`
 	//     does not double-free `return t`, and out of `pendingTempDrops` so the interp/promoted temporary is
@@ -30385,8 +30388,15 @@ export type Parser
 	// to the binding door. The refusal cost `stdlib/FilePath.maxon` its two `return self` sites, which is the
 	// whole of what stood between that module and compiling.
 	//
-	// A String is COPIED rather than increfed (value semantics) and a trivial TUPLE gets its own record, both
-	// through the same door; a scalar or payload-free enum carries no box and is always fine.
+	// A String is RETAINED — `__str_retain`, an incref of a heap record and a clone of an immortal one — and a
+	// trivial TUPLE gets its own record, both through the same door; a scalar or payload-free enum carries no
+	// box and is always fine.
+	//
+	// ⚠ **THIS LINE READ "a String is COPIED rather than increfed (value semantics)" UNTIL `ca5169e231`, AND
+	// THE PARENTHETICAL HAD IT BACKWARDS.** Maxon's value semantics ARE reference semantics — *"everything is
+	// a reference; if you want a copy you do it explicitly with `clone()`"* — so a `return name` handing back
+	// a different record than the `name` it was given is the copy the author never wrote. Only the `binding`
+	// door still copies (`ownedFormOfBorrowedValue`, which states why, and that the question is still open).
 	//
 	// **THE DROPS GO AFTER THE VALUE, BEFORE THE TERMINATOR.** AFTER the value, because `return p.x + p.y`
 	// READS the box; dropping first would free the memory the loads are about to read. BEFORE the
@@ -30406,8 +30416,9 @@ export type Parser
 
 		var returned = retVal
 
-		// The ONE promotion door (see the header): a borrowed String COPIES, a borrowed TRIVIAL TUPLE gets its
-		// own record, a borrowed struct/union/instance INCREFS. An already-owned value and a scalar pass
+		// The ONE promotion door (see the header): a borrowed String is RETAINED at this HAND-OFF door
+		// (`__str_retain`), a borrowed TRIVIAL TUPLE gets its own record, a borrowed struct/union/instance
+		// INCREFS. An already-owned value and a scalar pass
 		// straight through. The tuple half used to be asked HERE, one branch ahead of the shared door, which
 		// made it the `returned` door's private rule — and the `merged` door, opening onto the same shared door
 		// in S5, increfed a borrowed tuple instead and then handed the return an alias wearing the owned bit.
@@ -31704,7 +31715,7 @@ export type Parser
 
 		// ⭐ **REJECT AN OPAQUE-`T` TRY-MERGE THAT WOULD NEED A DESCRIPTOR-GATED INCREF/COPY (P1.7 slice
 		// 3b-vi-a).** The owned reconciliation below assumes a CONCRETE managed pointer: it increfs the borrowed
-		// OK result (`__mm_incref`), copies a borrowed String fallback (`promoteToOwnedString`), or increfs an
+		// OK result (`__mm_incref`), retains a borrowed String fallback (`retainBorrowedByteRecord`), or increfs an
 		// aliased owned fallback (`transferFallbackToPhi`). For an OPAQUE `typeParameter` element every one of
 		// those is WRONG — a trivial instantiation's word is a RAW SCALAR a plain `__mm_incref` faults on
 		// (access violation), and a managed one needs the enclosing instance's descriptor to pick the retain. So
@@ -34766,9 +34777,12 @@ export type Parser
 		return index < innermost.ownedFloor
 	end 'bindingIndexEscapesLoop'
 
-	// ⭐ **PROMOTE A BORROWED String TO AN OWNED HEAP COPY** so a `returns String` function ALWAYS hands
-	// back something owned. `return "hi"` yields an immortal rdata literal (capacity == -2), and a
-	// `returns String` caller drops its result unconditionally — decref'ing read-only data. Copying the
+	// ⭐ **PROMOTE A BORROWED String TO AN OWNED HEAP COPY**, which is what the `binding` door spends and what
+	// the two HAND-OFF doors spent until `ca5169e231` (they retain now — `retainBorrowedByteRecord`). The
+	// problem it solves is unchanged: `return "hi"` yields an immortal rdata literal
+	// (`capacity@16 == ImmortalRecordCapacity` — NOT `RdataBufferCapacity`, whose record is an ordinary
+	// `__mm_alloc` box), and a `returns String` caller drops its result unconditionally — decref'ing
+	// read-only data. Copying the
 	// source bytes into a fresh fused record — the SAME single-`__mm_alloc` path an interpolation builds,
 	// with the source as its one part (`__str_copy` blits `buffer@0`/`length@8`) — yields an owned
 	// temporary the caller can safely drop. `emitStringInterp` marks it owned (`trackOwnedTemp`); the
@@ -35104,9 +35118,9 @@ export type Parser
 		return promoted
 	end 'promoteBorrowedToOwned'
 
-	// The three-way protocol choice `promoteBorrowedToOwned` is written around — copy a String, copy a
-	// trivial tuple at a hand-off, incref anything else — split out so the surface carry above can wrap all
-	// three without being written into each. Every word of that door's header describes this body; it is
+	// The protocol choice `promoteBorrowedToOwned` is written around — RETAIN a String at a hand-off and COPY
+	// it at a `binding`, copy a trivial tuple at a hand-off, incref anything else — split out so the surface
+	// carry above can wrap all three without being written into each. Every word of that door's header describes this body; it is
 	// called from nowhere else.
 	function ownedFormOfBorrowedValue(value ValueId, door BorrowLaunderDoor, range SourceRange) returns ValueId throws ParseError
 		if tagIsByteRecord(self.tagOf(value)) 'byteRecord'
@@ -35218,7 +35232,7 @@ export type Parser
 			return self.retainBorrowedAggregate(value, range: range)
 		end 'aggregate'
 
-		panic("ownedFormOfBorrowedValue: v{value} is neither text nor a managed aggregate — the caller has already gated on `valueIsManagedHeap`, so a borrowed value promoted to owned is always a String (copy) or a struct/union box (retain); a scalar owns no heap and never reaches an owned binding's promotion")
+		panic("ownedFormOfBorrowedValue: v{value} is neither text nor a managed aggregate — the caller has already gated on `valueIsManagedHeap`, so a borrowed value promoted to owned is always a String (retained at a hand-off, copied at a binding) or a struct/union box (retain); a scalar owns no heap and never reaches an owned binding's promotion")
 	end 'ownedFormOfBorrowedValue'
 
 	// ⭐⭐ **MINT THE ONE OWNED REFERENCE A RESULT PHI'S BORROWED EDGE OWES IT, INTO THAT EDGE'S OWN BLOCK.**

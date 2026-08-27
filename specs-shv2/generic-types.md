@@ -3096,12 +3096,24 @@ end 'main'
 ```
 
 <!-- test: generic-managed-return-of-an-rdata-literal-copies -->
-⛔ **THE REASON THE CO-OWNERSHIP GOES THROUGH `promoteBorrowedToOwned` AND NOT THROUGH A BARE INCREF.** The
-reference a shared generic body could not take is taken by the CALLER (`coOwnSubstitutedCallResult`), and
-for a `String` that must be a COPY: `"hi"` is an immortal `.rdata` literal (capacity == -2) whose header
-lives in read-only memory, so `__mm_incref` on it writes a page the loader mapped read-only. The
-promotion's byte-record arm copies instead, exactly as a concrete `returns String` callee's own hand-off
-does. The oracle cannot compile this program either — it types the generic result as `int`
+⛔ **THE REASON THE REFERENCE CANNOT BE A BARE INCREF.** `"hi"` is a wholly immortal `.rdata` literal —
+record AND bytes, `capacity@16 == ImmortalRecordCapacity` — whose header lives in read-only memory, so
+`__mm_incref` on it is a read-modify-write of a page the loader mapped read-only. What the hand-off emits
+CLONES it instead, which is what the case name records and what its `byteLength()` of 2 measures.
+
+⚠ **THE ROUTE IS NOT THE ONE THIS PARAGRAPH USED TO NAME, AND BOTH OF ITS CLAUSES ARE NOW HISTORY.** It read
+*"the reference a shared generic body could not take is taken by the CALLER (`coOwnSubstitutedCallResult`),
+and for a `String` that must be a COPY"*, and it gave the sentinel as `-2`. All three moved:
+`582d9c45b9` (P1.7 slice 3b-vi-a) DELETED `coOwnSubstitutedCallResult` — the `+1` for a `returns T` hand-off
+is the CALLEE's now, taken in `emitOwnedValueReturn` through the enclosing instance's descriptor
+(`coOwnBorrowedOpaque` → `__retain_type_param`, whose `retainFunc@64` is `__str_clone` for a byte-record
+instantiation), and `main` emits nothing at all after the call. `ca5169e231` retired the concrete callee's
+COPY too — `retainBorrowedByteRecord` → `__str_retain`, which clones an immortal record and increfs a heap
+one off that same `capacity@16`. And `-2` is `RdataBufferCapacity`, a byte-string literal whose record is an
+ordinary `__mm_alloc` box; W157 gave a String literal's wholly-immortal record its own
+`ImmortalRecordCapacity`. Both roads still end in ONE clone, which is why the answer never moved.
+
+The oracle cannot compile this program either — it types the generic result as `int`
 (`E4006 Variable 's' is not a struct or enum type` at `s.byteLength()`) — so the answer is pinned by the
 non-generic control `let s = "hi"`, whose `byteLength()` is 2.
 ```maxon
@@ -3188,15 +3200,23 @@ caught
 ```
 
 <!-- test: expression-form-try-over-a-substituted-return -->
-⭐⭐ **THE EXPRESSION FORM OF THE CASE THE BLOCK FORM ABOVE HANDLES, AND IT REACHES THE SAME SHAPE BY THE
-SAME RULE: THE CALLER'S `+1` RIDES THE OK EDGE.** A shared generic body cannot classify its `T` return, so
-it hands one back as a BORROW and the caller takes its own reference (`coOwnSubstitutedCallResult`) —
-necessarily after the call, which is where the value exists. An expression `try` splits on the error flag
-at exactly that point, and on the error edge the result register was never written, so the promotion may
-not sit in the block both edges flow from. It does not: its ops are lifted off the fork's entry block and
-re-attached as the FIRST ops of `tryok`, the one edge the `tryCall` wrote the result on. That is the shape
-`generic-managed-return-routed-through-a-try-block` already emits — reached here by MOVING the ops the
-call left behind rather than by building a second mechanism to emit them elsewhere.
+⭐⭐ **THE EXPRESSION FORM OF THE CASE THE BLOCK FORM ABOVE HANDLES.** What it pins is the ANSWER — `v=9`
+off the ok edge of an expression-form `try` over a substituted managed return — and that has never moved. The
+MECHANISM behind it has, and the paragraph that stood here narrated the retired one as if it were still live.
+
+⚠ **READ THE NEXT SENTENCE IN THE PAST TENSE.** A shared generic body could not classify its `T` return, so
+it handed one back as a BORROW and the CALLER took its own reference (`coOwnSubstitutedCallResult`) —
+necessarily after the call, which is where the value exists. An expression `try` splits on the error flag at
+exactly that point, and on the error edge the result register was never written, so the promotion could not
+sit in the block both edges flow from: BATCH25 lifted its ops off the fork's entry block and re-attached them
+as the FIRST ops of `tryok`, the shape `generic-managed-return-routed-through-a-try-block` already emitted.
+
+**TODAY THERE IS NOTHING AT THE CALL TO LIFT.** `582d9c45b9` (P1.7 slice 3b-vi-a) deleted
+`coOwnSubstitutedCallResult` and moved the `+1` into the CALLEE (`emitOwnedValueReturn` →
+`coOwnBorrowedOpaque` → `__retain_type_param`), so the caller emits no promotion for a substituted `T` at
+all — this case's own committed golden shows `Box.fetch` making that call and `tryok:` holding a single
+`jmp trycont`. The ordering rule the lift exists to obey is unchanged and still serves the promotions that
+DO trail a call; it simply is not this program's any more.
 
 ⚠ **THE ORACLE MISCOMPILES THIS PROGRAM, so it is NOT the arbiter for the capability.** MEASURED on the
 bootstrap: it compiles, prints `v=9`, and then dies with `mm_decref: refcount underflow (already zero)`
@@ -3280,14 +3300,18 @@ v=hi
 ```
 
 <!-- test: expression-form-try-over-a-trivial-substituted-return -->
-⭐ **THE NEGATIVE CONTROL, AND THE DISCRIMINATOR THAT PROVED THE DIAGNOSIS.** A TRIVIAL instantiation
-owns no heap, so `coOwnSubstitutedCallResult` returns early and emits nothing at all — the call op is
-still the last op the target emitted, the rewrite claims it, and the program compiles and runs. That
-asymmetry between `Box with Integer` and `Box with Alpha` is what identified the co-own's promotion,
-rather than anything about `try` or about generics, as what the rewrite was grabbing. It stays a control
-after the cure: there is no promotion here to move onto the ok edge, so **not one op may change** and the
-golden must not budge. Widen the move to every substituted return and this case starts relocating the
-CALL itself — the sabotage this control is here to fail.
+⭐ **THE NEGATIVE CONTROL, AND THE DISCRIMINATOR THAT PROVED THE DIAGNOSIS — WHICH IS NOW HISTORY, AND THE
+CASE IS NOT.** A TRIVIAL instantiation owns no heap, so `coOwnSubstitutedCallResult` returned early and
+emitted nothing at all: the call op was still the last op the target emitted, the rewrite claimed it, and the
+program compiled and ran. That asymmetry between `Box with Integer` and `Box with Alpha` is what identified
+the co-own's promotion — rather than anything about `try` or about generics — as what the rewrite was
+grabbing.
+
+⚠ **THE ASYMMETRY IS GONE BECAUSE THE CALLER-SIDE PROMOTION IS.** `582d9c45b9` (P1.7 slice 3b-vi-a) deleted
+`coOwnSubstitutedCallResult` and gave the `+1` to the CALLEE, so `Box with Alpha` emits nothing after its
+call either (see `expression-form-try-over-a-substituted-return`). What this case still holds is the ANSWER
+for the trivial instantiation — it compiles, runs and returns 9 — and its golden, which must not budge for a
+rung that does not mean to move emission.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error

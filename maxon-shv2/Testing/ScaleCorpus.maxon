@@ -1218,11 +1218,21 @@ let GenericInstanceArgShapeCount = 2 as KnobSize
 // ⭐⭐ **M `try` SITES OVER A SUBSTITUTED *MANAGED* `T` RETURN — the shape BATCH25 built, and the shape
 // this corpus could not spell on the day it shipped.**
 //
-// A shared generic body cannot classify its `T` return, so it hands one back as a BORROW and the CALLER
-// takes the `+1` (`coOwnSubstitutedCallResult`) — necessarily after the call. Under a `try` that `+1`
-// may not sit in the block the fork splits, where the error edge would run it against a result register
-// the throw never wrote; BATCH25 LIFTS the promotion's ops off that block and re-attaches them at the
-// head of the ok edge. **Every op of that mechanism is per-SITE**, which is what this knob doubles.
+// A shared generic body cannot classify its `T` return, so BATCH25's shape handed one back as a BORROW and
+// the CALLER took the `+1` (`coOwnSubstitutedCallResult`) — necessarily after the call. Under a `try` that
+// `+1` may not sit in the block the fork splits, where the error edge would run it against a result register
+// the throw never wrote; BATCH25 LIFTS the promotion's ops off that block and re-attaches them at the head
+// of the ok edge. **Every op of that mechanism is per-SITE**, which is what this knob doubles.
+//
+// ⚠⚠ **THE CALLER-SIDE HALF OF THAT MECHANISM IS GONE, SO PART OF WHAT THIS KNOB WAS BUILT TO SEE IS NO
+// LONGER THERE TO SEE.** `582d9c45b9` (P1.7 slice 3b-vi-a) deleted `coOwnSubstitutedCallResult` and moved the
+// `+1` into the CALLEE (`Parser.emitOwnedValueReturn` → `coOwnBorrowedOpaque` → `__retain_type_param`), so a
+// substituted `T` return leaves NOTHING trailing the call and the lift finds nothing to relocate — measured
+// on `specs-shv2/generic-types.md`'s own golden, whose `tryok:` block is a bare `jmp`. The knob still
+// generates real per-site `try` work (the fork, the flag test, the callee's descriptor-gated retain), and it
+// is deliberately LEFT AS IT IS rather than retuned here: changing what the corpus emits moves every column
+// in `docs/optimization-log.md` and owes a measurement of its own. Read a flat column from the LIFT as the
+// corpus's blind spot, never as the cost.
 //
 // ⚠ **IT IS A SITE KNOB, AND THE TYPES ARE FIXED — for the Array knobs' reason.** The per-INSTANCE cost
 // (a layout descriptor, a per-instance `__destruct_<instance>`) is `genericInstances`' dimension and
@@ -1230,10 +1240,13 @@ let GenericInstanceArgShapeCount = 2 as KnobSize
 // change moved them. So this file declares exactly ONE base, ONE aggregate holder and TWO instances —
 // `Box with <holder>` and `Box with String` — and only the SITE count climbs.
 //
-// ⚠ **BOTH MANAGED SPELLINGS ARE GENERATED, BECAUSE THE CURE IS KEYED ON AN OP RANGE PRECISELY BECAUSE
-// THEY DIFFER.** An aggregate promotes with a single `__mm_retain` call; a `String` promotes by COPYING
-// (`promoteToOwnedString`), whose trailing op is an interpolation rather than a call. A knob that
-// generated only the aggregate would leave the arm that motivated the range unmeasured.
+// ⚠ **BOTH MANAGED SPELLINGS ARE GENERATED, BECAUSE THE CURE WAS KEYED ON AN OP RANGE PRECISELY BECAUSE
+// THEY DIFFERED.** An aggregate promoted with a single `__mm_retain` call; a `String` promoted by COPYING
+// (`promoteToOwnedString`), whose trailing op is an interpolation rather than a call. A knob that generated
+// only the aggregate would have left the arm that motivated the range unmeasured. ⚠ Since `ca5169e231` a
+// borrowed `String` at a HAND-OFF is RETAINED instead (`retainBorrowedByteRecord` → `__str_retain`, one
+// call), so the two spellings no longer differ in that way — the second spelling is kept because a
+// byte-record instantiation and an aggregate one still take different descriptor arms.
 let TryCoOwnSitesBase = 8 as KnobSize
 
 // The two managed spellings `tryCoOwnSource` rotates over — see the note above. Named for

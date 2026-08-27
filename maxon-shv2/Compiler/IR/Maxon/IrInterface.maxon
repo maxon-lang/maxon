@@ -101,9 +101,13 @@ export let WitnessDestroyFuncOffset = 8 as ByteOffset
 // (`Parser.emitManagedConstant`, `StringRuntime.stringBufferSlots`) is that such a record never reaches a
 // refcount write at all. On the CONCRETE doors it is upheld at RUN TIME since `ca5169e231` (borrowed
 // Strings are retained, not copied): `__str_retain` reads the record's own `capacity@16` and CLONES an
-// immortal one where it increfs a heap one (`StringRuntime.buildStrRetain`). The existential path cannot
-// read the record — it dispatches through this word — so it splits the same fact one level up, per
-// CONFORMER at compile time: a byte-record conformer's protocol is `__str_clone`, never the incref, and the
+// immortal one where it increfs a heap one (`StringRuntime.buildStrRetain`). ⚠ **THAT TEST IS NOT AVAILABLE
+// HERE, AND THE REASON IS THE LAYOUT AND NOT THE POINTER.** `capacity@16` is a capacity only in a record the
+// reader already knows to be a byte record; in an aggregate conformer's box that word is an arbitrary field
+// — or past the end of a box too small to have one — so a `capacity@16 == ImmortalRecordCapacity` test on an
+// existential would be reading a struct's own data and calling it a provenance. The split therefore happens
+// one level up, per CONFORMER at compile time where the type IS known: a byte-record conformer's protocol is
+// `__str_clone`, never the incref, and the
 // fresh OWNED heap record it hands back is what launders the literal. ⚠ This paragraph used to say the
 // concrete doors upheld it "by COPYING at the borrow→own boundary" — true until `ca5169e231`, and the same
 // stale sentence sat in four specs (W211); the conclusion for THIS word never depended on it. MEASURED with
