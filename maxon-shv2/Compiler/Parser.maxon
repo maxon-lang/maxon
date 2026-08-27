@@ -44587,6 +44587,11 @@ export type Parser
 			// below would compute a saturation that provably never fires, so the operand goes to the
 			// instruction exactly as a folded in-range count does at the end of this function — one
 			// unguarded shift, reached by two routes to the same bound.
+			//
+			// ⚠ Spelled out here rather than merged with that tail, and the merge was measured: folding
+			// the two would put `folded` inside a block, so `recordConst` would owe a SECOND
+			// `constOf(count)` read — one repeated call traded for another, in the half of this function
+			// where the legality diagnostics live.
 			if self.shiftCountIsProvenUnguarded(count) 'proven'
 				return try self.emitBinOp(lhs, rhs: count, op: shiftOp, opTok: opTok)
 			end 'proven'
@@ -44641,12 +44646,12 @@ export type Parser
 	// ⭐⭐ **DOES THIS COUNT'S DECLARED TYPE ALREADY PROVE THE GUARD DEAD?** — the one question that
 	// lets a count the parser cannot FOLD reach the instruction unguarded.
 	//
-	// `emitGuardedShift`'s 6-7 ops exist to fold a count OUTSIDE `MinShiftCount..MaxUnguardedShiftCount`
-	// back to the answer `evalShift` defines. A count whose alias cannot HOLD such a value is already
-	// there, so every one of those ops is dead — computed, and then thrown away by a mask that is
-	// always zero. `RegBits.RegNum` (`int(0 to 63)`) is the shape that pays for it: `regMaskContains`
-	// is one `shr` carrying the whole of `emitGuardedShift`'s cost — stated once, there — at fourteen
-	// inlined call sites.
+	// `emitGuardedShift`'s ops exist to fold a count OUTSIDE `MinShiftCount..MaxUnguardedShiftCount` back
+	// to the answer `evalShift` defines — that function's header states what they cost, and this one does
+	// not restate it. A count whose alias cannot HOLD such a value is already inside, so every one of
+	// them is dead: computed, and then thrown away by a mask that is always zero. `RegBits.RegNum`
+	// (`int(0 to 63)`) is the shape that pays for it — `regMaskContains` is one `shr` carrying the whole
+	// of that cost, at fourteen inlined call sites.
 	//
 	// ⚠ **IT COMPOSES `TypeRules.shiftCountIsUnguarded`, ONCE PER BOUND, AND SPELLS NO NUMBER.** That
 	// predicate IS "a count the instruction takes as written"; `foldConstOperands` asks it of a count's
@@ -44657,6 +44662,13 @@ export type Parser
 	// ⚠ **A FLOAT ALIAS IS REFUSED BEFORE ITS BOUNDS ARE READ, BECAUSE THEY ARE NOT NUMBERS.** They are
 	// IEEE-754 bit patterns — the fork `aliasIsFloat` exists for — and `float(0.0 to 0.0)` rides as
 	// `low == 0, high == 0`, a pair that reads as two perfectly good shift counts and is neither.
+	//
+	// ⚠⚠ **AND THAT ARM IS UNREACHABLE TODAY — DELIBERATELY KEPT, NOT AN OVERSIGHT.** `emitShift` asks
+	// `requireBinOpOperands` first, and a float count is E3005 there (MEASURED: both `float(0.0 to 1.0)`
+	// and the `float(0.0 to 0.0)` above are refused *"operator 'shl' requires integer operands, but this
+	// one is float"*). It stays because it is a PRECONDITION on reading these two fields as numbers, not a
+	// second opinion about which operands a shift takes: without it this function's correctness would rest
+	// on a refusal in another function, and the safe answer if that refusal ever moved is the one it gives.
 	//
 	// ⚠ **WHAT THE `true` ANSWER RESTS ON** is the induction `TypeRules.rangeCoversDenotedRange`'s header
 	// states: a value denoting alias `A` is IN `A`'s range, because a cast site guards its result, a
