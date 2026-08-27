@@ -145,9 +145,20 @@ with whatever the allocator left behind. MEASURED at `HEAD~` before the fix: `le
 4557430888798830399`. A garbage length is a WRONG ANSWER a green suite would never have noticed,
 where the array case at least announced itself with an access violation.
 
-A String promotes by COPY rather than by incref, and that is not a choice made here — it is
-`promoteBorrowedToOwned`'s existing protocol, and it is the sound one: a field can hold an immortal
-`.rdata` record, and an incref of one is a write to read-only memory.
+The promotion here is the `binding` door (`let old = name`), and that door still COPIES:
+`promoteBorrowedToOwned` routes it to `promoteToOwnedString`, the `__mm_alloc` + `__str_copy`
+pair this case's golden shows. It is no longer every door's protocol, and the reason it used to
+be is gone. Since `ca5169e231` a HAND-OFF (`return` / `gives`, or a merge edge) and a DURABLE
+store into a field, element or column both take a REFERENCE instead
+(`retainBorrowedByteRecord` → `__str_retain`), because Maxon is single-ownership with reference
+semantics and a copy the author did not write makes the caller's value stop being the callee's.
+Nor does the immortal-record argument force a copy any more: `__str_retain` tells an immortal
+`.rdata` record from a heap one at RUN TIME, off `capacity@16`, and clones only the former, so
+no door needs an unconditional copy to stay off read-only memory. What the `binding` door
+should do is a separate, still-open question about a REFUSAL rather than about a cost
+(`ownedFormOfBorrowedValue` states it), and this case is indifferent to the answer: a retain
+would keep the old record alive across the rebind exactly as the copy does — what must never
+happen is the read seeing a record the store already released.
 ```maxon
 typealias Len = int(0 to u64.max)
 

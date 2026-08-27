@@ -130,10 +130,16 @@ n=1 v=7
 ```
 
 <!-- test: string-field-store-aliasing-through-two-parameters -->
-### A `String` Field Stored Onto Itself Copies Live Bytes
-A borrowed `String` is acquired by COPY rather than by reference, so the acquire
-reads the source record's bytes. Release-first frees those bytes first and the
-copy then reads freed memory — the same defect with a different acquire. The
+### A `String` Field Stored Onto Itself Must Acquire Before It Releases
+The acquire is `retainBorrowedByteRecord` (`__str_retain`), not the `__mm_alloc` +
+`__str_copy` this case was written against: since `ca5169e231` a borrowed `String` reaching
+a DURABLE sink is CO-OWNED, for the reason the struct/union arm beside it already gave —
+Maxon is single-ownership with reference semantics, so a `dst.name = src.name` that stored a
+different record than the `src.name` it read would be a copy the author never wrote, and the
+field's identity would diverge from the source's. The ORDER is what this case pins and the
+new acquire does not move it: `__str_retain` reads the source record — its `capacity@16`, then
+either an incref or a clone of its bytes — so a release-first store frees the field's only
+reference and the acquire touches freed memory, the same defect with a different acquire. The
 field must still read back its original text.
 ```maxon
 type Rec

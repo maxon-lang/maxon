@@ -1833,14 +1833,17 @@ end 'main'
 <!-- test: literal-conformer-widened-to-an-owning-existential -->
 ⭐⭐ **A `String` LITERAL WIDENED TO AN INTERFACE IS AN IMMORTAL `.rdata` RECORD, AND CO-OWNING ONE MUST
 COPY RATHER THAN INCREF.** shv2 has no `MmImmortalRefcount` sentinel: the invariant is that an immortal
-record NEVER reaches a refcount write, upheld at the borrow→own boundary by COPYING
-(`Parser.promoteBorrowedToOwned` routes a byte record to `promoteToOwnedString`, a fresh heap record, and
-only a non-text aggregate to the incref). The existential path had no such split — `__retain_existential`
-called `__mm_incref` whatever the conformer was, which on an `.rdata` record is a read-modify-write of
-READ-ONLY memory. **MEASURED before the retain word existed: this program printed `A` and died with a
-Segmentation fault (exit 139); `B` never printed.** The witness table's `retainFunc@16` is what splits it —
-`__str_clone` for a byte-record conformer (an independently-droppable fresh heap record, which is what
-launders the literal), `__mm_retain` for an aggregate, 0 for a scalar.
+record NEVER reaches a refcount write. On the CONCRETE borrow→own doors that is upheld at RUN TIME since
+`ca5169e231` — `Parser.promoteBorrowedToOwned` routes a byte record at a HAND-OFF to
+`retainBorrowedByteRecord`, and `__str_retain` reads the record's own `capacity@16` and takes the CLONE
+arm for an immortal one and the incref arm for a heap one, which is a question no frame holding a
+borrowed `String` can answer for itself. The EXISTENTIAL path splits the same fact one level up — per
+CONFORMER, at compile time, where the type is known — and before this case it had no split at all:
+`__retain_existential` called `__mm_incref` whatever the conformer was, which on an `.rdata` record is a
+read-modify-write of READ-ONLY memory. **MEASURED before the retain word existed: this program printed
+`A` and died with a Segmentation fault (exit 139); `B` never printed.** The witness table's
+`retainFunc@16` is what splits it — `__str_clone` for a byte-record conformer (an independently-droppable
+fresh heap record, which is what launders the literal), `__mm_retain` for an aggregate, 0 for a scalar.
 ```maxon
 function widen(h Hashable) returns Hashable
 	return h

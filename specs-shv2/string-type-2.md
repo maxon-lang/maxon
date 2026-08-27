@@ -1077,6 +1077,66 @@ end 'main'
 v=abXY
 ```
 
+<!-- test: a-returned-borrow-still-writes-through-to-the-caller -->
+### The Return Door Hands Back the Caller's Own Record
+⭐⭐ **THE `returned` DOOR'S HALF OF THE SAME RULING, AND NOTHING PINNED IT FOR `String` UNTIL NOW**
+(`ca5169e231`, *"borrowed strings are no longer copied"*). `return s` over a borrowed `String` promotes
+through `retainBorrowedByteRecord` (`__str_retain`) where it used to promote through
+`promoteToOwnedString` (`__mm_alloc` + `__str_copy`), so what the caller adopts is a SECOND REFERENCE to
+`main`'s record rather than a copy of its bytes. Maxon is single-ownership with reference semantics —
+*"everything is a reference; if you want a copy you do it explicitly with `clone()`"* — so a `return s`
+handing back a different record than the `s` it was given would be a copy the author never wrote, and the
+caller's value would silently stop being the callee's. There is ONE record here, so both names print the
+appended text; the shared record is co-owned (`markValueCoOwnsHeap`) and never destructively moved.
+```maxon
+function relay(s String) returns String
+	return s
+end 'relay'
+
+function main() returns ExitCode
+	var v = "ab"
+	var out = relay(v)
+	out.append("XY")
+	print("v={v} out={out}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=abXY out=abXY
+```
+
+<!-- test: a-returned-literal-is-cloned-not-shared -->
+### A Returned Literal Is Cloned, and the `.rdata` Record Is Untouched
+⚠ **THE OTHER ARM OF `__str_retain`, WHICH IS WHAT LETS THE RETURN DOOR RETAIN AT ALL.** A `String`
+LITERAL is a wholly immortal `.rdata` record and shv2 has no immortal-refcount sentinel, so an incref of
+one would be a read-modify-write of a read-only image section. Nothing in `lit`'s frame can tell an
+immortal record from a heap one — which is why the decision is made at RUN TIME, off the record's own
+`capacity@16` against `ImmortalRecordCapacity`: that arm CLONES. So the returned value is an
+independently-droppable heap record, appending through it touches nothing else, and a second call hands
+back a fresh clone of the pristine literal.
+```maxon
+function lit() returns String
+	return "ab"
+end 'lit'
+
+function main() returns ExitCode
+	var first = lit()
+	first.append("XY")
+	let second = lit()
+	print("first={first} second={second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first=abXY second=ab
+```
+
 <!-- test: a-literal-reaching-a-merge-through-a-parameter -->
 ### A Literal Reaching a Merge Through a Parameter
 ⚠ **THIS IS WHY THE CHOICE CANNOT BE MADE AT COMPILE TIME.** `pick`'s `s` is the same declared `String`

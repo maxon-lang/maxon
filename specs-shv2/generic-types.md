@@ -3238,13 +3238,19 @@ v=9
 ```
 
 <!-- test: expression-form-try-over-a-substituted-string-return -->
-The other managed spelling, which used to reach the refusal by a different wrong road: a `String`
-substitution promotes by COPYING (`promoteToOwnedString`), so the op the try-rewrite found trailing the
+The other managed spelling, which used to reach the refusal by a different wrong road — and every
+clause of that road is now HISTORY, so read the next two sentences in the past tense. A `String`
+substitution promoted by COPYING (`promoteToOwnedString`), so the op the try-rewrite found trailing the
 target was a string-interpolation rather than the aggregate's `__mm_retain` call, and the program was
 told *"the expression after `try` is not a call"* about a program whose `try` is applied to exactly one.
-Both spellings are ONE construct, so the move onto the ok edge is keyed on the promotion's op RANGE and
-not on which op the promotion happened to end with — a cure that only understood the aggregate arm's
-single `call` would leave the interpolation's whole op chain on the fork's entry block.
+Both spellings are ONE construct, so the cure keyed the move onto the ok edge on the promotion's op RANGE
+and not on which op the promotion happened to end with — a cure that only understood the aggregate arm's
+single `call` would have left the interpolation's whole op chain on the fork's entry block. TODAY neither
+half is emitted at this call: the `+1` for a substituted `T` return is taken by the CALLEE
+(`emitOwnedValueReturn`, P1.7 slice 3b-vi-a), so nothing trails the call to lift, and a borrowed `String`
+handed off is RETAINED rather than copied (`retainBorrowedByteRecord` → `__str_retain`, `ca5169e231`).
+What the case pins is unchanged and is the ANSWER: `v=hi` off the ok edge of an expression-form `try`
+over a substituted managed return.
 ```maxon
 enum Boom implements Error
 	bad
