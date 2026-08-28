@@ -11484,6 +11484,30 @@ export type Parser
 	// ⚠ **SEEDED `false` = CO-OWNED, and the seed is the safety property.** A value nothing claimed takes the
 	// retain path, which is one refcount pair rather than a stolen slot.
 	var valueOwnsHeapAlone as BoolArray
+	// ⭐⭐ **AND WHETHER A CALL RESULT'S SOLE OWNERSHIP IS KNOWN ONE FRAME OUT (SV1)** — the column that says
+	// *"the callee that handed this back built the record in its own `return` statement, so this frame is its
+	// only owner"*, which `valueOwnsHeapAlone` structurally cannot say: that one means *"THIS frame executed the
+	// allocating op"*, and a call result never did.
+	//
+	// ⛔ **IT IS A SECOND COLUMN AND NOT A WIDENING OF `valueOwnsHeapAlone`, DELIBERATELY.** That column's only
+	// readers are the two DESTRUCTIVE move-outs, which null a slot in a box they will not re-read — and its
+	// header records the six segfaults that came of deriving its `true` from anything but a local allocation.
+	// This claim rests on a TOKEN-LEVEL whole-program summary (`ProgramSignatures.returnsFreshValue`), so it
+	// earns its own column and its own reader rather than licensing a slot steal.
+	//
+	// ⚠ **THE ONE READER IS `moveIntoGreenThread`**, which needs sole ownership for a reason no other rule in
+	// the parser has: the value crosses to a SECOND GREEN THREAD, where a co-owner's later refcount step is a
+	// plain load/add/store racing this one's (`MmRuntime.emitAdjustRefcount`, EC10).
+	//
+	// ⭐ **CLEARED BY `markValueCoOwnsHeap`, WHICH IS WHAT MAKES IT UNFORGETTABLE.** Every op that mints a
+	// second owner of a box already calls that one on its source — the five enumerated in its header — so a
+	// fresh call result this frame then pushes into a container, captures, or hands to a consuming call stops
+	// being movable at the instant the reference is taken, with no site having to remember a second write.
+	//
+	// Same lockstep as `valuePromiseMarks` (pushed `false` in `mintValue`/`recordValueType`, set by
+	// `markValueFromFreshReturn` at the ONE door that knows a callee's name, recreated per function and
+	// swapped across a closure body).
+	var valueFromFreshReturn as BoolArray
 	// ⭐ **THE PROMISE MARK (P1.5-B1a)** — true iff value `v` is an `async` spawn's handle. A per-value bool
 	// column in the SAME lockstep as `valueOwnsHeap` (pushed `false` in `mintValue`/`recordValueType`, set by
 	// `markValuePromise` on the one value `emitAsyncCall` mints, read by `valueOwnsGreenThread`). The handle's TAG
@@ -12610,6 +12634,7 @@ export type Parser
 			valueConstDomains: ConstPayloadDomainArray.create(),
 			valueOwnsHeap: BoolArray.create(),
 			valueOwnsHeapAlone: BoolArray.create(),
+			valueFromFreshReturn: BoolArray.create(),
 			valuePromiseMarks: BoolArray.create(),
 			nodeHandleMintedFrom: ValueIdArray.create(),
 			phiAliasUnprovenMarks: BoolArray.create(),
@@ -12867,7 +12892,7 @@ export type Parser
 		var throwsEntries = ThrowsClauseEntryArray.create()
 		// ⭐ Per-function DIVERGENCE (G17) — recorded from the SAME token walk. One entry per function whose body
 		// PROVABLY cannot return, so a bare call to it can be told that it ends its caller's block.
-		var divergingDecls = DivergingDeclEntryArray.create()
+		var bodyFacts = SweptBodyFactEntryArray.create()
 		// ⭐ Inner ranged typealiases (P1.6-C) — one entry per `typealias Idx` declared inside a generic type,
 		// keyed whole-program by `base.member` so `Instance.Idx` resolves in any file.
 		var innerAliases = InnerAliasEntryArray.create()
@@ -13046,7 +13071,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, messageMethodNameOut: noMessageMethodsAtFileScope)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, messageMethodNameOut: noMessageMethodsAtFileScope)
 				continue
 			end 'isFunction'
 
@@ -13068,7 +13093,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, bindingOut: bindings)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, bindingOut: bindings)
 				continue
 			end 'isTypeDecl'
 
@@ -13078,7 +13103,7 @@ export type Parser
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
 			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
 			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
-				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -13105,7 +13130,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED (ARRO).**
 		// Every one of these instances is one the COMPILER mints because the source names no type for it, so
@@ -13532,7 +13557,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, messageMethodNameOut ByteArrayArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, messageMethodNameOut ByteArrayArray)
 		let nameTok = self.current()
 		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
 		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
@@ -13718,7 +13743,7 @@ export type Parser
 		// much a forwarder as a free function is, and three of `specs/pass-by-reference.md`'s transitive cases
 		// are exactly that program — whereas the consume half deliberately declines to read one. Hence two
 		// lists into one walk rather than a second walk of the same tokens.
-		self.scanBodyFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, sourceParamNames: sourceParamNames, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, divergingDecls: divergingDecls, declaresThrows: declaresThrows, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
+		self.scanBodyFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, sourceParamNames: sourceParamNames, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, bodyFacts: bodyFacts, declaresThrows: declaresThrows, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
 	end 'recordScannedSignature'
 
 	// ⭐ **THE CALL-ALIGNED PARAMETER NAMES PBR-2's SCAN IS INDEXED BY.** For everything the consume scan
@@ -13994,7 +14019,7 @@ export type Parser
 	// the reason the walk exists at all — it already stands on every token of the body carrying the bracket
 	// and block-depth state a second walk would have to rebuild — so the name says "this body's facts" and the
 	// list of them is the paragraphs below.
-	function scanBodyFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, divergingDecls DivergingDeclEntryArray, declaresThrows bool, detectFieldStores bool, takesReceiver bool)
+	function scanBodyFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, detectFieldStores bool, takesReceiver bool)
 		// ⚠ **TWO NAME LISTS, AND THEY ARE NOT THE SAME LIST.** The CONSUME half reads `paramNames`, which the
 		// caller leaves EMPTY for a non-generic instance method (a direct `Self{f: p}` store there is left to the
 		// callee-side borrowed-value refusal — see the call site). The BY-REFERENCE half reads `byRefParamNames`,
@@ -14066,6 +14091,11 @@ export type Parser
 		// together; the `throw` rule cannot, because its own tail spells one of them. A `return` is the only
 		// keyword that is an exit NEITHER rule's tail can be, so it is the one that needs a column of its own.
 		var bodySpellsAReturn = false
+		// ⭐⭐ **SV1's COLUMN: is EVERY `return` in this body a record literal written in the `return` itself?**
+		// Seeded TRUE and only ever cleared, which is what makes it a UNIVERSAL claim over the returns rather
+		// than an existential one — and it is published only alongside `bodySpellsAReturn`, so a body with no
+		// `return` at all (a `void` function, a diverging one) states nothing rather than vacuously everything.
+		var everyReturnIsAFreshRecord = true
 		var atStatementStart = false
 		var lastTopLevelStatement = bodyStart
 		var sawATopLevelStatement = false
@@ -14114,6 +14144,11 @@ export type Parser
 			// is the one fact this walk collects for a body that has no parameters at all.
 			if kind == TokenKind.return 'returnStatement'
 				self.noteReturnedGlobalOrForward((q + 1) as TokenIndex, regionEnd: sharedSweptValueLineEnd, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls)
+				// SV1's probe rides the same `return` token W117's does, for that probe's reason: this walk already
+				// stands on it, and a second walk would rebuild the block-depth state to reach the same tokens.
+				if not self.noteFreshReturnShape((q + 1) as TokenIndex) 'notAFreshRecord'
+					everyReturnIsAFreshRecord = false
+				end 'notAFreshRecord'
 			end 'returnStatement'
 
 			if scansParams 'aBodyWithParametersToWatch'
@@ -14236,7 +14271,7 @@ export type Parser
 		// statement whatever follows it, but the pairing is what says the scan is standing where it thinks it
 		// is; a lone keyword at a line start is a malformed body the real parse is about to report.
 		if sawTheFunctionsOwnEnd and not declaresThrows and not bodyCanExitBeforeItsTail and sawATopLevelStatement and self.kindAt(lastTopLevelStatement) == TokenKind.panic and self.kindAt((lastTopLevelStatement + 1) as TokenIndex) == TokenKind.leftParen 'neverReturns'
-			divergingDecls.push(DivergingDeclEntry.create(funcName, takesReceiver: takesReceiver, leavesByThrowing: false))
+			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.leavesByPanicking))
 		end 'neverReturns'
 
 		// ⭐⭐ **G18: A BODY THAT CAN ONLY EVER THROW.** The rule above one way out over, and every condition is
@@ -14257,8 +14292,24 @@ export type Parser
 		// is what says the scan is standing on a statement rather than on a stray keyword; `throw` is a statement
 		// keyword the grammar admits nowhere else, so its own kind carries that.
 		if sawTheFunctionsOwnEnd and declaresThrows and not bodySpellsAReturn and sawATopLevelStatement and self.kindAt(lastTopLevelStatement) == TokenKind.throw 'alwaysThrows'
-			divergingDecls.push(DivergingDeclEntry.create(funcName, takesReceiver: takesReceiver, leavesByThrowing: true))
+			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.leavesByThrowing))
 		end 'alwaysThrows'
+
+		// ⭐⭐ **SV1: EVERY `return` HANDS BACK A RECORD THIS BODY JUST BUILT.** Two conditions, and the second is
+		// what stops the universal claim being vacuous:
+		//
+		//   • the walk reached the declaration's OWN `end`, so every `return` of this body was seen — the same
+		//     condition the two rules above open with, and for the identical reason: a scan that ran off the end
+		//     of a malformed body has not seen the statements it is about to make a claim over;
+		//   • the body SPELLS a `return`. A body with none states nothing, because "every return is fresh" is
+		//     trivially true of no returns at all and the caller would read it as a promise about a value.
+		//
+		// ⚠ **`throws` IS NOT EXCLUDED, UNLIKE THE `panic` RULE ONE PARAGRAPH UP.** A body that may throw still
+		// hands back a fresh record on the path that returns one, and the caller adopting it is the only party
+		// that reaches this fact — the error edge carries no value for it to be wrong about.
+		if sawTheFunctionsOwnEnd and bodySpellsAReturn and everyReturnIsAFreshRecord 'returnsAFreshRecord'
+			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecord))
+		end 'returnsAFreshRecord'
 
 		if any 'consumes'
 			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds), takesReceiver: takesReceiver))
@@ -14334,6 +14385,72 @@ export type Parser
 	// The edge reuses `forwardCallOpeningAt` — the one place a call's tokens are turned into a `ForwardCall` —
 	// so a return-forward and a parameter-forward cannot come to disagree about which declarations a spelling
 	// can name.
+	// ⭐⭐⭐ **DOES THIS `return` HAND BACK A RECORD THE `return` ITSELF BUILDS? — SV1's whole freshness proof,
+	// and it is a proof rather than a heuristic.** Exactly one shape is recognised:
+	//
+	//   `return <Name>{ … }`  — a struct literal, with the matching `}` the last token on the line.
+	//
+	// ⭐⭐ **WHY THAT SHAPE IS AIRTIGHT WHERE `return <name>` COULD NEVER BE.** A record literal written IN the
+	// return expression is allocated by this frame at that instant and handed over in the same expression:
+	// there is no statement between its construction and the hand-off, so no `push`, no field store, no closure
+	// capture and no consuming call can have taken a second reference to it. The caller adopting the `+1` is
+	// therefore that allocation's SOLE owner — which is exactly what a send has to know, and exactly what
+	// `Parser.enrolOwnedCallTemp` records it cannot know in general (*"telling a fresh-box return from a
+	// co-owning one is a whole-program fact"*). This is that fact, for the one shape where the tokens carry it.
+	//
+	// ⚠ **`return s` IS DELIBERATELY NOT RECOGNISED EVEN WHERE `s` WAS A LITERAL TWO LINES UP.** The moment the
+	// record is bound to a name, statements can run between the construction and the return, and reading them is
+	// the whole-program aliasing analysis this compiler has deferred. The shape test is what keeps the claim
+	// derivable from tokens alone.
+	//
+	// ⚠⚠ **THE MATCHING `}` MUST END THE LINE, AND THAT TEST IS NOT DECORATION.** `return Self{…} if c else s`
+	// hands back the record on one path and a bound name on the other; `return wrap(Self{…})` hands back
+	// whatever `wrap` chose to do with it. Both open with the admitted tokens and neither is fresh, so the
+	// region-end test is what parts them — `noteReturnedGlobalOrForward`'s own "and nothing follows it"
+	// discipline, one probe over.
+	//
+	// ⚠ It answers about ONE return; the caller ANDs it across every return in the body, so an unreadable
+	// shape costs the whole declaration its claim. That is this family's rule (*"every ambiguity resolves
+	// toward recording NOTHING"*) and here the wrong direction is a heap-corrupting move rather than a refusal.
+	function noteFreshReturnShape(valueStart TokenIndex) returns bool
+		// `tokenCanBeAName` admits `Self` along with every keyword-spelled type name (D8), which is the SAME
+		// admission the two `spawn` halves make — a factory writing `return Self{…}` and one writing
+		// `return Calc{…}` are one declaration spelled two ways.
+		if not tokenCanBeAName(self.tokenAt(valueStart)) or self.kindAt((valueStart + 1) as TokenIndex) != TokenKind.leftBrace 'notARecordLiteral'
+			return false
+		end 'notARecordLiteral'
+
+		return self.recordLiteralEndsTheLine((valueStart + 1) as TokenIndex)
+	end 'noteFreshReturnShape'
+
+	// Walk from a record literal's opening `{` to its match, and answer whether the token after it ends the
+	// line. Split from the shape test above so the bracket bookkeeping is one loop rather than a condition
+	// inside one — and it counts all three bracket kinds, because a nested call or subscript inside a field
+	// value carries braces of its own it must not stop at (`Self{items: f(Inner{…})}`).
+	//
+	// A literal left unclosed by a malformed body runs to the file's `eof` and answers `false`, which is the
+	// safe direction: the tolerant sweep must never publish a fact about tokens the real parse will reject.
+	function recordLiteralEndsTheLine(openBrace TokenIndex) returns bool
+		var depth = 0
+		var q = openBrace
+		while self.kindAt(q) != TokenKind.eof 'scanForTheMatch'
+			let kind = self.kindAt(q)
+			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'opensGroup'
+				depth = depth + 1
+			end 'opensGroup'
+			if kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'closesGroup'
+				depth = depth - 1
+				if depth == 0 'theMatch'
+					return kind == TokenKind.rightBrace and self.kindAt((q + 1) as TokenIndex) == TokenKind.newline
+				end 'theMatch'
+			end 'closesGroup'
+
+			q = q + 1
+		end 'scanForTheMatch'
+
+		return false
+	end 'recordLiteralEndsTheLine'
+
 	function noteReturnedGlobalOrForward(valueStart TokenIndex, regionEnd SweptValueRegionEnd, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray)
 		if not tokenCanBeAName(self.tokenAt(valueStart)) 'notANameAtAll'
 			return
@@ -17736,7 +17853,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, bindingOut TopLevelDeclArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, bindingOut TopLevelDeclArray)
 		// The DECLARATION keyword, taken before anything moves the cursor — the position
 		// `Queries.foldConformanceClauses` puts a reader back down on. See `ConformanceClauseDeclSite`.
 		let declStart = self.pos
@@ -17904,7 +18021,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: messageMethods)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: messageMethods)
 				continue
 			end 'isMethod'
 
@@ -18211,7 +18328,7 @@ export type Parser
 		var throwsEntries = ThrowsClauseEntryArray.create()
 		// ⭐ Per-function DIVERGENCE (G17) — recorded from the SAME token walk. One entry per function whose body
 		// PROVABLY cannot return, so a bare call to it can be told that it ends its caller's block.
-		var divergingDecls = DivergingDeclEntryArray.create()
+		var bodyFacts = SweptBodyFactEntryArray.create()
 		var methodInnerAliasParamOut = MethodInnerAliasParamEntryArray.create()
 		// ⭐⭐ **AN EXTENSION BODY'S NESTED TYPEALIASES, KEYED WHOLE-PROGRAM UNDER EACH CONFORMER (W3).** They
 		// were not, and the two things that followed were both real: a `typealias` member ENDED this walk, so
@@ -18401,7 +18518,7 @@ export type Parser
 				end 'theConformerDeclaresItsOwn'
 
 				match verdict 'verdict'
-					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName)
 				end 'verdict'
 				// `recordScannedSignature` leaves the cursor at the method BODY's first token, i.e. inside the
@@ -18416,7 +18533,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -18698,9 +18815,9 @@ export type Parser
 	// The published name is noted so `conformerDeclaresOwnMethod` can tell a conformer's own declaration from
 	// an extension's the next time it is asked — see that door for why the distinction is what keeps the
 	// verdict independent of fold order.
-	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		if shadowed 'theConformerDeclaresItsOwn'
-			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), bodyFacts: SweptBodyFactEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
 			return
 		end 'theConformerDeclaresItsOwn'
 
@@ -18714,7 +18831,7 @@ export type Parser
 		// standing where the user's belongs whenever the sweep folds `stdlib/` last.
 		let beaten = index.noteExtensionPublishedMethod(qualifiedMethodName, declFilePath: self.filePath, isStdlibSource: self.isStdlibSource)
 		if beaten 'aUserFileDeclaresIt'
-			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), bodyFacts: SweptBodyFactEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
 			return
 		end 'aUserFileDeclaresIt'
 
@@ -18722,14 +18839,14 @@ export type Parser
 		// than threaded to the conformer's layout: `extension Countable` declares one body on every conformer, and
 		// a service's variant order is a wire format its own declaration has to own. The two withheld arms above
 		// discard for the same reason plus their own.
-		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: ByteArrayArray.create())
+		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: ByteArrayArray.create())
 	end 'publishOrShadowExtensionMethod'
 
 	// Read a WITHHELD method's signature into arrays that are discarded, and file why it is missing. The read
 	// is what keeps the cursor where a published method's leaves it (see the call site); the filing is what
 	// lets the call site say something better than "no such method".
 	function foldWithheldExtensionMethod(index ProgramSignatures, conformer ByteArray, methodName ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray)
-		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
+		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), bodyFacts: SweptBodyFactEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
 		index.recordConditionalExtensionSkip(qualifiedMethodName(conformer, methodName: methodName), skip: ConditionalExtensionSkip.create(conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName))
 	end 'foldWithheldExtensionMethod'
 
@@ -18754,7 +18871,7 @@ export type Parser
 	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
-	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, isUnion bool)
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, isUnion bool)
 		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
 		// read this modifier forwards. `declStart` is that same position kept for the whole-program clause
 		// re-read (`recordScannedType`'s twin, and `ConformanceClauseDeclSite`).
@@ -18799,7 +18916,7 @@ export type Parser
 				// ⚠ **AN ENUM/UNION METHOD IS NOT A MESSAGE (SV1)** — a service is a declared `type`, reached through
 				// `spawn <T>.<factory>()`, whose target test requires a struct declaration. So the roster this method
 				// would contribute is discarded, exactly as an extension method's is.
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: ByteArrayArray.create())
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: ByteArrayArray.create())
 				continue
 			end 'method'
 
@@ -23911,6 +24028,7 @@ export type Parser
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueOwnsHeapAlone = BoolArray.create()
+		self.valueFromFreshReturn = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.nodeHandleMintedFrom = ValueIdArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
@@ -25417,6 +25535,7 @@ export type Parser
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueOwnsHeapAlone = BoolArray.create()
+		self.valueFromFreshReturn = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.nodeHandleMintedFrom = ValueIdArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
@@ -27273,7 +27392,7 @@ export type Parser
 			//
 			// ⚠ It is the SAME reader as the expression position's, so the two cannot come to disagree about
 			// what a spawn is or which refusal it earns — `parseAwait`'s single-homing argument exactly.
-			_ = try self.parseSpawn()
+			_ = try self.parseSpawn(func)
 		end 'spawnStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
@@ -34203,7 +34322,38 @@ export type Parser
 	// frame emits cannot be known to be the allocation's last.
 	function markValueCoOwnsHeap(value ValueId)
 		try self.valueOwnsHeapAlone.set(value, value: false) otherwise panic("markValueCoOwnsHeap: v{value}{SoleOwnershipSlotPanicTail}")
+		// ⭐⭐ **AND THE FRESH-RETURN CLAIM GOES WITH IT (SV1), FOR THE `sole` CLAIM'S OWN REASON ONE LINE UP.**
+		// `valueFromFreshReturn` says *"nobody but this frame owns this record"*, which every one of the five ops
+		// that reach this line has just made false. Clearing it HERE rather than at those five sites is what makes
+		// the downgrade unforgettable — the same argument this function's header makes for the exclusivity bit,
+		// and the reason a sixth retain door cannot ship a movable value with two owners.
+		try self.valueFromFreshReturn.set(value, value: false) otherwise panic("markValueCoOwnsHeap: v{value} has no fresh-return slot — every SSA value must be minted through mintValue, which seeds the column")
 	end 'markValueCoOwnsHeap'
+
+	// ⭐ **MARK A CALL RESULT AS THE SOLE REFERENCE TO A RECORD ITS CALLEE JUST BUILT (SV1).** The one writer
+	// of `valueFromFreshReturn`, called from `emitCall` — the one line every direct, method and static call
+	// passes with the callee's NAME in hand, which is what the whole-program summary is keyed by.
+	//
+	// ⚠ **IT MUST RUN AFTER `enrolOwnedCallTemp` AND IT DOES.** That door marks a call result `coOwned`, which
+	// goes through `markValueCoOwnsHeap` — the very line that CLEARS this bit. Ordered the other way the mark
+	// would be erased by the enrolment that follows it, silently, and every send of a factory result would be
+	// refused rather than moved.
+	function markValueFromFreshReturn(value ValueId)
+		try self.valueFromFreshReturn.set(value, value: true) otherwise panic("markValueFromFreshReturn: v{value} has no fresh-return slot — every SSA value must be minted through mintValue, which seeds the column")
+	end 'markValueFromFreshReturn'
+
+	// ⭐⭐ **SOLE OWNERSHIP AS A SEND NEEDS IT — `valueIsSoleHeapOwner` OR the one-level fresh-return summary.**
+	// The two claims answer one question through different evidence: the column says THIS FRAME allocated the
+	// record, and the summary says the CALLEE that handed it back allocated it in its own `return` and could not
+	// have kept a reference. A send is satisfied by either; the two destructive move-outs are not, which is why
+	// this is a door of its own rather than a widening of the column (see the field header).
+	function valueIsSolelyOwnedHere(value ValueId) returns bool
+		if self.valueIsSoleHeapOwner(value) 'allocatedInThisFrame'
+			return true
+		end 'allocatedInThisFrame'
+
+		return try self.valueFromFreshReturn.get(value) otherwise panic("valueIsSolelyOwnedHere: v{value} has no fresh-return slot — every SSA value must be minted through mintValue, which seeds the column")
+	end 'valueIsSolelyOwnedHere'
 
 	// Mark `value` as an `async` spawn's promise handle (P1.5-B1a).
 	function markValuePromise(value ValueId)
@@ -34285,6 +34435,13 @@ export type Parser
 	// reference this frame holds — so asking soleness there would refuse or leak on programs that are fine.
 	// The distinguishing property is not "does this touch ownership" but "does this write into a slot whose
 	// other readers this frame cannot enumerate".
+	//
+	// ⭐ **A THIRD READER ARRIVED WITH THAT ARGUMENT AND NOT AROUND IT (SV1): `valueIsSolelyOwnedHere`**, the
+	// send's transfer gate. A send does not write into a slot — it hands the record to ANOTHER GREEN THREAD,
+	// where the other readers this frame cannot enumerate would step the refcount with a plain load/add/store
+	// racing this one's (EC10). Same promise, one hazard over; it asks this predicate rather than the column, and
+	// admits ONE further shape of its own (a callee's proven-fresh return), which is why it is a door beside this
+	// one rather than an edit to it.
 	function valueIsSoleHeapOwner(value ValueId) returns bool
 		return self.valueIsOwnedHeap(value) and try self.valueOwnsHeapAlone.get(value) otherwise panic("valueIsSoleHeapOwner: v{value}{SoleOwnershipSlotPanicTail}")
 	end 'valueIsSoleHeapOwner'
@@ -43984,6 +44141,9 @@ export type Parser
 		// And its exclusivity, seeded CO-OWNED — the safe direction, because an unclaimed value takes the
 		// retain path rather than a destructive move-out (see `OwnedHeapExclusivity`).
 		self.valueOwnsHeapAlone.push(false)
+		// The fresh-return mark rides the same lockstep, seeded NOT-FRESH — the safe direction, because an
+		// unclaimed value is one a send refuses rather than one it moves (see the field header).
+		self.valueFromFreshReturn.push(false)
 		// The promise mark rides the same lockstep, seeded NOT-a-promise; set by `markValuePromise` on the
 		// one value an `async` spawn produces.
 		self.valuePromiseMarks.push(false)
@@ -44100,6 +44260,11 @@ export type Parser
 		// (`coOwnBorrowedForConsume`), and which of the two it chose is not a fact this frame can read. So the
 		// seed here is also the final answer for every parameter.
 		self.valueOwnsHeapAlone.push(false)
+		// A PARAMETER is the one arrival this fact is about the absence of: it crossed a frame boundary whose
+		// far side this compiler cannot read, which is exactly what `returnsFreshValue` answers for a RESULT and
+		// nothing answers for an argument. So the seed is also the final answer, and a send of a parameter is
+		// refused (E3138) — `SERVICES_DESIGN.md`'s known weakness 1, stated in a column.
+		self.valueFromFreshReturn.push(false)
 		// A parameter is never an async spawn's handle; the slot must exist so the column stays indexable.
 		self.valuePromiseMarks.push(false)
 		// A parameter is never an insertion's fresh mint either — a handle ARRIVES here, it is not made here —
@@ -45329,7 +45494,7 @@ export type Parser
 		// the only one that is not a lexer keyword (see `SpawnKeywordName` for the two live declarations of
 		// the word that forbid one).
 		if self.atSpawnPrefix() 'spawn'
-			return try self.parseSpawn()
+			return try self.parseSpawn(func)
 		end 'spawn'
 
 		if self.at(TokenKind.await) 'await'
@@ -45363,7 +45528,7 @@ export type Parser
 	// reader consumes the tokens it can classify from and throws. Building the call's arguments first would
 	// leave a rejected program with ops behind it, which is exactly what `emitBinOp`'s ordering rule forbids.
 	// The E2015 at the end is the ONE refusal SV1 wave 3 deletes; every other throw here is permanent.
-	function parseSpawn() returns ValueId throws ParseError
+	function parseSpawn(func IrFunction) returns ValueId throws ParseError
 		let spawnTok = self.current()
 		self.advance()
 
@@ -45436,7 +45601,7 @@ export type Parser
 	//      shuts the service down. A runtime-minted box would need every one of those taught to it.
 	function emitServiceSpawn(typeName ByteArray, member ByteArray, state ValueId, spawnTok Token, memberTok Token) returns ValueId throws ParseError
 		let range = SourceRange.between(spawnTok, last: memberTok)
-		let moved = try self.moveIntoGreenThread(state, blame: serviceSpawnStateBlame(typeName, member: member), callee: qualifiedMethodName(typeName, methodName: member), paramName: ServiceStateArgumentNoun, anchor: memberTok)
+		let moved = try self.moveIntoGreenThread(state, blame: serviceSpawnStateBlame(typeName, member: member), anchor: memberTok)
 
 		let mailbox = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.serviceSpawn(mailbox, typeName: typeName, state: moved), range: range)
@@ -67119,6 +67284,7 @@ export type Parser
 		let savedValueConstDomains = self.valueConstDomains
 		let savedValueOwnsHeap = self.valueOwnsHeap
 		let savedValueOwnsHeapAlone = self.valueOwnsHeapAlone
+		let savedValueFromFreshReturn = self.valueFromFreshReturn
 		let savedValuePromiseMarks = self.valuePromiseMarks
 		let savedNodeHandleMintedFrom = self.nodeHandleMintedFrom
 		let savedPhiAliasUnprovenMarks = self.phiAliasUnprovenMarks
@@ -67311,6 +67477,7 @@ export type Parser
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueOwnsHeapAlone = BoolArray.create()
+		self.valueFromFreshReturn = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.nodeHandleMintedFrom = ValueIdArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
@@ -67534,6 +67701,7 @@ export type Parser
 		self.valueConstDomains = savedValueConstDomains
 		self.valueOwnsHeap = savedValueOwnsHeap
 		self.valueOwnsHeapAlone = savedValueOwnsHeapAlone
+		self.valueFromFreshReturn = savedValueFromFreshReturn
 		self.valuePromiseMarks = savedValuePromiseMarks
 		self.nodeHandleMintedFrom = savedNodeHandleMintedFrom
 		self.phiAliasUnprovenMarks = savedPhiAliasUnprovenMarks
@@ -72028,6 +72196,14 @@ export type Parser
 		if self.functionMayReturnAGlobalAlias(callee) 'mayAliasAnImmutableGlobal'
 			self.markImmutableGlobalRead(result)
 		end 'mayAliasAnImmutableGlobal'
+		// ⭐⭐ **AND THE OPPOSITE FACT ABOUT THE SAME HAND-OFF (SV1), HERE FOR THE TWO LINES ABOVE'S REASON.** W117
+		// asks whether the callee may have handed back a record SOMETHING ELSE owns; this asks whether it provably
+		// handed back one NOBODY else owns. Both are whole-program answers keyed by the callee's name, and this is
+		// the one line that still holds it. The enrolment above has already marked the result `coOwned`, which is
+		// the conservative claim this refines — see `markValueFromFreshReturn` for why the order is load-bearing.
+		if self.signatures.returnsFreshValue(callee) 'handsBackARecordNobodyElseOwns'
+			self.markValueFromFreshReturn(result)
+		end 'handsBackARecordNobodyElseOwns'
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
@@ -73269,6 +73445,85 @@ export type Parser
 		// already paid.
 		return self.storeOwnedValueIntoDurableSink(argValue, isString: tagIsByteRecord(self.tagOf(argValue)), range: SourceRange.ofToken(anchor))
 	end 'transferConsumedArg'
+
+	// ⭐⭐⭐ **HAND ONE VALUE TO ANOTHER GREEN THREAD — THE ONE TRANSFER DOOR A SERVICE HAS (SV1).** Spent by
+	// the `spawn`'s STATE and by every managed argument of a SEND, and it is deliberately NOT
+	// `transferConsumedArg`, which the two would otherwise obviously share:
+	//
+	// ⛔⛔ **`async`'s ARGUMENT DOOR CO-OWNS, AND CO-OWNERSHIP ACROSS A GREEN THREAD IS HEAP CORRUPTION.**
+	// ⚖ user ruling 2026-08-12, *"a consuming argument CO-OWNS rather than moving"* — correct for `async`,
+	// whose coroutine never leaves its caller's green thread, so two references on one thread are simply two
+	// references. A service's loop runs on a green thread of its own, possibly on another OS thread, and since
+	// EC10 a refcount step is a PLAIN load/add/store (`MmRuntime.emitAdjustRefcount`) precisely because the
+	// LANGUAGE guarantees one green thread per box. Reusing that door here would not be slow; it would race two
+	// unsynchronised increments on one word and free a live record.
+	//
+	// ⇒ **A TRANSFER IS ADMITTED ONLY WHERE THIS FRAME PROVABLY HOLDS THE ONLY REFERENCE.** Three answers:
+	//
+	//   • a SCALAR owns no record and crosses as a machine word — nothing to transfer;
+	//   • a BORROWED BYTE RECORD is PROMOTED to a fresh sole copy (`promoteToOwnedString`), which is the same
+	//     answer `transferConsumedArg` gives it and for the same reason: a byte record has a cheap owning copy,
+	//     so the source stays readable and the service gets a record nobody else names;
+	//   • an OWNED value this frame solely owns is MOVED — the source binding poisoned (E3102 on a later read)
+	//     or the temporary drained. **No incref: the frame's own `+1` rides into the mailbox**, which is what
+	//     makes the service the record's one owner rather than its second.
+	//
+	// Everything else is refused as **`SemanticServiceArgumentNotUnique`**, naming the value and the `.clone()`
+	// cure.
+	//
+	// ⚠ **THE TYPE QUESTION IS NOT ASKED HERE, AND ADDING IT WOULD BE A DEAD CLAIM.** A Promise, a function
+	// value, an interface value and an opaque type parameter are refused at the `spawn`, against the message's
+	// DECLARATION (`ServiceCompanions.untransferableParameterNoun`, E3135) — so no accepted message has a
+	// parameter one of them could be an argument to, and a spawn's state is the factory's own box by
+	// construction. A second, value-level copy of that rule would be a refusal no program can reach.
+	//
+	// ⚠ **IT REFUSES BEFORE IT EMITS.** A promotion is the only thing it can emit and it emits it only on the
+	// accepting path, so a refused transfer leaves nothing behind — `emitBinOp`'s ordering rule, which every
+	// door that can throw mid-expression keeps.
+	function moveIntoGreenThread(value ValueId, blame String, anchor Token) returns ValueId throws ParseError
+		if not self.valueIsManagedHeap(value) 'aMachineWord'
+			return value
+		end 'aMachineWord'
+
+		if not self.valueIsOwnedHeap(value) 'borrowed'
+			if not tagIsByteRecord(self.tagOf(value)) 'noOwningCopyExists'
+				throw ParseError.serviceArgumentNotUnique(serviceBorrowedTransferMessage(blame, source: self.transferredValueName(value)), line: anchor.line, column: anchor.column)
+			end 'noOwningCopyExists'
+
+			// The promoted copy REPLACES the value the caller carries, exactly as `transferConsumedArg`'s arm
+			// does: what crosses is the fresh record, and this frame's own statement drop must not also reach it.
+			let owned = self.promoteToOwnedString(value, range: SourceRange.ofToken(anchor))
+			self.removeFromPendingTemps(owned)
+			return owned
+		end 'borrowed'
+
+		if not self.valueIsSolelyOwnedHere(value) 'aSecondOwnerMayExist'
+			throw ParseError.serviceArgumentNotUnique(serviceSharedTransferMessage(blame, source: self.transferredValueName(value)), line: anchor.line, column: anchor.column)
+		end 'aSecondOwnerMayExist'
+
+		// ⭐ **BOTH HALVES, UNCONDITIONALLY, AND EACH IS A NO-OP ON THE OTHER'S CASE.** A value is never in
+		// `ownedBindings` and `pendingTempDrops` at once (`markValueOwnsHeap`'s invariant), so this is the shape
+		// `transferConsumedArg`'s opaque arm already uses — and unlike `storeOwnedValueIntoDurableSink`, which
+		// had to become an `if`/`else` when it started CO-OWNING a bound value, a move gives up this frame's
+		// reference either way and so has one answer for both.
+		try self.poisonMoveSource(value, anchor: anchor)
+		self.removeFromPendingTemps(value)
+		return value
+	end 'moveIntoGreenThread'
+
+	// The source NAME a refused transfer should point the author at — the live owning binding's, or the empty
+	// name for a value no binding holds (a temporary, an element read, a field read). Split out because both
+	// refusals need it and neither may resolve it a second way; the sentence builders decide what to say when
+	// it is empty.
+	function transferredValueName(value ValueId) returns String
+		let index = self.liveOwnerIndexOf(value)
+		if self.noLiveOwner(index) 'noBindingHoldsIt'
+			return ""
+		end 'noBindingHoldsIt'
+
+		let owner = try self.ownedBindings.get(index) otherwise panic("transferredValueName: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		return String.from(owner.name)
+	end 'transferredValueName'
 
 	// ⭐⭐ **ARE THESE TWO DECLARED ANSWERS INTERCHANGEABLE AT A CALL?** — the question a whole-program index
 	// that keeps ONE return type per key silently answers YES to for every declaration wearing that key.

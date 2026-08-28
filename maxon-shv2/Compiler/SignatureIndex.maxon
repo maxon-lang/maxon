@@ -397,6 +397,12 @@ let DeclShapeDiverges = 107 as ContentHash
 // always-throwing declaration is recorded, so every ordinary function costs no hash movement.
 let DeclShapeAlwaysThrows = 108 as ContentHash
 
+// ⭐ A function whose every `return` hands back a FRESH RECORD (SV1) — the two above's third sibling, and its
+// own tag for their reason one fact over: a callee that gains or loses the property changes whether a SEND may
+// MOVE its result to another green thread, so a caller's parse memo must move with it. Only a proved
+// fresh-returning declaration is recorded, so every ordinary function costs no hash movement.
+let DeclShapeReturnsFreshRecord = 109 as ContentHash
+
 // ⭐ A declared RETURN TYPE's pre-erasure SPELLING (A2j / A2m) — the `DeclaredSurface` word `mixDeclaration`
 // folds in beside the return type. It is the one declaration fact `mixReturnType` structurally cannot carry:
 // `__ManagedMemory` resolves to the SAME `genericInstance` a `ByteArray` does, so an edit between the two
@@ -4142,38 +4148,55 @@ export typealias FuncThrowsMap = Map with (ByteArray, ThrowsClause)
 // layout up by it. A finer comparison here would be finer than what it is compared FOR.
 typealias DisagreeingThrowsNameSet = Set with ByteArray
 
-// ⭐⭐ **ONE FUNCTION THAT NEVER RETURNS TO ITS CALLER (G17)** — captured by the declaration sweep from the
-// SAME token walk as the `throws` clause beside it, and published for the same reason: the callee may be in
-// another file, so only the whole-program index can answer for it. `Parser.terminateAfterDivergingCall` is
-// the door that asks.
+// ⭐⭐ **ONE THING THE DECLARATION SWEEP PROVED ABOUT ONE BODY** — captured from the SAME token walk as the
+// `throws` clause beside it, and published for the same reason: the callee may be in another file, so only
+// the whole-program index can answer for it.
 //
-// ⭐ **THERE ARE TWO WAYS OUT AND `leavesByThrowing` SAYS WHICH (G18)**, because they are one fact to the
-// SWEEP and two facts to the CALL SITE. A body that can only ever `panic` is left by a BARE call statement;
-// a body that can only ever `throw` is left by a PROPAGATING `try` statement, and by nothing else — an
-// `otherwise` catches the error and control comes back. One transport array carries both so the second way
-// costs no second parameter on the eight routines the first one is threaded through; `foldFile` splits them
-// onto their own registries at the one point the key is minted.
+// ⭐ **THREE FACTS RIDE ONE TRANSPORT, AND `fact` SAYS WHICH**, because they are one thing to the SWEEP —
+// a body walk — and three different things to the call site. A body that can only ever `panic` is left by a
+// BARE call statement (`Parser.terminateAfterDivergingCall`); one that can only ever `throw` is left by a
+// PROPAGATING `try` statement and by nothing else, an `otherwise` catching the error and control coming back
+// (`Parser.desugarTry`); and one whose every `return` hands back a record it built in the `return` itself
+// gives its CALLER sole ownership of that record (`Parser.moveIntoGreenThread`). One array carries all three
+// so the second and third cost no second parameter on the eight routines the first is threaded through;
+// `foldFile` splits them onto their own registries at the one point the key is minted.
 //
-// ⚠ **THERE IS NO PAYLOAD, BECAUSE PRESENCE *IS* THE VALUE.** `recordScannedSignature` pushes one of these
-// only for a declaration whose body walk proved cannot return (`scanBodyFacts`' `'neverReturns'` verdict), so
-// a name with no entry returns — the "absence is the answer" convention `funcThrows` and `funcParamConsumes`
-// both rest on, and the safe direction here: an unmarked function is compiled exactly as it was before this
-// fact existed, while a wrongly MARKED one would stop emitting the edge control really takes. `takesReceiver`
+// ⚠ **THERE IS NO PAYLOAD, BECAUSE PRESENCE *IS* THE VALUE.** `scanBodyFacts` pushes one of these only for a
+// body its walk PROVED the fact of, so a name with no entry has none of them — the "absence is the answer"
+// convention `funcThrows` and `funcParamConsumes` both rest on, and the safe direction for all three: an
+// unmarked function is compiled exactly as it was before the fact existed, while a wrongly MARKED one would
+// stop emitting the edge control really takes, or move a box a second owner still holds. `takesReceiver`
 // rides for `ThrowsClauseEntry`'s reason (W75) — it is half of the registration key.
-export type DivergingDeclEntry
+export enum SweptBodyFact
+	// G17: the body's tail is a `panic(…)` and nothing in it can return.
+	leavesByPanicking
+	// G18: the body's tail is a `throw` and nothing in it can return.
+	leavesByThrowing
+	// ⭐⭐ SV1: every `return` in the body hands back a RECORD LITERAL written in the `return` itself. The
+	// record is therefore allocated by the returning frame and has had no opportunity to be referenced from
+	// anywhere — there is no statement between its construction and its hand-off — so the caller adopting the
+	// `+1` is that allocation's SOLE owner. See `Parser.noteFreshReturnShape` for why the shape is exactly
+	// that and nothing wider.
+	returnsAFreshRecord
+end 'SweptBodyFact'
+
+export type SweptBodyFactEntry
 	export let name as ByteArray
 	export let takesReceiver as bool
-	// Which of the two ways out this body has: `true` for a tail `throw` (G18), `false` for a tail `panic`
-	// (G17). See the header — the two are read by different call shapes and never share a registry.
-	export let leavesByThrowing as bool
+	// Which of the three the sweep proved. See the header — each is read by a different door and no two share
+	// a registry.
+	export let fact as SweptBodyFact
 
-	export static function create(name ByteArray, takesReceiver bool, leavesByThrowing bool) returns DivergingDeclEntry
-		return Self{name: name, takesReceiver: takesReceiver, leavesByThrowing: leavesByThrowing}
+	export static function create(name ByteArray, takesReceiver bool, fact SweptBodyFact) returns SweptBodyFactEntry
+		return Self{name: name, takesReceiver: takesReceiver, fact: fact}
 	end 'create'
-end 'DivergingDeclEntry'
+end 'SweptBodyFactEntry'
 
-export typealias DivergingDeclEntryArray = Array with DivergingDeclEntry
-typealias DivergingFunctionNameSet = Set with ByteArray
+export typealias SweptBodyFactEntryArray = Array with SweptBodyFactEntry
+typealias DeclaredBodyFactNameSet = Set with ByteArray
+// The `<T>.handle` names one program mints (SV1) — see `ProgramSignatures.serviceHandleNames`. Keyed by NAME
+// for `DisagreeingThrowsNameSet`'s reason: a companion has a nominal identity and nothing finer to compare.
+typealias ServiceHandleNameSet = Set with ByteArray
 
 // The answer to "does this callee consume any parameter?" — a union so "no recorded entry" is an ANSWER
 // (a borrow-only callee), never confused with an empty-but-present one.
@@ -4357,13 +4380,21 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 	// spelled here and nowhere else, and the CLONE twin — which owes the identical question — did not have
 	// them: it answered `__clone___ManagedFile`, a symbol nothing builds, and the backend panicked on a
 	// compilable program. One list, three doors.
-	match compilerOwnedAggregateOf(declaredName) 'compilerOwned'
+	match compilerOwnedAggregateOf(signatures, name: declaredName) 'compilerOwned'
 		managedFile then return ManagedFileDestructName
 		managedDirectory then return ManagedDirectoryDestructName
 		//   • **`__ManagedSocket` OWNS AN OS SOCKET, WHICH IS NOT MEMORY** — the file bullet's argument
 		//     unchanged, one type over. `MmDecrefName` here would free eight bytes and leak the socket for the
 		//     process lifetime, which the exit-101 gate cannot see at all.
 		managedSocket then return ManagedSocketDestructName
+		//   • **A `<T>.handle` OWNS A SHARE OF A MAILBOX AND A GREEN THREAD, WHICH IS NOT MEMORY EITHER** (SV1).
+		//     Its box holds one scalar word, so `structFieldIsManaged` is false and `installStructDestructors`
+		//     skips the type outright — the file bullet's shape exactly. `MmDecrefName` here would free the eight
+		//     bytes and leave the service's green thread parked forever on a mailbox with no live handle: not a
+		//     leak the exit-101 gate can see, but a process that never exits. `__mbox_handle_drop_box` steps the
+		//     handle count (closing the mailbox when it was the last), steps the reference count (freeing it when
+		//     it was the last owner) and then takes the ordinary decref of the box.
+		serviceHandle then return MboxHandleDropBoxName
 		userDeclared then break 'compilerOwned'
 	end 'compilerOwned'
 
@@ -4515,8 +4546,12 @@ end 'managedFieldCloneStrategy'
 // is what that gate's own header says it exists for: *"a name the gate and the strategy disagreed about would
 // admit a clone nobody can emit."*
 function managedNameCloneStrategy(signatures ProgramSignatures, declaredName ByteArray, asElement bool) returns ManagedCloneStrategy
-	match compilerOwnedAggregateOf(declaredName) 'compilerOwned'
+	match compilerOwnedAggregateOf(signatures, name: declaredName) 'compilerOwned'
 		managedFile to managedSocket then return ManagedCloneStrategy.unsupported
+		// ⭐ **A HANDLE IS THE ONE COMPILER-OWNED AGGREGATE THAT CLONES**, and its clone is the design's own
+		// `handle.clone()`: a SECOND HANDLE to the same service, which steps both mailbox counts and mints a
+		// fresh box. `direct` because that is one entry point taking one record, exactly as a `__clone_<T>` is.
+		serviceHandle then return ManagedCloneStrategy.direct(MboxHandleCloneBoxName)
 		userDeclared then break 'compilerOwned'
 	end 'compilerOwned'
 
@@ -4569,11 +4604,22 @@ enum CompilerOwnedAggregate
 	// three, so they are matched as ONE RANGE — which is also what makes a FOURTH compiler-owned aggregate
 	// that needs a different answer fail to compile at each of those arms rather than inherit theirs.
 	managedSocket
+	// ⭐⭐ **THE FOURTH ARRIVED (SV1 wave 3), AND IT IS THE CASE THAT ARM WAS WRITTEN FOR.** A `<T>.handle`
+	// box holds one machine word — the mailbox pointer — and its DROP is what shuts a service down: the last
+	// handle to go closes the mailbox, and the last reference to go frees it. Its CLONE is a second handle to
+	// the SAME service, never a second service. Neither is expressible as a synthesized per-type entry, and
+	// neither is the plain `__mm_decref` a scalar-fielded struct box would otherwise take — which would free
+	// eight bytes and leave a green thread parked on a mailbox nobody can ever close.
+	//
+	// ⚠ It is DELIBERATELY OUTSIDE the `managedFile to managedSocket` range: it is the one compiler-owned
+	// aggregate that IS deep-clonable, so a reader answering "not clonable" for the three must not answer it
+	// for this one. That is the sentence above, spent.
+	serviceHandle
 	// An ordinary declaration, whose drop and clone are the synthesized per-type entries.
 	userDeclared
 end 'CompilerOwnedAggregate'
 
-function compilerOwnedAggregateOf(name ByteArray) returns CompilerOwnedAggregate
+function compilerOwnedAggregateOf(signatures ProgramSignatures, name ByteArray) returns CompilerOwnedAggregate
 	if name.equals(ManagedFileTypeName) 'managedFile'
 		return CompilerOwnedAggregate.managedFile
 	end 'managedFile'
@@ -4583,6 +4629,13 @@ function compilerOwnedAggregateOf(name ByteArray) returns CompilerOwnedAggregate
 	if name.equals(ManagedSocketTypeName) 'managedSocket'
 		return CompilerOwnedAggregate.managedSocket
 	end 'managedSocket'
+	// ⚠ **ASKED OF THE REGISTRY AND NOT OF THE SPELLING, WHICH IS WHY THIS FUNCTION NOW TAKES THE INDEX.**
+	// The three names above are compiler constants; a handle's is `<T>.handle`, one per service, minted by
+	// `ServiceCompanions` from a type the program spawns. A suffix test would be a second statement of what a
+	// companion is named — and would answer `true` for a name no `spawn` ever produced.
+	if signatures.isServiceHandle(name) 'serviceHandle'
+		return CompilerOwnedAggregate.serviceHandle
+	end 'serviceHandle'
 
 	return CompilerOwnedAggregate.userDeclared
 end 'compilerOwnedAggregateOf'
@@ -9345,10 +9398,10 @@ export type ProgramSignatures
 	// `throwsClauseCollide` compares, and the only way the sweep can see a member that publishes no clause
 	// at all. `funcDefaultingDeclarationCounts`' twin, one registry over and for exactly its reason.
 	var funcThrowingDeclarationCounts as FunctionDeclarationCountMap
-	// ⭐ The functions that NEVER RETURN (G17) — see `DivergingDeclEntry`. `functionNeverReturns(callee)` is
+	// ⭐ The functions that NEVER RETURN (G17) — see `SweptBodyFactEntry`. `functionNeverReturns(callee)` is
 	// the door a bare-call STATEMENT asks before deciding the call ends its block. Only a proved-diverging
 	// declaration is recorded, so a program with no `panic` helper carries an empty set.
-	var funcDiverges as DivergingFunctionNameSet
+	var funcDiverges as DeclaredBodyFactNameSet
 	// How many declarations of a name DIVERGED, against `funcDeclarationCounts`' how many there were — the
 	// pair `functionNeverReturns` compares, and the only way the sweep can see an overload of the same name that
 	// returns. `funcThrowingDeclarationCounts`' twin, one registry over and for exactly its reason.
@@ -9356,10 +9409,19 @@ export type ProgramSignatures
 	// ⭐ The functions that can only ever THROW (G18) — `funcDiverges`' second way out, on its own registry
 	// because its door is a different call shape: `functionAlwaysThrows(callee)` is what a PROPAGATING `try`
 	// STATEMENT asks before deciding the call ends its block. Empty for a program with no such helper.
-	var funcAlwaysThrows as DivergingFunctionNameSet
+	var funcAlwaysThrows as DeclaredBodyFactNameSet
 	// How many declarations of a name could only THROW, against `funcDeclarationCounts`' how many there were
 	// — `funcDivergingDeclarationCounts`' twin, one registry over and for exactly its reason.
 	var funcAlwaysThrowingDeclarationCounts as FunctionDeclarationCountMap
+	// ⭐⭐ The functions whose every `return` hands back a record built in the `return` itself (SV1) — the
+	// third `SweptBodyFactEntry` fact, on its own registry for its siblings' reason: `returnsFreshValue(callee)`
+	// is what a SEND asks before it may MOVE a call's result to another green thread. Empty for a program with
+	// no service in it, and for every declaration whose returns the sweep could not read that exactly.
+	var funcReturnsFreshRecord as DeclaredBodyFactNameSet
+	// How many declarations of a name PROVED it, against `funcDeclarationCounts`' how many there were —
+	// `funcAlwaysThrowingDeclarationCounts`' twin, one registry over and for exactly its reason. Here the
+	// tally is what stops one overload's provable freshness answering for a sibling's unread returns.
+	var funcFreshReturningDeclarationCounts as FunctionDeclarationCountMap
 	// ⭐ Function name -> its per-parameter DEFAULTS (BATCH2 slice 4). `defaultsOf(callee)` is the door
 	// `Parser.emitCall` asks before deciding an under-supplied call is an arity error. Filled by
 	// `recordParamDefaults` from each file's scanned signatures; last-wins on a duplicate name (E3006
@@ -9678,6 +9740,16 @@ export type ProgramSignatures
 	// hash. Duplicates are dropped at the note — a program spawns one type from many sites — so membership is
 	// a scan of a list a whole program holds a handful of entries in.
 	var serviceSpawnCandidateList as ServiceSpawnCandidateArray
+	// ⭐⭐ **THE `<T>.handle` NAMES THIS SWEEP MINTED (SV1 wave 3)** — the exact set, filled by the one act
+	// that creates them (`recordServiceCompanions`), so `isServiceHandle` answers by MEMBERSHIP rather than by
+	// recognising a spelling. A name-shaped test would claim every `X.handle` a future companion scheme might
+	// mint, and would answer for one no `spawn` produced.
+	//
+	// ⚡ A `Set` and not a scan of `serviceSpawnCandidateList`, because the reader is
+	// `compilerOwnedAggregateOf` — asked for every managed name in every program — and building
+	// `<T>.handle` per candidate to compare would allocate a String on a path that answers `false` for every
+	// program with no service in it. Empty, it costs one hash-free `contains` on an empty table.
+	var serviceHandleNames as ServiceHandleNameSet
 	// Does any declaration OTHER than the corpus's carry the marker? The gate `isArrayBaseName` puts in front
 	// of the scan — false for every program that declares no container of its own, which is the whole
 	// existing corpus and every one of its goldens.
@@ -9810,7 +9882,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DivergingFunctionNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DivergingFunctionNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleNames: ServiceHandleNameSet.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -10047,7 +10119,18 @@ export type ProgramSignatures
 	export function recordServiceCompanions(companions ServiceCompanions)
 		self.recordEnum(companions.request, declaredByTheCorpus: true)
 		self.recordStruct(companions.handle, declaredByTheCorpus: true)
+		// The handle's NAME is noted by the same act that registers its layout, which is what makes
+		// `isServiceHandle` exact: there is no second way for a handle type to come into existence.
+		self.serviceHandleNames.insert(companions.handle.name)
 	end 'recordServiceCompanions'
+
+	// ⭐⭐ **IS THIS TYPE A SERVICE HANDLE? — the door two mechanisms ask.** `compilerOwnedAggregateOf` asks it
+	// to route the handle's drop and clone; `Parser.dispatchMethodOnBase` asks it to route a method call on a
+	// handle to a message SEND rather than to a direct call. One membership test, so a type whose calls are
+	// sends can never be one whose box drops as an ordinary struct.
+	export function isServiceHandle(name ByteArray) returns bool
+		return self.serviceHandleNames.contains(name)
+	end 'isServiceHandle'
 
 	// ⭐ **DOES A DECLARATION OF THIS NAME CARRY THE ARRAY-LITERAL MARKER?** THE one reader of the discovered
 	// list, so no caller can half-apply the "one or two names" rule the list's own header states.
@@ -10353,7 +10436,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, filePath FilePath, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, filePath FilePath, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
 		// the registries below are built from, so "what the user declared" and "what the index holds" are one
 		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
@@ -10589,17 +10672,17 @@ export type ProgramSignatures
 			self.recordThrows(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), clause: entry.clause)
 		end 'eachThrows'
 
-		// The sweep collects both ways out of a body into ONE array (see `DivergingDeclEntry`); they part
-		// company HERE, at the one point the registration key is minted, so neither way can be filed under a
-		// key the other's door would not ask with.
-		for entry in divergingDecls 'eachDivergingDeclaration'
-			let nonReturningKey = self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver)
-			if entry.leavesByThrowing 'leavesByThrowing'
-				self.recordNonReturningDeclaration(nonReturningKey, marked: self.funcAlwaysThrows, counts: self.funcAlwaysThrowingDeclarationCounts, shape: DeclShapeAlwaysThrows)
-			end 'leavesByThrowing' else 'leavesByPanicking'
-				self.recordNonReturningDeclaration(nonReturningKey, marked: self.funcDiverges, counts: self.funcDivergingDeclarationCounts, shape: DeclShapeDiverges)
-			end 'leavesByPanicking'
-		end 'eachDivergingDeclaration'
+		// The sweep collects all three body facts into ONE array (see `SweptBodyFactEntry`); they part company
+		// HERE, at the one point the registration key is minted, so none can be filed under a key another's
+		// door would not ask with.
+		for entry in bodyFacts 'eachProvedBodyFact'
+			let factKey = self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver)
+			match entry.fact 'which'
+				leavesByPanicking then self.recordSweptBodyFact(factKey, marked: self.funcDiverges, counts: self.funcDivergingDeclarationCounts, shape: DeclShapeDiverges)
+				leavesByThrowing then self.recordSweptBodyFact(factKey, marked: self.funcAlwaysThrows, counts: self.funcAlwaysThrowingDeclarationCounts, shape: DeclShapeAlwaysThrows)
+				returnsAFreshRecord then self.recordSweptBodyFact(factKey, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts, shape: DeclShapeReturnsFreshRecord)
+			end 'which'
+		end 'eachProvedBodyFact'
 
 		// ⭐⭐ **THIS FILE'S OWN RE-KEYED DECLARATIONS: THE ONE THING THE LOOPS ABOVE COULD NOT KEY FOR
 		// THEMSELVES — THE NAME OF A SYNTHESIZED DEFAULT HELPER.**
@@ -12016,14 +12099,14 @@ export type ProgramSignatures
 	// two ways differ only in WHICH call shape reads them back, which is a property of the door and not of the
 	// recording — so a second copy of these four lines would be two chances to forget the tally, and the tally
 	// is the half that carries the safe direction.
-	function recordNonReturningDeclaration(name ByteArray, marked DivergingFunctionNameSet, counts FunctionDeclarationCountMap, shape ContentHash)
+	function recordSweptBodyFact(name ByteArray, marked DeclaredBodyFactNameSet, counts FunctionDeclarationCountMap, shape ContentHash)
 		if marked.contains(name) 'anotherSuchDeclarationOfThisName'
 			self.noteRepeatedDeclaration(counts, name: name)
 		end 'anotherSuchDeclarationOfThisName'
 
 		marked.insert(name)
 		self.hash = mixBytes(mix(self.hash, value: shape), bytes: name)
-	end 'recordNonReturningDeclaration'
+	end 'recordSweptBodyFact'
 
 	// ⭐⭐ **DOES A CALL TO THIS NAME NEVER COME BACK? — the door `Parser.terminateAfterDivergingCall` asks
 	// before letting a bare-call STATEMENT end its block (G17).**
@@ -12035,7 +12118,7 @@ export type ProgramSignatures
 	// caller to remember, the forgotten call would not be a missing refusal: it would stop emitting the edge
 	// a returning overload really takes, which is a wrong answer with no diagnostic anywhere.
 	export function functionNeverReturns(callee ByteArray) returns bool
-		return self.everyDeclarationOfThisNameNeverReturns(callee, marked: self.funcDiverges, counts: self.funcDivergingDeclarationCounts)
+		return self.everyDeclarationOfThisNamePublishes(callee, marked: self.funcDiverges, counts: self.funcDivergingDeclarationCounts)
 	end 'functionNeverReturns'
 
 	// ⭐⭐ **DOES A CALL TO THIS NAME ALWAYS THROW? — the door `Parser.desugarTry` asks before letting a
@@ -12048,20 +12131,37 @@ export type ProgramSignatures
 	// `try`, because an `otherwise` catches the error and control comes back. Answering either question with
 	// the other's set would end a block control really leaves by.
 	export function functionAlwaysThrows(callee ByteArray) returns bool
-		return self.everyDeclarationOfThisNameNeverReturns(callee, marked: self.funcAlwaysThrows, counts: self.funcAlwaysThrowingDeclarationCounts)
+		return self.everyDeclarationOfThisNamePublishes(callee, marked: self.funcAlwaysThrows, counts: self.funcAlwaysThrowingDeclarationCounts)
 	end 'functionAlwaysThrows'
 
-	// The shared body of the two doors above — somebody published the fact for this key, and EVERY declaration
-	// wearing the key did. Written once for `recordNonReturningDeclaration`'s reason: the collide half is the
+	// ⭐⭐ **DOES A CALL TO THIS NAME HAND BACK A RECORD NOBODY ELSE OWNS? — the door `Parser.emitCall` asks
+	// before marking its result MOVABLE INTO A GREEN THREAD (SV1).** The two doors above's third sibling, and
+	// its tally rule is theirs: a name one of whose declarations the sweep could not read that exactly answers
+	// `false`, because the call site cannot know which declaration it resolved to.
+	//
+	// ⛔ **THE SAFE DIRECTION IS `false`, AND IT IS SAFE IN A WAY THE OTHER TWO ARE NOT.** A missed `true`
+	// costs a SEND the refusal E3138 already teaches the cure for (`.clone()`); a wrong `true` hands a box to a
+	// second green thread while this one still holds it, which the plain refcount cannot survive. Every
+	// uncertainty in `Parser.noteFreshReturnShape` therefore resolves to recording nothing.
+	//
+	// ⚠ **IT IS A ONE-LEVEL SUMMARY AND NOT AN ORACLE.** `return other()` states nothing here even when
+	// `other` is itself fresh-returning — that is the transitive fixpoint this compiler has deferred for the
+	// consume analysis as well, and the SEND's guarantee stops at the frame boundary for the same reason.
+	export function returnsFreshValue(callee ByteArray) returns bool
+		return self.everyDeclarationOfThisNamePublishes(callee, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts)
+	end 'returnsFreshValue'
+
+	// The shared body of the three doors above — somebody published the fact for this key, and EVERY
+	// declaration wearing the key did. Written once for `recordSweptBodyFact`'s reason: the collide half is the
 	// one that carries the safe direction, and a second copy of it is a second chance to omit it.
-	function everyDeclarationOfThisNameNeverReturns(callee ByteArray, marked DivergingFunctionNameSet, counts FunctionDeclarationCountMap) returns bool
+	function everyDeclarationOfThisNamePublishes(callee ByteArray, marked DeclaredBodyFactNameSet, counts FunctionDeclarationCountMap) returns bool
 		let someDeclarationPublishesIt = marked.contains(callee)
 		if not someDeclarationPublishesIt 'noDeclarationOfThisNameDoes'
 			return false
 		end 'noDeclarationOfThisNameDoes'
 
 		return not self.notEveryDeclarationPublishesIt(someDeclarationPublishesIt, publishedBy: counts, name: callee)
-	end 'everyDeclarationOfThisNameNeverReturns'
+	end 'everyDeclarationOfThisNamePublishes'
 
 	// ⭐ **THE CALLEE'S `throws` CLAUSE, or `none`** — the door a call site asks: does this callee throw,
 	// and what error type does it throw? `none` (no recorded entry) is every non-throwing function and the
@@ -26159,8 +26259,11 @@ export type ProgramSignatures
 	// was latent; a divergence held shut by an unrelated dispatch order is the shape this file keeps paying
 	// for, so the two callers now ask one function rather than two spellings of it.
 	function aggregateNameSupportsDeepClone(name ByteArray, visited ClonerSet) returns bool
-		match compilerOwnedAggregateOf(name) 'compilerOwned'
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile to managedSocket then return false
+			// A handle's clone is a real entry (`managedNameCloneStrategy`), so the GATE must admit what the
+			// STRATEGY answers — this arm and that one are the divergence this function exists to prevent.
+			serviceHandle then return true
 			userDeclared then break 'compilerOwned'
 		end 'compilerOwned'
 		if visited.contains(name) 'cycle'

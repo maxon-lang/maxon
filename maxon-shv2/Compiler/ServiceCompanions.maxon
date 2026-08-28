@@ -336,6 +336,48 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 	end 'why'
 end 'serviceRosterRefusalMessage'
 
+// ⭐⭐ **THE WORDS FOR A VALUE THAT MAY NOT CROSS TO A SERVICE'S GREEN THREAD (SV1 wave 3) — the OWNERSHIP
+// refusal, where the two above are about a DECLARATION.** `Parser.moveIntoGreenThread` decides; these say it,
+// and they live here because every other sentence a service refusal can end with lives here too.
+//
+// ⭐ **THE LESSON IS WRITTEN ONCE AND BOTH FINDINGS END WITH IT**, `borrowLaunderDoorClause`'s arrangement
+// and for its reason: the two differ in WHY this frame is not the value's only owner, and not at all in what a
+// send requires or in what the author does about it. Two copies would be free to drift into two rules.
+let ServiceTransferLesson = "A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send"
+
+// The BORROWED half: this frame does not own the value at all, and its type has no cheap owning copy the send
+// could take instead (a byte record does, and is promoted rather than refused).
+module function serviceBorrowedTransferMessage(blame String, source String) returns String
+	return "{blame} is BORROWED{serviceTransferSourceClause(source)} — read out of a field, an element or a parameter — so this frame does not own it, and its type has no owning copy a send could take instead. {ServiceTransferLesson}"
+end 'serviceBorrowedTransferMessage'
+
+// The CO-OWNED half: this frame owns a reference, but not provably the only one. Both arrivals are named
+// because the cure differs between them — a second reference taken HERE is one the author can see and remove,
+// while a value that crossed a frame boundary is `SERVICES_DESIGN.md`'s known weakness 1 and needs the clone.
+module function serviceSharedTransferMessage(blame String, source String) returns String
+	return "{blame} cannot be proven to have exactly one owner{serviceTransferSourceClause(source)}: this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). {ServiceTransferLesson}"
+end 'serviceSharedTransferMessage'
+
+// The source binding named in parentheses, or nothing at all when no binding holds the value (a temporary, an
+// element read). Split out because both sentences name the source and an author reading two spellings of one
+// fact would read them as two findings.
+function serviceTransferSourceClause(source String) returns String
+	return "" if source.isEmpty() else " (`{source}`)"
+end 'serviceTransferSourceClause'
+
+// ⭐ **WHAT A `spawn`'s STATE IS, in the words its refusal needs.** A spawn transfers exactly one value and
+// the author never named it — it is the factory's result — so the blame names the SPAWN instead, which is the
+// line they wrote.
+module function serviceSpawnStateBlame(typeName ByteArray, member ByteArray) returns String
+	return "the state `spawn {String.from(typeName)}.{String.from(member)}(…)` would start the service with"
+end 'serviceSpawnStateBlame'
+
+// ⭐ **WHAT ONE MESSAGE ARGUMENT IS**, its twin one construct over. Here the author DID name the value's
+// destination, so the blame names the parameter and the message rather than the send.
+module function serviceSendArgumentBlame(typeName ByteArray, methodName ByteArray, paramName ByteArray) returns String
+	return "argument `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}`"
+end 'serviceSendArgumentBlame'
+
 // ⭐⭐ **MINT `<T>.request` AND `<T>.handle`, INTO THE INTERNER THE CALLER'S IDS ARE MINTED AGAINST.**
 //
 // ⚠⚠ **THE INTERNER IS A PARAMETER AND IT IS NOT OPTIONAL — THIS IS OPEN #56's HAZARD (four times, and
@@ -430,7 +472,7 @@ function buildServiceHandleStruct(signatures ProgramSignatures, typeName ByteArr
 	// and neither can ask a layout anything — they are Std-tier bodies built after the pipeline. A second
 	// field added here would leave them reading and writing past the record's end, silently; this makes it a
 	// compile-time stop at the line that caused it.
-	if handle.sizeBytes() != ServiceHandleBoxSize as ByteOffset or handle.offsetOfField(0) != ServiceHandleMailboxOffset 'geometryDrifted'
+	if handle.sizeBytes() != ServiceHandleBoxSize or handle.offsetOfField(0) != ServiceHandleMailboxOffset 'geometryDrifted'
 		panic("buildServiceHandleStruct: `{String.from(serviceHandleCompanionName(typeName))}` lays out {handle.sizeBytes()} byte(s) with its mailbox at {handle.offsetOfField(0)}, against the `ServiceHandleBoxSize`/`ServiceHandleMailboxOffset` the mailbox runtime spells ({ServiceHandleBoxSize}/{ServiceHandleMailboxOffset}) — `__mbox_handle_clone_box` and `__mbox_handle_drop_box` are Std-tier bodies with no layout to ask, so the two numbers must be one fact")
 	end 'geometryDrifted'
 
@@ -469,7 +511,7 @@ end 'buildServiceHandleStruct'
 // ⚠ It DEDUPES, because two `spawn`s of one type through two different factories are two CANDIDATES and one
 // service. The mint below still asks the registry as well, for the reason its own comment gives; this makes
 // the LOOP builder — which has no registry to collide with — correct by construction.
-export function serviceTypeNames(signatures ProgramSignatures) returns ByteArrayArray
+export function serviceTypeRoster(signatures ProgramSignatures) returns ByteArrayArray
 	var services = ByteArrayArray.create()
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
 		match classifyServiceTarget(signatures, typeName: candidate.typeName, member: candidate.member) 'verdict'
@@ -486,7 +528,7 @@ export function serviceTypeNames(signatures ProgramSignatures) returns ByteArray
 		services.push(candidate.typeName)
 	end 'eachCandidate'
 	return services
-end 'serviceTypeNames'
+end 'serviceTypeRoster'
 
 // A linear scan, because the list is the number of DISTINCT SERVICE TYPES a program declares — one or two in
 // every program that has any — and a `Set with ByteArray` would cost a hash per candidate to beat a compare
@@ -500,8 +542,21 @@ function serviceNameAlreadyListed(services ByteArrayArray, typeName ByteArray) r
 	return false
 end 'serviceNameAlreadyListed'
 
+// ⭐⭐ **THE PERFORM HALF — every type on the roster above, minted once.** Called from
+// `Queries.queryProgramSignatures` directly after `internWellKnownContainerInstances()` and BEFORE
+// `allFilesFolded = true`, so that:
+//   • every whole-program normalization after that line (`rewriteRecordedReturnTypes`,
+//     `normalizeSweptInterfaceTypes`, `deriveInstanceNames`) treats the companions as ordinary layouts, and
+//   • the decision stands on the FAR SIDE of the stdlib/user name contest, which the fold has settled.
+//
+// It registers through `ProgramSignatures.recordServiceCompanions`, which is `recordStruct`/`recordEnum` —
+// so the companions ride the SAME rolling declaration hash every author-written type does. That is what
+// makes the memo correct across files with no separate mix-in: a `spawn` added in file B changes the source
+// hash that keys this whole sweep, the sweep mints a companion here, `recordStruct` folds its name and shape
+// into `signatures.hash`, and `Queries.currentParseMemoKey` therefore invalidates file A's parse — which is
+// where `Calc` is declared and where a reference to `Calc.handle` resolves.
 module function synthesizeServiceCompanions(signatures ProgramSignatures)
-	for typeName in serviceTypeNames(signatures) 'eachService'
+	for typeName in serviceTypeRoster(signatures) 'eachService'
 		// Asked of the REGISTRY rather than of the roster above, because the registry is what a second mint
 		// would actually collide with — a `spawn` in a warm-rebuilt file whose companions are already folded
 		// in reaches here with the roster fresh and the registry filled.
