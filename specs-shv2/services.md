@@ -1565,7 +1565,43 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:25:21: the state `spawn Calc.create(…)` would start the service with is a `type Calc` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, and a record whose every slot is one of those; proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
+error E3138: <fragment>:25:21: the state `spawn Calc.create(…)` would start the service with is a `type Calc` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
+```
+
+<!-- test: error.a-record-with-a-string-field-may-not-cross-either -->
+⭐⭐ **A `String` ARGUMENT CROSSES AND A `String` FIELD DOES NOT, AND THE DIAGNOSTIC USED TO SAY OTHERWISE.**
+A `String` VALUE is closed — its record's slots hold a byte buffer and a length, never a reference to a second
+refcounted record — which is exactly why a `String` message argument is allowed. A record that HOLDS one is a
+different question: `Self{held: s}` stores a reference where a move would have given one up, so the `String`
+has two owners the instant the record has one. That is the same non-transitivity one level down, and it is
+what makes a scalar-only record the shape that crosses.
+
+⚠ **THIS CASE EXISTS BECAUSE THE MESSAGE OVER-PROMISED.** It read *"a record whose every slot is one of
+those"* — of *"a scalar, a `String`, a service HANDLE"* — which names this program as legal. The compiler
+refuses it, and always did; the sentence was the part that was wrong. A refusal an author cannot act on is
+worse than one they can, and this is the shape they would have written next.
+```maxon
+type Holder
+	var held as String
+	var bytes as int
+
+	static function create() returns Self
+		return Self{held: "", bytes: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.bytes = self.bytes + s.byteLength()
+	end 'keep'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = spawn Holder.create()
+	h.keep("payload")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:16:23: the state `spawn Holder.create(…)` would start the service with is a `type Holder` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
 ```
 
 <!-- test: error.a-container-may-not-cross -->
@@ -1605,7 +1641,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:29:9: argument `cs` of the message `Svc.take` is a container, whose elements a push increfs rather than moves — so this frame may still own what is in it (`cs`). This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, and a record whose every slot is one of those; proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
+error E3138: <fragment>:29:9: argument `cs` of the message `Svc.take` is a container, whose elements a push increfs rather than moves — so this frame may still own what is in it (`cs`). This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
 ```
 
 <!-- test: error.a-promise-may-not-be-sent -->
