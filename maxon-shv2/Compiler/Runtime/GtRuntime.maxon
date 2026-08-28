@@ -5,7 +5,7 @@
 //
 //   • a **GREEN THREAD** is a schedulable unit the P/M tier may hand to any M. There is exactly ONE today
 //     (GT0, a P's inline scheduler context, adopted by `__sched_init_procs`) and **no producer of a second
-//     until a `spawn` primitive lands** (`SERVICES_DESIGN.md:62-160`, *"Send is a MOVE"*).
+//     until a `spawn` primitive lands** (`SERVICES_DESIGN.md §"Ownership — the spine"`, *"Send is a MOVE"*).
 //   • a **COROUTINE** is what `async f(…)` creates. ⚖ USER, 2026-08-27: *"async is not supposed to create a
 //     new green thread. it allows a function to yield the current green thread while waiting for a blocking
 //     operation."* So a coroutine is owned by the green thread that called it (`GtOffOwner`), is published
@@ -630,7 +630,7 @@ export let GtReadyName = b"__gt_ready"
 // published. After the pin an `async` frame is a COROUTINE and goes to its owner's queue instead
 // (`__gt_coro_enqueue` below), so the only remaining caller of either is inside `SchedRuntime` — the ring
 // overflow and the batch grab — and neither of THOSE has a producer until a `spawn` primitive creates real
-// green threads (`SERVICES_DESIGN.md:62-160`). Both names stay exported for those two in-tier callers, and
+// green threads (`SERVICES_DESIGN.md §"Ownership — the spine"`). Both names stay exported for those two in-tier callers, and
 // `DeadFunctionElimination` prunes the pair out of every program that cannot reach them.
 export let GtEnqueueName = b"__gt_enqueue"
 

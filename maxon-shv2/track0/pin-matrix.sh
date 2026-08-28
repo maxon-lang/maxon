@@ -39,7 +39,7 @@
 # 7/393 and 12/410. A gate nobody has seen move is not a gate.
 #
 # ⚠ THE DAY `spawn` LANDS, ASSERTION 4 FLIPS BACK AND MUST. A `spawn` primitive
-# (SERVICES_DESIGN.md:62-160, "Send is a MOVE") creates REAL green threads, which
+# (SERVICES_DESIGN.md §"Ownership — the spine", "Send is a MOVE") creates REAL green threads, which
 # are exactly what W212's ring, its stealing and its worker loop schedule — all
 # still built, all still here. That rung re-pins this assertion to `workers >= 2`
 # and `steals > 0` for a spawn-driven program, and keeps it at 1/0 for a

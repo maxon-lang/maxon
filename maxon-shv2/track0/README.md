@@ -52,7 +52,7 @@ determinism, leak-freedom and single-shard churn; they no longer reach the per-P
 mcache handoff, the remote-free MPSC queue or the span ownership gate **in shv2**.
 `validate.sh` still reaches all three **in the bootstrap**, whose scheduler is
 unchanged. Those paths regain a shv2 producer when a `spawn` primitive lands
-(`SERVICES_DESIGN.md:62-160`); until then, do not read a green shv2 run as
+(`SERVICES_DESIGN.md §"Ownership — the spine"`); until then, do not read a green shv2 run as
 covering them.
 
 ## Pieces
