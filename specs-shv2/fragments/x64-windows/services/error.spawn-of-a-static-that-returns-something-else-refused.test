@@ -1,0 +1,24 @@
+// Test: error.spawn-of-a-static-that-returns-something-else-refused
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	static function version() returns int
+		return 3
+	end 'version'
+
+	export function bump(by int)
+		self.count = self.count + by
+	end 'bump'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.version()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3134: <fragment>:19:10: `spawn Calc.version(…)` does not start a service: `Calc.version` does not hand back a `Calc` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`

@@ -859,8 +859,8 @@ try_expr      = 'try' expression 'otherwise' otherwise_clause
 ### 6.6 Async/Await Expressions
 
 ```
-async_expr    = 'async' IDENTIFIER '(' [ arg_list ] ')'    (* spawn green thread, returns promise *)
-              | 'async' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* spawn struct method call *)
+async_expr    = 'async' IDENTIFIER '(' [ arg_list ] ')'    (* start a coroutine, returns promise *)
+              | 'async' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* the same, on a static method *)
 
 await_expr    = 'await' expression                          (* wait for promise, returns result *)
 
@@ -875,7 +875,26 @@ cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a green thr
 - `async` target function must yield (contain I/O operations or `await` points)
 - Throwing async functions require `try await` (not plain `await`)
 
-### 6.7 Function and Method Calls
+
+### 6.7 Spawn Expressions
+
+```
+spawn_expr    = 'spawn' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* start a service, returns TYPE.handle *)
+```
+
+**Restrictions:**
+- `spawn` is a CONTEXTUAL keyword, not a reserved word: it is an identifier followed by a name. `spawn`
+  therefore remains a perfectly good spelling for a function, a static, a parameter, a field or a local
+  (`Subprocess.spawn(cmd)` and `static function spawn() returns Self` are both live in this tree).
+- the target must be a STATIC FACTORY of a declared `type` that returns that type; there is no bare
+  `spawn f()` green thread (E3134). The unit of concurrency is a service.
+- `spawn Self.…` is refused: the whole-program walk that decides which types are services reads tokens
+  with no type scope.
+- naming a type in a `spawn` makes it a SERVICE program-wide, which synthesizes `TYPE.request` and
+  `TYPE.handle` beside it. That is a semantic rule over `visibility_prefix`, not a grammar change: no
+  `type_decl` production moves.
+
+### 6.8 Function and Method Calls
 
 ```
 call_expr     = IDENTIFIER '(' [ arg_list ] ')'

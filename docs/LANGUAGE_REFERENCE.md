@@ -4254,7 +4254,11 @@ Maxon supports concurrency via `async` and `await`. An `async` call does **not**
 
 The restriction that an `async` target must yield (`E3073`, below) is the rule this model *is*: `async` exists to overlap waiting, so spawning something that can never give up the green thread buys nothing.
 
-Creating a green thread that is scheduled independently is `spawn`, which is reserved and not built (see `SERVICES_DESIGN.md`). The runtime carries the whole GMP (Goroutine-Machine-Processor) substrate a `spawn` needs — per-processor local queues, work stealing, IOCP-based overlapped I/O — and `async` reaches none of it.
+Creating a green thread that is scheduled independently is `spawn`, and `spawn` starts a **service** (see `SERVICES_DESIGN.md`). The runtime carries the whole GMP (Goroutine-Machine-Processor) substrate a `spawn` needs — per-processor local queues, work stealing, IOCP-based overlapped I/O — and `async` reaches none of it.
+
+`spawn` is a **contextual** keyword, not a reserved word: it is recognized as an identifier followed by a name, so `spawn` remains a perfectly good spelling for a function, a static, a parameter, a field or a local. A `spawn Calc.create()` anywhere in a program makes `Calc` a **service**, and the compiler synthesizes two companion types beside it — `Calc.request` (the message union) and `Calc.handle` (what a `spawn` yields, whose method surface is exactly `Calc`'s `export`/`public` INSTANCE methods). There is no bare `spawn f()` green thread: the target must be a static factory of a declared type returning that type, and anything else is **E3134**. A message's arguments are MOVED, so a parameter that cannot have exactly one owner on the far side — a `Promise`, a function value, a value held at an interface type — is **E3135**.
+
+⚠ **The declarations are in place and the runtime is not.** A `spawn` compiles as far as every declaration-time rule and then reports `E2015: services are not lowered yet`; the mailbox, the dispatch loop and the reply cell land with the rest of the `SV1`/`SV2` rows. `specs-shv2/services.md` carries the live cases and, as `disabled-test` entries, the ones each of those rows unlocks.
 
 ### Spawning Green Threads
 

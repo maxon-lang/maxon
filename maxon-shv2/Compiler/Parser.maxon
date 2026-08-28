@@ -1491,6 +1491,18 @@ export union ParseError implements Error
 	// fact. Raised by `parseUcdTableLoad`, the one intrinsic family with parameter names — a builtin
 	// WITHOUT a declaration answers E2067 instead, and that difference is the whole rule.
 	builtinUnknownArgLabel(intrinsic String, label String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ **THE TWO SERVICE REFUSALS (SV1), APPENDED AT THE END OF THE UNION.** Both carry a rendered
+	// SENTENCE rather than the facts, because the words belong beside the rule that decides them
+	// (`ServiceCompanions.serviceTargetRefusalMessage` / `serviceRosterRefusalMessage`) and not at the
+	// diagnostic mapper — the same shape `otherwiseOutsideRangedReturn` uses two arms up in that mapper, and
+	// for the same reason it gives.
+	//
+	// ⚠ **A 3xxx CODE RAISED BY THE PARSER, DELIBERATELY.** Whether a type is a SERVICE is a whole-program
+	// property (the sweep decides it), but the only place it can be REPORTED is the `spawn` the author wrote:
+	// the sweep is memoized and reports nothing, and the design requires the diagnostic to name the site that
+	// made the type a service. The parser already raises E3005 and E3011 the same way.
+	serviceNotASpawnTarget(explanation String, line LineNumber, column ColumnNumber)
+	serviceValueNotTransferable(explanation String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -5699,6 +5711,28 @@ let ByteViewMethod = b"bytes"
 // `Parser.atModuleModifier` for the measurement that forbids a `keywordMap` entry.
 let ModuleModifierName = b"module"
 
+// ⭐⭐ **`spawn`'s SPELLING — AN IDENTIFIER, NEVER A KEYWORD, FOR `module`'s REASON AND WITH ITS OWN
+// MEASUREMENT (SV1).** Two live declarations own the word and neither may be retokenized:
+// `specs-shv2/associated-types.md:3493,3500` declares `static function spawn() returns Self` — a
+// byte-identical port of `/specs/associated-types.md`, which the port rule forbids editing — and
+// `stdlib/Subprocess.maxon:658,664` declares `Subprocess.spawn` / `spawnWithCwd` in a module the
+// whitelist loads into EVERY compile. A `keywordMap` row would break both on the day it landed, so
+// `filter=associated-types` and `filter=subprocess` staying green IS this decision's gate.
+//
+// The recognition is EXACT rather than heuristic, exactly as `atModuleModifier`'s is: the word is the
+// prefix operator iff the very next token is an identifier or `Self`. Two adjacent NAME tokens open no
+// expression the grammar has, and `newline` is a real token — so `return spawn` followed by a line break
+// reads the local named `spawn`, and `Subprocess.spawn(cmd)` (whose next token is `(`) is untouched.
+let SpawnKeywordName = b"spawn"
+
+// Is `tok` the WORD `spawn`? A free function over a TOKEN because the two askers hold different things: the
+// PARSER asks it at a cursor, and the whole-program discovery walk (`Queries.noteWholeProgramTokenFactsIn`)
+// asks it of a raw `TokenArray` with no `Parser` in scope at all. Two spellings of "is this the keyword" is
+// the shape where the walk and the arm come to disagree about which programs contain a `spawn`.
+module function tokenIsTheSpawnKeyword(tok Token) returns bool
+	return tok.kind == TokenKind.identifier and tok.value.equals(SpawnKeywordName)
+end 'tokenIsTheSpawnKeyword'
+
 // The one annotation the language has, and its spelling — matched as an IDENTIFIER after the `@`, never as a
 // keyword, so `heap` stays a perfectly good name for a variable or a function. See `parseAnnotatedBinding`.
 let HeapAnnotationName = b"heap"
@@ -9723,7 +9757,13 @@ end 'kindSpellsBlockStructure'
 // declares a type. An allowlist of "harmless" keywords would be the same fact written down twice — once
 // here and once in whichever grammar rule the keyword really belongs to — and would silently refuse the
 // next keyword a corpus file declares.
-function tokenCanBeAName(tok Token) returns bool
+//
+// ⚠ `module`, not file-private: the whole-program `spawn` discovery walk
+// (`Queries.noteServiceSpawnFollowing`) asks the identical question of a raw `TokenArray` with no `Parser`
+// in scope, and a second spelling of "may this token be a name" would let that walk and
+// `Parser.atSpawnPrefix` accept different programs — companions minted for a spawn the parser refuses, or a
+// spawn the parser claims that nothing minted companions for.
+module function tokenCanBeAName(tok Token) returns bool
 	if tok.kind == TokenKind.identifier 'plainIdentifier'
 		return true
 	end 'plainIdentifier'
@@ -12789,6 +12829,11 @@ export type Parser
 	// cursor, so it is invisible to everything downstream.
 	export function foldDeclaredSignaturesInto(index ProgramSignatures, producers ProducerMask)
 		var entries = FuncReturnTypeEntryArray.create()
+		// ⭐ A FILE-SCOPE declaration is never a service MESSAGE, and this array PROVES it rather than asserting
+		// it: `recordScannedSignature` pushes only for a declaration that TAKES A RECEIVER, and
+		// `declarationTakesReceiver` answers `false` for every declaration outside a `type` body. One per file, and
+		// it ends every compile empty.
+		var noMessageMethodsAtFileScope = ByteArrayArray.create()
 		var aliases = RangedTypeAliasArray.create()
 		// ⭐ FUNCTION typealiases (P1.5-A1) — recorded from the SAME token walk as the ranged ones, into
 		// their own array (a function alias is not a ranged one). Folded whole-program so a function-typed
@@ -12994,7 +13039,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, messageMethodNameOut: noMessageMethodsAtFileScope)
 				continue
 			end 'isFunction'
 
@@ -13480,7 +13525,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, messageMethodNameOut ByteArrayArray)
 		let nameTok = self.current()
 		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
 		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
@@ -13499,6 +13544,13 @@ export type Parser
 		// argument list, so it is read here, once, and shared by the three facts below that are recorded
 		// CALL-ALIGNED (the default scan, the consume scan) or that state the alignment itself (the entry).
 		let takesReceiver = self.declarationTakesReceiver(hasStaticModifier)
+		// ⭐⭐ **AND WHETHER THIS DECLARATION IS A SERVICE MESSAGE (SV1)** — recorded HERE, from the two facts read
+		// on the two lines above, because this is the one routine that reads both for every declaration shape.
+		// `StructLayout.messageMethodNames` owns what membership means; the caller owns whether the roster is
+		// KEPT (only `recordScannedType`'s does — see each other call site for why it discards).
+		if takesReceiver and isProgramWideTier(visibility) 'aMessage'
+			messageMethodNameOut.push(nameTok.value)
+		end 'aMessage'
 		self.advance()
 		// The parameter list's `(` is captured before the skip so the param NAMES can be read back out of it
 		// (`paramNamesIn`) — the CONSUME scan needs them, and `skipBalancedParens` only advances past them.
@@ -17567,6 +17619,49 @@ export type Parser
 		return self.kindAt(index) == TokenKind.identifier and self.tokenAt(index).value.equals(ModuleModifierName)
 	end 'moduleModifierAt'
 
+	// ⭐⭐ **IS THE CURSOR ON THE `spawn` PREFIX OPERATOR? (SV1)** — `atModuleModifier`'s shape one construct
+	// over, and its exactness argument transfers unchanged: an identifier spelled `spawn` is the operator iff
+	// the very next token opens a NAME, because two adjacent name tokens begin no expression the grammar has.
+	// See `SpawnKeywordName` for the two live declarations of the word that forbid a `keywordMap` row.
+	//
+	// `Self` is admitted here and REFUSED inside `parseSpawn`, deliberately: `spawn Self.create()` is a
+	// spelling this rung cannot resolve (the whole-program discovery walk that decides which types are
+	// services reads tokens with no type scope), and admitting it at the door is what lets it be refused in
+	// its own words instead of dying as `E2001 unexpected token: 'Self'`.
+	//
+	// ⭐⭐ **THE THIRD CLAUSE IS D8's — A KEYWORD MAY BE A DECLARED NAME — AND IT WAS MEASURED MISSING.** A
+	// bare `identifier` test refuses `spawn Reader.from(path)` outright, because `from` is a real keyword
+	// (`Set from […]`) that `tokenCanBeAName` nonetheless admits in a NAME position, and
+	// `stdlib/FilePath.maxon:34` declares exactly that shape — `static function from(path String) returns
+	// Self`, a factory. MEASURED before this clause: `spawn String.from(b"x")` earned the SHAPE refusal
+	// ("`spawn` is followed by a STATIC CALL on a type"), which is a sentence about a program the author did
+	// not write.
+	//
+	// ⚠ **AND IT NEEDS THE DOT, WHERE THE FIRST TWO CLAUSES DO NOT.** `spawn work()` must be CLAIMED — it is
+	// the commonest mistake and the one refusal that teaches the form — so an `identifier` alone is enough
+	// there. A keyword alone is not: `spawn end` in a broken program would then earn a sentence about
+	// services instead of the token error it is. Requiring the qualifier keeps the widening to exactly the
+	// shape a keyword-named type produces.
+	function atSpawnPrefix() returns bool
+		if not self.spawnKeywordAt(self.pos) 'notTheWord'
+			return false
+		end 'notTheWord'
+
+		let next = self.kindAt(self.pos + 1)
+		if next == TokenKind.identifier or next == TokenKind.selfType 'anOrdinaryTypeName'
+			return true
+		end 'anOrdinaryTypeName'
+
+		return tokenCanBeAName(self.tokenAt(self.pos + 1)) and self.kindAt(self.pos + 2) == TokenKind.dot
+	end 'atSpawnPrefix'
+
+	// Is the token at `index` the WORD `spawn`? Split from `atSpawnPrefix` for `moduleModifierAt`'s reason:
+	// the whole-program discovery walk (`fileNamesServiceSpawns`) reads the stream by INDEX and asks the same
+	// question at a cursor it never moves.
+	function spawnKeywordAt(index TokenIndex) returns bool
+		return tokenIsTheSpawnKeyword(self.tokenAt(index))
+	end 'spawnKeywordAt'
+
 	// ⭐ **WHICH WORDS ARE VISIBILITY MODIFIERS — ASKED ONCE, BY THE LOOK-AHEAD DOORS.** `atStructFieldKeyword`
 	// and `atTypeAliasDeclaration` both need "is a modifier here, whatever it is?" before they can look past
 	// it at the keyword they are actually testing for, and each spelled the disjunction itself until this
@@ -17649,6 +17744,11 @@ export type Parser
 		self.enterTypeScope(nameTok.value, isEnum: false)
 
 		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.filePath)
+		// ⭐ **THE TYPE'S MESSAGE ROSTER, COLLECTED ON THE ONE WALK THAT READS ITS MEMBERS IN ORDER (SV1)** —
+		// see `StructLayout.messageMethodNames`, which owns what membership means and why this sweep is the only
+		// writer. Handed to `recordScannedSignature` so the tier and the receiver bit are read ONCE per
+		// declaration, by the routine that already reads them, rather than re-derived at this arm.
+		var messageMethods = ByteArrayArray.create()
 		// `uses T` (P1.6-A) — parsed here, in the tolerant sweep, exactly as `parseTypeDeclaration` does
 		// it, so the scanned layout carries the SAME parameter list the real parse reads a field's
 		// `typeParameter(token)` against. The cursor lands past the clause, at the type body the loop walks.
@@ -17797,7 +17897,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: messageMethods)
 				continue
 			end 'isMethod'
 
@@ -17810,6 +17910,11 @@ export type Parser
 		// argument, exactly as the directly-pushing method's does. Runs before `closeTypeParamScope` so
 		// `enclosingType`/`enclosingTypeParams` still name this type.
 		self.recordTransitiveArrayFeeds(paramConsumes, bodyStart: bodyStart, feedStart: feedStart)
+
+		// The roster is set WHOLESALE once every member has been read, on `recordTypeParams`' discipline: the
+		// whole list is known at one moment, and a per-push write would leave a half-filled column standing on a
+		// declaration the loop `break`s out of.
+		layout.recordMessageMethods(messageMethods)
 
 		structs.push(layout)
 		self.closeTypeParamScope()
@@ -18588,7 +18693,7 @@ export type Parser
 	// verdict independent of fold order.
 	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, divergingDecls DivergingDeclEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		if shadowed 'theConformerDeclaresItsOwn'
-			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
 			return
 		end 'theConformerDeclaresItsOwn'
 
@@ -18602,18 +18707,22 @@ export type Parser
 		// standing where the user's belongs whenever the sweep folds `stdlib/` last.
 		let beaten = index.noteExtensionPublishedMethod(qualifiedMethodName, declFilePath: self.filePath, isStdlibSource: self.isStdlibSource)
 		if beaten 'aUserFileDeclaresIt'
-			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
 			return
 		end 'aUserFileDeclaresIt'
 
-		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+		// ⚠ **AN EXTENSION METHOD IS NOT A MESSAGE (SV1)**, so its roster contribution is discarded here rather
+		// than threaded to the conformer's layout: `extension Countable` declares one body on every conformer, and
+		// a service's variant order is a wire format its own declaration has to own. The two withheld arms above
+		// discard for the same reason plus their own.
+		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: ByteArrayArray.create())
 	end 'publishOrShadowExtensionMethod'
 
 	// Read a WITHHELD method's signature into arrays that are discarded, and file why it is missing. The read
 	// is what keeps the cursor where a published method's leaves it (see the call site); the filing is what
 	// lets the call site say something better than "no such method".
 	function foldWithheldExtensionMethod(index ProgramSignatures, conformer ByteArray, methodName ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray)
-		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), divergingDecls: DivergingDeclEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
 		index.recordConditionalExtensionSkip(qualifiedMethodName(conformer, methodName: methodName), skip: ConditionalExtensionSkip.create(conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName))
 	end 'foldWithheldExtensionMethod'
 
@@ -18680,7 +18789,10 @@ export type Parser
 				self.pos = self.enumMethodKeywordIndex(self.pos)
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				// ⚠ **AN ENUM/UNION METHOD IS NOT A MESSAGE (SV1)** — a service is a declared `type`, reached through
+				// `spawn <T>.<factory>()`, whose target test requires a struct declaration. So the roster this method
+				// would contribute is discarded, exactly as an extension method's is.
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, divergingDecls: divergingDecls, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: ByteArrayArray.create())
 				continue
 			end 'method'
 
@@ -27145,7 +27257,17 @@ export type Parser
 			// carry a trailing `(args)`, which the postfix loop applies as an indirect call. A plain direct
 			// call leaves none, so this is a no-op for every ordinary namespace-qualified statement.
 			_ = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, resultUsed: false), resultUsed: false)
-		end 'namespaceQualifiedCallStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+		end 'namespaceQualifiedCallStmt' else if self.atSpawnPrefix() 'spawnStmt'
+			// ⭐ **`spawn Calc.create()` ON A LINE OF ITS OWN** — a service started for its EFFECT, its handle
+			// discarded. It needs an arm of its own for `namespaceQualifiedCallStmt`'s reason one arm up: the
+			// `callStmt` lookahead below is `identifier (`, which `spawn Calc` fails, so without this the
+			// canonical spelling would die as `E2001 unexpected token: 'spawn'` rather than reaching the
+			// reader that can say what is wrong with it.
+			//
+			// ⚠ It is the SAME reader as the expression position's, so the two cannot come to disagree about
+			// what a spawn is or which refusal it earns — `parseAwait`'s single-homing argument exactly.
+			_ = try self.parseSpawn()
+		end 'spawnStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
@@ -45171,6 +45293,13 @@ export type Parser
 			return try self.parseAsyncCall(func)
 		end 'async'
 
+		// `spawn <T>.<factory>(…)` STARTS A SERVICE and yields a `<T>.handle` — the third prefix operator, and
+		// the only one that is not a lexer keyword (see `SpawnKeywordName` for the two live declarations of
+		// the word that forbid one).
+		if self.atSpawnPrefix() 'spawn'
+			return try self.parseSpawn()
+		end 'spawn'
+
 		if self.at(TokenKind.await) 'await'
 			return try self.parseAwait(func)
 		end 'await'
@@ -45185,6 +45314,84 @@ export type Parser
 	// Single-homing it is the point. A statement-position copy is exactly the shape that drifts — it would
 	// be spelled `await <primary>` by whoever wrote it next and then `await async f()` would parse in one
 	// position and not the other, for no reason anyone could state.
+	// ⭐⭐ **`spawn <T>.<factory>(…)` — the ONE reader, for the TWO positions that admit it** (`parseAwait`'s
+	// precedent, and its reason: a statement-position copy is exactly the shape that drifts). The cursor sits
+	// on the word `spawn`, which `atSpawnPrefix` has already recognized.
+	//
+	// ⭐⭐ **EVERY SERVICE REFUSAL IS RAISED HERE, AT THE SITE THE AUTHOR WROTE — and that is forced twice
+	// over.** The classification is a WHOLE-PROGRAM fact and could only be computed by the declaration sweep;
+	// but the sweep is MEMOIZED and reports nothing (see `ServiceCompanions`' header, and
+	// `ProgramSignatures.evaluateInitializers`, which records the trap for itself). And the design requires a
+	// service diagnostic to NAME the spawn that made the type a service, because whether a type is a service
+	// is decided by a `spawn` that may be in a different file from the method the finding is about. Raising at
+	// the spawn site satisfies both: the sweep decides, this speaks, and the diagnostic is at the site by
+	// construction rather than by carrying one around.
+	//
+	// ⚠ **IT REFUSES BEFORE IT EMITS, AND WAVE 3 IS WHY.** A `spawn` has no op and no lowering yet, so this
+	// reader consumes the tokens it can classify from and throws. Building the call's arguments first would
+	// leave a rejected program with ops behind it, which is exactly what `emitBinOp`'s ordering rule forbids.
+	// The E2015 at the end is the ONE refusal SV1 wave 3 deletes; every other throw here is permanent.
+	function parseSpawn() returns ValueId throws ParseError
+		let spawnTok = self.current()
+		self.advance()
+
+		// ⛔ **`spawn Self.create()` IS REFUSED, AND THE REFUSAL IS THE DISCOVERY WALK'S SHAPE RATHER THAN A
+		// GAP IN THIS READER.** Which types are services is decided before any file is parsed, by a walk over
+		// raw tokens (`Queries.noteServiceSpawnFollowing`) that has no type scope to resolve `Self` against — so a
+		// `Self` spawn would name a service nothing minted companions for. Admitted by `atSpawnPrefix` purely
+		// so it can be refused in its own words instead of dying as `E2001 unexpected token: 'Self'`.
+		if self.at(TokenKind.selfType) 'selfTarget'
+			throw ParseError.unsupported("`spawn Self.…` — the whole-program walk that decides which types are services reads tokens with no type scope, so `Self` names nothing there. Write the type outright (`spawn Calc.create()`)", line: spawnTok.line, column: spawnTok.column)
+		end 'selfTarget'
+
+		// Through `consumeNameToken`, not `consume(identifier)`: BOTH halves of `<Type>.<factory>` may be
+		// spelled with a keyword (D8), and `stdlib/FilePath.maxon`'s `from` is the live proof for the member
+		// half. It is the same reader every other declaration and member position uses.
+		let typeTok = try self.consumeNameToken(NamePosition.declaration)
+		if not self.atSpawnTargetCall() 'notAStaticCall'
+			throw ParseError.serviceNotASpawnTarget(spawnShapeRefusalMessage(String.from(typeTok.value)), line: spawnTok.line, column: spawnTok.column)
+		end 'notAStaticCall'
+
+		try self.consume(TokenKind.dot)
+		let memberTok = try self.consumeNameToken(NamePosition.declaration)
+
+		// ⭐ **THE SAME CLASSIFICATION THE SWEEP MINTED COMPANIONS FROM.** Asked through the one function so a
+		// target this refuses can never be one the sweep minted for, nor the other way round. The verdict is
+		// BOUND rather than matched in place, so each arm hands the WORDS routine the value it matched instead
+		// of rebuilding it — a rebuilt verdict is a second statement of which arm fired.
+		let target = classifyServiceTarget(self.signatures, typeName: typeTok.value, member: memberTok.value)
+		match target 'target'
+			startsAService then break 'target'
+			// ⚖ A generic service is E2015 — the companions are monomorphic and a per-instantiation pair is a
+			// thing that could be built. Every other refusing arm is E3134: not what `spawn` means, ever, so
+			// they share one throw.
+			typeIsNotAStruct to memberDoesNotReturnTheType then throw ParseError.serviceNotASpawnTarget(serviceTargetRefusalMessage(target, typeName: typeTok.value, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
+			typeIsGeneric then throw ParseError.unsupported(serviceTargetRefusalMessage(target, typeName: typeTok.value, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
+		end 'target'
+
+		let roster = classifyServiceRoster(self.signatures, typeName: typeTok.value)
+		match roster 'roster'
+			rosterIsDispatchable then break 'roster'
+			// An overloaded message is a v1 limitation of the dispatch UNION, so E2015; a parameter that cannot
+			// cross a green thread is a rule that will never relax, so E3135.
+			messageIsOverloaded then throw ParseError.unsupported(serviceRosterRefusalMessage(roster, typeName: typeTok.value), line: spawnTok.line, column: spawnTok.column)
+			messageParameterIsNotTransferable then throw ParseError.serviceValueNotTransferable(serviceRosterRefusalMessage(roster, typeName: typeTok.value), line: spawnTok.line, column: spawnTok.column)
+		end 'roster'
+
+		// ⭐⭐ **THE ONE REFUSAL SV1 WAVE 3 DELETES, AND NOTHING ELSE ON THIS PATH.** Everything a `spawn` can
+		// be refused for at DECLARATION time has now been asked and answered; what is missing is the mailbox,
+		// the dispatch loop and the reply cell. The program above this line is well-formed.
+		throw ParseError.unsupported("services are not lowered yet — SV1 wave 3", line: spawnTok.line, column: spawnTok.column)
+	end 'parseSpawn'
+
+	// Does a `. <member> (` follow the type name a `spawn` just consumed? The SHAPE test, kept apart from the
+	// classification above because it is about TOKENS: it is the same shape `Queries.noteServiceSpawnFollowing`
+	// matches on, and a shape this accepts that the walk declined would be a spawn nobody minted companions
+	// for. Both spell `<Type> . <member> (` and neither may loosen alone.
+	function atSpawnTargetCall() returns bool
+		return self.at(TokenKind.dot) and tokenCanBeAName(self.tokenAt(self.pos + 1)) and self.kindAt(self.pos + 2) == TokenKind.leftParen
+	end 'atSpawnTargetCall'
+
 	function parseAwait(func IrFunction) returns ValueId throws ParseError
 		let awaitTok = try self.consume(TokenKind.await)
 		let promise = try self.parseUnary(func)

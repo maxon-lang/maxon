@@ -2192,6 +2192,36 @@ E3132 SemanticParametricConstraintWitnessRead
 	doc type parameter before the constrained type is built -- or to make the conformance's impls independent
 	doc of their type argument so no dictionary is needed at all.
 
+E3134 SemanticServiceNotASpawnTarget
+	shv2 semanticServiceNotASpawnTarget
+	doc `spawn` starts a SERVICE, and a service is started from a STATIC FACTORY of a declared type that
+	doc returns that type -- `spawn Calc.create()`. There is exactly one form, and this expression is not it.
+	doc The cases are: nothing declares the type; the type is declared but nothing declares the member; the
+	doc member is an INSTANCE method (a `spawn` calls the factory directly, so there is no service yet for a
+	doc message to reach); or the member is a static that returns something else, which has produced no state
+	doc for the message loop to own.
+	doc A bare `spawn f()` over a free function is refused here too, and deliberately: there is no
+	doc unstructured green thread in this language. The unit of concurrency is a service, whose message
+	doc surface the compiler can check.
+	doc The cure is to name a static factory of the type you mean to start.
+
+E3135 SemanticServiceValueNotTransferable
+	shv2 semanticServiceValueNotTransferable
+	doc A message of a service declares a parameter whose value cannot cross to another green thread.
+	doc A send MOVES its arguments -- the receiving thread becomes their one owner -- and that is what keeps
+	doc reference counting PLAIN rather than atomic: the language guarantees one green thread per box, so a
+	doc send that left two threads holding one box would corrupt the heap rather than merely be slow.
+	doc Four shapes fail it. A `Promise` is a green-thread handle its awaiter owns. A function value reaches
+	doc a captured environment block, which is a box with a second referent by construction. A value held at
+	doc an interface type is a fat pointer whose witness half is read-only data and whose value half is
+	doc released through `__drop_existential`, a pair the request union's payload cascade cannot carry. An
+	doc opaque type parameter has no layout at the send, so the sender cannot know what it is handing over.
+	doc The diagnostic fires at the `spawn` that made the type a service, which may be in a different file
+	doc from the method it names: whether a type is a service is a whole-program property, and the site that
+	doc decided it is the one worth naming.
+	doc The cure is to send a `.clone()`, to send the scalar the value is derived from, or to drop the
+	doc parameter from the message and reach the value another way.
+
 E6003 BinaryOutputNotWritten
 	shv2 binaryOutputNotWritten
 	doc The backend reported no failure, yet nothing exists at the output path after the write. The

@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "59b1f22ac723202b",
+  "sourceHash": "9e2944cf83dc5bea",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1515,6 +1515,24 @@
       "stage": "semantic",
       "doc": "A `where` constraint BINDS the constrained interface's associated types --\n`where Source is Iterator with Element` -- and the type argument supplied at an instantiation\nconforms to that interface while binding one of those positions to a different type.\nThe binding is not decoration. Inside the shared generic body the receiver of a witness dispatch\nis a value of a type PARAMETER, which carries nothing about what the conformance behind it bound,\nso the constraint's binding is what types the dispatch's RESULT\n(`Parser.associatedReturnThroughConstraintBinding`) and its associated FORMALS\n(`LowerMaxonToStd.associatedFormalType`) -- and it is what lets E3119 stop asking every conformer\nof that interface to agree about the position, because this dispatch SETTLED it.\nOne body is compiled against that answer and every instantiation reuses it, so a conformer binding\nthe position otherwise has its bits read as the wrong type. That is E3119's own recorded failure --\n`with String` beside `with Integer` SEGFAULTED (exit 139), `with float` answered 31 where the\nprogram computes 51, and a ranged binding RANGE-PANICKED -- reached one indirection later.\nIt is the `where`-clause twin of E3127, which asks the same question of a value WIDENED into a\nparameterized existential, and it is checked at the same moment E3017 is: the instantiation site,\nwhere the type argument and the constraint first meet.\nThe cure is to bind the constraint to what the conformer declares, or to supply a type argument\nwhose conformance binds what the constraint states.",
       "emittedBy": {"shv2": "semanticWhereConstraintBindingDisagreement"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3134,
+      "tag": "E3134",
+      "name": "SemanticServiceNotASpawnTarget",
+      "stage": "semantic",
+      "doc": "`spawn` starts a SERVICE, and a service is started from a STATIC FACTORY of a declared type that\nreturns that type -- `spawn Calc.create()`. There is exactly one form, and this expression is not it.\nThe cases are: nothing declares the type; the type is declared but nothing declares the member; the\nmember is an INSTANCE method (a `spawn` calls the factory directly, so there is no service yet for a\nmessage to reach); or the member is a static that returns something else, which has produced no state\nfor the message loop to own.\nA bare `spawn f()` over a free function is refused here too, and deliberately: there is no\nunstructured green thread in this language. The unit of concurrency is a service, whose message\nsurface the compiler can check.\nThe cure is to name a static factory of the type you mean to start.",
+      "emittedBy": {"shv2": "semanticServiceNotASpawnTarget"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3135,
+      "tag": "E3135",
+      "name": "SemanticServiceValueNotTransferable",
+      "stage": "semantic",
+      "doc": "A message of a service declares a parameter whose value cannot cross to another green thread.\nA send MOVES its arguments -- the receiving thread becomes their one owner -- and that is what keeps\nreference counting PLAIN rather than atomic: the language guarantees one green thread per box, so a\nsend that left two threads holding one box would corrupt the heap rather than merely be slow.\nFour shapes fail it. A `Promise` is a green-thread handle its awaiter owns. A function value reaches\na captured environment block, which is a box with a second referent by construction. A value held at\nan interface type is a fat pointer whose witness half is read-only data and whose value half is\nreleased through `__drop_existential`, a pair the request union's payload cascade cannot carry. An\nopaque type parameter has no layout at the send, so the sender cannot know what it is handing over.\nThe diagnostic fires at the `spawn` that made the type a service, which may be in a different file\nfrom the method it names: whether a type is a service is a whole-program property, and the site that\ndecided it is the one worth naming.\nThe cure is to send a `.clone()`, to send the scalar the value is derived from, or to drop the\nparameter from the message and reach the value another way.",
+      "emittedBy": {"shv2": "semanticServiceValueNotTransferable"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

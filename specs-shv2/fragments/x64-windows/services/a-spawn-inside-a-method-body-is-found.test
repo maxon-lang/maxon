@@ -1,0 +1,38 @@
+// Test: a-spawn-inside-a-method-body-is-found
+// --- file: calc.maxon
+export type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump(by int)
+		self.count = self.count + by
+	end 'bump'
+end 'Calc'
+
+export function serve(h Calc.handle) returns int
+	return 1
+end 'serve'
+
+// --- file: runner.maxon
+type Runner
+	var started as int
+
+	static function create() returns Self
+		return Self{started: 0}
+	end 'create'
+
+	function start() returns int
+		let h = spawn Calc.create()
+		return 1
+	end 'start'
+end 'Runner'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:28:11: Unsupported: services are not lowered yet — SV1 wave 3

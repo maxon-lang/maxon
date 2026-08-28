@@ -1,0 +1,20 @@
+// Test: error.spawn-self-dot-refused
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	static function start() returns int
+		let h = spawn Self.create()
+		return 0
+	end 'start'
+end 'Calc'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:11: Unsupported: `spawn Self.…` — the whole-program walk that decides which types are services reads tokens with no type scope, so `Self` names nothing there. Write the type outright (`spawn Calc.create()`)

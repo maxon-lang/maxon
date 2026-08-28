@@ -4725,7 +4725,7 @@ let ReservedTypeNamePrefix = b"__"
 // ⭐⭐ **THE NAME shv2 SYNTHESIZES THE ARRAY RECORD UNDER WHEN NO LISTED MODULE DECLARES ONE — AND SINCE
 // ARR5b THAT IS ALL IT IS.** It was the answer to *"which base is an `Array`?"*, read as a fact by 47 sites;
 // the answer is now DISCOVERED from the `BuiltinArrayLiteral` conformance
-// (`Queries.discoverArrayLiteralConformers` ⇒ `ProgramSignatures.arrayRecordDeclaredName`), which is the
+// (`Queries.discoverWholeProgramTokenFacts` ⇒ `ProgramSignatures.arrayRecordDeclaredName`), which is the
 // user's own stated exception to *"nothing array specific in the shv2 compiler"*.
 //
 // ⚠ **IT WAS CALLED `ArrayBuiltinBaseName` UNTIL ARR6, AND THE NAME IS WHAT KEPT IT BEING READ AS A FACT.**
@@ -4774,7 +4774,7 @@ let ReservedTypeNamePrefix = b"__"
 // 0 failed**, byte-identical verdicts to the tree with `b"Array"`. That is the seed being REPLACED before
 // anything reads it, on every one of 5,457 compiles, and it follows structurally:
 // `StdlibLoader.whitelistedStdlibModules` lists `Array.maxon` unconditionally and `listWhitelistedModule`
-// hard-errors if the file is absent, so the stdlib half of `discoverArrayLiteralConformers` always finds a
+// hard-errors if the file is absent, so the stdlib half of `discoverWholeProgramTokenFacts` always finds a
 // declaration. ⇒ **The remaining read is dead in every compile that has a corpus, and it may not therefore be
 // replaced by a discovered-or-panic**: the compile it describes is the one with no corpus, which is the only
 // compile in which it is ever read at all. It is an INITIALIZER for a state that exists, not a fallback for a
@@ -9654,7 +9654,7 @@ export type ProgramSignatures
 	// claimant on the reserved space and the one no re-probe of the other two would ever notice.
 	var stdlibDeclaredTypeNames as DeclaredTypeNameSet
 	// ⭐⭐ **EVERY DECLARATION IN THIS PROGRAM THAT CARRIES THE ARRAY-LITERAL MARKER (ARR5b)** — filled from
-	// the TOKENS by `Queries.discoverArrayLiteralConformers` before the first file is folded, because the
+	// the TOKENS by `Queries.discoverWholeProgramTokenFacts` before the first file is folded, because the
 	// fold itself has to know the answer (`Parser.canonicalGenericBaseNameInThisFile`, `isArrayBaseName`).
 	// The declared spelling, not the post-contest one: the contest is decided between the two halves of the
 	// sweep and this runs ahead of both, so the rename is applied at the READ exactly as it is for the
@@ -9666,6 +9666,18 @@ export type ProgramSignatures
 	// program. A whole program declares one such type, or two under a contest, so membership is a scan of
 	// one or two names — cheaper than the hash it replaces and one representation instead of two.
 	var arrayLiteralConformers as ByteArrayArray
+	// ⭐⭐ **EVERY `spawn <T>.<member>(…)` THE PROGRAM WRITES (SV1)** — noted by the whole-program token walk
+	// that runs AHEAD of both fold halves (`Queries.discoverWholeProgramTokenFacts`), performed once by
+	// `synthesizeServiceCompanions`. It is what makes "is `T` a service?" a whole-program question the parser
+	// can ask before the first file is parsed, which it must be: `Calc.handle` is a nameable TYPE in files
+	// that write no `spawn` at all.
+	//
+	// ⚠ **AN ARRAY AND NOT A SET, for `arrayLiteralConformers`' reason one line up**: the perform half
+	// registers companions in this order, so the order reaches `structNamesInDeclOrder` and the rolling
+	// declaration hash. A hash set's iteration order would make a compiler's own output a function of the
+	// hash. Duplicates are dropped at the note — a program spawns one type from many sites — so membership is
+	// a scan of a list a whole program holds a handful of entries in.
+	var serviceSpawnCandidateList as ServiceSpawnCandidateArray
 	// Does any declaration OTHER than the corpus's carry the marker? The gate `isArrayBaseName` puts in front
 	// of the scan — false for every program that declares no container of its own, which is the whole
 	// existing corpus and every one of its goldens.
@@ -9798,7 +9810,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DivergingFunctionNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DivergingFunctionNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DivergingFunctionNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DivergingFunctionNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -9930,7 +9942,7 @@ export type ProgramSignatures
 	end 'noteStdlibDeclaredTypeNames'
 
 	// ⭐⭐ **RECORD ONE `type <Name> … implements … BuiltinArrayLiteral` DECLARATION (ARR5b).** Called by
-	// `Queries.discoverArrayLiteralConformers`, once per such declaration, before the first file is folded.
+	// `Queries.discoverWholeProgramTokenFacts`, once per such declaration, before the first file is folded.
 	//
 	// ⚠ **THE STDLIB'S IS SINGLED OUT BECAUSE IT ANSWERS A DIFFERENT QUESTION FROM THE OTHERS.** Every
 	// conformer is a name whose instances ARE the managed record (`isArrayBaseName`); exactly one of them is
@@ -10001,6 +10013,41 @@ export type ProgramSignatures
 
 		self.hasNonCorpusArrayConformer = true
 	end 'noteArrayLiteralConformer'
+
+	// ⭐ **NOTE ONE `spawn <T>.<member>(…)` SITE (SV1)** — the NOTE half, on `noteArrayLiteralConformer`'s
+	// shape: the token walk states what it saw and this index decides nothing yet. The same pair from a second
+	// site is dropped, so a type spawned from twenty places is minted once and the diagnostic every one of
+	// those sites raises is decided from one classification.
+	export function noteServiceSpawnCandidate(typeName ByteArray, member ByteArray)
+		for noted in self.serviceSpawnCandidateList 'eachNoted'
+			if noted.typeName.equals(typeName) and noted.member.equals(member) 'alreadyNoted'
+				return
+			end 'alreadyNoted'
+		end 'eachNoted'
+
+		self.serviceSpawnCandidateList.push(ServiceSpawnCandidate.create(typeName, member: member))
+	end 'noteServiceSpawnCandidate'
+
+	// The noted candidates, in note order — read once, by the perform half.
+	export function serviceSpawnCandidates() returns ServiceSpawnCandidateArray
+		return self.serviceSpawnCandidateList
+	end 'serviceSpawnCandidates'
+
+	// ⭐⭐ **REGISTER A SERVICE'S TWO COMPANIONS — through `recordEnum`/`recordStruct`, the SAME doors an
+	// author-written declaration takes (SV1).** That is the whole point of the door rather than a convenience:
+	// those two are what fold a declaration's name and shape into `self.hash`, and `self.hash` is half of every
+	// file's parse-memo key (`Queries.currentParseMemoKey`). Registering behind them would leave a `spawn`
+	// added in file B unable to invalidate the parse of file A, where `Calc` is declared and where a reference
+	// to `Calc.handle` resolves — a stale memo answering `Unknown type` about a type this compile mints.
+	//
+	// ⚠ `declaredByTheCorpus: true` states what is true of a COMPILER-MINTED declaration at the one gate that
+	// reads it (`declarationContestsACompilerOwnedName`): it is not a user's contest for a reserved name, and
+	// it must never be dropped. The names are dotted, so no compiler-owned spelling can be reached anyway —
+	// stating it is what keeps that from being a coincidence.
+	export function recordServiceCompanions(companions ServiceCompanions)
+		self.recordEnum(companions.request, declaredByTheCorpus: true)
+		self.recordStruct(companions.handle, declaredByTheCorpus: true)
+	end 'recordServiceCompanions'
 
 	// ⭐ **DOES A DECLARATION OF THIS NAME CARRY THE ARRAY-LITERAL MARKER?** THE one reader of the discovered
 	// list, so no caller can half-apply the "one or two names" rule the list's own header states.

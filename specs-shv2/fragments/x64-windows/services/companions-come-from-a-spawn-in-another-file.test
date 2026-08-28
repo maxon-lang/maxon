@@ -1,0 +1,26 @@
+// Test: companions-come-from-a-spawn-in-another-file
+// --- file: calc.maxon
+export type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump(by int)
+		self.count = self.count + by
+	end 'bump'
+end 'Calc'
+
+export function serve(h Calc.handle) returns int
+	return 1
+end 'serve'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	return serve(h) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:21:10: Unsupported: services are not lowered yet — SV1 wave 3

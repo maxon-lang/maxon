@@ -1,0 +1,476 @@
+// ServiceCompanions — what the compiler synthesizes beside a SERVICE, and the rules that decide there is
+// one (SV1 wave 2). Designed in `SERVICES_DESIGN.md` §"Recommended design".
+//
+// ⭐⭐ **A `spawn T.create()` ANYWHERE IN THE PROGRAM MAKES `T` A SERVICE.** There is no `service` keyword
+// and no member keyword: a service is an ordinary `type`, and its message surface is exactly its
+// `export`/`public` INSTANCE methods (`StructLayout.messageMethodNames`). Two companion types are minted
+// beside it, under the DOTTED names an author writes:
+//
+//   • **`T.request`** — a union, one variant per message in declaration order, behind the compiler's own
+//     `__shutdown` at variant 0. A message's payload is its parameter list, plus a trailing `__reply`
+//     integer when the message has a reply to deliver.
+//   • **`T.handle`** — a one-field struct holding the mailbox pointer. A REAL 8-byte box on
+//     `managedFileLayout`'s shape, deliberately: moves, E3102, struct fields, arrays and the drop cascade
+//     then all reach it by construction rather than through a special case at each door.
+//
+// ⚠⚠ **WHY THE SYNTHESIS IS SILENT AND THE REFUSALS ARE THE PARSER'S.** Everything in this file runs inside
+// `queryProgramSignatures`, which is MEMOIZED and which `Parser.foldDeclaredSignaturesInto` states outright
+// is **not a validator**. A diagnostic reported from here would be reported on a memo MISS and silently
+// skipped on a HIT — the exact trap `ProgramSignatures.evaluateInitializers` records for itself (*"It
+// reports NOTHING. A defective initializer is recorded on its declaration and raised, with a position, by
+// the real parse when it reaches that line"*). So this file DECIDES and the parser SPEAKS: `Parser.parseSpawn`
+// asks `classifyServiceTarget` and `classifyServiceRoster` at the `spawn` the author wrote, and raises the
+// refusal there, positioned. That also satisfies the design's own requirement — *"the diagnostic must name
+// the spawn site that made the type a service"* — by construction rather than by carrying a site around: the
+// diagnostic IS at the spawn site.
+//
+// ⚠ **THE COMPANIONS ARE SYNTHESIZED FOR A VALID TARGET EVEN WHEN ITS ROSTER IS REFUSED**, and that is
+// deliberate. A program whose service takes an untransferable message parameter is refused at its `spawn`;
+// if the companions were withheld as well, a `Calc.handle` named in another file would ALSO report
+// `Unknown type`, and the author would read a cascade instead of the one finding. Only a target that cannot
+// HAVE companions — a generic type, whose pair would have to be per-instantiation — is skipped.
+
+// ⭐⭐ **ONE SPAWN TARGET AS THE DISCOVERY WALK READS IT — a TYPE and the FACTORY named on it.** Both halves
+// are needed to decide whether the type is a service: `spawn Calc.bump()` names a declared type and is not a
+// spawn at all, because `bump` is an instance method rather than a static factory returning `Calc`.
+module type ServiceSpawnCandidate
+	export let typeName as ByteArray
+	export let member as ByteArray
+
+	export static function create(typeName ByteArray, member ByteArray) returns ServiceSpawnCandidate
+		return Self{typeName: typeName, member: member}
+	end 'create'
+end 'ServiceSpawnCandidate'
+
+module typealias ServiceSpawnCandidateArray = Array with ServiceSpawnCandidate
+
+// ⭐⭐ **WHY `spawn <T>.<member>(…)` IS OR IS NOT A SERVICE START.** One verdict, TWO askers — the sweep,
+// which mints the companions for the accepting arm, and `Parser.parseSpawn`, which turns every refusing arm
+// into its positioned diagnostic. Asking it twice in two spellings is how the compiler comes to mint a
+// companion for a target it then refuses, or to refuse one it minted for.
+module union ServiceTargetVerdict
+	// `<member>` is a static factory of the declared type `<T>` returning `<T>`. `<T>` is a service.
+	startsAService
+	// No file declares `type <T>`. (An `enum`/`union` lands here too: a service is a `type`, because its
+	// state is what the message loop owns and a union's value is its own tag.)
+	typeIsNotAStruct
+	// `<T>` is declared and nothing declares `<T>.<member>`.
+	memberIsNotDeclared
+	// `<T>.<member>` is an INSTANCE method. `spawn` calls its factory DIRECTLY — there is no service yet for
+	// a message to reach — so the target must be a `static`.
+	memberTakesAReceiver
+	// `<T>.<member>` is a static whose recorded return type is not `<T>`'s own struct box (`void` included).
+	// A factory that does not hand one back has produced no state for the loop to own.
+	//
+	// ⚠ **A BUILTIN-BACKED TYPE LANDS HERE, AND THE ARM'S WORDS ARE CHOSEN SO THAT IS NOT A LIE.** MEASURED:
+	// `stdlib/String.maxon:119` declares `public static function from (bytes ByteArray) returns String`, and
+	// its RECORDED return type is the builtin `string` tag rather than `structRef(String)` — the parser types
+	// a `String` return that way while `declaredSlotType` resolves the same NAME to a struct box, which is a
+	// pre-existing asymmetry between two doors and not this rung's to settle. So `spawn String.from(b"x")` is
+	// refused here, correctly (a builtin's value is not a declared struct's box for a message loop to own) —
+	// and the sentence therefore says what the TEST is rather than asserting the author's factory returns
+	// something it does not.
+	memberDoesNotReturnTheType
+	// `type <T> uses …` — the companions are monomorphic by construction (one union, one handle struct), so
+	// a generic service would need a pair per instantiation. E2015: not built, not refused forever.
+	typeIsGeneric
+end 'ServiceTargetVerdict'
+
+// ⭐ **WHY A SERVICE'S MESSAGE ROSTER CANNOT BE DISPATCHED.** Split from `ServiceTargetVerdict` because the
+// two answer about different declarations — the target is about the FACTORY, this is about the messages —
+// and because the companions are minted for a valid target whose roster is refused (see this file's header).
+module union ServiceRosterVerdict
+	// Every message can become one variant of the request union.
+	rosterIsDispatchable
+	// A message declared more than once. One variant carries one payload shape, so an overloaded message has
+	// no single shape to become — and the dispatch `match` would have no arm to pick between them. E2015.
+	messageIsOverloaded(methodName ByteArray, declarationCount FieldIndex)
+	// A message parameter of a type that cannot cross to another green thread. `noun` is what it IS, so the
+	// sentence reads as the reason rather than as a spelling (see `untransferableParameterNoun`).
+	messageParameterIsNotTransferable(methodName ByteArray, paramName ByteArray, noun String)
+end 'ServiceRosterVerdict'
+
+// The pair minted for one service — returned together because they are built from one reading of the type
+// and registered by one act. Two separate builders would be two walks of the same roster.
+module type ServiceCompanions
+	export let request as EnumLayout
+	export let handle as StructLayout
+
+	export static function create(request EnumLayout, handle StructLayout) returns ServiceCompanions
+		return Self{request: request, handle: handle}
+	end 'create'
+end 'ServiceCompanions'
+
+// ⭐⭐ **IS THIS A SPAWN TARGET? — the whole rule, in one place.** The order of the arms is the order the
+// questions can be ASKED: a member cannot be classified before its type is known to be a struct, and a
+// generic type is refused ahead of its member because the refusal is about the type either way.
+//
+// ⚠ **THE RETURN TYPE IS MATCHED AS `structRef` OR `named`, AND BOTH ARE REQUIRED AT THIS MOMENT.** The
+// sweep resolves `returns Self` to a `structRef` from the tokens alone, but a factory written
+// `returns Calc` records a bare `named` until `ProgramSignatures.rewriteRecordedReturnTypes` re-tags it —
+// and that runs LATER in `queryProgramSignatures` than the synthesis this classification feeds (which must
+// precede `allFilesFolded = true`, so the companions are ordinary layouts to every normalization after it).
+// Accepting only `structRef` here would make `returns Self` a service and `returns Calc` not one, which is
+// the same declaration written two ways.
+module function classifyServiceTarget(signatures ProgramSignatures, typeName ByteArray, member ByteArray) returns ServiceTargetVerdict
+	var declared = try serviceLayoutOf(signatures, typeName: typeName) otherwise return ServiceTargetVerdict.typeIsNotAStruct
+
+	if declared.typeParamCount() > 0 'generic'
+		return ServiceTargetVerdict.typeIsGeneric
+	end 'generic'
+
+	let decls = signatures.overloadedDeclsOf(qualifiedMethodName(typeName, methodName: member))
+	if decls.count() == 0 'noSuchMember'
+		return ServiceTargetVerdict.memberIsNotDeclared
+	end 'noSuchMember'
+
+	// ⚠ The FIRST declaration decides, and an overloaded FACTORY is therefore read off its first member. A
+	// spawn picks its overload the way any call does (`SemanticCheck.resolveOverloadedCalls`), which is a
+	// pass this sweep runs before — but every member of a factory's overload set agrees about the two facts
+	// asked here, because they are what make it a factory at all: a `static` beside an instance method of
+	// one name is already refused (`requireOverloadableName`), and a set disagreeing about the return type
+	// is E3005 at its own declaration.
+	let factory = try decls.get(0) otherwise panic("classifyServiceTarget: overloadedDeclsOf('{String.from(typeName)}.{String.from(member)}') answered {decls.count()} declarations and get(0) failed")
+	if factory.takesReceiver 'anInstanceMethod'
+		return ServiceTargetVerdict.memberTakesAReceiver
+	end 'anInstanceMethod'
+
+	if not serviceReturnTypeNames(signatures, returned: factory.returnType, typeName: typeName) 'returnsSomethingElse'
+		return ServiceTargetVerdict.memberDoesNotReturnTheType
+	end 'returnsSomethingElse'
+
+	return ServiceTargetVerdict.startsAService
+end 'classifyServiceTarget'
+
+// Does the recorded return type name `typeName` itself? See `classifyServiceTarget` for why BOTH id-bearing
+// tags are accepted at this point in the sweep.
+function serviceReturnTypeNames(signatures ProgramSignatures, returned MaxonReturnType, typeName ByteArray) returns bool
+	match returned 'returns'
+		void then return false
+		value(inner) then return serviceTypeNames(signatures, t: inner, typeName: typeName)
+	end 'returns'
+end 'serviceReturnTypeNames'
+
+// Does the id-bearing type `t` name `typeName`? A type carrying no name at all (`void` has been excluded, so
+// what remains is `int`, `bool`, a container instance) names nothing and answers `false`.
+function serviceTypeNames(signatures ProgramSignatures, t MaxonType, typeName ByteArray) returns bool
+	let tag = maxonTypeTag(t)
+	if tag != ValueTypeTag.structRef and tag != ValueTypeTag.named 'namesNoType'
+		return false
+	end 'namesNoType'
+
+	return serviceIndexTypeName(signatures, id: typeNameIdOf(t)).equals(typeName)
+end 'serviceTypeNames'
+
+// A type-name id resolved against the SIGNATURE INDEX's own interner — the table every id reaching this file
+// was minted in (`ProgramSignatures.foldFile` remaps a file's ids into it). Resolving one anywhere else is
+// OPEN #56, whose two measured wrong answers `indexTypeNames`' header records.
+function serviceIndexTypeName(signatures ProgramSignatures, id TypeNameId) returns ByteArray
+	return try signatures.indexTypeNames().nameOf(id) otherwise panic("serviceIndexTypeName: type-name id {id} is not in the signature index's interner — every id a swept declaration carries was remapped into it at `foldFile`")
+end 'serviceIndexTypeName'
+
+// ⭐ **THE ONE LOOKUP DOOR — because five of them was five copies of one `match`, and every caller past the
+// first also needs the LAYOUT rather than one fact off it.** `structTypes` is keyed by NAME, so asking it
+// once per message (the roster walk did) hashes a string to re-find a record the caller already holds — the
+// measured cost `ProgramSignatures.fieldTypeOf`'s header records for exactly this shape.
+//
+// It THROWS rather than answering a default: "no such type" is the target classification's own first
+// verdict, and every other caller has already established the declaration.
+function serviceLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns StructLayout throws MapError
+	match signatures.structOf(typeName) 'lookup'
+		undeclared then throw MapError.keyNotFound
+		declared(layout) then return layout
+	end 'lookup'
+end 'serviceLayoutOf'
+
+// The layout of a type a caller has already classified a spawn TARGET. Split from the door above so the
+// message names the invariant rather than repeating the `otherwise panic` at six call sites.
+function spawnTargetLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
+	return try serviceLayoutOf(signatures, typeName: typeName) otherwise panic("spawnTargetLayoutOf: nothing declares `type {String.from(typeName)}` — every caller has already classified it a spawn target, which requires the declaration")
+end 'spawnTargetLayoutOf'
+
+// ⭐⭐ **CAN EVERY MESSAGE BECOME A VARIANT? — the roster's own rule, asked in declaration order so the
+// FIRST offending message is the one named.** A stable answer matters: this decides the text of a
+// diagnostic that fires at a `spawn` in a different file from the method it names.
+module function classifyServiceRoster(signatures ProgramSignatures, typeName ByteArray) returns ServiceRosterVerdict
+	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+	for i in 0 upto layout.messageMethodCount() 'eachMessage'
+		let methodName = layout.messageMethodAt(i)
+		let decls = signatures.overloadedDeclsOf(qualifiedMethodName(typeName, methodName: methodName))
+		if decls.count() > 1 'overloaded'
+			return ServiceRosterVerdict.messageIsOverloaded(methodName, declarationCount: decls.count())
+		end 'overloaded'
+
+		let decl = try decls.get(0) otherwise panic("classifyServiceRoster: '{String.from(typeName)}.{String.from(methodName)}' is on the roster the declaration sweep built from its own declaration, so `overloadedDeclsOf` cannot be empty")
+		for p in 0 upto decl.paramTypes.count() 'eachParam'
+			let declared = try decl.paramTypes.get(p) otherwise panic("classifyServiceRoster: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(typeName)}.{String.from(methodName)}'")
+			let noun = untransferableParameterNoun(signatures, declared: declared, declFilePath: layout.declFilePath)
+			if not noun.isEmpty() 'cannotCross'
+				return ServiceRosterVerdict.messageParameterIsNotTransferable(methodName, paramName: serviceParamName(decl, index: p), noun: noun)
+			end 'cannotCross'
+		end 'eachParam'
+	end 'eachMessage'
+
+	return ServiceRosterVerdict.rosterIsDispatchable
+end 'classifyServiceRoster'
+
+// ⭐⭐ **WHAT A PARAMETER *IS* WHEN IT CANNOT CROSS A GREEN THREAD, or EMPTY when it can.** A NOUN and not a
+// spelling, because the sentence has to say why: `'p' is a Promise` is the reason, where `'p' is
+// 'Promise with (int, E)'` is a rendering the author can already read off their own declaration.
+//
+// ⚠ **THE RULE IS THE PLAIN REFCOUNT'S, NOT A STYLE.** Since EC10 a refcount step is a plain load/add/store
+// (`Runtime/MmRuntime.maxon`, `emitAdjustRefcount`) because the language guarantees one green thread per box.
+// A send MOVES its arguments, which keeps that guarantee — but only for a value that HAS one owner and one
+// meaning on the far side. Each shape below fails that for its own reason:
+//   • a **Promise** is a green-thread handle owned by the awaiting thread; sending one hands a second thread
+//     a wait token whose completer is scheduled on the first (`E3100` linear await keys on the binding);
+//   • a **function value** is a bare code pointer, and a CAPTURING one reaches its environment block —
+//     which is `shared`, i.e. a box with a second referent by construction (P1.5 escape);
+//   • an **interface value** is a fat pointer whose witness half is `.rdata` and whose value half is
+//     released through `__drop_existential`; the request union's payload cascade cannot express the pair;
+//   • an **opaque type parameter** has no layout at the send, so the sender cannot know whether it is even
+//     managed — and a generic service is refused outright one rule up.
+//
+// ⚠ **IT IS ASKED OF THE RESOLVED TYPE.** A parameter written `Promise with (int, E)` is recorded by the
+// sweep as a bare `named` naming its alias, so testing the swept type directly would let every aliased
+// spelling through. `declaredSlotType` is the one door that resolves a swept slot type, and it is the same
+// door the payload build uses — so the check and the payload cannot come to disagree about what a parameter
+// is.
+function untransferableParameterNoun(signatures ProgramSignatures, declared MaxonType, declFilePath FilePath) returns String
+	let resolved = signatures.declaredSlotType(declared, into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
+	if typeIsPromiseStorage(signatures, t: resolved) 'aPromise'
+		return "a Promise, which is a green-thread handle its awaiter owns"
+	end 'aPromise'
+
+	match maxonTypeTag(resolved) 'tag'
+		function then return "a function value, whose captured environment is a box a second thread would share"
+		interfaceRef then return InterfaceParameterNoun
+		// ⚠ **UNREACHABLE TODAY AND STILL THE RIGHT ANSWER.** Only a GENERIC type's method can declare a
+		// type-parameter-typed parameter, and a generic type is refused as a spawn target one rule earlier
+		// (`ServiceTargetVerdict.typeIsGeneric`) — so no roster reaching here holds one. It answers rather
+		// than returning "" because the day a service can be generic, "transferable" would be the wrong
+		// default for the one shape whose layout the send site cannot know.
+		typeParameter then return "an opaque type parameter, whose layout is not known at the send"
+		// ⭐⭐ **A BARE `named` MAY STILL BE AN INTERFACE, AND THIS IS WHERE THAT IS ASKED (MEASURED).**
+		// `ProgramSignatures.normalizeSweptInterfaceTypes` re-tags a swept `named` that denotes an interface —
+		// but only in a struct's FIELD column and in the RETURN column, never in `OverloadedDecl.paramTypes`.
+		// `declaredSlotType` does not close the gap either: its `interfaceType` arm deliberately THROWS (see
+		// `denotedSlotType`, which argues that arm must stay a throw), so a parameter written `s Shape`
+		// arrives here as `named` and was silently accepted. Measured on a two-declaration program before this
+		// arm: `export function measure(s Shape)` on a spawned type compiled straight through to the wave-3
+		// E2015 with no transferability finding at all.
+		named then return declaredInterfaceParameterNoun(signatures, resolved: resolved)
+		// Every remaining tag names a value with ONE owner and a layout the send site knows: a scalar, an
+		// exit code, a struct box, a String, a container instance, a character. Each MOVES.
+		boolean to float then return ""
+		exitCode to string then return ""
+		genericInstance to character then return ""
+	end 'tag'
+end 'untransferableParameterNoun'
+
+// The noun for a value held at an interface type — one string, because the two arms that reach that verdict
+// (an `interfaceRef` the parse minted, a bare `named` the sweep left) are one finding about one declaration.
+let InterfaceParameterNoun = "a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry"
+
+// Does this bare `named` name a declared INTERFACE? Asked of the same registry the field/return normalization
+// asks (`ProgramSignatures.declaredFormOf` reads `interfaces`), so a parameter and a field of one interface
+// type cannot come to different answers.
+//
+// A name no registry declares is E3011 at the declaration itself and is not this check's finding.
+function declaredInterfaceParameterNoun(signatures ProgramSignatures, resolved MaxonType) returns String
+	let name = serviceIndexTypeName(signatures, id: typeNameIdOf(resolved))
+	let form = try signatures.declaredFormOf(name) otherwise return ""
+	return InterfaceParameterNoun if form == TypeDeclKind.interfaceType else ""
+end 'declaredInterfaceParameterNoun'
+
+// A declaration's parameter name at `index`. `OverloadedDecl`'s two columns are source-aligned with the
+// receiver excluded, so this index is the one `paramTypes` was read at.
+function serviceParamName(decl OverloadedDecl, index ParamCount) returns ByteArray
+	return try decl.paramNames.get(index) otherwise panic("serviceParamName: index {index} is out of range for a declaration carrying {decl.paramNames.count()} parameter name(s) against {decl.paramTypes.count()} type(s) — the two columns of an `OverloadedDecl` are written by one act and are source-aligned")
+end 'serviceParamName'
+
+// ⭐⭐ **THE ONE SENTENCE THAT TEACHES THE FORM — written once and quoted by every refusal that needs it.**
+// The single most valuable thing a `spawn` diagnostic can say is what the one legal shape IS: there is
+// exactly one, and an author who has just written the wrong one is exactly the reader who needs it.
+let SpawnTeachingSentence = "`spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`"
+
+// ⭐⭐ **THE WORDS FOR EVERY REFUSING TARGET VERDICT — beside the rule that chose them.** `ParseError`
+// carries the rendered sentence rather than the facts precisely so that this stays true: a message assembled
+// at the diagnostic mapper would be one rule stated in two files.
+//
+// ⚠ It answers for the REFUSING arms only. `startsAService` reaching here would mean a caller refused a
+// target this classification accepted, which is a compiler bug and not a sentence.
+module function serviceTargetRefusalMessage(verdict ServiceTargetVerdict, typeName ByteArray, member ByteArray) returns String
+	let written = "`spawn {String.from(typeName)}.{String.from(member)}(…)`"
+	match verdict 'why'
+		startsAService then panic("serviceTargetRefusalMessage: asked for the words of an ACCEPTED spawn target — `{String.from(typeName)}.{String.from(member)}` starts a service, and the caller refuses only the other arms")
+		typeIsNotAStruct then return "{written} does not start a service: nothing declares `type {String.from(typeName)}`. {SpawnTeachingSentence}"
+		memberIsNotDeclared then return "{written} does not start a service: `type {String.from(typeName)}` declares no `{String.from(member)}`. {SpawnTeachingSentence}"
+		memberTakesAReceiver then return "{written} does not start a service: `{String.from(typeName)}.{String.from(member)}` is an INSTANCE method, and a `spawn` calls its factory directly — there is no service yet for a message to reach. {SpawnTeachingSentence}"
+		memberDoesNotReturnTheType then return "{written} does not start a service: `{String.from(typeName)}.{String.from(member)}` does not hand back a `{String.from(typeName)}` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. {SpawnTeachingSentence}"
+		typeIsGeneric then return "{written} — `type {String.from(typeName)}` is generic, and a service's companions (`{String.from(serviceRequestCompanionName(typeName))}`, `{String.from(serviceHandleCompanionName(typeName))}`) are monomorphic: ONE union and ONE handle struct per service, not one pair per instantiation. Spawn a non-generic type, or declare a concrete wrapper around the generic one"
+	end 'why'
+end 'serviceTargetRefusalMessage'
+
+// ⭐ **THE WORDS FOR A `spawn` WHOSE SHAPE IS NOT `<Type>.<factory>(…)` AT ALL** — a bare `spawn f()`, a
+// `spawn x.y` with no call. It shares `SpawnTeachingSentence` with the verdicts above rather than restating
+// it, because it is the same lesson reached one step earlier: the token shape never named a static.
+//
+// ⚠ **A BARE `spawn f()` IS REFUSED ON PURPOSE AND PERMANENTLY, not because it is unbuilt.** ⚖ USER RULING
+// 2026-08-27: `spawn` is for SERVICES ONLY — there is no unstructured green thread in this language, and
+// P2.6's pass fan-out becomes a worker SERVICE rather than a second primitive. That is why this is E3134
+// (this is not what `spawn` means) and not E2015 (not built yet).
+module function spawnShapeRefusalMessage(written String) returns String
+	return "`spawn {written}…` does not start a service: `spawn` is followed by a STATIC CALL on a type, and there is no bare `spawn f()` green thread — the unit of concurrency is a service, whose message surface the compiler can check. {SpawnTeachingSentence}"
+end 'spawnShapeRefusalMessage'
+
+// ⭐⭐ **THE WORDS FOR A ROSTER THAT CANNOT BE DISPATCHED — and both of them NAME THE SPAWN by being raised
+// at it.** The design's own requirement is that a service diagnostic name the site that made the type a
+// service, because whether a type is a service is a whole-program property and the method it fires on may be
+// in another file entirely. Raising at the spawn site satisfies it without carrying a site around.
+module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeName ByteArray) returns String
+	match verdict 'why'
+		rosterIsDispatchable then panic("serviceRosterRefusalMessage: asked for the words of a DISPATCHABLE roster on `type {String.from(typeName)}` — the caller refuses only the other arms")
+		messageIsOverloaded(methodName, declarationCount) then return "`{String.from(typeName)}.{String.from(methodName)}` is a message of the service `{String.from(typeName)}` and is declared {declarationCount} times. A message becomes ONE variant of the synthesized `{String.from(serviceRequestCompanionName(typeName))}` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names"
+		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
+	end 'why'
+end 'serviceRosterRefusalMessage'
+
+// ⭐⭐ **MINT `<T>.request` AND `<T>.handle`, INTO THE INTERNER THE CALLER'S IDS ARE MINTED AGAINST.**
+//
+// ⚠⚠ **THE INTERNER IS A PARAMETER AND IT IS NOT OPTIONAL — THIS IS OPEN #56's HAZARD (four times, and
+// counting).** A payload type built here is a `MaxonType`, which carries a `TypeNameId` that is only a
+// number without its table: the layouts the SIGNATURE INDEX holds carry the index's ids, and a
+// `FileParseArtifact`'s carry that file's own. `ProgramSignatures.indexTypeNames`' header records what
+// resolving one against the wrong table cost — a destructor synthesized for `InstantNanos` on a field that
+// is a struct — and `fieldTypeOf`'s records the two doors that each got it wrong once. So the builder never
+// picks: every caller hands it the table its own ids live in.
+function buildServiceCompanions(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns ServiceCompanions
+	return ServiceCompanions.create(buildServiceRequestUnion(signatures, typeName: typeName, into: into), handle: buildServiceHandleStruct(signatures, typeName: typeName))
+end 'buildServiceCompanions'
+
+// The request union: `__shutdown` at variant 0, then one variant per message in declaration order.
+function buildServiceRequestUnion(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayout
+	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+	let declFilePath = layout.declFilePath
+	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: sharedEmptyDeclaredConformances, visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
+
+	// ⭐ **VARIANT 0 IS THE COMPILER'S, SO ADDING A MESSAGE NEVER RENUMBERS IT** — see
+	// `ServiceShutdownCaseName`. It always carries a reply slot: `shutdown()` is the one message whose
+	// completion an author can await, and a graceful drain that could not be waited on would be a race
+	// written into the language.
+	var shutdownPayloads = PayloadFieldArray.create()
+	shutdownPayloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface))
+	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: shutdownPayloads)
+
+	for i in 0 upto layout.messageMethodCount() 'eachMessage'
+		let methodName = layout.messageMethodAt(i)
+		addServiceRequestCase(request, caseName: methodName, payloads: serviceRequestPayloads(signatures, typeName: typeName, methodName: methodName, declFilePath: declFilePath, into: into))
+	end 'eachMessage'
+
+	return request
+end 'buildServiceRequestUnion'
+
+// One message's payload list: its parameters as declared, then the reply slot when the message HAS a reply
+// to deliver. A message that returns nothing and throws nothing is fire-and-forget — nothing waits on it, so
+// there is no cell to carry and no slot to make one for.
+function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray, methodName ByteArray, declFilePath FilePath, into TypeNameInterner) returns PayloadFieldArray
+	let key = qualifiedMethodName(typeName, methodName: methodName)
+	let decls = signatures.overloadedDeclsOf(key)
+	let decl = try decls.get(0) otherwise panic("serviceRequestPayloads: '{String.from(key)}' is on the roster the declaration sweep built from its own declaration, so `overloadedDeclsOf` cannot be empty")
+
+	var payloads = PayloadFieldArray.create()
+	for p in 0 upto decl.paramTypes.count() 'eachParam'
+		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
+		payloads.push(PayloadField.create(serviceParamName(decl, index: p), declaredType: signatures.declaredSlotType(declared, into: into, slotScopeFilePath: declFilePath), declaredSurface: sharedEmptyDeclaredSurface))
+	end 'eachParam'
+
+	if serviceMessageHasAReply(signatures, key: key, decl: decl) 'awaitable'
+		payloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface))
+	end 'awaitable'
+
+	return payloads
+end 'serviceRequestPayloads'
+
+// Does this message deliver a reply? A value-returning message obviously does; a THROWING one does too, and
+// that is the half a `returns`-only test would miss — `try await h.wipe()` on a `function wipe() throws E`
+// has an error to carry back and nothing else.
+function serviceMessageHasAReply(signatures ProgramSignatures, key ByteArray, decl OverloadedDecl) returns bool
+	if not maxonReturnTypeIsVoid(decl.returnType) 'returnsAValue'
+		return true
+	end 'returnsAValue'
+
+	return match signatures.throwsOf(key) 'throws'
+		none gives false
+		throwing gives true
+	end 'throws'
+end 'serviceMessageHasAReply'
+
+// Append one variant with the AUTO-INCREMENT tag its declaration position gives it. The tag is DERIVED from
+// the case count rather than written down, exactly as `Project.addBuiltinEnumCase` derives a builtin error
+// enum's — a literal here would be a second statement of the position and the two are free to disagree.
+function addServiceRequestCase(request EnumLayout, caseName ByteArray, payloads PayloadFieldArray)
+	let tag = request.caseCount()
+	request.addCase(caseName, tag: tag, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+end 'addServiceRequestCase'
+
+// The handle: ONE field holding the mailbox pointer. On `SignatureIndex.managedFileLayout`'s shape, and for
+// its reason — a nominal identity over a single machine word, so a handle is an ordinary box everywhere.
+//
+// ⚠ **IT CARRIES THE SERVICE'S OWN VISIBILITY AND DECLARING FILE, not `createCompilerOwned`'s `global`**,
+// on `appendUnionCasesCompanion`'s precedent: the companion is nameable exactly where the type is, so a
+// `module type Calc` does not leak its handle across the module boundary.
+function buildServiceHandleStruct(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
+	let owner = spawnTargetLayoutOf(signatures, typeName: typeName)
+	var handle = StructLayout.create(serviceHandleCompanionName(typeName), visibility: owner.visibility, declFilePath: owner.declFilePath)
+	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+	return handle
+end 'buildServiceHandleStruct'
+
+// ⭐⭐ **THE PERFORM HALF — every candidate the discovery walk noted, classified once and minted once.**
+// Called from `Queries.queryProgramSignatures` directly after `internWellKnownContainerInstances()` and
+// BEFORE `allFilesFolded = true`, so that:
+//   • every whole-program normalization after that line (`rewriteRecordedReturnTypes`,
+//     `normalizeSweptInterfaceTypes`, `deriveInstanceNames`) treats the companions as ordinary layouts, and
+//   • the decision stands on the FAR SIDE of the stdlib/user name contest, which the fold has settled.
+//
+// It registers through `ProgramSignatures.recordServiceCompanions`, which is `recordStruct`/`recordEnum` —
+// so the companions ride the SAME rolling declaration hash every author-written type does. That is what
+// makes the memo correct across files with no separate mix-in: a `spawn` added in file B changes the source
+// hash that keys this whole sweep, the sweep mints a companion here, `recordStruct` folds its name and shape
+// into `signatures.hash`, and `Queries.currentParseMemoKey` therefore invalidates file A's parse — which is
+// where `Calc` is declared and where a reference to `Calc.handle` resolves.
+//
+// ⛔⛔ **IT IS COLLECT-THEN-APPLY, AND THAT IS FORCED BY THE BORROW RULE RATHER THAN CHOSEN.** Minting inside
+// the walk mutates `signatures` while `candidate` is an element BORROWED out of it:
+// **`E3070: cannot mutate 'signatures' via 'recordServiceCompanions' while it is borrowed by 'candidate'`**.
+// ⚠ **MEASURED, and only by shv2 COMPILING ITSELF** — the bootstrap has no such check, so the loop built
+// clean at stage-1 and the whole 6,799-case suite was green over it. It is the same shape
+// `ProgramSignatures.rewriteRecordedReturnTypes` states once for all three of its rules (a pass that
+// rewrites the very map it walks collects first), and the same one `moveOverloadedDecls` records a measured
+// USE-AFTER-FREE for: *"the binding read out of the map is a BORROW … 36 spec tests died `nil pointer or
+// invalid memory access`"*. Copying the names first ends the aliasing before any write happens.
+module function synthesizeServiceCompanions(signatures ProgramSignatures)
+	var services = ByteArrayArray.create()
+	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
+		match classifyServiceTarget(signatures, typeName: candidate.typeName, member: candidate.member) 'verdict'
+			// Refused at the `spawn` by `Parser.parseSpawn`, which asks this same classification. Nothing is
+			// minted here for any of them — see this file's header for why the sweep never reports.
+			typeIsNotAStruct to typeIsGeneric then continue
+			startsAService then break 'verdict'
+		end 'verdict'
+
+		services.push(candidate.typeName)
+	end 'eachCandidate'
+
+	for typeName in services 'eachService'
+		// Two `spawn`s of one type through two different factories are two CANDIDATES and one service, so the
+		// second finds its companions already registered. Asked of the registry rather than of a set built
+		// here, because the registry is what a second mint would actually collide with.
+		if signatures.containsStruct(serviceHandleCompanionName(typeName)) 'alreadyMinted'
+			continue
+		end 'alreadyMinted'
+
+		signatures.recordServiceCompanions(buildServiceCompanions(signatures, typeName: typeName, into: signatures.indexTypeNames()))
+	end 'eachService'
+end 'synthesizeServiceCompanions'

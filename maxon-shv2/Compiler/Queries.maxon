@@ -290,7 +290,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// denotes, and `ProgramSignatures.isArrayBaseName` sits on every array question a swept declaration
 	// raises), so the answer cannot come from the fold — the same ordering argument the contest below makes,
 	// one step earlier because the USER half needs it too.
-	try discoverArrayLiteralConformers(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths)
+	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths)
 
 	for path in userPaths 'eachUserFile'
 		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false)
@@ -312,6 +312,18 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// `type Array`, belongs to the PROGRAM's container. See
 	// `ProgramSignatures.internWellKnownContainerInstances`.
 	signatures.internWellKnownContainerInstances()
+
+	// ⭐⭐ **AND THE COMPANIONS OF EVERY SERVICE THE PROGRAM SPAWNS (SV1)** — `T.request` and `T.handle`, minted
+	// from the candidates the pre-fold token walk noted. See `ServiceCompanions.synthesizeServiceCompanions`,
+	// which owns the rule; this is its one call site and its POSITION is load-bearing in both directions.
+	//
+	// ⚠ **BELOW the contest and `internWellKnownContainerInstances`**, so the decision stands on the far side
+	// of the stdlib/user name contest: which `type Calc` a spawn names is settled before it is asked.
+	// ⚠ **ABOVE `allFilesFolded = true`**, so every whole-program normalization from here down
+	// (`rewriteRecordedReturnTypes`, `normalizeSweptInterfaceTypes`, `normalizeSweptScopedGenericFields`,
+	// `deriveInstanceNames`) treats a companion as the ordinary layout it is, rather than leaving it as the
+	// one declaration in the program those passes never saw.
+	synthesizeServiceCompanions(signatures)
 
 	// ⭐ **THE INDEX IS NOW WHOLE-PROGRAM, AND IT SAYS SO.** Every reader below this line — the constant
 	// evaluator, the real parse — gets an index in which an absence MEANS the program does not declare
@@ -594,40 +606,66 @@ function namespaceAnchorFor(project Project, cwd FilePath, livesUnderStdlibDirec
 	return try root.parent() otherwise panic("namespaceAnchorFor: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, resolved against the cwd on the line above")
 end 'namespaceAnchorFor'
 
-// ⭐⭐⭐ **FIND THE `BuiltinArrayLiteral` CONFORMERS — THE ONE PLACE THE COMPILER LEARNS WHICH NAME THE ARRAY
-// RECORD GOES BY (ARR5b).** The user's directive is *"there should be nothing array specific in the shv2
-// compiler"*, with the marker INTERFACES as the stated exception; this walk is that exception doing the
-// work, in place of `SignatureIndex.SynthesizedArrayRecordSeed` being read as a fact.
+// ⭐⭐⭐ **EVERY WHOLE-PROGRAM FACT THE FOLD MUST ALREADY KNOW, READ OFF THE TOKENS BEFORE THE FIRST FILE IS
+// FOLDED.** Two of them, and the argument for the POSITION is one argument (below); the argument for them
+// sharing one WALK is `noteWholeProgramTokenFactsIn`'s.
+//
+//   • **which declarations carry the `BuiltinArrayLiteral` marker (ARR5b)** — the one place the compiler
+//     learns which name the array record goes by. The user's directive is *"there should be nothing array
+//     specific in the shv2 compiler"*, with the marker INTERFACES as the stated exception; this walk is that
+//     exception doing the work, in place of `SignatureIndex.SynthesizedArrayRecordSeed` being read as a fact.
+//   • **which types the program SPAWNS (SV1)** — a `spawn Calc.create()` anywhere makes `Calc` a service,
+//     and `synthesizeServiceCompanions` mints `Calc.request` / `Calc.handle` beside it. Whether a type is a
+//     service is therefore a whole-program property that a file writing no `spawn` still depends on: it may
+//     name `Calc.handle` in a signature.
 //
 // ⚠ **BEFORE THE USER FOLD, AND THAT POSITION IS FORCED IN BOTH DIRECTIONS.** It must precede the fold
 // because the fold reads the answer; it cannot be moved into the fold because a `typealias NumBag =
 // Bag with Num` in one file is swept before the `type Bag` in another. It runs over BOTH halves for the
 // same reason the contest runs over one: an under-approximation here is a declaration silently treated as
-// an ordinary struct, and the walk is the only reader that precedes everything.
+// an ordinary struct, and the walk is the only reader that precedes everything. The `spawn` probe inherits
+// the identical shape one construct over — a `spawn` in file B decides what file A's `Calc.handle` means —
+// which is why it belongs here and not in a pass of its own.
 //
-// ⚠ **IT READS TOKENS, LIKE THE CONTEST BELOW, AND ITS GRAMMAR IS AN ALLOW-LIST RATHER THAN A TERMINATOR
-// LIST.** A type HEADER is `type <Name> [uses …] [implements …] [where …]` and nothing else, so the scan
+// ⚠ **THE ARRAY PROBE READS TOKENS, LIKE THE CONTEST BELOW, AND ITS GRAMMAR IS AN ALLOW-LIST RATHER THAN A
+// TERMINATOR LIST.** A type HEADER is `type <Name> [uses …] [implements …] [where …]` and nothing else, so the scan
 // walks only the kinds a header can contain and stops at the first token that cannot be one. The
 // alternative — scanning until a known terminator — has to enumerate every keyword that could follow, and
 // the one it forgets makes the walk run on into a BODY and read a `BuiltinArrayLiteral` out of somewhere
 // that is not a conformance clause. `type` is legal as a parameter NAME (D8), so a spurious start is
 // expected and is what the allow-list stops: `f(type Foo)` reaches `returns` and ends, having seen no
 // `implements`.
-function discoverArrayLiteralConformers(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray) throws CompileError
-	try noteArrayLiteralConformersIn(project, signatures: signatures, paths: userPaths, isStdlibSource: false)
-	try noteArrayLiteralConformersIn(project, signatures: signatures, paths: stdlibPaths, isStdlibSource: true)
-end 'discoverArrayLiteralConformers'
+function discoverWholeProgramTokenFacts(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray) throws CompileError
+	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: userPaths, isStdlibSource: false)
+	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: stdlibPaths, isStdlibSource: true)
+end 'discoverWholeProgramTokenFacts'
 
 // One provenance half of the walk above. Split out so the two halves are one body rather than two copies of
 // it, exactly as `foldOneFileInto` is — and so the `isStdlibSource` bit the caller already knows is PASSED
 // rather than re-derived per file.
-function noteArrayLiteralConformersIn(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool) throws CompileError
+//
+// ⭐⭐ **EVERY QUESTION IS ASKED PER TOKEN AND THE ARRAY IS WALKED ONCE — `Parser.fileNamesProducerMask`'s
+// thesis, at the pre-fold layer.** That routine's header states it exactly: *"'complete' constrains WHAT is
+// visited, not HOW MANY TIMES … this asks every question per token and walks once, so the cost of the next
+// probe is a compare rather than a scan."* The `spawn` probe joined the array-literal probe here rather than
+// bringing a second complete pass of its own over every file in the program.
+//
+// ⚠ **THE `spawn` PROBE RUNS OVER `stdlib/` TOO, and that is a refusal to assume rather than an oversight.**
+// A stdlib file cannot spell `spawn` today — `stdlib/` is compiled by the BOOTSTRAP as well, at stage-1 —
+// but the probe is a compare on a walk that visits those tokens either way, so excluding them would buy
+// nothing and would make "stdlib never spawns" a premise this walk depends on instead of a fact about the
+// corpus as it stands.
+function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool) throws CompileError
 	for path in paths 'eachFile'
 		// A memo MISS here and a HIT for every later reader of this file — the fold asks for the same tokens
 		// moments later, exactly as the contest's own walk is the miss for the stdlib half.
 		let tokens = try queryActiveTokens(project, path: path)
 		for i in 0 upto tokens.count() 'eachToken'
-			let tok = try tokens.get(i) otherwise panic("noteArrayLiteralConformersIn: tokens.get OOB at {i} below count {tokens.count()}")
+			let tok = try tokens.get(i) otherwise panic("noteWholeProgramTokenFactsIn: tokens.get OOB at {i} below count {tokens.count()}")
+			if tokenIsTheSpawnKeyword(tok) 'aSpawnMayStartHere'
+				noteServiceSpawnFollowing(signatures, tokens: tokens, index: i)
+			end 'aSpawnMayStartHere'
+
 			if tok.kind != TokenKind.type 'notATypeKeyword'
 				continue
 			end 'notATypeKeyword'
@@ -644,7 +682,59 @@ function noteArrayLiteralConformersIn(project Project, signatures ProgramSignatu
 			signatures.noteArrayLiteralConformer(nameTok.value, isStdlibSource: isStdlibSource)
 		end 'eachToken'
 	end 'eachFile'
-end 'noteArrayLiteralConformersIn'
+end 'noteWholeProgramTokenFactsIn'
+
+// ⭐⭐ **IS A SERVICE SPAWNED AT `index`? — `spawn <Type> . <member> (` and nothing looser (SV1).**
+//
+// The caller has already matched the WORD (it holds the token, and re-reading it here would be a second
+// bounds-checked array read on a walk that visits every token in the program); this reads the four tokens
+// after it.
+//
+// ⚠ **THE WALK CANNOT BE THE DECLARATION SWEEP'S, AND THAT IS A MEASURED CRASH RATHER THAN CAUTION.**
+// `Parser.foldDeclaredSignaturesInto` consumes a `type` declaration WHOLE — method bodies included — and
+// resumes past its `end`, so an arm added inside that loop never sees a token in a method body, which is
+// exactly where a `spawn` lives. The identical mistake with `StringIndex` took the compiler down at
+// `stringIndexLayoutOrPanic`; see that loop's own warning block. A question about the whole file is answered
+// by reading the whole file.
+//
+// ⚠ **THE SHAPE IS EXACT, WHICH IS WHAT LETS `spawn` STAY AN ORDINARY IDENTIFIER.** `Subprocess.spawn(cmd)`
+// puts a `(` after the word; `static function spawn() returns Self` does too; `function f(spawn Calc)` has
+// no `.`; `var spawn as Calc` has no `(`. None of them matches, which is why the two live declarations of
+// the word (`specs-shv2/associated-types.md`, `stdlib/Subprocess.maxon`) are untouched by this rung.
+//
+// ⚠ **BOTH NAME POSITIONS ASK `tokenCanBeAName`, NOT "is it an identifier" — D8, and it was MEASURED
+// missing.** A keyword may be a declared name, and `stdlib/FilePath.maxon:34`'s `static function from(path
+// String) returns Self` is a FACTORY spelled with one. This must stay in lockstep with
+// `Parser.atSpawnPrefix` / `atSpawnTargetCall`: a shape one accepts and the other declines is either a
+// spawn nobody minted companions for, or companions nobody spawns.
+//
+// ⚠ It notes a PAIR and not a type: `spawn Calc.bump()` names a declared type and starts no service, because
+// `bump` is an instance method — see `ServiceTargetVerdict`. A shape this probe DECLINES is still refused at
+// the site: `Parser.parseSpawn` claims every `spawn <name>` the grammar can reach and answers for the ones
+// no candidate was noted for.
+function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArray, index TokenIndex)
+	let typeTok = try tokens.get(index + 1) otherwise return
+	if not tokenCanBeAName(typeTok) 'notATypeName'
+		return
+	end 'notATypeName'
+
+	let dotTok = try tokens.get(index + 2) otherwise return
+	if dotTok.kind != TokenKind.dot 'notQualified'
+		return
+	end 'notQualified'
+
+	let memberTok = try tokens.get(index + 3) otherwise return
+	if not tokenCanBeAName(memberTok) 'notAMemberName'
+		return
+	end 'notAMemberName'
+
+	let openTok = try tokens.get(index + 4) otherwise return
+	if openTok.kind != TokenKind.leftParen 'notACall'
+		return
+	end 'notACall'
+
+	signatures.noteServiceSpawnCandidate(typeTok.value, member: memberTok.value)
+end 'noteServiceSpawnFollowing'
 
 // Does the type header beginning at `headerStart` name `BuiltinArrayLiteral` as one of its OWN conformances?
 // The allow-list the caller's header argues for: the walk advances while the token could belong to a header
@@ -692,7 +782,7 @@ function headerDeclaresTheArrayLiteralMarker(tokens TokenArray, headerStart Toke
 end 'headerDeclaresTheArrayLiteralMarker'
 
 // Every token kind a `type <Name> [uses …] [implements …] [where …]` header can contain. An ALLOW-list, for
-// the reason `discoverArrayLiteralConformers` gives: the complement is every keyword in the language and
+// the reason `discoverWholeProgramTokenFacts` gives: the complement is every keyword in the language and
 // forgetting one runs the scan into a type BODY.
 //
 // `intLiteral` is here for a sized base (`Vector with 3 Int`) and the three primitive-type keywords for a
@@ -2160,6 +2250,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// The reference bootstrap's sentence verbatim, under the code it uses for it — the mistake and its
 		// remedy are the same in both compilers, so there is nothing here to word differently.
 		uninferrableClosureParam(paramName, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: "Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.", line: line, column: column, filePath: path)
+		// The SENTENCE arrives rendered — see the two arms' own note in `ParseError`. These two mapper lines
+		// carry the CODE and nothing else, which is what keeps the words beside the rule that chose them.
+		serviceNotASpawnTarget(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceNotASpawnTarget, message: explanation, line: line, column: column, filePath: path)
+		serviceValueNotTransferable(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceValueNotTransferable, message: explanation, line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'
 

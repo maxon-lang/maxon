@@ -71,7 +71,10 @@ end 'Visibility'
 // `public` are the same visibility (see the header above), so every reader that cares about REACH rather
 // than about the unused-export claim asks here instead of spelling `== global or == public`. That
 // disjunction written out at N sites is a set written down N times, and the N+1th tier reaches N-1 of them.
-function isProgramWideTier(visibility Visibility) returns bool
+// ⚠ `module`, not file-private: SV1's message-roster test asks it from `Parser.recordScannedSignature`,
+// which is the whole point of the function — the disjunction written out at a second site is the set written
+// down twice.
+module function isProgramWideTier(visibility Visibility) returns bool
 	return visibility == Visibility.global or visibility == Visibility.public
 end 'isProgramWideTier'
 
@@ -3268,6 +3271,12 @@ end 'renderWhereConstraints'
 // `interfaces`/`conformances` use to keep the per-struct parse path allocation-free.
 let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 
+// The SHARED EMPTY `messageMethodNames` every type that is not a service carries — which is every type in
+// every program that never writes `spawn` (SV1). `recordMessageMethods` replaces it wholesale on the one
+// declaration that has a roster and this is never mutated, exactly as `sharedEmptyWhereConstraints` above:
+// a per-type array here would be one allocation per declared `type` to hold a list only a service has.
+let sharedEmptyMessageMethods = ByteArrayArray.create()
+
 export type StructLayout
 	export var name as ByteArray
 	// Parallel arrays, in DECLARATION order: field `i` is called `fieldNames[i]`, is declared
@@ -3384,6 +3393,27 @@ export type StructLayout
 	// The reader now runs a second time, whole-program, where the arity that ends a `with` is known
 	// (`Queries.foldConformanceClauses`), and a clause can contribute a binding at every name.
 	export var conformanceBindings as ConformanceBindingArray
+	// ⭐⭐ **THE TYPE'S MESSAGE ROSTER — its `export`/`public` INSTANCE methods, IN DECLARATION ORDER (SV1).**
+	// A `spawn T.create()` anywhere in the program makes `T` a service, and this list IS the synthesized
+	// `T.request` union's variant order after the compiler's own `__shutdown` at variant 0. The ORDER is
+	// therefore a wire format: reordering two exported methods renumbers two variants.
+	//
+	// ⚠ **MEMBERSHIP IS `isProgramWideTier` AND `takesReceiver`, and each half excludes something different.**
+	// The tier is the reach `export` and `public` share (see `isProgramWideTier`) — a `module` or file-private
+	// method is reachable only through the value, never through the handle, which is what makes a self-send
+	// unspellable rather than diagnosed. `takesReceiver` excludes every `static` STRUCTURALLY: a static has no
+	// `self` to serialize against, and `spawn Calc.create()` calls one DIRECTLY rather than through a handle.
+	//
+	// ⚠ **THE DECLARATION SWEEP IS THE ONLY WRITER, AND THE REAL PARSE READS IT BACK.** The obvious symmetry —
+	// have `parseTypeMember` fill it too, as it fills the field columns — would be ONE FACT WRITTEN TWICE, in
+	// the one place a drift is a renumbered variant rather than a diagnostic. Every consumer asks
+	// `ProgramSignatures.structOf`, which is whole-program and complete before any file is parsed.
+	//
+	// ⚠ **IT IS NOT MIXED INTO `recordStruct`'s HASH, and that is a derivation rather than an omission.** Every
+	// input to this list — each method's NAME, its `visibility`, its `takesReceiver` and its declaration ORDER —
+	// is already folded into `self.hash` by `mixDeclaration`, one entry per declared function, in fold order. A
+	// second mix would be the same bytes hashed twice under a different shape.
+	export var messageMethodNames as ByteArrayArray
 	// ⭐ **THE DECLARATION'S OWN VISIBILITY (N1a)** — `type Point` vs `module type Point` vs
 	// `export type Point`. Read by `Parser.typeNameVisibleHere`, the door a source-written type NAME in a
 	// dotted primary goes through, and by `Parser.requireFieldAccessible`, which meets it at the first field
@@ -3401,7 +3431,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, messageMethodNames: sharedEmptyMessageMethods, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -3433,6 +3463,28 @@ export type StructLayout
 	// pairs the two columns by index and `mixConformanceBindings` walks them together; a column that arrived
 	// short would make the first read a neighbour's binding and the second hash one declaration's clause as
 	// another's. See `conformanceBindings` for the two admitted shapes.
+	// Record the type's message roster, in declaration order (SV1). Replaces the column wholesale for
+	// `recordTypeParams`' reason — the whole list is known at one moment, once every member has been read —
+	// and a roster that turned out EMPTY (every type in every program that declares no service) keeps the
+	// SHARED empty rather than retaining a per-type array of nothing.
+	export function recordMessageMethods(methodNames ByteArrayArray)
+		if methodNames.count() == 0 'noMessages'
+			return
+		end 'noMessages'
+
+		self.messageMethodNames = methodNames
+	end 'recordMessageMethods'
+
+	// The number of messages on this type's roster — 0 for every type that is not a service, and for a
+	// service that exports no instance method (which is legal: it can still be shut down).
+	export function messageMethodCount() returns FieldIndex
+		return self.messageMethodNames.count()
+	end 'messageMethodCount'
+
+	export function messageMethodAt(index FieldIndex) returns ByteArray
+		return try self.messageMethodNames.get(index) otherwise panic("StructLayout.messageMethodAt: index {index} is out of range for `type {String.from(self.name)}`, whose roster holds {self.messageMethodNames.count()} message(s)")
+	end 'messageMethodAt'
+
 	export function recordConformances(names ByteArrayArray, bindings ConformanceBindingArray)
 		if bindings.count() != 0 and bindings.count() != names.count() 'columnsDisagree'
 			panic("StructLayout.recordConformances: `type {String.from(self.name)}` records {names.count()} interface name(s) against {bindings.count()} binding list(s) — the two columns are paired by INDEX, so a reader of the shorter one answers with the wrong conformance's `with` arguments")
@@ -4304,6 +4356,42 @@ export let UnionCasesMemberName = b"unionCases"
 export function unionCasesCompanionName(unionName ByteArray) returns ByteArray
 	return "{String.from(unionName)}.{String.from(UnionCasesMemberName)}".toByteArray()
 end 'unionCasesCompanionName'
+
+// ⭐⭐ **THE TWO SYNTHESIZED SERVICE COMPANIONS' REGISTERED NAMES — `<T>.request` and `<T>.handle` (SV1).**
+// DOTTED, on `unionCasesCompanionName`'s precedent and for its exact reason: `Parser.parseTypeReference`'s
+// qualified arm already assembles a dotted chain into one `named(…)`, so `function serve(h Calc.handle)`
+// resolves with no new type grammar and the companion is found under exactly the key a type reference to it
+// produces. A reserved `__`-prefixed mint would need a translation at every door the author's spelling
+// arrives through — and the author's spelling is the one the design document teaches.
+let ServiceRequestMemberName = b"request"
+let ServiceHandleMemberName = b"handle"
+
+module function serviceRequestCompanionName(typeName ByteArray) returns ByteArray
+	return "{String.from(typeName)}.{String.from(ServiceRequestMemberName)}".toByteArray()
+end 'serviceRequestCompanionName'
+
+module function serviceHandleCompanionName(typeName ByteArray) returns ByteArray
+	return "{String.from(typeName)}.{String.from(ServiceHandleMemberName)}".toByteArray()
+end 'serviceHandleCompanionName'
+
+// ⭐⭐ **`__shutdown` IS VARIANT 0 OF EVERY REQUEST UNION, SO ADDING A MESSAGE NEVER RENUMBERS IT.** The
+// poison pill is the one variant the RUNTIME will construct from a literal tag, and the roster above it is
+// the author's to reorder; putting it last would move it every time a method was added. It wears the `__`
+// prefix because no source may declare it (`requireUnreservedName`, E2051) and no `match` an author writes
+// may name it.
+module let ServiceShutdownCaseName = b"__shutdown"
+
+// ⭐⭐ **THE REPLY SLOT IS AN `Integer`, DELIBERATELY, AND THE P1.3 CASCADE IS WHY.** It is a raw cell
+// pointer (0 = fire-and-forget), NOT a managed box: the `__destruct_<U>` payload cascade must SKIP it, and
+// it does so structurally because a scalar payload is not managed. Completing an abandoned reply cell is the
+// RUNTIME's job (SV2), not a decref's — and a managed-typed slot here would hand the cascade a box it must
+// not free.
+module let ServiceReplySlotName = b"__reply"
+
+// The one field of `<T>.handle`: the mailbox pointer. A real 8-byte box on `managedFileLayout`'s shape
+// rather than a parse-time mark, so moves, E3102, struct fields, arrays and the drop cascade all reach it
+// by construction rather than through a special case at each door.
+module let ServiceHandleMailboxFieldName = b"mailbox"
 
 // ⭐⭐ **SYNTHESIZE `<Union>.unionCases` BESIDE THE UNION THAT WAS JUST READ** (`/specs/union-cases.md`).
 // One bare case per variant, in declaration order, tag = index — which makes it an ordinary payload-free
