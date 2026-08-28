@@ -61,6 +61,15 @@
 # still prove determinism and leak-freedom — on ONE M. Their multi-M subject has
 # no producer until `spawn`, and no reading below should be read as covering it.
 #
+# ⭐⭐ park-torture IS THE ONLY ONE THAT PARKS, WHICH IS WHY SV1 ADDED IT. Every
+# other program here spins and returns, so not one of them walks the deferred-park
+# path (W218) at all — the window between registering on the store that will wake
+# a green thread and its registers being saved. It contributes 3200 suspensions
+# per run for about fifty milliseconds, and its own header carries the sabotage
+# reading that proves it can go red (139 at N=2/7/12 with the deferral reverted
+# and the window widened; clean at N=1) together with the two instruments that
+# reading needs. Its rows HERE are the coroutine ones, like everything else's.
+#
 # Exits 0 iff every assertion holds; non-zero (and prints FAIL) otherwise.
 
 set -u
@@ -76,7 +85,7 @@ MAXON="${MAXON:-$REPO/maxon-shv2/.maxon/maxon-shv2.exe}"
 
 WORK="$HERE/.pin-matrix"
 PROCS_LIST="${PROCS_LIST:-1 2 7 12}"
-PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture alloc-torture remote-free-torture refcount-torture}"
+PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture}"
 
 LEAK_EXIT=101
 SEGV_EXIT=139

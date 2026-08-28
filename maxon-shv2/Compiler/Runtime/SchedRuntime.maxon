@@ -2304,6 +2304,15 @@ function buildSchedWorkerLoop(module StdModule)
 	// worker M while `main` was busy in its own code waited for P0 to come back, however long that took.
 	// `ParkTimeoutWithTimersMs` — 2 ms while a timer is pending — exists for exactly this and has had no
 	// consumer since it was written: it is what bounds the latency of the poll below.
+	//
+	// ⭐ **MEASURED 2026-08-27, and the number is here because the instrument is not committed.** A green
+	// thread whose `sleep(1)` runs on a worker while `main` burns 400 ms in ORDINARY USER CODE — not
+	// yielding, not awaiting, so nothing on main's side polls — measures its own wait as **6-11 ms** with
+	// these two calls and **400 ms** without them, 3 runs at each of `MAXON_MAX_PROCS` 2, 7 and 12.
+	// ⚠ **IT IS A LATENCY EFFECT AND NOT A HANG**, which is worth saying precisely because the obvious
+	// claim is the stronger one: main's own netpoll and `__gt_drain_at_exit` both poll the timer store, so
+	// the deadline is noticed at the latest when main next enters a driver. What this removes is the
+	// unbounded-looking gap in between, which is as long as the user code happens to run.
 	let workerNow = ids.mint()
 	module.appendOp(doWait, op: StdOp.call(workerNow, callee: GtNowNsName, args: ValueIdArray.create()))
 	module.appendOp(doWait, op: StdOp.call(ids.mint(), callee: GtTimerCheckName, args: argsOf(workerNow)))

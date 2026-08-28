@@ -1,0 +1,131 @@
+// Track-0 DEFERRED-PARK torture program (SV1 wave 1 / W218) — the ONE shape no
+// other torture and no committed spec case can reach.
+//
+// ⛔⛔ **WHY IT EXISTS: NOTHING ELSE IN THIS DIRECTORY EVER PARKS.** `steal-torture`,
+// `drop-running-torture`, `alloc-torture`, `remote-free-torture` and
+// `refcount-torture` spin and return; not one of them suspends a green thread.
+// W218 is entirely about the window between *"register on the store that will
+// wake me"* and *"my registers are saved by `__gt_context_switch`"*, so a program
+// that never suspends cannot see it however many processors it runs on. This one
+// suspends constantly: `taskCount` tasks × `sleepsPerTask` parks each.
+//
+// ⭐⭐ **`sleepMs` IS 0, AND THAT IS LOAD-BEARING RATHER THAN A SHORTCUT.** The
+// deadline is `now`, i.e. DUE THE INSTANT IT IS REGISTERED, so any
+// `__gt_timer_check` running on another M fires the entry immediately — which is
+// exactly the event the deferral exists to keep out of the window. A `sleep(1)`
+// puts a millisecond between the registration and the earliest possible fire, and
+// MEASURED that way the sabotage below does not reproduce at all.
+//
+// ⭐ **THE READING IS `aggregate`.** Each task's contribution is a pure function of
+// its index and the sum is order-independent, so it is identical however many Ms
+// serviced the work and however many times each task suspended. A thread resumed
+// onto a stale SP does not produce a SMALLER number — it produces a segfault or a
+// wild value, which is what the driver's byte-identity assertion catches.
+//
+// ============================================================================
+// WHAT IT HAS BEEN SEEN TO DO — the sabotage, and why it needs an instrument
+// ============================================================================
+//
+// ⚠⚠ **AT THE COMMITTED KNOBS THE RACE WINDOW IS NANOSECONDS WIDE AND NEITHER ARM
+// MOVES. MEASURED 2026-08-27: 12 runs PER ARM (3 at each of N=1/2/7/12),
+// `aggregate=9997` and exit 42 throughout, WITH AND WITHOUT the deferral.** A reader who stops here will conclude this
+// program is inert. It is not — the window is simply too narrow for a timer check
+// on another M to land inside it, and widening it is what makes the difference
+// observable. That instrument is one line in `GtRuntime.emitGtPark`: an
+// `osSleepMs(1)` immediately before the `__gt_context_switch` call in
+// `parkSwitch`, applied to BOTH arms of the A/B.
+//
+// ⭐⭐ **WITH THAT WIDENING, AND `taskCount`/`sleepsPerTask` CUT TO 60/2 SO THE
+// MILLISECOND-PER-PARK DOES NOT DOMINATE THE RUN (aggregate 412), THE A/B IS
+// DECISIVE — MEASURED 2026-08-27 on this tree, 3 runs per processor count:**
+//
+//     deferred park (shipped)     N=1: 412/42   N=2: 412/42   N=7: 412/42   N=12: 412/42
+//     registered before the switch N=1: 412/42   N=2: 139×3    N=7: 139×3    N=12: 139×3
+//
+// The widening is harmless with the deferral in place — the thread sits in
+// `P->pendingPark`, registered by nobody, so a millisecond there is a millisecond
+// of nothing — and it is the whole race without it. N=1 is clean in BOTH arms,
+// which is the control that says the crash is the SECOND M and not the widening.
+//
+// ⚠⚠ **AND EVERY MULTI-M READING ABOVE RESTS ON A SECOND, SEPARATE INSTRUMENT.**
+// `async f(…)` creates a COROUTINE, which never leaves its owner's M, so this
+// program's tasks are single-M until `spawn` has a source spelling. The readings
+// were taken with `GtRuntime.buildGtSpawn`'s `coroutine` arm temporarily stamping
+// the new GT as its OWN owner — one line, the same sabotage shape
+// `pin-matrix.sh`'s header describes — which makes every `async` frame a real
+// GREEN THREAD. ⛔ **Nothing in the shipped compiler does that**, so the rows this
+// program contributes to the matrix TODAY are the coroutine ones: `workers=1
+// steals=0`, deterministic, no crash. The multi-M subject arrives with `spawn`.
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+// Sized so the park path is walked thousands of times in about fifty
+// milliseconds: 3200 suspensions, which is two orders of magnitude more parks
+// than any spec case makes and still cheap enough to sit in the default matrix.
+let taskCount = 400
+let sleepsPerTask = 8
+
+// ⭐ ZERO, and see the header: a deadline of `now` is due the moment it is
+// registered, which is the only way another M's timer check can land inside the
+// window this program exists to pin.
+let sleepMs = 0
+
+// The modulus that keeps each task's contribution small and index-dependent. It
+// exists so the checksum changes if a task runs twice or not at all, which a
+// constant contribution could not show.
+let mixModulus = 7
+
+function parker(idx Integer) returns Integer
+	// CPU-parallel checkpoint: marks this hand-written function as a legitimate
+	// `async` target (satisfies the E3073 yielding contract) without claiming fake
+	// I/O. No-op at runtime.
+	__Builtins.parallelBoundary()
+
+	var acc = 0
+	var j = 0
+
+	while j < sleepsPerTask 'sleeps'
+		sleep(sleepMs)
+		acc = acc + ((idx + j) mod mixModulus)
+		j = j + 1
+	end 'sleeps'
+
+	// The +1 is what makes the aggregate COUNT the tasks as well as sum them: a
+	// task that never ran removes a 1 the fixed expectation includes.
+	return acc + 1
+end 'parker'
+
+function main() returns ExitCode
+	var promises = IntPromiseArray.create()
+
+	// Spawn phase: queue every task before awaiting any, so a backlog exists and
+	// the parks overlap rather than running one at a time.
+	for i in 0 upto taskCount 'spawn'
+		promises.push(async parker(i))
+	end 'spawn'
+
+	// Await phase: collect in spawn order. Each result is index-derived and the
+	// accumulation order is fixed, so the total is fully deterministic even though
+	// the tasks suspended and resumed an arbitrary number of times.
+	var total = 0
+
+	for p in promises 'await'
+		total = total + await p
+	end 'await'
+
+	let steals = __Builtins.schedStealCount()
+	let workers = __Builtins.schedMaxActiveWorkers()
+
+	// The driver parses these three. `aggregate` is the assertion; `workers` and
+	// `steals` are the pin's own reading, and are 1 and 0 for a coroutine-only
+	// program at every processor count.
+	print("aggregate={total}\n")
+	print("steals={steals}\n")
+	print("workers={workers}\n")
+
+	// Fixed success ExitCode, as every track-0 program uses: deterministic across
+	// runs and never 101 (the leak-check gate value).
+	return 42
+end 'main'

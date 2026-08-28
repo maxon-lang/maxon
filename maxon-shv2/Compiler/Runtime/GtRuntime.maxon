@@ -3324,6 +3324,13 @@ end 'buildGtDriveLoop'
 // ⚠ **`__mm_leak_check` IS UNTOUCHED BY ANY OF IT.** A count still non-zero after the drain is a real leak —
 // a green thread neither awaited nor dropped — and still reports 75. What this removes is the OTHER reading:
 // a count that was merely not finished yet, and a worker still decrementing it while the gate read.
+//
+// ⭐ **THE JOIN IS DOING SOMETHING, MEASURED 2026-08-27, and the number is here because the instrument is
+// not committed.** A program that spawns six long-running green threads, RENOUNCES all six and returns at
+// once takes **178-180 ms** with this call and **45-48 ms** without it (3 runs each, `MAXON_MAX_PROCS=12`) —
+// the difference being the workers finishing threads that `ExitProcess` would otherwise have killed
+// mid-body, mid-`__gt_reclaim`. ⚠ The DRIVE half contributes nothing to that reading: `__gt_promise_drop`
+// debits `__gt_live_count` at the drop, so a renounced thread is already uncounted and only the join waits.
 function buildGtDrainAtExit(module StdModule)
 	var func = IrFunction.createFromStd(GtDrainAtExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
