@@ -27,59 +27,6 @@ read as *"10 stale golden mismatches + 9 others"* — and the 9 were nine float 
 did. **A red suite now means a program did the wrong thing. Read it; there is nothing in it to
 regenerate away.**
 
-### The instrument is the runner's trailer, and the answer is the DELTA
-
-**A clean `git status` over `specs-shv2/fragments/` is NOT evidence that the emitted code is unchanged**,
-and it was reported as exactly that in **five rungs** (`X1`, `N3`, `X5`, `X6`, `A3h`). `git status`
-answers *"has anyone REGENERATED a golden"* — i.e. whether someone ran `--update-required`. **A tree can
-have every golden mismatching and a perfectly clean `git status`.** The two questions are unrelated.
-
-The runner prints, on stderr, and **silently when nothing drifted**:
-
-```
-note: N golden fragment(s) no longer match what the compiler emits. GOLDENS ARE REFERENCE, NOT A GATE
-```
-
-**And N alone is still not the answer**, because a rung inherits whatever drift `main` already carries.
-⇒ **The answer is the DELTA against the merge base built the same way.** `A3h` read 34 at its tip
-against 33 at its base, which is how its one genuinely moved fragment was found and explained.
-
-**`rung-finish.sh` measures both ends**: it builds `origin/main` in a scratch worktree and runs its
-suite purely to subtract. ~30 s, and it is the only honest way to say *"this rung did not move codegen."*
-
-**A non-zero delta is NOT a failure.** It is a codegen change that must be EXPLAINED —
-`--codegen-note-file`, and the explanation goes into the rung report. *"Is this change intended"* is not
-a question a machine can answer; *"did one happen"* is, and now it does.
-
-⚠ **A codegen change leaves `fragments-arm64-*` STALE, and those goldens can only be minted by the lane
-that emits them** — so they are minted at the periodic remote sync, **not at the rung**. Do not hold a
-merge for them, do not hand-edit them to look current, and **say in the rung report that the rung
-changed codegen and the arm64 goldens are therefore owed a mint.**
-
-⚠ **A FILTERED run's fragments are not authoritative — IN THE BOOTSTRAP.** Its runner batches a
-spec's tests into a shared module and slices the IR per test, so literal-pool indices (`__str_N`,
-`__static_lit_N`) depend on *which* tests are in the batch. **Regenerate `specs/` goldens only from an
-unfiltered run.**
-
-⛔ **THAT IS FALSE OF shv2, AND THIS FILE ASSERTED IT OF BOTH — MEASURED AT `BATCH44`, 2026-08-23.**
-`maxon-shv2/Testing/SpecTestRunner.maxon:2904-2922` states the opposite invariant outright and names
-its other end: `runOneSpec` walks its selected tests ONE AT A TIME, `stageTest` puts that test's source
-on disk alone, and one `compileToProduct` compiles it — so **`--filter` cannot move a byte of any
-fragment it does not exclude, and a filtered `--update-required` regenerates exactly what an unfiltered
-one would.** `scripts/remote-mac.sh` RELIES on it to carry a filtered arm64 run's goldens home, and
-excludes the C# suite for precisely the reason shv2 needs no exclusion. Twice measured: `BATCH44`'s 8
-re-minted x64-windows goldens came back **byte-identical** after a full unfiltered re-mint, and `G20`
-had already shown `--filter=<spec>` and `--filter=<spec>.<one test>` produce byte-identical output.
-
-⭐ **The reason it is worth stating rather than deleting**: since `G20` that independence is a property
-of the compiler's PER-COMPILE STATE, not of process isolation. Every test used to get its own `build`
-subprocess, which made the claim free; now hundreds of compiles share one worker, and what carries it
-is that each builds a fresh `Project` with every memo, interner and counter hanging off it. **If shv2
-ever compiles several tests together, this paragraph and `remote-mac.sh`'s exclusion list are the two
-ends of one invariant and must change together.**
-
----
-
 ## `scale-test` — an instrument, and there is no green one
 
 **It collects data for TREND ANALYSIS. It has no verdict and there is nothing to pass.** It exits **0**

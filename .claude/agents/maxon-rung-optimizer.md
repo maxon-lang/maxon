@@ -94,14 +94,6 @@ making it.
 - **Correctness first, always.** An optimization that changes behaviour is a bug. **Your correctness
   proof is your `--filter`ed specs staying green while you iterate**, plus the coordinator's full suite
   after you.
-  ⛔ **IT IS NOT `git status specs-shv2/fragments/`, and this file claimed it was.** That check answers
-  *"has anyone REGENERATED a golden"* — a tree can have every golden mismatching with a perfectly clean
-  status, which is why it was reported as codegen evidence in **five rungs** (`X1 N3 X5 X6 A3h`). It was
-  the worst possible place for that claim to sit: you are the one agent whose whole job is *"change how
-  it runs without changing what it emits"*, so a clean `git status` read as **cheaper and stricter than
-  any suite pass** meant an optimizer could rewrite a pass and prove nothing at all.
-  **The real instrument is the drift-count DELTA against the merge base**, and `scripts/rung-finish.sh`
-  measures it — you do not, and neither does anyone else by hand.
   The full suite is the **coordinator's single merge gate**, run once on the final tree; you do not
   re-run it per change.
   ⚠ Redirecting suite runs, `--workers=1` and `fmt`-with-arguments are in `.claude/CLAUDE.md`, once,
@@ -124,8 +116,9 @@ Each hot spot found, with `file:line` and its **complexity before and after**, a
 and the RATIO between rungs is the growth. *(There is no verdict and no exponent table to paste; this
 section asked for both until 2026-08-03, three weeks after they were deleted.)*
 
-**Do NOT claim codegen neutrality from `git status specs-shv2/fragments/`** — it cannot answer that.
-Report what you changed and let `rung-finish.sh`'s drift delta measure it.
+**Do NOT claim codegen neutrality from the golden fragments.** They are REFERENCE MATERIAL and nothing
+measures them (user ruling 2026-08-27). If you need to show that a pass changed how the compiler RUNS
+without changing what it EMITS, disassemble or use `--emit-ir-runtime=<names>` and say what you read.
 
 **Never claim a measurement you did not take** — and if you could not make something faster, say so
 rather than shipping a change that only looks like an optimization.

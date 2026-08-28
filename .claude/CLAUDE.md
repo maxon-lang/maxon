@@ -241,26 +241,6 @@ driving these binaries:
   go red and the build stops — while its no-multi-line-literal control still PASSES, which is
   precisely why nothing caught this for two weeks.
 
-### ⛔⛔ `git status specs-shv2/fragments/` CANNOT TELL YOU WHETHER CODEGEN MOVED. THE RUNNER CAN.
-
-**A clean `git status` over `specs-shv2/fragments/` is NOT evidence that the emitted code is unchanged**,
-and it has been reported as exactly that in **five rungs** (`X1`, `N3`, `X5`, `X6`, `A3h` — caught by
-`A3h`'s review 2026-08-03). `git status` answers *"has anyone REGENERATED a golden"* — i.e. whether
-someone ran `--update-required`. **A tree can have every golden mismatching and a perfectly clean
-`git status`.** The two questions are unrelated.
-
-⇒ **The instrument is the runner's own trailer**, which since `X4` prints drift as a `note:` rather than
-a failure:
-
-```
-note: N golden fragment(s) no longer match what the compiler emits. GOLDENS ARE REFERENCE, NOT A GATE
-```
-
-**To claim codegen neutrality, compare that COUNT against the merge base built the same way** — `A3h`
-read 34 at its tip against 33 at its base, which is how the one genuinely moved fragment was found and
-explained. *(It also means a rung inherits whatever drift `main` already carries, so the count alone is
-not the answer — the DELTA against a like-for-like base build is.)*
-
 ### ⚠ Running a suite by hand: REDIRECT IT TO A FILE. Never pipe it through `head`/`tail`/`grep`.
 
 ```
@@ -274,10 +254,7 @@ what failed**, so when the run goes red the detail is already gone and the only 
 whole suite again* — which is how a red suite routinely costs two runs instead of one. Redirected, the
 run is on disk the instant it ends and can be reread from any later step for free. Grep alone is not
 enough either: a failed compile embeds the compiler's entire stderr, so the marker line is a headline,
-not the evidence. **And grepping `^FAIL` no longer finds golden drift at all** — a fragment mismatch is
-REFERENCE, not a gate (user ruling 2026-08-02): it never carries a `FAIL` marker, never counts as a
-failure and never touches the exit code. It prints as a separate `note:` block below the summary, so
-read the file for it rather than grepping for a marker that is deliberately absent.
+not the evidence.
 
 ⚠ **A BOOTSTRAP `spec-test` RUN DELETES EVERY `*.exe`, `*.ir_exe` AND `*.mxdbg` UNDER `temp/`, RECURSIVELY**
 (`TestRunner.CleanupExecutables`, `maxon-sharp/Testing/TestRunner.cs:890`, called on EVERY run — filtered or

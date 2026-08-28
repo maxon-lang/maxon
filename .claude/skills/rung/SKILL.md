@@ -26,16 +26,10 @@ and refuses to invent one.**
 | | |
 |---|---|
 | **`scripts/rung-start.sh`** | claim the row · **refuse a duplicate id** · **refuse a LANE COLLISION** · push (the lock) · worktree · `cp -r bin` · build |
-| **`scripts/rung-finish.sh`** | rebase FIRST · build · suite · leak · untracked goldens · **golden-drift DELTA vs the merge base** · ladder row · C# lane · cross-target · `--ff-only` merge · flip the board · push · re-run the suite on a rejected push · tear down · **REAP leaked rung worktrees** |
+| **`scripts/rung-finish.sh`** | rebase FIRST · build · suite · leak · ladder row · C# lane · cross-target · `--ff-only` merge · flip the board · push · re-run the suite on a rejected push · tear down · **REAP leaked rung worktrees** |
 
 Both take `--dry-run`. Both refuse to run outside a checkout that owns `main`. **Read what they refuse —
 the refusal names the fix.**
-
-⭐ **`rung-finish.sh` measures something no rung has ever measured: the golden-drift DELTA.**
-`git status specs-shv2/fragments/` **cannot** tell you whether codegen moved, and was reported as
-exactly that in five rungs (`X1 N3 X5 X6 A3h`). The script builds `origin/main` in a scratch worktree
-and subtracts — **caching the answer by commit SHA**, since a base measurement is a property of a
-COMMIT, and this rung's tip is the next rung's base. See `reference/gates.md`.
 
 ## ⚙ EACH GATE RUNS ONCE, AND THIS TABLE SAYS WHERE
 
@@ -49,7 +43,6 @@ up to **four**. Exactly one of each gated anything.)*
 | **filtered specs** | many | **each agent's fast loop** | this is the loop, not a gate |
 | **full shv2 suite** | **once** | `rung-finish.sh` | ⛔ the reviewer must NOT — it finishes minutes before the battery, on the identical tree. The implementer keeps ONE at its finish: a different, pre-integration tree, where breakage is cheapest to fix |
 | **`scale-test` ladder** | **once** | **you, §5a** — plus the optimizer's before/after, which is its instrument, not a check | ⛔ the implementer must NOT — a reading on a pre-review, pre-optimizer tree attributes nothing |
-| **golden-drift delta** | **once** | `rung-finish.sh` (cached by SHA) | ⛔ nobody by hand. `git status fragments/` cannot answer it |
 | **C# suite + neutrality** | twice, deliberately | implementer (fast feedback), `rung-finish.sh` (authoritative, merged tree) | — |
 | **cross-target** | **once** | `rung-finish.sh` | — |
 
@@ -144,7 +137,6 @@ Omit it and you are told `success: true` about a tree containing none of your wo
 > not an arithmetic delta from a remembered total — a green suite is green whatever it started at, and
 > other agents land between and during rungs. ⇒ **When `rung-finish.sh` comes back RED you may not
 > assume the red is yours.** Attribute it: do the failures touch what you changed? The script measures
-> the merge base's suite for you as part of the drift A/B and prints both, which is usually the answer.
 
 ## 2. PLAN IT — read BOTH reference compilers before you design anything
 
@@ -250,7 +242,7 @@ grepping for a success string. **Check exit codes. Never grep for success.** Exi
 
 **The full battery is `rung-finish.sh`'s, and it runs ONCE** — your independent verification and the
 pre-merge gate at the same time, not a second run stacked on the agents'. The agents iterate on
-`--filter` and prove their own slice; the full suite, the drift A/B and the cross-target matrix are the
+`--filter` and prove their own slice; the full suite and the cross-target matrix are the
 script's, run once on the final tree. If it comes back red, an agent goes back.
 
 ### ⭐⭐ THE SPEC SUITE IS THE TESTING MECHANISM. A hand-run snippet is DISCOVERY, never EVIDENCE.
@@ -288,7 +280,6 @@ uncommitted change**, because a rung that wrote no detail is not closed.
 
 ```bash
 scripts/rung-finish.sh --batch BATCH14 --message-file temp/closure.txt \
-    [--codegen-note-file temp/codegen.md]   # required iff the drift delta is non-zero
     [--no-ladder-row "<reason>"] [--branch <name> for --wave] [--dry-run]
 ```
 

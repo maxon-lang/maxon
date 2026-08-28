@@ -349,5 +349,5 @@ cat <<EOF
   NEXT: §2 plan it — survey BOTH references, write the SPEC PORT LIST, and watch it go RED.
         Then the wave, the ladder read, the review, and:
 
-      scripts/rung-finish.sh --batch $BATCH --message-file <f> [--codegen-note-file <f>]
+      scripts/rung-finish.sh --batch $BATCH --message-file <f>
 EOF

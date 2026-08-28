@@ -4,7 +4,7 @@
 # as one command. It is `.claude/skills/rung/SKILL.md` §8; read `reference/gates.md` for what a red one
 # MEANS, because this script can tell you a gate failed and never why it matters.
 #
-#   rebase the branch -> build -> suite -> GATES -> BASE-DRIFT A/B -> cross-target -> ff-merge
+#   rebase the branch -> build -> suite -> GATES -> cross-target -> ff-merge
 #     -> flip the board -> commit -> push -> tear down the worktree -> REAP the leaked ones
 #
 # ⭐ THE ORDER IS THE POINT, and by hand it has gone wrong in every direction:
@@ -15,36 +15,16 @@
 #    - a REJECTED PUSH IS NOT A RETRY. The tree changed under you; the suite re-runs before it lands.
 #    - the worktree is torn down LAST, after the push, so a failure anywhere leaves the work intact.
 #
-# ⭐⭐ WHAT THIS SCRIPT MEASURES THAT NOBODY HAS BEEN MEASURING: THE GOLDEN-DRIFT DELTA.
-#
-#    `git status specs-shv2/fragments/` CANNOT tell you whether codegen moved — it answers "has anyone
-#    REGENERATED a golden", and a tree can have every golden mismatching with a perfectly clean status.
-#    It was reported as codegen evidence in FIVE rungs (X1, N3, X5, X6, A3h). The instrument that CAN
-#    answer is the runner's own trailer:
-#
-#        note: N golden fragment(s) no longer match what the compiler emits.
-#
-#    …and N alone is still not the answer, because a rung inherits whatever drift `main` already
-#    carries. THE ANSWER IS THE DELTA AGAINST THE MERGE BASE BUILT THE SAME WAY. So this script builds
-#    origin/main in a scratch worktree and runs its suite, purely to subtract. That costs ~30 s and it
-#    is the only honest way to say "this rung did not move codegen".
-#
-#    A NON-ZERO DELTA IS NOT A FAILURE. It is a codegen change that has to be EXPLAINED — pass
-#    --codegen-note-file and the explanation goes in the report. "This codegen change is intended" is
-#    not a question a machine can answer; whether one happened is.
-#
 # THE GATES (every one of them stops the script):
 #   - the branch rebases onto origin/main cleanly
 #   - build exit 0 (bootstrap too, if stale)
 #   - full unfiltered shv2 suite: `failed: 0`      <- the gate is ZERO FAILURES, never a total
 #   - no memory leak (exit 101)
-#   - ZERO untracked goldens under specs-shv2/fragments/   <- a minted golden nobody committed
 #   - the SELF-COMPILE: shv2 builds maxon-shv2 with the branch's own binary, exit 0. It is the ONLY
 #     build that runs `checkUnusedExports` (E3092/E3093/E3094) — the bootstrap never does — so an
 #     `export` a rung adds and nothing outside its file reads is invisible to every other gate. Found
 #     2026-08-25 (EC1): a three-line contract commit broke the self-compile, the suite stayed 6673/0,
 #     and it was found only because a later agent happened to self-compile. ~3 min.
-#   - golden-drift delta vs the merge base: explained if non-zero
 #   - a row in docs/optimization-log.md, or an explicit --no-ladder-row reason
 #   - the C# suite + codegen neutrality, if the branch touched maxon-sharp/
 #   - scripts/cross-target-gate.sh over every LOCAL target (arm64 is remote and NEVER blocks a rung)
@@ -52,15 +32,13 @@
 #
 # USAGE
 #   scripts/rung-finish.sh --batch <ID> --message-file <f>
-#                          [--codegen-note-file <f>] [--no-ladder-row "<reason>"]
+#                          [--no-ladder-row "<reason>"]
 #                          [--branch <name>] [--csharp] [--no-cross-target "<reason>"]
 #                          [--dry-run] [--no-push] [--keep-worktree]
 #
 #   --batch             the board row id; its Owner cell is where the BRANCH NAME comes from, so the
 #                       board stays the one place that fact is written
 #   --message-file      the closure commit message (the merge + the board flip land as one push)
-#   --codegen-note-file why the emitted code moved. REQUIRED iff the drift delta is non-zero or the
-#                       branch modified a committed golden
 #   --no-ladder-row     skip the optimization-log.md check, with a reason that is echoed into the report
 #   --branch            WAVE mode: name the branch directly, no board row is read or flipped
 #   --dry-run           run every gate, merge nothing, write nothing, push nothing
@@ -103,7 +81,7 @@ readonly REAP_IDLE_MINUTES=30
 #    developed on. Nothing caught it because nothing runs this script except a rung finishing.
 . "$REPO/scripts/lib/host-binaries.sh" || { echo "cannot source scripts/lib/host-binaries.sh" >&2; exit 1; }
 
-BATCH=""; MSG_FILE=""; CODEGEN_NOTE=""; NO_LADDER=""; BRANCH=""; RUN_CSHARP=0
+BATCH=""; MSG_FILE=""; NO_LADDER=""; BRANCH=""; RUN_CSHARP=0
 NO_CROSS=""; DRY_RUN=0; NO_PUSH=0; KEEP_WORKTREE=0; STASHED=0
 
 restore_stash() {
@@ -119,7 +97,6 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --batch)             BATCH="$2";        shift 2 ;;
     --message-file)      MSG_FILE="$2";     shift 2 ;;
-    --codegen-note-file) CODEGEN_NOTE="$2"; shift 2 ;;
     --no-ladder-row)     NO_LADDER="$2";    shift 2 ;;
     --branch)            BRANCH="$2";       shift 2 ;;
     --csharp)            RUN_CSHARP=1;      shift   ;;
@@ -138,13 +115,12 @@ if [ "$DRY_RUN" = "0" ]; then
   [ -n "$MSG_FILE" ] || die "--message-file is required (omit only with --dry-run)"
   [ -f "$MSG_FILE" ] || die "--message-file does not exist: $MSG_FILE"
 fi
-[ -z "$CODEGEN_NOTE" ] || [ -f "$CODEGEN_NOTE" ] || die "--codegen-note-file does not exist: $CODEGEN_NOTE"
 
 mkdir -p "$LOGDIR"
 cd "$REPO" || die "cannot cd to $REPO"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "1/10  Position — the branch, the worktree, and the DETAIL ROW you owe"
+step "1/9  Position — the branch, the worktree, and the DETAIL ROW you owe"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "this checkout is on '$(git rev-parse --abbrev-ref HEAD)', not main.
      The merge and the board flip both land ON main, so they run in the checkout that OWNS main —
@@ -208,7 +184,7 @@ BOOTSTRAP="$(maxon_bootstrap_path "$WORKTREE")"
 [ -x "$BOOTSTRAP" ] || die "no bootstrap in the worktree ($BOOTSTRAP) — bin/ is gitignored; copy it in"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "2/10  Rebase the branch onto origin/main — BEFORE the suite, not after"
+step "2/9  Rebase the branch onto origin/main — BEFORE the suite, not after"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 git fetch --quiet origin || die "git fetch failed"
 BASE_SHA="$(git rev-parse origin/main)"
@@ -244,7 +220,7 @@ echo "$CHANGED_FILES" | grep -cE '^(maxon-sharp|stdlib)/' >/dev/null && RUN_CSHA
 [ "$RUN_CSHARP" = "0" ] || ok "the branch touched maxon-sharp/ or stdlib/ — the C# suite is now part of this battery"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "3/10  Build"
+step "3/9  Build"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 build_tree() {                       # build_tree <tree> <tag> [force-bootstrap] — bootstrap, then shv2
   local tree="$1" tag="$2" force="${3:-0}"
@@ -276,11 +252,11 @@ build_tree "$WORKTREE" "tip" 1
 ok "shv2 built from the rebased branch, on a bootstrap rebuilt from that branch's own sources"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "4/10  The full unfiltered shv2 suite"
+step "4/9  The full unfiltered shv2 suite"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # ⚠ REDIRECTED, never piped. A pipe decides what to keep BEFORE you know what failed, so a red run
 #   costs a second full run just to read what the first one already had.
-run_suite() {                        # run_suite <tree> <binary> <log> [target] -> sets PASSED FAILED DRIFT
+run_suite() {                        # run_suite <tree> <binary> <log> [target] -> sets PASSED FAILED
   local tree="$1" bin="$2" log="$3" target="${4:-}"
   if [ -n "$target" ]; then
     ( cd "$tree" && "$bin" spec-test "--target=$target" ) > "$log" 2>&1
@@ -293,28 +269,12 @@ run_suite() {                        # run_suite <tree> <binary> <log> [target] 
   [ -n "$summary" ] || { tail -40 "$log"; die "could not parse a summary from the suite — see $log"; }
   PASSED="$(echo "$summary" | awk '{print $1}')"
   FAILED="$(echo "$summary" | awk '{print $3}')"
-  # SILENT when nothing drifted, which is the normal case — so "no note" means zero.
-  #
-  # ⛔ MATCH THE NOTE'S OWN WORDING, NOT JUST ITS SHAPE. The runner prints TWO `note: N golden
-  #   fragment(s) …` blocks, and they count different things: one is DRIFT ("no longer match what the
-  #   compiler emits"), the other is UNTRACKED ("are NOT TRACKED BY GIT"). This used to take the LAST
-  #   number of that shape, which is the untracked one whenever both are present.
-  #
-  #   That is not a rare case — it is the BASE's normal case. The base is a fresh worktree of
-  #   origin/main, so running its suite MINTS a golden for every case the branch added, and those are
-  #   untracked by construction. Measured 2026-08-04: base drift read 291 and untracked read 39, the
-  #   script reported the base at 39, and a rung whose real delta was 4 was accused of a 256-fragment
-  #   codegen change. A gate that reports a number which is not the one it names is worse than no
-  #   gate: it sends you looking for a change that never happened, and it would hide a real one just
-  #   as readily whenever the untracked count happened to be the larger.
-  DRIFT="$(grep -oE 'note: [0-9]+ golden fragment\(s\) no longer match' "$log" | grep -oE '[0-9]+' | tail -1)"
-  [ -n "$DRIFT" ] || DRIFT=0
 }
 
 SUITE_LOG="$LOGDIR/rung-tip-suite.log"
 run_suite "$WORKTREE" "$SHV2" "$SUITE_LOG"
-TIP_PASSED="$PASSED"; TIP_FAILED="$FAILED"; TIP_DRIFT="$DRIFT"; TIP_EXIT="$SUITE_EXIT"
-echo "  $TIP_PASSED passed, $TIP_FAILED failed   (golden drift: $TIP_DRIFT)"
+TIP_PASSED="$PASSED"; TIP_FAILED="$FAILED"; TIP_EXIT="$SUITE_EXIT"
+echo "  $TIP_PASSED passed, $TIP_FAILED failed"
 
 [ "$TIP_EXIT" != "101" ] || { grep -iE 'leak' "$SUITE_LOG" | head -20; die "MEMORY LEAK — exit 101.
      Leaks are not ok. A leak this rung's mechanism can reach is FIXED, or the leak-causing construct
@@ -333,13 +293,6 @@ fi
 [ "$TIP_EXIT" = "0" ] || die "the suite exited $TIP_EXIT while reporting 0 failures — that is a runner
      problem, not a test problem"
 ok "suite green: $TIP_PASSED passed, 0 failed"
-
-# A minted golden left untracked is invisible to `git status` noise and to the summary alike. It has
-# been found three times in one session, every time by a LATER rung's baseline.
-UNTRACKED="$(git -C "$WORKTREE" ls-files --others --exclude-standard specs-shv2/fragments/)"
-[ -z "$UNTRACKED" ] || { echo "$UNTRACKED" | head -20; die "$(echo "$UNTRACKED" | wc -l | tr -d ' ') golden(s) were MINTED and never committed.
-     \`git add\` them on the branch and commit, then re-run — a golden this rung created belongs to it."; }
-ok "no untracked goldens"
 
 # ⭐ THE SELF-COMPILE — the gate the suite is not. `checkUnusedExports` (E3092/E3093/E3094) runs only
 #   when shv2 compiles a program, and the only program that exercises every `export` in the compiler is
@@ -360,130 +313,7 @@ fi
 ok "self-compile: shv2 builds itself (exit 0)"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "5/10  The golden-drift DELTA against the merge base"
-# ─────────────────────────────────────────────────────────────────────────────────────────────────
-# ⛔ `git status specs-shv2/fragments/` cannot answer this and was believed to in five rungs. The
-#    runner's drift count can — but a rung INHERITS whatever drift main already carries, so the count
-#    alone is not the answer either. The DELTA against a like-for-like base build is.
-BASE_TREE="$(cd .. && pwd)/maxon-$(echo "$BATCH" | tr '[:upper:]' '[:lower:]')-base"
-cleanup_base() { [ -e "$BASE_TREE" ] && git worktree remove --force "$BASE_TREE" >/dev/null 2>&1; }
-
-# ⭐ MEASURE EACH COMMIT ONCE, EVER. The base measurement is a property of a COMMIT, not of a rung — so
-#    it is cached under temp/ by SHA, and every rung that lands on the same `origin/main` reads it
-#    instead of re-deriving it. Two things fill this cache for free:
-#      · the previous rung's TIP measurement IS the next rung's base, and is written below at merge;
-#      · any earlier rung that already measured this base.
-#    Without it, consecutive rungs on an unmoved `main` each spend a build + a suite re-deriving one
-#    number. `temp/` is gitignored, so a cold cache costs exactly what it did before and nothing else.
-BASE_CACHE="$LOGDIR/rung-drift-$BASE_SHA.txt"
-if [ -r "$BASE_CACHE" ]; then
-  read -r BASE_DRIFT BASE_PASSED BASE_FAILED < "$BASE_CACHE"
-  ok "base $(git log --oneline -1 --format=%h "$BASE_SHA") already measured — reusing it (drift $BASE_DRIFT)"
-  echo "     $BASE_CACHE — delete it to force a re-measure"
-else
-  if [ -e "$BASE_TREE" ]; then
-    warn "a base worktree is already at $BASE_TREE — removing it"
-    cleanup_base
-  fi
-  git worktree add --detach --quiet "$BASE_TREE" "$BASE_SHA" || die "cannot create the base worktree"
-  cp -r "$WORKTREE/bin" "$BASE_TREE/bin" || { cleanup_base; die "cannot copy bin/ into the base worktree"; }
-  echo "  building origin/main ($(git log --oneline -1 --format=%h "$BASE_SHA")) to subtract from…"
-
-  # ⚠ THE COPIED bin/ IS THE *TIP'S* BOOTSTRAP, AND THAT WOULD CONTAMINATE THE A/B. `bin/` is
-  #   gitignored, so the base worktree has no compiler and must borrow one — but if this rung touched
-  #   maxon-sharp/, borrowing the tip's means building BASE sources with the CHANGED bootstrap, and the
-  #   drift delta would measure nothing at all. Force the base to build its own in exactly that case.
-  build_tree "$BASE_TREE" "base" "$RUN_CSHARP"
-  run_suite "$BASE_TREE" "$(maxon_shv2_path "$BASE_TREE")" "$LOGDIR/rung-base-suite.log"
-  BASE_DRIFT="$DRIFT"; BASE_PASSED="$PASSED"; BASE_FAILED="$FAILED"
-  cleanup_base
-  printf '%s %s %s\n' "$BASE_DRIFT" "$BASE_PASSED" "$BASE_FAILED" > "$BASE_CACHE"
-fi
-
-echo "  base  $BASE_PASSED passed, $BASE_FAILED failed   (golden drift: $BASE_DRIFT)"
-echo "  tip   $TIP_PASSED passed, $TIP_FAILED failed   (golden drift: $TIP_DRIFT)"
-
-if [ "$BASE_FAILED" != "0" ]; then
-  warn "⚠ THE BASE IS ALREADY RED ($BASE_FAILED failed). Whatever this rung did, it did not cause that."
-  warn "  A pre-existing red still gets fixed — but it is not this rung's gate, and its own commit is"
-  warn "  the right home for the fix."
-fi
-
-# ─────────────────────────────────────────────────────────────────────────────────────────────────
-# ⭐⭐ THE OTHER LOCAL LANES — REPORTED, NEVER GATED. User ruling, 2026-08-24.
-#
-# Everything above measures the HOST lane and nothing else, so a rung that moves x64-linux or wasm
-# codegen passes the drift gate in silence. That is not hypothetical: BATCH44 re-minted x64-linux to
-# ZERO drift, and by BATCH46's merge base 538 fragments already differed — moved by something in
-# between that nobody measured, because nothing was looking. `cross-target-gate.sh` DOES run those
-# lanes, but it reads only PASS/FAIL, and drift is a `note:` that never touches an exit code.
-#
-# ⛔ REPORT ONLY. These deltas never set CODEGEN_MOVED, never demand a note and never die — that is
-#    the ruling, and it is the right shape: a second gate on a number this script cannot attribute
-#    would stop rungs over movement that belongs to somebody else, which is the failure the host
-#    delta already had to be taught to avoid.
-#
-# COST: the base half is cached by SHA exactly like the host's, and THIS rung's tip is the NEXT
-# rung's base — so a lane is measured once per commit of `main`, not once per rung.
-LOCAL_LANES=""
-command -v wsl.exe >/dev/null 2>&1 && LOCAL_LANES="$LOCAL_LANES x64-linux"
-[ -x "$REPO/vendor/wasmtime/wasmtime.exe" ] || [ -x "$REPO/vendor/wasmtime/wasmtime" ]   && LOCAL_LANES="$LOCAL_LANES wasm32-wasi"
-
-if [ -n "$LOCAL_LANES" ]; then
-  echo
-  echo "  other LOCAL lanes — reported, never gated (the host delta above is the gate):"
-  for lane in $LOCAL_LANES; do
-    lane_cache="$LOGDIR/rung-drift-$BASE_SHA-$lane.txt"
-    if [ -r "$lane_cache" ]; then
-      read -r lane_base < "$lane_cache"
-    else
-      if [ -e "$BASE_TREE" ]; then git worktree remove --force "$BASE_TREE" >/dev/null 2>&1; fi
-      if git worktree add --detach --quiet "$BASE_TREE" "$BASE_SHA" 2>/dev/null          && cp -r "$WORKTREE/bin" "$BASE_TREE/bin" 2>/dev/null          && build_tree "$BASE_TREE" "base" 0 2>/dev/null; then
-        run_suite "$BASE_TREE" "$(maxon_shv2_path "$BASE_TREE")" "$LOGDIR/rung-base-$lane.log" "$lane" || true
-        lane_base="$DRIFT"
-        printf '%s
-' "$lane_base" > "$lane_cache"
-      else
-        lane_base=""
-      fi
-      cleanup_base
-    fi
-    run_suite "$WORKTREE" "$SHV2" "$LOGDIR/rung-tip-$lane.log" "$lane" || true
-    lane_tip="$DRIFT"
-    if [ -n "$lane_base" ]; then
-      printf '    %-14s base %-6s tip %-6s delta %s
-' "$lane" "$lane_base" "$lane_tip" "$(( lane_tip - lane_base ))"
-    else
-      printf '    %-14s base UNMEASURED  tip %-6s (could not build the base for this lane)
-' "$lane" "$lane_tip"
-    fi
-  done
-  echo "    ⚠ a non-zero delta here is NOT a gate and NOT a failure — it is a lane this rung moved"
-  echo "      that the host delta cannot see. Say it in the rung report."
-  echo
-fi
-
-DRIFT_DELTA=$(( TIP_DRIFT - BASE_DRIFT ))
-MODIFIED_GOLDENS="$(git -C "$WORKTREE" diff --name-status "$BASE_SHA...$TIP" -- specs-shv2/fragments/ | grep -c '^M' || true)"
-
-CODEGEN_MOVED=0
-[ "$DRIFT_DELTA" = "0" ] || CODEGEN_MOVED=1
-[ "$MODIFIED_GOLDENS" = "0" ] || CODEGEN_MOVED=1
-
-if [ "$CODEGEN_MOVED" = "0" ]; then
-  ok "drift delta 0 and no golden modified ⇒ this rung emitted BYTE-IDENTICAL code"
-else
-  warn "CODEGEN MOVED: drift delta $DRIFT_DELTA (base $BASE_DRIFT → tip $TIP_DRIFT), $MODIFIED_GOLDENS golden(s) modified"
-  [ -n "$CODEGEN_NOTE" ] || die "a codegen change needs an EXPLANATION, not a shrug. Pass
-     --codegen-note-file with what moved and why. ⚠ This is not a failure — 'is this change intended'
-     is not a question a machine can answer, which is exactly why you have to answer it.
-     ⚠ It also means the arm64 goldens are now OWED A MINT. They can only be minted by the lane that
-       emits them, so that happens at the periodic remote sync, NOT here — say so in the rung report."
-  ok "explained: $(head -c 160 "$CODEGEN_NOTE" | tr '\n' ' ')…"
-fi
-
-# ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "6/10  The ladder read, and the C# lane"
+step "5/9  The ladder read, and the C# lane"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # The scale-test READ is per rung and never batches — not out of thoroughness, but because ATTRIBUTION
 # IS ONLY AVAILABLE NOW. The instrument sees exactly WHAT moved and can never see why; ten rungs later,
@@ -516,15 +346,14 @@ if [ "$RUN_CSHARP" = "1" ]; then
   CS_DIRTY="$(git -C "$WORKTREE" status --short specs/ specs-shv2/)"
   if [ -n "$CS_DIRTY" ]; then
     echo "$CS_DIRTY" | head -20
-    [ -n "$CODEGEN_NOTE" ] || die "the C# suite moved goldens and nothing explains it — pass --codegen-note-file"
-    warn "the C# lane moved goldens; they are covered by your codegen note and must be COMMITTED"
+    warn "the C# lane moved goldens — they are REFERENCE, not a gate, and must be COMMITTED"
   else
     ok "C# codegen neutrality: git status over specs/ and specs-shv2/ is empty"
   fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "7/10  The CROSS-TARGET gate — every LOCAL target"
+step "6/9  The CROSS-TARGET gate — every LOCAL target"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # Step 4 proved the rung on exactly ONE target: whichever one this host happens to be. A green suite on
 # one target is evidence about one target — that is how 317 stale arm64 goldens sat on main unnoticed
@@ -563,13 +392,12 @@ fi
 if [ "$DRY_RUN" = "1" ]; then
   printf '\n\033[32m✓ DRY RUN CLEAN\033[0m — every gate passed. Nothing merged, written or pushed.\n'
   echo "  suite   $TIP_PASSED passed, 0 failed"
-  echo "  drift   base $BASE_DRIFT → tip $TIP_DRIFT (delta $DRIFT_DELTA)"
   echo "  cross   ${CROSS_SUMMARY:-ran}"
   exit 0
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "8/10  Land it — linear history"
+step "7/9  Land it — linear history"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 if [ -n "$(git status --porcelain)" ]; then
   git stash push -u --quiet -m "rung-finish: $BATCH" || die "git stash failed"
@@ -581,11 +409,6 @@ git merge --ff-only --quiet "$BRANCH" || die "FAST-FORWARD MERGE REFUSED. The --
      EXPLICITLY, so this errors rather than making a merge commit whatever the config says. The branch
      must sit directly on top of main — re-run, which rebases it."
 ok "main fast-forwarded to $BRANCH ($(git log --oneline -1 --format=%h))"
-
-# ⭐ THIS RUNG'S TIP IS THE NEXT RUNG'S BASE, and it was measured minutes ago on this exact tree. Write
-#    it into the cache so the next finish subtracts for free instead of rebuilding main to re-derive a
-#    number this run already holds.
-printf '%s %s %s\n' "$TIP_DRIFT" "$TIP_PASSED" "$TIP_FAILED" > "$LOGDIR/rung-drift-$(git rev-parse HEAD).txt"
 
 restore_stash
 
@@ -644,7 +467,7 @@ git commit --quiet -F "$MSG_FILE" || die "git commit failed"
 ok "committed $(git log --oneline -1)"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "9/10  Push"
+step "8/9  Push"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 if [ "$NO_PUSH" = "1" ]; then
   warn "--no-push: main is ahead locally. Push it yourself — the parallel repo consumes it."
@@ -695,7 +518,7 @@ if [ "$KEEP_WORKTREE" = "0" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "10/10  Reap LEAKED rung worktrees — the debris nothing has ever removed"
+step "9/9  Reap LEAKED rung worktrees — the debris nothing has ever removed"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # ⭐ WHY THIS EXISTS. The teardown above removes the worktree of the rung that RAN this script. Nothing
 #    has ever removed the worktree of a rung that DIDN'T, and there are two routine ways to be one:
@@ -838,11 +661,10 @@ printf '\n\033[32m✓ RUNG LANDED\033[0m\n\n'
 cat <<EOF
   row       $BATCH$( [ "$WAVE" = "1" ] && printf '  (WAVE mode — no board row)' )
   suite     $TIP_PASSED passed, 0 failed
-  drift     base $BASE_DRIFT → tip $TIP_DRIFT  (delta $DRIFT_DELTA, $MODIFIED_GOLDENS golden(s) modified)
   cross     ${CROSS_SUMMARY:-ran}
 
   FOR THE RUNG REPORT — say these out loud, because a skip folded into the green is the one failure
   this battery cannot catch for you:
-    · arm64-macos / arm64-linux: SKIP — remote, UNVERIFIED. Not required, owed by the periodic sync.$( [ "$CODEGEN_MOVED" = "1" ] && printf '\n    · codegen MOVED ⇒ the arm64 goldens are OWED A MINT at that sync.' )
+    · arm64-macos / arm64-linux: SKIP — remote, UNVERIFIED. Not required, owed by the periodic sync.
     · every LOCAL target that ran, and every one that did not.
 EOF

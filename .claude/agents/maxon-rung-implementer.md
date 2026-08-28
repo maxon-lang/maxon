@@ -130,11 +130,6 @@ From your worktree root. `bin/` is gitignored, so it is copied in for you.
 for every agent in this repo. They are not repeated here; four copies of one fact is the bug this
 project keeps naming.
 
-⚠ **Golden drift is NOT among the `^FAIL` hits, by design.** A fragment mismatch is REFERENCE, not a
-gate (user ruling 2026-08-02) — it carries no `FAIL` marker, is not counted as a failure and does not
-affect the exit code. It prints as a `note:` block below the summary, so read the file for it rather
-than grepping for a marker that is deliberately absent.
-
 ⚠ **`bin/maxon.exe` IS A BUILD OUTPUT, NOT A FIXTURE.** It is gitignored, so a worktree starts without
 one and it gets copied in — but a *copied* `maxon.exe` is frozen at whatever commit built it. **The
 bootstrap compiles shv2, so a stale `bin/maxon.exe` silently reverts every bootstrap change in your
@@ -164,16 +159,10 @@ Run every one of these that applies, and paste the real output:
 2. **Your ported/enabled specs green** under `--filter`, and — **once, at your finish** — the **full shv2
    suite green**, including every pre-existing test. That single full run catches broad breakage while you
    still hold the context to fix it cheaply; the authoritative run is the coordinator's.
-3. **Fragments:** `git status --short specs-shv2/fragments/` shows **additions only**, and you `git add`
-   every one of them — an untracked golden is invisible to every gate downstream.
-   ⛔ **That is a TRACKING check, NOT a codegen check, and this file said otherwise for months.** A
-   clean `git status` here **does not** prove byte-identical codegen: it answers *"has anyone
-   REGENERATED a golden"*, and a tree can have every golden mismatching with a perfectly clean status.
-   It was reported as codegen evidence in **five rungs** (`X1 N3 X5 X6 A3h`). **The real instrument is
-   the drift-count DELTA against the merge base, and `scripts/rung-finish.sh` measures it for you** —
-   do not attempt it by hand, and do not claim codegen neutrality in your report. Report an **`M`** on a
-   pre-existing golden as what it is: **a codegen change you must investigate and justify, or fix.**
-   Never blindly regenerate.
+3. **Fragments:** `git add` any golden the run minted. They are REFERENCE MATERIAL — nothing gates on
+   them and nothing measures them (user ruling 2026-08-27), so **do not claim codegen neutrality from
+   them** in either direction. If your rung needs to show what it did to the emitted code, disassemble
+   or use `--emit-ir-runtime=<names>`.
 4. **If you touched `maxon-sharp/`:** the C# suite must stay green (2883+), AND **codegen neutrality** —
    `git status --short specs/ specs-shv2/` must be EMPTY. *(This one IS valid: the bootstrap MINTS those
    goldens on every run, so the run that would have changed them has just happened.)*
