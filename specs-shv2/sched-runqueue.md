@@ -516,6 +516,12 @@ variable.
 overflow dropped would never run, `ran` would never reach 300, and an unbounded wait would sit there for
 ever with nothing to print. The limit is four orders of magnitude above the 300 turns a healthy run
 spends, so it can only be reached by a program that has already lost something.
+
+⭐ **SEEN RED.** With `__sched_runq_put`'s overflow no longer publishing the thread that overflowed it —
+one line, the `emitSchedEnqueueLocked` at `moveDone` — this case reads `beforeAnyRan=0 / ran=299` and
+**exits 101**. Exactly one thread is lost, which is the arithmetic: pushes 1-256 fill the ring, push 257
+moves 128 out and drops the new one, and pushes 258-300 fit in the room that made. The leak gate is what
+turns the loss into an exit code; `ran=299` is what names it.
 ```maxon
 typealias SinkHandleArray = Array with Sink.handle
 
@@ -580,11 +586,26 @@ six thousand times while the ring never holds more than one thread — which dri
 256 without ever filling a single slot. A counter used directly as a slot index addresses further and
 further past the end of the P struct.
 
-⚠ **THE COUNT IS SIX THOUSAND FOR A MEASURED REASON, AND FOUR HUNDRED PROVED NOTHING.** An unmasked
-index writes and reads through the SAME wrong address, so the program's own answer stays correct while it
-scribbles on whatever follows the P struct; the only observable is when it walks out of the mapped region
-entirely. The first cut of this case used 400 rounds and was **green under the sabotage it was written to
-catch** — say so, or the next reader will "simplify" it back.
+⚠⚠ **THE COUNT IS SIX THOUSAND FOR A MEASURED REASON, AND IT WAS RE-MEASURED FOR THIS SHAPE.** An
+unmasked index writes and reads through the SAME wrong address, so the program's own answer stays correct
+while it scribbles on whatever follows the P struct; the only observable is when it walks out of the
+mapped region entirely. **MEASURED against exactly that sabotage** (`emitRunqSlotAddr` addressing the raw
+monotonic counter with no `and RunqIndexMask`), one round count per build of this very program:
+
+| rounds | reading under the sabotage |
+|---|---|
+| 400 | `sum=400`, exit 0 — **GREEN under the sabotage it exists to catch** |
+| 1,000 | `sum=1000`, exit 0 |
+| 2,000 | `sum=2000`, exit 0 |
+| 3,000 | `sum=3000`, exit 0 |
+| 4,000 | **SEGFAULT** (exit 139; through the harness, `0xC0000005`) |
+| 5,000 | SEGFAULT |
+| 6,000 | SEGFAULT |
+
+⇒ six thousand is the smallest round number with a comfortable margin past the point where the mask stops
+being invisible. **DO NOT "simplify" it back**: the first cut of this case used 400 rounds, and the table
+above is what that would buy. (The pre-EC10 `async` shape of this case measured 2,000 green and 5,000
+segfaulting — the same threshold within a factor of two, reached through a different producer.)
 ```maxon
 // Far above the one yield a healthy round spends — a lost wake is a wrong answer, not a hang.
 let settleSpinLimit = 200000
@@ -640,7 +661,13 @@ schedules. The case records the position at which #1 ran and asserts it is early
 
 ⚠ It reports EARLY/LATE rather than the exact position, because the position depends on how many
 schedules the drain loop has already spent — a number this spec has no business pinning. The two outcomes
-are ~61 and ~171, so the boundary has a wide margin either way.
+are ~61 and ~171, so the boundary at 130 has a wide margin either way.
+
+⭐ **SEEN RED, AND BOTH POSITIONS MEASURED.** Healthy, an instrumented copy of this program prints
+`firstPos=61` — the fairness check firing on its first opportunity, since shv2 tests the tick AFTER the
+increment. With the check disabled (`atFairness` compared against `GtFairnessInterval`, a value
+`tick mod 61` can never take) it prints `firstPos=172` and this case reads `oldest=late`. 61 against 172
+is why the boundary is a wide one rather than a pinned number.
 ```maxon
 typealias LeafHandleArray = Array with Leaf.handle
 
@@ -715,6 +742,16 @@ against a thread queued AFTERWARDS. `yielder` yields (and is drained while `spaw
 the ring); `spawner` then runs and `spawn`s `spawnee` into the ring; the ring is preferred, so `spawnee`
 runs FIRST and the yielder resumes second. Routed to the ring instead, the yielder would sit ahead of
 `spawnee` and the two positions would swap.
+
+⭐⭐ **SEEN RED TWICE, FOR TWO DIFFERENT CAUSES, AND IT IS THE ONLY CASE IN THIS FILE THAT CATCHES EITHER.**
+Against the tree this case was restored into it read `sPos=2 yPos=1` — not a routing bug but a yield that
+handed off to nobody at all, `__gt_resched` asking only about its owner's COROUTINE queue (see
+`GtRuntime.GtReschedName`, where the three shapes of that defect are written down). Against the fixed tree
+with `__sched_publish_yield` re-pointed at the local ring — one argument, `SchedGreenEnd.localRing` — it
+reads `sPos=2 yPos=1` again, now for the reason its own prose names. **MEASURED under that second
+sabotage, every other case in this file stays GREEN, `a-yield-hands-the-processor-to-a-never-run-sibling`
+included**: that one discriminates the FRONT of a queue from its TAIL, which a single FIFO can express,
+and is blind to RING-versus-GLOBAL, which only a green thread has two tiers to have.
 
 ⚠ **`spawnee`'s HANDLE IS DROPPED BEFORE IT HAS RUN, AND THAT IS THE POINT AT WHICH IT IS STILL QUEUED.**
 A drop closes the mailbox, and a closed mailbox DRAINS what is already in it — so the message survives
@@ -798,6 +835,12 @@ because a coroutine never enters a P ring at all, so its zero is an arm nothing 
 laid out and its rounds ARE reached — there is simply nobody to steal from at one processor. That is what
 makes the `steals > 0` reading in `track0/pin-matrix.sh` a measurement rather than a number that is
 always there.
+
+⭐ **SEEN RED, AND THE TWIN STAYED GREEN — which is the whole reason these are two cases.** With
+`DefaultMaxProcs` raised from 1 to 12, so that a spec case finally HAS somebody to steal from, this case
+reads `done=1200 steals=1062` and `steals=1197` on two builds — while `no-coroutine-is-ever-stolen` above
+**passes unchanged**, because a coroutine enters no queue a thief can reach at any processor count. One
+sabotage, two opposite answers, each the one its case claims.
 ```maxon
 typealias WorkHandleArray = Array with Work.handle
 
