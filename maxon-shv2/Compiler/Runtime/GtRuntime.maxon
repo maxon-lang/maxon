@@ -394,16 +394,19 @@ export let GtStructSize = GtOffParkArg + PointerFieldBytes
 // registration puts the thread on, because that store is the whole of what the two halves of a park differ
 // in: the timer heap, the process table, or the in-flight overlapped read's cross-thread handshake.
 //
-// ⚠ **A FOURTH — THE MAILBOX PARK — ARRIVES WITH THE MAILBOX (SV1 wave 3), AND IT IS DELIBERATELY NOT
-// RESERVED HERE.** A constant no site can produce is a dead claim (`RuntimeAbort.maxon`'s own rule), and
-// `__gt_register_park`'s refusal arm is exactly where that wave adds its case — so the gap is loud rather
-// than silently handled.
+// ⭐ **THE FOURTH IS THE MAILBOX PARK, AND IT ARRIVED WITH A PRODUCER (SV1 wave 3).** Wave 1 deliberately
+// left it unreserved on the grounds that *a constant no site can produce is a dead claim*
+// (`RuntimeAbort.maxon`'s own rule), and left `__gt_register_park`'s refusal arm as the loud gap. This is
+// that gap filled: `MailboxRuntime.buildMboxRecv` is the site, and `emitMboxRegisterPark` is the arm.
 //
 // ⚠ Zero is not a kind: it is the slab's, i.e. "this GT has never parked", which is why the numbering starts
 // at one.
 let GtParkKindTimer = 1 as ParsedInt
 let GtParkKindProc = 2 as ParsedInt
 let GtParkKindIo = 3 as ParsedInt
+// EXPORTED, unlike its three siblings, because the site that PRODUCES it is `MailboxRuntime` while the arm
+// that consumes it is here — the two files must spell one number.
+export let GtParkKindMailbox = 4 as ParsedInt
 
 // The `arg` an IO park carries: none. A yielding overlapped read registers no store — its handshake is two
 // plain stores on the GT itself — so the slot has nothing to say and the site says so rather than passing
@@ -439,7 +442,9 @@ let GtTeardownRunnerTicket = 2 as ParsedInt
 // trap: freeing a yielded GT's stack is a use-after-free when it resumes).
 export let GtStatusReady = 0
 export let GtStatusCompleted = 2
-let GtStatusWaiting = 3
+// EXPORTED since SV1 wave 3: `MailboxRuntime.emitMboxRegisterPark` stores it, being the mailbox park's own
+// registration arm, and a second spelling of a status word is a thread parked in a state nothing wakes.
+export let GtStatusWaiting = 3
 
 // The green-thread stack: the INITIAL region a spawned GT gets. The relocating morestack (P1.5-B1a′) grows it
 // on demand (2x per guard fault, copy + rbp-chain relocation), so this is a small SEED, not a ceiling — the
@@ -663,10 +668,10 @@ export let GtSpawnName = b"__gt_spawn"
 // ⚠ Its `coroHead`/`coroTail` stay at the slab's zero, which is exactly right: a brand-new green thread owns
 // an EMPTY coroutine queue, and the coroutines it goes on to create are what fill it.
 //
-// ⚠ NOT exported, and it has no Maxon-source producer in wave 1 — the `spawn` lowering is wave 3's. Its one
-// reader is `installGtRuntime` in this file, which is what E3092 requires of a name with no cross-file
-// consumer.
-let GtSpawnGreenName = b"__gt_spawn_green"
+// ⭐ EXPORTED since SV1 wave 3, which is its first cross-file reader: `MailboxRuntime.buildSvcSpawn` calls it
+// by name. Wave 1 left it unexported precisely because nothing outside this file could name it yet, and an
+// `export` with no cross-file consumer is what E3092 refuses.
+export let GtSpawnGreenName = b"__gt_spawn_green"
 
 // ⭐⭐ **`__gt_ready(gt)` — PUBLISH A SPAWNED GREEN THREAD, AND IT IS A SEPARATE CALL FOR A MEASURED REASON
 // (G1).** `__gt_spawn` used to enqueue the GT itself and the lowering then filled its ARGUMENT slots, under a
@@ -766,7 +771,10 @@ export let GtPromiseDropName = b"__gt_promise_drop"
 // **`__gt_reclaim(gt)` — the SECOND party's half, whichever of the two that turns out to be.** The releaser
 // call and the struct free, in that order and once.
 export let GtRunnerDoneName = b"__gt_runner_done"
-let GtOwnerDoneName = b"__gt_owner_done"
+// ⭐ EXPORTED since SV1 wave 3: a SERVICE has no promise, so its green thread is its own consumer and calls
+// this itself at the end of its loop (`MailboxRuntime.buildMboxServiceExit`, which carries why the ticket
+// may not be added at the spawn instead).
+export let GtOwnerDoneName = b"__gt_owner_done"
 let GtReclaimName = b"__gt_reclaim"
 
 // ⭐⭐ **THE NON-BLOCKING PEEK (G17).** `__gt_is_complete(gt) -> 1 if that green thread has reached
@@ -1893,6 +1901,13 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	if usesStreaming 'streaming'
 		installSubpRuntime(module)
 	end 'streaming'
+
+	// ⭐ **THE MAILBOX RIDES `usesGt` EXACTLY AS THE SCHEDULER DOES (SV1 wave 3), AND FOR THE SAME REASON:
+	// there is no program that wants one without the other.** `__svc_spawn` calls `__gt_spawn_green` and
+	// every mailbox wake goes through `__sched_publish_locked`; a program that never spawns a service loses
+	// all six functions to `DeadFunctionElimination`, whose only edge into them is the `funcAddr`/`call` pair
+	// `LowerMaxonToStd.lowerServiceSpawn` emits.
+	installMailboxRuntime(module)
 end 'installGtRuntime'
 
 // ⚠⚠ **THE RUN-QUEUE LOCK IS UNCONDITIONAL AS OF G1, AND IT WAS GATED ON `usesIocp` BY A PREMISE THAT HAS
@@ -4379,7 +4394,10 @@ end 'emitGtParkOnDeadline'
 //
 // It creates its own blocks and terminates `cur`; `cont` is where control resumes once the GT is running
 // again, and the CALLER terminates that.
-function emitGtPark(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, kind ParsedInt, arg ValueId, cont IrBlock)
+// EXPORTED since SV1 wave 3: `MailboxRuntime.buildMboxRecv` is the first park outside this file, and it must
+// come through this door rather than write its own — the note/switch/defer split IS W218's fix, and a second
+// spelling of it would be a park registered before its registers were saved.
+export function emitGtPark(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, kind ParsedInt, arg ValueId, cont IrBlock)
 	var selfDrive = module.addBlock(func, label: b"selfdrive")
 	var parkSwitch = module.addBlock(func, label: b"parkswitch")
 
@@ -4451,6 +4469,10 @@ function buildGtRegisterPark(module StdModule)
 	var procOverflowWake = module.addBlock(func, label: b"parkprocfullwake")
 	var notProc = module.addBlock(func, label: b"notparkproc")
 	var ioArm = module.addBlock(func, label: b"parkio")
+	var notIo = module.addBlock(func, label: b"notparkio")
+	var mailboxArm = module.addBlock(func, label: b"parkmailbox")
+	var mailboxUnlock = module.addBlock(func, label: b"parkmailboxunlock")
+	var mailboxWake = module.addBlock(func, label: b"parkmailboxwake")
 	var unknownArm = module.addBlock(func, label: b"parkunknown")
 	var doneBlock = module.addBlock(func, label: b"parkdone")
 
@@ -4524,16 +4546,36 @@ function buildGtRegisterPark(module StdModule)
 
 	let ioKind = emitConst(module, block: notProc, value: GtParkKindIo, ids: ids)
 	let isIo = emitCmp(module, block: notProc, a: kind, b: ioKind, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notProc, op: StdOp.condBranch(isIo, thenBlockId: ioArm.id, elseBlockId: unknownArm.id))
+	module.setTerminator(notProc, op: StdOp.condBranch(isIo, thenBlockId: ioArm.id, elseBlockId: notIo.id))
 
 	emitStoreField(module, block: ioArm, record: gt, offset: GtOffStatus, value: waitingConst)
 	let inFlight = emitConst(module, block: ioArm, value: IoParkedInFlight, ids: ids)
 	emitStoreField(module, block: ioArm, record: gt, offset: GtOffIoParked, value: inFlight)
 	module.setTerminator(ioArm, op: StdOp.branch(doneBlock.id))
 
-	// ⛔ **A KIND NOTHING WRITES — a compiler bug, and the one arm SV1 wave 3's mailbox park adds a case to.**
-	// Falling through silently would leave a thread suspended on no store at all, which is a HANG whose cause
-	// is three functions away; the abort names the fault where it happened.
+	let mailboxKind = emitConst(module, block: notIo, value: GtParkKindMailbox, ids: ids)
+	let isMailbox = emitCmp(module, block: notIo, a: kind, b: mailboxKind, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notIo, op: StdOp.condBranch(isMailbox, thenBlockId: mailboxArm.id, elseBlockId: unknownArm.id))
+
+	// ⭐⭐ **THE MAILBOX PARK (SV1 wave 3), AND IT IS THE ONE ARM HERE THAT CAN DECLINE TO PARK AT ALL.** The
+	// registration is `MailboxRuntime.emitMboxRegisterPark`'s — the mailbox's fields are that file's — and it
+	// answers a WAKE DEBT because it may UNDO the park: an envelope that arrived between `__mbox_recv`'s
+	// release and this registration has already been sent by a thread that found nobody parked, so the thread
+	// must go back to `ready` and be re-published rather than wait for a wake that has already happened. Its
+	// header carries why that re-check is the lost-wakeup fix and not an optimisation. The lock is this
+	// function's to release, exactly as it is for the timer and proc arms.
+	emitSchedLockEnter(module, block: mailboxArm, ids: ids)
+	let mailboxRegistered = emitMboxRegisterPark(module, func: func, cur: mailboxArm, gt: gt, mbox: arg, ids: ids)
+	module.setTerminator(mailboxRegistered, op: StdOp.branch(mailboxUnlock.id))
+	let mailboxOwesWake = ids.mint()
+	mailboxUnlock.blockArgs.push(IrBlockArg.create(mailboxOwesWake, argType: StdType.i64))
+	mailboxRegistered.branchEdges.push(BranchEdge.create(mailboxUnlock.id, argIds: argsOf(mboxRegisterParkWakeDebt(mailboxRegistered))))
+	emitSchedLockLeave(module, block: mailboxUnlock, ids: ids)
+	emitSchedWakeIfOwed(module, cur: mailboxUnlock, owed: mailboxOwesWake, wake: mailboxWake, cont: doneBlock, ids: ids)
+
+	// ⛔ **A KIND NOTHING WRITES — a compiler bug.** Falling through silently would leave a thread suspended
+	// on no store at all, which is a HANG whose cause is three functions away; the abort names the fault where
+	// it happened.
 	emitRuntimeAbort(module, func: func, block: unknownArm, abort: RuntimeAbort.schedulerUnknownParkKind, ids: ids)
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)

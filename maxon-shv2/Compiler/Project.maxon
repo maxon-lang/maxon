@@ -4366,20 +4366,35 @@ end 'unionCasesCompanionName'
 let ServiceRequestMemberName = b"request"
 let ServiceHandleMemberName = b"handle"
 
-module function serviceRequestCompanionName(typeName ByteArray) returns ByteArray
+export function serviceRequestCompanionName(typeName ByteArray) returns ByteArray
 	return "{String.from(typeName)}.{String.from(ServiceRequestMemberName)}".toByteArray()
 end 'serviceRequestCompanionName'
 
-module function serviceHandleCompanionName(typeName ByteArray) returns ByteArray
+export function serviceHandleCompanionName(typeName ByteArray) returns ByteArray
 	return "{String.from(typeName)}.{String.from(ServiceHandleMemberName)}".toByteArray()
 end 'serviceHandleCompanionName'
+
+// The member half of the DISPATCH LOOP's symbol — `__`-prefixed for `ServiceShutdownCaseName`'s reason: no
+// source may declare it (E2051) and no author may call it.
+let ServiceLoopMemberName = b"__loop"
+
+// ⭐⭐ **`<T>.__loop` — THE SYNTHESIZED DISPATCH LOOP'S SYMBOL, SPELLED ONCE FOR ITS THREE READERS (SV1 wave
+// 3).** `ServiceLoop.installServiceLoops` BUILDS the function under this name,
+// `LowerMaxonToStd.lowerServiceSpawn` emits the `funcAddr` that hands its address to `__svc_spawn`, and
+// `DeadFunctionElimination` keeps it alive through exactly that edge. Three spellings would be three chances
+// to build one symbol and root another — a link failure at best, and at worst a service whose loop is pruned.
+//
+// It is `qualifiedMethodName`'s shape, so it reads as what it is: a member of `<T>` the compiler wrote.
+export function serviceLoopSymbol(typeName ByteArray) returns ByteArray
+	return qualifiedMethodName(typeName, methodName: ServiceLoopMemberName)
+end 'serviceLoopSymbol'
 
 // ⭐⭐ **`__shutdown` IS VARIANT 0 OF EVERY REQUEST UNION, SO ADDING A MESSAGE NEVER RENUMBERS IT.** The
 // poison pill is the one variant the RUNTIME will construct from a literal tag, and the roster above it is
 // the author's to reorder; putting it last would move it every time a method was added. It wears the `__`
 // prefix because no source may declare it (`requireUnreservedName`, E2051) and no `match` an author writes
 // may name it.
-module let ServiceShutdownCaseName = b"__shutdown"
+export let ServiceShutdownCaseName = b"__shutdown"
 
 // ⭐⭐ **THE REPLY SLOT IS AN `Integer`, DELIBERATELY, AND THE P1.3 CASCADE IS WHY.** It is a raw cell
 // pointer (0 = fire-and-forget), NOT a managed box: the `__destruct_<U>` payload cascade must SKIP it, and
@@ -4392,6 +4407,15 @@ module let ServiceReplySlotName = b"__reply"
 // rather than a parse-time mark, so moves, E3102, struct fields, arrays and the drop cascade all reach it
 // by construction rather than through a special case at each door.
 module let ServiceHandleMailboxFieldName = b"mailbox"
+
+// ⭐⭐ **THE HANDLE BOX'S GEOMETRY AS A NUMBER, FOR THE ONE READER THAT HAS NO LAYOUT — the RUNTIME.**
+// `__mbox_handle_clone_box` mints a fresh handle box and `__mbox_handle_drop_box` reads the mailbox out of
+// one, and neither can ask `StructLayout` anything: they are Std-tier bodies built after the pipeline. The
+// pair is AUDITED against the layout at the one place that builds it
+// (`ServiceCompanions.buildServiceHandleStruct`), so a field added to the handle fails the compile rather
+// than making the runtime read past the record's end.
+export let ServiceHandleMailboxOffset = 0 as ByteOffset
+export let ServiceHandleBoxSize = 8 as ParsedInt
 
 // ⭐⭐ **SYNTHESIZE `<Union>.unionCases` BESIDE THE UNION THAT WAS JUST READ** (`/specs/union-cases.md`).
 // One bare case per variant, in declaration order, tag = index — which makes it an ordinary payload-free

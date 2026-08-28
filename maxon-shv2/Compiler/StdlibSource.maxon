@@ -1625,6 +1625,11 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		panicAbortValue then break 'op'
 		// The error-flag encode names no callee at all, so it reaches no stdlib substrate.
 		errorFlagEncode then break 'op'
+		// A `spawn` names a TYPE; the factory it calls is an ordinary `call` op beside it and is noted there.
+		serviceSpawn then break 'op'
+		// ⭐ A SEND REACHES ITS MESSAGE, so it is an EDGE exactly as an `async` spawn is — the handler runs on
+		// another green thread, but it is the same function and it reaches whatever that function reaches.
+		serviceSend(callee, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 	end 'op'
 end 'noteSubstrateEdge'
 

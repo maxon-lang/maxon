@@ -1439,6 +1439,46 @@ export union MaxonOp
 	// cannot drift from a returned one's, which is the property the parser-side alternative could not have
 	// had: spelling `ordinal + ErrorFlagOrdinalBias` in the parser would be the ABI written at two tiers.
 	errorFlagEncode(result ValueId, errorValue ValueId, errorIsBoxed bool) = MaxonOpMeta{category: OpCategory.plain}
+	// --- SV1 wave 3: the two ops a SERVICE is made of ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `errorFlagEncode`, per the band-append invariant: a
+	// mid-union insert is silently swallowed by any range arm. `OpCategory.awaiting` places both logically
+	// beside `asyncCall`/`await` — the band of ops that hand work to a green thread — independent of this
+	// tail position.
+	//
+	// ⭐⭐ **`serviceSpawn(result, typeName, state)` — START `<T>`'s SERVICE AND ANSWER ITS MAILBOX.** `state`
+	// is the `<T>` box the factory just built, MOVED (`Parser.moveIntoGreenThread`); `result` is the mailbox
+	// POINTER, an integer, which the parser then stores into the one field of a freshly allocated
+	// `<T>.handle` box. The two synthesized functions the runtime needs — `<T>.__loop` and the request
+	// union's drop cascade — are named by the TYPE alone, so the op carries neither: `LowerMaxonToStd`
+	// derives both from `typeName` at the one place that emits their `funcAddr`s, which is what keeps the
+	// spawn site and `ServiceLoop`'s synthesis from coming to name different symbols.
+	//
+	// ⚠ It binds NO callee (`maxonOpCalleeKind` answers `noCallee`): `<T>` reaches `UnusedExportCheck`
+	// through the ordinary `call <T>.<factory>` this op's `state` operand comes from, and `<T>.__loop` is
+	// the compiler's own name, which that pass tracks nothing under.
+	serviceSpawn(result ValueId, typeName ByteArray, state ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+	// ⭐⭐ **`serviceSend(callee, handle, request)` — ENQUEUE ONE MESSAGE, INLINE, AND RETURN.** `callee` is
+	// the message's own qualified name (`"Calc.bump"`), `handle` the mailbox pointer loaded out of the
+	// handle box, `request` the request-union BOX the parser built at the send site exactly as `emitEnumBox`
+	// builds any other.
+	//
+	// ⚠ **IT DEFINES NOTHING, AND THAT IS SV1's SCOPE STATED IN THE OPERAND LIST RATHER THAN IN A FLAG.** A
+	// fire-and-forget send has no reply, so there is no value to bind and no `hasReply` bit any site could
+	// set to `true` — a constant no producer can emit is a dead claim (`GtRuntime`'s park kinds carry the
+	// same rule). SV2's awaitable form adds a reply cell and a result, and it will say so by ARRIVING.
+	//
+	// ⭐ **THE REQUEST IS ONE VALUE AND NOT AN ARGUMENT ARRAY, DELIBERATELY.** An array-typed field in an
+	// op's tail slot destructured by `lowerOp`'s big match is a live bootstrap miscompile (documented at
+	// `indirectCall` and restated at `switch`/`witnessDispatch`); building the box in the PARSER means this
+	// op has no array to carry at all.
+	//
+	// ⚠ **`maxonOpCalleeKind` ANSWERS `direct` FOR IT, WHICH IS THE WHOLE `UnusedExportCheck` STORY.** An
+	// export method reachable only as a message is credited by `noteOpReferences` exactly as an ordinary
+	// call's callee is, and `noteQualifiedOwner` credits `Calc` from the same name — so the pass needs no arm
+	// of its own. It can never reach the overload RESOLVER's rewrite: an overloaded message is refused at the
+	// `spawn` (`ServiceCompanions.classifyServiceRoster`), so `Calc.bump` is never an overload set's key.
+	serviceSend(callee ByteArray, handle ValueId, request ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 end 'MaxonOp'
 
 // ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
@@ -1520,9 +1560,10 @@ end 'MaxonCalleeKind'
 // ⇒ **SPLIT THE KIND FROM THE NAME.** The old comment said *"an allocation-free `bool` twin would answer the
 // wrong question: the resolver needs the NAME"* — true, and the answer is not a bool but this enum: the KIND
 // is a scalar and costs nothing, and the NAME is fetched only for the two kinds that HAVE one, which is a
-// handful of ops rather than all of them. There is still exactly ONE 27-arm table (below); `maxonOpCalleeName`
-// needs only the four callee-carrying arms and is floored by a `default panic`, the same shape
-// `withRewrittenCallee` and SemanticCheck's `overloadCallArgs`/`overloadResultValue` already have.
+// handful of ops rather than all of them. There is still exactly ONE arm-per-variant table (below) — it was
+// 27 arms when this paragraph was written and grows with the union, which is the whole property being
+// claimed; `maxonOpCalleeName` needs only the callee-carrying arms and is floored by a `default panic`, the
+// same shape `withRewrittenCallee` and SemanticCheck's `overloadCallArgs`/`overloadResultValue` already have.
 //
 // ⚠ `indirectCall` and the two witness dispatches carry NO name to bind: an indirect call's callee is a
 // VALUE, and a witness dispatch was resolved against the enclosing type's `where` constraints at parse time
@@ -1570,6 +1611,11 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		witnessTryDispatch gives MaxonCalleeKind.noCallee
 		// The error-flag ENCODE is arithmetic on a value the parser already holds — it calls nothing.
 		errorFlagEncode gives MaxonCalleeKind.noCallee
+		// A `spawn` names a TYPE, not a function: the factory it calls is an ordinary `call` op emitted
+		// beside it, and the two functions the lowering names are the compiler's own.
+		serviceSpawn gives MaxonCalleeKind.noCallee
+		// A SEND names the message it delivers, which is what credits an export reachable no other way.
+		serviceSend gives MaxonCalleeKind.direct
 	end 'op'
 end 'maxonOpCalleeKind'
 
@@ -1582,6 +1628,7 @@ export function maxonOpCalleeName(op MaxonOp) returns ByteArray
 		tryCall(_, _, callee, _, _, _, _, _, _) gives callee
 		asyncCall(_, callee, _, _, _, _, _) gives callee
 		functionRef(_, funcName) gives funcName
+		serviceSend(callee, _, _) gives callee
 		default panic("maxonOpCalleeName: asked of an op that binds no callee name — `maxonOpCalleeKind` answers `noCallee` for it, and every caller gates on that")
 	end 'op'
 end 'maxonOpCalleeName'
@@ -1599,7 +1646,12 @@ export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonO
 		call(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots)
-		default panic("withRewrittenCallee: asked of an op that binds no direct callee — `maxonOpCalleeKind` answers `direct` for exactly three variants and every caller gates on it")
+		// ⚠ **`serviceSend` IS `direct` AND IS DELIBERATELY ABSENT.** Only overload resolution rewrites a
+		// callee, and a message's name can never be an overload set's key: `classifyServiceRoster` refuses
+		// an overloaded message at the `spawn`, so `resolveOneOverloadedCall` returns at its
+		// `overloadSets.get` and never reaches this door. Admitting it would claim a capability nothing can
+		// exercise; the panic states the invariant instead.
+		default panic("withRewrittenCallee: asked of an op that binds no REWRITABLE direct callee — `maxonOpCalleeKind` answers `direct` for four variants, and the fourth (`serviceSend`) names a message an overload set can never hold")
 	end 'op'
 end 'withRewrittenCallee'
 
@@ -1615,13 +1667,20 @@ end 'withRewrittenCallee'
 // list edited in place is the artifact's own and would corrupt the memo for every later compile of the
 // project. The caller pairs this with `module.ops.set`, which replaces only the merged module's slot.
 //
-// ⚠ `asyncCall` is deliberately absent where `withRewrittenCallee` admits it: shv2 refuses a managed
-// `async` argument outright (`requireAsyncScalarParams`), so no spawn has a record-typed argument to
-// substitute, and admitting it would claim a capability nothing has tested.
+// ⚠ `asyncCall` is deliberately absent where `withRewrittenCallee` admits it, and the reason is NOT that a
+// spawn has no managed argument — that claim is stale. `SemanticCheck.requireAsyncScalarParams` has accepted
+// a managed `async` PARAMETER since A2 and refuses only a CONSUMED managed one, and
+// `track0/refcount-torture.maxon` hands one `String` to twelve tasks. What is actually absent is a REASON to
+// substitute: `LiteralArgPromotion` swaps an immortal or merged record for a writable one where a callee
+// WRITES its argument, and a spawn's arguments are transferred through `transferAsyncSpawnArgs`, which
+// already promotes a borrowed byte record to a fresh owned copy — so nothing an `asyncCall` carries is
+// immortal by the time this door could act. Admitting it would claim a capability nothing has tested.
 export function withRewrittenArgs(op MaxonOp, args ValueIdArray) returns MaxonOp
 	return match op 'op'
 		call(result, callee, _, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		tryCall(result, errorFlag, callee, _, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the two direct-call variants carry one, and every caller reaches this from their own match arms")
+		// ⚠ `serviceSend` supplies none either: its arguments were moved into the request BOX at the parser,
+		// so there is no argument list left on the op for `LiteralArgPromotion` to substitute into.
 	end 'op'
 end 'withRewrittenArgs'

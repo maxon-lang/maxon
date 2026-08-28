@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "9e2944cf83dc5bea",
+  "sourceHash": "4418d4463b0dc84a",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1533,6 +1533,15 @@
       "stage": "semantic",
       "doc": "A message of a service declares a parameter whose value cannot cross to another green thread.\nA send MOVES its arguments -- the receiving thread becomes their one owner -- and that is what keeps\nreference counting PLAIN rather than atomic: the language guarantees one green thread per box, so a\nsend that left two threads holding one box would corrupt the heap rather than merely be slow.\nFour shapes fail it. A `Promise` is a green-thread handle its awaiter owns. A function value reaches\na captured environment block, which is a box with a second referent by construction. A value held at\nan interface type is a fat pointer whose witness half is read-only data and whose value half is\nreleased through `__drop_existential`, a pair the request union's payload cascade cannot carry. An\nopaque type parameter has no layout at the send, so the sender cannot know what it is handing over.\nThe diagnostic fires at the `spawn` that made the type a service, which may be in a different file\nfrom the method it names: whether a type is a service is a whole-program property, and the site that\ndecided it is the one worth naming.\nThe cure is to send a `.clone()`, to send the scalar the value is derived from, or to drop the\nparameter from the message and reach the value another way.",
       "emittedBy": {"shv2": "semanticServiceValueNotTransferable"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3138,
+      "tag": "E3138",
+      "name": "SemanticServiceArgumentNotUnique",
+      "stage": "semantic",
+      "doc": "A message argument cannot be proven to have exactly one owner, so it may not be sent.\nA send MOVES: the service becomes the argument's one owner, and the sending frame gives up the\nreference it held. That is what keeps reference counting PLAIN rather than atomic -- the language\nguarantees one green thread per box -- so an argument this frame still shares with something else\nwould put one box in two green threads' hands, which corrupts the heap rather than merely being slow.\nTwo shapes fail it, and E3135 is the neighbouring rule about the argument's TYPE rather than its\nownership. The first is an OWNED value this frame has already taken a second reference to -- a value a\nclosure captured, one pushed into a container, one handed to another consuming call. The second is a\nBORROWED aggregate this frame does not own at all -- a struct read out of a field, an element, or a\nparameter -- for which there is no owning copy the send could take instead. (A borrowed `String` is\nnot in this class: a byte record has a cheap owning copy, so the send promotes it and the source stays\nreadable.)\nThe cure is `.clone()`, which is explicit precisely because it is O(n) and the language makes costs\nvisible; or restructuring so the value is freshly built at the send.",
+      "emittedBy": {"shv2": "semanticServiceArgumentNotUnique"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

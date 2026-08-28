@@ -341,6 +341,10 @@ function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayAr
 		// Two ranges rather than one because `asyncCall` sits mid-union, between `indirectCall` and `await`.
 		call to indirectCall then break 'op'
 		await to errorFlagEncode then break 'op'
+		// A SERVICE's green thread owns its state and its request boxes and releases them in its own loop
+		// (`ServiceLoop`), so it needs no per-callee releaser: the GT-struct release protocol this file
+		// implements is the `async` PROMISE's, and a service has no promise.
+		serviceSpawn to serviceSend then break 'op'
 	end 'op'
 end 'noteIfAsyncSpawn'
 

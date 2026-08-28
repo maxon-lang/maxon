@@ -1503,6 +1503,11 @@ export union ParseError implements Error
 	// made the type a service. The parser already raises E3005 and E3011 the same way.
 	serviceNotASpawnTarget(explanation String, line LineNumber, column ColumnNumber)
 	serviceValueNotTransferable(explanation String, line LineNumber, column ColumnNumber)
+	// ⭐ **THE THIRD, APPENDED AT THE END OF THE UNION (SV1 wave 3).** It is `serviceValueNotTransferable`'s
+	// neighbour and NOT its widening: that one is about a message parameter's TYPE, decided at the `spawn`
+	// from the declaration alone, and this one is about ONE ARGUMENT's OWNERSHIP at ONE send. A single code
+	// for both would make the two findings indistinguishable in a corpus that has to pin each separately.
+	serviceArgumentNotUnique(explanation String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -1579,6 +1584,8 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		panicAbortValue gives AsyncCalleeLookup.none
 		// The error-flag encode mints no promise — it is not a call of any kind.
 		errorFlagEncode gives AsyncCalleeLookup.none
+		// A `spawn` mints a MAILBOX pointer, not a promise; a send mints nothing.
+		serviceSpawn to serviceSend gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -31375,6 +31382,9 @@ export type Parser
 			// The error-flag encode is emitted by the ROUTER, never by a call's result production, so it can never be
 			// the reinterpretation sitting on top of one.
 			errorFlagEncode gives false
+			// Neither service op reinterprets a call's result — a spawn's result is a mailbox pointer it
+			// produced itself, and a send produces nothing.
+			serviceSpawn to serviceSend gives false
 		end 'reinterpretation'
 	end 'opReinterpretsResultOf'
 
@@ -31399,6 +31409,9 @@ export type Parser
 			literal to panicAbortValue gives DiscardedCallee.notACall
 			// The error-flag encode defines a value, but never a CALL's result — this test is about a direct call's.
 			errorFlagEncode gives DiscardedCallee.notACall
+			// A `spawn` defines a mailbox pointer and a send defines nothing; neither is a direct call whose
+			// result a `try` or a discarded-result probe could be about.
+			serviceSpawn to serviceSend gives DiscardedCallee.notACall
 		end 'producer'
 	end 'directCallDefining'
 
@@ -31466,8 +31479,25 @@ export type Parser
 			panicAbortValue gives try self.rejectTryTarget(tryTok)
 			// A `try` cannot be applied to the error-flag encode: the parser emits it, no source expression is it.
 			errorFlagEncode gives try self.rejectTryTarget(tryTok)
+			// ⚠ **A `spawn` CANNOT FAIL, so `try spawn Calc.create()` is refused like any other non-call.** It is
+			// not even the last op of its own expression — the handle box's `storeIndirect` is — so this arm is
+			// the structural backstop for a spawn reached by some other emission order.
+			serviceSpawn gives try self.rejectTryTarget(tryTok)
+			// ⭐⭐ **THE ONE ARM HERE THAT IS A SENTENCE RATHER THAN A REJECTION, AND IT NAMES THE FORM THAT
+			// WILL CARRY AN ERROR.** A fire-and-forget message delivers no reply, so there is nothing for a
+			// `try` to catch — but the author who wrote one is asking for the awaitable form, and `try` is
+			// exactly its first token. Refusing it as *"`try` must be applied to a call"* would be true and
+			// useless.
+			serviceSend gives try self.rejectTriedServiceSend(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
+
+	// The refusal above, in its own function so the arm stays one statement. It THROWS rather than answering,
+	// exactly as `rejectTryTarget` does, and the `TryTarget` return type is what lets the arm's `gives` join
+	// its siblings.
+	function rejectTriedServiceSend(tryTok Token) returns TryTarget throws ParseError
+		throw ParseError.unsupported("`try h.m(…)` — a fire-and-forget message carries no reply and so can deliver no error. The awaitable form `try await h.m(…)`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2", line: tryTok.line, column: tryTok.column)
+	end 'rejectTriedServiceSend'
 
 	// Replace the `witnessDispatch` op at `opIdx` with a `witnessTryDispatch` defining the second `errorFlag`
 	// result, and return the target the desugar reads — the interface method's NAME and its declared `throws`.
@@ -37754,6 +37784,8 @@ export type Parser
 			call(result, callee, _, _, _, _, _, _) then return result == source and throwsClauseIsIterationError(self.signatures.throwsOf(callee))
 			literal to switch then return false
 			witnessDispatch to errorFlagEncode then return false
+			// Neither service op is a throwing call whose result a `for … in` iterates.
+			serviceSpawn to serviceSend then return false
 		end 'op'
 	end 'sourceCameFromAnIterationThrowingCall'
 
@@ -45353,7 +45385,11 @@ export type Parser
 		end 'notAStaticCall'
 
 		try self.consume(TokenKind.dot)
-		let memberTok = try self.consumeNameToken(NamePosition.declaration)
+		// ⚠ **PEEKED AND NOT CONSUMED — the cursor is left ON the factory name deliberately.** The call below
+		// goes through `parseCallNamed`, the door every other static call comes through, and that door
+		// consumes its own callee token (`dispatchMethodOnBase` says so where it hands the cursor over).
+		// Consuming it here would leave the factory's arguments to a second reader.
+		let memberTok = try self.memberNameTokenAt(self.pos)
 
 		// ⭐ **THE SAME CLASSIFICATION THE SWEEP MINTED COMPANIONS FROM.** Asked through the one function so a
 		// target this refuses can never be one the sweep minted for, nor the other way round. The verdict is
@@ -45378,11 +45414,48 @@ export type Parser
 			messageParameterIsNotTransferable then throw ParseError.serviceValueNotTransferable(serviceRosterRefusalMessage(roster, typeName: typeTok.value), line: spawnTok.line, column: spawnTok.column)
 		end 'roster'
 
-		// ⭐⭐ **THE ONE REFUSAL SV1 WAVE 3 DELETES, AND NOTHING ELSE ON THIS PATH.** Everything a `spawn` can
-		// be refused for at DECLARATION time has now been asked and answered; what is missing is the mailbox,
-		// the dispatch loop and the reply cell. The program above this line is well-formed.
-		throw ParseError.unsupported("services are not lowered yet — SV1 wave 3", line: spawnTok.line, column: spawnTok.column)
+		// ⭐⭐ **THE FACTORY IS CALLED DIRECTLY, THROUGH THE ORDINARY STATIC-CALL DOOR.** `spawn Calc.create(…)`
+		// is `Calc.create(…)` plus a transfer: the arguments, the labels, the defaults, the overload
+		// resolution and the diagnostics are all the ordinary call's, and only what happens to the RESULT is
+		// this reader's. `notMinted` because both halves of the name are the author's own bytes.
+		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		return try self.emitServiceSpawn(typeTok.value, member: memberTok.value, state: state, spawnTok: spawnTok, memberTok: memberTok)
 	end 'parseSpawn'
+
+	// ⭐⭐ **THE SPAWN'S EMIT: MOVE THE STATE ACROSS, START THE SERVICE, AND WRAP ITS MAILBOX IN A HANDLE
+	// BOX.** Three acts, in an order that is not free:
+	//
+	//   1. **The state is MOVED** (`moveIntoGreenThread`) — the service becomes its one owner, and this frame
+	//      stops owing its drop. A refusal here leaves nothing behind, which is `emitBinOp`'s ordering rule.
+	//   2. **`serviceSpawn` answers the MAILBOX**, a bare machine word, because that is all the runtime has
+	//      to hand back: it created the mailbox and the green thread, and neither is a managed record.
+	//   3. **The handle BOX is minted here and not in the runtime.** `emitBoxAlloc` is the one `__mm_alloc`
+	//      door — it is where a box's destructor argument is decided — and enrolling the result through
+	//      `trackOwnedTemp` is what makes a handle an ORDINARY owned value: `let h = …` binds it, a second
+	//      read after a move is E3102, an array element drop reaches it, and its scope-exit drop is what
+	//      shuts the service down. A runtime-minted box would need every one of those taught to it.
+	function emitServiceSpawn(typeName ByteArray, member ByteArray, state ValueId, spawnTok Token, memberTok Token) returns ValueId throws ParseError
+		let range = SourceRange.between(spawnTok, last: memberTok)
+		let moved = try self.moveIntoGreenThread(state, blame: serviceSpawnStateBlame(typeName, member: member), callee: qualifiedMethodName(typeName, methodName: member), paramName: ServiceStateArgumentNoun, anchor: memberTok)
+
+		let mailbox = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.serviceSpawn(mailbox, typeName: typeName, state: moved), range: range)
+
+		let handle = self.serviceHandleLayout(typeName)
+		let box = self.emitBoxAlloc(self.emitLiteral(handle.sizeBytes() as ParsedInt, valueType: MaxonType.integer, range: range), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(handle.name), range: range)
+		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
+		self.emitIndirectStore(box, offset: ServiceHandleMailboxOffset, value: mailbox, storageType: MaxonType.integer, range: range)
+		return box
+	end 'emitServiceSpawn'
+
+	// The `<T>.handle` layout, or a panic: the companions were minted for every ACCEPTED spawn target inside
+	// `queryProgramSignatures`, and every caller here has just been through `classifyServiceTarget`.
+	function serviceHandleLayout(typeName ByteArray) returns StructLayout
+		return match self.signatures.structOf(serviceHandleCompanionName(typeName)) 'lookup'
+			declared(layout) gives layout
+			undeclared panic("serviceHandleLayout: nothing declares `type {String.from(serviceHandleCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it for every accepted spawn target before any body is parsed, and this caller has already accepted one")
+		end 'lookup'
+	end 'serviceHandleLayout'
 
 	// Does a `. <member> (` follow the type name a `spawn` just consumed? The SHAPE test, kept apart from the
 	// classification above because it is about TOKENS: it is the same shape `Queries.noteServiceSpawnFollowing`

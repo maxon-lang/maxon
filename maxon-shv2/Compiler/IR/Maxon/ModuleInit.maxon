@@ -559,7 +559,7 @@ function dropBorrowedArguments(fn SynthesizedFunction, args GlobalInitArgumentAr
 		let value = try values.get(i) otherwise panic("dropBorrowedArguments: values.get OOB at {i} — the materialization above pushes one value per argument")
 		match arg.cleanup 'cleanup'
 			none then continue
-			dropAfterCall(dropCallee) then _ = fn.emitPositionalCall(dropCallee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			dropAfterCall(dropCallee) then fn.emitPositionalCallDiscarding(dropCallee, args: singletonArgs(value), range: range)
 		end 'cleanup'
 	end 'eachArgument'
 end 'dropBorrowedArguments'
@@ -659,7 +659,7 @@ end 'buildGlobalCleanup'
 function dropGlobalSlot(fn SynthesizedFunction, global ManagedGlobal)
 	let record = fn.mintOfType(global.valueType)
 	fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), range: global.range)
-	_ = fn.emitPositionalCall(global.dropCallee, args: singletonArgs(record), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
+	fn.emitPositionalCallDiscarding(global.dropCallee, args: singletonArgs(record), range: global.range)
 end 'dropGlobalSlot'
 
 // ⭐ **A LAZY SLOT IS DROPPED ONLY IF IT HOLDS A RECORD — i.e. IF IT IS NEITHER SENTINEL.**
@@ -753,7 +753,11 @@ end 'anchorRange'
 // It records into `project.opRanges` and `project.valueOrigins` in the same lockstep
 // `FileParseArtifact.emitOp` uses — the span table is keyed by op index and asserts it is appended in
 // step, so a synthesized op that skipped it would misattribute every later span by one.
-type SynthesizedFunction
+// ⭐ EXPORTED since SV1 wave 3, whose `Runtime/ServiceLoop.maxon` is the second producer of Maxon-tier
+// functions the compiler builds — the FIRST outside this file. Everything the carrier's header says is why
+// it exists holds for that producer word for word: a `<T>.__loop` needs the dense per-value type columns
+// `LowerMaxonToStd` reads, and a second carrier would be a second place they could fall out of lockstep.
+export type SynthesizedFunction
 	var module as MaxonModule
 	var project as Project
 	// This function's position in `module.functions` — the key `ValueOriginTable` files an origin under.
@@ -771,7 +775,7 @@ type SynthesizedFunction
 	// Create the function, register it and its single `entry` block on `module`, and seed the value
 	// columns with the parameters — whose ids (`0..paramCount-1`) the value numbering RESERVES rather than
 	// mints, exactly as `Parser.recordValueType` does for a parsed function's parameters.
-	static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray, runsUserCodeOnItsCallersStack bool = false) returns SynthesizedFunction
+	export static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray, runsUserCodeOnItsCallersStack bool = false) returns SynthesizedFunction
 		var valueTags = ValueTypeTagArray.create()
 		var valueNameIds = TypeNameIdArray.create()
 		var valueClosureEnv = ValueIdArray.create()
@@ -805,7 +809,7 @@ type SynthesizedFunction
 	// It takes a TAG rather than a `MaxonType` for `Parser.mintValue`'s reason and one of its own: a
 	// runtime drop's result is `void`, which is a `ValueTypeTag` and deliberately NOT a `MaxonType` (see
 	// MaxonDialect — void names no value).
-	function mint(tag ValueTypeTag, nameId TypeNameId) returns ValueId
+	export function mint(tag ValueTypeTag, nameId TypeNameId) returns ValueId
 		let id = self.valueTags.count()
 		self.valueTags.push(tag)
 		self.valueNameIds.push(self.projectScopedNameId(tag, nameId: nameId))
@@ -816,7 +820,7 @@ type SynthesizedFunction
 
 	// Mint a value whose type is already in hand — decomposing the union rather than constructing one,
 	// exactly as `Parser.mintValueOfType` does.
-	function mintOfType(valueType MaxonType) returns ValueId
+	export function mintOfType(valueType MaxonType) returns ValueId
 		return self.mint(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType))
 	end 'mintOfType'
 
@@ -861,7 +865,7 @@ type SynthesizedFunction
 
 	// Append a body op, recording its span and the origin of the value it defines — the choke point
 	// `FileParseArtifact.emitOp` is for parsed code, and it keeps the identical two invariants.
-	function emit(op MaxonOp, range SourceRange)
+	export function emit(op MaxonOp, range SourceRange)
 		let opIndex = self.module.opCount()
 		self.module.appendOp(self.block, op: op)
 		self.recordOpTables(op, opIndex: opIndex, range: range)
@@ -903,7 +907,7 @@ type SynthesizedFunction
 	// Terminate the block ops are CURRENTLY landing in. It is `terminateBlock` over `self.block` and nothing
 	// else; it was a byte-identical second copy of those three lines until the §6 review (finding 5), and
 	// what must not be written twice is how a terminator joins the op tables.
-	function terminate(op MaxonOp, range SourceRange)
+	export function terminate(op MaxonOp, range SourceRange)
 		self.terminateBlock(self.block, op: op, range: range)
 	end 'terminate'
 
@@ -937,7 +941,7 @@ type SynthesizedFunction
 	// WAY OR THE OTHER — and this compiler's own lexer is written that way.** Minting at the op's `integer`
 	// gave **`E3005 argument type mismatch for 'kind': expected 'TokenKind', got 'int'`**, once per keyword;
 	// carrying `named` onto the op instead panicked the lowering. Both are the same missing distinction.
-	function emitTypedLiteral(value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
+	export function emitTypedLiteral(value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
 		let result = self.mintOfType(valueType)
 		self.emit(MaxonOp.literal(result, value: value, valueType: literalStorageType(valueType)), range: range)
 		return result
@@ -986,9 +990,18 @@ type SynthesizedFunction
 	// all (`Parser.evalConstContainerCreate`). It is named for that property rather than for the runtime,
 	// because since W41 the runtime is no longer the only thing it serves: a user factory taking ARGUMENTS goes
 	// to `emitCall` directly, its labels being what `LowerMaxonToStd.lowerCall` reorders against the signature.
-	function emitPositionalCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+	export function emitPositionalCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
 		return self.emitCall(callee, args: args, argLabels: emptyArgLabels(args), resultTag: resultTag, resultNameId: resultNameId, range: range)
 	end 'emitPositionalCall'
+
+	// ⭐ **A POSITIONAL CALL WHOSE RESULT NOBODY READS** — a drop, a runtime step, a mailbox close. It is
+	// `emitPositionalCall` with `void`/`UnnamedTypeId` and the result discarded, which is one spelling of a
+	// three-part incantation that was written out at every void site: the `_ =`, the `ValueTypeTag.void` and
+	// the `UnnamedTypeId` are one fact — *this call answers nothing* — and `Runtime/ServiceLoop.maxon` makes
+	// eight more of them.
+	export function emitPositionalCallDiscarding(callee ByteArray, args ValueIdArray, range SourceRange)
+		_ = self.emitPositionalCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitPositionalCallDiscarding'
 
 	// ⭐ **CALL A FUNCTION THE AUTHOR DECLARED — a top-level factory** (spec-port `map-struct-bytearray`), and
 	// the op every runtime call above is built from. `argLabels` is the only thing that differs between the

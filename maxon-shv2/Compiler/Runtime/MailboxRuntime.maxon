@@ -1,0 +1,563 @@
+// Runtime/MailboxRuntime.maxon — the MAILBOX a service receives on, and the four handle/lifetime doors
+// around it (SV1 wave 3). Designed in `SERVICES_DESIGN.md` §"Ownership — the spine" and §"Shutdown".
+//
+// ⭐⭐ **A MAILBOX IS AN INTRUSIVE FIFO OF ENVELOPES PLUS TWO REFERENCE COUNTS, AND NOTHING ELSE.** A send
+// appends and returns; a receive pops or PARKS; a close makes the queue drainable and un-fillable. What
+// makes it more than a queue is the pair of counts: `handles` is how many `<T>.handle` boxes name it (the
+// last one to go CLOSES it, which is the whole of "an ordinary program needs no shutdown boilerplate"), and
+// `refs` is that plus the loop itself (the last one to go FREES it, which is what lets the loop outlive the
+// handles it is draining for).
+//
+// ⭐⭐ **NO NEW `.data` WORD, AND THAT IS A GOLDEN ARGUMENT AS WELL AS A DESIGN ONE.** Mailbox state is
+// per-STRUCT, in the heap, reached from the handle box. A `.data` word would need a `MultiMSharing` class
+// (`SchedRuntime.pushRuntimeGlobal` PANICS without one) and would shift every label after it, re-minting
+// **every heap program's golden in the suite** — `SlabRuntime`'s own header records that cost for the
+// allocator's lock, which lives in its state region for exactly this reason.
+//
+// ⛔⛔ **HARD RULE, AND IT IS WHY THE RECEIVE PARK IS DEFERRED: NO MAILBOX LOCK IS EVER HELD ACROSS
+// `__gt_context_switch`.** Both platform locks are recursive on the WRONG IDENTITY — a Win32
+// CRITICAL_SECTION is per-OS-THREAD while green threads multiplex over one — so a GT that parked while
+// holding one would let another GT on the same M take the recursive path straight into the critical section.
+// That is not a deadlock; it is silent FIFO corruption, which is worse. `__mbox_recv` therefore RELEASES
+// before it parks and re-checks after it wakes, and the registration that makes it discoverable happens in
+// `__gt_register_park`'s mailbox arm, from the DRIVER, after the switch has saved its registers (W218).
+//
+// ⭐ **ONE LOCK — `__sched_lock` — FOR EVERY MAILBOX OPERATION, and that is a v1 decision with a stated
+// exit.** A per-mailbox CRITICAL_SECTION would be 40 bytes per service and a second lock ORDER for two files
+// to remember; `W221` records that the scheduler lock's cost is not visible on any measurement this tree
+// takes. It also makes the wake FREE of an ordering question: `__sched_publish_locked` requires exactly this
+// lock of its caller, so the append and the publish ride one critical section. A per-mailbox lock is a
+// follow-up that needs a measurement first.
+
+// ⭐⭐ **THE MAILBOX RECORD.** The first four words are read and written ONLY under `__sched_lock`, because
+// what must be indivisible is not a word — "is the queue empty AND is it closed AND is anybody parked on it"
+// is one question across three of them, and `__mbox_recv`'s decision to park rests on the answer being a
+// single instant. The two COUNTS are `lock xadd` instead, for the reason `MultiMSharing.atomicStep` names:
+// each is one word whose transaction is exactly its own increment, and a handle clone on a hot path should
+// not queue behind the scheduler.
+let MboxOffHead = 0x00 as ByteOffset
+let MboxOffTail = 0x08 as ByteOffset
+
+// ⚠ **NAMED `parkedGt` AND NOT `waiter`, BECAUSE `GtOffWaiter` IS A DIFFERENT FACT ABOUT THE SAME THREAD.**
+// A GT's `waiter` is its DRIVER — who to context-switch back to. This is the green thread parked in
+// `__mbox_recv` on THIS mailbox, i.e. who to make `ready` when an envelope arrives. Two fields called
+// `waiter` in one wake sequence is exactly the confusion that writes a status into the wrong struct.
+let MboxOffParkedGt = 0x10 as ByteOffset
+
+// Non-zero once the mailbox has been closed — by the last handle drop, or by the loop on its way out after a
+// `__shutdown` pill. A send to a closed mailbox ABANDONS its request rather than queueing it, and a receive
+// on a closed EMPTY one answers 0, which is how the loop learns to exit.
+let MboxOffClosed = 0x18 as ByteOffset
+
+let MboxOffHandles = 0x20 as ByteOffset
+let MboxOffRefs = 0x28 as ByteOffset
+
+// The request union's DROP CASCADE, as an address. It is what makes a closed mailbox's queue droppable at
+// all: an envelope holds a `<T>.request` box whose live variant only the cascade knows the payload types of.
+// A closure-based mailbox could not know what to free, which is `SERVICES_DESIGN.md`'s own argument for the
+// synthesized union.
+let MboxOffAbandonFn = 0x30 as ByteOffset
+let MboxStructSize = 0x38 as ParsedInt
+
+// An envelope: the intrusive link and the request box. 16 bytes out of the slab, freed the moment its box is
+// handed to the loop — the queue costs one small allocation per message and nothing while it is empty.
+let EnvOffNext = 0x00 as ByteOffset
+let EnvOffBox = 0x08 as ByteOffset
+let EnvStructSize = 16 as ParsedInt
+
+// The two counts' initial values, named because they are a PAIR and their difference is the whole lifetime
+// rule: one handle names the mailbox, and the loop is the second thing that keeps it alive.
+let MboxInitialHandles = 1 as ParsedInt
+let MboxInitialRefs = 2 as ParsedInt
+
+// A count step, as the `lock xadd` operand. `xadd` answers the PRIOR value, so "I was the last" is
+// `prior == 1` — read off the displaced value rather than from a re-read, which is the same discipline
+// `MmRuntime.emitAdjustRefcount` states for a decref.
+let MboxCountUp = 1 as ParsedInt
+let MboxCountDown = -1 as ParsedInt
+let MboxLastOwner = 1 as ParsedInt
+
+// The value stored into `closed`. Any non-zero would do; the constant is what stops a reader spelling `1`
+// and a writer spelling something else.
+let MboxIsClosed = 1 as ParsedInt
+
+// --- Entry points ---
+
+// ⭐⭐ **`__svc_spawn(loopPtr, state, abandonPtr) -> mbox` — CREATE THE MAILBOX AND THE GREEN THREAD THAT
+// SERVES IT, IN THAT ORDER.** The mailbox exists before the thread does, because the thread's second
+// argument IS the mailbox; and the thread is published LAST, once both its argument slots are written, for
+// `GtRuntime.GtReadyName`'s measured reason (a worker M dequeues and runs a spawned thread while the
+// spawning thread is still storing its arguments).
+//
+// ⚠ **IT ANSWERS THE MAILBOX AND NOT A HANDLE BOX.** The `<T>.handle` box is allocated by the PARSER, at
+// `emitBoxAlloc` — the one `__mm_alloc` door, which is where the box header's destructor argument is decided
+// — and this pointer is stored into its one field. A runtime-minted box would be a second place that knows
+// what a managed record costs.
+export let SvcSpawnName = b"__svc_spawn"
+
+// `__mbox_send(mbox, box)` — append one request, or abandon it if the mailbox is already closed. It
+// completes INLINE and never suspends, which is why it is deliberately NOT on `SemanticCheck`'s park roster:
+// listing it would let `async` wrap a genuinely non-yielding function.
+export let MboxSendName = b"__mbox_send"
+
+// ⭐ `__mbox_recv(mbox) -> box | 0` — the loop's only blocking operation, and the one mailbox entry that IS
+// a park point. It answers 0 exactly once: when the mailbox is closed AND drained.
+export let MboxRecvName = b"__mbox_recv"
+
+// EXPORTED because the LOOP closes its own mailbox on the way out — a `__shutdown` pill stops the service
+// while its handles are still alive, and the close is what makes what is queued behind it drainable.
+export let MboxCloseName = b"__mbox_close"
+
+// `__mbox_handle_clone_box(handleBox) -> handleBox` — a second HANDLE to the SAME service, never a second
+// service. Exported because `SignatureIndex.managedNameCloneStrategy` routes `<T>.handle`'s clone here.
+export let MboxHandleCloneBoxName = b"__mbox_handle_clone_box"
+
+// `__mbox_handle_drop_box(handleBox)` — one handle goes; the LAST one closes the mailbox. Exported because
+// `SignatureIndex.managedNameDropCallee` routes `<T>.handle`'s drop here, which is what makes an ordinary
+// scope exit, an array element drop and a struct-field cascade all shut a service down.
+export let MboxHandleDropBoxName = b"__mbox_handle_drop_box"
+
+// `__mbox_service_exit(mbox, selfGt)` — the loop's last act. Exported because `ServiceLoop` emits the call
+// as the tail of every synthesized `<T>.__loop`.
+export let MboxServiceExitName = b"__mbox_service_exit"
+
+// ⭐⭐ **INSTALL THE MAILBOX RUNTIME — behind `usesGt`, at its CALL SITE, exactly as `installSchedRuntime`
+// is.** There is no program that wants a mailbox without the green-thread substrate under it: `__svc_spawn`
+// calls `__gt_spawn_green` and every wake goes through `__sched_publish_locked`. And there is no bit of its
+// own to gate it with, for `SlabRuntime.SlabScavengeName`'s stated reason — these six functions gate
+// nothing (no import, no `.data` slot, no per-allocation maintenance), and `DeadFunctionElimination` drops
+// all six from every program that never spawns a service, because the only edge into them is the
+// `funcAddr`/`call` pair `LowerMaxonToStd.lowerServiceSpawn` emits.
+export function installMailboxRuntime(module StdModule)
+	buildSvcSpawn(module)
+	buildMboxSend(module)
+	buildMboxRecv(module)
+	buildMboxClose(module)
+	buildMboxHandleCloneBox(module)
+	buildMboxHandleDropBox(module)
+	buildMboxServiceExit(module)
+end 'installMailboxRuntime'
+
+// ⭐⭐ **THE WAKE, WRITTEN ONCE FOR THE TWO EVENTS THAT OWE IT — an arriving envelope and a close.** Both
+// are "the parked receiver's reason for waiting has changed", and both must perform the wake in exactly the
+// same three parts, in exactly this order:
+//
+//   1. **CLEAR `parkedGt` AND SET `ready` UNDER THE LOCK.** The same lock `__mbox_recv` re-checks head and
+//      `closed` under, so a receiver can never register itself and then be missed: either it stored itself
+//      before this read (and is woken) or it has not yet reached the store and will re-check afterwards.
+//   2. **PUBLISH UNDER THE LOCK** — `__sched_publish_locked` requires it of its caller, and answers a wake
+//      DEBT rather than performing the wake.
+//   3. **RELEASE, THEN PAY THE DEBT.** `LeaveCriticalSection` is the StoreLoad fence
+//      `__sched_wake_or_spawn`'s idle-M scan depends on, and a nested leave releases nothing — so the wake
+//      may not move inside.
+//
+// It terminates `cur` and answers the block to CONTINUE IN, which is the branching-emitter shape every
+// runtime in this tree uses (the Std tier has no select). The caller holds `__sched_lock` on entry and holds
+// nothing on return.
+function emitMboxWakeAndUnlock(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+	var wakeParked = module.addBlock(func, label: label)
+	var unlock = module.addBlock(func, label: b"mboxunlock")
+	var payWake = module.addBlock(func, label: b"mboxwake")
+	let cont = module.addBlock(func, label: b"mboxwoken")
+
+	let parked = emitLoadField(module, block: cur, record: mbox, offset: MboxOffParkedGt, ids: ids)
+	let noneParked = emitConst(module, block: cur, value: 0, ids: ids)
+	let nobodyWaiting = emitCmp(module, block: cur, a: parked, b: noneParked, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(nobodyWaiting, thenBlockId: unlock.id, elseBlockId: wakeParked.id))
+
+	// The wake debt reaches the release block as its block argument, because the two roads in disagree about
+	// it — an empty `parkedGt` published nothing and owes nothing. `emitSchedWakeIfOwed` states why the debt
+	// may not simply be paid where it is incurred.
+	let owed = ids.mint()
+	unlock.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(unlock.id, argIds: argsOf(noneParked)))
+
+	// The slot is cleared BEFORE the status store, so a second waker on another M finds nobody to wake rather
+	// than publishing the same thread twice.
+	emitStoreField(module, block: wakeParked, record: mbox, offset: MboxOffParkedGt, value: noneParked)
+	let readyStatus = emitConst(module, block: wakeParked, value: GtStatusReady, ids: ids)
+	emitStoreField(module, block: wakeParked, record: parked, offset: GtOffStatus, value: readyStatus)
+	let published = emitSchedPublishLocked(module, block: wakeParked, gt: parked, ids: ids)
+	module.setTerminator(wakeParked, op: StdOp.branch(unlock.id))
+	wakeParked.branchEdges.push(BranchEdge.create(unlock.id, argIds: argsOf(published)))
+
+	emitSchedLockLeave(module, block: unlock, ids: ids)
+	emitSchedWakeIfOwed(module, cur: unlock, owed: owed, wake: payWake, cont: cont, ids: ids)
+	return cont
+end 'emitMboxWakeAndUnlock'
+
+// One count stepped by `delta`, answering whether the caller was the LAST owner — `prior == 1` on a step
+// down. Both counts are read this way and neither is ever re-read, which is what makes "was I the last?"
+// a property of the instruction rather than of two loads with a window between them.
+function emitMboxCountStep(module StdModule, block IrBlock, mbox ValueId, offset ByteOffset, delta ParsedInt, ids ValueMinter) returns ValueId
+	let addr = emitFieldAddr(module, block: block, record: mbox, offset: offset, ids: ids)
+	let step = emitConst(module, block: block, value: delta, ids: ids)
+	let prior = ids.mint()
+	module.appendOp(block, op: StdOp.atomicRmw(prior, addrId: addr, operandId: step, opcode: StdAtomicRmwOpcode.add))
+	return prior
+end 'emitMboxCountStep'
+
+// Was the step this caller just made the last one — i.e. did the count go 1 -> 0?
+function emitMboxWasLastOwner(module StdModule, block IrBlock, prior ValueId, ids ValueMinter) returns ValueId
+	let one = emitConst(module, block: block, value: MboxLastOwner, ids: ids)
+	return emitCmp(module, block: block, a: prior, b: one, pred: StdCmpPred.eq, ids: ids)
+end 'emitMboxWasLastOwner'
+
+// `__svc_spawn(loopPtr, state, abandonPtr) -> mbox`. See `SvcSpawnName`.
+function buildSvcSpawn(module StdModule)
+	var func = IrFunction.createFromStd(SvcSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 3)
+	let loopPtr = 0 as ValueId
+	let state = 1 as ValueId
+	let abandonPtr = 2 as ValueId
+
+	// `__slab_alloc` ZEROES, so head/tail/parkedGt/closed are already their correct initial state and only
+	// the three words a zero would be wrong for are stored.
+	let mboxBytes = emitConst(module, block: entry, value: MboxStructSize, ids: ids)
+	let mbox = ids.mint()
+	module.appendOp(entry, op: StdOp.call(mbox, callee: SlabAllocName, args: argsOf(mboxBytes)))
+	emitStoreField(module, block: entry, record: mbox, offset: MboxOffHandles, value: emitConst(module, block: entry, value: MboxInitialHandles, ids: ids))
+	emitStoreField(module, block: entry, record: mbox, offset: MboxOffRefs, value: emitConst(module, block: entry, value: MboxInitialRefs, ids: ids))
+	emitStoreField(module, block: entry, record: mbox, offset: MboxOffAbandonFn, value: abandonPtr)
+
+	// ⭐⭐ **`__gt_spawn_green`, NOT `__gt_spawn` — a SERVICE IS A GREEN THREAD AND NOT A COROUTINE.** The two
+	// bodies differ in one store (a coroutine copies its spawner's owner; a green thread is stamped with
+	// itself), and that store is what routes every later publish of this thread to a P's RING rather than to
+	// some other thread's coroutine queue. A coroutine here would be driven only by its spawner's chain of
+	// drivers, which is exactly the property a service must not have.
+	let gt = ids.mint()
+	module.appendOp(entry, op: StdOp.call(gt, callee: GtSpawnGreenName, args: argsOf(loopPtr)))
+	emitStoreField(module, block: entry, record: gt, offset: GtOffArgInline as ByteOffset, value: state)
+	emitStoreField(module, block: entry, record: gt, offset: (GtOffArgInline + GtArgSlotBytes) as ByteOffset, value: mbox)
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtReadyName, args: argsOf(gt)))
+
+	module.setTerminator(entry, op: StdOp.ret(mbox))
+	module.functions.push(func)
+end 'buildSvcSpawn'
+
+// `__mbox_send(mbox, box)`. See `MboxSendName`.
+function buildMboxSend(module StdModule)
+	var func = IrFunction.createFromStd(MboxSendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var abandon = module.addBlock(func, label: b"sendclosed")
+	var append = module.addBlock(func, label: b"sendappend")
+	var firstEnvelope = module.addBlock(func, label: b"sendfirst")
+	var chainEnvelope = module.addBlock(func, label: b"sendchain")
+	var linked = module.addBlock(func, label: b"sendlinked")
+	let doneBlock = module.addBlock(func, label: b"senddone")
+
+	emitParams(module, block: entry, count: 2)
+	let mbox = 0 as ValueId
+	let box = 1 as ValueId
+
+	emitSchedLockEnter(module, block: entry, ids: ids)
+	let closed = emitLoadField(module, block: entry, record: mbox, offset: MboxOffClosed, ids: ids)
+	let open = emitConst(module, block: entry, value: 0, ids: ids)
+	let stillOpen = emitCmp(module, block: entry, a: closed, b: open, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(stillOpen, thenBlockId: append.id, elseBlockId: abandon.id))
+
+	// ⭐⭐ **THE CLOSED ARM IS REACHABLE AND IS NOT A RACE-ONLY SAFETY NET.** The LOOP closes the mailbox on
+	// its way out after a `__shutdown` pill, and the handles are still alive at that moment — so an author
+	// who writes `h.shutdown()` and then sends again arrives here. The request is dropped through the union's
+	// own cascade, which is the same drop the exit drain performs on whatever was already queued; whichever
+	// of the two roads a given send takes is a race, and BOTH must leak nothing
+	// (`specs-shv2/services.md:a-send-after-shutdown-is-dropped-cleanly` is that measurement).
+	//
+	// ⚠ **THE LOCK IS RELEASED FIRST, BECAUSE THE CASCADE IS USER-SHAPED CODE.** `__destruct_<T>.request`
+	// frees whatever the live variant owns — a String, a nested box, another service's handle — and a handle
+	// drop reaches `__mbox_close`, which takes this very lock. A recursive re-entry would be safe and its
+	// LEAVE would release nothing, which is the silent hang `GtRuntime.GtRunnerDoneName` records for the
+	// neighbouring rule.
+	emitSchedLockLeave(module, block: abandon, ids: ids)
+	let abandonFn = emitLoadField(module, block: abandon, record: mbox, offset: MboxOffAbandonFn, ids: ids)
+	module.appendOp(abandon, op: StdOp.callIndirect(ids.mint(), calleeReg: abandonFn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(box)))
+	module.setTerminator(abandon, op: StdOp.branch(doneBlock.id))
+
+	// The envelope is cut from the slab INSIDE the scheduler lock, which is the allowed nesting direction:
+	// `SlabRuntime`'s header states the order as `__sched_lock` -> `__slab_lock` and records that nothing
+	// under the allocator reaches a scheduler entry, so the reverse nesting does not exist.
+	let envBytes = emitConst(module, block: append, value: EnvStructSize, ids: ids)
+	let env = ids.mint()
+	module.appendOp(append, op: StdOp.call(env, callee: SlabAllocName, args: argsOf(envBytes)))
+	emitStoreField(module, block: append, record: env, offset: EnvOffBox, value: box)
+	let tail = emitLoadField(module, block: append, record: mbox, offset: MboxOffTail, ids: ids)
+	let emptyQueue = emitConst(module, block: append, value: 0, ids: ids)
+	let queueIsEmpty = emitCmp(module, block: append, a: tail, b: emptyQueue, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(append, op: StdOp.condBranch(queueIsEmpty, thenBlockId: firstEnvelope.id, elseBlockId: chainEnvelope.id))
+
+	emitStoreField(module, block: firstEnvelope, record: mbox, offset: MboxOffHead, value: env)
+	module.setTerminator(firstEnvelope, op: StdOp.branch(linked.id))
+
+	emitStoreField(module, block: chainEnvelope, record: tail, offset: EnvOffNext, value: env)
+	module.setTerminator(chainEnvelope, op: StdOp.branch(linked.id))
+
+	emitStoreField(module, block: linked, record: mbox, offset: MboxOffTail, value: env)
+	let woken = emitMboxWakeAndUnlock(module, func: func, cur: linked, mbox: mbox, ids: ids, label: b"sendwakeparked")
+	module.setTerminator(woken, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildMboxSend'
+
+// `__mbox_recv(mbox) -> box | 0`. See `MboxRecvName`.
+function buildMboxRecv(module StdModule)
+	var func = IrFunction.createFromStd(MboxRecvName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var attempt = module.addBlock(func, label: b"recvtry")
+	var pop = module.addBlock(func, label: b"recvpop")
+	var clearTail = module.addBlock(func, label: b"recvlast")
+	var popped = module.addBlock(func, label: b"recvpopped")
+	var emptyQueue = module.addBlock(func, label: b"recvempty")
+	var drained = module.addBlock(func, label: b"recvdrained")
+	var park = module.addBlock(func, label: b"recvpark")
+
+	emitParams(module, block: entry, count: 1)
+	let mbox = 0 as ValueId
+	module.setTerminator(entry, op: StdOp.branch(attempt.id))
+
+	emitSchedLockEnter(module, block: attempt, ids: ids)
+	let head = emitLoadField(module, block: attempt, record: mbox, offset: MboxOffHead, ids: ids)
+	let noEnvelope = emitConst(module, block: attempt, value: 0, ids: ids)
+	let queueIsEmpty = emitCmp(module, block: attempt, a: head, b: noEnvelope, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(attempt, op: StdOp.condBranch(queueIsEmpty, thenBlockId: emptyQueue.id, elseBlockId: pop.id))
+
+	// `pop` dominates both `clearTail` and `popped`, so the box and the envelope reach the exit block without
+	// block arguments.
+	let box = emitLoadField(module, block: pop, record: head, offset: EnvOffBox, ids: ids)
+	let next = emitLoadField(module, block: pop, record: head, offset: EnvOffNext, ids: ids)
+	emitStoreField(module, block: pop, record: mbox, offset: MboxOffHead, value: next)
+	let lastEnvelope = emitCmp(module, block: pop, a: next, b: noEnvelope, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(pop, op: StdOp.condBranch(lastEnvelope, thenBlockId: clearTail.id, elseBlockId: popped.id))
+
+	emitStoreField(module, block: clearTail, record: mbox, offset: MboxOffTail, value: noEnvelope)
+	module.setTerminator(clearTail, op: StdOp.branch(popped.id))
+
+	// The envelope is freed OUTSIDE the lock: it is unreachable from the mailbox the instant `head` was
+	// re-pointed, so nothing else can be looking at it, and `__slab_free` has a lock of its own.
+	emitSchedLockLeave(module, block: popped, ids: ids)
+	module.appendOp(popped, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(head)))
+	module.setTerminator(popped, op: StdOp.ret(box))
+
+	// ⭐ **THE `closed` READ IS INSIDE THE SAME CRITICAL SECTION THE HEAD READ WAS**, which is what makes
+	// "empty AND closed" one instant rather than two: a close that landed between two separate reads would
+	// leave this thread parking on a mailbox nobody will ever send to again.
+	let closed = emitLoadField(module, block: emptyQueue, record: mbox, offset: MboxOffClosed, ids: ids)
+	let stillOpen = emitCmp(module, block: emptyQueue, a: closed, b: noEnvelope, pred: StdCmpPred.eq, ids: ids)
+	emitSchedLockLeave(module, block: emptyQueue, ids: ids)
+	module.setTerminator(emptyQueue, op: StdOp.condBranch(stillOpen, thenBlockId: park.id, elseBlockId: drained.id))
+
+	module.setTerminator(drained, op: StdOp.ret(noEnvelope))
+
+	// ⭐⭐ **THE PARK IS DEFERRED AND THE LOCK IS ALREADY RELEASED — the two halves of this file's hard rule.**
+	// `emitGtPark` leaves a NOTE on the green thread and switches to its driver; `__gt_register_park`'s
+	// mailbox arm performs the registration afterwards, re-checking head and `closed` under the lock and
+	// UNDOING the park if either has changed. That re-check is the lost-wakeup fix: between this release and
+	// that registration a sender can arrive, find `parkedGt` still 0, wake nobody — and the re-check is what
+	// notices. Resuming re-enters `attempt`, which takes the lock and asks again, so a spurious wake costs a
+	// loop iteration and nothing else.
+	emitGtPark(module, func: func, ids: ids, cur: park, kind: GtParkKindMailbox, arg: mbox, cont: attempt)
+
+	module.functions.push(func)
+end 'buildMboxRecv'
+
+// `__mbox_close(mbox)` — make the queue un-fillable and drainable, and wake whoever is parked on it so the
+// loop can observe that. Idempotent: both roads to it (the last handle drop, and the loop's own exit after a
+// `__shutdown` pill) may run, in either order.
+function buildMboxClose(module StdModule)
+	var func = IrFunction.createFromStd(MboxCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let mbox = 0 as ValueId
+
+	emitSchedLockEnter(module, block: entry, ids: ids)
+	emitStoreField(module, block: entry, record: mbox, offset: MboxOffClosed, value: emitConst(module, block: entry, value: MboxIsClosed, ids: ids))
+	let woken = emitMboxWakeAndUnlock(module, func: func, cur: entry, mbox: mbox, ids: ids, label: b"closewakeparked")
+	module.setTerminator(woken, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMboxClose'
+
+// `__mbox_handle_clone_box(handleBox) -> handleBox`. See `MboxHandleCloneBoxName`.
+//
+// ⚠ **BOTH COUNTS GO UP, AND THE SECOND IS NOT REDUNDANT.** `handles` decides when the mailbox CLOSES and
+// `refs` when it is FREED; a clone adds a namer of the mailbox and therefore one of each. Stepping only
+// `handles` would let the drop of the original free a record its clone still points at.
+function buildMboxHandleCloneBox(module StdModule)
+	var func = IrFunction.createFromStd(MboxHandleCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let handleBox = 0 as ValueId
+
+	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
+	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffHandles, delta: MboxCountUp, ids: ids)
+	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffRefs, delta: MboxCountUp, ids: ids)
+
+	// A FRESH box, on the same `__mm_alloc` contract every handle box is born through — a clone that answered
+	// the same box would make the drop of either free a record the other still names.
+	let boxBytes = emitConst(module, block: entry, value: ServiceHandleBoxSize, ids: ids)
+	let trivial = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
+	let cloned = ids.mint()
+	module.appendOp(entry, op: StdOp.call(cloned, callee: MmAllocName, args: twoArgs(boxBytes, second: trivial)))
+	emitStoreField(module, block: entry, record: cloned, offset: ServiceHandleMailboxOffset, value: mbox)
+	module.setTerminator(entry, op: StdOp.ret(cloned))
+
+	module.functions.push(func)
+end 'buildMboxHandleCloneBox'
+
+// `__mbox_handle_drop_box(handleBox)`. See `MboxHandleDropBoxName`.
+//
+// ⭐⭐ **THE ORDER IS CLOSE-THEN-RELEASE, AND REVERSING IT IS A USE-AFTER-FREE.** `__mbox_close` reads and
+// writes the record, so the reference this frame holds has to outlive it — which is exactly what `refs`
+// counts. So: step `handles` and close if this was the last namer; only THEN step `refs` and free if this
+// was the last owner.
+function buildMboxHandleDropBox(module StdModule)
+	var func = IrFunction.createFromStd(MboxHandleDropBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var closeIt = module.addBlock(func, label: b"dropclose")
+	var releaseRef = module.addBlock(func, label: b"droprelease")
+	var freeMbox = module.addBlock(func, label: b"dropfree")
+	let doneBlock = module.addBlock(func, label: b"dropdone")
+
+	emitParams(module, block: entry, count: 1)
+	let handleBox = 0 as ValueId
+
+	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
+	let priorHandles = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffHandles, delta: MboxCountDown, ids: ids)
+	let wasLastHandle = emitMboxWasLastOwner(module, block: entry, prior: priorHandles, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(wasLastHandle, thenBlockId: closeIt.id, elseBlockId: releaseRef.id))
+
+	module.appendOp(closeIt, op: StdOp.call(ids.mint(), callee: MboxCloseName, args: argsOf(mbox)))
+	module.setTerminator(closeIt, op: StdOp.branch(releaseRef.id))
+
+	let priorRefs = emitMboxCountStep(module, block: releaseRef, mbox: mbox, offset: MboxOffRefs, delta: MboxCountDown, ids: ids)
+	let wasLastRef = emitMboxWasLastOwner(module, block: releaseRef, prior: priorRefs, ids: ids)
+	module.setTerminator(releaseRef, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
+
+	module.appendOp(freeMbox, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(mbox)))
+	module.setTerminator(freeMbox, op: StdOp.branch(doneBlock.id))
+
+	// The handle BOX itself is an ordinary managed record with a trivial destructor, so it goes back through
+	// the ordinary decref — the mailbox above is what this entry exists to say something extra about.
+	module.appendOp(doneBlock, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(handleBox)))
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMboxHandleDropBox'
+
+// `__mbox_service_exit(mbox, selfGt)` — the loop's last act. See `MboxServiceExitName`.
+//
+// ⚠⚠ **THE CONSUMER TICKET IS ADDED FROM INSIDE THE GREEN THREAD, AND ADDING IT AT THE SPAWN INSTEAD WOULD
+// BE A TOMBSTONE.** A service has no promise, so nobody else will ever call `__gt_owner_done` for it — the
+// thread is its own consumer. But `emitGtIsDropped` reads exactly that ticket to mean *"the promise is gone,
+// do not RUN this thread"*, so a ticket added at spawn would make a never-yet-run service read as abandoned
+// to every popper (`GtRuntime.emitGtIsDropped`). Added here it is the honest statement it looks like: this
+// thread is finished, and the driver that switched into it supplies the runner's half.
+function buildMboxServiceExit(module StdModule)
+	var func = IrFunction.createFromStd(MboxServiceExitName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var freeMbox = module.addBlock(func, label: b"exitfree")
+	let doneBlock = module.addBlock(func, label: b"exitdone")
+
+	emitParams(module, block: entry, count: 2)
+	let mbox = 0 as ValueId
+	let selfGt = 1 as ValueId
+
+	let priorRefs = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffRefs, delta: MboxCountDown, ids: ids)
+	let wasLastRef = emitMboxWasLastOwner(module, block: entry, prior: priorRefs, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
+
+	module.appendOp(freeMbox, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(mbox)))
+	module.setTerminator(freeMbox, op: StdOp.branch(doneBlock.id))
+
+	module.appendOp(doneBlock, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(selfGt)))
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMboxServiceExit'
+
+// ⭐⭐ **WHAT `__gt_register_park`'s MAILBOX ARM DOES — emitted HERE because the mailbox's fields are this
+// file's, and the arm is one act over them (W218's second half).** The caller holds `__sched_lock` and has
+// just handed this function a green thread that WANTS to park on `arg`. Two answers, and the RE-CHECK is
+// what makes the first one possible at all:
+//
+//   • **AN ENVELOPE ARRIVED, OR THE MAILBOX CLOSED, SINCE THE RECEIVE RELEASED THE LOCK.** The park is
+//     UNDONE: nothing will ever wake this thread, because the event it was waiting for has already happened
+//     and its waker found `parkedGt` still 0. The thread goes back to `ready` and is re-published if it had
+//     already switched away from its driver.
+//   • **NEITHER.** The thread registers itself as the mailbox's `parkedGt` and goes `waiting`, which is what
+//     the next `__mbox_send` or `__mbox_close` will find.
+//
+// ⛔ **THAT RE-CHECK IS THE LOST-WAKEUP FIX AND IT IS NOT AN OPTIMISATION.** Without it a send that lands in
+// the window between `__mbox_recv`'s release and this registration is lost, and the service hangs holding a
+// message — reachable at `MAXON_MAX_PROCS >= 2` and invisible at 1, which is precisely the shape a green
+// suite on one processor would never show.
+//
+// It terminates `cur` and answers the block to CONTINUE IN, `emitMboxWakeAndUnlock`'s shape — except that
+// here the caller owns the unlock, because `__gt_register_park`'s other three arms do too.
+export function emitMboxRegisterPark(module StdModule, func IrFunction, cur IrBlock, gt ValueId, mbox ValueId, ids ValueMinter) returns IrBlock
+	var recheckClosed = module.addBlock(func, label: b"parkmboxclosed")
+	var undoPark = module.addBlock(func, label: b"parkmboxundo")
+	var republish = module.addBlock(func, label: b"parkmboxrepublish")
+	var registerWaiter = module.addBlock(func, label: b"parkmboxwait")
+	let cont = module.addBlock(func, label: b"parkmboxdone")
+
+	let head = emitLoadField(module, block: cur, record: mbox, offset: MboxOffHead, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let queueIsEmpty = emitCmp(module, block: cur, a: head, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(queueIsEmpty, thenBlockId: recheckClosed.id, elseBlockId: undoPark.id))
+
+	let closed = emitLoadField(module, block: recheckClosed, record: mbox, offset: MboxOffClosed, ids: ids)
+	let stillOpen = emitCmp(module, block: recheckClosed, a: closed, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(recheckClosed, op: StdOp.condBranch(stillOpen, thenBlockId: registerWaiter.id, elseBlockId: undoPark.id))
+
+	let waitingStatus = emitConst(module, block: registerWaiter, value: GtStatusWaiting, ids: ids)
+	emitStoreField(module, block: registerWaiter, record: mbox, offset: MboxOffParkedGt, value: gt)
+	emitStoreField(module, block: registerWaiter, record: gt, offset: GtOffStatus, value: waitingStatus)
+	module.setTerminator(registerWaiter, op: StdOp.branch(cont.id))
+	registerWaiter.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(zero)))
+
+	// ⭐ **WHETHER AN UNDONE PARK MUST BE RE-PUBLISHED IS THE PARK'S OWN QUESTION, asked of the same field the
+	// park branched on** — `buildGtRegisterPark`'s process-overflow arm states it in full, and the two answers
+	// are the same two: a DEFERRED park (`waiter != 0`) has already switched to its driver and is on no queue,
+	// so it must be published; an IMMEDIATE one is a P's inline scheduler GT three instructions from
+	// `__gt_drive_until(self, ready)`, which its `ready` status ends at once, and publishing it would put a
+	// P's own scheduler context on that P's ring.
+	let readyStatus = emitConst(module, block: undoPark, value: GtStatusReady, ids: ids)
+	emitStoreField(module, block: undoPark, record: gt, offset: GtOffStatus, value: readyStatus)
+	let waiter = emitLoadField(module, block: undoPark, record: gt, offset: GtOffWaiter, ids: ids)
+	let selfDriving = emitCmp(module, block: undoPark, a: waiter, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(undoPark, op: StdOp.condBranch(selfDriving, thenBlockId: cont.id, elseBlockId: republish.id))
+	undoPark.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(zero)))
+
+	let published = emitSchedPublishLocked(module, block: republish, gt: gt, ids: ids)
+	module.setTerminator(republish, op: StdOp.branch(cont.id))
+	republish.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(published)))
+
+	// The wake debt reaches the caller as `cont`'s block argument — the three roads in disagree about it, and
+	// only `__gt_register_park` knows where its own release is.
+	let owed = ids.mint()
+	cont.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
+	return cont
+end 'emitMboxRegisterPark'
+
+// The wake debt an `emitMboxRegisterPark` continuation carries, read back by `__gt_register_park` so the
+// block-argument position is stated once rather than at the two ends of one edge.
+export function mboxRegisterParkWakeDebt(cont IrBlock) returns ValueId
+	let arg = try cont.blockArgs.get(0) otherwise panic("mboxRegisterParkWakeDebt: the mailbox park's continuation block carries no argument — `emitMboxRegisterPark` pushes exactly one, the wake debt")
+	return arg.valueId
+end 'mboxRegisterParkWakeDebt'

@@ -625,6 +625,17 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
 	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: signatures.managedGlobals(liveGlobals))
 
+	// ⭐⭐ **SYNTHESIZE `<T>.__loop` FOR EVERY SERVICE — HERE, AND FOR `installManagedGlobalInit`'s REASON ONE
+	// LINE UP (SV1 wave 3, see `Runtime/ServiceLoop`).** It is a Maxon-tier function appended to the merged
+	// module, so everything below this line treats it as ordinary program code: `SemanticCheck` type-checks
+	// the handler calls it makes, `scanRuntimeUsage` sees its `__mbox_recv` / `__mm_decref` / `__destruct_<T>`
+	// calls and installs the floor they need, and the pipeline lowers it through the same `lowerMaxonToStd`
+	// that lowers the program that spawned it. That last property is what deletes the whole
+	// `declareAsyncReleaserNeeds`-shaped obligation a Std-tier synthesis would have owed.
+	//
+	// A program that spawns nothing builds nothing here and is byte-identical to before this rung.
+	installServiceLoops(module, project: project, signatures: signatures)
+
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: needsProbe)
 
 	// ⭐⭐ **THE PIPELINE RUNS IN TWO STAGES, AND WHAT SITS BETWEEN THEM IS THIS RUNG (the writable-record

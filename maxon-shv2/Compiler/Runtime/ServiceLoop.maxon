@@ -1,0 +1,373 @@
+// Runtime/ServiceLoop.maxon — `<T>.__loop`, the dispatch loop the compiler synthesizes for every SERVICE
+// (SV1 wave 3). Designed in `SERVICES_DESIGN.md` §"What the compiler synthesizes".
+//
+// ⭐⭐ **IT IS BUILT AT THE MAXON TIER, ON `ModuleInit.SynthesizedFunction`, AND THE TIER IS THE WHOLE
+// WIRING.** The loop CALLS USER CODE — one handler per message, with the receiver, the argument slotting,
+// the ranged-alias widths and the dual-register error ABI a real call has — so building it as already-lowered
+// `StdOp`s would be a second copy of `lowerCall`, which is the duplication this compiler pays for hardest.
+// Appended to the merged module beside `__module_init`, it is ordinary program code to everything below:
+// `SemanticCheck` type-checks its calls, `scanRuntimeUsage` sees its `__mbox_recv` / `__mm_decref` /
+// `__destruct_<T>` calls and installs the floor they need, and `lowerMaxonToStd` lowers it like anything
+// else.
+//
+// ⭐ **ONE CONSEQUENCE WORTH STATING, BECAUSE IT DELETES A WHOLE OBLIGATION.** `AsyncReleaser` has to
+// DECLARE what its bodies will call (`declareAsyncReleaserNeeds`) because they are Std-tier bodies built
+// AFTER the runtime-needs scan — rule 2 of `RuntimeUsage`'s header. This loop is built BEFORE that scan, so
+// every drop it emits is DISCOVERED: the request union's cascade, each payload's drop and the state's are
+// rooted by the ordinary walk, and the two `funcAddr`s `LowerMaxonToStd.lowerServiceSpawn` emits name
+// symbols the loop itself already calls.
+//
+// ⭐⭐ **NO `__do_<m>` TRAMPOLINES, AND THE DESIGN DOCUMENT SAYS OTHERWISE — SO READ THIS RATHER THAN IT.**
+// `SERVICES_DESIGN.md` reasoned that each dispatch arm had to be a single call because **E2049** admits only
+// one statement per `match` arm. That is a SOURCE rule (`Parser.parseArmBody`,
+// `Parser.isBlockOpeningStatement`) and this loop is not source: at the IR tier a `switch` arm is a BLOCK,
+// which holds as many ops as it likes. So there is ONE function per service and the handler call, the drops
+// and the shell decref all live in the arm — which is also what makes the un-consumed-payload drop
+// expressible at all.
+
+// ⭐⭐ **BUILD `<T>.__loop` FOR EVERY SERVICE IN THE PROGRAM.** Called from `Compiler.compileToCodeResult`
+// directly after `installManagedGlobalInit`, at the same tier and for the same reason — see this file's
+// header, and `ModuleInit`'s, which states the position's whole argument.
+//
+// A program that spawns nothing builds NOTHING here: `serviceTypeNames` is empty, which is every program
+// that never writes `spawn`.
+export function installServiceLoops(module MaxonModule, project Project, signatures ProgramSignatures)
+	for typeName in serviceTypeNames(signatures) 'eachService'
+		buildServiceLoop(module, project: project, signatures: signatures, typeName: typeName)
+	end 'eachService'
+end 'installServiceLoops'
+
+// The loop's two parameters, by the ValueId the parameter numbering reserves for each — `ModuleInit`'s
+// `ExitCodeParam` shape, and for its reason: a synthesized function has no parameter NAMES, so argument `n`
+// is a named constant or it is a bare number at every use.
+let ServiceStateParam = 0 as ValueId
+let ServiceMailboxParam = 1 as ValueId
+
+// ⭐⭐ **THE WHOLE LOOP, and its shape is the answer to "what does a service DO?".**
+//
+// ```
+// loop:      req = __mbox_recv(mailbox)        // parks when the queue is empty and the mailbox is open
+//            req == 0 -> exit                  // closed AND drained: nobody can ever send again
+//            switch loadIndirect(req, tag)
+//              case 0 (__shutdown) -> drop the pill, exit
+//              case k              -> load each payload, call <T>.<m>(state, …), drop what the
+//                                     handler did not consume, __mm_decref the shell, loop
+// exit:      __mbox_close(mailbox)             // idempotent; makes the queue drainable and un-fillable
+// drain:     leftover = __mbox_recv(mailbox)   // closed now, so this never parks
+//            leftover != 0 -> abandon it through the request union's own cascade, drain again
+//            drop state
+//            __mbox_service_exit(mailbox)
+// ```
+//
+// ⭐ **THE DRAIN IS `__mbox_recv` AGAIN, NOT A SECOND WALK OF THE QUEUE.** Once `closed` is set that entry
+// pops what is there and answers 0 when there is nothing left — which is exactly the drain's question — so
+// the queue's pop protocol is written once and a message abandoned after a `shutdown` takes the same road a
+// handled one does, minus the handler.
+//
+// ⚠ **THE `__shutdown` ARM DROPS THE PILL AND LEAVES; IT DOES NOT DRAIN.** Draining is the exit path's, and
+// both roads into `exit` go through it — so "shutdown drains what was queued behind the pill" and "the last
+// handle drop drains what was queued" are one piece of code rather than two that could disagree.
+function buildServiceLoop(module MaxonModule, project Project, signatures ProgramSignatures, typeName ByteArray)
+	let stateType = MaxonType.structRef(project.typeNames.intern(typeName))
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(stateType)
+	paramTypes.push(MaxonType.integer)
+	var fn = SynthesizedFunction.open(module, project: project, name: serviceLoopSymbol(typeName), returnType: MaxonReturnType.void, paramTypes: paramTypes)
+
+	let range = SourceRange.none()
+	let requestName = serviceRequestCompanionName(typeName)
+	let request = serviceRequestLayout(signatures, requestName: requestName)
+	let abandonCallee = signatures.unionBoxDropCallee(requestName)
+
+	let entry = fn.currentBlock()
+	let receive = fn.openBlock(b"serve")
+	let req = fn.emitPositionalCall(MboxRecvName, args: argsOf(ServiceMailboxParam), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+	let noRequest = fn.emitCompare(req, rhs: fn.emitTypedLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
+	fn.terminateBlock(entry, op: MaxonOp.branch(receive.id), range: range)
+
+	let dispatch = fn.openBlock(b"dispatch")
+	let tag = fn.mintOfType(MaxonType.integer)
+	fn.emit(MaxonOp.loadIndirect(tag, addr: req, offset: UnionTagOffset, valueType: MaxonType.integer), range: range)
+
+	// The exit path is opened BEFORE the arms so every arm has a block id to branch to, and the arms are the
+	// switch's dense table in TAG order — `request.tagOfIndex(i)` is `i` by construction
+	// (`ServiceCompanions.addServiceRequestCase` derives each tag from the case count), so the table's index
+	// IS the case index.
+	let exit = fn.openBlock(b"stopping")
+	fn.emitPositionalCallDiscarding(MboxCloseName, args: argsOf(ServiceMailboxParam), range: range)
+
+	var armIds = BlockIdArray.create()
+	for caseIndex in 0 upto request.caseCount() 'eachVariant'
+		armIds.push(buildServiceArm(fn, project: project, signatures: signatures, typeName: typeName, request: request, caseIndex: caseIndex, req: req, abandonCallee: abandonCallee, receive: receive, exit: exit, range: range).id)
+	end 'eachVariant'
+
+	// ⚠ **THE DEFAULT IS THE EXIT, NOT AN ABORT, AND THAT IS A CHOICE ABOUT A CASE THAT CANNOT HAPPEN.** The
+	// table covers every tag the union has and only `<T>.__request` construction can fill a tag word, so the
+	// default is unreachable by construction. It goes to the exit rather than to a `panic` because a
+	// `RuntimeAbort` there would be a claim about a corrupted heap that this loop is in no position to make —
+	// and stopping the service is the conservative answer to "a request I do not recognise".
+	fn.terminateBlock(dispatch, op: MaxonOp.switch(tag, denseTargetBlockIds: armIds, defaultBlockId: exit.id), range: range)
+	fn.terminateBlock(receive, op: MaxonOp.condBranch(noRequest, thenBlockId: exit.id, elseBlockId: dispatch.id), range: range)
+
+	buildServiceDrain(fn, project: project, signatures: signatures, stateType: stateType, abandonCallee: abandonCallee, exit: exit, range: range)
+end 'buildServiceLoop'
+
+// The exit path: drain whatever is still queued through the request union's own cascade, drop the state, and
+// hand back this green thread's own ticket. `exit` has already closed the mailbox.
+function buildServiceDrain(fn SynthesizedFunction, project Project, signatures ProgramSignatures, stateType MaxonType, abandonCallee ByteArray, exit IrBlock, range SourceRange)
+	let drain = fn.openBlock(b"drain")
+	let leftover = fn.emitPositionalCall(MboxRecvName, args: argsOf(ServiceMailboxParam), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+	let drained = fn.emitCompare(leftover, rhs: fn.emitTypedLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
+	fn.terminateBlock(exit, op: MaxonOp.branch(drain.id), range: range)
+
+	// ⭐ **AN ABANDONED REQUEST TAKES THE UNION'S OWN CASCADE, WHERE A HANDLED ONE TAKES A SHELL DECREF — and
+	// the difference is which of them still owns its payloads.** A handled message's arguments were consumed
+	// or dropped slot by slot by the arm that ran it; an abandoned one still holds every one of them, and the
+	// tag-conditional `__destruct_<T>.request` is the only thing that knows which. That is the design's own
+	// argument for a closed union: *a closure-based mailbox holds erased environments, cannot know what to
+	// free, and would fail the leak gate.*
+	let abandonOne = fn.openBlock(b"abandon")
+	fn.emitPositionalCallDiscarding(abandonCallee, args: argsOf(leftover), range: range)
+	fn.terminateBlock(abandonOne, op: MaxonOp.branch(drain.id), range: range)
+
+	let teardown = fn.openBlock(b"finished")
+	fn.terminateBlock(drain, op: MaxonOp.condBranch(drained, thenBlockId: teardown.id, elseBlockId: abandonOne.id), range: range)
+
+	// The state was MOVED into this thread at the `spawn` (`Parser.moveIntoGreenThread`), so this frame is
+	// its one owner and this is the drop that pairs with that move.
+	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: stateType), args: argsOf(ServiceStateParam), range: range)
+	fn.emitPositionalCallDiscarding(MboxServiceExitName, args: argsOf(ServiceMailboxParam), range: range)
+	fn.terminate(MaxonOp.retVoid, range: range)
+end 'buildServiceDrain'
+
+// ⭐ **ONE DISPATCH ARM.** Variant 0 is the compiler's `__shutdown` pill and stops the loop; every other is a
+// message, and runs its handler.
+function buildServiceArm(fn SynthesizedFunction, project Project, signatures ProgramSignatures, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, req ValueId, abandonCallee ByteArray, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
+	let arm = fn.openBlock(request.caseNameAt(caseIndex))
+	if request.caseNameAt(caseIndex).equals(ServiceShutdownCaseName) 'thePoisonPill'
+		// The pill carries only its (unused, SV1) reply slot, which is a scalar — so the cascade has nothing
+		// to cascade to and this is the shell decref spelled through the one router. Whatever is queued
+		// BEHIND it is the exit path's to abandon.
+		fn.emitPositionalCallDiscarding(abandonCallee, args: argsOf(req), range: range)
+		fn.terminateBlock(arm, op: MaxonOp.branch(exit.id), range: range)
+		return arm
+	end 'thePoisonPill'
+
+	let methodName = request.caseNameAt(caseIndex)
+	let callee = qualifiedMethodName(typeName, methodName: methodName)
+	let decl = serviceMessageDecl(signatures, callee: callee)
+	let payloads = request.payloadsAt(caseIndex)
+
+	// ⚠ **ONLY THE DECLARED PARAMETERS ARE LOADED, AND THE `__reply` SLOT IS NOT ONE.** A message with a
+	// reply carries a trailing integer slot the request union declares and SV1 never fills (the send stores
+	// 0). Loading it would hand the handler an argument its declaration does not have.
+	var args = ValueIdArray.create()
+	args.push(ServiceStateParam)
+	var payloadClasses = PayloadClassArray.create()
+	for slot in 0 upto decl.paramTypes.count() 'eachParam'
+		let field = try payloads.get(slot) otherwise panic("buildServiceArm: `{String.from(request.name)}`'s variant `{String.from(methodName)}` declares {payloads.count()} payload(s) against `{String.from(callee)}`'s {decl.paramTypes.count()} parameter(s) — `ServiceCompanions.serviceRequestPayloads` builds one payload per parameter, plus a trailing reply slot")
+		let declared = signatures.payloadTypeOf(field, layout: request, into: project.typeNames)
+		let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: declared, slotScopeFilePath: request.declFilePath)
+		payloadClasses.push(class)
+		let loaded = fn.mintOfType(payloadValueTypeOf(class, declared: declared))
+		fn.emit(MaxonOp.loadIndirect(loaded, addr: req, offset: request.payloadSlotOffset(slot), valueType: payloadStorageOf(class)), range: range)
+		args.push(loaded)
+	end 'eachParam'
+
+	emitServiceHandlerCall(fn, signatures: signatures, project: project, callee: callee, args: args, range: range)
+	dropUnconsumedPayloads(fn, signatures: signatures, project: project, callee: callee, request: request, caseIndex: caseIndex, classes: payloadClasses, args: args, range: range)
+
+	// ⭐ **THE SHELL, AND ONLY THE SHELL.** The payloads were consumed by the handler or dropped by the loop
+	// one line up, so the box's own record is all that is left to release — and the box was allocated with
+	// the trivial destructor (`Parser.emitBoxAlloc`), which is what makes the plain decref the right entry
+	// rather than the cascade the abandon path takes.
+	fn.emitPositionalCallDiscarding(MmDecrefName, args: argsOf(req), range: range)
+	fn.terminateBlock(arm, op: MaxonOp.branch(receive.id), range: range)
+	return arm
+end 'buildServiceArm'
+
+// The handler call itself. A THROWING message needs the dual-register form and needs its error flag
+// released; everything else is one positional call whose result is dropped if it owns heap.
+//
+// ⚠⚠ **NO SEND CAN PRODUCE A THROWING VARIANT IN SV1 — `Parser.emitServiceSend` refuses one, because a
+// fire-and-forget message has nowhere to carry an error — SO THIS ARM IS CORRECTNESS AND NOT A LIVE PATH.**
+// It is written rather than aborted for two reasons that are both about the compiler and not about the
+// program: a plain `call` to a throwing callee is **E3057** at `SemanticCheck.validatePlainCall` (which
+// walks this synthesized body like any other), so the `tryCall` is FORCED; and once it exists, a boxed error
+// union's flag IS a heap pointer, so releasing it is the only non-leaking thing to do with it.
+function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignatures, project Project, callee ByteArray, args ValueIdArray, range SourceRange)
+	let returned = serviceHandlerReturnType(signatures, callee: callee, typeNames: project.typeNames)
+	let resultTag = match returned 'r'
+		void gives ValueTypeTag.void
+		value(inner) gives maxonTypeTag(inner)
+	end 'r'
+	let resultNameId = match returned 'n'
+		void gives UnnamedTypeId
+		value(inner) gives typeNameIdOf(inner)
+	end 'n'
+
+	if not throwsClauseIsThrowing(signatures.throwsOf(callee)) 'nonThrowing'
+		let result = fn.emitPositionalCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range)
+		dropServiceHandlerResult(fn, signatures: signatures, project: project, returned: returned, result: result, range: range)
+		return
+	end 'nonThrowing'
+
+	let result = fn.mint(resultTag, nameId: resultNameId)
+	let errorFlag = fn.mintOfType(MaxonType.integer)
+	fn.emit(MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
+
+	let threw = fn.emitCompare(errorFlag, rhs: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.ne, range: range)
+	let caught = fn.currentBlock()
+	let releaseError = fn.openBlock(b"dropthrown")
+	dropServiceHandlerError(fn, signatures: signatures, callee: callee, errorFlag: errorFlag, range: range)
+	let handled = fn.openBlock(b"handled")
+	fn.terminateBlock(caught, op: MaxonOp.condBranch(threw, thenBlockId: releaseError.id, elseBlockId: handled.id), range: range)
+	fn.terminateBlock(releaseError, op: MaxonOp.branch(handled.id), range: range)
+	fn.resumeBlock(handled)
+
+	// ⚠ On the THROWN path the success register holds whatever the exit left there — the undefined slot
+	// `AsyncReleaser`'s header calls a wild free — so the result is released only where it was actually
+	// produced. That is what the `handled` merge is: both edges reach it, and only the non-throwing one
+	// carries a value, which is why the drop cannot be emitted before the branch.
+	dropServiceHandlerResultIfNotThrown(fn, signatures: signatures, project: project, returned: returned, result: result, threw: threw, range: range)
+end 'emitServiceHandlerCall'
+
+// A managed RESULT nobody asked for. SV1 has no reply, so a value-returning message is fire-and-forget and
+// the value is dropped here — the loop is its one owner from the moment the handler returned it.
+function dropServiceHandlerResult(fn SynthesizedFunction, signatures ProgramSignatures, project Project, returned MaxonReturnType, result ValueId, range SourceRange)
+	match returned 'r'
+		void then return
+		value(inner) then dropServiceManagedValue(fn, signatures: signatures, project: project, valueType: inner, value: result, range: range)
+	end 'r'
+end 'dropServiceHandlerResult'
+
+// One value released through the SHARED field-drop router, iff it owns heap. The `if` is the whole body,
+// which is why it is a function rather than an arm: a `match` arm is one statement.
+function dropServiceManagedValue(fn SynthesizedFunction, signatures ProgramSignatures, project Project, valueType MaxonType, value ValueId, range SourceRange)
+	if not signatures.typeIsManaged(valueType, from: project.typeNames) 'ownsNoHeap'
+		return
+	end 'ownsNoHeap'
+
+	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: valueType), args: argsOf(value), range: range)
+end 'dropServiceManagedValue'
+
+// The same drop, on the ONE path that produced a value. See `emitServiceHandlerCall` for why a throwing
+// call's success register may not be read on the error edge.
+function dropServiceHandlerResultIfNotThrown(fn SynthesizedFunction, signatures ProgramSignatures, project Project, returned MaxonReturnType, result ValueId, threw ValueId, range SourceRange)
+	if not serviceHandlerReturnsHeap(signatures, project: project, returned: returned) 'ownsNoHeap'
+		return
+	end 'ownsNoHeap'
+
+	let inner = serviceHandlerReturnedType(returned)
+	let merge = fn.currentBlock()
+	let dropIt = fn.openBlock(b"dropresult")
+	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: inner), args: argsOf(result), range: range)
+	let after = fn.openBlock(b"resultdropped")
+	fn.terminateBlock(merge, op: MaxonOp.condBranch(threw, thenBlockId: after.id, elseBlockId: dropIt.id), range: range)
+	fn.terminateBlock(dropIt, op: MaxonOp.branch(after.id), range: range)
+	fn.resumeBlock(after)
+end 'dropServiceHandlerResultIfNotThrown'
+
+// Does this handler hand back a value that owns heap? Split from the drop above because the CONDITIONAL
+// drop needs the answer before it opens any block — a `match` arm cannot carry the four statements the
+// diamond takes.
+function serviceHandlerReturnsHeap(signatures ProgramSignatures, project Project, returned MaxonReturnType) returns bool
+	return match returned 'r'
+		void gives false
+		value(inner) gives signatures.typeIsManaged(inner, from: project.typeNames)
+	end 'r'
+end 'serviceHandlerReturnsHeap'
+
+// The type a handler returns. Asked only where `serviceHandlerReturnsHeap` has already answered true, so
+// `void` is a caller that skipped its own gate rather than a case to answer with a placeholder.
+function serviceHandlerReturnedType(returned MaxonReturnType) returns MaxonType
+	return match returned 'r'
+		void panic("serviceHandlerReturnedType: asked for the returned type of a VOID handler — every caller gates on `serviceHandlerReturnsHeap`, which answers false for one")
+		value(inner) gives inner
+	end 'r'
+end 'serviceHandlerReturnedType'
+
+// A thrown error, released iff it is a heap BOX. `asyncErrorSlotsOf`'s exact test, one runtime over: a
+// SCALAR error clause travels as `ordinal + ErrorFlagOrdinalBias` — a small integer that owns nothing and
+// must never reach a drop callee — while a boxed union's flag IS the box pointer, written verbatim by
+// `LowerMaxonToStd.lowerThrowError`.
+function dropServiceHandlerError(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, errorFlag ValueId, range SourceRange)
+	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return
+	if not serviceErrorIsBoxed(signatures, errorName: errorName.toByteArray()) 'aScalarOrdinal'
+		return
+	end 'aScalarOrdinal'
+
+	fn.emitPositionalCallDiscarding(signatures.unionBoxDropCallee(errorName.toByteArray()), args: argsOf(errorFlag), range: range)
+end 'dropServiceHandlerError'
+
+// Is this declared error union BOXED? Split out so the `declared` arm above stays one statement and the
+// registry is asked through one door.
+function serviceErrorIsBoxed(signatures ProgramSignatures, errorName ByteArray) returns bool
+	return match signatures.enumOf(errorName) 'e'
+		declared(layout) gives layout.isBoxed()
+		undeclared gives false
+	end 'e'
+end 'serviceErrorIsBoxed'
+
+// ⭐⭐ **DROP EVERY MANAGED PAYLOAD THE HANDLER DID NOT TAKE OWNERSHIP OF.** The request box holds exactly
+// one reference to each of its managed payloads — the one `Parser.moveIntoGreenThread` moved in at the send
+// — and the handler either consumed it or borrowed it. A borrowed one is still this loop's to release, and
+// releasing it is what balances the move.
+//
+// ⚠ **`paramIsConsumed` ANSWERS `false` FOR EVERY MESSAGE TODAY, AND ASKING IT IS STILL RIGHT.** The
+// consume analysis deliberately declines to scan a NON-GENERIC INSTANCE METHOD's body
+// (`Parser.recordScannedSignature`: *"the caller leaves EMPTY for a non-generic instance method"*), and a
+// service is never generic (`ServiceTargetVerdict.typeIsGeneric` refuses one at the `spawn`) — so every
+// message is exactly that shape. Asking the ONE door rather than hard-coding the answer costs a map lookup
+// per payload at compile time and is what makes this correct the day the analysis widens; hard-coding it
+// would be a double free the day it does.
+//
+// ⚠ The index is CALL-ALIGNED — the receiver is position 0 — which is the space `ParamConsumeInfo`'s columns
+// are recorded in (`Parser.recordScannedSignature` states it), and `args` is built in that same order.
+function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignatures, project Project, callee ByteArray, request EnumLayout, caseIndex CaseIndex, classes PayloadClassArray, args ValueIdArray, range SourceRange)
+	let payloads = request.payloadsAt(caseIndex)
+	for slot in 0 upto classes.count() 'eachPayload'
+		let class = try classes.get(slot) otherwise panic("dropUnconsumedPayloads: classes.get OOB at {slot} — one class is pushed per loaded payload")
+		if not payloadClassIsManaged(class) 'ownsNoHeap'
+			continue
+		end 'ownsNoHeap'
+		if signatures.paramIsConsumed(callee, index: (slot + ServiceReceiverArgCount) as ParamCount) 'theHandlerTookIt'
+			continue
+		end 'theHandlerTookIt'
+
+		let field = try payloads.get(slot) otherwise panic("dropUnconsumedPayloads: payloads.get OOB at {slot} — one class was pushed per payload read out of this same list")
+		let loaded = try args.get(slot + ServiceReceiverArgCount) otherwise panic("dropUnconsumedPayloads: args.get OOB at {slot + ServiceReceiverArgCount} — `args` holds the receiver followed by one value per payload")
+		fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: signatures.payloadTypeOf(field, layout: request, into: project.typeNames)), args: argsOf(loaded), range: range)
+	end 'eachPayload'
+end 'dropUnconsumedPayloads'
+
+// `args[0]` of a message dispatch is the service's own state — the receiver, which fills no payload slot. So
+// payload `j` is `args[j + ServiceReceiverArgCount]`, exactly as `MaxonDialect.WitnessReceiverArgCount`
+// states the same kind of fact for a witness dispatch.
+let ServiceReceiverArgCount = 1 as ParamCount
+
+// The request union's layout, or a panic: a service's companions were minted before the parse
+// (`ServiceCompanions.synthesizeServiceCompanions`), so a service whose union is missing here is a compiler
+// bug rather than a program's.
+function serviceRequestLayout(signatures ProgramSignatures, requestName ByteArray) returns EnumLayout
+	return match signatures.enumOf(requestName) 'e'
+		declared(layout) gives layout
+		undeclared panic("serviceRequestLayout: nothing declares `union {String.from(requestName)}` — the companions are minted for every accepted spawn target inside `queryProgramSignatures`, before any body is parsed")
+	end 'e'
+end 'serviceRequestLayout'
+
+// The declaration a message variant was built from. Its `paramTypes` count is how many of the variant's
+// payloads are ARGUMENTS (the rest is the reply slot).
+function serviceMessageDecl(signatures ProgramSignatures, callee ByteArray) returns OverloadedDecl
+	let decls = signatures.overloadedDeclsOf(callee)
+	return try decls.get(0) otherwise panic("serviceMessageDecl: '{String.from(callee)}' is a message on the roster the declaration sweep built from its own declaration, so `overloadedDeclsOf` cannot be empty")
+end 'serviceMessageDecl'
+
+// A handler's declared return type, `void` for an undeclared callee — which is a program SemanticCheck
+// rejects with E3004, reached here only because this synthesis runs over a module that may still be doomed.
+function serviceHandlerReturnType(signatures ProgramSignatures, callee ByteArray, typeNames TypeNameInterner) returns MaxonReturnType
+	return match signatures.returnTypeOf(callee, into: typeNames) 'r'
+		declared(declaredReturn) gives declaredReturn
+		undeclared gives MaxonReturnType.void
+	end 'r'
+end 'serviceHandlerReturnType'

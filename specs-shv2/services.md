@@ -84,8 +84,8 @@ at the send).
 
 ### `ServiceError`
 
-A service can be gone: `shutdown()` enqueues a poison pill behind everything queued, and dropping the last
-handle does the same. So `stdlib/Builtins.maxon` declares
+A service can be gone: `h.shutdown()` enqueues a poison pill behind everything queued, and dropping the last
+handle closes the mailbox, which drains it the same way. So `stdlib/Builtins.maxon` declares
 
 ```text
 public enum ServiceError implements Error
@@ -98,32 +98,29 @@ which a reply's error type will be merged with. It carries no `__` prefix precis
 
 ## Targets
 
-⚠ **No case in this file carries a `<!-- targets: -->` marker, and none should.** Fourteen of them are
-decided BEFORE lowering — a token shape, a declaration, a transferability rule — and a verdict reached
-before a backend is target-neutral by construction. The two that RUN (`spawn-is-not-a-keyword`,
-`service-error-is-declared-and-nameable`) reach no green-thread runtime at all: one is an ordinary program
-about an identifier and the other throws an ordinary enum. That is the rule
-`specs-shv2/async-scheduler.md`'s own Targets section states — **a marker on a case that passes everywhere
-hides a green lane rather than describing a red one**, which is what eleven removed markers were doing.
+⚠ **A `<!-- targets: x64-windows -->` MARKS EXACTLY THE CASES THAT START A SERVICE, AND NOTHING ELSE.** A
+running service reaches a green thread's context switch, which is hand-assembled x64 — so those cases are
+restricted for the reason `specs-shv2/async-scheduler.md`'s own Targets section gives, and every one of
+them carries the marker.
 
-⚠ **The gate arrives with the cases that need it.** Every `disabled-test` below that actually STARTS a
-service is gated on the mailbox and the dispatch loop, and each will carry the green-thread
-`<!-- targets: x64-windows -->` when it is enabled — because from that moment the case reaches a context
-switch written in hand-assembled x64.
+⚠ **Every REFUSAL in this file is unmarked, and that is the same rule read from the other end.** A verdict
+reached before a backend — a token shape, a declaration, a transferability rule, a move — is target-neutral
+by construction, so a marker on one would hide a green lane rather than describe a red one. `spawn-is-not-a-keyword`
+and `service-error-is-declared-and-nameable` are unmarked for the neighbouring reason: they RUN, but they
+start no service and reach no scheduler at all.
 
 ## Tests
 
 <!-- test: companions-resolve-as-types -->
+<!-- targets: x64-windows -->
 A `spawn` makes the type a service, and both synthesized companions are then nameable TYPES — in a
 signature written by a function that spawns nothing.
 
-⚠ **THIS CASE CANNOT FAIL ON ITS OWN CLAIM, AND THAT IS MEASURED RATHER THAN SUSPECTED.** With the
-whole-program spawn walk disabled — companions minted for nothing — it still PASSES: the wave-3 E2015 is a
-throw, so the file's parse ends before an unresolved `Calc.handle` is ever reported, and the `E3011 Unknown
-type` that would expose the absence never runs. It is kept because it pins the SHAPE (naming both
-companions in ordinary signatures adds no diagnostic of its own), and because it goes red the moment wave 3
-deletes the E2015 with anything wrong. **The gate on the companions actually existing is
-`companions-come-from-a-spawn-in-another-file`**, where the declaring file parses to completion.
+⭐ **IT CAN NOW FAIL ON ITS OWN CLAIM, AND WAVE 2's NOTE THAT IT COULD NOT IS SPENT.** While the wave-3
+E2015 stood at the `spawn`, the file's parse ended before an unresolved `Calc.handle` was ever reported, so
+this case passed with the whole-program spawn walk disabled and only the two CROSS-FILE cases could see the
+companions. That throw is gone: the program now parses to completion, runs, and an absent companion is
+`E3011 Unknown type 'Calc.handle'` at `serve`'s own signature.
 ```maxon
 type Calc
 	var count as int
@@ -155,24 +152,26 @@ end 'describe'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	return 0
+	return serve(h) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:31:10: Unsupported: services are not lowered yet — SV1 wave 3
+```exitcode
+1
 ```
 
 <!-- test: companions-come-from-a-spawn-in-another-file -->
+<!-- targets: x64-windows -->
 ⭐ Whether a type is a service is a WHOLE-PROGRAM property. The file that declares `Calc` and names
 `Calc.handle` writes no `spawn` at all; the file that spawns declares nothing. The companions exist
-because the two are compiled together, and the only diagnostic is the wave-3 refusal — the `Unknown type`
-a per-file decision would report is what this case is against.
+because the two are compiled together — the `Unknown type` a per-file decision would report is what this
+case is against.
 
-⭐ **IT IS THE ONE CASE IN THIS FILE THAT CAN FAIL ON THE COMPANIONS, AND IT WAS SEEN RED.** SABOTAGE
-MEASURED: with the whole-program spawn probe removed from the pre-fold token walk, this case reports the
-wave-3 E2015 **and** `error E3011: Unknown type 'Calc.handle'`, while every other case in this file stays
-green. `calc.maxon` parses to completion — its `spawn` is in the other file — so the unresolved companion
-is actually reached, which is precisely what a single-file case cannot arrange.
+⭐ **IT WAS THE ONE CASE IN THIS FILE THAT COULD FAIL ON THE COMPANIONS, AND IT WAS SEEN RED.** SABOTAGE
+MEASURED at wave 2: with the whole-program spawn probe removed from the pre-fold token walk, this case
+reported `error E3011: Unknown type 'Calc.handle'` while every other case in the file stayed green.
+`calc.maxon` parses to completion — its `spawn` is in the other file — so the unresolved companion is
+actually reached, which is precisely what a single-file case could not arrange while a throw stood at the
+`spawn`.
 ```maxon
 // --- file: calc.maxon
 export type Calc
@@ -197,20 +196,21 @@ function main() returns ExitCode
 	return serve(h) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:21:10: Unsupported: services are not lowered yet — SV1 wave 3
+```exitcode
+1
 ```
 
 <!-- test: a-spawn-inside-a-method-body-is-found -->
+<!-- targets: x64-windows -->
 ⭐ The walk that decides which types are services reads EVERY token of every file, and this is the case
 that says why it cannot ride the declaration sweep: that sweep consumes a `type` declaration whole and
 resumes past its `end`, so a `spawn` in a METHOD BODY would be invisible to an arm written inside it. The
 only `spawn` in this program is inside `Runner.start`.
 
 ⚠ **IT IS SPLIT ACROSS TWO FILES ON PURPOSE, for `companions-come-from-a-spawn-in-another-file`'s measured
-reason.** Written as one file it would pass with the walk disabled — the wave-3 E2015 is a throw and ends
-the parse before an unresolved companion is reported — so the claim would be untestable. Here `calc.maxon`
-parses to completion, and a walk that skipped method bodies would leave its `Calc.handle` unresolved.
+reason.** `Runner.start`'s `spawn` is the only one in the program, and `calc.maxon` — which parses to
+completion and names `Calc.handle` in a signature — is where a walk that skipped method bodies leaves the
+companion unresolved.
 ```maxon
 // --- file: calc.maxon
 export type Calc
@@ -247,8 +247,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:28:11: Unsupported: services are not lowered yet — SV1 wave 3
+```exitcode
+0
 ```
 
 <!-- test: error.spawn-of-a-bare-function-refused -->
@@ -635,8 +635,793 @@ end 'main'
 7
 ```
 
+<!-- test: spawn-send-and-the-service-runs -->
+<!-- targets: x64-windows -->
+⭐ The first case in this file that starts a real green thread. `spawn` hands back a `Counter.handle`; a call
+on that handle is a MESSAGE, enqueued and returned from at once; the service's own green thread runs the
+handler. Dropping the handle at the end of `main` closes the mailbox, the loop's `recv` answers 0 and the
+service exits — which the exit drain runs out before the leak gate reads its counters.
+
+⚠ **`main` PRINTS NOTHING, AND THAT IS THE RULE EVERY RUNNING CASE IN THIS FILE FOLLOWS.** A service runs on
+its own green thread and, above one processor, on another OS thread — so `main`'s output and a handler's are
+ordered by nothing. Every expectation below is therefore built out of prints made by ONE service at a time,
+whose order is its own mailbox's FIFO.
+```maxon
+type Counter
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function tick()
+		self.n = self.n + 1
+	end 'tick'
+
+	export function report()
+		print("n={self.n}\n")
+	end 'report'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	h.tick()
+	h.tick()
+	h.report()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=2
+```
+
+<!-- test: messages-are-serialized-in-fifo-order -->
+<!-- targets: x64-windows -->
+Handlers run one at a time, in send order — so three digits pushed in order read back as one number.
+```maxon
+type Log
+	var acc as int
+
+	static function create() returns Self
+		return Self{acc: 0}
+	end 'create'
+
+	export function push(d int)
+		self.acc = self.acc * 10 + d
+	end 'push'
+
+	export function read()
+		print("acc={self.acc}\n")
+	end 'read'
+end 'Log'
+
+function main() returns ExitCode
+	let h = spawn Log.create()
+	h.push(1)
+	h.push(2)
+	h.push(3)
+	h.read()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+acc=123
+```
+
+<!-- test: two-instances-are-independent -->
+<!-- targets: x64-windows -->
+Two spawns of one type are two services with two states.
+
+⚠ **THE ORDER OF THE TWO PRINTS IS FORCED BY CAUSALITY AND NOT BY LUCK.** `b` prints its own count and then
+sends `report` to `a`, so `a`'s line cannot be written until `b`'s handler has already written its own — two
+services printing on two green threads with nothing between them would be ordered by the scheduler. Moving
+`a`'s handle INTO `b`'s mailbox is what buys that ordering, and it is the same transfer
+`a-handle-moved-into-another-service` pins on its own.
+```maxon
+type Counter
+	var id as int
+	var n as int
+
+	static function create(id int) returns Self
+		return Self{id: id, n: 0}
+	end 'create'
+
+	export function tick()
+		self.n = self.n + 1
+	end 'tick'
+
+	export function report()
+		print("{self.id}={self.n}\n")
+	end 'report'
+
+	export function reportThen(peer Counter.handle)
+		print("{self.id}={self.n}\n")
+		peer.report()
+	end 'reportThen'
+end 'Counter'
+
+function main() returns ExitCode
+	let a = spawn Counter.create(1)
+	let b = spawn Counter.create(2)
+	a.tick()
+	a.tick()
+	b.tick()
+	b.reportThen(a)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2=1
+1=2
+```
+
+<!-- test: the-same-type-is-used-directly-and-spawned -->
+<!-- targets: x64-windows -->
+⭐ The location-transparency property, and the test a dedicated `service` declaration would have made
+impossible: one type, one method, reached both ways in one program. The direct calls run before the `spawn`
+exists, so the two lines are ordered by the program rather than by the scheduler.
+```maxon
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump(by int)
+		self.count = self.count + by
+	end 'bump'
+
+	export function total()
+		print("total={self.count}\n")
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	var direct = Calc.create()
+	direct.bump(4)
+	direct.total()
+
+	let h = spawn Calc.create()
+	h.bump(3)
+	h.total()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+total=4
+total=3
+```
+
+<!-- test: error.a-private-method-is-absent-from-the-handle -->
+A private helper is not on the handle, which is what makes a self-send unspellable.
+```maxon
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	function record(v int)
+		self.count = v
+	end 'record'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	h.record(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4006: <fragment>:15:4: Type 'Calc.handle' has no member named 'record'
+```
+
+<!-- test: shutdown-drains-what-is-queued -->
+<!-- targets: x64-windows -->
+`shutdown()` is a graceful drain, not a kill: the poison pill goes in BEHIND everything already queued, so
+every message sent before it still runs.
+
+⚠ `shutdown` is the handle's own method and is not a message of `Log`. It follows `clone`'s precedent
+exactly (`Parser.structCloneIsSynthesized`): a service that declares an `export function shutdown()` of its
+own WINS, and the compiler's pill is then unspellable for it — which leaves dropping the last handle, the
+other road to the same drain.
+```maxon
+type Log
+	var acc as int
+
+	static function create() returns Self
+		return Self{acc: 0}
+	end 'create'
+
+	export function push(d int)
+		self.acc = self.acc + d
+	end 'push'
+
+	export function read()
+		print("acc={self.acc}\n")
+	end 'read'
+end 'Log'
+
+function main() returns ExitCode
+	let h = spawn Log.create()
+	h.push(1)
+	h.push(2)
+	h.read()
+	h.shutdown()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+acc=3
+```
+
+<!-- test: a-send-after-shutdown-is-dropped-cleanly -->
+<!-- targets: x64-windows -->
+⭐⭐ **THE CASE THAT REACHES THE ABANDON PATH, AND IT REACHES IT BY EITHER OF TWO ROADS.** The second `keep`
+is sent after the poison pill, so the loop never runs its handler — and which road drops its `String` is a
+race this case deliberately does not resolve: if the send wins, the envelope is queued behind the pill and
+the loop's exit drain abandons it; if the loop wins, the mailbox is already closed and `__mbox_send` abandons
+it inline. **Both roads must print exactly the same thing and leak exactly nothing**, which is the property
+worth pinning — the drop of a moved-in payload nobody will ever handle.
+```maxon
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let first = "a{1}"
+	h.keep(first)
+	h.shutdown()
+	let second = "b{2}"
+	h.keep(second)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kept a1
+```
+
+<!-- test: dropping-the-last-handle-shuts-the-service-down -->
+<!-- targets: x64-windows -->
+An ordinary program needs no shutdown boilerplate: the handle is an owned box, and its scope-exit drop is
+what closes the mailbox. `inner` is dropped at the end of the labelled block, well before `main` returns, so
+the service that prints `early` is finished while the second one is still being fed.
+```maxon
+type Beeper
+	var tag as int
+
+	static function create(tag int) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	export function beep()
+		print("beep {self.tag}\n")
+	end 'beep'
+end 'Beeper'
+
+function main() returns ExitCode
+	let outer = spawn Beeper.create(2)
+	if true 'early'
+		let inner = spawn Beeper.create(1)
+		inner.beep()
+	end 'early'
+	outer.beep()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-cloned-handle-keeps-the-service-alive -->
+<!-- targets: x64-windows -->
+A handle is an ordinary box, so `.clone()` reaches it — and on a handle the clone is a second HANDLE to the
+SAME service, not a second service. Dropping one leaves the mailbox open; the last one to go closes it.
+```maxon
+type Counter
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function tick()
+		self.n = self.n + 1
+	end 'tick'
+
+	export function report()
+		print("n={self.n}\n")
+	end 'report'
+end 'Counter'
+
+function main() returns ExitCode
+	let a = spawn Counter.create()
+	let b = a.clone()
+	a.tick()
+	b.tick()
+	b.report()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=2
+```
+
+<!-- test: a-handle-moved-into-another-service -->
+<!-- targets: x64-windows -->
+A handle is a transferable message payload: `Worker` is handed the `Logger`'s handle, sends to it, and then
+DROPS it — the un-consumed payload drop the loop owes for every message it runs. That drop is the `Logger`'s
+last handle, so the logger shuts down without `main` ever naming it again.
+```maxon
+type Logger
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function say(s String)
+		print("log: {s}\n")
+	end 'say'
+end 'Logger'
+
+type Worker
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function run(sink Logger.handle)
+		sink.say("from the worker")
+	end 'run'
+end 'Worker'
+
+function main() returns ExitCode
+	let logger = spawn Logger.create()
+	let worker = spawn Worker.create()
+	worker.run(logger)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+log: from the worker
+```
+
+<!-- test: handles-in-an-array -->
+<!-- targets: x64-windows -->
+Handles are ordinary boxes and live in containers — which means the array's element drop is the handle drop,
+and two services shut down when the array does.
+```maxon
+type Counter
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function tick()
+		self.n = self.n + 1
+	end 'tick'
+end 'Counter'
+
+typealias CounterHandleArray = Array with Counter.handle
+
+function main() returns ExitCode
+	var hs = CounterHandleArray.create()
+	hs.push(spawn Counter.create())
+	hs.push(spawn Counter.create())
+	return hs.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: a-string-argument-moves-into-the-service -->
+<!-- targets: x64-windows -->
+A managed argument is MOVED: the sending frame hands over the reference it holds and the service becomes the
+box's one owner. Nothing is increfed at the send and nothing is dropped by the sender, which is what keeps
+the plain refcount correct across a green thread.
+```maxon
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s} ({self.n})\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let a = "one-{1}"
+	h.keep(a)
+	let b = "two-{2}"
+	h.keep(b)
+	h.keep("a literal")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kept one-1 (1)
+kept two-2 (2)
+kept a literal (3)
+```
+
+<!-- test: unioncases-tags-the-request-variants -->
+<!-- targets: x64-windows -->
+The synthesized request union is an ordinary union, so its `.unionCases` companion exists — and `__shutdown`
+holds variant 0, so the first message an author declares is variant 1.
+```maxon
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump(by int)
+		self.count = self.count + by
+	end 'bump'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	return Calc.request.unionCases.bump.rawValue as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: an-idle-service-that-is-never-sent-to-still-exits-zero -->
+<!-- targets: x64-windows -->
+Process exit must not hang on a service parked in `recv`, which is its steady state. Here the mailbox is
+closed by the handle's own scope-exit drop before `main` returns, so the loop's `recv` answers 0 the first
+time it is asked and the exit drain has one already-finished thread to reap.
+```maxon
+type Idler
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function tick()
+		self.n = self.n + 1
+	end 'tick'
+end 'Idler'
+
+function main() returns ExitCode
+	let h = spawn Idler.create()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: fire-and-forget-cycle-is-legal -->
+<!-- targets: x64-windows -->
+⭐ The case that pins "only blocking edges count" — without it a later tightening would silently ban correct
+programs. `A` names `B`'s handle in a message and `B` names `A`'s, which is a cycle in the type graph and no
+cycle at all in the blocking one, because neither send waits.
+```maxon
+type A
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping(b B.handle)
+		b.pong()
+	end 'ping'
+
+	export function ack()
+		self.n = self.n + 1
+	end 'ack'
+end 'A'
+
+type B
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function pong()
+		self.n = self.n + 1
+	end 'pong'
+end 'B'
+
+function main() returns ExitCode
+	let a = spawn A.create()
+	let b = spawn B.create()
+	a.ping(b)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-export-reached-only-by-message-is-not-unused -->
+<!-- targets: x64-windows -->
+An export method reachable only as a MESSAGE must count as used, or the unused-export check would refuse
+every service whose handle is the only caller. It is credited by the send op naming `Calc.bump` — the same
+`maxonOpCalleeKind` road an ordinary call is credited by, which is why this needs no arm of its own.
+```maxon
+// --- file: calc.maxon
+export type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump(by int)
+		self.count = self.count + by
+	end 'bump'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	h.bump(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-sent-value-is-moved-and-reading-it-back-is-refused -->
+A send consumes its argument; the source is poisoned and a read is E3102.
+
+⚠ **THE VALUE IS AN INTERPOLATION AND NOT A BARE LITERAL, AND THAT IS THE SUBJECT RATHER THAN A DETAIL.** A
+`"hello"` binding is a BORROWED `.rdata` record, and a borrowed byte record is PROMOTED to a fresh owned copy
+at the send (`promoteToOwnedString`) — which leaves the source readable, correctly, because the service was
+given a copy and never the author's record. Only an OWNED String is moved, so only an owned one can be read
+back too soon.
+```maxon
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let buf = "hello {1}"
+	h.keep(buf)
+	print("{buf}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:18:10: 'buf' was moved and cannot be read
+```
+
+<!-- test: error.a-co-owned-value-may-not-be-sent -->
+A value a closure captured has a second owner on this green thread, which is exactly what the plain refcount
+forbids across two. The send is refused rather than silently increfed, and `.clone()` is the fix.
+```maxon
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let buf = "hello {1}"
+	let peek = function() gives buf
+	h.keep(buf)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:18:8: argument 's' of the message 'Store.keep' cannot be sent: 'buf' is an owned value this frame has already taken a second reference to, and a message MOVES its arguments to another green thread — where a second owner on this one would make the plain refcount wrong. Send `buf.clone()` instead
+```
+
+<!-- test: error.a-borrowed-parameter-may-not-be-sent -->
+Send-uniqueness does not survive a function boundary for a value with no owning copy: `p` arrived as a
+BORROWED struct parameter, the caller still holds it, and a struct has no static clone for the send site to
+take. (A borrowed `String` is not in this class — it has a cheap owning copy and is promoted.)
+```maxon
+type Payload
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Payload'
+
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(p Payload)
+		self.n = self.n + 1
+	end 'keep'
+end 'Store'
+
+function forward(h Store.handle, p Payload)
+	h.keep(p)
+end 'forward'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let p = Payload.create()
+	forward(h, p: p)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:23:8: argument 'p' of the message 'Store.keep' cannot be sent: 'p' is a borrowed value this frame does not own — a message MOVES its arguments to another green thread, and the frame this borrow belongs to would still be holding it. Send a `.clone()` of it instead
+```
+
+<!-- test: error.a-promise-may-not-be-sent -->
+A `Promise` is a green-thread handle its awaiter owns, and its value is a bare integer — so a message
+declaring an `int` parameter would take one without a word if the send site did not ask. It asks.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function work() returns Integer
+	return 5
+end 'work'
+
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(n Integer)
+		self.n = n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let p = async work()
+	h.keep(p)
+	let r = await p
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3135: <fragment>:22:8: argument 'n' of the message 'Store.keep' cannot be sent: it is a Promise, which is a green-thread handle its awaiter owns and drives — a second green thread holding one would drop a thread this one is still waiting on
+```
+
+<!-- test: error.a-handle-of-another-service-is-refused -->
+Two services' handles are two nominal types, so handing one where the other is expected is the ordinary
+struct-identity mismatch and needs no rule of its own.
+```maxon
+type Calc
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Calc'
+
+type Logger
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function say(peer Calc.handle)
+		peer.bump()
+	end 'say'
+end 'Logger'
+
+function main() returns ExitCode
+	let c = spawn Calc.create()
+	let l = spawn Logger.create()
+	l.say(l)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:28:8: argument type mismatch for 'peer': expected 'Calc.handle', got 'Logger.handle'
+```
+
+<!-- test: error.a-send-may-not-be-tried -->
+A `try` on a send has nothing to catch in SV1: a fire-and-forget message delivers no reply and therefore no
+error. The refusal names the form that WILL carry one rather than reporting a syntax fault.
+```maxon
+type Calc
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	try h.bump()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:2: Unsupported: `try h.bump()` — a fire-and-forget message carries no reply and so can deliver no error. The awaitable form `try await h.bump()`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2
+```
+
 <!-- disabled-test: send-and-await-a-reply -->
-<!-- SV1 wave 3: mailbox + dispatch loop; SV2: the reply cell -->
+<!-- SV2: the reply cell -->
 A value-returning message is awaitable RPC.
 ```maxon
 type Calc
@@ -664,167 +1449,6 @@ end 'main'
 ```
 ```exitcode
 3
-```
-
-<!-- disabled-test: fire-and-forget-send-returns-nothing -->
-<!-- SV1 wave 3: mailbox + dispatch loop -->
-A message that returns nothing is a non-blocking send.
-```maxon
-type Counter
-	var n as int
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function tick()
-		self.n = self.n + 1
-	end 'tick'
-
-	export function value() returns int
-		return self.n
-	end 'value'
-end 'Counter'
-
-function main() returns ExitCode
-	let h = spawn Counter.create()
-	h.tick()
-	h.tick()
-	let n = try await h.value() otherwise 0
-	return n as ExitCode
-end 'main'
-```
-```exitcode
-2
-```
-
-<!-- disabled-test: messages-are-serialized-in-fifo-order -->
-<!-- SV1 wave 3: mailbox FIFO -->
-Handlers run one at a time, in send order.
-```maxon
-type Log
-	var acc as int
-
-	static function create() returns Self
-		return Self{acc: 0}
-	end 'create'
-
-	export function push(d int)
-		self.acc = self.acc * 10 + d
-	end 'push'
-
-	export function read() returns int
-		return self.acc
-	end 'read'
-end 'Log'
-
-function main() returns ExitCode
-	let h = spawn Log.create()
-	h.push(1)
-	h.push(2)
-	h.push(3)
-	let n = try await h.read() otherwise 0
-	return n as ExitCode
-end 'main'
-```
-```exitcode
-123
-```
-
-<!-- disabled-test: two-instances-are-independent -->
-<!-- SV1 wave 3: mailbox + dispatch loop -->
-Two spawns of one type are two services with two states.
-```maxon
-type Counter
-	var n as int
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function tick()
-		self.n = self.n + 1
-	end 'tick'
-
-	export function value() returns int
-		return self.n
-	end 'value'
-end 'Counter'
-
-function main() returns ExitCode
-	let a = spawn Counter.create()
-	let b = spawn Counter.create()
-	a.tick()
-	a.tick()
-	b.tick()
-	let x = try await a.value() otherwise 0
-	let y = try await b.value() otherwise 0
-	return (x * 10 + y) as ExitCode
-end 'main'
-```
-```exitcode
-21
-```
-
-<!-- disabled-test: the-same-type-is-used-directly-and-spawned -->
-<!-- SV1 wave 3: mailbox + dispatch loop -->
-⭐ The location-transparency property, and the test a dedicated `service` declaration would have made
-impossible: one type, one method, reached both ways in one program.
-```maxon
-type Calc
-	var count as int
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function bump(by int)
-		self.count = self.count + by
-	end 'bump'
-
-	export function total() returns int
-		return self.count
-	end 'total'
-end 'Calc'
-
-function main() returns ExitCode
-	var direct = Calc.create()
-	direct.bump(4)
-
-	let h = spawn Calc.create()
-	h.bump(3)
-	let remote = try await h.total() otherwise 0
-	return (direct.total() + remote) as ExitCode
-end 'main'
-```
-```exitcode
-7
-```
-
-<!-- disabled-test: error.a-private-method-is-absent-from-the-handle -->
-<!-- SV1 wave 3: the handle's method surface -->
-A private helper is not on the handle, which is what makes a self-send unspellable.
-```maxon
-type Calc
-	var count as int
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	function record(v int) returns int
-		return v
-	end 'record'
-end 'Calc'
-
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	let n = try await h.record(1) otherwise 0
-	return n as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E4006: <fragment>:15:22: Type 'Calc.handle' has no member named 'record'
 ```
 
 <!-- disabled-test: a-message-throws-and-the-error-merges-with-serviceerror -->
@@ -865,39 +1489,6 @@ end 'main'
 71
 ```
 
-<!-- disabled-test: shutdown-drains-what-is-queued -->
-<!-- SV1 wave 3: shutdown as a poison pill behind the queue -->
-`shutdown()` is a graceful drain, not a kill.
-```maxon
-type Log
-	var acc as int
-
-	static function create() returns Self
-		return Self{acc: 0}
-	end 'create'
-
-	export function push(d int)
-		self.acc = self.acc + d
-	end 'push'
-
-	export function read() returns int
-		return self.acc
-	end 'read'
-end 'Log'
-
-function main() returns ExitCode
-	let h = spawn Log.create()
-	h.push(1)
-	h.push(2)
-	let n = try await h.read() otherwise 0
-	h.shutdown()
-	return n as ExitCode
-end 'main'
-```
-```exitcode
-3
-```
-
 <!-- disabled-test: a-call-after-shutdown-answers-stopped -->
 <!-- SV2: the reply cell resolves pending replies with ServiceError.stopped -->
 A stopped service resolves its pending replies rather than hanging their awaiters.
@@ -927,88 +1518,6 @@ end 'main'
 ```
 ```exitcode
 9
-```
-
-<!-- disabled-test: an-idle-service-with-a-global-handle-still-exits-zero -->
-<!-- SV1 wave 3: the exit drain — dropping the last handle enqueues __shutdown -->
-Process exit must not hang on a service parked in `recv`, which is its steady state.
-```maxon
-type Idler
-	var n as int
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function tick()
-		self.n = self.n + 1
-	end 'tick'
-end 'Idler'
-
-function main() returns ExitCode
-	let h = spawn Idler.create()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- disabled-test: error.a-sent-value-is-moved-and-reading-it-back-is-refused -->
-<!-- SV1 wave 3: the move door at the send site -->
-A send consumes its argument; the source is poisoned and a read is E3102.
-```maxon
-type Store
-	var n as int
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function keep(s String)
-		self.n = self.n + 1
-	end 'keep'
-end 'Store'
-
-function main() returns ExitCode
-	let h = spawn Store.create()
-	let buf = "hello"
-	h.keep(buf)
-	print("{buf}")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3102: <fragment>:17:10: 'buf' was moved and cannot be read
-```
-
-<!-- disabled-test: error.a-co-owned-value-may-not-be-sent -->
-<!-- SV1 wave 3: the move door — the co-owner refusal over the escape/retain marks -->
-A value promoted to `shared` by escape analysis has a second referent, which is exactly what the plain
-refcount forbids across a green thread.
-```maxon
-type Store
-	var n as int
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function keep(s String)
-		self.n = self.n + 1
-	end 'keep'
-end 'Store'
-
-function main() returns ExitCode
-	let h = spawn Store.create()
-	let buf = "hello"
-	let peek = function() gives buf
-	h.keep(buf)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3135: <fragment>:17:2: 'buf' is captured by a closure and has a second owner, so it cannot be sent
 ```
 
 <!-- disabled-test: error.a-reply-may-not-alias-service-state -->
@@ -1078,107 +1587,6 @@ end 'main'
 error E3137: <fragment>:30:10: service call cycle — these messages can deadlock waiting on each other
 ```
 
-<!-- disabled-test: fire-and-forget-cycle-is-legal -->
-<!-- SV2: only AWAITED replies are edges in the blocking graph -->
-⭐ The case that pins "only blocking edges count" — without it a later tightening would silently ban
-correct programs. A sends to B, B sends back to A, both non-blocking.
-```maxon
-type A
-	var n as int
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function ping(b B.handle)
-		b.pong()
-	end 'ping'
-
-	export function ack()
-		self.n = self.n + 1
-	end 'ack'
-end 'A'
-
-type B
-	var n as int
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function pong(a A.handle)
-		a.ack()
-	end 'pong'
-end 'B'
-
-function main() returns ExitCode
-	let a = spawn A.create()
-	let b = spawn B.create()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- disabled-test: an-export-reached-only-by-message-is-not-unused -->
-<!-- SV1 wave 3: the UnusedExportCheck arm — reachable only once a spawn compiles -->
-An export method reachable only as a MESSAGE must count as used, or the unused-export check would refuse
-every service whose handle is the only caller.
-```maxon
-// --- file: calc.maxon
-export type Calc
-	var count as int
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function bump(by int)
-		self.count = self.count + by
-	end 'bump'
-end 'Calc'
-
-// --- file: main.maxon
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	h.bump(1)
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- disabled-test: handles-in-an-array -->
-<!-- W217: an `Array with Promise` never drops its elements — exit 75 -->
-Handles are ordinary boxes and live in containers.
-```maxon
-type Counter
-	var n as int
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function tick()
-		self.n = self.n + 1
-	end 'tick'
-end 'Counter'
-
-typealias CounterHandleArray = Array with Counter.handle
-
-function main() returns ExitCode
-	var hs = CounterHandleArray.create()
-	hs.push(spawn Counter.create())
-	hs.push(spawn Counter.create())
-	return hs.count() as ExitCode
-end 'main'
-```
-```exitcode
-2
-```
-
 <!-- disabled-test: awaitany-returns-the-completed-index -->
 <!-- SV3: awaitAny over an Array with Promise; gated on W217 -->
 One waiting primitive covers service replies, file I/O and subprocess drains.
@@ -1209,31 +1617,6 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: unioncases-tags-the-request-variants -->
-<!-- SV1 wave 3: the request union reaches codegen -->
-The synthesized request union is an ordinary union, so its `.unionCases` companion exists.
-```maxon
-type Calc
-	var count as int
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function bump(by int)
-		self.count = self.count + by
-	end 'bump'
-end 'Calc'
-
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	return Calc.request.unionCases.bump.rawValue as ExitCode
-end 'main'
-```
-```exitcode
-1
-```
-
 <!-- disabled-test: error.a-generic-service-is-supported -->
 <!-- SV-later: per-instantiation companions -->
 The monomorphic-companion limitation is a v1 limit, not a rule of the design.
@@ -1262,7 +1645,12 @@ end 'main'
 
 <!-- disabled-test: error.a-value-sent-through-a-parameter-is-refused -->
 <!-- E2015-deferred: the transitive half of param-consume (PLAN.md's interprocedural fixpoint) -->
-Send-uniqueness does not survive a function boundary, and that is the design's biggest recorded weakness.
+⚠ **THE SHAPE THIS CASE PINS IS A `String`, AND IT IS THE ONE THE SEND SITE CURRENTLY ACCEPTS.** A borrowed
+byte record is PROMOTED to a fresh owned copy at the send, which is sound — the service gets a record of its
+own — so the refusal below is what a TRANSITIVE consume analysis would let the compiler replace the copy
+with. The struct shape, which has no owning copy to take, IS refused today and is pinned live by
+`error.a-borrowed-parameter-may-not-be-sent`. So this case is about the COST of the missing fixpoint (one
+copy per forwarded String), not about a hole in the safety rule.
 ```maxon
 type Store
 	var n as int
@@ -1287,5 +1675,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:14:8: 'buf' arrived as a parameter and cannot be proven unique at the send
+error E3138: <fragment>:14:8: 'buf' arrived as a parameter and cannot be proven unique at the send
 ```

@@ -424,6 +424,16 @@ function buildServiceHandleStruct(signatures ProgramSignatures, typeName ByteArr
 	let owner = spawnTargetLayoutOf(signatures, typeName: typeName)
 	var handle = StructLayout.create(serviceHandleCompanionName(typeName), visibility: owner.visibility, declFilePath: owner.declFilePath)
 	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+
+	// ⭐⭐ **THE AUDIT THAT KEEPS THE RUNTIME'S TWO NUMBERS HONEST.** `__mbox_handle_clone_box` allocates
+	// `ServiceHandleBoxSize` bytes and both handle entries load the mailbox from `ServiceHandleMailboxOffset`,
+	// and neither can ask a layout anything — they are Std-tier bodies built after the pipeline. A second
+	// field added here would leave them reading and writing past the record's end, silently; this makes it a
+	// compile-time stop at the line that caused it.
+	if handle.sizeBytes() != ServiceHandleBoxSize as ByteOffset or handle.offsetOfField(0) != ServiceHandleMailboxOffset 'geometryDrifted'
+		panic("buildServiceHandleStruct: `{String.from(serviceHandleCompanionName(typeName))}` lays out {handle.sizeBytes()} byte(s) with its mailbox at {handle.offsetOfField(0)}, against the `ServiceHandleBoxSize`/`ServiceHandleMailboxOffset` the mailbox runtime spells ({ServiceHandleBoxSize}/{ServiceHandleMailboxOffset}) — `__mbox_handle_clone_box` and `__mbox_handle_drop_box` are Std-tier bodies with no layout to ask, so the two numbers must be one fact")
+	end 'geometryDrifted'
+
 	return handle
 end 'buildServiceHandleStruct'
 
@@ -450,23 +460,51 @@ end 'buildServiceHandleStruct'
 // rewrites the very map it walks collects first), and the same one `moveOverloadedDecls` records a measured
 // USE-AFTER-FREE for: *"the binding read out of the map is a BORROW … 36 spec tests died `nil pointer or
 // invalid memory access`"*. Copying the names first ends the aliasing before any write happens.
-module function synthesizeServiceCompanions(signatures ProgramSignatures)
+// ⭐⭐ **EVERY TYPE THIS PROGRAM SPAWNS, DEDUPED, IN FIRST-SPAWN ORDER — THE ONE ROSTER OF "WHAT IS A
+// SERVICE HERE?".** Two askers, and a disagreement between them is not a diagnostic: the SWEEP mints the
+// companions from it (below), and `Runtime/ServiceLoop.installServiceLoops` builds one `<T>.__loop` from it.
+// A type on one list and not the other is a handle whose loop nothing built (a link failure) or a loop for a
+// type with no request union (a panic inside the synthesis) — so it is derived once.
+//
+// ⚠ It DEDUPES, because two `spawn`s of one type through two different factories are two CANDIDATES and one
+// service. The mint below still asks the registry as well, for the reason its own comment gives; this makes
+// the LOOP builder — which has no registry to collide with — correct by construction.
+export function serviceTypeNames(signatures ProgramSignatures) returns ByteArrayArray
 	var services = ByteArrayArray.create()
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
 		match classifyServiceTarget(signatures, typeName: candidate.typeName, member: candidate.member) 'verdict'
 			// Refused at the `spawn` by `Parser.parseSpawn`, which asks this same classification. Nothing is
-			// minted here for any of them — see this file's header for why the sweep never reports.
+			// minted for any of them — see this file's header for why the sweep never reports.
 			typeIsNotAStruct to typeIsGeneric then continue
 			startsAService then break 'verdict'
 		end 'verdict'
 
+		if serviceNameAlreadyListed(services, typeName: candidate.typeName) 'aSecondSpawnOfOneType'
+			continue
+		end 'aSecondSpawnOfOneType'
+
 		services.push(candidate.typeName)
 	end 'eachCandidate'
+	return services
+end 'serviceTypeNames'
 
-	for typeName in services 'eachService'
-		// Two `spawn`s of one type through two different factories are two CANDIDATES and one service, so the
-		// second finds its companions already registered. Asked of the registry rather than of a set built
-		// here, because the registry is what a second mint would actually collide with.
+// A linear scan, because the list is the number of DISTINCT SERVICE TYPES a program declares — one or two in
+// every program that has any — and a `Set with ByteArray` would cost a hash per candidate to beat a compare
+// against a list that short.
+function serviceNameAlreadyListed(services ByteArrayArray, typeName ByteArray) returns bool
+	for listed in services 'each'
+		if listed.equals(typeName) 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'serviceNameAlreadyListed'
+
+module function synthesizeServiceCompanions(signatures ProgramSignatures)
+	for typeName in serviceTypeNames(signatures) 'eachService'
+		// Asked of the REGISTRY rather than of the roster above, because the registry is what a second mint
+		// would actually collide with — a `spawn` in a warm-rebuilt file whose companions are already folded
+		// in reaches here with the roster fresh and the registry filled.
 		if signatures.containsStruct(serviceHandleCompanionName(typeName)) 'alreadyMinted'
 			continue
 		end 'alreadyMinted'

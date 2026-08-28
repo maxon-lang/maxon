@@ -516,6 +516,12 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		// The error-flag encode names no runtime callee and pulls in no runtime floor — it lowers to a `const`
 		// and an `add`.
 		errorFlagEncode then break 'op'
+		// ⭐⭐ **A SERVICE CARRIES THE WHOLE GREEN-THREAD FLOOR, AND IT IS DECLARED HERE BECAUSE THE CALLS ARE
+		// NOT WRITTEN YET.** `serviceSpawn` lowers to `__svc_spawn` and `serviceSend` to `__mbox_send`, and
+		// both of those reach `__gt_spawn_green`, `__sched_publish` and the slab — none of which exists as a
+		// call op for this walk to see. It is rule 2 of this file's header (a synthesized body's calls are
+		// DECLARED, never discovered), one tier up: here the body is the LOWERING's rather than an installer's.
+		serviceSpawn to serviceSend then recordGtUsage(usage)
 	end 'op'
 end 'classifyRuntimeCall'
 

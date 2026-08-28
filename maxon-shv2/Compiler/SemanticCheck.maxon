@@ -1425,6 +1425,13 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 		panicAbortValue then break 'op'
 		// The error-flag encode persists nothing: its result is consumed by the routed edge's phi, in this frame.
 		errorFlagEncode then break 'op'
+		// ⭐⭐ **A SERVICE OP HANDS ITS OPERAND TO ANOTHER GREEN THREAD, WHICH IS AS FAR OUT OF REACH AS A
+		// VALUE GETS.** Neither can carry a closure today — a `function`-typed message parameter is refused at
+		// the `spawn` (E3135) and a spawn's state is a static factory's own fresh box — so both arms are the
+		// structural backstop rather than a live route, and `closureEscapeReason` answers for each in its own
+		// words rather than reaching that function's disagreement panic.
+		serviceSpawn(_, _, state) then return isTrackedValue(state, subject: subject, func: func)
+		serviceSend(_, handle, request) then return isTrackedValue(handle, subject: subject, func: func) or isTrackedValue(request, subject: subject, func: func)
 	end 'op'
 	return false
 end 'opEscapesValue'
@@ -1496,6 +1503,9 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 		panicAbortValue then break 'term'
 		// The error-flag encode is a BODY op — the routed edge's `branch` is what terminates its block.
 		errorFlagEncode then break 'term'
+		// Both service ops are BODY ops — a spawn defines a value the next statement stores, and a send is a
+		// statement of its own.
+		serviceSpawn to serviceSend then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesValue'
@@ -1823,6 +1833,12 @@ function collectCallParamEdgesAt(project Project, op MaxonOp, func IrFunction, c
 		panicAbortValue then break 'op'
 		// The error-flag encode calls no user function, so it carries no mutation edge.
 		errorFlagEncode then break 'op'
+		// ⭐ **NO EDGE, AND THE REASON IS THE SAME ONE THE `asyncCall` ARM GIVES ONE LINE UP, SHARPENED.** This
+		// summary answers *"does a call to this function WRITE the caller's own parameter?"*, and a message's
+		// arguments are no longer the caller's: `Parser.moveIntoGreenThread` MOVED each of them into the
+		// request box, so a handler writing one writes a value this frame has given up. A `serviceSpawn`'s
+		// state is a factory's own fresh box and was never a parameter of anybody.
+		serviceSpawn to serviceSend then break 'op'
 	end 'op'
 end 'collectCallParamEdgesAt'
 
@@ -2012,6 +2028,9 @@ function opConsumesAPromise(op MaxonOp) returns bool
 		panicAbortValue gives false
 		// The error-flag encode neither spawns nor consumes — it is arithmetic.
 		errorFlagEncode gives false
+		// A SERVICE's green thread is not a promise and neither op reclaims one — a Promise may not be sent at
+		// all (`Parser.moveIntoGreenThread` refuses it), which is what keeps this answer true.
+		serviceSpawn to serviceSend gives false
 	end 'op'
 end 'opConsumesAPromise'
 
@@ -2072,6 +2091,8 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				panicAbortValue then break 'op'
 				// The error-flag encode is not an await site: it reads an enum value, never a promise handle.
 				errorFlagEncode then break 'op'
+				// Neither service op awaits or cancels: SV1's send is fire-and-forget and has no reply to wait on.
+				serviceSpawn to serviceSend then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -2285,6 +2306,9 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		panicAbortValue then break 'op'
 		// The error-flag encode reads an enum tag or a box pointer, never a promise handle.
 		errorFlagEncode then break 'op'
+		// Neither service op re-awaits: a spawn DEFINES a mailbox pointer (so it falls through to the re-arm
+		// test below, exactly as a `call` does) and a send reads a mailbox and a box, never a promise handle.
+		serviceSpawn to serviceSend then break 'op'
 	end 'op'
 	return rearmRoleIfDefines(op, promise: promise)
 end 'classifyOpForPromise'
@@ -2361,6 +2385,8 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		panicAbortValue then break 'term'
 		// The error-flag encode is a BODY op, so it is never the terminator whose successors this walks.
 		errorFlagEncode then break 'term'
+		// Both service ops are BODY ops, so neither is the terminator whose successors this walks.
+		serviceSpawn to serviceSend then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -2486,6 +2512,13 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					panicAbortValue then break 'op'
 					// The error-flag encode has no callee name to validate and no arguments to type.
 					errorFlagEncode then break 'op'
+					// ⭐⭐ **A SERVICE OP'S ARGUMENTS ARE CHECKED AT THE PARSER AND CANNOT BE CHECKED HERE.** By
+					// the time either op exists its arguments are gone: a message's are inside the request BOX
+					// (typed against the request union's payload fields, which ARE the method's declared
+					// parameter types — `ServiceCompanions.serviceRequestPayloads` builds them from exactly that
+					// column), and a `spawn`'s state is the factory `call` op's own result, validated as that
+					// call. There is nothing left on either op for a signature to be slotted against.
+					serviceSpawn to serviceSend then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -3406,6 +3439,12 @@ function reportIfNonYielding(project Project, op MaxonOp, opIndex OpIndex, func 
 		call to indirectCall then return
 		asyncCall(_, callee, _, _, _, _, _) then reportSpawnOfNonYielding(project, callee: callee, opIndex: opIndex, func: func, funcNames: funcNames, yields: yields)
 		await to errorFlagEncode then return
+		// ⭐⭐ **E3073's RULE IS EXACTLY WRONG FOR A SERVICE, SO NEITHER OP MAY EVER REACH IT.** *"function
+		// never yields; `async` is for I/O-concurrent work only"* is a statement about a COROUTINE, which
+		// overlaps waiting and cannot overlap execution — so a non-yielding one is pure waste. A service's
+		// green thread is scheduled independently and CPU-bound work is exactly what one is for; a message
+		// handler that never parks is the normal case, not a defect.
+		serviceSpawn to serviceSend then return
 	end 'op'
 end 'reportIfNonYielding'
 
@@ -3605,6 +3644,12 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncI
 		witnessDispatch to witnessTryDispatch gives true
 		panicAbortValue gives false
 		errorFlagEncode gives false
+		// ⭐ **NEITHER SUSPENDS THE FRAME THAT WROTE IT, AND NEITHER IS AN EDGE EITHER.** A `spawn` hands the
+		// work to a green thread of its own and returns a handle; a send appends an envelope under
+		// `__sched_lock` and returns. The handler runs on the SERVICE's thread, so whether it can park says
+		// nothing about whether this frame can — which is the exact opposite of `asyncCall`, whose coroutine
+		// runs on this frame's own thread and therefore contributes its edge.
+		serviceSpawn to serviceSend gives false
 	end 'op'
 end 'opYields'
 
@@ -3793,6 +3838,9 @@ function opShowsAnEffect(op MaxonOp, funcIndexByName FuncIndexByName, callerInde
 		witnessDispatch to witnessTryDispatch gives true
 		panicAbortValue gives true
 		errorFlagEncode gives false
+		// Starting a service and delivering a message are both effects no return type expresses — a send has
+		// no result at all, so its whole reason for existing is the effect.
+		serviceSpawn to serviceSend gives true
 	end 'op'
 end 'opShowsAnEffect'
 
@@ -4781,6 +4829,12 @@ function closureEscapeReason(op MaxonOp) returns String
 		panicAbortValue then break 'op'
 		// The error-flag encode persists nothing (`opEscapesValue` says so), so it falls through to the panic below.
 		errorFlagEncode then break 'op'
+		// ⚠ **UNREACHABLE TODAY AND STILL THE RIGHT ANSWER, for `untransferableParameterNoun`'s reason.** A
+		// `function`-typed message parameter is refused at the `spawn` (E3135) and a spawn's state is a static
+		// factory's own box, so no closure can be either operand — but `opEscapesValue` reports the escape
+		// structurally, and a `break` here would send a program that somehow reached it to that function's
+		// disagreement panic instead of to a sentence.
+		serviceSpawn to serviceSend then return "cannot hand a closure that captures to a service: a message MOVES its arguments to another green thread, and a capturing closure's environment is a box this one would still hold. {CapturingClosureEscapeSuffix}"
 	end 'op'
 
 	// Reached only if `opEscapesValue` reported an escape at an op this mapping believes cannot persist a
@@ -5635,6 +5689,8 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 			retVoid to panicAbortValue then break 'op'
 			// The error-flag encode hands nothing back through the return registers — its result is a routed edge's.
 			errorFlagEncode then break 'op'
+			// Neither service op is a `ret`, so neither hands anything back through the return registers.
+			serviceSpawn to serviceSend then break 'op'
 		end 'op'
 	end 'eachOp'
 end 'checkReturnsAgainstInterface'
