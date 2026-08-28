@@ -1669,10 +1669,6 @@ function buildSchedFindRunnable(module StdModule)
 	var victimNext = module.addBlock(func, label: b"frvictimnext")
 	var stole = module.addBlock(func, label: b"frstole")
 	var candidate = module.addBlock(func, label: b"frcandidate")
-	var noWork = module.addBlock(func, label: b"frnowork")
-	var checkDropped = module.addBlock(func, label: b"frcheckdropped")
-	var reclaim = module.addBlock(func, label: b"frreclaim")
-	var hand = module.addBlock(func, label: b"frhand")
 
 	// The candidate merge — every source of a green thread reaches it, and it is the only exit.
 	let found = ids.mint()
@@ -1829,18 +1825,11 @@ function buildSchedFindRunnable(module StdModule)
 	module.setTerminator(roundNext, op: StdOp.branch(roundHdr.id))
 	roundNext.branchEdges.push(BranchEdge.create(roundHdr.id, argIds: argsOf(nextRound)))
 
-	let candidateZero = emitConst(module, block: candidate, value: 0, ids: ids)
-	let nothingFound = emitCmp(module, block: candidate, a: found, b: candidateZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(candidate, op: StdOp.condBranch(nothingFound, thenBlockId: noWork.id, elseBlockId: checkDropped.id))
-	emitConstReturn(module, block: noWork, value: 0, ids: ids)
-
-	let wasDropped = emitGtIsDropped(module, block: checkDropped, gt: found, ids: ids)
-	module.setTerminator(checkDropped, op: StdOp.condBranch(wasDropped, thenBlockId: reclaim.id, elseBlockId: hand.id))
-	module.setTerminator(hand, op: StdOp.ret(found))
-
-	// Reclaim and look again. `localPop` rather than `entry` so the retry costs no second fairness tick.
-	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(found)))
-	module.setTerminator(reclaim, op: StdOp.branch(localPop.id))
+	// The candidate/tombstone/hand-back tail, which `GtRuntime.__gt_coro_next` is the other caller of — one
+	// body, so a change to what "dropped" means cannot reach one consumer and miss the other. ⚠ `localPop`
+	// rather than `entry` is the retry, so a reclaimed thread costs no second fairness tick; that is the only
+	// argument this emitter takes, and the only thing the two consumers differ in.
+	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: localPop, ids: ids)
 
 	module.functions.push(func)
 end 'buildSchedFindRunnable'
@@ -1898,9 +1887,6 @@ function buildSchedSweepDropped(module StdModule)
 	var ringTake = module.addBlock(func, label: b"swringtake")
 	var ringFree = module.addBlock(func, label: b"swringfree")
 	var globalStart = module.addBlock(func, label: b"swglobalstart")
-	var globalHdr = module.addBlock(func, label: b"swglobalhdr")
-	var globalPeek = module.addBlock(func, label: b"swglobalpeek")
-	var globalFree = module.addBlock(func, label: b"swglobalfree")
 	var doneBlock = module.addBlock(func, label: b"swdone")
 
 	let p = emitLoadCurrentP(module, block: entry, ids: ids)
@@ -1926,22 +1912,12 @@ function buildSchedSweepDropped(module StdModule)
 	module.appendOp(ringFree, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(peeked)))
 	module.setTerminator(ringFree, op: StdOp.branch(ringHdr.id))
 
-	// The global half. Under the lock the head cannot move, so the peek and the dequeue name one thread and
-	// no compare-and-swap is needed — the lock IS the claim.
+	// The global half — the SAME walk `GtRuntime.__gt_coro_sweep_dropped` is, off the two `.data` ends
+	// instead of an owner's two fields. Under the lock the head cannot move, so the peek and the dequeue
+	// name one thread and no compare-and-swap is needed; that argument, the front-only bound and the reason
+	// the sweep exists at all live once, at `emitGtFifoSweepDropped`.
 	emitSchedLockEnter(module, block: globalStart, ids: ids)
-	module.setTerminator(globalStart, op: StdOp.branch(globalHdr.id))
-
-	let globalHead = emitLoadGlobalWord(module, block: globalHdr, label: GtRunQueueHeadLabel, ids: ids)
-	let globalZero = emitConst(module, block: globalHdr, value: 0, ids: ids)
-	let globalEmpty = emitCmp(module, block: globalHdr, a: globalHead, b: globalZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(globalHdr, op: StdOp.condBranch(globalEmpty, thenBlockId: doneBlock.id, elseBlockId: globalPeek.id))
-
-	let globalDropped = emitGtIsDropped(module, block: globalPeek, gt: globalHead, ids: ids)
-	module.setTerminator(globalPeek, op: StdOp.condBranch(globalDropped, thenBlockId: globalFree.id, elseBlockId: doneBlock.id))
-
-	module.appendOp(globalFree, op: StdOp.call(ids.mint(), callee: GtDequeueName, args: ValueIdArray.create()))
-	module.appendOp(globalFree, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(globalHead)))
-	module.setTerminator(globalFree, op: StdOp.branch(globalHdr.id))
+	emitGtFifoSweepDropped(module, func: func, cur: globalStart, cont: doneBlock, ends: GtQueueEnds.globalLabels, ids: ids)
 
 	emitSchedLockLeave(module, block: doneBlock, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)

@@ -95,6 +95,7 @@ export let GtOffStackBase = 0x18  // low address of the osAllocPages'd stack (0 
 // the doubled size and the memcpy count, and writes the new size back here after growing.
 export let GtOffStackSize = 0x20
 export let GtOffResult = 0x28  // the R8 return value, captured by the trampoline when the GT completes
+
 // ⭐⭐ **THE GT TO CONTEXT-SWITCH BACK TO WHEN THIS GT COMPLETES — and, because the driver is what writes
 // it, ALSO THE ANSWER TO "HAS THIS THREAD EVER RUN?".** `emitGtRunOne` stores the running driver's own GT
 // here immediately before every switch-in, that value is a P's inline scheduler context and therefore never
@@ -528,9 +529,11 @@ let StartupInfoCbOffset = 0
 let ProcInfoSize = 0x18
 let ProcInfoHProcessOffset = 0
 let ProcInfoHThreadOffset = 8
+
 // `PROCESS_INFORMATION.dwProcessId` — a DWORD after the two HANDLEs, which is why it is read at `u32` width
 // and not `i64`: the `dwThreadId` beside it would otherwise ride in the high half of the answer.
 let ProcInfoDwProcessIdOffset = 16
+
 // The low 32 bits of a machine word — how a DWORD is read out of an eight-byte load. See `dwProcessId`'s use.
 let DwordMask = 0xFFFFFFFF as ParsedInt
 
@@ -630,6 +633,7 @@ export let GtReadyName = b"__gt_ready"
 // green threads (`SERVICES_DESIGN.md:62-160`). Both names stay exported for those two in-tier callers, and
 // `DeadFunctionElimination` prunes the pair out of every program that cannot reach them.
 export let GtEnqueueName = b"__gt_enqueue"
+
 // EXPORTED because the worker M's loop (`SchedRuntime.buildSchedWorkerLoop`) is the second driver that pops
 // the global run queue — the first being `__gt_drive_until` here.
 export let GtDequeueName = b"__gt_dequeue"
@@ -2021,7 +2025,193 @@ function buildGtReady(module StdModule)
 	module.functions.push(func)
 end 'buildGtReady'
 
-// `__gt_enqueue(g)` — append `g` to the tail of the global FIFO run queue.
+// ⭐⭐⭐ **WHERE ONE INTRUSIVE FIFO'S TWO ENDS LIVE — the ONLY thing the global run queue and a green
+// thread's coroutine queue differ in, and therefore the only thing the emitters below take.**
+//
+// ⛔⛔ **IT EXISTS BECAUSE THE TWO QUEUES WERE ONE ALGORITHM WRITTEN TWICE (EC10 review).** EC10 built
+// `__gt_coro_enqueue` / `__gt_coro_dequeue` / `__gt_coro_sweep_dropped` / `__gt_coro_next` as deliberate
+// copies of `__gt_enqueue` / `__gt_dequeue` / `__sched_sweep_dropped` / `__sched_find_runnable`, each saying
+// at its own declaration that it was *"`__gt_enqueue`'s shape exactly"*. **Saying so is not what keeps it
+// so.** The intrusive-list protocol is ONE fact — the `next = 0` seed, the empty/append split, the tail
+// clear when the queue drains, the tombstone refusal — and eight functions held four copies of it with
+// nothing making them agree; a clause added to one and not its twin reads as correct at both sites and is a
+// coroutine RUN AFTER ITS PROMISE WAS DROPPED at runtime, not a compile error.
+//
+// ⛔ **AND THE COPY THAT WOULD ROT IS THE ONE NOTHING RUNS.** Dead-code elimination takes the whole
+// green-thread tier out of every emitted program until `spawn` (MEASURED: `--emit-ir-runtime=__gt_enqueue`
+// panics with *"this program emits nothing named '__gt_enqueue'"*), so a divergence in the global half would
+// be invisible to every test in the suite until the day that tier came back. One body per operation and two
+// `GtQueueEnds` means the tier `spawn` inherits is the one `async` has been exercising all along.
+export union GtQueueEnds
+	// The GLOBAL run queue — its head and tail are two `.data` words. ⚠ Unreached until `spawn`.
+	globalLabels
+	// A green thread's own coroutine queue — its head and tail are two fields of the struct `owner`
+	// addresses. `owner` must be minted in a block that dominates every block the emitter writes into.
+	ownerFields(owner ValueId)
+end 'GtQueueEnds'
+
+// The four one-word accesses a FIFO's ends need, and the pop CALL that goes with them. Four named functions
+// rather than one taking a "which end" argument: each is a single `match` with one statement per arm, and
+// the offset a reader wants to check is then beside the label it is the alternative to.
+function emitQueueLoadHead(module StdModule, block IrBlock, ends GtQueueEnds, ids ValueMinter) returns ValueId
+	return match ends 'ends'
+		globalLabels gives emitLoadGlobalWord(module, block: block, label: GtRunQueueHeadLabel, ids: ids)
+		ownerFields(owner) gives emitLoadField(module, block: block, record: owner, offset: GtOffCoroHead, ids: ids)
+	end 'ends'
+end 'emitQueueLoadHead'
+
+function emitQueueStoreHead(module StdModule, block IrBlock, ends GtQueueEnds, value ValueId, ids ValueMinter)
+	match ends 'ends'
+		globalLabels then emitStoreGlobalWord(module, block: block, label: GtRunQueueHeadLabel, value: value, ids: ids)
+		ownerFields(owner) then emitStoreField(module, block: block, record: owner, offset: GtOffCoroHead, value: value)
+	end 'ends'
+end 'emitQueueStoreHead'
+
+function emitQueueLoadTail(module StdModule, block IrBlock, ends GtQueueEnds, ids ValueMinter) returns ValueId
+	return match ends 'ends'
+		globalLabels gives emitLoadGlobalWord(module, block: block, label: GtRunQueueTailLabel, ids: ids)
+		ownerFields(owner) gives emitLoadField(module, block: block, record: owner, offset: GtOffCoroTail, ids: ids)
+	end 'ends'
+end 'emitQueueLoadTail'
+
+function emitQueueStoreTail(module StdModule, block IrBlock, ends GtQueueEnds, value ValueId, ids ValueMinter)
+	match ends 'ends'
+		globalLabels then emitStoreGlobalWord(module, block: block, label: GtRunQueueTailLabel, value: value, ids: ids)
+		ownerFields(owner) then emitStoreField(module, block: block, record: owner, offset: GtOffCoroTail, value: value)
+	end 'ends'
+end 'emitQueueStoreTail'
+
+// The runtime function that pops this queue's head, called with whatever it needs to NAME the queue — the
+// global one is a `.data` pair and takes no argument, an owner's is the owner. Its result is discarded: the
+// one caller (`emitGtFifoSweepDropped`) already holds the head it is about to free, and under `__sched_lock`
+// the pop and the peek name the same GT.
+function emitQueuePopCall(module StdModule, block IrBlock, ends GtQueueEnds, ids ValueMinter)
+	match ends 'ends'
+		globalLabels then module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtDequeueName, args: ValueIdArray.create()))
+		ownerFields(owner) then module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtCoroDequeueName, args: argsOf(owner)))
+	end 'ends'
+end 'emitQueuePopCall'
+
+// ⭐⭐ **APPEND `g` AT THE TAIL — the ONE body `__gt_enqueue` and `__gt_coro_enqueue` are.** The caller owns
+// the three blocks and the ends; both arms return, because an append has nothing to do afterwards.
+function emitGtFifoAppend(module StdModule, entry IrBlock, appendBlock IrBlock, emptyBlock IrBlock, ends GtQueueEnds, g ValueId, ids ValueMinter)
+	// g.next = 0 — a GT sits in at most one queue, so BOTH queues thread the SAME chain field.
+	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
+	emitStoreField(module, block: entry, record: g, offset: GtOffNext, value: zeroConst)
+
+	let tail = emitQueueLoadTail(module, block: entry, ends: ends, ids: ids)
+	let tailNull = emitCmp(module, block: entry, a: tail, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(tailNull, thenBlockId: emptyBlock.id, elseBlockId: appendBlock.id))
+
+	// Non-empty: tail.next = g; tail = g.
+	emitStoreField(module, block: appendBlock, record: tail, offset: GtOffNext, value: g)
+	emitQueueStoreTail(module, block: appendBlock, ends: ends, value: g, ids: ids)
+	module.setTerminator(appendBlock, op: StdOp.retVoid)
+
+	// Empty: head = tail = g.
+	emitQueueStoreHead(module, block: emptyBlock, ends: ends, value: g, ids: ids)
+	emitQueueStoreTail(module, block: emptyBlock, ends: ends, value: g, ids: ids)
+	module.setTerminator(emptyBlock, op: StdOp.retVoid)
+end 'emitGtFifoAppend'
+
+// ⭐⭐ **POP THE HEAD — the ONE body `__gt_dequeue` and `__gt_coro_dequeue` are.** `head` is minted in
+// `entry`, which dominates every block below, so `doneBlock` returns it in both cases: 0 when the queue was
+// empty, the popped GT otherwise. It sets the return terminator itself, which is why it hands nothing back.
+function emitGtFifoPop(module StdModule, entry IrBlock, popBlock IrBlock, clearTail IrBlock, doneBlock IrBlock, ends GtQueueEnds, ids ValueMinter)
+	let head = emitQueueLoadHead(module, block: entry, ends: ends, ids: ids)
+	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
+	let headNull = emitCmp(module, block: entry, a: head, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(headNull, thenBlockId: doneBlock.id, elseBlockId: popBlock.id))
+
+	// head = head.next; if the new head is null the queue has drained → clear the tail too.
+	let next = emitLoadField(module, block: popBlock, record: head, offset: GtOffNext, ids: ids)
+	emitQueueStoreHead(module, block: popBlock, ends: ends, value: next, ids: ids)
+	let nextNull = emitCmp(module, block: popBlock, a: next, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(popBlock, op: StdOp.condBranch(nextNull, thenBlockId: clearTail.id, elseBlockId: doneBlock.id))
+
+	emitQueueStoreTail(module, block: clearTail, ends: ends, value: zeroConst, ids: ids)
+	module.setTerminator(clearTail, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.ret(head))
+end 'emitGtFifoPop'
+
+// ⭐⭐ **RECLAIM THE TOMBSTONES AT THE FRONT OF ONE FIFO — the ONE body `__gt_coro_sweep_dropped` and
+// `__sched_sweep_dropped`'s GLOBAL half are.** The caller has already taken `__sched_lock` and terminates
+// `cur` into this walk; the walk leaves through `cont`, where the caller releases.
+//
+// ⛔⛔ **IT IS WHAT KEEPS A NEVER-SCHEDULED PROGRAM's MEMORY BOUNDED, and without it the mark-and-skip
+// protocol would be a leak with a spec that still passed.** `__gt_promise_drop` hands back the half a
+// dropped promise owns — its managed arguments and its slot in `__gt_live_count` — but the STACK and the
+// STRUCT can only be freed by a party allowed to take the GT out of a queue, which is the popper. A program
+// that spawns and drops in a loop and never awaits anything drives NOTHING, so nothing would ever pop them.
+//
+// ⚠ **THE FRONT ONLY, AND THE BOUND IS WHAT MAKES THAT RIGHT.** It stops at the first live entry rather
+// than scanning, so the work is O(entries actually reclaimed) and each is reclaimed at most once ever — a
+// drop can never be more than amortised O(1). A tombstone sitting BEHIND a live one is left for the queue's
+// popper to refuse and reclaim (`emitGtTombstoneHandback`).
+//
+// ⭐ **UNDER THE LOCK THE PEEK AND THE POP NAME ONE GT, WHICH IS WHY THERE IS NO COMPARE-AND-SWAP HERE.**
+// The ring half of `__sched_sweep_dropped` needs one because a THIEF races the sweeper for a victim's head;
+// neither of this loop's two queues has a lockless consumer, so the lock IS the claim.
+// ⚠ EXPORTED for `SchedRuntime.buildSchedSweepDropped`'s global half, which is its other caller. The
+// append and the pop above have only in-file callers, which is what E3092 refuses an `export` for.
+export function emitGtFifoSweepDropped(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ends GtQueueEnds, ids ValueMinter)
+	var loopHdr = module.addBlock(func, label: b"fifosweephdr")
+	var peek = module.addBlock(func, label: b"fifosweeppeek")
+	var free = module.addBlock(func, label: b"fifosweepfree")
+
+	module.setTerminator(cur, op: StdOp.branch(loopHdr.id))
+
+	let head = emitQueueLoadHead(module, block: loopHdr, ends: ends, ids: ids)
+	let zero = emitConst(module, block: loopHdr, value: 0, ids: ids)
+	let queueEmpty = emitCmp(module, block: loopHdr, a: head, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(loopHdr, op: StdOp.condBranch(queueEmpty, thenBlockId: cont.id, elseBlockId: peek.id))
+
+	let headDropped = emitGtIsDropped(module, block: peek, gt: head, ids: ids)
+	module.setTerminator(peek, op: StdOp.condBranch(headDropped, thenBlockId: free.id, elseBlockId: cont.id))
+
+	// The pop is the claim and it comes FIRST, so nothing can reach the GT while it is being reclaimed.
+	emitQueuePopCall(module, block: free, ends: ends, ids: ids)
+	module.appendOp(free, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(head)))
+	module.setTerminator(free, op: StdOp.branch(loopHdr.id))
+end 'emitGtFifoSweepDropped'
+
+// ⭐⭐⭐ **HAND A CANDIDATE BACK, OR RECLAIM IT AND LOOK AGAIN — the ONE body `__gt_coro_next`'s tail and
+// `__sched_find_runnable`'s tail are.** `candidate` carries whatever the queue answered as its single block
+// argument (`found`); 0 means it answered nothing. A GT renounced while it was still QUEUED is a TOMBSTONE
+// (`emitGtIsDropped`), and handing one back would RUN a thread whose promise is gone — so the pop is
+// followed by the test, a reclaim, and a branch to `retry`.
+//
+// ⚠ **`retry` IS THE ONLY THING THE TWO CALLERS DIFFER IN, and it is a real difference rather than a copy's
+// accident.** `__sched_find_runnable` retries at `localPop` so a reclaimed thread costs no second FAIRNESS
+// TICK; a coroutine queue has no tiers to be fair between — one owner, one FIFO — so `__gt_coro_next`
+// retries at the top of its own pop.
+//
+// ⚠ **THE RECLAIM RUNS WITH `__sched_lock` RELEASED AT BOTH CALLERS, and the POP is what makes that safe:**
+// a GT taken off a queue is unreachable by anyone else, while `__gt_runner_done` frees a stack through a
+// syscall nobody should hold the IOCP completion thread's lock across.
+export function emitGtTombstoneHandback(module StdModule, func IrFunction, candidate IrBlock, found ValueId, retry IrBlock, ids ValueMinter)
+	var noWork = module.addBlock(func, label: b"tsnowork")
+	var checkDropped = module.addBlock(func, label: b"tscheckdropped")
+	var reclaim = module.addBlock(func, label: b"tsreclaim")
+	var hand = module.addBlock(func, label: b"tshand")
+
+	let candidateZero = emitConst(module, block: candidate, value: 0, ids: ids)
+	let nothingFound = emitCmp(module, block: candidate, a: found, b: candidateZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(candidate, op: StdOp.condBranch(nothingFound, thenBlockId: noWork.id, elseBlockId: checkDropped.id))
+	emitConstReturn(module, block: noWork, value: 0, ids: ids)
+
+	let wasDropped = emitGtIsDropped(module, block: checkDropped, gt: found, ids: ids)
+	module.setTerminator(checkDropped, op: StdOp.condBranch(wasDropped, thenBlockId: reclaim.id, elseBlockId: hand.id))
+	module.setTerminator(hand, op: StdOp.ret(found))
+
+	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(found)))
+	module.setTerminator(reclaim, op: StdOp.branch(retry.id))
+end 'emitGtTombstoneHandback'
+
+// `__gt_enqueue(g)` — append `g` to the tail of the global FIFO run queue. ⚠ UNREACHED until `spawn`: every
+// producer of the global tier goes through `SchedRuntime.emitSchedPublishRunnable`'s two green-thread arms,
+// which nothing selects.
 function buildGtEnqueue(module StdModule)
 	var func = IrFunction.createFromStd(GtEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -2031,37 +2221,13 @@ function buildGtEnqueue(module StdModule)
 	var emptyBlock = module.addBlock(func, label: b"empty")
 
 	emitParams(module, block: entry, count: 1)
-	let g = 0 as ValueId
-
-	// g.next = 0.
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(g, offset: GtOffNext, valueId: zeroConst, valueType: StdType.i64))
-
-	let tailAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(tailAddr, label: GtRunQueueTailLabel))
-	let tail = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(tail, addrId: tailAddr, offset: 0, valueType: StdType.i64))
-	let tailNull = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(tailNull, lhs: tail, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(tailNull, thenBlockId: emptyBlock.id, elseBlockId: appendBlock.id))
-
-	// Non-empty: tail.next = g; tail = g.
-	module.appendOp(appendBlock, op: StdOp.storeIndirect(tail, offset: GtOffNext, valueId: g, valueType: StdType.i64))
-	module.appendOp(appendBlock, op: StdOp.storeIndirect(tailAddr, offset: 0, valueId: g, valueType: StdType.i64))
-	module.setTerminator(appendBlock, op: StdOp.retVoid)
-
-	// Empty: head = tail = g.
-	let headAddr = ids.mint()
-	module.appendOp(emptyBlock, op: StdOp.globalAddr(headAddr, label: GtRunQueueHeadLabel))
-	module.appendOp(emptyBlock, op: StdOp.storeIndirect(headAddr, offset: 0, valueId: g, valueType: StdType.i64))
-	module.appendOp(emptyBlock, op: StdOp.storeIndirect(tailAddr, offset: 0, valueId: g, valueType: StdType.i64))
-	module.setTerminator(emptyBlock, op: StdOp.retVoid)
+	emitGtFifoAppend(module, entry: entry, appendBlock: appendBlock, emptyBlock: emptyBlock, ends: GtQueueEnds.globalLabels, g: 0 as ValueId, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtEnqueue'
 
-// `__gt_dequeue() -> g` — pop the head green thread off the global FIFO run queue, or 0 if empty.
+// `__gt_dequeue() -> g` — pop the head green thread off the global FIFO run queue, or 0 if empty. ⚠
+// UNREACHED until `spawn`, for `__gt_enqueue`'s reason one consumer over.
 function buildGtDequeue(module StdModule)
 	var func = IrFunction.createFromStd(GtDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -2071,38 +2237,14 @@ function buildGtDequeue(module StdModule)
 	var clearTail = module.addBlock(func, label: b"cleartail")
 	var doneBlock = module.addBlock(func, label: b"done")
 
-	let headAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(headAddr, label: GtRunQueueHeadLabel))
-	let head = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(head, addrId: headAddr, offset: 0, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	let headNull = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(headNull, lhs: head, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	// head is minted in entry (dominates every block), so `done` returns it in both cases: 0 when empty,
-	// the popped GT otherwise.
-	module.setTerminator(entry, op: StdOp.condBranch(headNull, thenBlockId: doneBlock.id, elseBlockId: popBlock.id))
+	emitGtFifoPop(module, entry: entry, popBlock: popBlock, clearTail: clearTail, doneBlock: doneBlock, ends: GtQueueEnds.globalLabels, ids: ids)
 
-	// head = head.next; if the new head is null the queue is empty → clear the tail too.
-	let next = ids.mint()
-	module.appendOp(popBlock, op: StdOp.loadIndirect(next, addrId: head, offset: GtOffNext, valueType: StdType.i64))
-	module.appendOp(popBlock, op: StdOp.storeIndirect(headAddr, offset: 0, valueId: next, valueType: StdType.i64))
-	let nextNull = ids.mint()
-	module.appendOp(popBlock, op: StdOp.cmp(nextNull, lhs: next, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(popBlock, op: StdOp.condBranch(nextNull, thenBlockId: clearTail.id, elseBlockId: doneBlock.id))
-
-	let tailAddr = ids.mint()
-	module.appendOp(clearTail, op: StdOp.globalAddr(tailAddr, label: GtRunQueueTailLabel))
-	module.appendOp(clearTail, op: StdOp.storeIndirect(tailAddr, offset: 0, valueId: zeroConst, valueType: StdType.i64))
-	module.setTerminator(clearTail, op: StdOp.branch(doneBlock.id))
-
-	module.setTerminator(doneBlock, op: StdOp.ret(head))
 	module.functions.push(func)
 end 'buildGtDequeue'
 
-// ⭐⭐⭐ **`__gt_coro_enqueue(gt)` — APPEND A COROUTINE TO ITS OWNER'S QUEUE (EC10).** `__gt_enqueue`'s shape
-// exactly, with the head/tail read off `gt.owner` instead of off two `.data` labels — see `GtCoroEnqueueName`
-// for the one difference and for the lock the caller owes.
+// ⭐⭐⭐ **`__gt_coro_enqueue(gt)` — APPEND A COROUTINE TO ITS OWNER'S QUEUE (EC10).** `__gt_enqueue`'s body
+// exactly — literally, since the review: both are `emitGtFifoAppend`, differing only in the `GtQueueEnds`
+// they hand it. See `GtCoroEnqueueName` for the lock the caller owes.
 //
 // ⛔ **THE OWNER IS READ OFF THE GT AND NOT FROM TLS, AND THAT IS WHAT LETS THE IOCP COMPLETION THREAD CALL
 // IT.** That thread owns no P, so `emitLoadCurrentP` would answer 0 there; the GT it recovered from the
@@ -2118,30 +2260,15 @@ function buildGtCoroEnqueue(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let g = 0 as ValueId
 
-	// g.next = 0 — a GT sits in at most one queue, so this is the SAME chain field the global FIFO uses.
-	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
-	emitStoreField(module, block: entry, record: g, offset: GtOffNext, value: zeroConst)
-
+	// `entry` dominates both arms, so the owner is read once here and the ends name it throughout.
 	let owner = emitLoadField(module, block: entry, record: g, offset: GtOffOwner, ids: ids)
-	let tail = emitLoadField(module, block: entry, record: owner, offset: GtOffCoroTail, ids: ids)
-	let tailNull = emitCmp(module, block: entry, a: tail, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(tailNull, thenBlockId: emptyBlock.id, elseBlockId: appendBlock.id))
-
-	// Non-empty: tail.next = g; owner.coroTail = g.
-	emitStoreField(module, block: appendBlock, record: tail, offset: GtOffNext, value: g)
-	emitStoreField(module, block: appendBlock, record: owner, offset: GtOffCoroTail, value: g)
-	module.setTerminator(appendBlock, op: StdOp.retVoid)
-
-	// Empty: head = tail = g.
-	emitStoreField(module, block: emptyBlock, record: owner, offset: GtOffCoroHead, value: g)
-	emitStoreField(module, block: emptyBlock, record: owner, offset: GtOffCoroTail, value: g)
-	module.setTerminator(emptyBlock, op: StdOp.retVoid)
+	emitGtFifoAppend(module, entry: entry, appendBlock: appendBlock, emptyBlock: emptyBlock, ends: GtQueueEnds.ownerFields(owner), g: g, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtCoroEnqueue'
 
 // `__gt_coro_dequeue(owner) -> gt | 0` — pop the head of `owner`'s coroutine queue, clearing the tail when
-// the queue empties. `__gt_dequeue`'s shape, off the owner struct. The caller holds `__sched_lock`.
+// the queue empties. `__gt_dequeue`'s body, off the owner struct. The caller holds `__sched_lock`.
 function buildGtCoroDequeue(module StdModule)
 	var func = IrFunction.createFromStd(GtCoroDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -2152,24 +2279,8 @@ function buildGtCoroDequeue(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 1)
-	let owner = 0 as ValueId
+	emitGtFifoPop(module, entry: entry, popBlock: popBlock, clearTail: clearTail, doneBlock: doneBlock, ends: GtQueueEnds.ownerFields(0 as ValueId), ids: ids)
 
-	let head = emitLoadField(module, block: entry, record: owner, offset: GtOffCoroHead, ids: ids)
-	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
-	let headNull = emitCmp(module, block: entry, a: head, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	// `head` is minted in `entry`, which dominates every block, so `done` returns it in both cases: 0 when
-	// the queue was empty, the popped coroutine otherwise.
-	module.setTerminator(entry, op: StdOp.condBranch(headNull, thenBlockId: doneBlock.id, elseBlockId: popBlock.id))
-
-	let next = emitLoadField(module, block: popBlock, record: head, offset: GtOffNext, ids: ids)
-	emitStoreField(module, block: popBlock, record: owner, offset: GtOffCoroHead, value: next)
-	let nextNull = emitCmp(module, block: popBlock, a: next, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(popBlock, op: StdOp.condBranch(nextNull, thenBlockId: clearTail.id, elseBlockId: doneBlock.id))
-
-	emitStoreField(module, block: clearTail, record: owner, offset: GtOffCoroTail, value: zeroConst)
-	module.setTerminator(clearTail, op: StdOp.branch(doneBlock.id))
-
-	module.setTerminator(doneBlock, op: StdOp.ret(head))
 	module.functions.push(func)
 end 'buildGtCoroDequeue'
 
@@ -2178,20 +2289,13 @@ end 'buildGtCoroDequeue'
 // driver in this file asks IT rather than reading a queue, so the tombstone refusal is a property of the
 // scheduler and not of whichever driver remembered it.
 //
-// ⭐ **IT IS THAT FUNCTION'S `checkDropped`/`reclaim`/`hand` TAIL AND NOTHING ELSE.** A coroutine renounced
-// while it was still queued is a TOMBSTONE (`emitGtIsDropped`), and handing one back would run a thread
-// whose promise is gone — so the pop is followed by the test, a reclaim, and another pop.
+// ⭐ **THE POP IS ALL THIS FUNCTION SPELLS; the tail it shares with `__sched_find_runnable` is
+// `emitGtTombstoneHandback`.** What is left here is the lock, the dequeue and the retry target — and the
+// retry target is the one thing the two consumers genuinely differ in (that emitter's header says why).
 //
-// ⚠ **THE LOOP IS SIMPLER THAN THE RING TWIN'S AND THE MISSING PART IS DELIBERATE.** `__sched_find_runnable`
-// retries at `localPop` rather than at `entry` so a reclaimed thread costs no second FAIRNESS TICK; there is
-// no fairness tick here, because there are no tiers to be fair between — one owner, one FIFO — so the retry
-// is simply the top of this function's own loop. Copying the split would have been copying machinery for a
-// mechanism this queue does not have.
-//
-// ⚠ **THE RECLAIM RUNS WITH THE LOCK RELEASED**, exactly as `__sched_find_runnable`'s does: `__gt_runner_done`
-// frees a stack (a `VirtualFree` through the syscall shim) and may run a releaser, and holding the one lock
-// the IOCP completion thread needs across a syscall is latency nobody has to pay. The POP is the claim, so a
-// coroutine this function has taken off the queue is unreachable by anyone else while it is being reclaimed.
+// ⚠ **THE LOCK IS TAKEN AROUND THE DEQUEUE ALONE**, because the IOCP completion thread appends to this same
+// queue; the reclaim beyond it runs released. See `emitGtTombstoneHandback` for why the pop is what makes
+// that safe.
 function buildGtCoroNext(module StdModule)
 	var func = IrFunction.createFromStd(GtCoroNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -2199,10 +2303,6 @@ function buildGtCoroNext(module StdModule)
 	var entry = module.addBlock(func, label: b"entry")
 	var pop = module.addBlock(func, label: b"cnpop")
 	var candidate = module.addBlock(func, label: b"cncandidate")
-	var checkDropped = module.addBlock(func, label: b"cncheckdropped")
-	var reclaim = module.addBlock(func, label: b"cnreclaim")
-	var hand = module.addBlock(func, label: b"cnhand")
-	var noWork = module.addBlock(func, label: b"cnnowork")
 
 	emitParams(module, block: entry, count: 1)
 	let owner = 0 as ValueId
@@ -2220,72 +2320,28 @@ function buildGtCoroNext(module StdModule)
 	module.setTerminator(pop, op: StdOp.branch(candidate.id))
 	pop.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(popped)))
 
-	let candidateZero = emitConst(module, block: candidate, value: 0, ids: ids)
-	let nothingFound = emitCmp(module, block: candidate, a: found, b: candidateZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(candidate, op: StdOp.condBranch(nothingFound, thenBlockId: noWork.id, elseBlockId: checkDropped.id))
-	emitConstReturn(module, block: noWork, value: 0, ids: ids)
-
-	let wasDropped = emitGtIsDropped(module, block: checkDropped, gt: found, ids: ids)
-	module.setTerminator(checkDropped, op: StdOp.condBranch(wasDropped, thenBlockId: reclaim.id, elseBlockId: hand.id))
-	module.setTerminator(hand, op: StdOp.ret(found))
-
-	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(found)))
-	module.setTerminator(reclaim, op: StdOp.branch(pop.id))
+	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: pop, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtCoroNext'
 
 // ⭐⭐ **`__gt_coro_sweep_dropped(owner)` — RECLAIM THE TOMBSTONES AT THE FRONT OF THIS GREEN THREAD's
-// COROUTINE QUEUE.** Its one caller is `__gt_promise_drop`, which is what puts one there, and it is
-// `SchedRuntime.buildSchedSweepDropped`'s counterpart.
-//
-// ⛔⛔ **IT IS WHAT KEEPS A NEVER-SCHEDULED PROGRAM's MEMORY BOUNDED, and without it the mark-and-skip
-// protocol would be a leak with a spec that still passed.** `__gt_promise_drop` hands back the half a
-// dropped coroutine's promise owns — its managed arguments and its slot in `__gt_live_count` — but the STACK
-// and the STRUCT can only be freed by a party allowed to take it out of a queue, which is the popper. A
-// program that spawns and drops in a loop and never awaits anything drives NOTHING, so nothing would ever
-// pop them; sweeping the front at the drop reclaims them in that shape immediately, because the coroutine
-// just marked is normally the newest AND the only one. `sched-runqueue.a-spawn-drop-loop-stays-bounded` is
-// that measurement (W212 measured the same hole one queue over as exit 75, unbounded).
-//
-// ⚠ **THE FRONT ONLY, and the bound is what makes that right.** It stops at the first live coroutine rather
-// than scanning, so the work is O(coroutines actually reclaimed) and each is reclaimed at most once ever — a
-// drop can never be more than amortised O(1). A tombstone sitting BEHIND a live one is left for
-// `__gt_coro_next` to refuse and reclaim.
-//
-// ⭐⭐ **IT IS SIMPLER THAN ITS RING TWIN, AND THE REASON IS THE PIN.** `__sched_sweep_dropped`'s ring half is
-// a peek-then-CAS, and it is *"the one site that dereferences a thread it has not yet claimed"* — a hazard
-// that exists because a THIEF races the sweeper for the victim's head. Nothing races an owner's coroutine
-// queue: only the owner itself and the IOCP completion thread touch it, and the completion thread holds
-// `__sched_lock`. So the lock IS the claim, the peek and the pop name the same coroutine, and the sweep is a
-// plain locked walk — the shape the sweep's GLOBAL half already has, for the same reason.
+// COROUTINE QUEUE.** Its one caller is `__gt_promise_drop`, which is what puts one there; the walk itself is
+// `emitGtFifoSweepDropped`, which `__sched_sweep_dropped`'s global half is the other caller of, and that
+// emitter carries the bound and the lock argument. `sched-runqueue.a-spawn-drop-loop-stays-bounded` is the
+// measurement that it is not optional (W212 measured the same hole one queue over as exit 75, unbounded).
 function buildGtCoroSweepDropped(module StdModule)
 	var func = IrFunction.createFromStd(GtCoroSweepDroppedName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var loopHdr = module.addBlock(func, label: b"cshdr")
-	var peek = module.addBlock(func, label: b"cspeek")
-	var free = module.addBlock(func, label: b"csfree")
 	var doneBlock = module.addBlock(func, label: b"csdone")
 
 	emitParams(module, block: entry, count: 1)
 	let owner = 0 as ValueId
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
-
-	let head = emitLoadField(module, block: loopHdr, record: owner, offset: GtOffCoroHead, ids: ids)
-	let zero = emitConst(module, block: loopHdr, value: 0, ids: ids)
-	let queueEmpty = emitCmp(module, block: loopHdr, a: head, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(loopHdr, op: StdOp.condBranch(queueEmpty, thenBlockId: doneBlock.id, elseBlockId: peek.id))
-
-	let headDropped = emitGtIsDropped(module, block: peek, gt: head, ids: ids)
-	module.setTerminator(peek, op: StdOp.condBranch(headDropped, thenBlockId: free.id, elseBlockId: doneBlock.id))
-
-	module.appendOp(free, op: StdOp.call(ids.mint(), callee: GtCoroDequeueName, args: argsOf(owner)))
-	module.appendOp(free, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(head)))
-	module.setTerminator(free, op: StdOp.branch(loopHdr.id))
+	emitGtFifoSweepDropped(module, func: func, cur: entry, cont: doneBlock, ends: GtQueueEnds.ownerFields(owner), ids: ids)
 
 	emitSchedLockLeave(module, block: doneBlock, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -4224,7 +4280,6 @@ function buildGtTraceEmit(module StdModule, tags GtTraceTags)
 	module.functions.push(func)
 end 'buildGtTraceEmit'
 
-
 // Emit one trace line at a call site: `<tag><gtId><suffix?>`. An ABSENT suffix (zero length) means no suffix.
 // A no-op when the build is untraced, so every call site reads as an unconditional statement and the gating
 // lives in exactly one place.
@@ -5242,6 +5297,7 @@ let SubpSlotBytes = 184
 // the reader takes a stream-base offset and indexes within. The persistent buffers (bufPtr/bytesOut/writeBuf)
 // survive release for reuse; the OS handles are cleared at release.
 let SubpSlotInUse = 0
+
 // The value `inUse` holds once a slot is CLAIMED — written by the scan's CAS (`buildSubpSpawnCore`) and
 // cleared by the release. A claimed slot is one no other scan may take, whether or not its spawn has finished.
 let SubpSlotClaimed = 1 as ParsedInt
@@ -5261,6 +5317,7 @@ let SubpSlotWriteCap = 120
 // the slot, silently making the NEW handle read EOF (memory-safe, but a wrong answer). Read and written ONLY by
 // GT-side code (spawn + the reader's resume) — the completion thread never touches it, so no cross-thread state.
 let SubpSlotGeneration = 128
+
 // ⭐ **THE FIVE FIELDS THE ATTACHED SPAWN ADDED.** The streaming half needed none of them: it never reports a
 // pid, never queues a payload for the child's stdin and never caps what it collects, because its caller does
 // all three by hand. `subprocessGetPid`, `StdinKind.bytes` and `OutputDestination.collect(limit)` are three
@@ -5273,6 +5330,7 @@ export let SubpSlotPid = 136 as ByteOffset
 export let SubpSlotStdinPend = 144 as ByteOffset
 export let SubpSlotOutLimit = 152 as ByteOffset
 export let SubpSlotErrLimit = 160 as ByteOffset
+
 // The wall-clock reading (in milliseconds) taken when `waitCollect` begins, so the result struct can report
 // how long the child ran. It is a SPAWN-to-WAIT span rather than a spawn-to-exit one because the corpus asks
 // for `durationMs` off the WAIT and a handle may be spawned long before anyone waits on it.
@@ -5287,6 +5345,7 @@ let SubpInitialLineBufBytes = 4096
 export let SubpMaxLineBytes = 1048576  // 1 MiB per-line cap — a newline-less child cannot grow the buffer without bound
 let SubpBytesOutBytes = 8
 let SubpPipeScratchBytes = 16  // the two handle out-param slots for a single osPipeCreate*, reused across the 3 pipes
+
 // The SECOND of those two out-param words. Named because `scratch + 8` at a pipe creation says nothing about
 // which end of the pipe is being read back out of it.
 let SubpPipeScratchSecondWord = 8 as ParsedInt
@@ -5311,6 +5370,7 @@ export let SubpWaitInfinite = 0xFFFFFFFF as ParsedInt
 
 export let SubpYieldReadName = b"__gt_subp_yield_read"
 export let SubpSpawnName = b"__gt_subp_spawn"
+
 // The ONE `CreateProcessA` path. Every spelling a program can spawn a child with fills a request record and
 // calls this; see `SubpReqCmdline` for why there is only one.
 export let SubpSpawnCoreName = b"__gt_subp_spawn_core"
@@ -5676,6 +5736,7 @@ let SubpStdioInherit = 1 as ParsedInt
 let SubpStdioFile = 3 as ParsedInt
 let SubpStdinBytes = 2 as ParsedInt
 export let SubpOutCollect = 2 as ParsedInt
+
 // ⚠ **`pipe` IS shv2's OWN FIFTH STDIN KIND AND HAS NO SURFACE SPELLING.** `StreamingSubprocess` wants a stdin
 // pipe with NO payload preloaded, which `StdinKind` cannot say — its `bytes` arm always carries one. Appended
 // past the corpus's four rather than overloading `bytes` with an empty payload, so the drain loop's "is there
