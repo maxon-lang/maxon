@@ -168,7 +168,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// The stub's two producer calls ride the module's own armed flag (`buildCarriesDebugStream`, set at the
 	// install seam), never a second spelling of that conjunction: a stub calling a `__ds_init` the module
 	// never installed does not link.
-	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, debugStream: stdModule.debugStream)
+	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, debugStream: stdModule.debugStream)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -284,13 +284,18 @@ end 'refuseDuplicateChunkName'
 // `initGlobals` is `RuntimeUsage.usesManagedGlobals` — whether the program declares a managed top-level
 // `var`, and so carries `__module_init`/`__maxon_global_cleanup` (P1.7 slice 2a). A program with none
 // carries neither call and its emitted stub is byte-identical to before that rung.
-function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, debugStream bool)
+//
+// `drainGreenThreads` is `RuntimeUsage.usesGt` — whether the green-thread scheduler was installed, and so
+// whether `__gt_drain_at_exit` exists to be called. It rides the INSTALLATION bit rather than a probe of the
+// module for this file's own recorded reason: dead-function elimination takes installed functions back out,
+// so *"does the module still contain X"* is not a question about the runtime X belongs to.
+function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool)
 	match target.os 'os'
-		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, debugStream: debugStream)
+		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream)
 		// ⛔ The Linux stub takes no `debugStream`: the producer's three host primitives are x64-windows
 		// only and `--debugstream` is REFUSED at the command line on every other target (see
 		// `Main.debugStreamSupports`), so this arm can never be reached with the flag on.
-		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals)
+		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads)
 		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
 		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")
 	end 'os'
@@ -319,7 +324,7 @@ end 'augmentWithRuntime'
 // at: `main`'s saved rbp points here, and a walk that arrives with no frame to read stops
 // one frame short of the `in mrt_start` every backtrace in the corpus expects. Its own
 // saved rbp is whatever the loader left, and the walk's `.text` bound is what discards it.
-function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, debugStream bool)
+function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -335,6 +340,7 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
 	module.appendOp(block, op: TargetOp.callDirect(UserEntryName.toByteArray()))
 	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
+	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
 
 	// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, and the reason `__mm_decref` has a
 	// reason to be right at all. `main` has returned its ExitCode in R8; `__mm_leak_check` takes
@@ -412,6 +418,24 @@ function appendGlobalCleanupGate(module TargetModule, block IrBlock, initGlobals
 	end 'globalCleanup'
 end 'appendGlobalCleanupGate'
 
+// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE (SV1)** —
+// shared by both entry stubs. The ORDER is the whole point, twice over:
+//
+//   • **AFTER the global cleanup**, because a released managed global may be the last owner of a service
+//     handle, and dropping it is what lets that service's green thread finish.
+//   • **BEFORE `__mm_leak_check`**, because a worker M's `__gt_reclaim` steps the very counters that gate
+//     reads. Un-joined, the two race and a clean program reports 101 intermittently — and a green thread
+//     that had not finished yet would report 75 for work that was merely still running.
+//
+// It rides `appendExitCodePassThroughCall` because `__gt_drain_at_exit` is shaped like `__mm_leak_check`
+// deliberately: `main`'s ExitCode is the one live value on this path, and a void callee would clobber it in
+// R8. A program with no scheduler carries neither the call nor the function.
+function appendGreenThreadDrainGate(module TargetModule, block IrBlock, drainGreenThreads bool)
+	if drainGreenThreads 'greenThreadDrain'
+		appendExitCodePassThroughCall(module, block: block, callee: GtDrainAtExitName)
+	end 'greenThreadDrain'
+end 'appendGreenThreadDrainGate'
+
 // Route `main`'s ExitCode (R8, the custom Maxon ABI's primary return) through `callee` and back into R8:
 // `mov rcx, r8` puts it in argument register 0, and the callee's own primary return lands where the next
 // stage of the exit path expects it. The ONE spelling of that value flow, shared by the leak gate and the
@@ -446,7 +470,7 @@ end 'appendExitCodePassThroughCall'
 // shadow space to reserve (raw syscalls carry no imports, and shv2 functions spill to their OWN frames),
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.
-function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool)
+function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -458,6 +482,7 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
 	module.appendOp(block, op: TargetOp.callDirect(UserEntryName.toByteArray()))
 	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
+	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
 	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
 
 	// ExitCode (R8, custom ABI) -> EDI (Linux syscall arg 0). A 32-bit move, exactly as the Windows stub

@@ -50,8 +50,9 @@
 //     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
 //     cannot be cited about the next.
 // ⇒ **THE PICKING RULE ABOVE IS UNCHANGED AND STILL MEANS WHAT IT SAYS**: the next entry takes the next
-// FREE number above 70, which is now 92 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
-// W215's arena alignment) — 77 went to `managedListNodeNotInThisChain`, 81 to
+// FREE number above 70, which is now 94 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
+// W215's arena alignment, and SV1 took 92/93 for the scheduler's two — a deadlocked drive and a park note
+// carrying a kind nothing writes) — 77 went to `managedListNodeNotInThisChain`, 81 to
 // `managedListNodeElementMovedOut`, 82/83/84/88 to the slab ARENA's four (`SlabArena.maxon`) and 85/86/87 to
 // the slab OBJECT layer's three (`SlabRuntime.maxon`), while 76
 // and 80 stay vacant for the reason this paragraph gives, and S5 took 89 and 90 for the SHARDED allocator's
@@ -227,6 +228,28 @@ export enum RuntimeAbort
 	// `checkArenaReservationSlack` asserts that premise at compile time from the grow unit; this asks the
 	// same thing of the address a future lane really returns.
 	slabArenaBaseNotGranuleAligned = 91
+	// ⛔⛔ `__gt_drive_until`: a SCHEDULER DEADLOCK. This driver's green thread has no runnable coroutine, the
+	// scheduler's three tiers hold nothing, no child is parked, no timer is pending, no overlapped read is in
+	// flight and no other M is live — so the thread this drive is waiting for can never become runnable.
+	//
+	// ⭐ **IT REPLACES A SILENT WRONG ANSWER, WHICH IS WHY IT IS AN ABORT AND NOT A HANG-BY-POLLING.** The arm
+	// used to RETURN, under a note saying *"the awaiting caller reads its result and the program makes what
+	// progress it can"* — but the caller is an `await`, and what it reads is the result slot of a thread that
+	// never ran: whatever the allocator last left there, reported as the program's answer. A deadlock is a
+	// defect in the program or in the runtime and the honest response is to say so and stop.
+	//
+	// ⚠ **THE EXIT DRAIN DOES NOT REACH IT, AND MUST NOT.** `__gt_drive_exit` runs the same loop to a
+	// different end (`__gt_live_count == 0`); a count still non-zero with nothing left to run is a green
+	// thread neither awaited nor dropped, which is `greenThreadLeak` (75) with the count in it, reported by
+	// `__mm_leak_check` a few instructions later. Two different faults may not report one number.
+	schedulerDeadlock = 92
+	// `__gt_register_park`: the park note carries a kind no site writes. `GtRuntime`'s `GtParkKindTimer` /
+	// `GtParkKindProc` / `GtParkKindIo` are the three `emitGtPark` can stamp, so a fourth value is a COMPILER
+	// bug rather than a program's — and it is silent without this: the thread would be suspended having been
+	// registered on NO store at all, which is a hang three functions away from its cause. It is a separate
+	// code from `schedulerDeadlock` above, this registry's founding rule: a runtime that cannot register a
+	// park and a scheduler that has nothing left to run are two different faults.
+	schedulerUnknownParkKind = 93
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2
@@ -288,7 +311,7 @@ end 'lastSegment'
 // ⭐ **ABORT THE PROCESS FROM A BUILDER-BUILT RUNTIME FUNCTION — THE ONE HOME OF THE ABORT SHAPE.**
 // `osExit` DIVERGES, so the block it sits in never falls out; but a block must still carry a
 // terminator, so a DEAD one follows. That fact was open-coded four times (`ManagedMemoryRuntime.emitVoidAbort`
-// plus `GtRuntime`'s `__gt_proc_add` and `__gt_process_run`, and `ManagedMemoryRuntime.__managed_create`), and it
+// plus `GtRuntime`'s process-store append and `__gt_process_run`, and `ManagedMemoryRuntime.__managed_create`), and it
 // is written here once.
 //
 // ⭐ **THE TERMINATOR KIND IS DERIVED FROM THE FUNCTION, NOT PASSED IN.** A void function's dead

@@ -202,18 +202,17 @@ end 'requireUnreachableStdlibStayedDead'
 //        in `StdToWasm.appendLeakGate`. ⚠ Restore that property if you touch a gate: no committed spec
 //        makes the leak gate FIRE, so a gate that decided from the module instead would let this root's
 //        removal turn every exit-101 test silently green.
-//      * `__gt_coro_enqueue` — the IOCP completion thread's re-ready of a parked coroutine onto its owning
-//        green thread's queue (`X64GtRuntime.buildIoCompletionLoopChunk`). The chunk names it
-//        UNCONDITIONALLY, while every Std caller of the coroutine queue sits behind `__gt_ready`, which a
-//        program that spawns no coroutine does not reach — so a SUBPROCESS-only program, which installs the
-//        IOCP substrate and therefore the completion loop but never spawns, reaches it from data alone.
-//        MEASURED for its predecessor by adding the call without a root: `panic at X64Backend.maxon:2294:
-//        resolveCallFixups: call to unknown function '__sched_wake_or_spawn'`, seventeen
-//        `subprocess-builtins` cases at once, exactly the shape `__mm_leak_check`'s note above predicts.
-//        ⚠ **IT WAS `__gt_enqueue` AND `__sched_wake_or_spawn` UNTIL EC10 — TWO ROOTS, NOT ONE — and both
-//        went when the chunk's calls changed.** A coroutine goes to its owner's queue rather than the
-//        global one, and it takes no wake because no worker M can run it. Neither of the two has a
-//        cross-tier caller any more, so the prune correctly takes both out.
+//      * `__sched_publish_locked` and `__sched_wake_or_spawn` — the IOCP completion thread's re-ready of a
+//        parked thread and the wake it may owe (`X64GtRuntime.buildIoCompletionLoopChunk`). The chunk names
+//        both UNCONDITIONALLY, while every Std caller of the publish doors sits behind `__gt_ready` or a
+//        driver's drain, which a program that spawns nothing does not reach — so a SUBPROCESS-only program,
+//        which installs the IOCP substrate and therefore the completion loop but never spawns, reaches them
+//        from data alone. MEASURED for a predecessor by adding the call without a root: `panic at
+//        X64Backend.maxon:2294: resolveCallFixups: call to unknown function '__sched_wake_or_spawn'`,
+//        seventeen `subprocess-builtins` cases at once, exactly the shape `__mm_leak_check`'s note above
+//        predicts.
+//      * `__gt_drain_at_exit` — the entry stub's scheduler teardown (`BackendDispatch.prependEntryStub`),
+//        in exactly `__mm_leak_check`'s position and for exactly its reason.
 //    They are rooted unconditionally: a name absent from this module is simply not found (a program
 //    with no heap has no `__mm_leak_check` to keep), so the root costs nothing where the runtime it
 //    belongs to was never installed.
@@ -249,18 +248,24 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	try markCompilerOwnedRoot(ModuleInitName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(MmLeakCheckName, project: project, index: index, reached: reached, worklist: worklist)
-	// ⭐ **THE IOCP COMPLETION LOOP's CALLEE (EC10).** That loop is a hand-assembled Target-tier chunk, so no
-	// Std caller reaches what it calls and the prune would drop it — leaving a pipe-reading program calling a
-	// function that was never laid out, which is a LINK failure and not a compile error, in exactly the
-	// programs that read pipes (`Testing/SpecWorkerPool.maxon`, i.e. the compiler's own harness).
+	// ⭐ **THE IOCP COMPLETION LOOP's TWO CALLEES (SV1).** That loop is a hand-assembled Target-tier chunk, so
+	// no Std caller reaches what it calls and the prune would drop them — leaving a pipe-reading program
+	// calling functions that were never laid out, which is a LINK failure and not a compile error, in exactly
+	// the programs that read pipes (`Testing/SpecWorkerPool.maxon`, i.e. the compiler's own harness).
 	//
-	// ⚠ **IT WAS `GtEnqueueName` PLUS `SchedWakeOrSpawnName` UNTIL EC10, AND BOTH CHANGED FOR THE SAME
-	// REASON: THE CHUNK's CALLS CHANGED.** The loop now appends a re-readied COROUTINE to its owner's queue
-	// (`__gt_coro_enqueue`) instead of to the global one, and it no longer wakes an idle M at all — a worker M
-	// cannot run a coroutine. `__gt_enqueue` and `__sched_wake_or_spawn` keep only in-file callers inside
-	// `SchedRuntime`'s unreached green-thread tier, so the prune correctly takes both out of every program
-	// that cannot reach them.
-	try markCompilerOwnedRoot(GtCoroEnqueueName, project: project, index: index, reached: reached, worklist: worklist)
+	// ⚠ **THE PAIR HAS CHANGED TWICE, AND BOTH TIMES BECAUSE THE CHUNK's CALLS DID.** It was `__gt_enqueue`
+	// plus `__sched_wake_or_spawn` until EC10, then `__gt_coro_enqueue` alone (a coroutine goes to its owner's
+	// queue, and no worker M can run one, so there was nobody to wake); SV1 makes the loop publish through the
+	// ROUTING door, because a re-readied reader may now be a GREEN THREAD, and gives the wake back
+	// conditionally for the same reason. `__gt_coro_enqueue` is no longer rooted — `__sched_publish_locked`
+	// calls it, so the walk reaches it by an ordinary edge.
+	try markCompilerOwnedRoot(SchedPublishLockedName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(SchedWakeOrSpawnName, project: project, index: index, reached: reached, worklist: worklist)
+	// ⭐ **THE ENTRY STUB's SCHEDULER TEARDOWN (SV1)** — `__gt_drain_at_exit`, called from `mrt_start` between
+	// the global cleanup and the leak gate and from nowhere else. Exactly `__mm_leak_check`'s position, and
+	// rooted for exactly its reason: the gate emits its call from `RuntimeUsage.usesGt` — where installation
+	// is decided — so a pruned root leaves a call with no callee rather than a program without a drain.
+	try markCompilerOwnedRoot(GtDrainAtExitName, project: project, index: index, reached: reached, worklist: worklist)
 	// ⭐ **THE DEBUGSTREAM PRODUCER'S TWO ENTRY-STUB CALLEES (O3).** `__ds_init` and `__ds_shutdown` are
 	// called from `mrt_start` and from nowhere else — exactly `__mm_leak_check`'s position — so nothing in
 	// the Std module reaches them and the prune would drop both, leaving the stub calling functions that

@@ -34,9 +34,12 @@
 # directly off the runtime's own counters rather than inferred from timing.
 #
 # ⭐ AND THE PIN IS WHAT PRODUCES THOSE NUMBERS, WHICH IS A SEPARATE MEASUREMENT.
-# Sabotaged — `__gt_ready` given `SchedQueueEnd.localRing` again on the FINISHED
-# tree, one line, nothing else changed — drop-running-torture reads 1/0, 2/242,
-# 7/393 and 12/410. A gate nobody has seen move is not a gate.
+# Sabotaged — `__gt_spawn`'s owner stamp changed to `gt` itself on the FINISHED
+# tree, so every `async` frame is a GREEN THREAD again; one line, nothing else
+# changed — drop-running-torture reads 1/0, 2/6, 7/42 and 11/43 and steal-torture
+# 1/0, 2/52, 7/3970 and 7/3985, with byte-identical aggregates throughout
+# (MEASURED at SV1 wave 1; the pre-EC10 spelling of the same sabotage read
+# 2/242, 7/393 and 12/410). A gate nobody has seen move is not a gate.
 #
 # ⚠ THE DAY `spawn` LANDS, ASSERTION 4 FLIPS BACK AND MUST. A `spawn` primitive
 # (SERVICES_DESIGN.md §"Ownership — the spine", "Send is a MOVE") creates REAL green threads, which
