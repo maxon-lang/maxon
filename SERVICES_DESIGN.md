@@ -33,6 +33,72 @@
 >    `Array with Promise` never drops its elements — blocks `awaitAny` over an array), `W218` (the multi-M
 >    park race — unreachable for coroutines, REAL for green threads, so `spawn` arms it), and `W221`.
 
+> 🏗 **BUILT 2026-08-28 (`SV1`) — READ THIS BEFORE THE DESIGN BELOW.** Services RUN: `spawn`, the two
+> synthesized companions, the mailbox, the green thread, the send and the dispatch loop are all in the
+> tree, driven by `specs-shv2/services.md` (45 cases) and `maxon-shv2/track0/`. **Where the implementation
+> and this document disagree, the implementation is what shipped**, and each disagreement is listed here
+> once rather than being hunted for in the sections below. Everything not listed landed as designed.
+>
+> 1. **`spawn` IS SERVICES-ONLY** (⚖ user ruling). There is no bare `spawn f()` green thread: every
+>    `spawn` names a **static factory of a declared type returning that type**, and everything else is
+>    **E3134**. ⇒ the "two forms of `spawn`" question this document leaves open is **closed**, and P2.6's
+>    fan-out is a **worker SERVICE** rather than a fan-out of bare threads (`ARCHITECTURE.md`'s parallel
+>    driver section now says so). The unit of concurrency is a type whose message surface the compiler
+>    can check; a second, unstructured primitive would have none of that.
+> 2. **`spawn` is a CONTEXTUAL keyword, not a `TokenKind`.** Two live declarations in this tree own the
+>    name (`Subprocess.spawn(cmd)`, and a `static function spawn() returns Self`), so reserving the word
+>    would have been a source-breaking change for a feature that does not need one. It is recognized as an
+>    identifier followed by a type name; `spawn` remains a good spelling for a function, a static, a
+>    parameter, a field or a local, and `services.spawn-is-not-a-keyword` pins that.
+> 3. **The transferability rule shipped STRICT, plus a one-level FRESH-RETURN summary** — a value built by
+>    a `return` that is a record literal written in the `return` itself is provably sole, which is a
+>    token-level fact rather than a heuristic. ⛔ **The "retained-here" refinement this document proposes is
+>    REJECTED AS UNSOUND**: knowing that *this frame* took no reference says nothing about the CALLEE, which
+>    may have returned an alias it still holds. It would have admitted exactly the program the rule exists
+>    to refuse.
+> 4. **⭐⭐ SOLENESS IS NOT TRANSITIVE, AND THAT IS THE SHARPEST CORRECTION THE IMPLEMENTATION MADE.** This
+>    document reasons throughout as though proving the crossing BOX unique is enough. It is not: a box this
+>    frame owns alone can POINT AT a record it only co-owns, because every co-owning store takes a reference
+>    where a move would give one up. **MEASURED — four programs crossed a co-owned record and exited 0**
+>    before the rule existed. The cure is `Parser.unclosedTransferSlotNoun`, which asks the rule **of the
+>    TYPE, one level, no recursion**: a scalar crosses; a `String` crosses (its record's slots hold a byte
+>    buffer and a length, never a reference to a second refcounted record); a service HANDLE crosses; a
+>    record whose every slot is a SCALAR crosses whole; **a container never crosses** (a push increfs rather
+>    than moves) and **a record with a MANAGED field never crosses** — including a `String` FIELD, which is
+>    not the same thing as a `String` argument, and the diagnostic said otherwise until it was corrected.
+>    Pinned by `a-scalar-only-record-crosses-whole`,
+>    `error.a-record-with-a-managed-field-may-not-cross`, `error.a-container-may-not-cross` and
+>    `error.a-record-with-a-string-field-may-not-cross-either`. Proving more needs a record's whole graph
+>    tracked through the co-owning stores, which is a whole-program fact this compiler does not compute.
+> 5. **`T.handle` is a REAL 8-BYTE BOX**, not the `Promise` parse-mark pattern this document assumes — a
+>    one-field struct holding the mailbox pointer. That is what makes moves, **E3102**, struct fields,
+>    arrays and the drop cascade reach it by construction rather than by a special case at each door.
+> 6. **`__reply` is an INTEGER slot**, so the P1.3 destructor cascade skips it and a message with a reply
+>    costs the union no managed payload.
+> 7. **NO `__do_<m>` TRAMPOLINES.** This document derives them from **E2049** (one statement per `match`
+>    arm) — but E2049 is a **SOURCE** rule, and `<T>.__loop` is not source: at the IR tier a `switch` arm is
+>    a BLOCK holding as many ops as it likes. So there is ONE synthesized function per service, and the
+>    handler call, the payload drops and the shell decref all live in the arm. That is also what makes the
+>    un-consumed-payload drop expressible at all.
+> 8. **"Handles in an array" is NOT `W217`-gated**, and this document says it is. `W217` is about an
+>    `Array with Promise` never dropping its elements; **a handle is a box, not a `Promise`**, so the
+>    array's element drop is the handle drop and two services shut down when the array does
+>    (`services.handles-in-an-array`). `awaitAny` remains genuinely `W217`-gated.
+> 9. **SERVICES ARE `x64-windows` BY SUBSTRATE, AND THE REFUSAL IS A DIAGNOSTIC RATHER THAN A PANIC.** A
+>    running service reaches a green thread's hand-assembled context switch, which exists on one lane. A
+>    `spawn` compiled for another target is refused with **E3104** — the same code `sleep` has always given
+>    there — by `requireTargetSupportsServiceEntry`. ⛔ It is worth stating because it was NOT free:
+>    measured at review, a `spawn` reached the backend and **PANICKED the compiler on all three non-host
+>    lanes** (`StdToArm64Conversion.maxon:652`, `StdToWasm.maxon:1748`, `StdToX64Conversion.maxon:3382`).
+>    `error.a-service-is-rejected-on-wasm` and `error.a-service-is-rejected-on-arm64` pin it, and they are
+>    the only two refusals in that spec file carrying a `targets:` marker — a verdict whose whole subject is
+>    *"this target has no substrate"* can only be pinned by compiling FOR that target.
+> 10. **WHAT `SV1` DID NOT BUILD**, exactly as §"Target" and §"Deliverables" plan it: **no reply** — a
+>    message is fire-and-forget, so a handler delivers no value back and the reply CELL is `SV2`; **no
+>    `awaitAny`** (`SV3`, still `W217`-gated); and **`Promise.inner` is still exported with
+>    `SpecWorkerPool` still polling it**, because deleting it needs the bootstrap-parity re-ruling this
+>    document's §"Target" asks for and `SV1` had no authority to settle.
+
 Maxon has a faithful Go-style GMP green-thread runtime — per-P run queues, work stealing,
 `runnext`, Go's 61-tick fairness interval and `_StackMin`/`_StackGuard`, growable 2KB stacks,
 IOCP/kqueue I/O. In shv2 that hierarchy landed with `W212` (closed 2026-08-27, `SchedRuntime.maxon`)
@@ -193,10 +259,17 @@ function Calc.__loop(state Calc, mailbox __Mailbox)     // SYNTHESIZED — the w
 end 'Calc.__loop'
 ```
 
+> ⚠ **CHANGED — THE SKETCH ABOVE IS NOT WHAT WAS BUILT, IN TWO WAYS (SV1).** There are **no `__do_<m>`
+> trampolines**: the loop is built at the IR tier, where a `switch` arm is a BLOCK, so the handler call,
+> the payload drops and the shell decref all live in the arm (see the built-status note at the top, item
+> 7, and `Runtime/ServiceLoop.maxon`, which carries the whole shape). And `__reply` is an **integer**
+> slot, not a `ReplySlot` record, so the P1.3 cascade skips it.
+
 Four existing mechanisms fall out free: exhaustive `match` (dispatch cannot miss a handler);
-**E2049's single-statement arms satisfied by construction** (each arm is one trampoline call — had
-handler bodies been inlined, any handler containing an `if` would be rejected); `.unionCases` wire
-tags; and struct-backed union metadata for future per-handler `priority`/`timeout`.
+**E2049's single-statement arms satisfied by construction** — ⚠ **and this one is VOID: E2049 is a
+SOURCE rule and the loop is not source**, so it never constrained the arms and the trampolines it was
+used to justify do not exist; `.unionCases` wire tags; and struct-backed union metadata for future
+per-handler `priority`/`timeout`.
 
 A fifth matters more than expected: **a closed union is the only mailbox whose contents can be
 dropped.** On shutdown, un-processed messages own moved-in values; the compiler synthesizes an
@@ -206,6 +279,9 @@ cannot know what to free, and would fail the leak gate.
 
 **`spawn` returns `Calc.handle`** — a compiler-synthesized companion struct, nominally distinct per
 service. Precedent: `Shape.unionCases` is a synthesized companion enum in the union's namespace.
+⚠ **CHANGED — it is a REAL 8-BYTE BOX** holding the mailbox pointer, not a parse-mark over an integer
+the way a `Promise` is. That is what makes moves, E3102, struct fields, arrays and the drop cascade
+reach it by construction rather than by a door-by-door special case.
 
 > ⚠ **Rejected: the per-instance-typealias trick.** `specs/per-instance-typealias.md` documents, as
 > a *feature*, that per-instance aliases are `as`-convertible between instantiations. For an index
@@ -310,7 +386,28 @@ RHS is a bare reference — a shape it already indexes. `MaxonCallOp.ArgVarNames
 already tells it which caller variable each argument came from. The rule must be **conservative-reject**:
 an argument is sendable iff *provably unique* — a fresh rvalue, or a local whose initializer was a fresh
 rvalue with no aliasing assignment, field store, or container push since. Everything else is refused,
-naming the aliasing binding and its line, in E3070's existing diagnostic shape. *(shv2's
+naming the aliasing binding and its line, in E3070's existing diagnostic shape.
+
+> ⚠ **CHANGED — WHAT SHIPPED IN `SV1`, AND THE ONE REFINEMENT THAT WAS REJECTED.** shv2 needed none of
+> the analysis above: the ownership bits the parser already carries answer it
+> (`Parser.moveIntoGreenThread` — a scalar passes, a borrowed byte record is promoted to a fresh copy, a
+> solely-owned value MOVES with no incref, everything else is **E3138**). The *"or a local whose
+> initializer was a fresh rvalue"* half shipped as a ONE-LEVEL summary,
+> `ProgramSignatures.returnsFreshValue`: every `return` in the callee's body is a record literal written
+> in the `return` itself, which is a token-level proof rather than a heuristic — there is no statement
+> between the construction and the hand-off for a second reference to be taken in.
+>
+> ⛔ **A "RETAINED-HERE" REFINEMENT — admit the send when THIS FRAME emitted no retain — WAS CONSIDERED
+> AND REJECTED AS UNSOUND.** What this frame did says nothing about what the CALLEE did: a callee may
+> return an alias of a record it still holds, and this frame would emit no retain for it. It would have
+> admitted precisely the program the rule exists to refuse, and the refusal it replaces is one the user
+> can act on with `.clone()`.
+>
+> ⭐ **AND NEITHER FORM IS ENOUGH ON ITS OWN** — see the built-status note's item 4. Proving the crossing
+> BOX unique says nothing about what the box POINTS AT; `Parser.unclosedTransferSlotNoun` is the third
+> question, asked of the TYPE.
+
+*(shv2's
 `BorrowCheck.maxon` is a different thing — E3070 alone, container-element borrow liveness — and is not
 the home for this.)*
 
@@ -391,9 +488,15 @@ covers service replies, file I/O, and subprocess drains. There is no separate "c
 > ELEMENTS — an array of un-awaited promises going out of scope emits no `__gt_promise_drop` per
 > element, `__gt_live_count` stays up, and the process ABORTS 75."* Pre-existing, three reproducer
 > shapes written into the row. `awaitAny` returns an index and leaves the OTHER promises un-awaited in
-> the array — which is the exact shape that aborts today. So `awaitAny`, "handles in an array", and the
-> worker-pool dogfood are all gated on `W217`, and its row says whoever fixes it must first read
-> `emitGtFifoSweepDropped`'s header, because fixing the leak ARMS a latent lock-recursion hang.
+> the array — which is the exact shape that aborts today. So `awaitAny` and the worker-pool dogfood are
+> gated on `W217`, and its row says whoever fixes it must first read `emitGtFifoSweepDropped`'s header,
+> because fixing the leak ARMS a latent lock-recursion hang.
+>
+> ⚠ **CHANGED — "HANDLES IN AN ARRAY" WAS NEVER IN THAT SET, AND SHIPPED IN `SV1`.** `W217` is about an
+> `Array with Promise`; a handle is a BOX, not a `Promise`, so the array's ordinary element drop IS the
+> handle drop and two services shut down when the array does (`services.handles-in-an-array`). Three
+> `track0` programs hold twelve handles in one array and shut every service down through it. Listing it
+> here was a guess by association with `awaitAny`, which IS gated.
 
 **Implementation is a park, not a poll.** The selecting GT registers on all K reply cells at once.
 The single `waiter` slot forces a heap `MboxWaiter` record per mailbox (Go's `sudog`, same forcing
@@ -524,7 +627,7 @@ whose handle lives in a global still lets the process exit 0".
    *and* spawned** (the location-transparency property, and the test that would have been impossible
    under a `service` declaration), **private methods are absent from the handle**, message throws,
    named error union, call-after-shutdown, shutdown drains, shutdown resolves pending replies,
-   `.unionCases` tags, handles in an array (gated `W217`), move-in-and-back, `awaitAny` (gated `W217`),
+   `.unionCases` tags, handles in an array (⚠ **NOT** `W217`-gated — shipped in `SV1`), move-in-and-back, `awaitAny` (gated `W217`),
    an idle service with a global handle exits 0, and diagnostics (use-after-send, non-unique send,
    **co-owned/`shared` send**, reply-aliases-state, sending a `Promise`, handle mismatch, double-await
    of a reply, an export reachable only by message is not "unused"). **Deadlock-freedom tests carry
@@ -550,10 +653,12 @@ whose handle lives in a global still lets the process exit 0".
    `spawn` lands** — it pins `workers == 1`, `steals == 0` at every `MAXON_MAX_PROCS` as the current truth
    and says so; the `spawn` rung rewrites it, it does not delete it.
 2. **`docs/LANGUAGE_REFERENCE.md` §14** — "Async/Await (Concurrency)" at line 4251 (TOC item 14 at
-   `:37`, which has no sub-bullets today). It already carries the one-sentence reservation at `:4257`
-   (*"Creating a green thread that is scheduled independently is `spawn`, which is reserved and not
-   built"*); add a Services subsection and the TOC sub-bullets.
-3. **`docs/BNF_SYNTAX.md`** — just `spawn_expr`, beside `async_expr` (§6.6, `:859-862`). No new
+   `:37`). ✅ **DONE (SV1 wave 4):** the Services subsection, a Yielding subsection and the TOC
+   sub-bullets are in. Three sentences there were false and were fixed rather than added to — the
+   `spawn` reservation (*"reserved and not built"*), *"Use `async` before a function call to spawn a
+   green thread"* (wrong since EC10, not since `spawn`), and *"the declarations are in place and the
+   runtime is not"*.
+3. **`docs/BNF_SYNTAX.md`** — ✅ **DONE:** `spawn_expr` in a §6.7 of its own, beside `async_expr`. No new
    declaration production: `type_decl` is unchanged, and "which members are messages" is a *semantic*
    rule over `visibility_prefix`, not a grammar change. *(Adjacent nit: `async_expr`'s comment still
    reads "spawn green thread" — stale since EC10; so do the `async` keyword help texts in both lexers,
@@ -591,7 +696,12 @@ a cycle reported as a single site is unactionable.
 
 **shv2** (the recommended target):
 
-- `Compiler/Lexer.maxon` — **one** keyword-table row beside `async` (`:1687`): `spawn`
+- `Compiler/Lexer.maxon` — ⚠ **CHANGED: NOTHING.** `spawn` did not become a keyword-table row beside
+  `async`. Two live declarations in this tree own the name (`Subprocess.spawn(cmd)`, and a
+  `static function spawn() returns Self`), so reserving the word would have been a source-breaking
+  change for a feature that does not need one. It is a CONTEXTUAL keyword — an identifier followed by
+  a type name — decided in the parser, and `services.spawn-is-not-a-keyword` pins that `spawn` is
+  still a good spelling for a function, a static, a parameter, a field or a local.
 - `Compiler/Parser.maxon` — the `async` prefix arm at `:45169` gains a `spawn` sibling; the synthesized
   `<T>.request` union / `<T>.handle` companion / `<T>.__loop`; the send site as a consuming call.
   **No pre-scan change** — a service is an ordinary `type`, and the parser stays a pure per-file
@@ -634,6 +744,12 @@ atomic refcounts, so in the bootstrap move-on-send is a simplification, not a co
 
 **Recommendation: shv2 is the target, `specs-shv2/services.md` is the spec, and the bootstrap gets
 nothing unless the user rules otherwise.** Three reasons, and one hard constraint against:
+
+> ✅ **OPTION A IS WHAT SHIPPED (`SV1`, 2026-08-28).** The feature is shv2-only, the spec is
+> `specs-shv2/services.md`, and the bootstrap got nothing. The hard constraint below is UNCHANGED and
+> is what the residual rests on: `SpecWorkerPool.maxon` still polls `Promise.inner`, and `SV1` had no
+> authority to delete it. **The open item is the bootstrap-parity / retirement re-ruling, still for the
+> user** — not a piece of work anybody can claim.
 
 1. **The design's ownership rule IS shv2's language** (P1.2 moves, P1.4a consuming params, P1.3 payload
    cascades). In the bootstrap it needs a new uniqueness analysis bolted onto `BorrowCheckPass` over an
@@ -714,7 +830,7 @@ default build changing.
 
 | row | scope | lane(s) | gated on |
 |---|---|---|---|
-| **`SV1` — `spawn`** | the keyword; a GT that IS a green thread (`owner = self`, `GtRuntime.maxon:6-8`), published to a P ring; `track0/pin-matrix.sh` rewritten (its `workers==1`/`steals==0` pins go red by design); the four deleted `sched-runqueue` cases re-authored; **`W218` closed in the same rung** — the sleep/proc park race is unreachable for coroutines and real for green threads, so the rung that creates green threads inherits it; a `spawn` copies the caller's context parameters (`CONTEXT-PARAMETERS-PLAN.md` ruling 7) | L-gt-runtime (`GtRuntime.maxon`, `SchedRuntime.maxon`) · L-parser-decl | nothing — the substrate is built |
+| **`SV1` — `spawn`** ✅ **LANDED 2026-08-28** | ⚠ the CONTEXTUAL keyword, not a keyword-table row (see the Lexer deliverable); a GT that IS a green thread (`owner = self`, `GtRuntime.maxon:6-8`), published to a P ring; `track0/pin-matrix.sh` rewritten (its `workers==1`/`steals==0` pins are now PER FAMILY, and a spawn-driven program reads `workers >= 2`, `steals > 0` at N >= 2); ⚠ **FIVE** deleted `sched-runqueue` cases re-authored, not four — the fifth is `nothing-is-stolen-on-one-processor`, whose name was freed when the old one was renamed to `no-coroutine-is-ever-stolen`, and the two are different facts (a coroutine is never stolen at ANY processor count; a spawned service is not stolen at ONE); **`W218` closed in the same rung** — the sleep/proc park race is unreachable for coroutines and real for green threads, so the rung that creates green threads inherits it; a `spawn` copies the caller's context parameters (`CONTEXT-PARAMETERS-PLAN.md` ruling 7) | L-gt-runtime (`GtRuntime.maxon`, `SchedRuntime.maxon`) · L-parser-decl | nothing — the substrate is built |
 | **`SV2` — services core** | the synthesized request union + `.handle` companion + dispatch loop, the mailbox, move-on-send with the co-owner refusal, reply cells with `W218`'s deferred registration, `ServiceError`, graceful shutdown, `UnusedExportCheck` arm, and the **acyclic-blocking-graph check** (pure front-end analysis over `CallGraphEdges` — could land as its own row ahead of the runtime) | L-parser-decl · L-ownership · L-gt-runtime · L-types | `SV1` |
 | **`SV3` — `awaitAny`** | the stdlib primitive over `Array with Promise`; `MboxWaiter` registration on K cells; the un-export of `Promise.inner` | L-stdlib · L-gt-runtime | `SV2`, **`W217`** |
 | *(dogfood)* | `SpecWorkerPool.findReadyDrain` + `sleep(PollYieldMs)` deleted; P2.6's fan-out | — | **the bootstrap-parity / retirement re-ruling** — see the hard constraint |
@@ -738,6 +854,15 @@ everything else `<!-- disabled-test: -->` plus the gating row on the next line (
 `<!-- W217 -->`). **The ratchet applies: an enabled case may never be re-disabled.**
 
 ## Verification
+
+> ✅ **SUPERSEDED BY THE IMPLEMENTATION (`SV1`, 2026-08-28).** The list below is the DESIGN phase's gate
+> and is kept for the record. What actually gates the feature now is the ordinary one: the shv2 suite
+> green with `specs-shv2/services.md`'s 45 cases live (45 host, 23 `wasm32-wasi`, 21 `arm64-macos` — the
+> two lower counts are the running cases, which carry `targets: x64-windows` because a service reaches a
+> hand-assembled context switch), plus `maxon-shv2/track0/pin-matrix.sh` across
+> `MAXON_MAX_PROCS in {1, 2, 7, 12}`. Item 4 below is also stale in a way worth naming: the Maxon in
+> THIS document is still shape-accurate rather than build-verified, and every code sketch it contains has
+> now been superseded by something in the tree that WAS compiled.
 
 Design-phase only — no compiler changes, so the gate is review plus spec well-formedness:
 
