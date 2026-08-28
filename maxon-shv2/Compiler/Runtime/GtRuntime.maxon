@@ -845,10 +845,35 @@ export let GtDrainAtExitName = b"__gt_drain_at_exit"
 // that makes progress, which is what a yield is; the BLOCKING waits are `await` and `sleep`.
 // (IOCP read completions need no help here at all: `__io_completion_loop` enqueues cross-thread.)
 //
-// ⚠ **THE THREE ARMS.** A SPAWNED GT with somebody queued HANDS OFF through the run queue. A SPAWNED GT with
-// an empty queue has nobody to yield to, so it POLLS. **GT0 — the top-level thread — DRIVES**: it has
-// `waiter == 0`, so it is never on the run queue and cannot context-switch to itself, and it instead dequeues
-// exactly ONE ready thread and switches into it, coming back when that thread yields or completes.
+// ⚠⚠ **THE QUESTION IS ALWAYS THE SAME TWO; ONLY THE ARM THAT CAN SERVE IT DIFFERS BY KIND (SV1).** Every
+// driver in this runtime asks (1) *my own coroutine queue*, then (2) *the scheduler's three tiers* —
+// `buildGtDriveLoop`'s `drive`/`drivegreen` pair is that policy stated once. A yield asks both as well; what
+// the yielder's kind decides is which of the two a HAND-OFF can serve at all:
+//
+// | the yielder | its own coroutine queue | the scheduler's three tiers |
+// |---|---|---|
+// | a **GREEN THREAD** (`owner == self`: GT0, and everything `spawn` creates) | **DRIVES one, bounded.** Nobody else can: a coroutine is reachable only through its OWNER's chain of drivers, and this thread's driver has a different owner | GT0 **DRIVES one** — it has no waiter to switch to. A spawned green thread **HANDS OFF**, which puts it on the GLOBAL queue's TAIL so its driver takes the ring first |
+// | a **COROUTINE** (`owner != self`) | **HANDS OFF.** Its driver shares its owner, so the driver pops whoever is already ahead of it | **DRIVES one, bounded.** A hand-off would land it back on the very queue its driver reads FIRST and be handed straight back, leaving the green thread unrun |
+//
+// ⇒ nothing is handed to a queue the receiving driver does not read, and nothing is polled past while some
+// driver on this OS thread could have run it.
+//
+// ⛔⛔ **THREE MEASURED WRONG ANSWERS, ONE DEFECT, ALL NEWLY REACHABLE BECAUSE `spawn` CREATES REAL GREEN
+// THREADS.** EC10 collapsed the whole question to *"is my OWNER's coroutine queue non-empty?"* and argued the
+// collapse — correctly, for a tree in which GT0 was the only green thread there could ever be, so the ring
+// and the global queue had no producer. SV1 built that producer and did not revisit the yield. MEASURED
+// against the finished wave-3 tree, at the default one processor:
+//
+//   • a service handler's `Runtime.yield()` gave a SIBLING SERVICE no turn — `sPos=2 yPos=1` against
+//     `sPos=1 yPos=2` in `specs-shv2/sched-runqueue.md`'s `a-yield-goes-behind-the-global-queue`, which is
+//     the exact reading EC10 recorded on the day it deleted that case;
+//   • five thousand yields inside a service handler left an `async` frame THAT HANDLER had just created
+//     completely unrun (`done=0 guard=5000`); it ran only when the handler reached its `await`;
+//   • five thousand yields inside a COROUTINE left a spawned service unrun (`done=0 guard=5000`), and the
+//     service still had not run when `main`'s own `await` came back.
+//
+// Each is a `while not done { Runtime.yield() }` that makes no progress — the hang this function's own
+// header calls the hazard, arriving through the one door EC10 had no way to test.
 //
 // ⛔ **THAT GT0 ARM IS A FIX FOR A MEASURED HANG, NOT A REFINEMENT.** An earlier cut reasoned "GT0 cannot
 // switch to itself, therefore it can only poll" and made GT0 poll-and-return. MEASURED, that left a thousand
@@ -5023,14 +5048,16 @@ function buildGtResched(module StdModule)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var spawnedBlock = module.addBlock(func, label: b"spawned")
-	var gt0Drive = module.addBlock(func, label: b"gt0drive")
-	var gt0DriveGreen = module.addBlock(func, label: b"gt0drivegreen")
+	var ownCoro = module.addBlock(func, label: b"yowncoro")
+	var greenSched = module.addBlock(func, label: b"ygreensched")
+	var greenPeek = module.addBlock(func, label: b"ygreenpeek")
+	var coroYield = module.addBlock(func, label: b"ycoro")
+	var driveSched = module.addBlock(func, label: b"ydrivesched")
 	var runBlock = module.addBlock(func, label: b"run")
-	var handOffBlock = module.addBlock(func, label: b"handoff")
+	var completedBlock = module.addBlock(func, label: b"completed")
 	var ranBlock = module.addBlock(func, label: b"ran")
 	var pollBlock = module.addBlock(func, label: b"poll")
-	var handoffBlock = module.addBlock(func, label: b"handoff")
+	var handoffBlock = module.addBlock(func, label: b"yieldhandoff")
 	var doneBlock = module.addBlock(func, label: b"done")
 
 	// Lazy one-time scheduler init. `Runtime.yield()` is reachable from a `main` that never spawned — stdlib
@@ -5040,69 +5067,76 @@ function buildGtResched(module StdModule)
 
 	let reschedProc = emitLoadCurrentP(module, block: entry, ids: ids)
 	let selfGt = emitLoadField(module, block: entry, record: reschedProc, offset: POffCurrentGt, ids: ids)
-	// The green thread whose coroutines this yield may hand the processor to — `__gt_drive_until`'s `owner`,
-	// read for the same reason and in the block that dominates both arms below.
+	// The green thread whose coroutine queue is in play — `__gt_drive_until`'s `owner`, read for the same
+	// reason and in the block that dominates every arm below. For a green thread it is SELF, which is what
+	// makes the two arms below read two different queues from one load.
 	let owner = emitLoadField(module, block: entry, record: selfGt, offset: GtOffOwner, ids: ids)
 	let zeroConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
 
-	// A SPAWNED GT has a driver to switch back to; GT0 has none and must DRIVE instead.
+	// A SPAWNED GT has a driver to switch back to; GT0 has none. Read here because both the GT0 test in
+	// `greenSched` and the hand-off's switch target need it.
 	let waiter = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(waiter, addrId: selfGt, offset: GtOffWaiter, valueType: StdType.i64))
-	let isGt0 = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(isGt0, lhs: waiter, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(isGt0, thenBlockId: gt0Drive.id, elseBlockId: spawnedBlock.id))
 
-	// spawned: hand off only if somebody is queued; otherwise there is nobody to yield TO and the poll is the
-	// only progress available.
-	//
-	// ⭐⭐ **"ANYBODY QUEUED" IS ONE LOAD AND ONE COMPARE AGAIN (EC10), AND IT MEANS *IN MY OWNER's COROUTINE
-	// QUEUE*.** W212 made it two reads — this P's ring and the global queue — because a runnable thread could
-	// be in either. After the pin an `async` frame enters exactly one queue, so the two collapse back into one,
-	// and the collapse is not a simplification: reading the ring or the global queue here would be asking
-	// whether somebody ELSE's work exists, and a yield gives up this processor only for a coroutine this same
-	// chain of drivers can run.
-	//
-	// ⚠ **THE READ IS UNLOCKED, AND THAT IS ARGUED RATHER THAN OVERLOOKED.** It is one aligned machine word
-	// and it decides only WHICH ARM a yield takes, both of which are correct whatever it answers: read as
-	// non-empty when the last coroutine has just been taken, we defer ourselves and switch, and the driver
-	// finds nothing and drives on; read as empty when something has just arrived, we poll and return promptly,
-	// which is exactly what a yield promises (*"let someone else have a turn IF anyone wants one"*). Taking the
-	// lock here would put an uncontended critical section on the yield fast path to sharpen an answer neither
-	// arm needs sharp.
-	let coroHead = emitLoadField(module, block: spawnedBlock, record: owner, offset: GtOffCoroHead, ids: ids)
-	let queueEmpty = emitCmp(module, block: spawnedBlock, a: coroHead, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(spawnedBlock, op: StdOp.condBranch(queueEmpty, thenBlockId: pollBlock.id, elseBlockId: handoffBlock.id))
+	// ⭐⭐ **THE KIND DECIDES WHICH QUEUE A HAND-OFF COULD POSSIBLY SERVE — see this function's header table.**
+	// It is the same `owner == self` relation `__sched_publish_yield` routes by, so the gate here and the
+	// destination there cannot drift apart: whichever queue this yielder is about to be put on is the one the
+	// arm below asked about.
+	let isGreen = emitGtIsGreenThread(module, block: entry, gt: selfGt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isGreen, thenBlockId: ownCoro.id, elseBlockId: coroYield.id))
 
-	// ⭐⭐ **gt0drive: GT0 DRIVES ONE QUEUED GREEN THREAD — THE HALF THAT WAS MISSING.** GT0 is never on the run
-	// queue and cannot context-switch to itself, so an earlier cut concluded it could only poll. MEASURED, that
-	// left a thousand `Runtime.yield()`s from `main` with a spawned thread completely unrun
-	// (`progressed=0 spins=1000`) — which makes `while not done { Runtime.yield() }` on GT0 an infinite spin and
-	// breaks the promise the spec makes. The fix is NOT to put GT0 on the run queue; it is to give the yield the
-	// BOUNDED form of what `await` and `sleep` already do from GT0: dequeue exactly one ready thread, switch into
-	// it, and come back when it yields or completes. One turn, then return — bounding it is the whole difference
-	// between a yield and an await.
-	//
-	// ⭐ **AND IT ASKS THE SAME TWO QUESTIONS `__gt_drive_until` DOES, IN THE SAME ORDER (SV1)** — this green
-	// thread's own coroutines first, then the scheduler's three tiers — so a `Runtime.yield()` from `main`
-	// gives a turn to a GREEN THREAD as well as to a coroutine. Without the second question a program at the
-	// default `MAXON_MAX_PROCS=1` could yield for ever beside a green thread nothing would ever run.
+	// The one merge every arm that found something to run reaches.
 	let runGt = ids.mint()
 	runBlock.blockArgs.push(IrBlockArg.create(runGt, argType: StdType.i64))
 
-	let dequeued = ids.mint()
-	module.appendOp(gt0Drive, op: StdOp.call(dequeued, callee: GtCoroNextName, args: argsOf(owner)))
-	let nothingReady = ids.mint()
-	module.appendOp(gt0Drive, op: StdOp.cmp(nothingReady, lhs: dequeued, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(gt0Drive, op: StdOp.condBranch(nothingReady, thenBlockId: gt0DriveGreen.id, elseBlockId: runBlock.id))
-	gt0Drive.branchEdges.push(BranchEdge.create(runBlock.id, argIds: argsOf(dequeued)))
+	// ⭐⭐ **ownCoro: A GREEN THREAD'S OWN COROUTINES ARE ITS OWN BUSINESS, SO IT DRIVES THEM.** `owner` is
+	// SELF here, so this is MY queue — and my driver reads ITS owner's, never mine, which is why handing off
+	// could not serve it. Driving one for a bounded turn is exactly what an `await` does unboundedly, and it
+	// is the shape GT0's arm has had since it was a fix for the same class of hang.
+	let ownCoroGt = ids.mint()
+	module.appendOp(ownCoro, op: StdOp.call(ownCoroGt, callee: GtCoroNextName, args: argsOf(owner)))
+	let noOwnCoro = emitCmp(module, block: ownCoro, a: ownCoroGt, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(ownCoro, op: StdOp.condBranch(noOwnCoro, thenBlockId: greenSched.id, elseBlockId: runBlock.id))
+	ownCoro.branchEdges.push(BranchEdge.create(runBlock.id, argIds: argsOf(ownCoroGt)))
 
-	let greenGt = emitSchedFindRunnable(module, block: gt0DriveGreen, ids: ids)
-	let noGreen = emitCmp(module, block: gt0DriveGreen, a: greenGt, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(gt0DriveGreen, op: StdOp.condBranch(noGreen, thenBlockId: pollBlock.id, elseBlockId: runBlock.id))
-	gt0DriveGreen.branchEdges.push(BranchEdge.create(runBlock.id, argIds: argsOf(greenGt)))
+	// greenSched: nothing of my own, so the scheduler's tiers. GT0 has no driver to switch to and must drive
+	// them itself; a SPAWNED green thread has one, and handing off is strictly better than driving — it goes
+	// to the GLOBAL queue's TAIL while the driver takes the RING first, which is the two-tier ordering
+	// `sched-runqueue.a-yield-goes-behind-the-global-queue` pins and the whole content of "let someone else
+	// have a turn".
+	let isGt0 = emitCmp(module, block: greenSched, a: waiter, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(greenSched, op: StdOp.condBranch(isGt0, thenBlockId: driveSched.id, elseBlockId: greenPeek.id))
 
-	emitGtRunOne(module, run: runBlock, handOff: handOffBlock, g: runGt, selfGt: selfGt, p: reschedProc, continuation: ranBlock, ids: ids)
+	// greenPeek: hand off only if the driver will find somebody. With nothing runnable the hand-off would be a
+	// context switch out and straight back, skipping the POLL — and skipping the poll is the netpoll
+	// starvation this function's header names as a HANG rather than a wrong answer.
+	let anyRunnable = emitSchedAnyRunnable(module, block: greenPeek, p: reschedProc, ids: ids)
+	let nothingRunnable = emitCmp(module, block: greenPeek, a: anyRunnable, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(greenPeek, op: StdOp.condBranch(nothingRunnable, thenBlockId: pollBlock.id, elseBlockId: handoffBlock.id))
+
+	// ⚠ **coroYield: THE READ IS UNLOCKED, AND THAT IS ARGUED RATHER THAN OVERLOOKED.** It is one aligned
+	// machine word and it decides only WHICH ARM a yield takes, both of which are correct whatever it answers:
+	// read as non-empty when the last coroutine has just been taken, we defer ourselves and switch, and the
+	// driver finds nothing and drives on; read as empty when something has just arrived, we ask the scheduler
+	// and return promptly, which is exactly what a yield promises (*"let someone else have a turn IF anyone
+	// wants one"*). Taking the lock here would put an uncontended critical section on the yield fast path to
+	// sharpen an answer neither arm needs sharp.
+	let coroHead = emitLoadField(module, block: coroYield, record: owner, offset: GtOffCoroHead, ids: ids)
+	let coroQueueEmpty = emitCmp(module, block: coroYield, a: coroHead, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(coroYield, op: StdOp.condBranch(coroQueueEmpty, thenBlockId: driveSched.id, elseBlockId: handoffBlock.id))
+
+	// ⭐⭐ **driveSched: THE SCHEDULER'S THREE TIERS, DRIVEN FOR ONE BOUNDED TURN.** GT0 reaches it because it
+	// has nobody to switch to. A COROUTINE reaches it because a hand-off could not serve it: it would be put
+	// on the very queue its driver reads FIRST and handed straight back, so a coroutine spinning on a yield
+	// loop would starve a green thread for ever. Bounding it to one turn is the whole difference between a
+	// yield and an await.
+	let schedGt = emitSchedFindRunnable(module, block: driveSched, ids: ids)
+	let noSchedGt = emitCmp(module, block: driveSched, a: schedGt, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(driveSched, op: StdOp.condBranch(noSchedGt, thenBlockId: pollBlock.id, elseBlockId: runBlock.id))
+	driveSched.branchEdges.push(BranchEdge.create(runBlock.id, argIds: argsOf(schedGt)))
+
+	emitGtRunOne(module, run: runBlock, handOff: completedBlock, g: runGt, selfGt: selfGt, p: reschedProc, continuation: ranBlock, ids: ids)
 
 	// ⭐⭐ **THE DRAIN AFTER THE TURN, AND THIS IS THE ONE DRIVER THAT NEEDS IT SPELLED OUT (W218).** Every
 	// other driver comes back from `emitGtRunOne` into a LOOP whose header drains; this one comes back into
@@ -5123,9 +5157,15 @@ function buildGtResched(module StdModule)
 	module.appendOp(pollBlock, op: StdOp.call(procCheckResult, callee: GtProcCheckName, args: ValueIdArray.create()))
 	module.setTerminator(pollBlock, op: StdOp.branch(doneBlock.id))
 
-	// handoff: stay READY — we are runnable, merely not running — go to the BACK of the FIFO, and switch to the
-	// driver. `__gt_drive_until`'s `run` block reads our status on the way back and recycles only a `completed`
-	// GT, so `ready` returns it straight to its dequeue loop, which pops whoever was queued ahead of us.
+	// handoff: stay READY — we are runnable, merely not running — go to the BACK of whichever queue our kind
+	// belongs to, and switch to the driver. `__gt_drive_until`'s `run` block reads our status on the way back
+	// and recycles only a `completed` GT, so `ready` returns it straight to its dequeue loop, which pops
+	// whoever was queued ahead of us.
+	//
+	// ⚠ **WHICH QUEUE IS `__sched_publish_yield`'s DECISION, NOT THIS ARM'S** — a COROUTINE to its owner's
+	// coroutine queue, a GREEN THREAD to the GLOBAL queue's tail (never to this P's ring, which the driver
+	// reads first and which is exactly what must overtake us). The two arms above are gated on the same
+	// `owner == self` relation that routing reads, so the queue asked about and the queue arrived at are one.
 	//
 	// ⛔⛔ **THE ENQUEUE-THEN-SWITCH WINDOW IS A USE-AFTER-FREE UNDER MULTI-M, AND THIS ARM USED TO WRITE IT.**
 	// Between `__gt_enqueue(self)` and the point where `__gt_context_switch` has finished SAVING our registers,

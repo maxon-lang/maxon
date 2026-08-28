@@ -211,14 +211,12 @@ end 'pushRuntimeGlobal'
 // twice — which is exactly how a queue comes to disagree with itself. It stays reserved rather than being
 // reused so the bootstrap's debug agent, which reads this header, still finds its own field where it left it.
 //
-// ⚠ NEITHER IS EXPORTED, AND SINCE EC10 NEITHER HAS A CROSS-FILE QUESTION TO ANSWER AT ALL. Both were
-// exported so `GtRuntime`'s yield arm could ask whether this P had anything queued; W212 made that question
-// an `emitRunqAnyQueued` door, and the pin removed the asker — a yield now asks its OWNER's coroutine queue,
-// which is the only place work it may run can be. The door went with its caller rather than being kept
-// uncalled: *"is this ring empty"* is two loads and a compare, and a `spawn` rung that needs it back will
-// need Go's re-read loop as well (`runqempty` re-reads because a `runnext` can hold a thread while the two
-// counters agree — `POffRunnext` names the rung that builds one), so what survives here is the ARGUMENT and
-// not four lines nothing calls.
+// ⚠ NEITHER IS EXPORTED, AND THE QUESTION THEY ANSWER FOR ANOTHER FILE IS ASKED THROUGH A DOOR IN THIS ONE.
+// Both were exported so `GtRuntime`'s yield arm could read them directly; W212 made that question an
+// `emitRunqAnyQueued` door, EC10 removed the asker (with no green threads to schedule, a yield could only
+// ever be handed to its OWNER's coroutine queue) and **SV1 brought the asker back with `spawn`, which is the
+// rung the deletion note named**. It is `emitSchedAnyRunnable` below rather than a re-export, because where
+// the ring keeps its counters and what makes it empty belong to the file that owns the P.
 let POffRunqHead = 0x00 as ByteOffset
 let POffRunqTail = 0x08 as ByteOffset
 let POffReservedLocalQueueLen = 0x10 as ByteOffset
@@ -1460,6 +1458,36 @@ function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueM
 	let failed = emitConst(module, block: block, value: AtomicCasFailed, ids: ids)
 	return emitCmp(module, block: block, a: result, b: failed, pred: StdCmpPred.eq, ids: ids)
 end 'emitCasLost'
+
+// ⭐⭐ **DO THE SCHEDULER'S TIERS HOLD A GREEN THREAD RIGHT NOW? — the yield's PEEK, and the door W212 had,
+// EC10 deleted and SV1 needs back.** `POffRunqHead` predicted this exact rung: *"a `spawn` rung that needs
+// it back"*. `__gt_resched`'s hand-off arm gives this processor up to a DRIVER, and the driver looks here
+// (`__sched_find_runnable`); asking first is what keeps a yield with nobody to yield to on the POLL arm,
+// where the due timers and the exited children are.
+//
+// ⚠ **GO RE-READS THE COUNTERS AND THIS DOES NOT — because shv2 has no `runnext`.** Go's `runqempty` loops
+// because a `runnext` slot can hold a thread while head and tail agree; `__sched_runq_get` is built *"minus
+// the `runnext` slot shv2 deliberately does not build"* (`POffRunnext` names the rung that would build one,
+// and it is the rung that would have to restore the loop). Until then `tail != head` IS a non-empty ring,
+// and one read of each is exact rather than optimistic.
+//
+// ⚠ **IT DOES NOT WALK THE OTHER Ps' RINGS, AND THAT IS ARGUED RATHER THAN FORGOTTEN.** Work sitting on
+// another P is already owned by an M that is running it, so a yield that polled instead has starved nobody
+// — while a peek at every P would put a scan on the yield fast path to sharpen an answer neither arm needs
+// sharp. Both loads are unlocked for `__gt_resched`'s own stated reason: they choose an ARM, and both arms
+// are correct whatever they answer.
+export function emitSchedAnyRunnable(module StdModule, block IrBlock, p ValueId, ids ValueMinter) returns ValueId
+	let head = emitLoadField(module, block: block, record: p, offset: POffRunqHead, ids: ids)
+	let tail = emitLoadField(module, block: block, record: p, offset: POffRunqTail, ids: ids)
+	let ringHasWork = emitCmp(module, block: block, a: head, b: tail, pred: StdCmpPred.ne, ids: ids)
+	let globalHead = emitLoadGlobalWord(module, block: block, label: GtRunQueueHeadLabel, ids: ids)
+	let noGlobalHead = emitConst(module, block: block, value: 0, ids: ids)
+	let globalHasWork = emitCmp(module, block: block, a: globalHead, b: noGlobalHead, pred: StdCmpPred.ne, ids: ids)
+
+	// Both operands are `cmp` results, so they are 0 or 1 and a bitwise OR is the logical one — the argument
+	// `emitGtIsDropped` makes for its own `and`.
+	return emitBin(module, block: block, a: ringHasWork, b: globalHasWork, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitSchedAnyRunnable'
 
 // ⭐⭐ **`__sched_runq_put(gt)` — PUSH A RUNNABLE GREEN THREAD ONTO THE CURRENT P's RING, WITH NO LOCK.**
 // Go's `runqput(pp, gp, next: false)` (`proc.go:7529`) plus `runqputslow` (`proc.go:7576`), which is where a

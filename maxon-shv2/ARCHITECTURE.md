@@ -2934,10 +2934,24 @@ function of its file, so both fan-out seams exist; nothing drives them yet.
 
 ⚠ **AND `async` IS NOT WHAT WILL DRIVE THEM (EC10).** An `async` call is a coroutine of the green
 thread that made it — it overlaps *waiting*, never execution, and cannot leave its owner's OS thread.
-Fanning a `perFunction` pass across cores is `spawn`'s job (reserved, `SERVICES_DESIGN.md`), and it
-is what W212's ring, its stealing and its worker loop were built for: they are still here, correct
-and unreached. A fan-out written with `async` would compile, run every pass in sequence on one M,
-and read as a completed parallel driver.
+A fan-out written with `async` would compile, run every pass in sequence on one M, and read as a
+completed parallel driver.
+
+⭐ **`spawn` IS WHAT WILL DRIVE THEM, AND IT EXISTS (SV1) — but what it makes is a SERVICE.** There is
+no bare green-thread spawn (⚖ user ruling): every `spawn` names a static factory of a declared type,
+and the unit of concurrency is a type whose message surface the compiler can check. So a parallel
+driver is not `spawn perFunctionPass(f)`; it is a **worker service** — a type whose `export` methods
+are the units of work, spawned once per processor, each sent the functions it owns — which is exactly
+what W212's ring, its stealing and its worker loop schedule. `track0/service-torture.maxon` is that
+shape at torture scale, and `track0/pin-matrix.sh` reads its `workers >= 2, steals > 0` at
+`MAXON_MAX_PROCS >= 2`.
+
+⚠ **TWO THINGS A DRIVER WRITTEN TODAY WOULD HIT, AND NEITHER IS A GAP IN THE SCHEDULER.** A message is
+**fire-and-forget** — there is no reply until `SV2` — so a worker cannot hand a result back and the
+driver must collect through state the worker owns; and a message's arguments are **MOVED**, so what
+crosses must be solely owned by the sender and must be a type whose contents can be proven sole
+(**E3135**). A `perFunction` pass handed an `IrFunction` out of a module the driver still holds is
+exactly the shape that rule refuses.
 
 **The runtime underneath it is proven** (x64-windows). The C# emitter's green-thread scheduler and
 sharded allocator run correctly across many worker Ps: a 32-green-thread CPU/alloc burst runs on 16

@@ -17,7 +17,7 @@ and the whole of the scheduler a Maxon program can reach follows from that one s
 | | |
 |---|---|
 | **a coroutine** | what `async f(…)` creates. It is OWNED by one green thread (`GtOffOwner`), is published only to that green thread's coroutine queue, and is driven only by that green thread's chain of drivers. A coroutine spawned by a coroutine belongs to the SAME green thread, so the relation is transitive and every frame `async` ever creates, at any nesting depth, lands in exactly one queue. |
-| **a green thread** | a unit the P/M scheduler may hand to any OS thread. **There is exactly one** — GT0, a processor's inline scheduler context — and **no producer of a second until a `spawn` primitive lands.** A green thread's owner is ITSELF, which is what closes the chain above. |
+| **a green thread** | a unit the P/M scheduler may hand to any OS thread. GT0 — a processor's inline scheduler context — is one, and **`spawn` is the producer of every other** (SV1: a spawned SERVICE is a green thread). A green thread's owner is ITSELF, which is what closes the chain above. |
 
 ⇒ **only one green thread can hold references to a box at a time, and that is a language guarantee
 rather than a thread count.** Every refcount read-modify-write on a box therefore happens on the OS
@@ -40,10 +40,11 @@ without the lock produces no diagnostic anywhere — only a queue two OS threads
 bootstrap measured what the other choice costs — *"a thousand yields from one green thread left a
 sibling that had never run still unrun"* — and the tail is what refuses it.
 
-### The green-thread run-queue hierarchy — built, and UNREACHED until `spawn`
+### The green-thread run-queue hierarchy — and `spawn` is what reaches it
 
-W212 built Go's three tiers, and they are all still here. Nothing an `async` program does enters any of
-them, because what they schedule is GREEN THREADS:
+W212 built Go's three tiers. Nothing an `async` program does enters any of them, because what they
+schedule is GREEN THREADS — and since SV1 a `spawn` produces those, so a program that spawns a service
+reaches all three:
 
 | Tier | What it is | Who writes it |
 |---|---|---|
@@ -51,16 +52,19 @@ them, because what they schedule is GREEN THREADS:
 | **the global queue** | the intrusive FIFO through `GtOffNext` that used to be the whole scheduler | every mutation under `__sched_lock` |
 | **stealing** | four rounds, each visiting every other ACTIVE P once from a random start, grabbing HALF a victim's ring into the thief's own | the thief, by CAS on the victim's head |
 
-⛔ **AND "UNREACHED" IS OBSERVABLE IN THE EMITTED BINARY, NOT MERELY ASSERTED.** `__gt_ready` publishes
-to the owner's queue, so nothing reaches `__sched_runq_put`; nothing reaches it, so nothing reaches
-`__sched_wake_or_spawn`, so **no worker OS thread is ever created at any `MAXON_MAX_PROCS`**. Dead-code
-elimination then takes the whole tier out: MEASURED on the first case below, the emitted program
-contains `__sched_runq_put`, `__sched_runq_get`, `__sched_steal`, `__sched_find_runnable`,
-`__sched_worker_loop`, `__sched_wake_or_spawn`, `__gt_enqueue` and `__gt_dequeue` **before** the pin and
-**none of the eight** after it.
+⛔ **WHICH TIER A PROGRAM REACHES IS OBSERVABLE IN THE EMITTED BINARY, NOT MERELY ASSERTED, AND IT IS
+DECIDED BY WHETHER THE PROGRAM SPAWNS.** For an `async`-only program `__gt_ready` publishes to the owner's
+coroutine queue, so nothing reaches `__sched_runq_put`; nothing reaches it, so nothing reaches
+`__sched_wake_or_spawn`, so **no worker OS thread is created at any `MAXON_MAX_PROCS`** — and dead-code
+elimination then takes the whole tier out. MEASURED on the first case below, the emitted program contains
+`__sched_runq_put`, `__sched_runq_get`, `__sched_steal`, `__sched_find_runnable`, `__sched_worker_loop`,
+`__sched_wake_or_spawn`, `__gt_enqueue` and `__gt_dequeue` before the EC10 pin and **none of the eight**
+after it.
 
-⚠ **THE TIER STAYS BECAUSE `spawn` IS ITS PRODUCER** (`SERVICES_DESIGN.md:62-160`, *"Send is a MOVE"*).
-That rung creates real green threads, which is exactly what a ring, a steal and a worker loop are for.
+⭐ **A `spawn` PUTS ALL EIGHT BACK** (`SERVICES_DESIGN.md`, *"Send is a MOVE"*). `__svc_spawn` calls
+`__gt_spawn_green` and publishes to a P RING, which is exactly what a ring, a steal and a worker loop are
+for — so the five cases at the END of this file, which drive services, are the tier's first spec-level
+readers. They are also why the tier is no longer describable as "unreached".
 
 ### The dropped-thread protocol, which is unchanged
 
@@ -88,17 +92,20 @@ a park overwrites it with `waiting`: a mark left there is erased by exactly the 
 exists to meet.
 
 ⛔⛔ **A SPEC CASE CANNOT SET `MAXON_MAX_PROCS`, SO NOTHING BELOW EXERCISES TWO PROCESSORS** — the
-harness gives a case `Args:` and no environment. Since the pin that costs less than it used to: a
-coroutine cannot reach a second processor at any processor count, so the answers below are the answers
-everywhere. **What still needs a harness program is the PIN ITSELF**, because only a program that can
-set the variable can show that raising it changes nothing: `maxon-shv2/track0/pin-matrix.sh` drives the
-five `track0` programs across `MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1` and
-`steals=0` at every one. On the parent commit the same script read `workers=8 steals=3996` at N=12.
+harness gives a case `Args:` and no environment, and `DefaultMaxProcs` is 1. For a COROUTINE that costs
+nothing: it cannot reach a second processor at any processor count, so the `async` answers below are the
+answers everywhere. **For a SERVICE it is a real restriction**, and the cases that drive one say so where
+it matters — one P means one M, which is what makes a global counter a legal channel in a program whose
+green threads all mutate it. **Work stealing, the head CAS under contention and the Dekker fence on the
+ring publish are therefore all out of reach from here**; the multi-processor gate is
+`maxon-shv2/track0/pin-matrix.sh`, which drives the `track0` programs across
+`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1 steals=0` of every COROUTINE-only program and
+`workers >= 2, steals > 0` at N ≥ 2 of every SPAWN-driven one.
 
-⛔ **AND THE DROPPED-WHILE-EXECUTING SHAPE IS NOW UNREACHABLE FOR A COROUTINE ALTOGETHER.** It needs a
-second M popping the thread out of the dropper's queue while the dropper is still spawning, and there is
-no second M. `maxon-shv2/track0/drop-running-torture.maxon` keeps measuring it, and keeps reading zero,
-against the parent's `steals=51` at twelve processors; it is `spawn`'s gate, and W218's.
+⛔ **AND THE DROPPED-WHILE-EXECUTING SHAPE IS UNREACHABLE FOR A COROUTINE ALTOGETHER, WHATEVER ELSE THE
+PROGRAM SPAWNS.** It needs a second M popping the thread out of the dropper's queue while the dropper is
+still spawning; a coroutine enters no queue a second M reads, so no processor count exposes it.
+`maxon-shv2/track0/drop-running-torture.maxon` measures the shape a `spawn` DOES expose.
 
 ⚠ **EVERY CASE HERE IS `targets: x64-windows`, and that is a property of the subject.** They are all
 green-thread programs, and the green-thread substrate exists on exactly one lane —
@@ -483,6 +490,365 @@ end 'main'
 ```
 ```stdout
 r=5 steals=0
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.ring-overflow-runs-every-spawned-service -->
+<!-- targets: x64-windows -->
+**THE OVERFLOW, AND THE PROOF THAT NOTHING IS LOST IN IT.** Three hundred `spawn`s run back to back with
+nothing between them that yields, so all 300 green threads are published before the first one runs —
+`beforeAnyRan=0` is that fact, and it is what makes the overflow reachable at all. The ring fills to its
+256 slots and the 257th push moves the OLDEST HALF plus the new thread to the global queue. The drain
+then unwinds both tiers, and every one of the 300 handles its one message exactly once whichever tier it
+ended up in.
+
+⚠ **A GLOBAL COUNTER IS THE ONLY CHANNEL A SERVICE HAS IN SV1, AND IT IS SOUND HERE FOR A STATED
+REASON.** There are no replies yet, so a fire-and-forget send delivers no value a sender could await;
+what a handler did is observable only through a global. That is a data race in general and not here: a
+spec case gets no environment, `DefaultMaxProcs` is 1, and one P means one M — every green thread in
+this program runs on the OS thread that started it. The multi-processor reading of the same shape is
+`track0/service-torture.maxon`, which is a harness program precisely because a spec cannot set the
+variable.
+
+⚠ **THE DRAIN IS BOUNDED SO THAT A LOST THREAD IS A WRONG ANSWER RATHER THAN A HANG.** A thread the
+overflow dropped would never run, `ran` would never reach 300, and an unbounded wait would sit there for
+ever with nothing to print. The limit is four orders of magnitude above the 300 turns a healthy run
+spends, so it can only be reached by a program that has already lost something.
+```maxon
+typealias SinkHandleArray = Array with Sink.handle
+
+// Far above the 300 yields a healthy run spends — see the note above.
+let drainSpinLimit = 200000
+
+var ran = 0
+
+type Sink
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		ran = ran + 1
+	end 'bump'
+end 'Sink'
+
+function main() returns ExitCode
+	var sinks = SinkHandleArray.create()
+
+	var i = 0
+	while i < 300 'spawnEach'
+		sinks.push(spawn Sink.create())
+		i = i + 1
+	end 'spawnEach'
+
+	print("beforeAnyRan={ran}\n")
+
+	var k = 0
+	while k < 300 'sendEach'
+		let sink = try sinks.get(k) otherwise panic("sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		sink.bump()
+		k = k + 1
+	end 'sendEach'
+
+	var spins = 0
+	while ran < 300 and spins < drainSpinLimit 'drain'
+		Runtime.yield()
+		spins = spins + 1
+	end 'drain'
+
+	print("ran={ran}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+beforeAnyRan=0
+ran=300
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.the-ring-index-wraps-past-its-capacity -->
+<!-- targets: x64-windows -->
+**THE WRAP.** `runqhead`/`runqtail` are monotonic counters, not indices. One service takes six thousand
+messages one at a time, each drained before the next is sent, so the service is woken and re-published
+six thousand times while the ring never holds more than one thread — which drives both counters far past
+256 without ever filling a single slot. A counter used directly as a slot index addresses further and
+further past the end of the P struct.
+
+⚠ **THE COUNT IS SIX THOUSAND FOR A MEASURED REASON, AND FOUR HUNDRED PROVED NOTHING.** An unmasked
+index writes and reads through the SAME wrong address, so the program's own answer stays correct while it
+scribbles on whatever follows the P struct; the only observable is when it walks out of the mapped region
+entirely. The first cut of this case used 400 rounds and was **green under the sabotage it was written to
+catch** — say so, or the next reader will "simplify" it back.
+```maxon
+// Far above the one yield a healthy round spends — a lost wake is a wrong answer, not a hang.
+let settleSpinLimit = 200000
+
+var sum = 0
+
+type Step
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function tick()
+		sum = sum + 1
+	end 'tick'
+end 'Step'
+
+function main() returns ExitCode
+	let h = spawn Step.create()
+
+	var i = 0
+	while i < 6000 'rounds'
+		h.tick()
+
+		var spins = 0
+		while sum <= i and spins < settleSpinLimit 'settle'
+			Runtime.yield()
+			spins = spins + 1
+		end 'settle'
+
+		i = i + 1
+	end 'rounds'
+
+	print("sum={sum}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+sum=6000
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.the-global-queue-is-consulted-within-sixty-one-schedules -->
+<!-- targets: x64-windows -->
+**THE FAIRNESS CHECK, AND THE ONE SHAPE THAT CAN SEE IT.** The overflow above moves the OLDEST half of
+the ring to the global queue, so service #1 — the first ever spawned — ends up at the global head while
+~170 services remain in the ring. The scheduler prefers its ring, so without the every-61st-schedule
+global check service #1 would run only after all ~170 of them; with it, it runs within the first 61
+schedules. The case records the position at which #1 ran and asserts it is early.
+
+⚠ It reports EARLY/LATE rather than the exact position, because the position depends on how many
+schedules the drain loop has already spent — a number this spec has no business pinning. The two outcomes
+are ~61 and ~171, so the boundary has a wide margin either way.
+```maxon
+typealias LeafHandleArray = Array with Leaf.handle
+
+let drainSpinLimit = 200000
+
+var runCount = 0
+var firstPos = 0
+
+type Leaf
+	var id as int
+
+	static function create(id int) returns Self
+		return Self{id: id}
+	end 'create'
+
+	export function go()
+		runCount = runCount + 1
+		if self.id == 1 'oldest'
+			firstPos = runCount
+		end 'oldest'
+	end 'go'
+end 'Leaf'
+
+function main() returns ExitCode
+	var leaves = LeafHandleArray.create()
+
+	var i = 0
+	while i < 300 'spawnEach'
+		leaves.push(spawn Leaf.create(i + 1))
+		i = i + 1
+	end 'spawnEach'
+
+	var k = 0
+	while k < 300 'sendEach'
+		let leaf = try leaves.get(k) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		leaf.go()
+		k = k + 1
+	end 'sendEach'
+
+	var spins = 0
+	while runCount < 300 and spins < drainSpinLimit 'drain'
+		Runtime.yield()
+		spins = spins + 1
+	end 'drain'
+
+	if firstPos < 130 'early'
+		print("runCount={runCount} oldest=early")
+	end 'early' else 'late'
+		print("runCount={runCount} oldest=late")
+	end 'late'
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+runCount=300 oldest=early
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.a-yield-goes-behind-the-global-queue -->
+<!-- targets: x64-windows -->
+**THE BACK OF THE QUEUE, AND THE ONLY SHAPE AT ONE PROCESSOR THAT CAN SEE IT.** A drained yielder goes to
+the GLOBAL queue's tail; the scheduler consults its RING first, so anything pushed to the ring AFTER the
+yielder was drained still runs BEFORE the yielder resumes. That is Go's split exactly (`Gosched` →
+`globrunqput`, `goready` → `runqput`).
+
+⚠ **AND IT TAKES THREE GREEN THREADS, BECAUSE TWO CANNOT TELL THE TWO ENDS APART.** Both ends are FIFO,
+so a yielder routed to either one lands behind everything already queued — the difference only shows
+against a thread queued AFTERWARDS. `yielder` yields (and is drained while `spawner` is still waiting in
+the ring); `spawner` then runs and `spawn`s `spawnee` into the ring; the ring is preferred, so `spawnee`
+runs FIRST and the yielder resumes second. Routed to the ring instead, the yielder would sit ahead of
+`spawnee` and the two positions would swap.
+
+⚠ **`spawnee`'s HANDLE IS DROPPED BEFORE IT HAS RUN, AND THAT IS THE POINT AT WHICH IT IS STILL QUEUED.**
+A drop closes the mailbox, and a closed mailbox DRAINS what is already in it — so the message survives
+its handle and the service still runs it once.
+```maxon
+let drainSpinLimit = 200000
+
+var order = 0
+var sPos = 0
+var yPos = 0
+
+type Spawnee
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function go()
+		order = order + 1
+		sPos = order
+	end 'go'
+end 'Spawnee'
+
+type Spawner
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function go()
+		let child = spawn Spawnee.create()
+		child.go()
+	end 'go'
+end 'Spawner'
+
+type Yielder
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function go()
+		Runtime.yield()
+		order = order + 1
+		yPos = order
+	end 'go'
+end 'Yielder'
+
+function main() returns ExitCode
+	let y = spawn Yielder.create()
+	let s = spawn Spawner.create()
+	y.go()
+	s.go()
+
+	var spins = 0
+	while order < 2 and spins < drainSpinLimit 'drain'
+		Runtime.yield()
+		spins = spins + 1
+	end 'drain'
+
+	print("sPos={sPos} yPos={yPos}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+sPos=1 yPos=2
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.nothing-is-stolen-on-one-processor -->
+<!-- targets: x64-windows -->
+**THE STEAL COUNTER, AND THE ONE ANSWER A SPEC CAN PIN — the SERVICE twin of
+`no-coroutine-is-ever-stolen` above, and the reason the two are different cases.** That one reads 0
+because a coroutine never enters a P ring at all, so its zero is an arm nothing executes. This one reads
+0 for the opposite reason: twelve services and twelve hundred messages DO fill a ring, `__sched_steal` IS
+laid out and its rounds ARE reached — there is simply nobody to steal from at one processor. That is what
+makes the `steals > 0` reading in `track0/pin-matrix.sh` a measurement rather than a number that is
+always there.
+```maxon
+typealias WorkHandleArray = Array with Work.handle
+
+let drainSpinLimit = 200000
+
+var done = 0
+
+type Work
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function go()
+		done = done + 1
+	end 'go'
+end 'Work'
+
+function main() returns ExitCode
+	var workers = WorkHandleArray.create()
+
+	var i = 0
+	while i < 12 'spawnEach'
+		workers.push(spawn Work.create())
+		i = i + 1
+	end 'spawnEach'
+
+	var r = 0
+	while r < 100 'eachRound'
+		var k = 0
+		while k < 12 'eachWorker'
+			let worker = try workers.get(k) otherwise panic("workers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+			worker.go()
+			k = k + 1
+		end 'eachWorker'
+		r = r + 1
+	end 'eachRound'
+
+	var spins = 0
+	while done < 1200 and spins < drainSpinLimit 'drain'
+		Runtime.yield()
+		spins = spins + 1
+	end 'drain'
+
+	print("done={done} steals={__Builtins.schedStealCount()}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+done=1200 steals=0
 ```
 ```exitcode
 0

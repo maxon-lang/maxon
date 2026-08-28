@@ -35,6 +35,17 @@ This reference provides complete syntax and semantics for the Maxon programming 
 12. [Error Handling](#error-handling)
 13. [Namespaces](#namespaces)
 14. [Async/Await (Concurrency)](#asyncawait-concurrency)
+    - [Starting a Coroutine](#starting-a-coroutine)
+    - [Awaiting Results](#awaiting-results)
+    - [Overlapping Waits](#overlapping-waits)
+    - [Void Functions](#void-functions)
+    - [Services — `spawn`](#services--spawn)
+    - [Yielding](#yielding)
+    - [Throwing Async Functions](#throwing-async-functions)
+    - [Cancellation](#cancellation)
+    - [Typed promises in collections](#typed-promises-in-collections)
+    - [Restrictions](#restrictions)
+    - [Key Properties](#key-properties)
 15. [Standard Library](#standard-library)
     - [FilePath](#filepath)
     - [URL](#url)
@@ -4258,31 +4269,31 @@ Creating a green thread that is scheduled independently is `spawn`, and `spawn` 
 
 `spawn` is a **contextual** keyword, not a reserved word: it is recognized as an identifier followed by a name, so `spawn` remains a perfectly good spelling for a function, a static, a parameter, a field or a local. A `spawn Calc.create()` anywhere in a program makes `Calc` a **service**, and the compiler synthesizes two companion types beside it — `Calc.request` (the message union) and `Calc.handle` (what a `spawn` yields, whose method surface is exactly `Calc`'s `export`/`public` INSTANCE methods). There is no bare `spawn f()` green thread: the target must be a static factory of a declared type returning that type, and anything else is **E3134**. A message's arguments are MOVED, so a parameter that cannot have exactly one owner on the far side — a `Promise`, a function value, a value held at an interface type — is **E3135**.
 
-⚠ **The declarations are in place and the runtime is not.** A `spawn` compiles as far as every declaration-time rule and then reports `E2015: services are not lowered yet`; the mailbox, the dispatch loop and the reply cell land with the rest of the `SV1`/`SV2` rows. `specs-shv2/services.md` carries the live cases and, as `disabled-test` entries, the ones each of those rows unlocks.
+Services **run**: the mailbox, the green thread and the dispatch loop are built. What is not built yet is the **reply** — a message is fire-and-forget, so a handler delivers no value back to its sender (`SV2`), and there is no `awaitAny` (`SV3`). `specs-shv2/services.md` carries the live cases and, as `disabled-test` entries, the ones those rows unlock.
 
-### Spawning Green Threads
+### Starting a Coroutine
 
-Use `async` before a function call to spawn a green thread:
+Use `async` before a function call to start it as a coroutine of the current green thread:
 
 ```maxon
 var promise = async someFunction(arg1, arg2)
 ```
 
-The `async` expression returns a promise value that can be awaited later.
+The `async` expression returns a promise value that can be awaited later. It creates no thread of any kind — see the model above.
 
 ### Awaiting Results
 
-Use `await` to wait for a green thread to complete and retrieve its result:
+Use `await` to wait for a coroutine to complete and retrieve its result:
 
 ```maxon
 var result = await promise
 ```
 
-If the green thread has already completed, `await` returns immediately. Otherwise, the current thread yields until the result is ready.
+If the coroutine has already completed, `await` returns immediately. Otherwise, the awaiting green thread drives its own coroutine queue until the result is ready.
 
-### Parallel Execution
+### Overlapping Waits
 
-Multiple green threads can run concurrently:
+Several coroutines can be in flight at once, and their WAITING overlaps:
 
 ```maxon
 var p1 = async taskA()
@@ -4291,14 +4302,53 @@ var r1 = await p1
 var r2 = await p2
 ```
 
+Both are started before either is awaited, so whichever blocks first gives the green thread to the other. Nothing here runs on two processors — that is what a service is for.
+
 ### Void Functions
 
-Functions that return no value can also be spawned as green threads:
+Functions that return no value can also be started with `async`:
 
 ```maxon
 var p = async doWork()
 await p
 ```
+
+### Services — `spawn`
+
+A **service** is an ordinary `type`. There is no `service` keyword and no member keyword; `spawn` is the only new syntax, and what it yields is a HANDLE whose method surface is exactly that type's `export`/`public` instance methods:
+
+```maxon
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump(by int)          // a MESSAGE: export + instance
+		self.count = self.count + by
+	end 'bump'
+
+	function record(v int) returns int    // private: NOT on the handle
+		return v
+	end 'record'
+end 'Calc'
+
+let c = Calc.create()          // a plain value — direct calls, fully testable
+let h = spawn Calc.create()    // a `Calc.handle` — the same methods, as messages
+```
+
+Dispatch is decided by the receiver's TYPE, so no method ever changes meaning; a service is synchronously unit-testable by constructing one directly; and a self-send deadlock is impossible to spell, because a private helper is not on the handle. `spawn Calc.create()` calls the factory DIRECTLY — `static function` is excluded from the message roster structurally, having no `self`.
+
+**A send is a MOVE.** A message's arguments are moved into the service, which becomes their one owner. This is not ergonomics: a refcount step is a plain load/add/store precisely because the language guarantees one green thread per box, so a send that let two green threads hold one box would corrupt the heap rather than merely be slow. An argument whose value cannot have exactly one owner on the far side is **E3135** — a `Promise`, a function value, a value held at an interface type, an opaque type parameter — and so is one this frame does not solely own, or one whose TYPE admits managed contents it cannot prove sole (a container, or a record with a managed field).
+
+**A service can be gone.** `h.shutdown()` enqueues a poison pill behind everything queued, and dropping the last handle closes the mailbox, which drains it the same way. `stdlib/Builtins.maxon` declares `ServiceError.stopped` for the reply that will report it.
+
+**Services are `x64-windows` by substrate.** A running service reaches a green thread's hand-assembled context switch, which exists on one lane; a `spawn` compiled for `wasm32-wasi` or `arm64-macos` is refused with **E3104**, the same diagnostic `sleep` has always given there.
+
+### Yielding
+
+`Runtime.yield()` gives up the current green thread's turn to whatever else is runnable and resumes behind it — the caller's own coroutines first, then other green threads. It occupies no timer (unlike `sleep(0)`), and when nothing else is runnable it polls due timers and exited children and returns promptly, so `while not done { Runtime.yield() }` is a busy wait that makes progress rather than a block. `await` and `sleep` are the blocking waits.
 
 ### Throwing Async Functions
 
@@ -4325,7 +4375,7 @@ var p = async longRunning()
 p.cancel()
 ```
 
-Preemptive cancellation is not yet implemented: in the current cooperative scheduler `.cancel()` is a no-op (a spawned green thread still runs to completion when awaited). Real cancellation lands with the IOCP-driven async-I/O work.
+Preemptive cancellation is not yet implemented: in the current cooperative scheduler `.cancel()` is a no-op (an `async` coroutine still runs to completion when awaited). Real cancellation lands with the IOCP-driven async-I/O work.
 
 ### Typed promises in collections
 
@@ -4358,7 +4408,9 @@ end 'join'
 - **Plain reference counting** -- because one green thread owns everything its coroutines touch, a retain or release has no second party and needs no atomic. Shared state that genuinely crosses OS threads (the runtime's own counters and queues) is a different question and is protected accordingly.
 - **Fire-and-forget safe** -- unawaited coroutines are drained at program exit
 
-These properties are the same on every target. `wasm32-wasi` differs only in the *mechanism* of suspension -- having no native stack switching, it implements it with Binaryen Asyncify, unwinding a live call stack into linear memory at an `await` and rewinding it on resume -- and not in the semantics. There is no longer a multi-threaded carve-out to exclude it from: `async` reaches no worker thread and no work stealing on any target.
+These properties are the same on every target. `wasm32-wasi` differs only in the *mechanism* of suspension -- having no native stack switching, it implements it with Binaryen Asyncify, unwinding a live call stack into linear memory at an `await` and rewinding it on resume -- and not in the semantics. There is no multi-threaded carve-out to exclude it from: `async` reaches no worker thread and no work stealing on any target.
+
+A **service** is where those six read differently, and it is the only place they do: a `spawn`ed green thread is scheduled by the P/M substrate, so it may run on another OS thread, may be stolen from one processor to another, and is what makes the ring, the work stealing and the worker loop reachable at all. The single-owner guarantee is unchanged and is what a send being a MOVE buys — the box crosses, and only one green thread ever holds it.
 
 ---
 

@@ -867,7 +867,7 @@ await_expr    = 'await' expression                          (* wait for promise,
 try_await     = 'try' 'await' expression                    (* await throwing promise, propagate error *)
               | 'try' 'await' expression 'otherwise' otherwise_clause  (* see 5.12 for all forms *)
 
-cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a green thread *)
+cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a coroutine *)
 ```
 
 **Restrictions:**
@@ -893,6 +893,11 @@ spawn_expr    = 'spawn' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* start a ser
 - naming a type in a `spawn` makes it a SERVICE program-wide, which synthesizes `TYPE.request` and
   `TYPE.handle` beside it. That is a semantic rule over `visibility_prefix`, not a grammar change: no
   `type_decl` production moves.
+- a message SEND has no production of its own either: it is `call_expr`'s method form (6.8) whose receiver
+  happens to be a `TYPE.handle`. Dispatch is decided by the receiver's TYPE, so the same spelling is a
+  direct call on a value and a message on a handle.
+- a `spawn` compiled for a target with no green-thread substrate is refused with E3104 — see 6.6's note;
+  the grammar is target-neutral and the refusal is not.
 
 ### 6.8 Function and Method Calls
 
