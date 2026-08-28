@@ -3852,6 +3852,28 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool, rawFree ByteArray)
 	// handshake (the completion thread still holds its OVERLAPPED — this is the one in-flight I/O shv2 now has to
 	// abort); a timer/proc-parked GT (ioParked == 0) takes the existing store-removal path. Under `usesIocp` the
 	// distinction exists; without it there is no read runtime, so ioParked is always 0 and the path is byte-identical.
+	//
+	// ⛔⛔ **THE DEREGISTRATION ROSTER IS THREE OF `emitGtPark`'s FOUR KINDS, AND THE FOURTH IS UNREACHABLE
+	// RATHER THAN HANDLED (SV1 review).** `__gt_register_park` registers TIMER, PROC, IO and — since SV1 —
+	// MAILBOX (`MailboxRuntime.emitMboxRegisterPark`, which stores the GT into `mbox.parkedGt`). This arm
+	// empties the first three stores and there is NOTHING anywhere that clears `mbox.parkedGt` except the
+	// waker's own store. A mailbox-parked GT reaching here would read `waiting`, miss both scans, re-read
+	// `waiting`, take `soleOwner` — and free the stack, and possibly the struct, while `mbox.parkedGt` still
+	// points at it. The next `__mbox_send` / `__mbox_close` then stores `ready` into freed memory and
+	// publishes a freed GT.
+	//
+	// ⚠ **IT CANNOT ARRIVE, ON TWO INDEPENDENT STRUCTURAL GROUNDS, BOTH MEASURED AT REVIEW.** This function is
+	// a PROMISE drop, and (1) `spawn` lowers to `__svc_spawn` and yields a `<T>.handle` box, never a promise
+	// (`LowerMaxonToStd:3969-3975`), so no promise names a service's green thread; (2) `__mbox_recv` — the one
+	// producer of a mailbox park — has exactly two callers, both inside the synthesized `<T>.__loop`
+	// (`ServiceLoop.maxon:84`, `:119`), which no `async` spawns.
+	//
+	// ⛔ **SV2 IS THE RUNG THAT MAKES IT LIVE**, because a reply cell is a promise a message's sender awaits —
+	// at which point ground (1) is gone. The cure is a fourth removal beside the two below, clearing
+	// `mbox.parkedGt` under the lock this arm already holds; the mbox pointer is on the GT already, in
+	// `GtOffParkArg`. It is NOT written here because nothing in this tree can execute it, and unverifiable
+	// emitter code in a reclamation path is the worse of the two risks — but it is a debt with a named
+	// trigger, not an omission.
 	if usesIocp 'ioAware'
 		var waitingTimer = module.addBlock(func, label: b"waitingtimer")
 		var ioArm = module.addBlock(func, label: b"ioarm")

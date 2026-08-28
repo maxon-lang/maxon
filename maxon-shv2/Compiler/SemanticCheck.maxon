@@ -2518,7 +2518,26 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// parameter types — `ServiceCompanions.serviceRequestPayloads` builds them from exactly that
 					// column), and a `spawn`'s state is the factory `call` op's own result, validated as that
 					// call. There is nothing left on either op for a signature to be slotted against.
-					serviceSpawn to serviceSend then break 'op'
+					//
+					// ⛔⛔ **THE TARGET GATE IS STILL OWED, AND ITS ABSENCE WAS A COMPILER PANIC ON A VALID
+					// PROGRAM (SV1 review, MEASURED on all three non-host targets).** Every other road into the
+					// green-thread substrate is a CALL, so `requireTargetSupportsCallee` meets it by NAME —
+					// but a service reaches that substrate through an OP whose callee is minted at lowering,
+					// and this walk sees no name to key on. `spawn Plot.create()` therefore ran straight past
+					// the gate and into the backend that cannot emit it:
+					//   • `--target=arm64-macos` — `panic at StdToArm64Conversion.maxon:652: the P1.5 IOCP ops are x64-windows only`
+					//   • `--target=wasm32-wasi` — `panic at StdToWasm.maxon:1748:` the same
+					//   • `--target=x64-linux`   — `panic at StdToX64Conversion.maxon:3382: lowerTlsAlloc: TlsAlloc is x64-windows only`
+					// against the CONTROL one construct over: the same substrate reached by `sleep` answers
+					// `E3104 … 'sleep' lowers to the runtime entry '__gt_sleep', which has no <target>
+					// implementation` on all three. It is exactly the shape `calleeNeedsWin32Substrate`'s
+					// header records for the socket runtime — *"the surface without the floor is worse than
+					// neither"* — reached through the one door that carries no callee.
+					//
+					// ⚠ It names the ENTRY the lowering will mint, through the one E3104 wire format, so a
+					// service refusal and a `sleep` refusal cannot become two spellings of one rejection.
+					serviceSpawn then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "'spawn'", entry: SvcSpawnName, blameTargetErrorsHere: blameTargetErrorsHere)
+					serviceSend then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "a message send", entry: MboxSendName, blameTargetErrorsHere: blameTargetErrorsHere)
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -4108,6 +4127,22 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex O
 		reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: "'{String.from(noun)}'", entry: entry)
 	end 'stdlibCrossing'
 end 'requireTargetSupportsCallee'
+
+// ⭐⭐ **THE TARGET GATE FOR A CONSTRUCT WHOSE RUNTIME ENTRY IS MINTED AT LOWERING (SV1 review)** —
+// `requireTargetSupportsCallee`'s twin for the ops that carry no callee name. The split is exactly the one
+// fact each door holds and the other cannot: that one is handed a NAME and must decide whether the name
+// needs the substrate; this one is handed an OP whose entry is already known, and only the TARGET is in
+// question. Both end at `reportTargetUnsupportedCallee`, which is the one wire format.
+//
+// ⚠ `blameTargetErrorsHere` carries both preconditions for `requireTargetSupportsCallee`'s stated reason —
+// it is constant per function and the caller has already settled it — so the target is not re-asked here.
+function requireTargetSupportsServiceEntry(project Project, func IrFunction, opIndex OpIndex, subject String, entry ByteArray, blameTargetErrorsHere bool)
+	if not blameTargetErrorsHere 'nothingRefusableHere'
+		return
+	end 'nothingRefusableHere'
+
+	reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: subject, entry: entry)
+end 'requireTargetSupportsServiceEntry'
 
 // The one wire format of E3104, so the two subjects cannot drift into two spellings of one rejection. The
 // span is materialized HERE rather than at the gate because `SourceRangeTable.get` builds a heap

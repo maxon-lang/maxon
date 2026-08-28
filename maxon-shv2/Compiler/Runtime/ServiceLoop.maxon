@@ -155,7 +155,11 @@ function buildServiceArm(fn SynthesizedFunction, project Project, signatures Pro
 
 	let methodName = request.caseNameAt(caseIndex)
 	let callee = qualifiedMethodName(typeName, methodName: methodName)
-	let decl = serviceMessageDecl(signatures, callee: callee)
+	// The declaration this variant was built from. Its `paramTypes` count is how many of the variant's
+	// payloads are ARGUMENTS (the rest is the reply slot), which is what the loop below is bounded by; the
+	// "it cannot miss" invariant is `ServiceCompanions.serviceFirstDeclOf`'s, stated once for all four
+	// places that rest on it.
+	let decl = serviceFirstDeclOf(signatures.overloadedDeclsOf(callee), key: callee)
 	let payloads = request.payloadsAt(caseIndex)
 
 	// ⚠ **ONLY THE DECLARED PARAMETERS ARE LOADED, AND THE `__reply` SLOT IS NOT ONE.** A message with a
@@ -375,13 +379,6 @@ function serviceRequestLayout(signatures ProgramSignatures, requestName ByteArra
 		undeclared panic("serviceRequestLayout: nothing declares `union {String.from(requestName)}` — the companions are minted for every accepted spawn target inside `queryProgramSignatures`, before any body is parsed")
 	end 'e'
 end 'serviceRequestLayout'
-
-// The declaration a message variant was built from. Its `paramTypes` count is how many of the variant's
-// payloads are ARGUMENTS (the rest is the reply slot).
-function serviceMessageDecl(signatures ProgramSignatures, callee ByteArray) returns OverloadedDecl
-	let decls = signatures.overloadedDeclsOf(callee)
-	return try decls.get(0) otherwise panic("serviceMessageDecl: '{String.from(callee)}' is a message on the roster the declaration sweep built from its own declaration, so `overloadedDeclsOf` cannot be empty")
-end 'serviceMessageDecl'
 
 // A handler's declared return type, `void` for an undeclared callee — which is a program SemanticCheck
 // rejects with E3004, reached here only because this synthesis runs over a module that may still be doomed.

@@ -1,0 +1,21 @@
+// Test: error.a-private-method-is-absent-from-the-handle
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	function record(v int)
+		self.count = v
+	end 'record'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	h.record(1)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3136: <fragment>:16:4: `record` is declared on `type Calc` but is not a message: only its `export` INSTANCE methods are on `Calc.handle`. That is the isolation boundary, and it is what makes a self-send unspellable — a private helper can only ever be reached by a DIRECT call, from inside a message body or from a `Calc` value. Export it to make it a message, or call it on a `Calc` value

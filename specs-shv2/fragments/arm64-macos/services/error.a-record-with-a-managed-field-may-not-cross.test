@@ -1,0 +1,31 @@
+// Test: error.a-record-with-a-managed-field-may-not-cross
+type Cell
+	export var n as int
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+type Calc
+	var c as Cell
+
+	static function create(src Cell) returns Self
+		let alias = src
+		return Self{c: alias}
+	end 'create'
+
+	export function bump()
+		self.c.n = self.c.n + 100
+	end 'bump'
+end 'Calc'
+
+function main() returns ExitCode
+	var cell = Cell.create()
+	let h = spawn Calc.create(cell)
+	h.bump()
+	return cell.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3138: <fragment>:25:21: the state `spawn Calc.create(…)` would start the service with is a `type Calc` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, and a record whose every slot is one of those; proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it

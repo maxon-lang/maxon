@@ -103,11 +103,19 @@ running service reaches a green thread's context switch, which is hand-assembled
 restricted for the reason `specs-shv2/async-scheduler.md`'s own Targets section gives, and every one of
 them carries the marker.
 
-⚠ **Every REFUSAL in this file is unmarked, and that is the same rule read from the other end.** A verdict
-reached before a backend — a token shape, a declaration, a transferability rule, a move — is target-neutral
-by construction, so a marker on one would hide a green lane rather than describe a red one. `spawn-is-not-a-keyword`
-and `service-error-is-declared-and-nameable` are unmarked for the neighbouring reason: they RUN, but they
-start no service and reach no scheduler at all.
+⚠ **Almost every REFUSAL in this file is unmarked, and that is the same rule read from the other end.** A
+verdict reached before a backend — a token shape, a declaration, a transferability rule, a move — is
+target-neutral by construction, so a marker on one would hide a green lane rather than describe a red one.
+`spawn-is-not-a-keyword` and `service-error-is-declared-and-nameable` are unmarked for the neighbouring
+reason: they RUN, but they start no service and reach no scheduler at all.
+
+⚠ **THE TWO E3104 CASES ARE THE EXCEPTION, AND THEY ARE MARKED WITH THE TARGET THEY REFUSE.** A refusal
+whose whole subject is *"this target has no substrate for it"* is the one verdict in this file that is not
+target-neutral, so it can only be pinned by compiling FOR that target — exactly as
+`subprocess-builtins.rejected-on-wasm` is. They exist because the gate did not: MEASURED at review on all
+three non-host lanes, a `spawn` reached the backend and PANICKED the compiler
+(`StdToArm64Conversion.maxon:652`, `StdToWasm.maxon:1748`, `StdToX64Conversion.maxon:3382`) where the same
+substrate reached by `sleep` has always answered E3104.
 
 ## Tests
 
@@ -116,11 +124,21 @@ start no service and reach no scheduler at all.
 A `spawn` makes the type a service, and both synthesized companions are then nameable TYPES — in a
 signature written by a function that spawns nothing.
 
-⭐ **IT CAN NOW FAIL ON ITS OWN CLAIM, AND WAVE 2's NOTE THAT IT COULD NOT IS SPENT.** While the wave-3
-E2015 stood at the `spawn`, the file's parse ended before an unresolved `Calc.handle` was ever reported, so
-this case passed with the whole-program spawn walk disabled and only the two CROSS-FILE cases could see the
-companions. That throw is gone: the program now parses to completion, runs, and an absent companion is
-`E3011 Unknown type 'Calc.handle'` at `serve`'s own signature.
+⭐ **IT CAN NOW FAIL, AND WAVE 2's NOTE THAT IT COULD NOT IS SPENT.** While the wave-3 E2015 stood at the
+`spawn`, the file's parse ended before an unresolved `Calc.handle` was ever reported, so this case passed
+with the whole-program spawn walk disabled and only the two CROSS-FILE cases could see the companions. That
+throw is gone: the program parses to completion and runs.
+
+⛔ **BUT NOT BY THE E3011 THIS PARAGRAPH USED TO CLAIM — SABOTAGE MEASURED AT THE SV1 REVIEW.** It said *"an
+absent companion is `E3011 Unknown type 'Calc.handle'` at `serve`'s own signature"*. With the handle mint
+withheld (`ServiceCompanions.synthesizeServiceCompanions`'s pass 1 skipped) this case IS red — but as
+`panic at Parser.maxon:45750: serviceHandleLayout: nothing declares 'type Calc.handle'`, raised at the
+`spawn` on line 14, which is reached long before `serve`'s signature and which kills the worker and fails
+every case in this file with it. The E3011 road is real but belongs to
+`companions-come-from-a-spawn-in-another-file`, whose declaring file writes no `spawn` and so has no panic
+standing in front of the unresolved name — which is exactly the sabotage its own header records. ⇒ **This
+case's gate is "the companions exist and the program runs"; the DIAGNOSTIC for an absent one is the
+cross-file case's, and one claim may not be filed under both.**
 ```maxon
 type Calc
 	var count as int
@@ -509,6 +527,7 @@ error E2015: <fragment>:15:10: Unsupported: `spawn Box.create(…)` — `type Bo
 ```
 
 <!-- test: a-private-method-is-not-a-message -->
+<!-- targets: x64-windows -->
 Only `export`/`public` INSTANCE methods are messages. `record` is file-private and `version` is a static,
 so neither is subject to the transferability rule — a `Promise` parameter on either is perfectly legal on
 a type that is spawned, which is what this case pins. Compare
@@ -547,6 +566,7 @@ end 'main'
 ```
 
 <!-- test: a-factory-may-be-spelled-with-a-keyword -->
+<!-- targets: x64-windows -->
 ⭐ A keyword may be a DECLARED NAME (D8), and `stdlib/FilePath.maxon:34` proves the shape is live corpus:
 `public static function from (path String) returns FilePath`. So `spawn Reader.from(3)` must be recognized
 as a spawn — both halves of `<Type>.<factory>` go through the same name reader every other declaration
@@ -926,9 +946,17 @@ and BOTH services' queued work runs — which is the property under test.
 IMPLYING OTHERWISE.** At the default `MAXON_MAX_PROCS=1` nothing runs on a service's green thread until the
 main thread stops running — an early handle drop closes the mailbox and publishes the parked receiver, but
 nobody drives it — so both handlers run at the exit drain, in the order the drain reaps them, which is
-spawn order. MEASURED stable across five runs at N=1 and three at N=4. A scheduler change may legitimately
-move this line; what may NOT move is that both lines appear and the process exits 0.
+spawn order. MEASURED stable across five runs at N=1 and three at N=4.
 `two-instances-are-independent` is the case whose order IS forced, by a handle transfer.
+
+⚠⚠ **THE `stdout` BLOCK PINS THAT ORDER EXACTLY, SO THIS CASE IS A TRIPWIRE ON THE DRAIN AND NOT ONLY ON
+THE SHUTDOWN.** This paragraph used to end *"a scheduler change may legitimately move this line; what may
+NOT move is that both lines appear and the process exits 0"* — which is a permission the GOLDEN does not
+grant, and the two disagreeing is the shape this project keeps naming (SV1 review). The golden wins, and
+that is the useful arrangement rather than a defect to weaken away: a drain-order change is exactly the
+kind of scheduler edit whose blast radius someone should have to look at. ⇒ **When this line moves, the
+answer is to re-baseline it DELIBERATELY, with the reason in the commit** — never to loosen the block, and
+never to read the red as a shutdown bug. What would be a shutdown bug is a line MISSING, or a non-zero exit.
 ```maxon
 type Beeper
 	var tag as int
@@ -1389,6 +1417,69 @@ end 'main'
 ```
 ```maxoncstderr
 error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it, and its type has no owning copy a send could take instead. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
+```
+
+<!-- test: error.a-service-is-rejected-on-wasm -->
+<!-- targets: wasm32-wasi -->
+⭐ A service's whole substrate is x64-windows only, so on any other target BOTH ops are refused at their own
+source span with `E3104`, naming the runtime entry that has no lowering there — never a panic from inside a
+backend, which is what this family did before the gate existed.
+
+⚠ **THE TWO OPS NEED TWO ARMS, AND ONE WOULD HAVE PASSED A HALF-BUILT GATE.** A `spawn` and a send mint
+different entries, and a program can contain either without the other — `an-idle-service-that-is-never-sent-to-still-exits-zero`
+is exactly a spawn with no send.
+```maxon
+type Plot
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function at(x int)
+		self.n = self.n + x
+	end 'at'
+end 'Plot'
+
+function main() returns ExitCode
+	let h = spawn Plot.create()
+	h.at(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:15:10: this construct is x64-windows only at this rung: 'spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
+error E3104: <fragment>:16:2: this construct is x64-windows only at this rung: a message send lowers to the runtime entry '__mbox_send', which has no wasm32-wasi implementation
+```
+
+<!-- test: error.a-service-is-rejected-on-arm64 -->
+<!-- targets: arm64-macos -->
+The same gate on the other local lane, which is the one that makes this a TARGET rule rather than a wasm
+one. ⚠ `x64-linux` was measured to answer identically (`lowerTlsAlloc: TlsAlloc is x64-windows only` before
+the gate, E3104 after) and is not pinned here only because two lanes already part the target from the
+construct.
+```maxon
+type Plot
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function at(x int)
+		self.n = self.n + x
+	end 'at'
+end 'Plot'
+
+function main() returns ExitCode
+	let h = spawn Plot.create()
+	h.at(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:15:10: this construct is x64-windows only at this rung: 'spawn' lowers to the runtime entry '__svc_spawn', which has no arm64-macos implementation
+error E3104: <fragment>:16:2: this construct is x64-windows only at this rung: a message send lowers to the runtime entry '__mbox_send', which has no arm64-macos implementation
 ```
 
 <!-- test: a-scalar-only-record-crosses-whole -->

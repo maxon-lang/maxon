@@ -108,7 +108,8 @@ module function classifyServiceTarget(signatures ProgramSignatures, typeName Byt
 		return ServiceTargetVerdict.typeIsGeneric
 	end 'generic'
 
-	let decls = signatures.overloadedDeclsOf(qualifiedMethodName(typeName, methodName: member))
+	let factoryKey = qualifiedMethodName(typeName, methodName: member)
+	let decls = signatures.overloadedDeclsOf(factoryKey)
 	if decls.count() == 0 'noSuchMember'
 		return ServiceTargetVerdict.memberIsNotDeclared
 	end 'noSuchMember'
@@ -119,7 +120,7 @@ module function classifyServiceTarget(signatures ProgramSignatures, typeName Byt
 	// asked here, because they are what make it a factory at all: a `static` beside an instance method of
 	// one name is already refused (`requireOverloadableName`), and a set disagreeing about the return type
 	// is E3005 at its own declaration.
-	let factory = try decls.get(0) otherwise panic("classifyServiceTarget: overloadedDeclsOf('{String.from(typeName)}.{String.from(member)}') answered {decls.count()} declarations and get(0) failed")
+	let factory = serviceFirstDeclOf(decls, key: factoryKey)
 	if factory.takesReceiver 'anInstanceMethod'
 		return ServiceTargetVerdict.memberTakesAReceiver
 	end 'anInstanceMethod'
@@ -185,12 +186,13 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
 		let methodName = layout.messageMethodAt(i)
-		let decls = signatures.overloadedDeclsOf(qualifiedMethodName(typeName, methodName: methodName))
+		let messageKey = qualifiedMethodName(typeName, methodName: methodName)
+		let decls = signatures.overloadedDeclsOf(messageKey)
 		if decls.count() > 1 'overloaded'
 			return ServiceRosterVerdict.messageIsOverloaded(methodName, declarationCount: decls.count())
 		end 'overloaded'
 
-		let decl = try decls.get(0) otherwise panic("classifyServiceRoster: '{String.from(typeName)}.{String.from(methodName)}' is on the roster the declaration sweep built from its own declaration, so `overloadedDeclsOf` cannot be empty")
+		let decl = serviceFirstDeclOf(decls, key: messageKey)
 		for p in 0 upto decl.paramTypes.count() 'eachParam'
 			let declared = try decl.paramTypes.get(p) otherwise panic("classifyServiceRoster: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(typeName)}.{String.from(methodName)}'")
 			let noun = untransferableParameterNoun(signatures, declared: declared, declFilePath: layout.declFilePath)
@@ -286,6 +288,23 @@ function declaredInterfaceParameterNoun(signatures ProgramSignatures, resolved M
 	let form = try signatures.declaredFormOf(name) otherwise return ""
 	return InterfaceParameterNoun if form == TypeDeclKind.interfaceType else ""
 end 'declaredInterfaceParameterNoun'
+
+// ⭐⭐ **THE FIRST DECLARATION WEARING A SERVICE KEY — the ONE statement of the invariant that made every
+// `.get(0)` on this path safe, and it was written FOUR times (SV1 review).** `classifyServiceTarget`,
+// `classifyServiceRoster`, `serviceRequestPayloads` and `ServiceLoop.buildServiceArm` each spelled the same
+// fetch and their own sentence for why it cannot miss. That is `serviceLayoutOf`'s finding one column
+// over — *"five of them was five copies of one `match`"* — and it is worth collapsing for the same reason:
+// the day a message can reach any of those four without a declaration, the answer must change in one place,
+// not in whichever three somebody remembers.
+//
+// ⚠ **IT TAKES THE ARRAY, NOT THE KEY, AND THAT IS DELIBERATE.** Two of the callers have already asked
+// `overloadedDeclsOf` — one to refuse an EMPTY set, one to refuse an OVERLOADED one — and a door that
+// re-fetched would hash the key a second time to re-find a record the caller is holding, which is the
+// measured cost this file's `serviceLayoutOf` header records for exactly this shape. The key rides along
+// for the sentence only.
+module function serviceFirstDeclOf(decls OverloadedDeclArray, key ByteArray) returns OverloadedDecl
+	return try decls.get(0) otherwise panic("serviceFirstDeclOf: '{String.from(key)}' names no declaration — every caller reached here through a roster the declaration sweep built FROM those declarations, so `overloadedDeclsOf` cannot be empty")
+end 'serviceFirstDeclOf'
 
 // A declaration's parameter name at `index`. `OverloadedDecl`'s two columns are source-aligned with the
 // receiver excluded, so this index is the one `paramTypes` was read at.
@@ -469,7 +488,7 @@ end 'buildServiceRequestUnion'
 function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray, methodName ByteArray, declFilePath FilePath, into TypeNameInterner) returns PayloadFieldArray
 	let key = qualifiedMethodName(typeName, methodName: methodName)
 	let decls = signatures.overloadedDeclsOf(key)
-	let decl = try decls.get(0) otherwise panic("serviceRequestPayloads: '{String.from(key)}' is on the roster the declaration sweep built from its own declaration, so `overloadedDeclsOf` cannot be empty")
+	let decl = serviceFirstDeclOf(decls, key: key)
 
 	var payloads = PayloadFieldArray.create()
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
@@ -529,20 +548,6 @@ module function buildServiceHandleStruct(signatures ProgramSignatures, typeName 
 	return handle
 end 'buildServiceHandleStruct'
 
-// ⭐⭐ **THE PERFORM HALF — every candidate the discovery walk noted, classified once and minted once.**
-// Called from `Queries.queryProgramSignatures` directly after `internWellKnownContainerInstances()` and
-// BEFORE `allFilesFolded = true`, so that:
-//   • every whole-program normalization after that line (`rewriteRecordedReturnTypes`,
-//     `normalizeSweptInterfaceTypes`, `deriveInstanceNames`) treats the companions as ordinary layouts, and
-//   • the decision stands on the FAR SIDE of the stdlib/user name contest, which the fold has settled.
-//
-// It registers through `ProgramSignatures.recordServiceCompanions`, which is `recordStruct`/`recordEnum` —
-// so the companions ride the SAME rolling declaration hash every author-written type does. That is what
-// makes the memo correct across files with no separate mix-in: a `spawn` added in file B changes the source
-// hash that keys this whole sweep, the sweep mints a companion here, `recordStruct` folds its name and shape
-// into `signatures.hash`, and `Queries.currentParseMemoKey` therefore invalidates file A's parse — which is
-// where `Calc` is declared and where a reference to `Calc.handle` resolves.
-//
 // ⛔⛔ **IT IS COLLECT-THEN-APPLY, AND THAT IS FORCED BY THE BORROW RULE RATHER THAN CHOSEN.** Minting inside
 // the walk mutates `signatures` while `candidate` is an element BORROWED out of it:
 // **`E3070: cannot mutate 'signatures' via 'recordServiceCompanions' while it is borrowed by 'candidate'`**.

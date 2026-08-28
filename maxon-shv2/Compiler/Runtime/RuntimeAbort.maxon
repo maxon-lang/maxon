@@ -244,11 +244,16 @@ export enum RuntimeAbort
 	// `__mm_leak_check` a few instructions later. Two different faults may not report one number.
 	schedulerDeadlock = 92
 	// `__gt_register_park`: the park note carries a kind no site writes. `GtRuntime`'s `GtParkKindTimer` /
-	// `GtParkKindProc` / `GtParkKindIo` are the three `emitGtPark` can stamp, so a fourth value is a COMPILER
-	// bug rather than a program's — and it is silent without this: the thread would be suspended having been
-	// registered on NO store at all, which is a hang three functions away from its cause. It is a separate
-	// code from `schedulerDeadlock` above, this registry's founding rule: a runtime that cannot register a
-	// park and a scheduler that has nothing left to run are two different faults.
+	// `GtParkKindProc` / `GtParkKindIo` / `GtParkKindMailbox` are the FOUR `emitGtPark` can stamp, so a fifth
+	// value is a COMPILER bug rather than a program's — and it is silent without this: the thread would be
+	// suspended having been registered on NO store at all, which is a hang three functions away from its
+	// cause. It is a separate code from `schedulerDeadlock` above, this registry's founding rule: a runtime
+	// that cannot register a park and a scheduler that has nothing left to run are two different faults.
+	//
+	// ⛔ **THIS SENTENCE SAID "the three" UNTIL THE SV1 REVIEW, AND SV1 IS THE RUNG THAT ADDED THE FOURTH.**
+	// It is exactly the failure mode this file keeps naming — a COUNT written beside a list, going stale in
+	// the direction that reads as completeness. The kinds are enumerated by NAME above rather than counted so
+	// that the next one has to be spelled here to be believed; do not reintroduce a bare number.
 	schedulerUnknownParkKind = 93
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
