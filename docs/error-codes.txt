@@ -2222,6 +2222,21 @@ E3135 SemanticServiceValueNotTransferable
 	doc The cure is to send a `.clone()`, to send the scalar the value is derived from, or to drop the
 	doc parameter from the message and reach the value another way.
 
+E3136 SemanticServiceNotAMessage
+	shv2 semanticServiceNotAMessage
+	doc A member was called on a service HANDLE that is not one of the service's messages.
+	doc A handle's surface is exactly its service type's `export` INSTANCE methods, one variant of the
+	doc synthesized request union each. That is the isolation boundary, and it is also what makes self-send
+	doc deadlock unspellable rather than diagnosed: a private helper is not on the handle, so a call to one from
+	doc inside a message body can only ever be a DIRECT call on the service's own state.
+	doc Two shapes reach it, and the message tells them apart because the cures differ. The member may be
+	doc DECLARED on the service type and merely not exported -- a private helper, or a `static`, which has no
+	doc receiver and so can never be a message -- in which case `export` makes it one, or the value can be
+	doc reached through a plain (unspawned) value of the type. Or nothing declares it at all, which is an
+	doc ordinary misspelling.
+	doc It is neither E3018 (a missing FIELD) nor E3004 (an undefined FUNCTION): the member usually exists, on
+	doc the type, and saying otherwise would read as a typo.
+
 E3138 SemanticServiceArgumentNotUnique
 	shv2 semanticServiceArgumentNotUnique
 	doc A message argument cannot be proven to have exactly one owner, so it may not be sent.

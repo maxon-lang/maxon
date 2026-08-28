@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "4418d4463b0dc84a",
+  "sourceHash": "2620d7af63e9dd45",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1533,6 +1533,15 @@
       "stage": "semantic",
       "doc": "A message of a service declares a parameter whose value cannot cross to another green thread.\nA send MOVES its arguments -- the receiving thread becomes their one owner -- and that is what keeps\nreference counting PLAIN rather than atomic: the language guarantees one green thread per box, so a\nsend that left two threads holding one box would corrupt the heap rather than merely be slow.\nFour shapes fail it. A `Promise` is a green-thread handle its awaiter owns. A function value reaches\na captured environment block, which is a box with a second referent by construction. A value held at\nan interface type is a fat pointer whose witness half is read-only data and whose value half is\nreleased through `__drop_existential`, a pair the request union's payload cascade cannot carry. An\nopaque type parameter has no layout at the send, so the sender cannot know what it is handing over.\nThe diagnostic fires at the `spawn` that made the type a service, which may be in a different file\nfrom the method it names: whether a type is a service is a whole-program property, and the site that\ndecided it is the one worth naming.\nThe cure is to send a `.clone()`, to send the scalar the value is derived from, or to drop the\nparameter from the message and reach the value another way.",
       "emittedBy": {"shv2": "semanticServiceValueNotTransferable"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3136,
+      "tag": "E3136",
+      "name": "SemanticServiceNotAMessage",
+      "stage": "semantic",
+      "doc": "A member was called on a service HANDLE that is not one of the service's messages.\nA handle's surface is exactly its service type's `export` INSTANCE methods, one variant of the\nsynthesized request union each. That is the isolation boundary, and it is also what makes self-send\ndeadlock unspellable rather than diagnosed: a private helper is not on the handle, so a call to one from\ninside a message body can only ever be a DIRECT call on the service's own state.\nTwo shapes reach it, and the message tells them apart because the cures differ. The member may be\nDECLARED on the service type and merely not exported -- a private helper, or a `static`, which has no\nreceiver and so can never be a message -- in which case `export` makes it one, or the value can be\nreached through a plain (unspawned) value of the type. Or nothing declares it at all, which is an\nordinary misspelling.\nIt is neither E3018 (a missing FIELD) nor E3004 (an undefined FUNCTION): the member usually exists, on\nthe type, and saying otherwise would read as a typo.",
+      "emittedBy": {"shv2": "semanticServiceNotAMessage"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

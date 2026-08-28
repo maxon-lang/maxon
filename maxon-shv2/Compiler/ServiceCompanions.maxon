@@ -90,17 +90,6 @@ module union ServiceRosterVerdict
 	messageParameterIsNotTransferable(methodName ByteArray, paramName ByteArray, noun String)
 end 'ServiceRosterVerdict'
 
-// The pair minted for one service — returned together because they are built from one reading of the type
-// and registered by one act. Two separate builders would be two walks of the same roster.
-module type ServiceCompanions
-	export let request as EnumLayout
-	export let handle as StructLayout
-
-	export static function create(request EnumLayout, handle StructLayout) returns ServiceCompanions
-		return Self{request: request, handle: handle}
-	end 'create'
-end 'ServiceCompanions'
-
 // ⭐⭐ **IS THIS A SPAWN TARGET? — the whole rule, in one place.** The order of the arms is the order the
 // questions can be ASKED: a member cannot be classified before its type is known to be a struct, and a
 // generic type is refused ahead of its member because the refusal is about the type either way.
@@ -372,27 +361,53 @@ module function serviceSpawnStateBlame(typeName ByteArray, member ByteArray) ret
 	return "the state `spawn {String.from(typeName)}.{String.from(member)}(…)` would start the service with"
 end 'serviceSpawnStateBlame'
 
+// ⭐⭐ **THE WORDS FOR A MEMBER THAT IS NOT ON THE HANDLE (SV1 wave 3).** It is neither a missing field nor
+// an undefined function, and saying either would read as a typo: the member exists on the TYPE and the
+// export boundary left it off the handle. `declaresIt` is what lets the sentence tell those two apart — a
+// private helper the author can see in their own file, against a name nothing declares at all.
+//
+// ⚠ **THE PRIVATE-HELPER HALF IS WHY SELF-SEND DEADLOCK NEEDS NO DIAGNOSTIC**, and the message says so:
+// `self.record(…)` inside a message body can only ever be a direct call, because `record` is not on the
+// handle — so there is no way to spell a self-send at all.
+module function serviceNotAMessageRefusal(typeName ByteArray, handleName ByteArray, member ByteArray, declaresIt bool) returns String
+	if declaresIt 'aPrivateHelper'
+		return "`{String.from(member)}` is declared on `type {String.from(typeName)}` but is not a message: only its `export` INSTANCE methods are on `{String.from(handleName)}`. That is the isolation boundary, and it is what makes a self-send unspellable — a private helper can only ever be reached by a DIRECT call, from inside a message body or from a `{String.from(typeName)}` value. Export it to make it a message, or call it on a `{String.from(typeName)}` value"
+	end 'aPrivateHelper'
+
+	return "`type {String.from(typeName)}` declares no `{String.from(member)}`, so `{String.from(handleName)}` has no such message. A handle's surface is exactly the service's `export` instance methods"
+end 'serviceNotAMessageRefusal'
+
+// ⭐ **THE WORDS FOR A SEND WHOSE VALUE THE AUTHOR TRIED TO USE.** SV1 delivers no reply, so a message has
+// no value — and the author who bound one is asking for the awaitable form, which is a thing that will
+// exist. E2015, therefore, and the sentence names the row that builds it.
+module function serviceSendHasNoValueRefusal(typeName ByteArray, member ByteArray) returns String
+	return "the value of `{String.from(typeName)}.{String.from(member)}` sent as a MESSAGE — a fire-and-forget send delivers no reply, so there is nothing to bind. The awaitable form `try await <handle>.{String.from(member)}(…)`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2. Send it as a statement, or reach the value another way"
+end 'serviceSendHasNoValueRefusal'
+
+// ⭐ **THE WORDS FOR A `try` ON A SEND**, and it is a SENTENCE rather than a rejection for the reason
+// `Parser.rewriteLastCallToTryCall`'s arm gives: the author who wrote one is asking for the awaitable form,
+// and `try` is exactly its first token. Refusing it as *"`try` must be applied to a call"* would be true and
+// useless.
+module function serviceSendCannotBeTriedRefusal(callee ByteArray) returns String
+	return "`try` on the message `{String.from(callee)}` — a fire-and-forget send carries no reply and so can deliver no error. The awaitable form `try await <handle>.<message>(…)`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2"
+end 'serviceSendCannotBeTriedRefusal'
+
 // ⭐ **WHAT ONE MESSAGE ARGUMENT IS**, its twin one construct over. Here the author DID name the value's
 // destination, so the blame names the parameter and the message rather than the send.
 module function serviceSendArgumentBlame(typeName ByteArray, methodName ByteArray, paramName ByteArray) returns String
 	return "argument `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}`"
 end 'serviceSendArgumentBlame'
 
-// ⭐⭐ **MINT `<T>.request` AND `<T>.handle`, INTO THE INTERNER THE CALLER'S IDS ARE MINTED AGAINST.**
-//
 // ⚠⚠ **THE INTERNER IS A PARAMETER AND IT IS NOT OPTIONAL — THIS IS OPEN #56's HAZARD (four times, and
-// counting).** A payload type built here is a `MaxonType`, which carries a `TypeNameId` that is only a
+// counting).** A payload type built below is a `MaxonType`, which carries a `TypeNameId` that is only a
 // number without its table: the layouts the SIGNATURE INDEX holds carry the index's ids, and a
 // `FileParseArtifact`'s carry that file's own. `ProgramSignatures.indexTypeNames`' header records what
 // resolving one against the wrong table cost — a destructor synthesized for `InstantNanos` on a field that
 // is a struct — and `fieldTypeOf`'s records the two doors that each got it wrong once. So the builder never
-// picks: every caller hands it the table its own ids live in.
-function buildServiceCompanions(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns ServiceCompanions
-	return ServiceCompanions.create(buildServiceRequestUnion(signatures, typeName: typeName, into: into), handle: buildServiceHandleStruct(signatures, typeName: typeName))
-end 'buildServiceCompanions'
-
+// picks: the caller hands it the table its own ids live in.
+//
 // The request union: `__shutdown` at variant 0, then one variant per message in declaration order.
-function buildServiceRequestUnion(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayout
+module function buildServiceRequestUnion(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayout
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 	let declFilePath = layout.declFilePath
 	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: sharedEmptyDeclaredConformances, visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
@@ -462,7 +477,7 @@ end 'addServiceRequestCase'
 // ⚠ **IT CARRIES THE SERVICE'S OWN VISIBILITY AND DECLARING FILE, not `createCompilerOwned`'s `global`**,
 // on `appendUnionCasesCompanion`'s precedent: the companion is nameable exactly where the type is, so a
 // `module type Calc` does not leak its handle across the module boundary.
-function buildServiceHandleStruct(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
+module function buildServiceHandleStruct(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
 	let owner = spawnTargetLayoutOf(signatures, typeName: typeName)
 	var handle = StructLayout.create(serviceHandleCompanionName(typeName), visibility: owner.visibility, declFilePath: owner.declFilePath)
 	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
@@ -556,14 +571,35 @@ end 'serviceNameAlreadyListed'
 // into `signatures.hash`, and `Queries.currentParseMemoKey` therefore invalidates file A's parse — which is
 // where `Calc` is declared and where a reference to `Calc.handle` resolves.
 module function synthesizeServiceCompanions(signatures ProgramSignatures)
-	for typeName in serviceTypeRoster(signatures) 'eachService'
-		// Asked of the REGISTRY rather than of the roster above, because the registry is what a second mint
-		// would actually collide with — a `spawn` in a warm-rebuilt file whose companions are already folded
-		// in reaches here with the roster fresh and the registry filled.
+	let services = serviceTypeRoster(signatures)
+
+	// ⭐⭐ **PASS 1 — EVERY HANDLE, BEFORE ANY REQUEST UNION, AND THE ORDER IS NOT A PREFERENCE.** A message
+	// may take a `<S>.handle` parameter, so a request union's PAYLOAD may be typed at a handle: at the service's
+	// own (`Counter.reportThen(peer Counter.handle)`) or at a peer's
+	// (`Worker.run(sink Logger.handle)`). `serviceRequestPayloads` resolves each parameter through
+	// `declaredSlotType`, which answers `unresolved` for a struct no registry holds yet — and an `unresolved`
+	// payload takes `Parser.requirePayloadLowerable` into `classifyUnionPayload`'s panic. MEASURED as exactly
+	// that panic, on `services/two-instances-are-independent`, from a one-pass mint that built each pair whole.
+	//
+	// A handle depends on nothing but its own service's layout, so pass 1 can never need pass 2's output and
+	// the two-phase order is total rather than a topological sort over services.
+	for typeName in services 'eachHandle'
+		// Asked of the REGISTRY rather than of the roster, because the registry is what a second mint would
+		// actually collide with — a `spawn` in a warm-rebuilt file whose companions are already folded in
+		// reaches here with the roster fresh and the registry filled.
 		if signatures.containsStruct(serviceHandleCompanionName(typeName)) 'alreadyMinted'
 			continue
 		end 'alreadyMinted'
 
-		signatures.recordServiceCompanions(buildServiceCompanions(signatures, typeName: typeName, into: signatures.indexTypeNames()))
-	end 'eachService'
+		signatures.recordServiceHandle(buildServiceHandleStruct(signatures, typeName: typeName), serviceTypeName: typeName)
+	end 'eachHandle'
+
+	// PASS 2 — the request unions, now that every handle a payload could be declared at exists.
+	for typeName in services 'eachRequest'
+		if signatures.containsEnum(serviceRequestCompanionName(typeName)) 'alreadyMinted'
+			continue
+		end 'alreadyMinted'
+
+		signatures.recordServiceRequest(buildServiceRequestUnion(signatures, typeName: typeName, into: signatures.indexTypeNames()))
+	end 'eachRequest'
 end 'synthesizeServiceCompanions'

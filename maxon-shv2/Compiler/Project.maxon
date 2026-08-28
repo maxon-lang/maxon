@@ -4396,6 +4396,11 @@ end 'serviceLoopSymbol'
 // may name it.
 export let ServiceShutdownCaseName = b"__shutdown"
 
+// The variant INDEX that name occupies, which is what a reader that has a layout in hand actually needs.
+// Derived from nothing and written here beside the rule that fixes it: `buildServiceRequestUnion` adds the
+// pill FIRST, and `addServiceRequestCase` gives each case the index its position in the roster gives it.
+export let ServiceShutdownCaseIndex = 0 as CaseIndex
+
 // ⭐⭐ **THE REPLY SLOT IS AN `Integer`, DELIBERATELY, AND THE P1.3 CASCADE IS WHY.** It is a raw cell
 // pointer (0 = fire-and-forget), NOT a managed box: the `__destruct_<U>` payload cascade must SKIP it, and
 // it does so structurally because a scalar payload is not managed. Completing an abandoned reply cell is the
@@ -4403,10 +4408,20 @@ export let ServiceShutdownCaseName = b"__shutdown"
 // not free.
 module let ServiceReplySlotName = b"__reply"
 
+// ⭐ **WHAT SV1 STORES IN THAT SLOT: NOTHING, SPELLED ONCE.** A reply cell is a GT pointer and 0 is "no
+// awaiter" — which is what makes a value-returning message legal fire-and-forget in SV1: the loop runs the
+// handler and drops the result because there is nobody to hand it to.
+export let ServiceNoReplyCell = 0 as ParsedInt
+
 // The one field of `<T>.handle`: the mailbox pointer. A real 8-byte box on `managedFileLayout`'s shape
 // rather than a parse-time mark, so moves, E3102, struct fields, arrays and the drop cascade all reach it
 // by construction rather than through a special case at each door.
 module let ServiceHandleMailboxFieldName = b"mailbox"
+
+// Its FIELD INDEX, for the one reader that loads it through a `StructLayout` rather than at a raw offset
+// (`Parser.emitServiceSendOp`). `buildServiceHandleStruct` adds exactly this one field, and the audit there
+// is what keeps the index and `ServiceHandleMailboxOffset` two spellings of one geometry.
+export let ServiceHandleMailboxFieldIndex = 0 as FieldIndex
 
 // ⭐⭐ **THE HANDLE BOX'S GEOMETRY AS A NUMBER, FOR THE ONE READER THAT HAS NO LAYOUT — the RUNTIME.**
 // `__mbox_handle_clone_box` mints a fresh handle box and `__mbox_handle_drop_box` reads the mailbox out of
@@ -4414,6 +4429,17 @@ module let ServiceHandleMailboxFieldName = b"mailbox"
 // pair is AUDITED against the layout at the one place that builds it
 // (`ServiceCompanions.buildServiceHandleStruct`), so a field added to the handle fails the compile rather
 // than making the runtime read past the record's end.
+// ⭐⭐ **`shutdown` IS THE HANDLE'S OWN METHOD, NOT A MESSAGE — AND IT YIELDS TO ONE OF THAT NAME.** It
+// enqueues the `__shutdown` pill BEHIND everything already queued, which is what makes a shutdown a graceful
+// drain rather than a kill. It follows `clone`'s precedent exactly (`Parser.structCloneIsSynthesized`): a
+// service that declares an `export function shutdown()` of its own WINS, because that declaration is a
+// VARIANT of the request union and the dispatch looks for a variant first — which leaves dropping the last
+// handle as the other road to the same drain.
+//
+// ⚠ It is the AUTHOR-SPELLABLE name; `ServiceShutdownCaseName` above is the compiler's `__`-prefixed
+// VARIANT, which no source may declare and no author may name.
+export let ServiceShutdownMethodName = b"shutdown"
+
 export let ServiceHandleMailboxOffset = 0 as ByteOffset
 export let ServiceHandleBoxSize = 8 as ParsedInt
 
@@ -4470,6 +4496,16 @@ export function appendUnionCasesCompanion(enums EnumLayoutArray, layout EnumLayo
 		return
 	end 'noAssociatedValues'
 
+	enums.push(buildUnionCasesCompanion(layout))
+end 'appendUnionCasesCompanion'
+
+// ⭐ **THE COMPANION ITSELF, SPLIT FROM THE APPENDER FOR ITS SECOND REGISTRAR (SV1 wave 3).** A SERVICE's
+// request union is registered through `ProgramSignatures.recordServiceRequest` rather than pushed onto an
+// array, and it owes its `unionCases` companion exactly as an author's union does —
+// `services.unioncases-tags-the-request-variants` reads `Calc.request.unionCases.bump.rawValue`. Two builders
+// would be two answers to "what tag does a variant carry", which is the drift the header below is entirely
+// about.
+export function buildUnionCasesCompanion(layout EnumLayout) returns EnumLayout
 	// ⛔⛔ **THE COMPANION'S TAG IS THE UNION'S TAG, READ THROUGH `tagOfIndex` — NEVER THE LOOP INDEX.** It was
 	// written `tag: i, rawValue: "{i}"`, and that was true only while a boxed union could not declare raw
 	// values: every tag WAS its declaration index, so the index was the union's tag spelled differently. The
@@ -4517,8 +4553,8 @@ export function appendUnionCasesCompanion(enums EnumLayoutArray, layout EnumLayo
 		companion.addCase(layout.caseNameAt(i), tag: tag, rawValue: "{tag}", declaresRawValue: mirrorsTheUnionsBacking and layout.declaresRawValues, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 	end 'eachVariant'
 
-	enums.push(companion)
-end 'appendUnionCasesCompanion'
+	return companion
+end 'buildUnionCasesCompanion'
 
 // ⭐ **`<Enum>.allCaseNames` — THE CASE NAMES, IN DECLARATION ORDER, AS AN `Array with String`.** A STATIC
 // member of every enum AND every union, payload-bearing ones included: only the NAMES are returned, so a

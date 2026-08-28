@@ -1508,6 +1508,11 @@ export union ParseError implements Error
 	// from the declaration alone, and this one is about ONE ARGUMENT's OWNERSHIP at ONE send. A single code
 	// for both would make the two findings indistinguishable in a corpus that has to pin each separately.
 	serviceArgumentNotUnique(explanation String, line LineNumber, column ColumnNumber)
+	// ⭐ **THE FOURTH (SV1 wave 3), AND IT IS ABOUT THE HANDLE'S SURFACE RATHER THAN ABOUT A VALUE.** A member
+	// that is not on `<T>.handle` is not a missing FIELD and not an undefined FUNCTION — it is a method the
+	// export boundary deliberately left off the handle, which is the property that makes a self-send
+	// unspellable. The sentence has to say that or it reads as a typo.
+	serviceNotAMessage(explanation String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -7478,11 +7483,17 @@ end 'articledColumnTypeName'
 // E3019 would blame for this argument, empty when it may be written through. It rides here rather
 // than being derived later for the reason the label does — it is a fact about the SYNTAX at this
 // argument, and nothing downstream can recover it (see the op's own header).
-function pushCallArg(args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, value ValueId, label ByteArray, range SourceRange, immutableName ByteArray)
+function pushCallArg(args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argAnchors TokenIndexArray, value ValueId, label ByteArray, range SourceRange, immutableName ByteArray, anchorIndex TokenIndex)
 	args.push(value)
 	argLabels.push(label)
 	argRanges.push(range)
 	argImmutableNames.push(immutableName)
+	// ⭐ **THE ARGUMENT'S OWN FIRST VALUE TOKEN, WHICH `argRanges` CANNOT STAND IN FOR.** A range carries a
+	// line and a column; a refusal raised by a door that takes a `Token` — which every slot-type refusal does
+	// — needs the token itself. `argRanges` is anchored at the argument's LABEL where it has one, and this at
+	// its VALUE, because a type mismatch is about the value and the canonical position for one is where the
+	// value starts (`services.error.a-handle-of-another-service-is-refused` pins exactly that column).
+	argAnchors.push(anchorIndex)
 end 'pushCallArg'
 
 // ⭐ **PUSH AN ARGUMENT THE COMPILER SUPPLIED, NOT THE AUTHOR** (BATCH2 slice 4) — a parameter default's
@@ -7494,6 +7505,10 @@ end 'pushCallArg'
 // blame, which is exactly what a missing entry means (`immutableArgNameAt` decodes a short column as
 // empty; it is the column's only reader). Second, three `emitCall` sites hand in the SHARED
 // `NoImmutableArgNames`, so a push would grow a global array every other call in the program then reads.
+//
+// ⚠ **IT LEAVES `argAnchors` SHORT FOR THE SAME REASON, AND `callArgAnchorAt` DECODES THAT.** A defaulted
+// argument has no token of the author's to point at — the value was materialized from the DECLARATION — so
+// the honest anchor is the call site itself, which is what a short column means.
 function pushDefaultedCallArg(args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, value ValueId, label ByteArray, range SourceRange)
 	args.push(value)
 	argLabels.push(label)
@@ -7567,6 +7582,15 @@ export let NoDefaultArgSlots = ParamCountArray.create()
 export function immutableArgNameAt(argImmutableNames ByteArrayArray, index ParamCount) returns ByteArray
 	return try argImmutableNames.get(index) otherwise EmptySourceText
 end 'immutableArgNameAt'
+
+// ⭐ **THE TOKEN A REFUSAL ABOUT ARGUMENT `index` SHOULD POINT AT** — the argument's own first value token,
+// or the CALL's own anchor when the column is short. It is short for exactly one reason and it is a real
+// answer rather than a gap: `pushDefaultedCallArg` supplies an argument the author never wrote, so there is
+// no token of theirs to blame and the call site is the honest place to put it. `immutableArgNameAt`'s
+// convention one column over, and its reason.
+export function callArgAnchorAt(argAnchors TokenIndexArray, index ParamCount, callAnchor TokenIndex) returns TokenIndex
+	return try argAnchors.get(index) otherwise callAnchor
+end 'callArgAnchorAt'
 
 // The `argImmutableNames` column to put ON the op: the shared empty one when no argument named an
 // immutable binding, else the column as built. Called once per source-written call, at the emit, so the
@@ -9852,6 +9876,40 @@ enum SlotMismatchVoice
 	// compiler leaves its cursor after reading that argument.
 	payloadArgument
 end 'SlotMismatchVoice'
+
+// ⭐⭐ **WHY A UNION BOX'S PAYLOAD SLOTS ARE BEING FILLED — AND IT DECIDES TWO THINGS THAT MUST NOT BE
+// DECIDED SEPARATELY (SV1 wave 3).** One `emitEnumBox` fills every boxed union in the language, and there are
+// now two constructs that reach it. They agree about the box — the size, the tag, the slot offsets and the
+// zero-fill are the union's, not the construct's — and they differ about exactly two things:
+//
+//   • **WHO TAKES OWNERSHIP OF A MANAGED PAYLOAD.** A union CONSTRUCTED here hands its box to this frame, so
+//     a borrowed value may be CO-OWNED (`moveInPayload`, the 2026-08-04 transitive-consume ruling). A message
+//     crosses to another GREEN THREAD, where a second owner is not a refcount pair but a race
+//     (`moveIntoGreenThread`, EC10) — so the same borrowed value must be REFUSED or copied.
+//   • **WHAT THE REFUSAL SOUNDS LIKE.** A construct's payload is a payload; a message's is an ARGUMENT, and
+//     it takes the argument sentence every other argument position takes for
+//     `SlotMismatchVoice.containerElementArgument`'s stated reason — it is a call whose arguments never
+//     reach `SemanticCheck.checkArgTypes`.
+//
+// ⚠ **ONE PARAMETER AND NOT TWO, BECAUSE THEY ARE ONE FACT.** A caller free to pair the message's voice
+// with the construct's transfer would be free to refuse in the argument's words while co-owning the
+// argument's box, which is the wrong answer wearing the right sentence.
+union PayloadFill
+	// `Move.walk(5)` — the author is CONSTRUCTING a boxed union value, and it stays in this frame.
+	unionConstruct
+	// `h.bump(5)` — the author is SENDING a message, and the box is on its way to another green thread. It
+	// carries the SERVICE's type name because the refusal names the message the argument belongs to, and the
+	// case name alone (`caseTok`) is only half of it.
+	serviceMessage(serviceTypeName ByteArray)
+end 'PayloadFill'
+
+// The sentence a mis-typed payload is refused in, per fill. See `SlotMismatchVoice` for what each voice says.
+function payloadFillVoice(fill PayloadFill) returns SlotMismatchVoice
+	return match fill 'fill'
+		unionConstruct gives SlotMismatchVoice.payloadArgument
+		serviceMessage gives SlotMismatchVoice.containerElementArgument
+	end 'fill'
+end 'payloadFillVoice'
 
 // ⭐⭐ **THE TWO DOORS AN ERROR LEAVES A FUNCTION BY (A1s-throwsbox review).** Both hand the caller a flag the
 // caller decodes against the enclosing function's DECLARED `throws` clause, so both owe that clause the same
@@ -16958,7 +17016,7 @@ export type Parser
 	//
 	// The cursor is saved and restored, so the peek-only contract of the walk that calls this holds.
 	function sweptParamTypeAt(typeStart TokenIndex, typeEnd TokenIndex) returns MaxonType
-		if typeEnd != typeStart + 1 'aCompoundTypeIsNotReadHere'
+		if typeEnd != typeStart + 1 and not self.paramTypeIsADottedName(typeStart, typeEnd: typeEnd) 'aCompoundTypeIsNotReadHere'
 			return sharedUnreadParamType
 		end 'aCompoundTypeIsNotReadHere'
 
@@ -16970,6 +17028,26 @@ export type Parser
 		self.pos = saved
 		return swept
 	end 'sweptParamTypeAt'
+
+	// ⭐⭐ **A THREE-TOKEN `<Type>.<member>` IS THE ONE COMPOUND SHAPE THE SWEEP DOES READ (SV1 wave 3), AND
+	// NONE OF THE THREE REASONS ABOVE APPLIES TO IT.** It registers nothing (a dotted name is a `named`, and
+	// only tuples and generic instantiations mint), it costs three token tests plus the one-token reader's own
+	// work, and it is not the ranged-int shape the fallback exists for.
+	//
+	// ⛔ **AND WITHOUT IT A SERVICE CANNOT TAKE A HANDLE, WHICH THE DESIGN REQUIRES.** A message's parameters
+	// ARE the payload fields of the synthesized request union (`ServiceCompanions.serviceRequestPayloads`
+	// resolves each one), so a `run(sink Logger.handle)` recorded `unresolved` builds a payload declared
+	// `unresolved` — and that takes `Parser.requirePayloadLowerable` into `classifyUnionPayload`'s panic.
+	// MEASURED as exactly that panic on `services/two-instances-are-independent`, whose `reportThen` takes a
+	// peer's handle.
+	//
+	// ⚠ It widens what the OVERLOAD picker can score, which is the second half of what an unread type costs:
+	// a declaration with a dotted parameter type stops being UNSCOREABLE. That direction is the safe one — the
+	// picker was declining to score a type it could have read — and it is the same widening the return clause
+	// two lines away has always had.
+	function paramTypeIsADottedName(typeStart TokenIndex, typeEnd TokenIndex) returns bool
+		return typeEnd == typeStart + 3 and self.kindAt((typeStart + 1) as TokenIndex) == TokenKind.dot and tokenCanBeAName(self.tokenAt((typeStart + 2) as TokenIndex))
+	end 'paramTypeIsADottedName'
 
 	// ⭐ The inner-alias PARAMETER shape of the parameter list at `parenPos` (P1.6-C) — its SOURCE parameter
 	// names and, per position, the bare inner-alias MEMBER (`Idx`) or `EmptySourceText`. It walks the list the
@@ -21574,8 +21652,44 @@ export type Parser
 		self.skipOptionalLabel()
 
 		self.artifact.recordStructType(layout)
+		self.contributeServiceCompanions(layout.name)
 		self.closeTypeParamScope()
 	end 'parseTypeDeclaration'
+
+	// ⭐⭐⭐ **A SERVICE'S COMPANIONS ARE THIS FILE'S CONTRIBUTION TOO, AND A LAYOUT IN ONLY ONE OF THE TWO
+	// REGISTRIES IS WHAT THE INSTALLERS CANNOT SURVIVE (SV1 wave 3).** `synthesizeServiceCompanions` registers
+	// the pair on the SIGNATURE INDEX, which is what makes `Calc.handle` a nameable type. But
+	// `installUnionDestructors` and `installStructDestructors` walk `project.enumTypes` / `project.structTypes`
+	// — the registries a FILE contributes to — and a layout absent there is a `__destruct_<T>` the backend
+	// cannot resolve. MEASURED as exactly that: `call to unknown function '__destruct_Counter.request'` on
+	// `services/two-instances-are-independent`, whose request union owns a `Counter.handle` payload.
+	//
+	// It is `internTupleLayout`'s arrangement, one synthesis over and for its stated reason: *"both
+	// registrations happen here, together, because a layout in one and not the other is what makes the
+	// destructor installer ask a question the index cannot answer."*
+	//
+	// ⚠⚠ **THE PAIR IS REBUILT AGAINST THIS FILE'S INTERNER RATHER THAN COPIED FROM THE INDEX — OPEN #56.**
+	// A payload type carries a `TypeNameId`, which is only a number without its table, and `mergeArtifact`
+	// remaps an artifact's ids as THIS FILE'S. Handing it the index's layout would file the index's numbers
+	// under the file's remap: a payload declared `Counter.handle` resolving to whatever name that id happens to
+	// hold here. `buildServiceRequestUnion` takes the interner as a parameter for exactly this, so what is
+	// shared is the BUILDER and not the record.
+	//
+	// ⚠ It runs at the DECLARING file's `type` — the one file that is guaranteed to exist for a service, and
+	// the file the memo re-parses when a `spawn` elsewhere mints the companions (the sweep's own hash moves,
+	// which is `synthesizeServiceCompanions`' recorded argument for why the cross-file case works at all).
+	function contributeServiceCompanions(typeName ByteArray)
+		// The handle's EXISTENCE is what says this type is a service: the sweep mints one for every accepted
+		// spawn target and for nothing else, so this is the roster asked through the registry that holds it.
+		if not self.signatures.containsStruct(serviceHandleCompanionName(typeName)) 'notASpawnedService'
+			return
+		end 'notASpawnedService'
+
+		self.artifact.recordStructType(buildServiceHandleStruct(self.signatures, typeName: typeName))
+		// Through `recordEnumType`, which is also what appends the `unionCases` companion — so a request union
+		// reaches `project.enumTypes` with the same three-layout shape an author's boxed union does.
+		self.artifact.recordEnumType(buildServiceRequestUnion(self.signatures, typeName: typeName, into: self.artifact.typeNames))
+	end 'contributeServiceCompanions'
 
 	// The member list's TERMINATOR test, shared by a `type` body and an `extension` body: blank lines are
 	// skipped, an `end` closes, and EOF is the unterminated-declaration throw. The two bodies differ only in
@@ -31607,15 +31721,15 @@ export type Parser
 			// `try` to catch — but the author who wrote one is asking for the awaitable form, and `try` is
 			// exactly its first token. Refusing it as *"`try` must be applied to a call"* would be true and
 			// useless.
-			serviceSend gives try self.rejectTriedServiceSend(tryTok)
+			serviceSend(_, callee, _, _) gives try self.rejectTriedServiceSend(tryTok, callee: callee)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
 	// The refusal above, in its own function so the arm stays one statement. It THROWS rather than answering,
 	// exactly as `rejectTryTarget` does, and the `TryTarget` return type is what lets the arm's `gives` join
 	// its siblings.
-	function rejectTriedServiceSend(tryTok Token) returns TryTarget throws ParseError
-		throw ParseError.unsupported("`try h.m(…)` — a fire-and-forget message carries no reply and so can deliver no error. The awaitable form `try await h.m(…)`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2", line: tryTok.line, column: tryTok.column)
+	function rejectTriedServiceSend(tryTok Token, callee ByteArray) returns TryTarget throws ParseError
+		throw ParseError.unsupported(serviceSendCannotBeTriedRefusal(callee), line: tryTok.line, column: tryTok.column)
 	end 'rejectTriedServiceSend'
 
 	// Replace the `witnessDispatch` op at `opIdx` with a `witnessTryDispatch` defining the second `errorFlag`
@@ -51595,7 +51709,7 @@ export type Parser
 			let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: memberTok)
 			let arg = try slotValues.get(i) otherwise panic("parseEnumFromNameCase: slotValues.get OOB at {i} — the columns are filled one per declared slot")
 			let anchorIndex = try slotAnchors.get(i) otherwise panic("parseEnumFromNameCase: slotAnchors.get OOB at {i} — captured in lockstep with the values")
-			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: memberTok, argTok: self.tokenAt(anchorIndex))
+			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: memberTok, argTok: self.tokenAt(anchorIndex), voice: SlotMismatchVoice.payloadArgument)
 			classes.push(class)
 		end 'validate'
 
@@ -51719,7 +51833,7 @@ export type Parser
 
 		try self.requireAllPayloadsProvided(layout, payloads: payloads, filled: filled, caseTok: caseTok)
 
-		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: slotValues, argsBareLocal: slotBareLocal, argAnchors: slotAnchors, caseTok: caseTok, range: range)
+		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: slotValues, argsBareLocal: slotBareLocal, argAnchors: slotAnchors, caseTok: caseTok, range: range, fill: PayloadFill.unionConstruct)
 	end 'parseEnumBoxConstruct'
 
 	// Parse the `(pos, label: value, …)` payload argument list into the layout-parallel columns. The caller
@@ -51850,7 +51964,7 @@ export type Parser
 	// ⚠ **THE ZERO-FILL IS MANDATORY** even though the slab returns zeroed memory: it pins a
 	// deterministic 0 in a narrow case's unused slots, and a NULL slot is exactly what the cascade's
 	// null-guard skips — so a zeroed managed slot is never decref'd as a bogus pointer.
-	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, argAnchors TokenIndexArray, caseTok Token, range SourceRange) returns ValueId throws ParseError
+	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, argAnchors TokenIndexArray, caseTok Token, range SourceRange, fill PayloadFill) returns ValueId throws ParseError
 		let payloads = layout.payloadsAt(caseIndex)
 
 		// Validate + classify every field before emitting a single op — a refused payload emits no code.
@@ -51861,9 +51975,17 @@ export type Parser
 			let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: caseTok)
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.count() was checked to equal the arity but get OOB at {i}")
 			let anchorIndex = try argAnchors.get(i) otherwise panic("emitEnumBox: argAnchors.get OOB at {i} — captured in lockstep with the args")
-			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: caseTok, argTok: self.tokenAt(anchorIndex))
+			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: caseTok, argTok: self.tokenAt(anchorIndex), voice: payloadFillVoice(fill))
 			classes.push(class)
 		end 'validate'
+
+		// ⭐⭐ **A MESSAGE'S PAYLOADS ARE TRANSFERRED BEFORE THE BOX EXISTS, AND THE ORDER IS THE WHOLE
+		// DIFFERENCE.** A construct's move-in needs the box (an opaque slot's reference is recorded ON the record
+		// it fills), so it happens at the store. A SEND's transfer can REFUSE — an argument this frame does not
+		// solely own is E3138 — and a refusal after the `__mm_alloc` would leave a box behind that nothing frees:
+		// the enrolment two lines down is what would have made it droppable. `transferConsumedArgs` runs before
+		// its own call op for the same reason.
+		try self.transferPayloadsIntoAGreenThread(fill, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
 
 		let size = self.emitLiteral(layout.boxSizeBytes(), valueType: MaxonType.integer, range: range)
 		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
@@ -51875,7 +51997,7 @@ export type Parser
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
 			let class = try classes.get(i) otherwise panic("emitEnumBox: classes.get OOB at {i} — it is filled in lockstep with the fields")
 			let bareLocal = try argsBareLocal.get(i) otherwise panic("emitEnumBox: argsBareLocal.get OOB at {i} — captured in lockstep with the args")
-			let stored = try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, owner: box, anchor: caseTok, range: range)
+			let stored = try self.storedPayloadValue(fill, class: class, arg: arg, argBareLocal: bareLocal, owner: box, caseTok: caseTok, range: range)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: stored, storageType: payloadStorageOf(class), range: range)
 		end 'storeEach'
 
@@ -51892,6 +52014,43 @@ export type Parser
 
 		return box
 	end 'emitEnumBox'
+
+	// ⭐⭐ **MOVE EVERY MANAGED PAYLOAD OF A MESSAGE INTO THE SERVICE'S GREEN THREAD — or refuse.** The
+	// send's half of `emitEnumBox`'s two-fill split; a `unionConstruct` fill returns at the first line and the
+	// whole step is inert for every union in every program that spawns nothing.
+	//
+	// It REWRITES `args` in place, exactly as `transferConsumedArgs` rewrites a call's, and for the identical
+	// reason: a borrowed byte record is PROMOTED, so what crosses is a different record than what was parsed
+	// and the store below must carry the copy rather than the borrow.
+	function transferPayloadsIntoAGreenThread(fill PayloadFill, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) throws ParseError
+		match fill 'fill'
+			unionConstruct then return
+			serviceMessage(serviceTypeName) then try self.moveMessagePayloads(serviceTypeName, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
+		end 'fill'
+	end 'transferPayloadsIntoAGreenThread'
+
+	// The loop, split from the `match` above so the arm stays one statement. Every payload goes through the ONE
+	// transfer door, the reply slot included — that slot is an integer, which `moveIntoGreenThread` passes
+	// through untouched, so it needs no case of its own here.
+	function moveMessagePayloads(serviceTypeName ByteArray, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) throws ParseError
+		for i in 0 upto payloads.count() 'eachPayload'
+			let arg = try args.get(i) otherwise panic("moveMessagePayloads: args.get OOB at {i} — the caller sized the columns to the variant's payload count")
+			let field = try payloads.get(i) otherwise panic("moveMessagePayloads: payloads.get OOB at {i} — the loop is bounded by that same count")
+			let anchorIndex = try argAnchors.get(i) otherwise panic("moveMessagePayloads: argAnchors.get OOB at {i} — filled in lockstep with the args")
+			let blame = serviceSendArgumentBlame(serviceTypeName, methodName: caseTok.value, paramName: field.name)
+			try args.set(i, value: try self.moveIntoGreenThread(arg, blame: blame, anchor: self.tokenAt(anchorIndex))) otherwise panic("moveMessagePayloads: args.set OOB at {i}")
+		end 'eachPayload'
+	end 'moveMessagePayloads'
+
+	// What actually lands in payload slot `i`, per fill. A CONSTRUCT moves in here, where the box exists; a
+	// MESSAGE was transferred before the box did, so this frame has already given up its reference and the
+	// store is the bare word.
+	function storedPayloadValue(fill PayloadFill, class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, caseTok Token, range SourceRange) returns ValueId throws ParseError
+		return match fill 'fill'
+			unionConstruct gives try self.moveInPayload(class, arg: arg, argBareLocal: argBareLocal, owner: owner, anchor: caseTok, range: range)
+			serviceMessage gives arg
+		end 'fill'
+	end 'storedPayloadValue'
 
 	// ⭐ **MOVE A MANAGED VALUE INTO DURABLE STORAGE** — a union payload slot or a struct field, the
 	// construct half of static single-owner ownership and the mirror of `parseBinding`'s move-on-bind. A
@@ -52365,7 +52524,7 @@ export type Parser
 	// `argTok` is the token following THIS argument and is where a refusal about ONE argument's type
 	// belongs, which is the position the canonical specs pin. Passing the construct's anchor for both is
 	// what made `union-payload.error.wrong-struct` point at `tint` rather than at the argument.
-	function requirePayloadArgType(field PayloadField, declared MaxonType, class PayloadClass, value ValueId, caseTok Token, argTok Token) throws ParseError
+	function requirePayloadArgType(field PayloadField, declared MaxonType, class PayloadClass, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) throws ParseError
 		match class 'c'
 			scalar then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
 			// ⚠ The scalar rule, spelled as its OWN arm and deliberately not folded into a `scalar to typeParam`
@@ -52377,7 +52536,7 @@ export type Parser
 			typeParam then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
 			// The shared managed door directly — `requireManagedPayloadArg` stood here and did nothing but
 			// forward, once the payload voice stopped needing a `<Union>.<case>(<field>)` label built for it.
-			managed(storage, isString) then try self.requireManagedValueMatches(storage, isString: isString, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
+			managed(storage, isString) then try self.requireManagedValueMatches(storage, isString: isString, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, voice: voice, anchor: argTok)
 			// ⭐ **A NESTED BOXED UNION TAKES THE MANAGED DOOR, over its `named(<union>)` VALUE type and not over
 			// the machine word its slot is (W55).** A boxed union's value carries `named`, which every ranged-int
 			// alias and every payload-free enum also carries — so the tag comparison alone AGREES for any two of
@@ -52386,7 +52545,7 @@ export type Parser
 			// `Inner`'s destructor. `isString: false` — a union box is an aggregate, released by
 			// `__destruct_<U>`/`__mm_decref` and co-owned by `__mm_retain`, never by the fused-record COPY
 			// protocol a String takes.
-			nestedUnion(storage) then try self.requireManagedValueMatches(storage, isString: false, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
+			nestedUnion(storage) then try self.requireManagedValueMatches(storage, isString: false, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, voice: voice, anchor: argTok)
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
 			undeclaredName then break 'c'
@@ -53983,6 +54142,21 @@ export type Parser
 		// PEEKED, not consumed: the method path below hands the cursor to `parseCallNamed`, which consumes
 		// the name itself. Only the field-read branch advances.
 		let memberTok = try self.memberNameTokenAt(self.pos)
+
+		// ⭐⭐⭐ **A MEMBER CALL ON A `<T>.handle` IS A MESSAGE SEND, AND THAT IS THE WHOLE OF LOCATION
+		// TRANSPARENCY (SV1 wave 3).** Dispatch is decided by the RECEIVER's type: a `Calc` value takes direct
+		// calls, a `Calc.handle` takes messages, and `c.bump(3)` is spelled identically either way. Intercepted
+		// HERE, ahead of the field/method split, because a handle has exactly one field — the mailbox, at
+		// `Visibility.file` — and every member an author can name on one is a message, `clone` or `shutdown`.
+		//
+		// ⚠ **ALL THREE DISPATCH ENTRIES FUNNEL THROUGH THIS FUNCTION**, so one interception covers a handle
+		// held by a binding (`h.bump()`), one reached through a chain (`self.sink.say(s)`) and one a postfix
+		// walk produced. A second copy at each door is exactly the drift `dispatchMethodOnBase`'s own header
+		// warns about one paragraph down.
+		if self.signatures.isServiceHandle(base.layout.name) 'aServiceHandle'
+			return try self.dispatchOnServiceHandle(func, base: base, baseTok: baseTok, memberTok: memberTok, resultUsed: resultUsed)
+		end 'aServiceHandle'
+
 		// Read ONCE and threaded to both decisions below, which are the two halves of one question: a member
 		// followed by `(` is a CALL, and a member not followed by one is a READ — so "is it a field?" and
 		// "may it be reported as a missing field?" cannot come to disagree about which shape they saw.
@@ -54111,6 +54285,234 @@ export type Parser
 
 		return result
 	end 'dispatchMethodOnBase'
+
+	// ⭐⭐ **EVERYTHING AN AUTHOR MAY SPELL ON A `<T>.handle`, IN THE ORDER THE QUESTIONS CAN BE ASKED.** The
+	// request UNION is the roster: it holds one variant per message in declaration order, so "is this a
+	// message?" is `indexOfCase` and needs no second list to fall out of step with `messageMethodNames`.
+	//
+	// ⭐ **THE VARIANT TEST COMES FIRST, AND THAT IS WHAT GIVES A DECLARED `clone`/`shutdown` PRECEDENCE.** A
+	// service declaring `export function shutdown()` has a VARIANT of that name, so the author's method wins
+	// and the compiler's pill becomes unspellable for it — which leaves dropping the last handle as the other
+	// road to the same drain. It is `structCloneIsSynthesized`'s rule, reached by asking the roster rather
+	// than by asking `declaresCallee` a second time.
+	//
+	// ⚠ **VARIANT 0 IS THE COMPILER'S `__shutdown` AND IS NOT A MESSAGE.** It is `__`-prefixed, so no source
+	// may declare it and no author may name it (E2051) — the arm below is the structural backstop for a
+	// spelling that reaches here anyway, and it answers the same way an absent member does.
+	function dispatchOnServiceHandle(func IrFunction, base StructBase, baseTok Token, memberTok Token, resultUsed bool) returns ValueId throws ParseError
+		let typeName = self.signatures.serviceOfHandle(base.layout.name)
+		let request = self.serviceRequestLayoutOf(typeName)
+		let caseIndex = request.indexOfCase(memberTok.value)
+
+		if caseIndex < request.caseCount() and caseIndex != ServiceShutdownCaseIndex 'aMessage'
+			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, caseIndex: caseIndex, resultUsed: resultUsed)
+		end 'aMessage'
+
+		if memberTok.value.equals(ServiceShutdownMethodName) 'thePoisonPill'
+			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, resultUsed: resultUsed)
+		end 'thePoisonPill'
+
+		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
+			return try self.emitServiceHandleClone(base, baseTok: baseTok, memberTok: memberTok)
+		end 'aSecondHandle'
+
+		throw ParseError.serviceNotAMessage(serviceNotAMessageRefusal(typeName, handleName: base.layout.name, member: memberTok.value, declaresIt: self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: memberTok.value))), line: memberTok.line, column: memberTok.column)
+	end 'dispatchOnServiceHandle'
+
+	// The `<T>.request` layout, or a panic — `serviceHandleLayout`'s twin, one companion over, and for its
+	// reason: the pair is minted by one act for every accepted spawn target, before any body is parsed.
+	function serviceRequestLayoutOf(typeName ByteArray) returns EnumLayout
+		return match self.signatures.enumOf(serviceRequestCompanionName(typeName)) 'lookup'
+			declared(layout) gives layout
+			undeclared panic("serviceRequestLayoutOf: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it beside the handle, and this caller reached a handle")
+		end 'lookup'
+	end 'serviceRequestLayoutOf'
+
+	// ⭐⭐ **`h.m(…)` — BUILD THE REQUEST BOX AND ENQUEUE IT.** The arguments are read by the ORDINARY call
+	// reader (`parseCallArgs` + `fillOmittedArgDefaults`), so a message takes labels, defaults and every
+	// argument diagnostic exactly as a direct call to the same method does; only what happens to them
+	// afterwards is this reader's. They are then SLOTTED into the variant's payload columns through
+	// `argSlotPosition` — the one home of the label-to-position mapping — and handed to `emitEnumBox`, which
+	// types each against the payload field (which IS the parameter's declared type) and MOVES it into the box.
+	//
+	// ⚠ **THE ARGUMENTS NEVER REACH `SemanticCheck.checkArgTypes`, WHICH IS WHY THE TYPING HAPPENS HERE.** The
+	// `serviceSend` op carries a BOX and not an argument list, so the pass that types a call's arguments has
+	// nothing to type. That is the same position a parser-intrinsic container mutator is in, and the refusal
+	// takes the same voice for the same reason (`SlotMismatchVoice.containerElementArgument`).
+	function emitServiceSend(func IrFunction, base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, resultUsed bool) returns ValueId throws ParseError
+		try self.requireServiceSendResultUnused(resultUsed, typeName: typeName, memberTok: memberTok)
+
+		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
+		let memberIndex = self.pos
+		try self.consumeNameToken(NamePosition.declaration)
+		try self.consume(TokenKind.leftParen)
+
+		var args = ValueIdArray.create()
+		var argLabels = ByteArrayArray.create()
+		var argRanges = SourceRangeArray.create()
+		var argImmutableNames = ByteArrayArray.create()
+		var argAnchors = TokenIndexArray.create()
+		// ORDINARY, unconditionally: a message is a declared method, so it always has parameter names to label
+		// with — no bare builtin can arrive through a handle.
+		try self.parseCallArgs(func, callee: callee, anchor: memberTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.ordinary)
+		let rparenTok = try self.consume(TokenKind.rightParen)
+		// A message's declared defaults are filled exactly as a direct call's are, through the same door, so
+		// `h.bump()` on a `bump(by int = 1)` sends the same request `h.bump(1)` does.
+		_ = try self.fillOmittedArgDefaults(callee, anchor: memberTok, args: args, argLabels: argLabels, argRanges: argRanges)
+
+		let payloads = request.payloadsAt(caseIndex)
+		var slotValues = ValueIdArray.create()
+		var filled = BoolArray.create()
+		var slotAnchors = TokenIndexArray.create()
+		for _ in 0 upto payloads.count() 'initSlots'
+			slotValues.push(0)
+			filled.push(false)
+			slotAnchors.push(memberIndex)
+		end 'initSlots'
+
+		try self.slotMessageArgs(callee, args: args, argLabels: argLabels, argAnchors: argAnchors, memberIndex: memberIndex, slotValues: slotValues, filled: filled, slotAnchors: slotAnchors, memberTok: memberTok)
+		self.fillMessageReplySlot(payloads, slotValues: slotValues, filled: filled, range: SourceRange.between(baseTok, last: rparenTok))
+		try self.requireEveryMessageArgumentGiven(callee, payloads: payloads, filled: filled, given: args.count(), memberTok: memberTok)
+
+		// `argsBareLocal` is ALL FALSE and cannot be otherwise: the transfer a message's payload takes is
+		// `moveIntoGreenThread`, which resolves the source binding itself, so the construct's per-slot
+		// bare-local column has no reader on this path (`storedPayloadValue`).
+		var bareLocal = BoolArray.create()
+		for _ in 0 upto payloads.count() 'noneIsABareLocalHere'
+			bareLocal.push(false)
+		end 'noneIsABareLocalHere'
+
+		let range = SourceRange.between(baseTok, last: rparenTok)
+		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
+		return self.emitServiceSendOp(base, box: box, callee: callee, range: range)
+	end 'emitServiceSend'
+
+	// ⭐ **THE ENQUEUE ITSELF — the mailbox out of the handle, and the op.** Written once because BOTH doors
+	// that put an envelope in a mailbox reach it: an author's message and the compiler's `__shutdown` pill.
+	// They differ in which variant they build and in nothing else, and a second copy of these three lines is a
+	// second chance to load the mailbox from the wrong offset.
+	//
+	// ⚠ The BOX is enrolled as an owned temporary by `emitEnumBox`, and it must be DRAINED here: the mailbox
+	// owns it from the moment the op is emitted, and the statement-end drop would free a request the service
+	// is about to read.
+	function emitServiceSendOp(base StructBase, box ValueId, callee ByteArray, range SourceRange) returns ValueId
+		let mailbox = self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)
+		self.removeFromPendingTemps(box)
+		let sent = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.serviceSend(sent, callee: callee, handle: mailbox, request: box), range: range)
+		return sent
+	end 'emitServiceSendOp'
+
+	// ⭐ **`h.shutdown()` — THE COMPILER'S POISON PILL, ENQUEUED LIKE ANY OTHER MESSAGE.** Variant 0 carries
+	// only its reply slot, which SV1 fills with 0, so the box is built through the same `emitEnumBox` an
+	// author's message goes through and the drain behind it is the loop's.
+	function emitServiceShutdown(base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, resultUsed bool) returns ValueId throws ParseError
+		try self.requireServiceSendResultUnused(resultUsed, typeName: typeName, memberTok: memberTok)
+
+		try self.consumeNameToken(NamePosition.declaration)
+		try self.consume(TokenKind.leftParen)
+		let rparenTok = try self.consume(TokenKind.rightParen)
+
+		let range = SourceRange.between(baseTok, last: rparenTok)
+		var slotValues = ValueIdArray.create()
+		var bareLocal = BoolArray.create()
+		var slotAnchors = TokenIndexArray.create()
+		for _ in 0 upto request.payloadArityAt(ServiceShutdownCaseIndex) 'eachSlot'
+			slotValues.push(self.emitLiteral(ServiceNoReplyCell, valueType: MaxonType.integer, range: range))
+			bareLocal.push(false)
+			slotAnchors.push(self.pos)
+		end 'eachSlot'
+
+		let box = try self.emitEnumBox(request, caseIndex: ServiceShutdownCaseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
+		return self.emitServiceSendOp(base, box: box, callee: qualifiedMethodName(typeName, methodName: memberTok.value), range: range)
+	end 'emitServiceShutdown'
+
+	// ⭐ **`h.clone()` — A SECOND HANDLE TO THE SAME SERVICE, NEVER A SECOND SERVICE.** It cannot take
+	// `emitSynthesizedStructClone`'s road: that emits `__clone_<T>`, a symbol `installStructCloners` never
+	// builds for a companion, and a blitted copy of the box would name the mailbox twice while its counts said
+	// once. `MboxHandleCloneBoxName` is the SAME entry `SignatureIndex.managedNameCloneStrategy` hands back for
+	// a handle held in a field or an array element, so a handle cloned three different ways takes one body.
+	function emitServiceHandleClone(base StructBase, baseTok Token, memberTok Token) returns ValueId throws ParseError
+		self.advance()
+		try self.consumeEmptyArgList()
+
+		return self.emitOwnedRuntimeResult(MboxHandleCloneBoxName, args: singletonArgs(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: SourceRange.between(baseTok, last: memberTok))
+	end 'emitServiceHandleClone'
+
+	// SV1's send delivers no reply, so there is no value for the author to bind. It is E2015 and not a type
+	// error because the awaitable form is a thing that WILL exist — SV2 — and the sentence names it.
+	function requireServiceSendResultUnused(resultUsed bool, typeName ByteArray, memberTok Token) throws ParseError
+		if not resultUsed 'aStatement'
+			return
+		end 'aStatement'
+
+		throw ParseError.unsupported(serviceSendHasNoValueRefusal(typeName, member: memberTok.value), line: memberTok.line, column: memberTok.column)
+	end 'requireServiceSendResultUnused'
+
+	// Slot every source argument into the variant's payload column, through `argSlotPosition` — the one home
+	// of the label-to-position mapping, asked over the DECLARATION's own parameter names. A label naming no
+	// parameter lands past the end and is refused here rather than filling a slot it does not mean.
+	//
+	// ⚠ The names are the declaration's SOURCE-ALIGNED list (`OverloadedDecl.paramNames`, receiver excluded),
+	// which is exactly the shape a send's arguments are in: the service's state is the LOOP's receiver, not
+	// this call's, so nothing is prepended and position `i` is parameter `i`.
+	function slotMessageArgs(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argAnchors TokenIndexArray, memberIndex TokenIndex, slotValues ValueIdArray, filled BoolArray, slotAnchors TokenIndexArray, memberTok Token) throws ParseError
+		let paramNames = self.serviceMessageParamNames(callee)
+		for i in 0 upto args.count() 'eachArg'
+			let label = try argLabels.get(i) otherwise panic("slotMessageArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
+			let position = argSlotPosition(paramNames, argIndex: i, label: label)
+			if position >= paramNames.count() 'namesNoParameter'
+				throw ParseError.unknownField(String.from(callee), fieldName: String.from(label), line: memberTok.line, column: memberTok.column)
+			end 'namesNoParameter'
+
+			let alreadyFilled = try filled.get(position) otherwise panic("slotMessageArgs: filled.get OOB at {position} — the columns are sized to the variant's payload count, which is the parameter count plus at most a reply slot")
+			if alreadyFilled 'twice'
+				throw ParseError.duplicateFieldInitializer(String.from(callee), fieldName: String.from(label), line: memberTok.line, column: memberTok.column)
+			end 'twice'
+
+			try slotValues.set(position, value: try args.get(i) otherwise panic("slotMessageArgs: args.get OOB at {i}")) otherwise panic("slotMessageArgs: slotValues.set OOB at {position}")
+			try filled.set(position, value: true) otherwise panic("slotMessageArgs: filled.set OOB at {position}")
+			try slotAnchors.set(position, value: callArgAnchorAt(argAnchors, index: i, callAnchor: memberIndex)) otherwise panic("slotMessageArgs: slotAnchors.set OOB at {position}")
+		end 'eachArg'
+	end 'slotMessageArgs'
+
+	// The reply slot SV1 does not use, pinned to 0. A message that returns nothing and throws nothing has no
+	// such slot at all (`ServiceCompanions.serviceMessageHasAReply`), so this fills what is there and nothing
+	// more — which is also why the loop below cannot be a fixed one-slot write.
+	function fillMessageReplySlot(payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, range SourceRange)
+		for slot in 0 upto payloads.count() 'eachSlot'
+			let field = try payloads.get(slot) otherwise panic("fillMessageReplySlot: payloads.get OOB at {slot}")
+			if not field.name.equals(ServiceReplySlotName) 'anArgument'
+				continue
+			end 'anArgument'
+
+			try slotValues.set(slot, value: self.emitLiteral(ServiceNoReplyCell, valueType: MaxonType.integer, range: range)) otherwise panic("fillMessageReplySlot: slotValues.set OOB at {slot}")
+			try filled.set(slot, value: true) otherwise panic("fillMessageReplySlot: filled.set OOB at {slot}")
+		end 'eachSlot'
+	end 'fillMessageReplySlot'
+
+	// Every payload slot the source was responsible for must have been given a value. Reported in the
+	// ARGUMENT-COUNT voice rather than the union's missing-field one, because what the author wrote is a call
+	// and the count they need is the message's parameter count — the reply slot, which they cannot fill, is
+	// excluded from both sides of it.
+	function requireEveryMessageArgumentGiven(callee ByteArray, payloads PayloadFieldArray, filled BoolArray, given ParamCount, memberTok Token) throws ParseError
+		for slot in 0 upto payloads.count() 'eachSlot'
+			let wasFilled = try filled.get(slot) otherwise panic("requireEveryMessageArgumentGiven: filled.get OOB at {slot}")
+			if wasFilled 'given'
+				continue
+			end 'given'
+
+			throw ParseError.builtinArity(String.from(callee), expected: self.serviceMessageParamNames(callee).count(), got: given, line: memberTok.line, column: memberTok.column)
+		end 'eachSlot'
+	end 'requireEveryMessageArgumentGiven'
+
+	// A message's declared parameter NAMES. Asked through one function because three readers need them and a
+	// disagreement would slot an argument into one position and count it against another.
+	function serviceMessageParamNames(callee ByteArray) returns ByteArrayArray
+		let decls = self.signatures.overloadedDeclsOf(callee)
+		let decl = try decls.get(0) otherwise panic("serviceMessageParamNames: '{String.from(callee)}' is a VARIANT of a request union the sweep built from that declaration, so `overloadedDeclsOf` cannot be empty")
+		return decl.paramNames
+	end 'serviceMessageParamNames'
 
 	// Is this member the SYNTHESIZED struct `clone` — the name `clone`, on a struct that declares no `clone` of
 	// its own? The gate in front of the emit below. `declaresCallee` is the WHOLE-PROGRAM index, not this file:
@@ -58107,13 +58509,16 @@ export type Parser
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
 		var argImmutableNames = ByteArrayArray.create()
+		// Filled and DISCARDED: a literal-init call emits a real `MaxonOp.call`, so SemanticCheck types its one
+		// argument against `init`'s signature and no refusal here needs a token of its own.
+		var argAnchors = TokenIndexArray.create()
 		// The E3070 call-argument door, taken exactly as `parseCallArgs` takes it — a literal names no
 		// storage, so it returns at `sourceNamesABase`, but asking through the one door is what keeps this
 		// argument path from being a second, quietly different one.
 		self.noteBorrowSubjectCallArg(func, callee: qualifiedMethodName(typeTok.value, methodName: StringInitMethod), anchor: typeTok, argColumn: args.count(), argLabel: EmptySourceText, valueStart: literalStart)
 		// POSITIONAL and un-nameable: `init`'s single parameter takes it at position 0, and a literal is not a
 		// bare binding, so it can never be the subject of an E3019 blame.
-		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: value, label: EmptySourceText, range: SourceRange.ofToken(literalTok), immutableName: EmptySourceText)
+		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: value, label: EmptySourceText, range: SourceRange.ofToken(literalTok), immutableName: EmptySourceText, anchorIndex: literalStart)
 
 		self.artifact.recordLiteralInitSite(LiteralInitSite.create(typeTok.value, nameLine: typeTok.line, nameColumn: typeTok.column, filePath: self.filePath))
 
@@ -59542,6 +59947,10 @@ export type Parser
 		// dispatch has not got. Under dictionary-passing there is no one impl whose mutation of a parameter
 		// could be the answer, so the question is not merely unasked here, it is unaskable at this call.
 		var argImmutableNames = ByteArrayArray.create()
+		// Filled and DISCARDED for `argImmutableNames`' reason one line up, one question over: the per-argument
+		// TOKEN exists so a slot-type refusal can point at the value, and a witness dispatch's arguments ARE
+		// typed by SemanticCheck against the resolved requirement, so nothing here has one to raise.
+		var argAnchors = TokenIndexArray.create()
 		// The first argument's label is OPTIONAL at an interface / type-parameter receiver and MANDATORY
 		// from the second on — see `consumeArgLabel`.
 		//
@@ -59550,7 +59959,7 @@ export type Parser
 		// this argument names, and that summary is keyed by callee. Under dictionary-passing a witness dispatch
 		// has no one impl to key on. `noteBorrowSubjectCallArg` refuses an unnamed callee explicitly rather
 		// than letting the summary lookup miss — see there.
-		try self.parseCallArgs(func, callee: EmptySourceText, anchor: methodTok, args: userArgs, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rule: ArgLabelRule.firstMayBeNamed)
+		try self.parseCallArgs(func, callee: EmptySourceText, anchor: methodTok, args: userArgs, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.firstMayBeNamed)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 		let target = try self.pickWitnessDispatchByArity(candidates, argCount: userArgs.count(), receiver: receiver, methodTok: methodTok)
 		let args = try self.slottedWitnessArgs(target, receiver: receiver, userArgs: userArgs, argLabels: argLabels, argRanges: argRanges, methodTok: methodTok)
@@ -70364,6 +70773,9 @@ export type Parser
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
 		var argImmutableNames = ByteArrayArray.create()
+		// Read by the SEND alone (`emitServiceSend`), which is the one caller whose arguments never reach
+		// `SemanticCheck.checkArgTypes` and must therefore be typed here, against a token.
+		var argAnchors = TokenIndexArray.create()
 
 		// ⭐ **THE RECEIVER GOES IN FIRST, AS AN UNLABELLED ARGUMENT, AND THEN IT IS JUST AN
 		// ARGUMENT.** Pushed BEFORE the source's own arguments are parsed, so it occupies index 0
@@ -70395,14 +70807,14 @@ export type Parser
 		// E3070's write site is the METHOD's. See `prependReceiverArg`.
 		match receiver 'prependReceiver'
 			none then break 'prependReceiver'
-			value(id, immutableName, subjectName, receiverTok) then try self.prependReceiverArg(func, callee: callee, callAnchor: anchor, receiverTok: receiverTok, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+			value(id, immutableName, subjectName, receiverTok) then try self.prependReceiverArg(func, callee: callee, callAnchor: anchor, receiverTok: receiverTok, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, receiverIndex: self.pos)
 		end 'prependReceiver'
 
 		// ⭐ THE ONE DOOR WHERE A BUILTIN — BARE OR `__Builtins.`-QUALIFIED — CAN ARRIVE, so it is the one
 		// door that asks which label regime the callee takes. The question is asked HERE, from the name
 		// alone, because the builtin check below runs only AFTER the arguments are parsed — and the label
 		// rule fires during that parse. See `argLabelRuleForCallee`.
-		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rule: argLabelRuleForCallee(callee))
+		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: argLabelRuleForCallee(callee))
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
@@ -71684,10 +72096,10 @@ export type Parser
 	// mutator blame a different column from the parser-intrinsic mutator on the line above it: MEASURED when
 	// `insert` left the roster, `arr.insert(…)` moved from `5:6` to `5:2` while `arr.push(…)` stayed at `5:6`,
 	// and the runnable oracle anchors `insert` at the method too.
-	function prependReceiverArg(func IrFunction, callee ByteArray, callAnchor Token, receiverTok Token, id ValueId, immutableName ByteArray, subjectName ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) throws ParseError
+	function prependReceiverArg(func IrFunction, callee ByteArray, callAnchor Token, receiverTok Token, id ValueId, immutableName ByteArray, subjectName ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argAnchors TokenIndexArray, receiverIndex TokenIndex) throws ParseError
 		self.noteReceiverBorrowSubjects(func, callee: callee, display: EmptySourceText, anchor: callAnchor, argColumn: args.count(), id: id, subjectName: subjectName)
 		self.noteStorageReachingCall(func, callee: callee, argColumn: args.count(), id: id, subjectName: subjectName)
-		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(receiverTok), immutableName: immutableName)
+		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: id, label: EmptySourceText, range: SourceRange.ofToken(receiverTok), immutableName: immutableName, anchorIndex: receiverIndex)
 	end 'prependReceiverArg'
 
 	// ⭐⭐⭐ **RECORD THAT THIS CALL HANDS A CALLER'S OWN ARRAY TO A DECLARED CALLEE (ARR4).** The write half
@@ -71856,7 +72268,7 @@ export type Parser
 	// whose argument names a borrowed collection is a mutation site only if the CALLEE writes
 	// that parameter's storage, so the site has to be recorded against a name, here, where the
 	// argument's own tokens are still in hand (`BorrowCheck.maxon`).
-	function parseCallArgs(func IrFunction, callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rule ArgLabelRule) throws ParseError
+	function parseCallArgs(func IrFunction, callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argAnchors TokenIndexArray, rule ArgLabelRule) throws ParseError
 		if self.at(TokenKind.rightParen) 'noArgs'
 			return
 		end 'noArgs'
@@ -71946,7 +72358,7 @@ export type Parser
 			// `argSlotPosition` maps to a parameter position (`noteBorrowSubjectCallArg`).
 			self.noteBorrowSubjectCallArg(func, callee: callee, anchor: anchor, argColumn: args.count(), argLabel: label, valueStart: valueStart)
 
-			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: passed, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
+			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: passed, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value), anchorIndex: valueStart)
 			argIndex = argIndex + 1
 
 			if not self.at(TokenKind.comma) 'endArgs'
@@ -72764,11 +73176,14 @@ export type Parser
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
 		var argImmutableNames = ByteArrayArray.create()
+		// Filled and DISCARDED: an `async` call emits a real `MaxonOp.call`, so SemanticCheck types its
+		// arguments against the callee's signature and no refusal here needs a token of its own.
+		var argAnchors = TokenIndexArray.create()
 		// ORDINARY, unconditionally: an `async` call always emits a real `MaxonOp.call` to a declared
 		// function, so its callee always has parameter names — no bare builtin is reachable through
 		// this door, and the positional-argument regime would be answering for a callee that cannot
 		// arrive here.
-		try self.parseCallArgs(func, callee: calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rule: ArgLabelRule.ordinary)
+		try self.parseCallArgs(func, callee: calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.ordinary)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		// `self.pos` now sits one PAST the `)`, which is exactly `tokenTextFrom`'s exclusive end. The POSITION is

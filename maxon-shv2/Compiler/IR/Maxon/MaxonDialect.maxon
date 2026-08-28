@@ -1458,15 +1458,17 @@ export union MaxonOp
 	// through the ordinary `call <T>.<factory>` this op's `state` operand comes from, and `<T>.__loop` is
 	// the compiler's own name, which that pass tracks nothing under.
 	serviceSpawn(result ValueId, typeName ByteArray, state ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
-	// ⭐⭐ **`serviceSend(callee, handle, request)` — ENQUEUE ONE MESSAGE, INLINE, AND RETURN.** `callee` is
-	// the message's own qualified name (`"Calc.bump"`), `handle` the mailbox pointer loaded out of the
-	// handle box, `request` the request-union BOX the parser built at the send site exactly as `emitEnumBox`
-	// builds any other.
+	// ⭐⭐ **`serviceSend(result, callee, handle, request)` — ENQUEUE ONE MESSAGE, INLINE, AND RETURN.**
+	// `callee` is the message's own qualified name (`"Calc.bump"`), `handle` the mailbox pointer loaded out of
+	// the handle box, `request` the request-union BOX the parser built at the send site exactly as
+	// `emitEnumBox` builds any other.
 	//
-	// ⚠ **IT DEFINES NOTHING, AND THAT IS SV1's SCOPE STATED IN THE OPERAND LIST RATHER THAN IN A FLAG.** A
-	// fire-and-forget send has no reply, so there is no value to bind and no `hasReply` bit any site could
-	// set to `true` — a constant no producer can emit is a dead claim (`GtRuntime`'s park kinds carry the
-	// same rule). SV2's awaitable form adds a reply cell and a result, and it will say so by ARRIVING.
+	// ⚠ **`result` IS `void`, AND THAT IS SV1's SCOPE STATED IN THE TYPE RATHER THAN IN A FLAG.** A
+	// fire-and-forget send delivers no reply, so there is nothing to bind and no `hasReply` bit any site could
+	// set to `true` — a constant no producer can emit is a dead claim (`GtRuntime`'s park kinds carry the same
+	// rule). It still DEFINES a value, because a void `call` does: every value-producing op in this dialect
+	// names its result, and an op that named none would be the one shape `ValueOrigin`'s walk and the
+	// expression parser each need a special case for. SV2's awaitable form gives the same slot a real type.
 	//
 	// ⭐ **THE REQUEST IS ONE VALUE AND NOT AN ARGUMENT ARRAY, DELIBERATELY.** An array-typed field in an
 	// op's tail slot destructured by `lowerOp`'s big match is a live bootstrap miscompile (documented at
@@ -1478,7 +1480,7 @@ export union MaxonOp
 	// call's callee is, and `noteQualifiedOwner` credits `Calc` from the same name — so the pass needs no arm
 	// of its own. It can never reach the overload RESOLVER's rewrite: an overloaded message is refused at the
 	// `spawn` (`ServiceCompanions.classifyServiceRoster`), so `Calc.bump` is never an overload set's key.
-	serviceSend(callee ByteArray, handle ValueId, request ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+	serviceSend(result ValueId, callee ByteArray, handle ValueId, request ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 end 'MaxonOp'
 
 // ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
@@ -1628,7 +1630,7 @@ export function maxonOpCalleeName(op MaxonOp) returns ByteArray
 		tryCall(_, _, callee, _, _, _, _, _, _) gives callee
 		asyncCall(_, callee, _, _, _, _, _) gives callee
 		functionRef(_, funcName) gives funcName
-		serviceSend(callee, _, _) gives callee
+		serviceSend(_, callee, _, _) gives callee
 		default panic("maxonOpCalleeName: asked of an op that binds no callee name — `maxonOpCalleeKind` answers `noCallee` for it, and every caller gates on that")
 	end 'op'
 end 'maxonOpCalleeName'
