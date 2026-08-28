@@ -2153,6 +2153,31 @@ end 'emitGtFifoPop'
 // ⭐ **UNDER THE LOCK THE PEEK AND THE POP NAME ONE GT, WHICH IS WHY THERE IS NO COMPARE-AND-SWAP HERE.**
 // The ring half of `__sched_sweep_dropped` needs one because a THIEF races the sweeper for a victim's head;
 // neither of this loop's two queues has a lockless consumer, so the lock IS the claim.
+//
+// ⛔⛔ **THE RECLAIM RUNS WITH THE LOCK STILL HELD, WHICH IS THE OPPOSITE OF WHAT `emitGtTombstoneHandback`
+// DOES, AND THE ASYMMETRY IS DELIBERATE BUT CONDITIONAL — STATED HERE BECAUSE NOTHING ELSE WOULD SAY IT.**
+// That emitter releases first, on the ground that *"holding the one lock the IOCP completion thread needs
+// across a syscall is latency nobody has to pay"*; this one cannot release as cheaply, because it must hold
+// the lock across peek→pop for every iteration and re-taking it per tombstone would trade one syscall's
+// latency for a lock round trip per entry. ⇒ TODAY that is a LATENCY choice only: `__gt_runner_done` reaches
+// `osFreePages` and then `__gt_reclaim`'s RELEASER, and every releaser a program can synthesize today is
+// pure memory (`__str_decref`, `__destruct_<T>`, `__managed_decref` — `AsyncReleaser.decrefCalleeFor`'s
+// list), so nothing under this lock ever waits on another OS thread.
+//
+// ⚠ **IT STOPS BEING A LATENCY CHOICE THE DAY A RELEASER CAN REACH `__gt_promise_drop`, AND THAT DAY IS
+// NEARER THAN IT LOOKS.** `decrefCalleeFor` already routes a Promise-typed slot there, and
+// `__gt_promise_drop`'s IO arm SPIN-WAITS on `gt.ioParked == IoParkedDrainDone` *"with the lock RELEASED so
+// the completion thread can acquire it"* — but `osLockEnter` is a RECURSIVE CRITICAL_SECTION, so an inner
+// release inside this walk decrements the count and RELEASES NOTHING. The completion thread would block on
+// `EnterCriticalSection` for ever while this thread spins for it: a hang, with no diagnostic.
+//
+// ⚠ **IT IS UNREACHABLE TODAY ONLY BECAUSE OF A DIFFERENT, PRE-EXISTING DEFECT.** A promise reaches a
+// releaser only inside a container, and a container of un-awaited promises does not drop them at all —
+// MEASURED on this tree AND byte-for-byte the same on EC10's merge base `53049bb9df`, so it is neither
+// this rung's nor a regression: `var s = IntPromiseArray.create(); s.push(async plain())` and nothing else
+// exits **75** (`RuntimeAbort.greenThreadLeak`); passing that array to an `async` callee and cancelling
+// exits **101**. ⇒ **WHOEVER FIXES THAT LEAK MUST READ THIS PARAGRAPH FIRST**, because the fix is what
+// makes the chain above live.
 // ⚠ EXPORTED for `SchedRuntime.buildSchedSweepDropped`'s global half, which is its other caller. The
 // append and the pop above have only in-file callers, which is what E3092 refuses an `export` for.
 export function emitGtFifoSweepDropped(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ends GtQueueEnds, ids ValueMinter)
