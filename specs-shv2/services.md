@@ -1099,6 +1099,69 @@ end 'main'
 2
 ```
 
+<!-- test: a-handle-payload-beside-a-consumed-string-payload -->
+<!-- targets: x64-windows -->
+⭐⭐ **TWO SERVICES, TWO PAYLOAD KINDS, AND THE CROSSING BETWEEN TWO NAME TABLES.** `Logger.say` takes a
+`String` and CALLS A METHOD on it; `Worker.run` takes a `Logger.handle`. Neither is remarkable alone — the
+cases above pin each — and together they are the first program in this file whose signature-index and project
+name tables have DIVERGED at the id a payload carries. `<T>.__loop` resolves that id, and it has to resolve it
+against the table it came out of.
+
+⛔ **IT WAS A CLEAN REFUSAL OF A CORRECT PROGRAM:** `E3005 argument type mismatch for 'sink': expected
+'Logger.handle', got 'ExitCode'` — with no file and no line, because the check was walking the synthesized
+loop. `ExitCode` is simply what the OTHER table holds at that number. See
+`Runtime/ServiceLoop.maxon`'s header for the crossing and `ModuleInit.projectScopedNameId` for the carrier's
+two-sided contract.
+
+⚠ **WHY IT TOOK TWO SERVICES AND A METHOD CALL.** The two tables agree at every id until enough types are
+declared to push them apart, so a smaller program cannot show it: `Logger.say` printing its parameter instead
+of calling `byteLength()` on it interns one name fewer and the program compiles. That is the same property the
+carrier's own header records the lexer's keyword map having — *"a read that is right only while two
+independent insertion orders agree is a wrong answer waiting"*.
+```maxon
+type Logger
+	var bytes as int
+
+	static function create() returns Self
+		return Self{bytes: 0}
+	end 'create'
+
+	export function say(s String)
+		self.bytes = self.bytes + s.byteLength()
+	end 'say'
+
+	export function report()
+		print("bytes={self.bytes}\n")
+	end 'report'
+end 'Logger'
+
+type Worker
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function run(sink Logger.handle)
+		sink.say("from the worker")
+		sink.report()
+	end 'run'
+end 'Worker'
+
+function main() returns ExitCode
+	let logger = spawn Logger.create()
+	let worker = spawn Worker.create()
+	worker.run(logger.clone())
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+bytes=15
+```
+
 <!-- test: a-string-argument-moves-into-the-service -->
 <!-- targets: x64-windows -->
 A managed argument is MOVED: the sending frame hands over the reference it holds and the service becomes the

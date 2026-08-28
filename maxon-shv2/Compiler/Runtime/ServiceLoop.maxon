@@ -17,6 +17,29 @@
 // rooted by the ordinary walk, and the two `funcAddr`s `LowerMaxonToStd.lowerServiceSpawn` emits name
 // symbols the loop itself already calls.
 //
+// ⛔⛔⛔ **EVERY TYPE THIS FILE RESOLVES OUT OF THE SIGNATURE INDEX STAYS IN THE INDEX'S NAME SPACE, AND
+// `SynthesizedFunction.mint` IS WHAT CROSSES IT (SV1 wave 4).** *"Names travel between interners; ids never
+// do"* — an id is a number, and it means whatever name sits at that number in the table you read it against.
+// The carrier's `projectScopedNameId` crosses every id a MINT is given, so a caller that hands it one which
+// is ALREADY project-scoped gets a SECOND crossing, from the wrong side: the number is resolved through the
+// index, lands on an unrelated name, and that name is re-interned into the project.
+//
+// ⛔ **MEASURED, and it is the lexer keyword map's `expected 'KeywordInfo', got 'SpillSlot'` a second time.**
+// This file resolved its payload types `into: project.typeNames` and then minted from them. On a program
+// with two services where one message takes a `String` its handler calls a method on and another takes a
+// `Logger.handle`, the tables had diverged by exactly one entry and the loop's handle argument came out as
+// **`E3005 argument type mismatch for 'sink': expected 'Logger.handle', got 'ExitCode'`** — a clean refusal
+// of a correct program, with no file or line, because the check was walking THIS synthesized body. The
+// diagnostic is the mild face of it: the same misread id also chooses `classifyUnionPayload`'s class and
+// `managedFieldDropCallee`'s callee, which is a payload dropped through the wrong destructor or not at all.
+// It stayed invisible for a rung because the two tables agree at every id until enough types are declared to
+// push them apart, and every existing service case was under that threshold.
+//
+// ⇒ **`signatures.indexTypeNames()` at every one of those doors, and `project.typeNames` at exactly two:**
+// `stateType`, which is interned by NAME rather than read out of the index and is handed to
+// `SynthesizedFunction.open` (which stores parameter ids RAW — see the carrier), and the drop callee that
+// pairs with it. A `typeNames:` argument and the `MaxonType` beside it must always be one table.
+//
 // ⭐⭐ **NO `__do_<m>` TRAMPOLINES, AND THE DESIGN DOCUMENT SAYS OTHERWISE — SO READ THIS RATHER THAN IT.**
 // `SERVICES_DESIGN.md` reasoned that each dispatch arm had to be a single call because **E2049** admits only
 // one statement per `match` arm. That is a SOURCE rule (`Parser.parseArmBody`,
@@ -98,7 +121,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 
 	var armIds = BlockIdArray.create()
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
-		armIds.push(buildServiceArm(fn, project: project, signatures: signatures, typeName: typeName, request: request, caseIndex: caseIndex, req: req, abandonCallee: abandonCallee, receive: receive, exit: exit, range: range).id)
+		armIds.push(buildServiceArm(fn, signatures: signatures, typeName: typeName, request: request, caseIndex: caseIndex, req: req, abandonCallee: abandonCallee, receive: receive, exit: exit, range: range).id)
 	end 'eachVariant'
 
 	// ⚠ **THE DEFAULT IS THE EXIT, NOT AN ABORT, AND THAT IS A CHOICE ABOUT A CASE THAT CANNOT HAPPEN.** The
@@ -142,7 +165,7 @@ end 'buildServiceDrain'
 
 // ⭐ **ONE DISPATCH ARM.** Variant 0 is the compiler's `__shutdown` pill and stops the loop; every other is a
 // message, and runs its handler.
-function buildServiceArm(fn SynthesizedFunction, project Project, signatures ProgramSignatures, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, req ValueId, abandonCallee ByteArray, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
+function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, req ValueId, abandonCallee ByteArray, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
 	let arm = fn.openBlock(request.caseNameAt(caseIndex))
 	if request.caseNameAt(caseIndex).equals(ServiceShutdownCaseName) 'thePoisonPill'
 		// The pill carries only its (unused, SV1) reply slot, which is a scalar — so the cascade has nothing
@@ -170,16 +193,16 @@ function buildServiceArm(fn SynthesizedFunction, project Project, signatures Pro
 	var payloadClasses = PayloadClassArray.create()
 	for slot in 0 upto decl.paramTypes.count() 'eachParam'
 		let field = try payloads.get(slot) otherwise panic("buildServiceArm: `{String.from(request.name)}`'s variant `{String.from(methodName)}` declares {payloads.count()} payload(s) against `{String.from(callee)}`'s {decl.paramTypes.count()} parameter(s) — `ServiceCompanions.serviceRequestPayloads` builds one payload per parameter, plus a trailing reply slot")
-		let declared = signatures.payloadTypeOf(field, layout: request, into: project.typeNames)
-		let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: declared, slotScopeFilePath: request.declFilePath)
+		let declared = signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())
+		let class = classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: declared, slotScopeFilePath: request.declFilePath)
 		payloadClasses.push(class)
 		let loaded = fn.mintOfType(payloadValueTypeOf(class, declared: declared))
 		fn.emit(MaxonOp.loadIndirect(loaded, addr: req, offset: request.payloadSlotOffset(slot), valueType: payloadStorageOf(class)), range: range)
 		args.push(loaded)
 	end 'eachParam'
 
-	emitServiceHandlerCall(fn, signatures: signatures, project: project, callee: callee, args: args, range: range)
-	dropUnconsumedPayloads(fn, signatures: signatures, project: project, callee: callee, request: request, caseIndex: caseIndex, classes: payloadClasses, args: args, range: range)
+	emitServiceHandlerCall(fn, signatures: signatures, callee: callee, args: args, range: range)
+	dropUnconsumedPayloads(fn, signatures: signatures, callee: callee, request: request, caseIndex: caseIndex, classes: payloadClasses, args: args, range: range)
 
 	// ⭐ **THE SHELL, AND ONLY THE SHELL.** The payloads were consumed by the handler or dropped by the loop
 	// one line up, so the box's own record is all that is left to release — and the box was allocated with
@@ -219,8 +242,8 @@ end 'buildServiceArm'
 // A plain `call` to a throwing callee is **E3057** at `SemanticCheck.validatePlainCall` (which walks this
 // synthesized body like any other), so the `tryCall` is FORCED; and a boxed error union's flag IS a heap
 // pointer, so releasing it is the only non-leaking thing to do with it.
-function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignatures, project Project, callee ByteArray, args ValueIdArray, range SourceRange)
-	let returned = serviceHandlerReturnType(signatures, callee: callee, typeNames: project.typeNames)
+function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, args ValueIdArray, range SourceRange)
+	let returned = serviceHandlerReturnType(signatures, callee: callee, typeNames: signatures.indexTypeNames())
 	let resultTag = match returned 'r'
 		void gives ValueTypeTag.void
 		value(inner) gives maxonTypeTag(inner)
@@ -232,7 +255,7 @@ function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignat
 
 	if not throwsClauseIsThrowing(signatures.throwsOf(callee)) 'nonThrowing'
 		let result = fn.emitPositionalCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range)
-		dropServiceHandlerResult(fn, signatures: signatures, project: project, returned: returned, result: result, range: range)
+		dropServiceHandlerResult(fn, signatures: signatures, returned: returned, result: result, range: range)
 		return
 	end 'nonThrowing'
 
@@ -253,39 +276,39 @@ function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignat
 	// `AsyncReleaser`'s header calls a wild free — so the result is released only where it was actually
 	// produced. That is what the `handled` merge is: both edges reach it, and only the non-throwing one
 	// carries a value, which is why the drop cannot be emitted before the branch.
-	dropServiceHandlerResultIfNotThrown(fn, signatures: signatures, project: project, returned: returned, result: result, threw: threw, range: range)
+	dropServiceHandlerResultIfNotThrown(fn, signatures: signatures, returned: returned, result: result, threw: threw, range: range)
 end 'emitServiceHandlerCall'
 
 // A managed RESULT nobody asked for. SV1 has no reply, so a value-returning message is fire-and-forget and
 // the value is dropped here — the loop is its one owner from the moment the handler returned it.
-function dropServiceHandlerResult(fn SynthesizedFunction, signatures ProgramSignatures, project Project, returned MaxonReturnType, result ValueId, range SourceRange)
+function dropServiceHandlerResult(fn SynthesizedFunction, signatures ProgramSignatures, returned MaxonReturnType, result ValueId, range SourceRange)
 	match returned 'r'
 		void then return
-		value(inner) then dropServiceManagedValue(fn, signatures: signatures, project: project, valueType: inner, value: result, range: range)
+		value(inner) then dropServiceManagedValue(fn, signatures: signatures, valueType: inner, value: result, range: range)
 	end 'r'
 end 'dropServiceHandlerResult'
 
 // One value released through the SHARED field-drop router, iff it owns heap. The `if` is the whole body,
 // which is why it is a function rather than an arm: a `match` arm is one statement.
-function dropServiceManagedValue(fn SynthesizedFunction, signatures ProgramSignatures, project Project, valueType MaxonType, value ValueId, range SourceRange)
-	if not signatures.typeIsManaged(valueType, from: project.typeNames) 'ownsNoHeap'
+function dropServiceManagedValue(fn SynthesizedFunction, signatures ProgramSignatures, valueType MaxonType, value ValueId, range SourceRange)
+	if not signatures.typeIsManaged(valueType, from: signatures.indexTypeNames()) 'ownsNoHeap'
 		return
 	end 'ownsNoHeap'
 
-	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: valueType), args: argsOf(value), range: range)
+	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: valueType), args: argsOf(value), range: range)
 end 'dropServiceManagedValue'
 
 // The same drop, on the ONE path that produced a value. See `emitServiceHandlerCall` for why a throwing
 // call's success register may not be read on the error edge.
-function dropServiceHandlerResultIfNotThrown(fn SynthesizedFunction, signatures ProgramSignatures, project Project, returned MaxonReturnType, result ValueId, threw ValueId, range SourceRange)
-	if not serviceHandlerReturnsHeap(signatures, project: project, returned: returned) 'ownsNoHeap'
+function dropServiceHandlerResultIfNotThrown(fn SynthesizedFunction, signatures ProgramSignatures, returned MaxonReturnType, result ValueId, threw ValueId, range SourceRange)
+	if not serviceHandlerReturnsHeap(signatures, returned: returned) 'ownsNoHeap'
 		return
 	end 'ownsNoHeap'
 
 	let inner = serviceHandlerReturnedType(returned)
 	let merge = fn.currentBlock()
 	let dropIt = fn.openBlock(b"dropresult")
-	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: inner), args: argsOf(result), range: range)
+	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: inner), args: argsOf(result), range: range)
 	let after = fn.openBlock(b"resultdropped")
 	fn.terminateBlock(merge, op: MaxonOp.condBranch(threw, thenBlockId: after.id, elseBlockId: dropIt.id), range: range)
 	fn.terminateBlock(dropIt, op: MaxonOp.branch(after.id), range: range)
@@ -295,10 +318,10 @@ end 'dropServiceHandlerResultIfNotThrown'
 // Does this handler hand back a value that owns heap? Split from the drop above because the CONDITIONAL
 // drop needs the answer before it opens any block — a `match` arm cannot carry the four statements the
 // diamond takes.
-function serviceHandlerReturnsHeap(signatures ProgramSignatures, project Project, returned MaxonReturnType) returns bool
+function serviceHandlerReturnsHeap(signatures ProgramSignatures, returned MaxonReturnType) returns bool
 	return match returned 'r'
 		void gives false
-		value(inner) gives signatures.typeIsManaged(inner, from: project.typeNames)
+		value(inner) gives signatures.typeIsManaged(inner, from: signatures.indexTypeNames())
 	end 'r'
 end 'serviceHandlerReturnsHeap'
 
@@ -348,7 +371,7 @@ end 'serviceErrorIsBoxed'
 //
 // ⚠ The index is CALL-ALIGNED — the receiver is position 0 — which is the space `ParamConsumeInfo`'s columns
 // are recorded in (`Parser.recordScannedSignature` states it), and `args` is built in that same order.
-function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignatures, project Project, callee ByteArray, request EnumLayout, caseIndex CaseIndex, classes PayloadClassArray, args ValueIdArray, range SourceRange)
+function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, request EnumLayout, caseIndex CaseIndex, classes PayloadClassArray, args ValueIdArray, range SourceRange)
 	let payloads = request.payloadsAt(caseIndex)
 	for slot in 0 upto classes.count() 'eachPayload'
 		let class = try classes.get(slot) otherwise panic("dropUnconsumedPayloads: classes.get OOB at {slot} — one class is pushed per loaded payload")
@@ -361,7 +384,7 @@ function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignat
 
 		let field = try payloads.get(slot) otherwise panic("dropUnconsumedPayloads: payloads.get OOB at {slot} — one class was pushed per payload read out of this same list")
 		let loaded = try args.get(slot + ServiceReceiverArgCount) otherwise panic("dropUnconsumedPayloads: args.get OOB at {slot + ServiceReceiverArgCount} — `args` holds the receiver followed by one value per payload")
-		fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: signatures.payloadTypeOf(field, layout: request, into: project.typeNames)), args: argsOf(loaded), range: range)
+		fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())), args: argsOf(loaded), range: range)
 	end 'eachPayload'
 end 'dropUnconsumedPayloads'
 

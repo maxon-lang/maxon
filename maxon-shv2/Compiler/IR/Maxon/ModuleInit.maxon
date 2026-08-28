@@ -841,6 +841,21 @@ export type SynthesizedFunction
 	//
 	// It sits in `mint` rather than at the five emit sites because that is the ONE place a value of this
 	// carrier gets its type columns, and a door list is what rots.
+	//
+	// ⛔⛔ **SO A `mint` TAKES AN INDEX-SPACE ID AND `open` TAKES A PROJECT-SPACE ONE, AND THE TWO HALVES OF
+	// THIS CARRIER GENUINELY DISAGREE (SV1 wave 4).** `open` pushes `typeNameIdOf(paramType)` RAW, because the
+	// same `paramTypes` array is stored on the `IrFunction` for the merged module to read, and the module
+	// speaks the project's table. There is no crossing that could satisfy both, so the contract is:
+	//
+	//   • **`paramTypes` handed to `open` are PROJECT-space.**
+	//   • **`nameId` handed to `mint` / `mintOfType` / `emitPositionalCall(resultNameId:)` is INDEX-space**,
+	//     and is crossed here.
+	//
+	// ⚠ It hid inside this file because `__module_init` and `__maxon_global_cleanup` take one `int` parameter
+	// between them, so `open`'s half was never exercised with a NAMED type. **It cost the second producer a
+	// wrong answer**: `Runtime/ServiceLoop.maxon` resolved its payload types through `project.typeNames` and
+	// minted from them, and the double crossing refused a correct program — that file's header carries the
+	// reading. A third producer should read this box before it writes a `mint`.
 	function projectScopedNameId(tag ValueTypeTag, nameId TypeNameId) returns TypeNameId
 		if not tagNamesAnIndexInternedType(tag) 'carriesNoNameToCross'
 			return nameId

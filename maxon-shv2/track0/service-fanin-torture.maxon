@@ -1,0 +1,136 @@
+// Track-0 MANY-SENDER torture (SV1 wave 4) — the mailbox's MULTI-PRODUCER side,
+// which nothing else in this directory reaches.
+//
+// ⭐⭐ `service-torture.maxon` IS ONE SENDER AND TWELVE MAILBOXES; THIS IS TWELVE
+// SENDERS AND ONE. That is not a rearrangement of the same program: a mailbox is a
+// multi-producer / single-consumer queue, and with `main` the only sender its
+// producer side has exactly one party at every `MAXON_MAX_PROCS`. Here twelve
+// SERVICE green threads — each of which the scheduler may put on a different M —
+// push into one `__mbox_send` concurrently, which is the shape the queue's CAS was
+// written for and the only shape that can contend it.
+//
+// ⭐⭐ THE SINK PRINTS, AND THAT IS WHAT MAKES THE READING SOUND WITHOUT REPLIES.
+// SV1 has no reply, so a sender cannot be told anything and `main` cannot learn when
+// the work is finished — which rules out `main` reading the counters, because it
+// would read them before the senders had run. The SINK can: its handlers are
+// serialized by its own mailbox, so the message that brings `taken` to
+// `expectedTotal` is by construction the last one, and everything this program wants
+// to report is known at exactly that instant. No cross-thread flag, no global
+// stepped by two green threads, nothing that is a race at N >= 2.
+//
+// ⚠ WHY THE AGGREGATE IS ORDER-INDEPENDENT: each payload's byte length is a
+// function of its (sender id, round) alone, and the sink SUMS them. A message
+// delivered twice, not at all, or interleaved differently changes the sum or the
+// count; a different processor count does not. `taken=` is the same statement
+// counted rather than summed, and it is the one that catches a payload whose length
+// happened to collide.
+//
+// ⚠ LEAK-FREEDOM IS THE EXIT CODE HERE, NOT A `leaked=` FIELD. `drop-running-torture`
+// can print one because it takes `mmRawAllocLive()` at two QUIESCENT points it can
+// name; this program has no such point it can observe from — `main` cannot see the
+// senders finish. What covers it is the runtime's own exit leak gate: 4,800 heap
+// `String`s are built by twelve green threads and dropped by a thirteenth, and a
+// single lost decref is exit 101. `pin-matrix.sh` asserts the exit code is identical
+// at every processor count AND never 101, which is the same fact read off the door
+// that can actually see it.
+
+typealias Integer = int(i64.min to i64.max)
+typealias SenderHandleArray = Array with Sender.handle
+
+// One sender per M the scheduler will plausibly build — 12 is the default worker
+// pool size and the count every other program here takes its readings at.
+let senderCount = 12
+
+// Messages per sender. Each is one fresh `String` moved across, so the sink takes
+// `senderCount * roundsPerSender` payloads from `senderCount` different green
+// threads and drops every one of them on its own.
+let roundsPerSender = 400
+
+// The message that completes the run. Stated once, so the sink's print gate and the
+// count it reports cannot disagree.
+let expectedTotal = senderCount * roundsPerSender
+
+type Sink
+	var taken as Integer
+	var bytes as Integer
+
+	static function create() returns Self
+		return Self{taken: 0, bytes: 0}
+	end 'create'
+
+	// ⭐ THE PAYLOAD IS BORROWED HERE AND DROPPED BY THE LOOP, which is what makes
+	// the drop cross a green thread: the `String` was allocated on whichever M ran
+	// its SENDER and is released on whichever M runs this SINK. At N >= 2 those are
+	// routinely different Ps, so this is the allocator's remote-free path driven by
+	// a real producer rather than by a probe.
+	export function take(s String)
+		self.taken = self.taken + 1
+		self.bytes = self.bytes + s.byteLength()
+
+		// The last message to arrive is the only one that can report, and it knows it
+		// is the last because this handler is the mailbox's single consumer.
+		if self.taken == expectedTotal 'lastMessage'
+			print("aggregate={self.bytes}\n")
+			print("taken={self.taken}\n")
+			print("workers={__Builtins.schedMaxActiveWorkers()}\n")
+			print("steals={__Builtins.schedStealCount()}\n")
+			print("cpucount={__Builtins.cpuCount()}\n")
+		end 'lastMessage'
+	end 'take'
+end 'Sink'
+
+type Sender
+	var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+
+	// ⚠ `sink` IS MOVED IN AND DROPPED BY THE LOOP once this handler returns — the
+	// un-consumed payload drop a service owes for every message it runs. That drop
+	// is one of the sink's handles going away, so the sink stays alive exactly as
+	// long as one sender still has work.
+	export function run(sink Sink.handle, rounds Integer)
+		var r = 0
+
+		while r < rounds 'eachRound'
+			// ⚠ INTERPOLATION, not a literal: an immortal `.rdata` record takes
+			// `__str_retain`'s COPY arm and never touches a refcount, so a literal
+			// would move nothing and the cross-thread drop would not exist.
+			let payload = "msg {self.id}:{r}"
+			sink.take(payload)
+			r = r + 1
+		end 'eachRound'
+	end 'run'
+end 'Sender'
+
+function main() returns ExitCode
+	let sink = spawn Sink.create()
+
+	var senders = SenderHandleArray.create()
+
+	var i = 0
+
+	while i < senderCount 'spawnEach'
+		senders.push(spawn Sender.create(i))
+		i = i + 1
+	end 'spawnEach'
+
+	// Every sender gets its OWN handle to the one sink. `.clone()` on a handle is a
+	// second handle to the SAME service, so the sink outlives `main`'s own handle
+	// and dies when the last sender has finished with it.
+	var k = 0
+
+	while k < senderCount 'startEach'
+		let sender = try senders.get(k) otherwise panic("service-fanin-torture: senders.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		sender.run(sink.clone(), rounds: roundsPerSender)
+		k = k + 1
+	end 'startEach'
+
+	// ⚠ NOTHING IS PRINTED HERE, AND THAT IS THE POINT OF THE HEADER'S SECOND
+	// PARAGRAPH. `main` returns before a single sender has necessarily run; the
+	// array's element drop shuts each of them down, each drains its one `run`
+	// message to completion, and the sink reports when the last payload lands.
+	// Fixed success ExitCode: deterministic across runs, and never 101.
+	return 42
+end 'main'

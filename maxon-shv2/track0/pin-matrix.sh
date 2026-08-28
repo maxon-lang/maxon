@@ -19,10 +19,12 @@
 #   2. The exit code is identical at every N, and is never 101 (the runtime's leak
 #      gate) or 139 (a segfault).
 #   3. `leaked=0` from drop-running-torture at every N.
-#   4. ⭐ THE PIN ITSELF, AND IT IS NOW PER PROGRAM (SV1). A COROUTINE-ONLY
-#      program reads `workers=1` and `steals=0` at every N. A SPAWN-DRIVEN one
-#      (`service-torture`) reads `1/0` at N=1 and `workers >= 2`, `steals > 0`
-#      at every N >= 2 — which is this script's own prediction below, cashed.
+#   4. ⭐ THE PIN ITSELF, AND IT IS NOW PER FAMILY (SV1). A COROUTINE-ONLY
+#      program reads `workers=1` and `steals=0` at every N. A SPAWN-DRIVEN one —
+#      the `SPAWNING_PROGRAMS` list, which is where the fact is written down once —
+#      reads `1/0` at N=1 and `workers >= 2`, `steals > 0` at every N >= 2, which
+#      is this script's own prediction below, cashed.
+#   5. Every program in `REFUSED_PROGRAMS` FAILS TO BUILD, with the code named.
 #
 # ⭐⭐ ASSERTION 4 IS WHAT THIS SCRIPT EXISTS FOR, AND IT IS THE ONE THAT FLIPPED.
 # Before EC10 every `async f(...)` published a GT to the SCHEDULER, so at N >= 2 a
@@ -65,6 +67,30 @@
 # that discriminates. What it contributes here is one more program whose spawn
 # path is asserted to reach no worker M.
 #
+# ⭐⭐ AND IT STAYS AN `async` PROGRAM, BECAUSE THE SERVICE FORM OF IT DOES NOT
+# COMPILE (SV1 wave 4). It hands ONE heap `String` to twelve tasks; a send is a
+# MOVE, so the second hand-over asks this frame to give up a reference the first
+# already took. `refcount-service-refused.maxon` is that program, and it is in
+# `REFUSED_PROGRAMS` rather than `PROGRAMS`: the driver asserts the BUILD FAILS and
+# fails with **E3102** specifically — `use of moved value`, which is sharper than the
+# transferability refusal E3138 because the first send did not merely threaten a
+# second owner, it TOOK the reference. The refusal is a fact about the move that no
+# RUN can assert, so it lives beside the program it mirrors.
+#
+# ⚠ CHECKING THE CODE IS NOT PEDANTRY — IT CAUGHT THE FIRST CUT OF THAT FILE. Written
+# as a loop over twelve services it was refused by `E2015` instead, a path-sensitivity
+# limit on moving a value declared outside a loop, which says nothing whatever about
+# transfer. A must-not-compile program that fails for the wrong reason asserts nothing,
+# and this check went red on its first run rather than passing quietly.
+#
+# ⭐⭐ service-fanin-torture IS THE MAILBOX'S OTHER SIDE. `service-torture` is ONE
+# sender and twelve mailboxes; this is twelve SENDER SERVICES and one, so the
+# multi-producer half of `__mbox_send` finally has more than one producer. Its
+# aggregate is accumulated by the SINK — whose handlers its own mailbox serializes
+# — rather than by `main`, which is what makes the reading sound at N >= 2 without
+# a cross-thread flag. MEASURED at SV1 wave 4: `aggregate=42680 taken=4800` at
+# every N, with workers/steals of 1/0, 2/2, 7/20 and 12/23 at N=1/2/7/12.
+#
 # ⚠ AND THAT IS ALSO WHAT alloc-torture AND remote-free-torture NOW COST. Both
 # exist to drive the sharded allocator's CROSS-P paths, and both do it by getting
 # worker Ms to run their tasks. With no worker M they still run every task and
@@ -95,13 +121,13 @@ MAXON="${MAXON:-$REPO/maxon-shv2/.maxon/maxon-shv2.exe}"
 
 WORK="$HERE/.pin-matrix"
 PROCS_LIST="${PROCS_LIST:-1 2 7 12}"
-PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture}"
+PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture}"
 
 # ⭐⭐ WHICH PROGRAMS CREATE REAL GREEN THREADS — the one fact assertion 4 is keyed
 # by, written down once so a program added to either family cannot inherit the
 # other's expectation by being appended to the wrong list. A `spawn` publishes to a
 # P RING; an `async` publishes to its caller's own coroutine queue.
-SPAWNING_PROGRAMS="${SPAWNING_PROGRAMS:-service-torture}"
+SPAWNING_PROGRAMS="${SPAWNING_PROGRAMS:-service-torture service-fanin-torture}"
 
 spawns_green_threads() {
 	case " $SPAWNING_PROGRAMS " in
@@ -109,6 +135,21 @@ spawns_green_threads() {
 		*) return 1 ;;
 	esac
 }
+
+# ⭐⭐ PROGRAMS THAT MUST NOT COMPILE, AND THE CODE EACH MUST BE REFUSED WITH.
+# `refcount-torture.maxon` hands ONE heap `String` to twelve tasks — the shape its
+# own header's 96-run table is about — and the same program written with SERVICES is
+# a compile-time refusal, because a send is a MOVE and the second one asks this frame
+# to give up a reference the first one already took. That refusal is a fact about the
+# transfer rule with nowhere else to live: no run can assert it, so this driver
+# asserts the BUILD, and it asserts the CODE rather than merely "it failed" — a build
+# that fails for an unrelated reason (a typo, a renamed builtin) would otherwise pass
+# this check for ever.
+#
+# Each entry is `<program>:<code>`, because the code is a property of the PROGRAM
+# and not of the list: two must-not-compile programs can be refused by two different
+# rules, and one global code would silently accept the wrong one for the second.
+REFUSED_PROGRAMS="${REFUSED_PROGRAMS:-refcount-service-refused:E3102}"
 
 LEAK_EXIT=101
 SEGV_EXIT=139
@@ -140,6 +181,28 @@ for prog in $PROGRAMS; do
 	fi
 done
 echo "built: $PROGRAMS"
+
+# The other half of the compile step: the programs whose whole content is that they
+# DO NOT build. Asserted here rather than in a spec case because what they mirror is
+# a torture program, and a reader comparing the two has to find them side by side.
+for entry in $REFUSED_PROGRAMS; do
+	prog="${entry%%:*}"
+	code="${entry##*:}"
+
+	if "$MAXON" build "$HERE/$prog.maxon" -o "$WORK/$prog" >"$WORK/$prog.build.log" 2>&1; then
+		bad "$prog COMPILED — it must be refused with $code; the rule it mirrors has stopped covering the shape it was written for"
+		continue
+	fi
+
+	if ! grep -q "$code" "$WORK/$prog.build.log"; then
+		bad "$prog was refused, but not with $code — a build that fails for an unrelated reason asserts nothing"
+		head -3 "$WORK/$prog.build.log"
+		continue
+	fi
+
+	pass "$prog refused with $code"
+done
+echo "refused: $REFUSED_PROGRAMS"
 echo
 
 # Read one field off a program's stdout, or "-" when the program does not print it.

@@ -1,0 +1,82 @@
+// Track-0 MUST-NOT-COMPILE entry (SV1 wave 4) — `refcount-torture.maxon` written
+// against SERVICES, which is a COMPILE-TIME REFUSAL, and that is the point.
+//
+// ⭐⭐ `refcount-torture.maxon` HANDS THE SAME HEAP `String` TO TWELVE TASKS. That
+// is what makes it a refcount race: every incref and every decref lands on one
+// word, and its header carries the 96-run table that justified making the step a
+// plain load/add/store. It stays an `async` program and `pin-matrix.sh` keeps
+// asserting `workers=1 steals=0` of it, because an `async` frame is a COROUTINE of
+// the green thread that called it and there is no second M to race from.
+//
+// ⭐⭐ THE SAME PROGRAM CANNOT BE WRITTEN WITH SERVICES, AND THE COMPILER SAYS SO.
+// A send is a MOVE: the sending frame gives up the reference it holds and the
+// service becomes the box's one owner. So the FIRST send takes `shared` away from
+// `main`, and the second one is asking `main` to give up a reference it no longer
+// has. Under the `async` shape those two hand-overs are what put twelve green
+// threads on twelve Ms stepping one plain refcount word — exactly the shape the
+// atomic used to cover and the pin now removes; under a service the shape has no
+// spelling at all.
+//
+// ⚠⚠ **TWO SENDS, WRITTEN OUT, AND NOT A LOOP — MEASURED, BECAUSE THE FIRST CUT OF
+// THIS FILE WAS A LOOP AND `pin-matrix.sh` CAUGHT IT.** Handing a value declared
+// OUTSIDE a loop to a send INSIDE it is refused earlier and by a different rule:
+// `E2015 moving a value declared outside this loop from inside the loop body`,
+// which is about path-sensitive elaboration across a back edge and says nothing
+// whatever about transferability. A must-not-compile program that fails for the
+// wrong reason asserts nothing, which is why the driver checks the CODE and not
+// merely that the build failed — and why the mirror of "twelve tasks" here is two
+// straight-line sends. The COUNT was never the subject: twelve is what produces
+// CONTENTION, and contention cannot arise at all once the shape is refused.
+//
+// ⇒ **THE REFUSAL IS THE MEASUREMENT.** `refcount-race.sh` discriminates the
+// `async` shape by REPEATING it and tabulating exit codes, because the race is
+// intermittent and a single run cannot see it. The service shape needs no runs at
+// all: it is unrepresentable, and this file is where that fact is kept so it is
+// re-checked by a driver rather than remembered. `pin-matrix.sh` builds it and
+// asserts the build FAILS with E3102 (`use of moved value`, which is sharper
+// than the transferability refusal E3138: the first send did not merely threaten a
+// second owner, it TOOK the reference) — a build that starts SUCCEEDING here is the
+// transfer rule having quietly stopped covering the shape it was written for.
+
+typealias Integer = int(i64.min to i64.max)
+
+// `refcount-torture`'s round count. It never runs, but a number that differed from
+// the program this one mirrors would invite the reader to think the shapes differ
+// in some way that matters here. They differ in exactly one way: the send.
+let rounds = 6000
+
+type Hammer
+	var acc as Integer
+
+	static function create() returns Self
+		return Self{acc: 0}
+	end 'create'
+
+	// The borrowing handler `service-torture.maxon`'s `take` is, so the loop owes the
+	// payload drop — which is the second half of what would race.
+	export function churn(s String, perRound Integer)
+		self.acc = self.acc + (s.byteLength() * perRound)
+	end 'churn'
+end 'Hammer'
+
+function main() returns ExitCode
+	let first = spawn Hammer.create()
+	let second = spawn Hammer.create()
+
+	// ⚠ INTERPOLATION, not a literal, for `service-torture`'s reason: an immortal
+	// `.rdata` record takes `__str_retain`'s COPY arm and never touches a refcount, so
+	// a literal would be a program with nothing to race and the refusal would be about
+	// a different thing.
+	let shared = "a shared payload {rounds}"
+
+	// This one is legal and is the whole of what a service may be handed: `main` owns
+	// `shared` alone, gives up its reference, and `first` becomes the box's one owner.
+	first.churn(shared, perRound: rounds)
+
+	// ⛔ THE LINE THAT MUST NOT COMPILE. `main` no longer holds a reference to give up,
+	// and the only way this could be made to work is the one the language refuses —
+	// two green threads owning one box and stepping one plain refcount word.
+	second.churn(shared, perRound: rounds)
+
+	return 42
+end 'main'
