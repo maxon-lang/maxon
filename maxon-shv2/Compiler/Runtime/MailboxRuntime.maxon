@@ -358,10 +358,9 @@ function buildMboxRecv(module StdModule)
 	// ⭐⭐ **THE PARK IS DEFERRED AND THE LOCK IS ALREADY RELEASED — the two halves of this file's hard rule.**
 	// `emitGtPark` leaves a NOTE on the green thread and switches to its driver; `__gt_register_park`'s
 	// mailbox arm performs the registration afterwards, re-checking head and `closed` under the lock and
-	// UNDOING the park if either has changed. That re-check is the lost-wakeup fix: between this release and
-	// that registration a sender can arrive, find `parkedGt` still 0, wake nobody — and the re-check is what
-	// notices. Resuming re-enters `attempt`, which takes the lock and asks again, so a spurious wake costs a
-	// loop iteration and nothing else.
+	// UNDOING the park if either has changed. Between this release and that registration a sender can arrive,
+	// find `parkedGt` still 0 and wake nobody — and the re-check is what notices. Resuming re-enters `attempt`,
+	// which takes the lock and asks again, so a spurious wake costs a loop iteration and nothing else.
 	emitGtPark(module, func: func, ids: ids, cur: park, kind: GtParkKindMailbox, arg: mbox, cont: attempt)
 
 	module.functions.push(func)
@@ -513,10 +512,25 @@ end 'buildMboxServiceExit'
 //   • **NEITHER.** The thread registers itself as the mailbox's `parkedGt` and goes `waiting`, which is what
 //     the next `__mbox_send` or `__mbox_close` will find.
 //
-// ⛔ **THAT RE-CHECK IS THE LOST-WAKEUP FIX AND IT IS NOT AN OPTIMISATION.** Without it a send that lands in
-// the window between `__mbox_recv`'s release and this registration is lost, and the service hangs holding a
-// message — reachable at `MAXON_MAX_PROCS >= 2` and invisible at 1, which is precisely the shape a green
-// suite on one processor would never show.
+// ⚠⚠ **THE RE-CHECK IS CORRECT AND IT HAS NOT BEEN SEEN RED — SAID PLAINLY, BECAUSE THE SENTENCE THAT
+// STOOD HERE CLAIMED OTHERWISE.** It read: *"without it a send that lands in the window is lost, and the
+// service hangs holding a message — reachable at `MAXON_MAX_PROCS >= 2`"*. **MEASURED at SV1 wave 3 and
+// FALSE for anything SV1 can express**: the re-check disabled (both comparisons forced true, so the park is
+// always registered), `track0/service-torture` — 12 services, 4,800 sends — read exit 42 on 49 runs across
+// N = 1/2/7/12, with no hang and no leak.
+//
+// ⇒ **WHY, AND IT IS THE SHAPE OF SV1 RATHER THAN LUCK: THERE ARE TWO WAKE SOURCES AND THE SECOND IS
+// UNCONDITIONAL.** A lost wake strands a message only until the NEXT event on that mailbox, and every
+// mailbox gets one: the last handle's drop calls `__mbox_close`, which takes this same lock and wakes
+// whoever is parked. So a missed send costs LATENCY, and the close repairs it before the process can exit.
+// A permanent stall needs the CLOSE's own wake to be lost in the same few-dozen-instruction window, which
+// 49 runs did not hit.
+//
+// ⛔ **THAT IS AN ARGUMENT ABOUT SV1's OBSERVABILITY, NOT ABOUT THE WINDOW, AND THE WINDOW IS REAL.** SV1
+// has no reply, so nothing in the language BLOCKS on a service making progress — which is exactly what
+// SV2 adds: an awaiter parked on a reply cell has no `__mbox_close` to rescue it, and there the lost wake is
+// a hang with no second source. The re-check stays because it is right and costs two loads under a lock the
+// caller already holds; what may not stay is a claim that it has been measured to matter.
 //
 // It terminates `cur` and answers the block to CONTINUE IN, `emitMboxWakeAndUnlock`'s shape — except that
 // here the caller owns the unlock, because `__gt_register_park`'s other three arms do too.

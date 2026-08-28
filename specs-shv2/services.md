@@ -1109,6 +1109,53 @@ kept two-2 (2)
 kept a literal (3)
 ```
 
+<!-- test: a-throwing-message-is-sent-fire-and-forget -->
+<!-- targets: x64-windows -->
+⭐⭐ **A `throws` CLAUSE IS WHAT MAKES A MESSAGE REPLY-BEARING, AND SV1 SENDS IT ANYWAY.** The reply slot is
+filled with 0, the handler runs, and its error has nowhere to go — which is the fire-and-forget half of the
+design, not a gap in it. What must NOT happen is the thing that did: the second `keep` throws before it
+reads `s`, so the `String` it was handed is still the loop's to drop, and the request box is still the loop's
+to release.
+
+⛔ **MEASURED RED AT SV1 wave 3: exit 101 on exactly this shape.** A `tryCall` opens an error-edge diamond,
+so the payload drop and the shell decref land in that diamond's MERGE — and `buildServiceArm` terminated the
+arm's own block instead, overwriting the diamond's branch and skipping both. Correct answers printed, every
+throwing message's box and payload stranded.
+```maxon
+enum StoreError
+	full
+end 'StoreError'
+
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String) throws StoreError
+		if self.n > 0 'alreadyHoldsOne'
+			throw StoreError.full
+		end 'alreadyHoldsOne'
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	h.keep("a{1}")
+	h.keep("b{2}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kept a1
+```
+
 <!-- test: unioncases-tags-the-request-variants -->
 <!-- targets: x64-windows -->
 The synthesized request union is an ordinary union, so its `.unionCases` companion exists — and `__shutdown`
@@ -1684,6 +1731,8 @@ type Store
 
 	export function keep(s String)
 		self.n = self.n + 1
+		print("kept {s}
+")
 	end 'keep'
 end 'Store'
 

@@ -54429,6 +54429,10 @@ export type Parser
 		var args = ValueIdArray.create()
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
+		// Filled and DISCARDED, both of them, and each for its own reason. `argRanges` is the column an op
+		// carries so a LATER pass can position a diagnostic about one argument, and a send's op carries a BOX
+		// rather than arguments; `argImmutableNames` blames a binding for E3019, which is keyed by callee
+		// mutation summary — and a message writes a value this frame has given up, so there is nothing to blame.
 		var argImmutableNames = ByteArrayArray.create()
 		var argAnchors = TokenIndexArray.create()
 		// ORDINARY, unconditionally: a message is a declared method, so it always has parameter names to label
@@ -54439,32 +54443,39 @@ export type Parser
 		// `h.bump()` on a `bump(by int = 1)` sends the same request `h.bump(1)` does.
 		_ = try self.fillOmittedArgDefaults(callee, anchor: memberTok, args: args, argLabels: argLabels, argRanges: argRanges)
 
+		let range = SourceRange.between(baseTok, last: rparenTok)
 		let payloads = request.payloadsAt(caseIndex)
 		var slotValues = ValueIdArray.create()
 		var filled = BoolArray.create()
+		var bareLocal = BoolArray.create()
 		var slotAnchors = TokenIndexArray.create()
-		for _ in 0 upto payloads.count() 'initSlots'
-			slotValues.push(0)
-			filled.push(false)
-			slotAnchors.push(memberIndex)
-		end 'initSlots'
+		self.seedMessageSlots(payloads.count(), anchor: memberIndex, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
 
 		try self.slotMessageArgs(callee, args: args, argLabels: argLabels, argAnchors: argAnchors, memberIndex: memberIndex, slotValues: slotValues, filled: filled, slotAnchors: slotAnchors, memberTok: memberTok)
-		self.fillMessageReplySlot(payloads, slotValues: slotValues, filled: filled, range: SourceRange.between(baseTok, last: rparenTok))
+		self.fillMessageReplySlot(payloads, slotValues: slotValues, filled: filled, range: range)
 		try self.requireEveryMessageArgumentGiven(callee, payloads: payloads, filled: filled, given: args.count(), memberTok: memberTok)
 
-		// `argsBareLocal` is ALL FALSE and cannot be otherwise: the transfer a message's payload takes is
-		// `moveIntoGreenThread`, which resolves the source binding itself, so the construct's per-slot
-		// bare-local column has no reader on this path (`storedPayloadValue`).
-		var bareLocal = BoolArray.create()
-		for _ in 0 upto payloads.count() 'noneIsABareLocalHere'
-			bareLocal.push(false)
-		end 'noneIsABareLocalHere'
-
-		let range = SourceRange.between(baseTok, last: rparenTok)
 		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
 		return self.emitServiceSendOp(base, box: box, callee: callee, range: range)
 	end 'emitServiceSend'
+
+	// ⭐ **THE FOUR LAYOUT-PARALLEL COLUMNS A REQUEST BOX IS FILLED THROUGH, SEEDED FOR ONE VARIANT.** Both
+	// doors that build one need all four and neither may seed three — `emitEnumBox` indexes every one of them
+	// by slot, so a column short by an entry is an out-of-bounds panic rather than a missing value.
+	//
+	// ⚠ **`bareLocal` IS ALL FALSE AND CANNOT BE OTHERWISE, WHICH IS WHY IT IS SEEDED HERE AND NEVER WRITTEN.**
+	// The transfer a message's payload takes is `moveIntoGreenThread`, which resolves the source binding
+	// itself; the union CONSTRUCT's per-slot bare-local column has no reader on this path
+	// (`storedPayloadValue`), and passing a column of the right SHAPE is what lets the two fills share one
+	// emitter instead of two.
+	function seedMessageSlots(count CaseIndex, anchor TokenIndex, slotValues ValueIdArray, filled BoolArray, bareLocal BoolArray, slotAnchors TokenIndexArray)
+		for _ in 0 upto count 'eachSlot'
+			slotValues.push(0)
+			filled.push(false)
+			bareLocal.push(false)
+			slotAnchors.push(anchor)
+		end 'eachSlot'
+	end 'seedMessageSlots'
 
 	// ⭐ **THE ENQUEUE ITSELF — the mailbox out of the handle, and the op.** Written once because BOTH doors
 	// that put an envelope in a mailbox reach it: an author's message and the compiler's `__shutdown` pill.
@@ -54493,14 +54504,17 @@ export type Parser
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		let range = SourceRange.between(baseTok, last: rparenTok)
+		// ⭐ **THE PILL'S ONLY PAYLOAD IS THE REPLY SLOT, so the fill EVERY message's box takes fills the whole
+		// variant here and there is no argument to slot.** `buildServiceRequestUnion` gives variant 0 exactly one
+		// payload, `__reply`, and gives it to every request union there will ever be — so this is not a shape
+		// this door assumes, it is the shape that door builds.
+		let payloads = request.payloadsAt(ServiceShutdownCaseIndex)
 		var slotValues = ValueIdArray.create()
+		var filled = BoolArray.create()
 		var bareLocal = BoolArray.create()
 		var slotAnchors = TokenIndexArray.create()
-		for _ in 0 upto request.payloadArityAt(ServiceShutdownCaseIndex) 'eachSlot'
-			slotValues.push(self.emitLiteral(ServiceNoReplyCell, valueType: MaxonType.integer, range: range))
-			bareLocal.push(false)
-			slotAnchors.push(self.pos)
-		end 'eachSlot'
+		self.seedMessageSlots(payloads.count(), anchor: self.pos, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
+		self.fillMessageReplySlot(payloads, slotValues: slotValues, filled: filled, range: range)
 
 		let box = try self.emitEnumBox(request, caseIndex: ServiceShutdownCaseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
 		return self.emitServiceSendOp(base, box: box, callee: qualifiedMethodName(typeName, methodName: memberTok.value), range: range)

@@ -149,7 +149,7 @@ function buildServiceArm(fn SynthesizedFunction, project Project, signatures Pro
 		// to cascade to and this is the shell decref spelled through the one router. Whatever is queued
 		// BEHIND it is the exit path's to abandon.
 		fn.emitPositionalCallDiscarding(abandonCallee, args: argsOf(req), range: range)
-		fn.terminateBlock(arm, op: MaxonOp.branch(exit.id), range: range)
+		fn.terminate(MaxonOp.branch(exit.id), range: range)
 		return arm
 	end 'thePoisonPill'
 
@@ -182,19 +182,39 @@ function buildServiceArm(fn SynthesizedFunction, project Project, signatures Pro
 	// the trivial destructor (`Parser.emitBoxAlloc`), which is what makes the plain decref the right entry
 	// rather than the cascade the abandon path takes.
 	fn.emitPositionalCallDiscarding(MmDecrefName, args: argsOf(req), range: range)
-	fn.terminateBlock(arm, op: MaxonOp.branch(receive.id), range: range)
+	// ⛔⛔ **THE CURRENT BLOCK, NOT `arm` — AND THE TWO ARE NOT THE SAME BLOCK FOR EVERY MESSAGE.** A THROWING
+	// handler is a `tryCall` whose error edge is a diamond (`emitServiceHandlerCall`), so by this line the ops
+	// above have landed in that diamond's MERGE and `arm` was terminated by its `condBranch` several lines
+	// ago. Terminating `arm` a second time OVERWROTE that branch: the handler still ran (its op precedes the
+	// terminator) and control went straight back to `receive`, skipping the payload drops and the shell decref
+	// this line and the two above it are.
+	//
+	// **MEASURED as exit 101 on a two-message program whose second message throws** — correct answers printed,
+	// every request box and every moved-in payload of a throwing message stranded. `arm` is still what this
+	// function RETURNS, because that is the block the switch jumps to; what it TERMINATES is wherever the ops
+	// ended up. `fn.terminate` is that distinction, and it exists on the carrier for exactly this reason.
+	fn.terminate(MaxonOp.branch(receive.id), range: range)
 	return arm
 end 'buildServiceArm'
 
 // The handler call itself. A THROWING message needs the dual-register form and needs its error flag
 // released; everything else is one positional call whose result is dropped if it owns heap.
 //
-// ⚠⚠ **NO SEND CAN PRODUCE A THROWING VARIANT IN SV1 — `Parser.emitServiceSend` refuses one, because a
-// fire-and-forget message has nowhere to carry an error — SO THIS ARM IS CORRECTNESS AND NOT A LIVE PATH.**
-// It is written rather than aborted for two reasons that are both about the compiler and not about the
-// program: a plain `call` to a throwing callee is **E3057** at `SemanticCheck.validatePlainCall` (which
-// walks this synthesized body like any other), so the `tryCall` is FORCED; and once it exists, a boxed error
-// union's flag IS a heap pointer, so releasing it is the only non-leaking thing to do with it.
+// ⚠⚠ **A THROWING MESSAGE IS SENDABLE IN SV1 AND THIS ARM IS LIVE — THE COMMENT THAT STOOD HERE SAID THE
+// OPPOSITE AND WAS WRONG.** It read *"no send can produce a throwing variant in SV1 — `emitServiceSend`
+// refuses one"*. It does not, and it should not: a `throws` clause is exactly what makes a message
+// REPLY-BEARING (`ServiceCompanions.serviceMessageHasAReply` counts it beside a return type), and SV1's
+// fire-and-forget half is the design's own — the send fills the reply slot with 0 and the error has nowhere
+// to go, so this loop drops it. **SV2 is what gives it somewhere to go.**
+//
+// ⛔ **AND THE ARM BEING LIVE IS HOW A LEAK GOT IN.** A `tryCall` opens an error-edge DIAMOND, so the ops
+// after this call land in the merge rather than in the arm's own block — which `buildServiceArm` did not
+// account for. MEASURED: exit 101 on a two-message program whose second message throws. See the terminator
+// at the end of `buildServiceArm` for what that cost and why it is `fn.terminate`.
+//
+// A plain `call` to a throwing callee is **E3057** at `SemanticCheck.validatePlainCall` (which walks this
+// synthesized body like any other), so the `tryCall` is FORCED; and a boxed error union's flag IS a heap
+// pointer, so releasing it is the only non-leaking thing to do with it.
 function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignatures, project Project, callee ByteArray, args ValueIdArray, range SourceRange)
 	let returned = serviceHandlerReturnType(signatures, callee: callee, typeNames: project.typeNames)
 	let resultTag = match returned 'r'
