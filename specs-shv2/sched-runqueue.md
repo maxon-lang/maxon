@@ -24,10 +24,17 @@ rather than a thread count.** Every refcount read-modify-write on a box therefor
 thread running that box's one owning green thread.
 
 **The coroutine queue** is an intrusive FIFO through `GtOffNext`, with its two ends on the owning green
-thread's own struct. `__gt_coro_enqueue` appends, `__gt_coro_next` is the one place a driver asks what
-runs next, and both take `__sched_lock` — because the IOCP completion thread appends to it too, when a
-coroutine parked on a pipe read becomes runnable again. That completion thread is the ONLY other OS
+thread's own struct. `__gt_coro_enqueue` appends and `__gt_coro_next` is the one place a driver asks what
+runs next; `__sched_lock` covers every access to it, because the IOCP completion thread appends to it too
+when a coroutine parked on a pipe read becomes runnable again. That completion thread is the ONLY other OS
 thread that touches the queue, and it is the reason the lock is there.
+
+⚠ **THE TWO DOORS DIFFER IN WHO TAKES THAT LOCK, AND A READER WHO GETS IT BACKWARDS WRITES A RACE.**
+`__gt_coro_next` takes it around its own dequeue. `__gt_coro_enqueue` does **not** — it REQUIRES the
+caller to hold it, because its callers already do: the completion thread holds it across its whole
+abandoned-vs-normal decision, and `__gt_timer_check` / `__gt_proc_check` hold it across the store walk
+they publish from. `osLockEnter` is a Win32 CRITICAL_SECTION and therefore RECURSIVE, so calling it
+without the lock produces no diagnostic anywhere — only a queue two OS threads can be inside at once.
 
 **A yield goes to the TAIL**, which is the whole content of *"let someone else have a turn"*. The
 bootstrap measured what the other choice costs — *"a thousand yields from one green thread left a
@@ -103,17 +110,22 @@ green-thread programs, and the green-thread substrate exists on exactly one lane
 <!-- targets: x64-windows -->
 **THE TRANSITIVITY THE WHOLE PIN RESTS ON.** A coroutine's owner is its SPAWNER'S owner, not its spawner
 — so `inner`, spawned by the coroutine `outer`, belongs to the same green thread `main` does, and lands
-in the SAME queue as `sibling`, which `main` spawned. This case is the only one that can see that:
-`outer` runs first, spawns `inner` behind `sibling`, and then awaits `inner` — which drives the ONE
-queue, so `sibling` runs before `inner` even though `inner` is what is being awaited and `sibling` is
-nobody's business.
+in the SAME queue as `sibling`, which `main` spawned. It is the case that states the transitivity
+DIRECTLY, in positions rather than in an exit code: `outer` runs first, spawns `inner` behind `sibling`,
+and then awaits `inner` — which drives the ONE queue, so `sibling` runs before `inner` even though
+`inner` is what is being awaited and `sibling` is nobody's business.
 
-⚠ **AND IT IS THE ONLY CASE THAT CAN SEE THE STAMP BE *WRONG* RATHER THAN MISSING.** MEASURED against
-`__gt_spawn` stamping `gt.owner = currentGt` — the SPAWNER — instead of `currentGt.owner`: this case reads
-`ra=0 posC=0` (`inner` lands in `outer`'s own queue, which nothing drives, so `await c` bails and answers
-the unset result slot) while **every other case in this file still passes**, because none of them nests an
-`async` inside an `async`. Removing the stamp altogether is the coarser sabotage and does not need this
-case: an `owner` of 0 makes `__gt_coro_enqueue` write its queue ends through a null pointer, so **every**
+⚠ **IT IS NOT THE ONLY CASE THAT CAN SEE THE STAMP BE *WRONG* RATHER THAN MISSING — a first cut of this
+paragraph said it was, and the review measured otherwise.** MEASURED against `__gt_spawn` stamping
+`gt.owner = currentGt` — the SPAWNER — instead of `currentGt.owner`: this case reads
+`ra=0 rb=1 posA=1 posB=2 posC=0` (`inner` lands in `outer`'s own queue, which nothing drives, so `await c`
+bails and answers the unset result slot), **every other case in THIS FILE still passes** because none of
+them nests an `async` inside an `async` — and **EIGHT cases elsewhere go red for the same sabotage**:
+`async-await.nested`, `.nested-two-levels`, `.nested-in-expression`, `.nested-spawn-then-await-late`,
+`.nested-void`, `.nested-try-await`, `.nested-sleep`, and `async-scheduler.nested`. So the transitivity is
+gated whether or not this case exists; what this case adds is a reading that says WHICH queue rather than
+a wrong answer. Removing the stamp altogether is the coarser sabotage and does not need this case: an
+`owner` of 0 makes `__gt_coro_enqueue` write its queue ends through a null pointer, so **every**
 green-thread program takes an access violation (exit `0xC0000005`, measured across all eight cases here).
 A zero here is not a benign default and a plausible-looking non-zero is not enough either.
 ```maxon
