@@ -114,6 +114,7 @@ def main():
         os.path.join(REPO, "examples", "fannkuch-redux.maxon"),
         os.path.join(REPO, "temp", "codegen-probe", "arr.maxon"),
         os.path.join(REPO, "temp", "codegen-probe", "cse2.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "cse3.maxon"),
         os.path.join(REPO, "temp", "codegen-probe", "probe.maxon"),
     ) if os.path.exists(p)]
 

@@ -86,33 +86,38 @@ to argue anything.
 
 ## THE ANCHOR — one 3-line loop, and every missing pass visible at once
 
-`for v in a` over `Array with Integer`, summing. shv2 at `f8380ebcaa`, freshly built, `--emit-ir`
-(`temp/codegen-probe/arr.maxon`). The executed hot path is **15 instructions per element**:
+`for v in a` over `Array with Integer`, summing (`temp/codegen-probe/arr.maxon`). **Re-measured at
+`d9de57c455`, after `EC11` and `EC12`**: the executed hot path is **14 instructions per element**,
+down from 15 — and what remains is a list of the rows still open.
 
 ```
-  forhdr:     load rax,[rbx+8]      ← length, RELOADED every trip          (LICM)
-              cmp r13,rax ; jcc less,loop
-  loop:       load rax,[rbx+24]     ← element_size, RELOADED every trip    (LICM)
-              cmp rax,8 ; jcc equal,__im_word   ← a RUNTIME stride dispatch on a
-                                                  type whose stride is 8 at COMPILE TIME
-  __im_word:  load rax,[rbx+0]      ← buffer base, RELOADED every trip     (LICM)
-              imul rcx,r13,8        ← index scaling by IMUL                (addressing mode)
+  forhdr:     load rax,[rbx+8]      ← length, RELOADED every trip          (EC14 LICM)
+              cmp r13,rax ; jcc greaterEqual,forexit
+  loop:       load rax,[rbx+24]     ← element_size, RELOADED every trip    (EC14 LICM)
+              cmp rax,8 ; jcc notEqual,__im_stride   ← a RUNTIME stride dispatch on a
+                                                       type whose stride is 8 at COMPILE TIME (EC15)
+  __im_word:  load rax,[rbx+0]      ← buffer base, RELOADED every trip     (EC14 LICM)
+              imul rcx,r13,8        ← index scaling by IMUL                (EC16 addressing mode)
               lea  rax,rax,rcx
               load rax,[rax+0]
-              jmp  __il_cont
-  __il_cont:  lea  r12,r12,rax
-              jmp  forstep          ← forstep IS the next block            (block layout)
+              jmp  __il_cont        ← __im_stride is physically next, so EC11 cannot elide this.
+                                      BLOCK REORDERING would (filed, not taken)
+  __il_cont:  lea  r12,r12,rax      ← EC11 elided this block's `jmp forstep`
   forstep:    lea  r13,r13,1
               jmp  forhdr           ← the real back edge
 ```
 
 An ideal x64 body is **5**: `mov rax,[rbx+r13*8]` · `add r12,rax` · `inc r13` · `cmp r13,len` · `jl`.
-**15 → 5.** Each row of the ranking below is one of the reasons for the other ten, and they are
+**14 → 5.** Each row of the ranking below is one of the reasons for the other nine, and they are
 independent of each other.
 
 ⚠ Note what this is NOT: the `__im_*` arms are `EC1`'s inlined fast path, and `EC1` was a large
 measured win (a checked read went 176 → 26 instructions). The defect is that the inlined arm is
 **not specialized by an element type the compiler already knows** — not that it was inlined.
+
+⭐ The one jump left in the loop is the clearest argument for **block reordering**, which `EC11`
+deliberately did not do: `EC11` collects the fall-throughs that already exist, it does not create
+new ones. Laying `__il_cont` after `__im_word` would remove it and cost nothing.
 
 ## The ranking
 
@@ -441,6 +446,36 @@ end 'work'
 
 function main() returns ExitCode
 	print("r={work(3, y: 4)}")
+	return 0
+end 'main'
+```
+
+**`cse3.maxon`** — the CSE probe (`EC13`). ⚠ `cse2.maxon` STOPPED being a CSE probe when `EC12`
+landed: its operands are constant after inlining, so `foldConstants` now evaluates all three copies
+away and its `imul-imm` reads 0. `cse3` feeds the same expression a value the compiler cannot see
+through, so the three copies survive folding and only CSE can remove them. shv2 emits `imul`/`lea`
+three times into three simultaneously-live registers:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+// The operand is a RUNTIME value the compiler cannot see through, so foldConstants
+// cannot collapse this. Three identical subexpressions remain three computations.
+function work(x Integer, y Integer) returns Integer
+	let a = x * 31 + y
+	let b = x * 31 + y
+	let c = x * 31 + y
+	return a + b + c
+end 'work'
+
+function main() returns ExitCode
+	var seed = 0
+	for i in 0 upto 3 'feed'
+		seed = seed + work(i, y: i + 1)
+	end 'feed'
+	if seed < 0 'guard'
+		return 1
+	end 'guard'
 	return 0
 end 'main'
 ```
