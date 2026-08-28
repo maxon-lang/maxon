@@ -53,20 +53,21 @@ func @loopReuse {
     x64.leaRegRegImm32 r12, rcx, 10
     x64.leaRegRegImm32 r13, rcx, 11
     x64.storeSlotReg slot0, r13
-    x64.leaRegRegImm32 r13, rcx, 20
-    x64.leaRegRegImm32 rcx, rcx, 5
-    x64.movRegImm32 r14, 0
+    x64.leaRegRegImm32 rcx, rcx, 20
+    x64.movRegImm32 r13, 0
+    x64.movRegReg r14, r13
+    x64.movRegReg r13, r8
   whilehdr:
     x64.cmpRegImm32 r14, 3
     x64.jcc greaterEqual, whileexit
   loop:
-    x64.movRegReg r15, r13
-    x64.subRegReg r15, r13, rcx
+    x64.movRegReg r15, rcx
+    x64.subRegReg r15, rcx, r13
     x64.leaRegRegImm32 r14, r14, 1
-    x64.movRegReg rcx, r15
+    x64.movRegReg r13, r15
     x64.jmp whilehdr
   whileexit:
-    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg rax, r13, rax
     x64.leaRegRegReg rax, rax, rdx
     x64.leaRegRegReg rax, rax, rsi
     x64.leaRegRegReg rax, rax, rdi

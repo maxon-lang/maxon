@@ -676,22 +676,29 @@ export type StdOpMeta
 	// Side-effect-free: the op can be duplicated, reordered, or dropped when its
 	// result is unused.
 	//
-	// ⚠⚠ **THIS FIELD HAS NO READER TODAY — IT IS A DECLARATION AWAITING ONE, AND
-	// EVERY OP'S VALUE MUST STILL BE RIGHT.** Measured 2026-07-15: a sweep of all
-	// nine `StdOpMeta` fields finds `isPure` read NOWHERE (`op.rawValue` is never
-	// even aliased to a local, so the sweep is complete), and a SABOTAGE confirms it
-	// — `loadIndirect` flipped to `isPure: true` leaves `specs-shv2` at **371/0,
-	// exit 0**, including both `*-load-not-hoisted` specs. Its readers are the
-	// inliner's callee-body purity gate (v1: `Inliner.isPureOp`) and DCE/CSE/LICM;
-	// all are SCHEDULED and none exist (`buildDefaultPipeline` hoists nothing).
+	// ⭐⭐ **IT HAS A READER SINCE `EC13` (2026-08-28), AND IT IS THE FIRST.**
+	// `eliminateCommonSubexpressions` gates on it: an op it would replace with an
+	// earlier equal one must be `isPure`, which is what keeps `div`/`mod` (they trap)
+	// and every load, call and OS primitive out of the pass — and the ONE flag that
+	// says so, rather than a second list of op names inside the pass.
 	//
-	// ⇒ **No spec can gate this field, so the values are held by REVIEW alone.** That
-	// is why each variant's value is argued at its own line rather than asserted, and
-	// why a wrong one is invisible until the first hoisting pass makes it a silent
-	// wrong answer in every program at once. **OPEN.md #27** carries the finding and
-	// the keep-vs-delete question for this field's FIVE equally unread siblings
-	// (`role`, `isUnsupportedInInlineBody`, `isMemory`, `isStore`, `isCmp` — only
-	// `category`, `isCall` and `clobbersFlags` have a reader).
+	// ⚠⚠ **THAT READER DOES NOT MAKE EVERY VARIANT'S VALUE GATED, AND THE OLD WARNING
+	// STANDS FOR THE REST.** Measured 2026-07-15: a sweep of all nine `StdOpMeta`
+	// fields found `isPure` read NOWHERE, and a SABOTAGE confirmed it — `loadIndirect`
+	// flipped to `isPure: true` left `specs-shv2` at **371/0, exit 0**, including both
+	// `*-load-not-hoisted` specs. Re-measured 2026-08-28 with CSE landed, that same
+	// sabotage is now REACHABLE — a load is only CSE'd if this flag lies — but a lie
+	// on a variant CSE's own roster (`classifyArithOperands`) already refuses is still
+	// invisible, because the roster answers `neither` before the flag is asked.
+	//
+	// ⇒ **The values are still held by REVIEW for every variant outside the arith
+	// band.** That is why each variant's value is argued at its own line rather than
+	// asserted. **OPEN.md #27** carries the finding and the keep-vs-delete question
+	// for this field's FIVE equally unread siblings (`role`,
+	// `isUnsupportedInInlineBody`, `isMemory`, `isStore`, `isCmp` — only `category`,
+	// `isCall` and `clobbersFlags` have a reader). The other readers this field was
+	// awaiting are the inliner's callee-body purity gate (v1: `Inliner.isPureOp`) and
+	// DCE/LICM, which are still scheduled and still do not exist.
 	//
 	// Declared PER VARIANT, which is the flat union's payoff: v1 could only answer
 	// this by CATEGORY at the match site (`arith gives true; control gives true;
@@ -2270,58 +2277,81 @@ end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
 
-// ⭐⭐ **WHICH OF THE TWO BINARY ARITHMETIC SHAPES AN OP CARRIES — ONE ROSTER, READ BY BOTH
-// ARITHMETIC REWRITE PASSES.** `foldConstOperands` (move a const OPERAND into an immediate) and
-// `foldConstants` (EVALUATE `const <op> const`) act on exactly the same two variants and no others:
-// `binOp` and `cmp`. Each used to open with its own exhaustive `StdOp` match whose every other arm
-// answered "unchanged" — the same set, enumerated twice, in two files that would learn about a new
-// variant separately. This is that enumeration, once.
+// ⭐⭐ **WHICH ARITHMETIC SHAPE AN OP CARRIES — ONE ROSTER, READ BY ALL THREE ARITHMETIC PASSES.**
+// `foldConstOperands` (move a const OPERAND into an immediate), `foldConstants` (EVALUATE
+// `const <op> const`) and `eliminateCommonSubexpressions` (reuse a value the block already computed)
+// each ask "what does this op compute, out of what?" of the same union. Each used to open — or would
+// have opened — with its own exhaustive `StdOp` match whose every other arm answered "unchanged": the
+// same set, enumerated three times, in three files that would learn about a new variant separately.
+// This is that enumeration, once.
 //
-// ⚠ **THE OTHER TWO ARITH VARIANTS ARE DELIBERATELY NOT SUBJECTS.** `binOpImm`/`cmpImm` carry an
-// IMMEDIATE rather than a second value operand, so neither pass's question ("are BOTH operands
-// constant?") is even askable of one; `div`/`mod` are `isPure: false` — they trap — and no fold may
-// remove them. Both facts are stated at the arms below rather than left to the range that covers them.
+// ⚠ **THE SHAPE SET GREW FOR `EC13` AND THE TWO FOLD PASSES ARE UNAFFECTED BY THE GROWTH**, because
+// each asks a `shape` PREDICATE (`isBinaryArith`/`isComparison`) rather than reading `shape` directly.
+// `unaryOp`, `binOpImm` and `cmpImm` used to answer `recordNeither` here with their reasons stated at
+// the arms; those reasons were about what a CONST FOLD can do with them, not about what they compute,
+// so each now records its real shape and the fold passes' two predicates still answer `false` for it.
+//
+// ⚠ **`div`/`mod` STAY OUT, AND THAT IS THE ONE EXCLUSION THAT IS ABOUT SEMANTICS RATHER THAN ABOUT A
+// PASS.** They are `isPure: false` — x64 `idiv` faults on a zero divisor and on `i64.min / -1` — so no
+// fold may evaluate one away and no CSE may drop the second of two. Admitting them here would put a
+// trapping op in front of three passes that all treat this roster's answer as a licence to rewrite.
+// `eliminateCommonSubexpressions` additionally re-asks `op.rawValue.isPure` of every shape this roster
+// admits and PANICS on a disagreement, so the two statements cannot drift apart.
 //
 // A caller-owned RECORD, never a returned union, for `StdFoldableDef`'s measured reason: a
 // payload-bearing union heap-boxes EVERY case including the payload-free ones, and this sits on a
 // path walked once per op in the module.
-export enum StdBinaryShape
-	// Neither a `binOp` nor a `cmp`: no binary arithmetic rewrite applies.
+export enum StdArithShape
+	// No arithmetic at all: a terminator, a call, a memory access, an address, an OS primitive, or one
+	// of the two trapping divisions. Nothing any arithmetic pass acts on.
 	neither
-	// A `binOp` — `opcode` and `operandType` are meaningful, `pred` is not.
+	// A `binOp` — `lhs`, `rhs`, `opcode` and `operandType` are meaningful.
 	binaryArith
-	// A `cmp` — `pred` and `operandType` are meaningful, `opcode` is not.
+	// A `cmp` — `lhs`, `rhs`, `pred` and `operandType` are meaningful.
 	comparison
-end 'StdBinaryShape'
+	// A `unaryOp` — `lhs` (the one operand), `unaryOpcode` and `operandType` are meaningful.
+	unary
+	// A `binOpImm` — `lhs`, `imm`, `opcode` and `operandType` are meaningful.
+	binaryArithImm
+	// A `cmpImm` — `lhs`, `imm`, `pred` and `operandType` are meaningful.
+	comparisonImm
+end 'StdArithShape'
 
-export type StdBinaryOperands
+export type StdArithOperands
 	// ⚠ **THE FIELDS BELOW ARE MEANINGLESS UNTIL `shape` SAYS WHICH OF THEM THE LAST classification
 	// FILLED**, and none may be read as a sentinel — ValueId 0 is a real value, `StdBinOpcode.add` is a
 	// real opcode and `StdCmpPred.eq` a real predicate. Every reader asks a `shape` predicate first.
-	var shape as StdBinaryShape
+	var shape as StdArithShape
 	export var resultId as ValueId
+	// The FIRST value operand, and the only one a `unary` or an immediate form has.
 	export var lhs as ValueId
+	// The SECOND value operand — `binaryArith` and `comparison` only (`hasSecondValueOperand`).
 	export var rhs as ValueId
-	// `binaryArith` only.
+	// `binaryArith` and `binaryArithImm`.
 	export var opcode as StdBinOpcode
-	// `comparison` only.
+	// `comparison` and `comparisonImm`.
 	export var pred as StdCmpPred
-	// Set by BOTH shapes: it is the type the operation READS, and it is what tells either pass whether
-	// this is float arithmetic (which neither may touch — see each pass's own float guard).
+	// `unary` only.
+	export var unaryOpcode as StdUnaryOpcode
+	// The two IMMEDIATE forms only — an ENCODED LITERAL, not a value operand, which is why
+	// `remapOperandsThrough` leaves it alone and `computesSameValueAs` compares it directly.
+	export var imm as Imm32
+	// Set by EVERY shape: it is the type the operation READS, and it is what tells a pass whether this
+	// is float arithmetic (which the two fold passes may not touch — see each pass's own float guard).
 	export var operandType as StdType
 
-	export static function create() returns StdBinaryOperands
-		return Self{shape: StdBinaryShape.neither, resultId: 0, lhs: 0, rhs: 0, opcode: StdBinOpcode.add, pred: StdCmpPred.eq, operandType: StdType.i64}
+	export static function create() returns StdArithOperands
+		return Self{shape: StdArithShape.neither, resultId: 0, lhs: 0, rhs: 0, opcode: StdBinOpcode.add, pred: StdCmpPred.eq, unaryOpcode: StdUnaryOpcode.neg, imm: 0, operandType: StdType.i64}
 	end 'create'
 
 	function recordNeither()
-		self.shape = StdBinaryShape.neither
+		self.shape = StdArithShape.neither
 	end 'recordNeither'
 
 	// The parameters are named for the ROLE rather than for the field, because a local that shadows a
 	// `self` field is E3006 — see the diagnostic's own wording on why the compiler refuses it.
 	function recordBinOp(defined ValueId, left ValueId, right ValueId, binOpcode StdBinOpcode, readType StdType)
-		self.shape = StdBinaryShape.binaryArith
+		self.shape = StdArithShape.binaryArith
 		self.resultId = defined
 		self.lhs = left
 		self.rhs = right
@@ -2330,7 +2360,7 @@ export type StdBinaryOperands
 	end 'recordBinOp'
 
 	function recordCmp(defined ValueId, left ValueId, right ValueId, cmpPred StdCmpPred, readType StdType)
-		self.shape = StdBinaryShape.comparison
+		self.shape = StdArithShape.comparison
 		self.resultId = defined
 		self.lhs = left
 		self.rhs = right
@@ -2338,42 +2368,193 @@ export type StdBinaryOperands
 		self.operandType = readType
 	end 'recordCmp'
 
+	function recordUnaryOp(defined ValueId, only ValueId, unaryOpcodeRead StdUnaryOpcode, readType StdType)
+		self.shape = StdArithShape.unary
+		self.resultId = defined
+		self.lhs = only
+		self.unaryOpcode = unaryOpcodeRead
+		self.operandType = readType
+	end 'recordUnaryOp'
+
+	function recordBinOpImm(defined ValueId, left ValueId, immediate Imm32, binOpcode StdBinOpcode, readType StdType)
+		self.shape = StdArithShape.binaryArithImm
+		self.resultId = defined
+		self.lhs = left
+		self.imm = immediate
+		self.opcode = binOpcode
+		self.operandType = readType
+	end 'recordBinOpImm'
+
+	function recordCmpImm(defined ValueId, left ValueId, immediate Imm32, cmpPred StdCmpPred, readType StdType)
+		self.shape = StdArithShape.comparisonImm
+		self.resultId = defined
+		self.lhs = left
+		self.imm = immediate
+		self.pred = cmpPred
+		self.operandType = readType
+	end 'recordCmpImm'
+
 	export function isBinaryArith() returns bool
-		return self.shape == StdBinaryShape.binaryArith
+		return self.shape == StdArithShape.binaryArith
 	end 'isBinaryArith'
 
 	export function isComparison() returns bool
-		return self.shape == StdBinaryShape.comparison
+		return self.shape == StdArithShape.comparison
 	end 'isComparison'
-end 'StdBinaryOperands'
 
-// Fill `operands` with the binary arithmetic shape `op` carries. Exhaustive over StdOp, no bare
-// `default`.
+	// Whether this record describes an arithmetic op at all — the admission test for a pass whose
+	// subject is EVERY shape rather than one of them.
+	export function isArithmetic() returns bool
+		return self.shape != StdArithShape.neither
+	end 'isArithmetic'
+
+	// Whether the shape reads TWO value operands. `unary` and the two immediate forms read one; an
+	// immediate is an encoded literal and not a value at all.
+	export function hasSecondValueOperand() returns bool
+		return self.shape == StdArithShape.binaryArith or self.shape == StdArithShape.comparison
+	end 'hasSecondValueOperand'
+
+	// Whether the shape carries an ENCODED IMMEDIATE where the other binary shapes carry a second value
+	// operand. The complement `hasSecondValueOperand` leaves for a shape that IS arithmetic, so between
+	// the two a reader can say what the second half of the expression is without reading `shape`.
+	export function hasImmediate() returns bool
+		return self.shape == StdArithShape.binaryArithImm or self.shape == StdArithShape.comparisonImm
+	end 'hasImmediate'
+
+	// Rewrite this record's VALUE OPERANDS through a substitution column, leaving `resultId` alone (a
+	// def is not a use — the same split `remapStdOpUses` makes, for the same reason).
+	//
+	// It is what lets a walk compare an op against one whose reads it has already decided to rewrite:
+	// the column is the pass's PENDING rewrite, and an operand read through it is the value the op will
+	// read once that rewrite is applied.
+	export function remapOperandsThrough(subst ValueIdArray)
+		if not self.isArithmetic() 'nothingToRemap'
+			return
+		end 'nothingToRemap'
+
+		self.lhs = remappedValue(self.lhs, subst: subst)
+
+		if self.hasSecondValueOperand() 'twoValueOperands'
+			self.rhs = remappedValue(self.rhs, subst: subst)
+		end 'twoValueOperands'
+	end 'remapOperandsThrough'
+
+	// ⭐ **PUT A COMMUTATIVE OP'S TWO OPERANDS IN A CANONICAL ORDER, SO `a + b` AND `b + a` COMPARE
+	// EQUAL.** The lower `ValueId` lands on the lhs — an arbitrary but TOTAL order over a function's
+	// dense value space, which is all a canonical form needs.
+	//
+	// ⚠ **FLOATS ARE EXCLUDED, AND THE REASON IS NOT `binOpcodeIsCommutative`'s.** That function answers
+	// `true` for float `add`/`mul` and is right to: `a + b` and `b + a` are the same REAL number. What
+	// they are not is the same BITS when an operand is a NaN — x64's `addsd`/`mulsd` answer with the
+	// destination operand's NaN, so a swap can change which payload propagates. No Maxon program can
+	// print a payload, so this is a difference nothing observes; it is excluded anyway, because a
+	// canonical form that is only unobservably wrong is a trap for the next pass that reads it.
+	//
+	// ⚠ It answers for `binaryArith` ALONE. A `comparison` has its own swap rule (`a < b` is `b > a`,
+	// which needs the predicate flipped too — `foldConstOperands.flipCmpPred`), and neither immediate
+	// form has a second operand to swap.
+	export function canonicalizeCommutativeOperands()
+		if not self.isBinaryArith() 'notATwoOperandArith'
+			return
+		end 'notATwoOperandArith'
+
+		if stdTypeIsFloat(self.operandType) or not binOpcodeIsCommutative(self.opcode) 'mustKeepItsOrder'
+			return
+		end 'mustKeepItsOrder'
+
+		if self.lhs <= self.rhs 'alreadyCanonical'
+			return
+		end 'alreadyCanonical'
+
+		let lower = self.rhs
+		self.rhs = self.lhs
+		self.lhs = lower
+	end 'canonicalizeCommutativeOperands'
+
+	// ⭐⭐ **THE EXPRESSION-EQUALITY PREDICATE, AND IT LIVES ON THE RECORD THAT DEFINES WHAT AN
+	// EXPRESSION IS.** True when two records describe computations producing the same value from the
+	// same inputs — every field the shape says is meaningful must agree, and `resultId` must not, since
+	// two occurrences of one expression are exactly two names for one value.
+	//
+	// `operandType` is compared even though every integer form computes at the MACHINE WORD on all
+	// three targets: the type is what a wasm local's class is declared from (`wasmValTypeOf` and
+	// `wasmMachineValTypeOf` disagree for the narrow integers), so two ops differing only in it are
+	// deliberately left as two.
+	//
+	// A `neither` record equals nothing, itself included: it describes no computation, so there is no
+	// value for a second one to be the same as.
+	export function computesSameValueAs(other StdArithOperands) returns bool
+		if not self.isArithmetic() or self.shape != other.shape 'notOneExpression'
+			return false
+		end 'notOneExpression'
+
+		if self.lhs != other.lhs or self.operandType != other.operandType 'differentInputs'
+			return false
+		end 'differentInputs'
+
+		return match self.shape 'shape'
+			// Unreachable — the guard above already returned — but answered rather than defaulted, so
+			// the arm stays correct if that guard is ever moved.
+			neither gives false
+			binaryArith gives self.rhs == other.rhs and self.opcode == other.opcode
+			comparison gives self.rhs == other.rhs and self.pred == other.pred
+			unary gives self.unaryOpcode == other.unaryOpcode
+			binaryArithImm gives self.imm == other.imm and self.opcode == other.opcode
+			comparisonImm gives self.imm == other.imm and self.pred == other.pred
+		end 'shape'
+	end 'computesSameValueAs'
+end 'StdArithOperands'
+
+// ⭐⭐ **WHETHER SWAPPING A `binOp`'s TWO OPERANDS CHANGES ITS ANSWER — THE one place that is stated.**
+// It lives beside `StdBinOpcode` rather than inside a pass for `stdBinOpcodeIsFloatOnly`'s reason: it
+// is a property OF THE OPCODE and of no one target or pass. Two readers today —
+// `foldConstOperands.tryFoldBinOp` (may it move a const lhs onto the rhs?) and
+// `StdArithOperands.canonicalizeCommutativeOperands` (may CSE order the two operands?) — and they must
+// not answer it separately.
+module function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
+	return match opcode 'o'
+		add gives true
+		mul gives true
+		sub gives false
+		bitAnd to bitXor gives true
+		shl to shrLogical gives false
+		// The three FLOAT-ONLY opcodes:
+		//   • `div` — `a / b` is not `b / a`.
+		//   • `min`/`max` — `min(a, b)` is `a` when `a < b` and `b` otherwise, `max(a, b)` is `a` when
+		//     `a > b` and `b` otherwise, and a STRICT comparison is FALSE on unordered — so `min(nan, 5.0)`
+		//     is `5.0` while `min(5.0, nan)` is `nan`, and `max` answers the same pair. A swap changes the
+		//     answer. v1 excludes its own `minF64`/`maxF64` from commuting for exactly this reason
+		//     (`CommuteForCoalescing.maxon:269`). See `StdBinOpcode`'s `min`/`max` header.
+		div to max gives false
+	end 'o'
+end 'binOpcodeIsCommutative'
+
+// Fill `operands` with the arithmetic shape `op` carries. Exhaustive over StdOp, no bare `default`.
 //
 // ⚠ The last arm is pinned to the union's CURRENT LAST variant, so a variant APPENDED at the end
 // (the rule `StdOp`'s header states) falls outside every arm and is a COMPILE ERROR here rather
 // than a silently-missed classification.
-export function classifyBinaryOperands(op StdOp, operands StdBinaryOperands)
+export function classifyArithOperands(op StdOp, operands StdArithOperands)
 	match op 'b'
 		const then operands.recordNeither()
 		binOp(resultId, lhs, rhs, opcode, operandType) then operands.recordBinOp(resultId, left: lhs, right: rhs, binOpcode: opcode, readType: operandType)
-		// One operand, so no binary rewrite has anything to pair. (An arithmetic pass that grows a
-		// unary fold gives this record a third shape; it does not get a second roster.)
-		unaryOp then operands.recordNeither()
+		unaryOp(resultId, operand, opcode, operandType) then operands.recordUnaryOp(resultId, only: operand, unaryOpcodeRead: opcode, readType: operandType)
 		cmp(resultId, lhs, rhs, pred, operandType) then operands.recordCmp(resultId, left: lhs, right: rhs, cmpPred: pred, readType: operandType)
-		// Everything from the IMMEDIATE forms to the end of the union. Three bands are worth naming,
-		// because each is excluded for its OWN reason rather than by falling off the end of the list:
-		//   • `binOpImm`/`cmpImm` — the rhs is an ENCODED IMMEDIATE, not a value operand, so there is no
-		//     second operand for either pass to ask about. (They are also what `foldConstOperands`
-		//     PRODUCES, which is why it cannot want them as input.)
+		// The IMMEDIATE forms — what `foldConstOperands` PRODUCES, which is why that pass cannot want
+		// them as INPUT (its question, "is an operand a const?", has no second operand to ask it of).
+		// They are still real arithmetic, and CSE reads them as such.
+		binOpImm(resultId, lhs, imm, opcode, operandType) then operands.recordBinOpImm(resultId, left: lhs, immediate: imm, binOpcode: opcode, readType: operandType)
+		cmpImm(resultId, lhs, imm, pred, operandType) then operands.recordCmpImm(resultId, left: lhs, immediate: imm, cmpPred: pred, readType: operandType)
+		// Everything from the two DIVISIONS to the end of the union. Two bands are worth naming, because
+		// each is excluded for its OWN reason rather than by falling off the end of the list:
 		//   • `div`/`mod` — `isPure: false`. x64 `idiv` faults on a zero divisor and on `i64.min / -1`,
-		//     so they may be neither folded away nor dropped when unread; they are not a rewrite subject
-		//     at any tier of this compiler.
+		//     so they may be neither folded away, nor dropped when unread, nor answered once for two
+		//     occurrences; they are not a rewrite subject at any tier of this compiler.
 		//   • everything else — terminators, calls, memory and the OS band define call returns, kernel
-		//     answers and addresses, none of which is a binary arithmetic shape at all.
-		binOpImm to osSetEvent then operands.recordNeither()
+		//     answers and addresses, none of which is an arithmetic shape at all.
+		div to osSetEvent then operands.recordNeither()
 	end 'b'
-end 'classifyBinaryOperands'
+end 'classifyArithOperands'
 
 // The set of value ids a function's ops READ. Every Std-tier pass that asks "does anything
 // still read this value?" — the const DCE, the dead-block-arg prune, the trivial-block-arg
@@ -2418,6 +2599,13 @@ export type StdValueUseSet
 		end 'neverInserted'
 		return try self.member.get(valueId) otherwise panic("StdValueUseSet.contains: member.get OOB at {valueId}")
 	end 'contains'
+
+	// Whether NOTHING has been inserted. The column is only ever extended by `insert`, so an empty
+	// backing store is an exact answer rather than an approximation of one — which is what lets
+	// `removeOpsDefining` skip a function's whole block walk when there is nothing to remove.
+	export function isEmpty() returns bool
+		return self.member.count() == 0
+	end 'isEmpty'
 end 'StdValueUseSet'
 
 // Add the value ids `op` READS to `referenced` — its DEFS are not uses, and neither are the
@@ -3064,6 +3252,39 @@ module function remappedValue(v ValueId, subst ValueIdArray) returns ValueId
 	return try subst.get(v) otherwise v
 end 'remappedValue'
 
+// Record that every read of `resultId` may read `replacement` instead, extending `subst` to hold the
+// id with every NEW slot standing for ITSELF.
+//
+// ⭐ **THE COLUMN'S BUILDER, BESIDE ITS READER AND ITS APPLIER.** `remappedValue` reads one entry and
+// `substituteValuesInFunc` applies the whole column; this is how an entry gets in. It was file-private
+// to `foldConstOperands` while that pass was the only builder — `eliminateCommonSubexpressions` is the
+// second, and a second copy would be a dense column whose `push`-not-`resize` trap and identity seed
+// nothing keeps in step with this one.
+//
+// ⚠ `resize` cannot build this column and the difference is a miscompile rather than a detail: it
+// zero-fills, and a zero in a substitution column means *"rewrite this read to value 0"*. The identity
+// seed is what makes `remappedValue` answer "unchanged" for every value the pass does not rewrite — the
+// same discipline `elimTrivialBlockArgs` seeds its union-find column with, grown to meet the ids as they
+// arrive rather than sized from a bound computed up front.
+//
+// `push` grows the backing store GEOMETRICALLY, so filling from 0 to the largest rewritten id is linear
+// overall — the trap `ConstValueMap.upsert` names, avoided the same way.
+//
+// The stored value is `replacement` READ THROUGH THE COLUMN, which is what collapses a CHAIN in one
+// step — `foldConstOperands`' `(x * 1) + 0` and CSE's third occurrence of an expression whose second
+// already pointed at the first. Both callers record in walk order, so a chain's earlier link is always
+// already in the column; see `substituteIdentityImmediates` for why that is an optimization rather than
+// a correctness requirement.
+module function recordValueSubstitution(subst ValueIdArray, resultId ValueId, replacement ValueId)
+	var next = subst.count()
+	while next <= resultId 'grow'
+		subst.push(next)
+		next = next + 1
+	end 'grow'
+
+	try subst.set(resultId, value: remappedValue(replacement, subst: subst)) otherwise panic("recordValueSubstitution: subst.set OOB at {resultId} against a column of {subst.count()}")
+end 'recordValueSubstitution'
+
 function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
 	var out = ValueIdArray.create()
 	for a in args 'each'
@@ -3290,6 +3511,81 @@ function anyEdgeArgIsRemapped(block IrBlock, subst ValueIdArray) returns bool
 	return false
 end 'anyEdgeArgIsRemapped'
 
+// ⭐⭐ **DELETE EVERY OP THAT DEFINES A VALUE IN `doomed` — THE one block-rebuild both Std passes that
+// remove ops share.** `foldConstOperands`' const/identity DCE dooms the defs it detached from their
+// readers; `eliminateCommonSubexpressions` dooms the defs it redirected onto an earlier equal
+// computation. Each decides its OWN set — the two questions are nothing alike — and neither owns a
+// second copy of the walk that acts on it.
+//
+// It reads the def through `stdOpDefinedValue`, this file's one def enumerator, so a new `StdOp`
+// variant is a compile error there rather than an op this walk silently cannot classify.
+//
+// ⭐ **A BLOCK THAT LOSES NOTHING KEEPS THE COLUMN IT ALREADY HAS.** The rebuild allocates a fresh
+// `OpIndexArray` and refills it, and MOST blocks in most functions lose nothing — the unconditional
+// rebuild was one allocation per block per function for a column that came out identical. The probe
+// below is allocation-free and asks exactly what the rebuild asks, so the two cannot disagree about
+// what survives.
+//
+// ⚠ It removes from `block.opRefs` only. A TERMINATOR is never doomed by either caller (a const and an
+// identity `binOpImm` are body ops, and CSE's roster answers `neither` for every control op), and
+// removing one would leave a block with no exit at all.
+module function removeOpsDefining(module StdModule, func IrFunction, doomed StdValueUseSet)
+	if doomed.isEmpty() 'nothingDoomed'
+		return
+	end 'nothingDoomed'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("removeOpsDefining: blockRef from func.blockRefs not in module.blocks")
+
+		if not blockDefinesADoomedValue(module, block: block, doomed: doomed) 'nothingToRemove'
+			continue
+		end 'nothingToRemove'
+
+		var kept = OpIndexArray.create()
+		for opIdx in block.opRefs 'eachRef'
+			if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed) 'removed'
+				continue
+			end 'removed'
+
+			kept.push(opIdx)
+		end 'eachRef'
+		block.opRefs = kept
+	end 'eachBlock'
+end 'removeOpsDefining'
+
+// Whether `block` holds any op the removal would drop — the question that decides whether its `opRefs`
+// column has to be rebuilt at all.
+function blockDefinesADoomedValue(module StdModule, block IrBlock, doomed StdValueUseSet) returns bool
+	for opIdx in block.opRefs 'eachRef'
+		if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed) 'found'
+			return true
+		end 'found'
+	end 'eachRef'
+	return false
+end 'blockDefinesADoomedValue'
+
+function opDefinesADoomedValue(module StdModule, opIdx OpIndex, doomed StdValueUseSet) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("removeOpsDefining: opIdx {opIdx} from block.opRefs not in module.ops")
+	return match stdOpDefinedValue(op) 'defines'
+		none gives false
+		defines(valueId) gives doomed.contains(valueId)
+		// ⚠ A TWO-DEF op is a `tryCall`/`witnessTryCall` — a CALL, `isPure: false`, which neither caller
+		// can doom (a const DCE retires `const`s and identity `binOpImm`s; CSE's roster answers `neither`
+		// for every call). It is CHECKED rather than assumed, because dooming ONE half of a pair would
+		// delete the op that defines the OTHER, and the survivor's readers would be left naming a value
+		// nothing writes.
+		definesPair(first, second) gives requireNeitherHalfIsDoomed(doomed, first: first, second: second)
+	end 'defines'
+end 'opDefinesADoomedValue'
+
+function requireNeitherHalfIsDoomed(doomed StdValueUseSet, first ValueId, second ValueId) returns bool
+	if doomed.contains(first) or doomed.contains(second) 'doomedHalfOfAPair'
+		panic("removeOpsDefining: value {first}/{second} is one half of a TWO-DEF op (`tryCall`/`witnessTryCall`) and was doomed — removing the op would delete the other def as well, and no caller may doom one")
+	end 'doomedHalfOfAPair'
+
+	return false
+end 'requireNeitherHalfIsDoomed'
+
 // --- The sugar band contract ---
 //
 // v1 enforced "no sugar reaches the backend" with a TYPE: sugar ops existed in
@@ -3327,3 +3623,55 @@ export function assertNoSugarOps(module StdModule)
 		end 'eachOp'
 	end 'eachFunc'
 end 'assertNoSugarOps'
+
+// The block ids control can transfer to from `block` — its terminator's targets, appended to `out`.
+//
+// ⭐ **THREE ARMS NAME A SUCCESSOR AND EVERY OTHER OP NAMES NONE, WHICH IS AN ANSWER RATHER THAN A
+// DEFAULT.** An op that is not a branch either LEAVES THE FUNCTION (`ret`, `retVoid`, `errorReturn`) or
+// leaves the PROCESS (`osExit`, `osPanic`, `osPanicValue`) — in both cases control reaches no other
+// block of this function — or it is a body op that cannot be a terminator at all, which is
+// `IrModule.setTerminator`'s contract to keep and not this walk's to re-check. The question asked here
+// is "where can control go from here", and for every one of them the answer is "nowhere else".
+//
+// The Target tier's twin is `TargetLiveness.collectBlockSuccessorIds`, and the two cannot be shared: a
+// Target block's second successor is a `jcc` BODY op (`block.condBranch`), while a Std block's whole
+// exit is its one terminator.
+//
+// ⭐ It lives HERE, beside `collectStdOpUses` and `stdOpDefinedValue`, because it is the third
+// exhaustive `StdOp` roster and they belong in one file: a new variant is then a compile error in three
+// adjacent matches rather than in three files that learn about it separately. TWO readers —
+// `foldConstants.dropUnreachableBlocks`, which owns the reachability walk this used to live beside, and
+// `StdDominatorTree.build`, which needs the same edges to compute dominance.
+module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out BlockIdArray)
+	if not block.hasTerminatorOp() 'noTerminatorOp'
+		return
+	end 'noTerminatorOp'
+
+	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("collectStdBlockSuccessorIds: the terminator of block {block.id} is not in module.ops")
+	match op 'term'
+		const to mod then break 'term'
+		condBranch(_, thenBlockId, elseBlockId) then pushBothTargets(out, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
+		branch(targetBlockId) then out.push(targetBlockId)
+		ret to osFreePages then break 'term'
+		switch(_, denseTargetBlockIds, defaultBlockId) then pushSwitchTargets(out, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
+		witnessCall to osSetEvent then break 'term'
+	end 'term'
+end 'collectStdBlockSuccessorIds'
+
+// A conditional branch's two targets. A helper because a `match` arm is ONE statement and both edges
+// have to be recorded — the same shape `insertUsePair` takes for a two-operand op.
+function pushBothTargets(out BlockIdArray, thenBlockId BlockId, elseBlockId BlockId)
+	out.push(thenBlockId)
+	out.push(elseBlockId)
+end 'pushBothTargets'
+
+// A jump table's targets: every dense arm plus the default. Duplicates cost nothing — a reachability
+// walk marks a position once however many edges name it, and a CSR adjacency simply lists the edge
+// twice.
+function pushSwitchTargets(out BlockIdArray, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId)
+	for targetBlockId in denseTargetBlockIds 'eachArm'
+		out.push(targetBlockId)
+	end 'eachArm'
+
+	out.push(defaultBlockId)
+end 'pushSwitchTargets'

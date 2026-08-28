@@ -75,9 +75,11 @@ func @Gate.twice {
     x64.pushReg rbx
     x64.prologue 40
     x64.cmpRegImm32 rcx, 0
+    x64.setccReg less, rax
     x64.jcc less, __rc_panic
   __rc_chk#3:
     x64.cmpRegImm32 rcx, 1000
+    x64.setccReg greater, rdx
     x64.jcc lessEqual, __il_body
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
@@ -88,11 +90,11 @@ func @Gate.twice {
     x64.popReg rbp
     x64.ret
   __il_body:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_slow
   __rc_chk#7:
-    x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __il_slow
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow
   __rc_ok:
     x64.leaRegRegReg rbx, rcx, rcx
     x64.cmpRegImm32 rbx, 0

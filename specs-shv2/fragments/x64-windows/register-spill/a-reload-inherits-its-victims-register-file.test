@@ -84,9 +84,11 @@ func @pressure {
     x64.storeSlotReg slot10, xmm14
     x64.storeSlotReg slot11, xmm15
     x64.cmpRegImm32 rcx, -1000000000
+    x64.setccReg less, rax
     x64.jcc less, __rc_panic#2
   __rc_chk#3:
     x64.cmpRegImm32 rcx, 1000000000
+    x64.setccReg greater, rdx
     x64.jcc lessEqual, __rc_ok#1
   __rc_panic#2:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
@@ -121,11 +123,11 @@ func @pressure {
     x64.movsdRegRip xmm0, [rip + __fconst_16]
     x64.storeSlotReg slot0, xmm0
   __il_body:
-    x64.cmpRegImm32 rcx, -1000000000
-    x64.jcc less, __il_slow
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_slow
   __rc_chk#10:
-    x64.cmpRegImm32 rcx, 1000000000
-    x64.jcc greater, __il_slow
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, __il_slow
   __rc_ok#9:
     x64.leaRegRegImm32 rax, rcx, 1
     x64.cmpRegImm32 rax, -1000000000

@@ -34,7 +34,7 @@
 //
 //   • **`div`/`mod` — they TRAP.** They are not even `binOp`s: integer division has its own `StdOp.div`/
 //     `StdOp.mod` variants carrying `isPure: false`, because x64 `idiv` faults on a zero divisor and on
-//     `i64.min / -1`. `classifyBinaryOperands` therefore never offers one as a subject, and the prune
+//     `i64.min / -1`. `classifyArithOperands` therefore never offers one as a subject, and the prune
 //     below (`dceRetiredDefs`) retires only `const`s, so neither can be dropped for being unread either.
 //     ⚠ Note that `foldIntDivision` is nonetheless RIGHT about the pair a division can and cannot answer
 //     — `i64.min / -1` has no representable quotient and declines, `i64.min mod -1` is `0` and folds —
@@ -48,10 +48,12 @@
 //     be a wrong ANSWER here. A float fold is a rung of its own.
 //   • **SHIFT COUNTS OUTSIDE THE UNGUARDED WINDOW** (`TypeRules.shiftCountIsUnguarded`, 0..63). See
 //     `evaluateIntBinOp` — the window is asked, not restated.
-//   • **UNARY ops.** `neg`/`bitNot` over a constant are foldable and are not folded here: the pass's
-//     subject is the BINARY shape (`classifyBinaryOperands`), and a unary fold is a third shape on that
-//     record rather than a second roster. `InsertRangeChecks.recordConstNeg` already folds a `neg` for
-//     its own purposes, so a unary fold would owe that site a look first.
+//   • **UNARY ops.** `neg`/`bitNot` over a constant are foldable and are not folded here: this pass's
+//     two evaluators are `evaluateBinOp` and `evaluateCmp`, and neither has a one-operand form.
+//     ⚠ The shared roster DOES classify a `unaryOp` since `EC13` (`StdArithShape.unary`), so the arm a
+//     unary fold needs is already there and the missing half is only the evaluator. It is still not
+//     free: `InsertRangeChecks.recordConstNeg` already folds a `neg` for its own purposes, so a unary
+//     fold would owe that site a look first.
 //
 // ⚠ **IT IS NOT A CONSTANT PROPAGATOR.** It reads only what a `const` op materializes; a value that is
 // constant on every path into a phi is not constant to this pass, and nothing here looks through memory
@@ -143,8 +145,8 @@ end 'foldConstantsInFunc'
 // allocation, where a union saying "unchanged" would be a heap box per op.
 function evaluateOps(module StdModule, opIndices OpIndexArray, constMap ConstValueMap)
 	// ONE record of each kind for the whole walk, refilled per op and never re-created — see
-	// `StdBinaryOperands` and `StdFoldableDef` for why both answers are written into caller-owned records.
-	var operands = StdBinaryOperands.create()
+	// `StdArithOperands` and `StdFoldableDef` for why both answers are written into caller-owned records.
+	var operands = StdArithOperands.create()
 	var def = StdFoldableDef.create()
 
 	for opIdx in opIndices 'eachOp'
@@ -163,10 +165,10 @@ end 'evaluateOps'
 // Attempt to evaluate one op, answering with THE OP THAT BELONGS AT ITS INDEX — a `const` carrying the
 // computed value, or `op` itself where nothing folds.
 //
-// Which ops are subjects at all is `classifyBinaryOperands`' answer, shared with `foldConstOperands`:
+// Which ops are subjects at all is `classifyArithOperands`' answer, shared with `foldConstOperands`:
 // the two passes act on the same two variants and no others, and that set is enumerated once.
-function tryEvaluate(op StdOp, constMap ConstValueMap, operands StdBinaryOperands) returns StdOp
-	classifyBinaryOperands(op, operands: operands)
+function tryEvaluate(op StdOp, constMap ConstValueMap, operands StdArithOperands) returns StdOp
+	classifyArithOperands(op, operands: operands)
 
 	if operands.isBinaryArith() 'arith'
 		return evaluateBinOp(op, resultId: operands.resultId, lhs: operands.lhs, rhs: operands.rhs, opcode: operands.opcode, operandType: operands.operandType, constMap: constMap)
@@ -476,48 +478,3 @@ function markReachable(reachable BoolArray, stack BlockRefIndexArray, position B
 	try reachable.set(position, value: true) otherwise panic("markReachable: reachable.set OOB at {position}")
 	stack.push(position)
 end 'markReachable'
-
-// The block ids control can transfer to from `block` — its terminator's targets, appended to `out`.
-//
-// ⭐ **THREE ARMS NAME A SUCCESSOR AND EVERY OTHER OP NAMES NONE, WHICH IS AN ANSWER RATHER THAN A
-// DEFAULT.** An op that is not a branch either LEAVES THE FUNCTION (`ret`, `retVoid`, `errorReturn`) or
-// leaves the PROCESS (`osExit`, `osPanic`, `osPanicValue`) — in both cases control reaches no other
-// block of this function — or it is a body op that cannot be a terminator at all, which is
-// `IrModule.setTerminator`'s contract to keep and not this walk's to re-check. The question asked here
-// is "where can control go from here", and for every one of them the answer is "nowhere else".
-//
-// The Target tier's twin is `TargetLiveness.collectBlockSuccessorIds`, and the two cannot be shared: a
-// Target block's second successor is a `jcc` BODY op (`block.condBranch`), while a Std block's whole
-// exit is its one terminator.
-function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out BlockIdArray)
-	if not block.hasTerminatorOp() 'noTerminatorOp'
-		return
-	end 'noTerminatorOp'
-
-	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("collectStdBlockSuccessorIds: the terminator of block {block.id} is not in module.ops")
-	match op 'term'
-		const to mod then break 'term'
-		condBranch(_, thenBlockId, elseBlockId) then pushBothTargets(out, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
-		branch(targetBlockId) then out.push(targetBlockId)
-		ret to osFreePages then break 'term'
-		switch(_, denseTargetBlockIds, defaultBlockId) then pushSwitchTargets(out, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
-		witnessCall to osSetEvent then break 'term'
-	end 'term'
-end 'collectStdBlockSuccessorIds'
-
-// A conditional branch's two targets. A helper because a `match` arm is ONE statement and both edges
-// have to be recorded — the same shape `insertUsePair` takes for a two-operand op.
-function pushBothTargets(out BlockIdArray, thenBlockId BlockId, elseBlockId BlockId)
-	out.push(thenBlockId)
-	out.push(elseBlockId)
-end 'pushBothTargets'
-
-// A jump table's targets: every dense arm plus the default. Duplicates cost nothing — `markReachable`
-// answers once per position however many edges name it.
-function pushSwitchTargets(out BlockIdArray, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId)
-	for targetBlockId in denseTargetBlockIds 'eachArm'
-		out.push(targetBlockId)
-	end 'eachArm'
-
-	out.push(defaultBlockId)
-end 'pushSwitchTargets'

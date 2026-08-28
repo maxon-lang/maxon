@@ -866,8 +866,10 @@ func @Array.stablePartition {
     x64.jmp whilehdr#13
   whileexit#15:
     x64.loadRegSlot rax, slot5
-    x64.leaRegRegReg r12, rax, rbx
-    x64.movRegImm32 r13, 0
+    x64.leaRegRegReg rbx, rax, rbx
+    x64.movRegImm32 r12, 0
+    x64.movRegReg r13, r12
+    x64.movRegReg r12, rbx
   whilehdr#25:
     x64.loadRegSlot rax, slot4
     x64.cmpRegReg r13, rax
@@ -1052,8 +1054,6 @@ func @Array.stablePartition {
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp whilehdr#25
   whileexit#27:
-    x64.loadRegSlot rax, slot5
-    x64.leaRegRegReg rbx, rax, rbx
     x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
@@ -2274,13 +2274,11 @@ func @Array.naturalRunLen {
     x64.storeSlotReg slot7, r13
     x64.movRegReg r14, rsi
     x64.storeSlotReg slot9, r14
-    x64.movRegReg rcx, rax
-    x64.subRegReg rcx, rax, r12
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc greater, ifcont#2
-  trivial:
     x64.movRegReg r8, rax
     x64.subRegReg r8, rax, r12
+    x64.cmpRegImm32 r8, 1
+    x64.jcc greater, ifcont#2
+  trivial:
     x64.epilogue 136
     x64.popReg r15
     x64.popReg r14
@@ -3999,7 +3997,7 @@ func @Array.internalInsertionSortRange {
     x64.callDirect Log.trace
     x64.leaRegRegImm32 rax, r12, 1
     x64.cmpRegReg r13, rax
-    x64.jcc greater, ifcont#2
+    x64.jcc greater, whilehdr#3
   trivial:
     x64.epilogue 88
     x64.popReg r15
@@ -4009,8 +4007,6 @@ func @Array.internalInsertionSortRange {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#2:
-    x64.leaRegRegImm32 rax, r12, 1
   whilehdr#3:
     x64.storeSlotReg slot0, rax
     x64.cmpRegReg rax, r13
@@ -4166,14 +4162,14 @@ func @Array.internalInsertionSortRange {
     x64.loadRegSlot r14, slot3
     x64.callReg r14
     x64.cmpRegImm32 r8, 2
-    x64.jcc equal, ifcont#14
+    x64.jcc equal, ifcont
   placed:
     x64.movRegReg rcx, r15
     x64.callDirect __managed_decref
     x64.loadRegSlot rcx, slot2
     x64.callDirect __managed_decref
     x64.jmp whileexit#8
-  ifcont#14:
+  ifcont:
     x64.loadRegSlot r14, slot1
     x64.leaRegRegImm32 rdx, r14, -1
     x64.movRegReg rcx, rbx
@@ -6894,13 +6890,13 @@ func @Array.medianOfMediansIndex {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 104
+    x64.prologue 120
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
-    x64.movRegReg r14, r9
-    x64.storeSlotReg slot6, rsi
-    x64.movRegReg r15, rdi
+    x64.storeSlotReg slot7, r9
+    x64.storeSlotReg slot5, rsi
+    x64.movRegReg r14, rdi
     x64.leaRegRdata rcx, [rip + __str_rec_97]
     x64.callDirect Log.trace
     x64.movRegReg rax, r13
@@ -6914,68 +6910,63 @@ func @Array.medianOfMediansIndex {
     x64.cqo
     x64.idivReg rsi
     x64.leaRegRegReg rsi, r12, rax
-    x64.leaRegRegReg rax, r12, rcx
-    x64.leaRegRegImm32 r9, rax, -1
-    x64.leaRegRegReg rax, r12, rcx
-    x64.storeSlotReg slot4, rax
     x64.leaRegRegReg rdi, r12, rcx
+    x64.storeSlotReg slot3, rdi
+    x64.leaRegRegImm32 r9, rdi, -1
     x64.movRegImm32 r8, 2
     x64.movRegReg rax, rcx
     x64.cqo
     x64.idivReg r8
     x64.leaRegRegReg rax, rdi, rax
-    x64.storeSlotReg slot3, rax
-    x64.imulRegRegImm32 rax, rcx, 2
-    x64.leaRegRegReg rax, r12, rax
-    x64.leaRegRegImm32 rax, rax, -1
     x64.storeSlotReg slot2, rax
     x64.imulRegRegImm32 rax, rcx, 2
-    x64.leaRegRegReg rax, r12, rax
+    x64.leaRegRegReg r15, r12, rax
+    x64.leaRegRegImm32 rax, r15, -1
     x64.storeSlotReg slot1, rax
-    x64.imulRegRegImm32 rax, rcx, 2
-    x64.leaRegRegReg rdi, r12, rax
+    x64.movRegImm32 rdi, 2
     x64.movRegReg rax, rcx
     x64.cqo
-    x64.movRegImm32 rcx, 2
-    x64.idivReg rcx
-    x64.leaRegRegReg rax, rdi, rax
+    x64.idivReg rdi
+    x64.leaRegRegReg rax, r15, rax
     x64.storeSlotReg slot0, rax
-    x64.leaRegRegImm32 r13, r13, -1
-    x64.storeBaseDispReg.word64 [rsp + 32], r15
+    x64.leaRegRegImm32 rax, r13, -1
+    x64.storeSlotReg slot8, rax
+    x64.storeBaseDispReg.word64 [rsp + 32], r14
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.movRegReg rax, rsi
-    x64.movRegReg rsi, r14
-    x64.loadRegSlot r12, slot6
-    x64.movRegReg rdi, r12
+    x64.loadRegSlot r12, slot7
+    x64.movRegReg rsi, r12
+    x64.loadRegSlot r13, slot5
+    x64.movRegReg rdi, r13
     x64.callDirect Array.medianOf3Index
-    x64.storeSlotReg slot7, r8
-    x64.storeBaseDispReg.word64 [rsp + 32], r15
+    x64.storeSlotReg slot6, r8
+    x64.storeBaseDispReg.word64 [rsp + 32], r14
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot rdx, slot4
-    x64.loadRegSlot rax, slot3
-    x64.loadRegSlot r9, slot2
-    x64.movRegReg rsi, r14
-    x64.movRegReg rdi, r12
+    x64.loadRegSlot rdx, slot3
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot r9, slot1
+    x64.movRegReg rsi, r12
+    x64.movRegReg rdi, r13
     x64.callDirect Array.medianOf3Index
-    x64.storeSlotReg slot5, r8
-    x64.storeBaseDispReg.word64 [rsp + 32], r15
+    x64.storeSlotReg slot4, r8
+    x64.storeBaseDispReg.word64 [rsp + 32], r14
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot rdx, slot1
+    x64.movRegReg rdx, r15
     x64.loadRegSlot rax, slot0
-    x64.movRegReg r9, r13
-    x64.movRegReg rsi, r14
-    x64.movRegReg rdi, r12
+    x64.loadRegSlot r9, slot8
+    x64.movRegReg rsi, r12
+    x64.movRegReg rdi, r13
     x64.callDirect Array.medianOf3Index
-    x64.storeBaseDispReg.word64 [rsp + 32], r15
+    x64.storeBaseDispReg.word64 [rsp + 32], r14
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot rdx, slot7
-    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rdx, slot6
+    x64.loadRegSlot rax, slot4
     x64.movRegReg r9, r8
-    x64.movRegReg rsi, r14
-    x64.movRegReg rdi, r12
+    x64.movRegReg rsi, r12
+    x64.movRegReg rdi, r13
     x64.callDirect Array.medianOf3Index
-    x64.epilogue 104
+    x64.epilogue 120
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

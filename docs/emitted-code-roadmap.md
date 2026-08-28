@@ -38,7 +38,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | Const **operand** → immediate | ✅ `FoldConstOperands` | ◑ imm8/imm32 encodings only | ✅ `Canonicalize` |
 | Algebraic identity (`x+0`, `x*1`) | ✅ `FoldConstOperands` move 3 | ✅ `TryAlgebraicIdentity` | ✅ `Canonicalize` |
 | **Constant folding (`const ⊕ const`)** | ✅ `FoldConstants` (EC12) | ❌ | ✅ `Canonicalize` |
-| **CSE / GVN** | ❌ | ❌ | ✅ `CommonSubexpressionElimination.maxon` (494) |
+| **CSE / GVN** | ✅ `CommonSubexpressionElimination` (EC13) — dominator-scoped, arith band, call-barriered | ❌ | ✅ `CommonSubexpressionElimination.maxon` (494) |
 | **LICM** | ❌ | ◑ refcount pairs only | ✅ `LoopInvariantCodeMotion.maxon` (596) |
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* | ✅ `DeadStoreEliminationPass` sub-pass 3 | ✅ `DeadCodeElimination.maxon` (728) |
 | **Block merging / branch simplification** | ◑ `X64BranchCleanup` (EC11) — elision, inversion, threading, unreachable; **no reordering** | ◑ cond-br then-edge only | ✅ `CfgAnalysis` + `Canonicalize` |
@@ -58,7 +58,9 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 
 **The headline:** on the classical-optimizer axis, the bootstrap is *not* the reference — it has no
 constant folding, no CSE, no inlining, no LICM either, and shv2 already beats it. **v1 is the
-reference**, and shv2 has ported none of its six classical passes.
+reference**, and shv2 has now taken THREE of its six classical passes (branch simplification `EC11`,
+constant folding `EC12`, CSE `EC13`) — each written against shv2's own IR rather than ported, and each
+citing what it took from v1's version and what it deliberately did not.
 
 ### Three things NOT to port, each with its reason
 
@@ -263,6 +265,80 @@ schedules it `mem2reg → canonicalize → cse → licm → dce`. ⚠ shv2 must 
 a `div` is not pure (it traps) and a `call` is not (effects). ⚠ And it must run **after**
 `inlineLeaves`, which is what makes identical expressions co-resident in one block at all.
 
+✅ **LANDED 2026-08-28** as `maxon-shv2/Compiler/IR/Std/CommonSubexpressionElimination.maxon`, scheduled
+in `buildLoweringPasses` between `foldConstOperands` and `promoteStackRecords`.
+
+⭐⭐ **"AFTER `foldConstants`" WAS NOT ENOUGH — IT HAD TO BE AFTER `foldConstOperands`, AND THAT IS THE
+ROW'S FIRST FINDING.** The lowering mints a SEPARATE `const` op per literal occurrence (there is no
+constant interning), so before the operand rewrite the three copies of `x * 31 + y` are three `binOp`s
+over three DIFFERENT value ids and no expression comparison can call them equal. `foldConstOperands` is
+the canonicalization that makes them one shape — it moves the literal INTO the op as an `imm` and puts
+a commutative op's constant on the rhs. Scheduled one pass earlier, this rung finds nothing.
+
+**Scope, and the three measurements that set it:**
+
+- **DOMINATOR-SCOPED**, not intra-block. `StdDominatorTree.maxon` is new and is what `EC14` needs too:
+  successors via the dialect's `collectStdBlockSuccessorIds` (moved into `StdDialect` beside the other
+  two exhaustive `StdOp` rosters), three CSR adjacencies via the existing `buildCsr`, a DFS reverse
+  postorder and the Cooper–Harvey–Kennedy iterative solve. ⚠ **An intra-block-only first cut measured
+  8 hits in `cse3.maxon` and ZERO in nbody and fannkuch** — shv2's own two inliners fragment every
+  array access and every leaf call into a diamond, so a program's repeated arithmetic lands in
+  different blocks. (An unsound function-wide table, run only to bound the answer, found 79 and 47.)
+- **A CALL IS A BARRIER TO REUSE**, and that rule is the row's second finding. Without it,
+  `generic-hash-table-regalloc/…witness-dispatch-inside-a-pressured-loop` — a spec built to sit exactly
+  at the register pool with nineteen values live across a call — went RED with `E5001 … needs 1 more
+  register`, **for ONE reused expression**. shv2 REFUSES rather than spills, so a CSE that lengthens a
+  live range is a compile error rather than slower code, and the ranges that cost most are the ones
+  crossing a call (confined to five callee-saved registers). ⚠ The count follows the DOMINATOR path, so
+  a call on a side path is not seen — permissive, never unsound.
+- **MEMORY AND `div`/`mod` ARE OUT, BY THE DIALECT'S OWN FLAG.** This pass is the FIRST reader
+  `StdOpMeta.isPure` has ever had (its field comment said so and now records the change). `loadIndirect`
+  and `div`/`mod` are `isPure: false`, so neither is in the shared arith roster nor past the purity
+  gate, and the pass re-asks the flag of every shape the roster admits and PANICS on a disagreement.
+  Hoisting loads is `EC14`'s row. **Floats are IN** — CSE changes no value, so there is no NaN or
+  signed-zero argument to make; only operand REORDERING is float-excluded.
+
+⭐⭐ **THE EQUALITY PREDICATE ALREADY EXISTED IN PART, AND THE ANSWER WAS TO WIDEN IT RATHER THAN WRITE
+A FOURTH ROSTER.** `classifyArithOperands`/`StdArithOperands` (was `classifyBinaryOperands`) is the
+dialect's one answer to "what does this op compute, out of what?", shared with `foldConstOperands` and
+`foldConstants`; it gained the three shapes it used to decline (`unary`, `binaryArithImm`,
+`comparisonImm`) — their exclusion reasons were about what a CONST FOLD can do with them, never about
+what they compute — plus `computesSameValueAs`. The substitution column's three operations
+(`recordValueSubstitution`, `remappedValue`, `substituteValuesInFunc`) and the block rebuild
+(`removeOpsDefining`, now shared with `foldConstOperands`' const DCE) are likewise the dialect's.
+
+`scripts/emitted-code-count.py`, committed corpus, before → after:
+
+| | ops | imul-imm |
+|---|---|---|
+| nbody | 9,481 → **9,477** | 40 → 40 |
+| fannkuch-redux | 2,458 → **2,456** | 24 → 24 |
+| cse3 | 26 → **22** | 3 → **1** |
+| TOTAL | 12,217 → **12,207** | 66 → 66 |
+
+⚠ **THAT CORPUS UNDERSTATES IT AND THE SCALE LADDER DOES NOT.** With a CONTROL taken the same session
+(the same binary with the one `passes.push` line removed), `scale-test`'s generated corpus reads
+**emitted code bytes 2,888,699 → 2,842,895 at rung 5, −1.59%, and −1.1%…−1.6% at every rung**, for
+**+0.96%…+1.19% of compile allocations** (flat across the ladder) and +2.0% of compile CPU. The two
+corpora disagree because they contain different amounts of repeated arithmetic, not because either is
+wrong: nbody's repeats are mostly the array-index scaling `EC15`/`EC16` remove, which lives in sibling
+diamond arms that dominate nothing.
+
+⛔⛔ **THE FIRST CUT WAS A QUADRATIC THE MEMORY COLUMNS COULD NOT SEE, and the corpus caught it.** The
+expression table bucketed on the FIRST OPERAND — dense, no arithmetic, and wrong: `lhs` is a dense index
+for a VALUE, not for an EXPRESSION. `scale-test`'s own `c_long` knob (`a + 1`, `a + 2`, … `a + N`) is N
+distinct expressions sharing one operand, so every probe walked one long chain: **CPU ×1.77 ×2.07 ×2.28
+×2.79 ×3.12 across a DOUBLING ladder while allocations stayed linear at ×1.89.** Mixing both halves of
+the expression into the key fixed it with no allocation change and no change to the emitted code
+anywhere (6,801 goldens, 0 differing), taking the phase from 5.38e9 to 1.48e9 ticks at rung 5.
+
+**Left open**: `const` unification (v1's Stage A, whose own header records the ABI-constrained-use
+hazard — MEASURED here: 369 of nbody's 524 `movRegImm32` are duplicates within one function, and most
+are call arguments a merge would drag across a call); the three pure ADDRESS ops (`globalAddr`,
+`rdataAddr`, `funcAddr` — 33 duplicate `leaRegRdata` within a function on nbody), which need a second
+bucketing scheme because they have no value operand; and a strict per-block call summary, which would
+let the barrier see a call on a side path.
+
 ### Tier 2 — real wins, one design question each
 
 #### `EC14` · Loop-invariant code motion
@@ -275,8 +351,14 @@ loop is live is refused by the borrow checker (`Parser.maxon:37545-37560` — th
 `iterationSubjectNameAt` — the refusal IS the ruling"*; the four round-trip cases are
 `specs-shv2/borrow-liveness.md`). ⇒ **the array header cannot change under the loop, and the compiler
 already knows it.** Reference: `LoopInvariantCodeMotion.maxon` (596) + `CfgAnalysis.maxon` (592 —
-natural loops + dominators). ⚠ Hoisting raises live ranges; measure the register-pressure diagnostic
-and the spill count, not only the op count.
+natural loops + dominators). ⭐ **The dominance half already exists**: `EC13` landed
+`maxon-shv2/Compiler/IR/Std/StdDominatorTree.maxon` (successors, reverse postorder, immediate
+dominators, dominator-tree children), so this rung owes natural-loop detection — back edges are
+`u → v where v dominates u` — and not a dominator solve. ⚠ Hoisting raises live ranges; measure the
+register-pressure diagnostic and the spill count, not only the op count. `EC13` MEASURED what that
+costs on this compiler: one reused expression across a call took a knife-edge pressure spec red with
+`E5001`, which is why its own reuse rule stops at a call. LICM's hoists cross the loop, which is
+strictly worse for pressure, so the trade has to be made explicitly rather than discovered.
 
 #### `EC15` · Static stride specialization for the inlined managed primitives
 
@@ -453,8 +535,9 @@ end 'main'
 **`cse3.maxon`** — the CSE probe (`EC13`). ⚠ `cse2.maxon` STOPPED being a CSE probe when `EC12`
 landed: its operands are constant after inlining, so `foldConstants` now evaluates all three copies
 away and its `imul-imm` reads 0. `cse3` feeds the same expression a value the compiler cannot see
-through, so the three copies survive folding and only CSE can remove them. shv2 emits `imul`/`lea`
-three times into three simultaneously-live registers:
+through, so the three copies survive folding and only CSE can remove them. Before `EC13` shv2 emitted
+`imul`/`lea` three times into three simultaneously-live registers; it now emits the pair ONCE
+(`imul-imm` 3 → 1, ops 26 → 22), which is what the row was opened for:
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

@@ -1,0 +1,689 @@
+// CommonSubexpressionElimination — a Std->Std pass that replaces a PURE computation the program has
+// ALREADY performed on the way here with a read of the earlier result. `x * 31 + y` written three times
+// stops being three `imul`/`lea` pairs into three simultaneously-live registers and becomes one.
+//
+// It pays TWICE, which is why it sits above LICM and strength reduction on the emitted-code ranking
+// (`docs/emitted-code-roadmap.md`, EC13): fewer instructions, and a NARROWER LIVE SET for the chordal
+// register allocator — three short ranges that overlap become one, which is the direction E5001 wants.
+// ⚠ It is not free in that column and the reverse is MEASURED, not hypothetical: the surviving value
+// lives from the first occurrence to the last, where the copies each lived a few ops, and shv2 REFUSES
+// rather than spills when a loop runs out of registers. `CseExpressionTable.noteCall` is the rule that
+// came out of that measurement.
+//
+// ⭐⭐ **THE EQUALITY PREDICATE IS NOT THIS PASS'S OWN — IT IS THE DIALECT'S ARITHMETIC ROSTER, ASKED.**
+// `classifyArithOperands` / `StdArithOperands` already answer "what does this op compute, out of
+// what?" for `foldConstOperands` and `foldConstants`; this pass is the third caller, and
+// `StdArithOperands.computesSameValueAs` is where two of those answers are compared. A per-variant
+// `StdOp` walk of its own would have been a fourth roster over one union — this project's signature
+// bug, and the one `EC5`'s review already found two copies of in `remapStdOpForClone`. What the roster
+// gained for this rung is three shapes it used to decline (`unary`, `binaryArithImm`, `comparisonImm`);
+// the reasons it declined them were about what a CONST FOLD can do with them, never about what they
+// compute.
+//
+// The same rule settles every other mechanism this pass needs, and it owns none of them:
+// `StdDominatorTree` answers where a value is available, `recordValueSubstitution` builds the rewrite
+// column, `substituteValuesInFunc` applies it (ops AND branch-edge args — half a substitution is a
+// miscompile), and `removeOpsDefining` deletes the ops. The last three live beside `remappedValue` in
+// `StdDialect`, shared with `foldConstOperands`.
+//
+// ══ SCOPE, stated rather than implied ══
+//
+// ⭐⭐ **DOMINATOR-SCOPED, NOT INTRA-BLOCK — AND THE FIRST CUT WAS INTRA-BLOCK, WHICH MEASURED ZERO.**
+// A candidate is compared only against expressions computed in blocks that DOMINATE it, which is
+// exactly the set whose values are available on every path to it. MEASURED 2026-08-28 on the committed
+// `scripts/emitted-code-count.py` corpus, an intra-block-only version found **8 redundant expressions
+// in `cse3.maxon` and ZERO in `nbody` and `fannkuch-redux`** — because shv2's own two inliners fragment
+// every array access and every leaf call into a diamond, so the arithmetic a program repeats lands in
+// different blocks. A function-wide table (unsound, run only to bound the answer) found **79 in nbody
+// and 47 in fannkuch**. The dominator scope is the sound part of that gap, and building it is what
+// `foldConstants`' header already said this rung owed: *"EC13's CSE needs a dominance order anyway and
+// is the rung to build it in."*
+//
+// ⭐ **MEMORY IS OUT, AND THE DIALECT IS WHAT SAYS SO RATHER THAN THIS PASS.** A `loadIndirect` is
+// `isPure: false` — its own variant comment argues that a load's value can be changed by a store it
+// cannot see — so it is neither in the arithmetic roster nor past the purity gate. Two loads of one
+// address are therefore left as two, ALWAYS, with no attempt at store invalidation. That is a real
+// missed win (the anchor loop reloads three invariants per element) and it belongs to `EC14`, which is
+// about hoisting those loads out of the loop: a load-CSE here would be half of that rung, done without
+// the aliasing analysis the other half needs.
+//
+// ⭐ **`div`/`mod` ARE OUT BECAUSE THEY TRAP, AND THE FLAG IS HONOURED RATHER THAN REASONED AROUND.**
+// Two divisions with equal operands do fault identically, so eliminating the second is arguably safe —
+// and it is still not done: `isPure: false` is the dialect's declaration that an op may not be dropped,
+// and a pass that special-cases its way past a purity flag is a pass that will be wrong about the next
+// impure op somebody adds.
+//
+// ⭐ **A CALL IS A BARRIER TO REUSE**, so two equal expressions on either side of one are left as two.
+// A live range that crosses a call is confined to the five callee-saved registers x64-windows leaves,
+// and shv2 answers a loop it cannot allocate with a DIAGNOSTIC rather than a spill — so lengthening
+// such a range does not make a program slower, it makes it fail to compile. The full measurement, and
+// what the rule approximates, are at `CseExpressionTable.noteCall`.
+//
+// ⭐ **FLOATS ARE IN, and unlike constant folding that needs no argument about NaNs or signed zero.**
+// CSE changes no value: it reuses one the program already computed, so the bits are the bits the second
+// `mulsd` would have produced. The one place float semantics DO bite is operand REORDERING, and that is
+// excluded — see `StdArithOperands.canonicalizeCommutativeOperands`.
+//
+// ⭐ **`const` IS NOT CSE'd**, which costs nothing here and avoids a measured hazard. `foldConstOperands`
+// runs immediately before this pass and turns every constant that fits an immediate field INTO the op
+// that reads it, so `x * 31` arrives as one `binOpImm` and its literal is not a value at all — which is
+// exactly what lets the three copies compare equal. What is left is the constants too wide (or too
+// float) for an immediate, and unifying those is v1's Stage A, whose own header records the price: the
+// canonical def is live across the whole function and "the downstream regalloc must rematerialize
+// const-typed virtuals at each use rather than maintain one live range, otherwise the hoisted canonical
+// conflicts with ABI-constrained uses". A constant hoist is that rung; this one is not it.
+
+// Fold every redundant pure computation throughout `module`, in place.
+//
+// Where the pass is scheduled and why: `PassPipeline.buildLoweringPasses`, between `foldConstOperands`
+// and `promoteStackRecords`.
+//
+// ⭐⭐ **AFTER `foldConstOperands` IS LOAD-BEARING, NOT MERELY "AFTER `foldConstants`".** MEASURED: the
+// lowering mints a SEPARATE `const` op per literal occurrence — there is no constant interning — so
+// before the operand rewrite the three copies of `x * 31 + y` are `binOp(x, c1, mul)`, `binOp(x, c2,
+// mul)` and `binOp(x, c3, mul)` over three DIFFERENT value ids, and no expression comparison can call
+// them equal. `foldConstOperands` is the canonicalization that makes them one shape: it moves the
+// literal into the op as an `imm`, and (move 1) puts a commutative op's constant on the rhs. Scheduled
+// one pass earlier, this rung would find the probe's three copies and report nothing.
+//
+// It runs before `promoteStackRecords` because that pass is deliberately last (its header says why: it
+// decides on the FINAL shape of the code). Nothing it reads is created here — this pass only deletes
+// arithmetic — and a merged address computation is one fewer pointer for its escape scan to walk.
+//
+// Like `foldConstants` it takes no start index: its other caller would be the appended runtime band,
+// and those hand-built bodies (`MmRuntime`, `GtRuntime`, the synthesized cascades) recompute nothing —
+// a second run there would walk every appended function to find nothing.
+export function eliminateCommonSubexpressions(module StdModule)
+	logDebug(LogCategory.ir, message: function() gives "eliminateCommonSubexpressions: {module.funcCount()} function(s)")
+
+	// ONE set of scratch for the whole module, not one per function. `eliminateInFunc` opens and closes a
+	// table scope around each function (see the ⛔ note there — a leaked entry is a MISCOMPILE, not a
+	// missed fold), so the table arrives empty every time and its dense columns are reused at the size
+	// the largest function so far needed instead of being reallocated per function. The three records are
+	// refilled per op and never re-created — the shape `StdArithOperands` states, and the reason
+	// `foldConstants.evaluateOps` gives.
+	var scratch = CseScratch.create()
+
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		eliminateInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("eliminateCommonSubexpressions: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
+	end 'eachFunc'
+end 'eliminateCommonSubexpressions'
+
+// ⭐ **ANALYSE FIRST, REWRITE ONCE.** The dominator walk records what each redundant value may read
+// instead; nothing is rewritten until the whole function has been read. That is not tidiness — the
+// rewrite is `substituteValuesInFunc`, whose header states that the (from, to) form of the same job
+// walked the function once per substitution and rebuilt every branch edge each time, which made one
+// pass 54% of a large compile. The column form applies all of them in one walk.
+//
+// A function in which nothing was redundant — most functions — pays the analysis walk and NOTHING else:
+// no rewrite, no block rebuild and no prune. `recordValueSubstitution` always extends the column by at
+// least the slot it writes, so an empty column is an exact test for "found nothing".
+function eliminateInFunc(module StdModule, func IrFunction, scratch CseScratch)
+	var subst = ValueIdArray.create()
+
+	// ⛔⛔ **THE FUNCTION BOUNDARY IS ITSELF A TABLE SCOPE, AND IT IS NOT BELT-AND-BRACES — IT CLOSED A
+	// MISCOMPILE.** A `ValueId` is FUNCTION-LOCAL, so an entry left in the table by the previous function
+	// is an id from a different value space, and the next function's bucket lookup finds it and calls it
+	// an equal expression. MEASURED 2026-08-28 on `specs-shv2/string-interpolation.md float-arithmetic`:
+	// `__floatIsNan`'s three `bitAnd`s were each substituted with a value defined in the block AFTER
+	// them, because the previous function's entries for ids 2, 4 and 6 were still in the table —
+	// `panic at RegisterAllocator.maxon:1504: seedInUse: value 6 is live-in to block 0 but was never
+	// colored`. The dominator walk does roll its own scopes back, but a SINGLE-BLOCK function takes a
+	// fast path with no tree and no walk, and its entries were never popped. Scoping the whole function
+	// makes both paths correct by construction rather than by each remembering to clean up.
+	let functionScope = scratch.table.mark()
+	scratch.table.requireEmptyAt(functionScope)
+	scratch.table.beginFunction(bucketCountFor(module, func: func))
+
+	analyzeFunc(module, func: func, subst: subst, scratch: scratch)
+
+	scratch.table.rollbackTo(functionScope)
+
+	if subst.count() == 0 'nothingWasRedundant'
+		return
+	end 'nothingWasRedundant'
+
+	removeOpsDefining(module, func: func, doomed: redundantDefs(module, func: func, subst: subst, operands: scratch.current))
+	substituteValuesInFunc(module, func: func, subst: subst)
+
+	// The `const`s this pass detached from their readers — the operands of every op it deleted. Shared
+	// with `foldConstOperands` rather than re-derived: it is the same narrow rule (retire a `const`
+	// nothing reads), and the pass that owns it states at length why it must not grow into a general
+	// DCE. It reaches little at this point in the pipeline, because `foldConstOperands` has already
+	// turned every immediate-sized constant into an operand and retired it; what it collects is the wide
+	// and float constants a deleted op was the last reader of.
+	dceRetiredDefs(module, func: func, opIndices: module.liveOpIndices(func), def: StdFoldableDef.create())
+end 'eliminateInFunc'
+
+// ⭐⭐ **WALK THE DOMINATOR TREE, PUSHING A TABLE SCOPE PER BLOCK.** When a block is analysed, the table
+// holds exactly the expressions computed in the blocks on the path from the entry to it — which is the
+// definition of the blocks that dominate it, and therefore exactly the values that are available on
+// every path reaching it. Leaving a block rolls its own entries back off, so a SIBLING in the tree never
+// sees them: that is the whole safety argument, and it is why the table is scoped rather than cleared.
+//
+// An EXPLICIT STACK rather than recursion, for `StdDominatorTree.buildReversePostorder`'s reason: a
+// dominator chain can be as long as the function has blocks, and a recursive walk over a 19,200-block
+// function is a host stack overflow rather than a compiler diagnostic.
+//
+// ⚠ **A BLOCK THE ENTRY CANNOT REACH IS NOT ANALYSED AT ALL.** The parser mints unreachable blocks
+// routinely (`Terminator.dead`), `foldConstants` can orphan one, and `reorderFuncBlocksRpo` still emits
+// them — so they hold ops. They are skipped rather than handled: nothing dominates a block on no path
+// from the entry, so there is no earlier value CSE could offer it, and the only thing lost is CSE
+// *within* such a block, in code no execution reaches.
+function analyzeFunc(module StdModule, func IrFunction, subst ValueIdArray, scratch CseScratch)
+	let blockCount = func.blockRefs.count()
+
+	if blockCount == 0 'aDeclaration'
+		return
+	end 'aDeclaration'
+
+	// A single-block function needs no dominance question answered and pays for no tree: its one block
+	// dominates itself and nothing else. This is most of the stdlib, so the guard is worth its two lines.
+	if blockCount == 1 'oneBlock'
+		analyzeBlock(module, func: func, position: StdEntryBlockPosition, subst: subst, scratch: scratch)
+		return
+	end 'oneBlock'
+
+	let tree = StdDominatorTree.build(module, func: func)
+	var walk = CseDominatorWalk.create()
+
+	walk.enter(module, func: func, position: StdEntryBlockPosition, subst: subst, scratch: scratch)
+
+	while walk.hasOpenScope() 'depthFirst'
+		let position = walk.currentBlock()
+		let nextChild = walk.takeNextChildSlot()
+
+		if nextChild >= tree.children.degree(position) 'everyChildVisited'
+			walk.leave(scratch)
+			continue
+		end 'everyChildVisited'
+
+		walk.enter(module, func: func, position: tree.children.neighbour(position, k: nextChild), subst: subst, scratch: scratch)
+	end 'depthFirst'
+end 'analyzeFunc'
+
+// The dominator-tree walk's own stack: which block each open scope is, which of its children comes
+// next, and the two things a scope has to RESTORE on the way out — the table's entry mark and the
+// number of calls the path had walked when the scope opened.
+//
+// One record rather than four columns threaded through two functions, for `CseScratch`'s reason: they
+// are pushed together, popped together, and a walk that took them separately would name all four at
+// every call site.
+type CseDominatorWalk
+	var block as BlockPositionColumn
+	var nextChild as BlockPositionColumn
+	var entryMark as CseEntryIndexColumn
+	var callsOnEntry as CallBarrierCountColumn
+
+	static function create() returns CseDominatorWalk
+		return Self{block: BlockPositionColumn.create(), nextChild: BlockPositionColumn.create(), entryMark: CseEntryIndexColumn.create(), callsOnEntry: CallBarrierCountColumn.create()}
+	end 'create'
+
+	// Whether any block's scope is still open — the walk's termination test.
+	function hasOpenScope() returns bool
+		return self.block.count() > 0
+	end 'hasOpenScope'
+
+	function currentBlock() returns BlockRefIndex
+		return try self.block.get(self.block.count() - 1) otherwise panic("CseDominatorWalk.currentBlock: the walk is empty")
+	end 'currentBlock'
+
+	// Which child of the open scope's block comes next, ADVANCING the cursor as it answers — the two
+	// were never useful apart, and reading without advancing is how a DFS loops forever.
+	function takeNextChildSlot() returns BlockRefIndex
+		let top = self.block.count() - 1
+		let slot = try self.nextChild.get(top) otherwise panic("CseDominatorWalk.takeNextChildSlot: the walk is empty")
+		try self.nextChild.set(top, value: slot + 1) otherwise panic("CseDominatorWalk.takeNextChildSlot: nextChild.set OOB at {top}")
+		return slot
+	end 'takeNextChildSlot'
+
+	// Open a scope for one block: remember what leaving it must restore, analyse it, and push it.
+	// Both marks are taken BEFORE the block is analysed, so `leave` undoes exactly what this block and
+	// its whole subtree added.
+	function enter(module StdModule, func IrFunction, position BlockRefIndex, subst ValueIdArray, scratch CseScratch)
+		self.entryMark.push(scratch.table.mark())
+		self.callsOnEntry.push(scratch.table.callsOnPath)
+
+		analyzeBlock(module, func: func, position: position, subst: subst, scratch: scratch)
+
+		self.block.push(position)
+		self.nextChild.push(0)
+	end 'enter'
+
+	// Close the innermost scope, restoring the table to what the dominator path held before it.
+	function leave(scratch CseScratch)
+		let top = self.block.count() - 1
+		scratch.table.rollbackTo(try self.entryMark.get(top) otherwise panic("CseDominatorWalk.leave: the walk is empty"))
+		scratch.table.callsOnPath = try self.callsOnEntry.get(top) otherwise panic("CseDominatorWalk.leave: callsOnEntry.get OOB at {top}")
+
+		_ = try self.block.pop() otherwise panic("CseDominatorWalk.leave: block.pop on a non-empty walk failed")
+		_ = try self.nextChild.pop() otherwise panic("CseDominatorWalk.leave: nextChild.pop on a non-empty walk failed")
+		_ = try self.entryMark.pop() otherwise panic("CseDominatorWalk.leave: entryMark.pop on a non-empty walk failed")
+		_ = try self.callsOnEntry.pop() otherwise panic("CseDominatorWalk.leave: callsOnEntry.pop on a non-empty walk failed")
+	end 'leave'
+end 'CseDominatorWalk'
+
+// Analyse every op of one block, in execution order.
+//
+// `block.opRefs` and not `liveOpIndices`: the terminator is deliberately excluded, and it costs this
+// walk nothing to exclude it. A terminator computes no value (branches, returns, the jump table and the
+// process exits are all `StdArithShape.neither`) and it is not a CALL either, so neither the expression
+// half nor the call-barrier half of `analyzeOp` has anything to learn from one.
+function analyzeBlock(module StdModule, func IrFunction, position BlockRefIndex, subst ValueIdArray, scratch CseScratch)
+	let blockRef = try func.blockRefs.get(position) otherwise panic("eliminateCommonSubexpressions: blockRefs.get OOB at {position}")
+	let block = try module.blocks.get(blockRef) otherwise panic("eliminateCommonSubexpressions: blockRef from func.blockRefs not in module.blocks")
+
+	for opIdx in block.opRefs 'eachOp'
+		analyzeOp(module, opIdx: opIdx, subst: subst, scratch: scratch)
+	end 'eachOp'
+end 'analyzeBlock'
+
+// Classify ONE op, and either record it as the first computation of its expression or record that its
+// result may be read from an earlier equal one.
+//
+// The operands are read THROUGH the pending substitution column before anything is compared, so a
+// value this pass has already redirected is compared as its canonical self — which is what lets a chain
+// collapse in one walk: the third `x * 31` matches the first through the second.
+function analyzeOp(module StdModule, opIdx OpIndex, subst ValueIdArray, scratch CseScratch)
+	let op = try module.ops.get(opIdx) otherwise panic("eliminateCommonSubexpressions: op index {opIdx} from block.opRefs not in module.ops")
+	canonicalExpressionOf(op, operands: scratch.current, subst: subst)
+
+	if not scratch.current.isArithmetic() 'notAnExpression'
+		// Every op that is not arithmetic is asked whether it is a CALL, which is the one fact the reuse
+		// rule below needs about the code BETWEEN two equal expressions. See `CseExpressionTable.noteCall`.
+		if op.rawValue.isCall 'aCallBarrier'
+			scratch.table.noteCall()
+		end 'aCallBarrier'
+
+		return
+	end 'notAnExpression'
+
+	requireAdmittedOpIsPure(op)
+
+	// ONE bucket computation for both halves of the probe-then-record: they ask it of the same
+	// expression, and `record` may only ever use the bucket `findEqual` searched.
+	let bucket = bucketOf(scratch.current, bucketCount: scratch.table.bucketCount)
+	scratch.table.findEqual(module, expression: scratch.current, bucket: bucket, subst: subst, candidate: scratch.candidate, outcome: scratch.outcome)
+
+	if not scratch.outcome.isHit() 'firstOccurrence'
+		scratch.table.record(bucket, opIndex: opIdx)
+		return
+	end 'firstOccurrence'
+
+	logTrace(LogCategory.ir, message: function() gives "eliminateCommonSubexpressions: value {scratch.current.resultId} recomputes value {scratch.outcome.canonicalValue()}")
+	recordValueSubstitution(subst, resultId: scratch.current.resultId, replacement: scratch.outcome.canonicalValue())
+end 'analyzeOp'
+
+// The CANONICAL FORM of one op's expression, written into `operands`: the dialect's classification,
+// with its value operands read through the pending substitution column and a commutative op's two
+// operands put in a fixed order.
+//
+// It is called from BOTH sides of every comparison — once for the op being classified and once for each
+// op already in the table — so the two sides cannot canonicalize differently. Re-deriving the table
+// side is exact rather than approximate: an op's operands are defined before it, and this pass only
+// ever substitutes values defined LATER in the walk, so re-reading an earlier op through a column that
+// has since grown gives back the same answer it gave when it was recorded.
+function canonicalExpressionOf(op StdOp, operands StdArithOperands, subst ValueIdArray)
+	classifyArithOperands(op, operands: operands)
+	operands.remapOperandsThrough(subst)
+	operands.canonicalizeCommutativeOperands()
+end 'canonicalExpressionOf'
+
+// ⭐⭐ **THE BUCKET AN EXPRESSION HASHES TO — AND KEYING IT ON THE FIRST OPERAND ALONE WAS A MEASURED
+// QUADRATIC.** The first cut bucketed on `lhs`, which is dense, needs no arithmetic and looked like the
+// project's "no hashing in the hot path" rule being honoured. It is not the same shape: a dense column
+// works when the KEY is already a dense index for the thing being looked up, and `lhs` is a dense index
+// for a VALUE, not for an EXPRESSION. `scale-test`'s own `c_long` corpus is the counter-example, and it
+// is what real code looks like — `a + 1`, `a + 2`, … `a + N` are N distinct expressions that all share
+// one operand, so every probe walked the whole chain and the phase's CPU grew **x1.77, x2.07, x2.28,
+// x2.79, x3.12** across a DOUBLING ladder while its allocations stayed linear at x1.89. That is the
+// signature `.claude/CLAUDE.md` names: a cost that allocates nothing.
+//
+// Mixing the SECOND half of the expression into the key separates them. It is still one flat integer
+// column and still no `Map` — what changed is that the key now identifies an expression rather than one
+// of its operands. Collisions are ordinary and cost only a `computesSameValueAs` that answers false.
+function bucketOf(operands StdArithOperands, bucketCount CseBucketCount) returns CseBucketIndex
+	return (operands.lhs * FirstOperandStride + secondKeyOf(operands)) mod bucketCount
+end 'bucketOf'
+
+// An odd multiplier for the first operand, so `lhs` and the second key cannot cancel each other out for
+// the commonest shape of all — `x <op> x`.
+let FirstOperandStride = 31 as CseKeyPart
+
+// The half of an expression that is NOT its first operand, as one non-negative number. Every shape has
+// one, and the three answers are disjoint because `hasSecondValueOperand` and `hasImmediate` are.
+//
+// ⚠ The immediate is SIGNED and every other key part is not, so it is biased into the non-negative range
+// rather than used raw: a negative key part would make the mix negative and `mod` would answer outside
+// the bucket column.
+function secondKeyOf(operands StdArithOperands) returns CseKeyPart
+	if operands.hasSecondValueOperand() 'twoValues'
+		return operands.rhs
+	end 'twoValues'
+
+	if operands.hasImmediate() 'anEncodedLiteral'
+		return operands.imm - i32.min
+	end 'anEncodedLiteral'
+
+	// A `unary` shape: the operator is all that is left to tell two of them apart.
+	return operands.unaryOpcode.ordinal
+end 'secondKeyOf'
+
+// How many buckets this function's table gets: a floor plus its own op count.
+//
+// ⭐ It is computed ONCE PER FUNCTION and fixed for the whole function scope, which is what keeps
+// `rollbackTo` exact — an entry is unwound by writing its bucket's head back, and a bucket count that
+// moved mid-walk would send that write to a different bucket. Sizing it from the op count keeps the
+// chains short without a resize: a function cannot record more expressions than it has ops.
+//
+// It walks `blockRefs` -> `opRefs.count()` rather than `liveOpIndices`, which allocates a fresh column
+// of every op index in the function to answer a question that is a sum of counts.
+function bucketCountFor(module StdModule, func IrFunction) returns CseBucketCount
+	var buckets = SmallestUsefulBucketCount
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("bucketCountFor: blockRef from func.blockRefs not in module.blocks")
+		buckets = buckets + block.opRefs.count()
+	end 'eachBlock'
+
+	return buckets
+end 'bucketCountFor'
+
+// The floor the count is built up from. Below it there is nothing to spread — a function with a
+// handful of expressions has a handful of chain steps whatever the key does — and being a floor rather
+// than a `max` is what makes the count's TYPE non-zero without a narrowing cast, which `mod` requires
+// of its divisor.
+let SmallestUsefulBucketCount = 16 as CseBucketCount
+
+// ⛔⛔ **THE CHECK BETWEEN THE ARITHMETIC ROSTER AND THE PURITY FLAG, because this pass is the first
+// reader `StdOpMeta.isPure` has ever had and the two statements would otherwise be free to disagree.**
+// `classifyArithOperands` decides which variants are arithmetic; `isPure` decides which ops may be
+// dropped. Every variant the roster admits declares `isPure: true` today, and nothing enforces it: a
+// future op appended to the arith band with `isPure: false` (another trapping form, say) would be given
+// an arm in the roster by a reader thinking about SHAPE, and this pass would delete the second of two
+// without ever asking. Asking here costs one field read per arithmetic op and turns that into a panic
+// on the first program that compiles it.
+//
+// ⚠ It is NOT the memory gate. A load never reaches here — it is `StdArithShape.neither` — so flipping
+// `loadIndirect` to `isPure: true` (the sabotage `StdOpMeta.isPure`'s own comment records) still would
+// not make this pass CSE one. The roster refuses it first.
+function requireAdmittedOpIsPure(op StdOp)
+	if not op.rawValue.isPure 'impure'
+		panic("eliminateCommonSubexpressions: `classifyArithOperands` admitted an op in category {op.rawValue.category.name} that the dialect declares `isPure: false` — an op that may trap or have effects must never be replaced by an earlier equal one")
+	end 'impure'
+end 'requireAdmittedOpIsPure'
+
+// Every value id whose defining op this pass made redundant — the exact input `removeOpsDefining`
+// takes, derived from the substitution column rather than from a second bookkeeping set.
+//
+// ⭐ The column IS the record: this pass creates it fresh per function and writes exactly one entry per
+// eliminated def, so "a def the column moves" and "a def whose op is now unread" are the same set. A
+// separate list of eliminated ops would be that fact written down twice.
+//
+// ⚠ It asks the ROSTER before reading `resultId`, because that field is meaningless on a record whose
+// shape is `neither` — the discipline `StdArithOperands`' header states.
+function redundantDefs(module StdModule, func IrFunction, subst ValueIdArray, operands StdArithOperands) returns StdValueUseSet
+	var doomed = StdValueUseSet.create()
+
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("eliminateCommonSubexpressions: live op index {opIdx} not in module.ops")
+		classifyArithOperands(op, operands: operands)
+
+		if not operands.isArithmetic() 'notAnExpression'
+			continue
+		end 'notAnExpression'
+
+		if remappedValue(operands.resultId, subst: subst) == operands.resultId 'notRedundant'
+			continue
+		end 'notRedundant'
+
+		doomed.insert(operands.resultId)
+	end 'eachOp'
+
+	return doomed
+end 'redundantDefs'
+
+// A position in the pass's flat expression columns, and a mark into them.
+typealias CseEntryIndex = int(0 to u64.max)
+typealias CseEntryIndexColumn = Array with CseEntryIndex
+
+// A bucket in the expression table, and the parts the key is mixed from. Both are ordinary
+// non-negative integers — a ValueId, an `Imm32` biased into range, an enum ordinal, or a modulus.
+typealias CseBucketIndex = int(0 to u64.max)
+typealias CseBucketIndexColumn = Array with CseBucketIndex
+// The number of buckets, which is a DIVISOR and so is typed to exclude zero — `mod` by a
+// possibly-zero value is E3057, and a runtime guard for a count that cannot be zero would be a check
+// nothing can fail.
+typealias CseBucketCount = int(1 to u64.max)
+typealias CseKeyPart = int(0 to u64.max)
+
+// How many calls a dominator path has walked past — the reuse barrier `CseExpressionTable.noteCall`
+// counts. Only EQUALITY of two of these is ever asked, so the count itself never has to be right in
+// absolute terms; it has to be the same number at two points exactly when no call separates them.
+typealias CallBarrierCount = int(0 to u64.max)
+typealias CallBarrierCountColumn = Array with CallBarrierCount
+
+// The mutable state one run of the pass carries: the expression table and the three records every op is
+// classified into. ONE object threaded through the walk rather than four parameters at every level —
+// they are created together, live together and are reset together, and a walk that took them separately
+// would have to name all four at each of five call sites.
+type CseScratch
+	export var table as CseExpressionTable
+	// The expression of the op being classified.
+	export var current as StdArithOperands
+	// The expression of a table entry being compared against it. A SECOND record, because a comparison
+	// needs both sides at once and each `classifyArithOperands` overwrites the record it is given.
+	export var candidate as StdArithOperands
+	export var outcome as CseLookup
+
+	static function create() returns CseScratch
+		return Self{table: CseExpressionTable.create(), current: StdArithOperands.create(), candidate: StdArithOperands.create(), outcome: CseLookup.create()}
+	end 'create'
+end 'CseScratch'
+
+// The answer to one table probe, written into a caller-owned record rather than returned as a union,
+// for `StdFoldableDef`'s measured reason: a payload-bearing union heap-boxes EVERY case including the
+// payload-free one, and this sits on a path walked once per arithmetic op in the module.
+type CseLookup
+	var hit as bool
+	// Meaningless until `hit` says otherwise, and not readable as a sentinel — ValueId 0 is a real
+	// value. `canonicalValue` panics rather than answering for a miss.
+	var canonicalId as ValueId
+
+	static function create() returns CseLookup
+		return Self{hit: false, canonicalId: 0}
+	end 'create'
+
+	function recordMiss()
+		self.hit = false
+	end 'recordMiss'
+
+	function recordComputedBy(valueId ValueId)
+		self.hit = true
+		self.canonicalId = valueId
+	end 'recordComputedBy'
+
+	function isHit() returns bool
+		return self.hit
+	end 'isHit'
+
+	function canonicalValue() returns ValueId
+		if not self.hit 'noHit'
+			panic("CseLookup.canonicalValue: the probe found nothing — ask `isHit` first")
+		end 'noHit'
+
+		return self.canonicalId
+	end 'canonicalValue'
+end 'CseLookup'
+
+// ⭐⭐ **THE EXPRESSIONS ALREADY COMPUTED ON THE PATH FROM THE ENTRY TO HERE, BUCKETED BY THEIR FIRST
+// OPERAND — DENSE COLUMNS AND A CHAIN, NO `Map` AND NO HASHING.** v1's CSE keys a
+// `Map with (String, ValueId)` on `"{opcode}:{lhs}:{rhs}"`, which mints and hashes a String per
+// candidate op; the design's "no `Set`/`Map` and no hashing in the hot path" rule (ARCHITECTURE.md
+// §"Data representation") is what `StdValueUseSet` and `ConstValueMap` are both written to, and their
+// headers measure what breaking it costs.
+//
+// ⚠ **A FLAT LIST WOULD BE QUADRATIC, AND SO WAS BUCKETING ON THE FIRST OPERAND — MEASURED, see
+// `bucketOf`.** Comparing every candidate against every expression in scope is Θ(k²) in the arithmetic
+// ops along a dominator path, and paths in this compiler's own source are long. The bucket key mixes
+// BOTH halves of the expression, which is what makes `a + 1` … `a + N` N chains of one instead of one
+// chain of N.
+//
+// ⭐⭐ **IT IS SCOPED BY MARK-AND-ROLLBACK, WHICH IS WHAT MAKES THE DOMINATOR WALK SOUND.** Entering a
+// block takes a `mark`; leaving it rolls every entry recorded at or after that mark back off, so a
+// sibling subtree never sees them. The rollback is EXACT rather than approximate because a new entry
+// always goes to the FRONT of its bucket's chain: undoing them newest-first restores each bucket head
+// to what it was, with no per-bucket bookkeeping and no clearing pass over the value space.
+type CseExpressionTable
+	// TWO COLUMNS for one map, exactly as `ConstValueMap` is: "is there a bucket here" and "where its
+	// chain starts". A single column would need an index that means "empty", and every `CseEntryIndex`
+	// is a real entry.
+	var bucketHasEntry as BoolArray
+	var bucketHead as CseEntryIndexColumn
+	// One entry per expression in scope, in the order they were recorded — which is what `mark` indexes
+	// and `rollbackTo` unwinds. Parallel columns: which bucket the entry is in (needed to unwind it),
+	// which op computed it, the next entry sharing that bucket, and the call count it was recorded at.
+	var entryBucket as CseBucketIndexColumn
+	var entryOpIndex as OpIndexArray
+	// ⚠ **A CHAIN ENDS AT THE ENTRY THAT POINTS AT ITSELF.** Not a sentinel index and not a second
+	// `BoolArray`: an entry's own position is a value the column can always hold, cannot collide with
+	// another entry, and needs no separate "is there a next" question to stay correct as entries are
+	// appended in front of each other.
+	var entryNext as CseEntryIndexColumn
+	// How many CALLS had been walked on the current dominator path when each entry was recorded — the
+	// one thing `findEqual` asks about the code between two equal expressions. See `noteCall`.
+	var entryCalls as CallBarrierCountColumn
+	// How many buckets the CURRENT function's table has. Fixed for the whole function scope — see
+	// `bucketCountFor` for why `rollbackTo` depends on that.
+	export var bucketCount as CseBucketCount
+	// Calls walked so far on the path from the entry block to the op being classified. Saved and
+	// restored around every block scope by the dominator walk, exactly as the entry columns are.
+	export var callsOnPath as CallBarrierCount
+
+	static function create() returns CseExpressionTable
+		return Self{bucketHasEntry: BoolArray.create(), bucketHead: CseEntryIndexColumn.create(), entryBucket: CseBucketIndexColumn.create(), entryOpIndex: OpIndexArray.create(), entryNext: CseEntryIndexColumn.create(), entryCalls: CallBarrierCountColumn.create(), bucketCount: SmallestUsefulBucketCount, callsOnPath: 0}
+	end 'create'
+
+	// ⭐⭐ **A CALL IS A BARRIER TO REUSE, AND THIS IS THE RULE THAT KEEPS CROSS-BLOCK CSE FROM TURNING A
+	// COMPILE INTO AN `E5001`.** shv2 REFUSES rather than spills when a loop needs more registers than the
+	// target has, so a CSE that lengthens a live range is not "slower code", it is a compile error — and
+	// the live ranges that cost the most are the ones that cross a CALL, because those are confined to the
+	// five callee-saved registers x64-windows leaves. MEASURED 2026-08-28: without this rule,
+	// `specs-shv2/generic-hash-table-regalloc.md witness-dispatch-inside-a-pressured-loop` — nineteen
+	// values live across a call in one loop, a case built to sit exactly at the pool — went RED with
+	// `E5001 … needs 1 more register`, for ONE reused expression.
+	//
+	// ⚠ **IT IS AN APPROXIMATION AND ONLY IN THE PERMISSIVE DIRECTION, WHICH IS THE ONLY DIRECTION THAT
+	// IS SAFE TO APPROXIMATE IN.** The count follows the DOMINATOR path, so a call on a side path between
+	// the two occurrences (an `if` arm the walk does not descend into on its way to the merge block) is
+	// not seen and the reuse is allowed. That can cost a register; it cannot produce a wrong answer, and
+	// the strict version needs a per-block call summary this rung does not have.
+	function noteCall()
+		self.callsOnPath = self.callsOnPath + 1
+	end 'noteCall'
+
+	// Open a FUNCTION's scope: fix the bucket count for its whole walk and reset the call counter. The
+	// bucket columns only ever GROW (a later function with fewer ops leaves the tail unused and unread),
+	// and they need no clearing because `rollbackTo` unwinds every entry a function recorded.
+	function beginFunction(buckets CseBucketCount)
+		self.bucketCount = buckets
+		self.callsOnPath = 0
+		self.bucketHasEntry.growFilled(buckets, value: false)
+		self.bucketHead.growFilled(buckets, value: 0)
+	end 'beginFunction'
+
+	// Where this scope's entries will start. Paired with `rollbackTo`.
+	function mark() returns CseEntryIndex
+		return self.entryOpIndex.count()
+	end 'mark'
+
+	// Forget every expression recorded at or after `mark`, restoring the buckets to exactly what they
+	// held when the mark was taken. Newest-first, which is what makes each removal a bucket-head write
+	// rather than a chain search.
+	function rollbackTo(mark CseEntryIndex)
+		while self.entryOpIndex.count() > mark 'unwind'
+			let entry = self.entryOpIndex.count() - 1
+			let bucket = try self.entryBucket.get(entry) otherwise panic("CseExpressionTable.rollbackTo: entryBucket.get OOB at {entry}")
+			let next = try self.entryNext.get(entry) otherwise panic("CseExpressionTable.rollbackTo: entryNext.get OOB at {entry}")
+
+			if next == entry 'lastInItsBucket'
+				try self.bucketHasEntry.set(bucket, value: false) otherwise panic("CseExpressionTable.rollbackTo: bucketHasEntry.set OOB at {bucket}")
+			end 'lastInItsBucket' else 'theChainContinues'
+				try self.bucketHead.set(bucket, value: next) otherwise panic("CseExpressionTable.rollbackTo: bucketHead.set OOB at {bucket}")
+			end 'theChainContinues'
+
+			_ = try self.entryCalls.pop() otherwise panic("CseExpressionTable.rollbackTo: entryCalls.pop on a non-empty column failed")
+			_ = try self.entryBucket.pop() otherwise panic("CseExpressionTable.rollbackTo: entryBucket.pop on a non-empty column failed")
+			_ = try self.entryOpIndex.pop() otherwise panic("CseExpressionTable.rollbackTo: entryOpIndex.pop on a non-empty column failed")
+			_ = try self.entryNext.pop() otherwise panic("CseExpressionTable.rollbackTo: entryNext.pop on a non-empty column failed")
+		end 'unwind'
+	end 'rollbackTo'
+
+	// Record that the op at `opIndex` computes the expression that hashes to `bucket`. The entry goes to
+	// the FRONT of that bucket's chain, so a probe meets the most recent definition first — which costs
+	// nothing in correctness (every entry in a bucket is a candidate and each is compared in full) and
+	// finds the NEAREST equal expression when there is more than one, keeping the substituted value's
+	// live range as short as the scope allows.
+	function record(bucket CseBucketIndex, opIndex OpIndex)
+		let entry = self.entryOpIndex.count()
+		self.entryBucket.push(bucket)
+		self.entryOpIndex.push(opIndex)
+		self.entryCalls.push(self.callsOnPath)
+
+		let bucketIsOccupied = try self.bucketHasEntry.get(bucket) otherwise panic("CseExpressionTable.record: bucketHasEntry.get OOB at {bucket}")
+		if bucketIsOccupied 'extendsAChain'
+			self.entryNext.push(try self.bucketHead.get(bucket) otherwise panic("CseExpressionTable.record: bucketHead.get OOB at {bucket}"))
+		end 'extendsAChain' else 'startsAChain'
+			// Points at itself: this entry is the end of the chain.
+			self.entryNext.push(entry)
+		end 'startsAChain'
+
+		try self.bucketHead.set(bucket, value: entry) otherwise panic("CseExpressionTable.record: bucketHead.set OOB at {bucket}")
+		try self.bucketHasEntry.set(bucket, value: true) otherwise panic("CseExpressionTable.record: bucketHasEntry.set OOB at {bucket}")
+	end 'record'
+
+	// ⛔ The table must hold NOTHING when a function's scope opens — see `eliminateInFunc` for the
+	// miscompile a leaked entry causes. The function scope makes that true by construction; this says so
+	// out loud, at a cost of one comparison per function, because the failure it guards is a wrong answer
+	// in a function nothing about the leak names.
+	function requireEmptyAt(functionScope CseEntryIndex)
+		if functionScope != 0 'notEmpty'
+			panic("CseExpressionTable.requireEmptyAt: {functionScope} expression(s) survived the previous function — a ValueId is function-local, so a leaked entry matches an id in a different value space")
+		end 'notEmpty'
+	end 'requireEmptyAt'
+
+	// Fill `outcome` with the value an equal expression already computed, or with a miss.
+	//
+	// Each candidate is re-derived from its op through `canonicalExpressionOf`, the same function that
+	// produced `expression` — so the two sides of every comparison are canonicalized by one piece of
+	// code and cannot disagree about, say, which way round a commutative op's operands go.
+	function findEqual(module StdModule, expression StdArithOperands, bucket CseBucketIndex, subst ValueIdArray, candidate StdArithOperands, outcome CseLookup)
+		outcome.recordMiss()
+
+		let bucketIsOccupied = try self.bucketHasEntry.get(bucket) otherwise panic("CseExpressionTable.findEqual: bucketHasEntry.get OOB at {bucket}")
+		if not bucketIsOccupied 'emptyBucket'
+			return
+		end 'emptyBucket'
+
+		var entry = try self.bucketHead.get(bucket) otherwise panic("CseExpressionTable.findEqual: bucketHead.get OOB at {bucket}")
+		var moreEntries = true
+
+		while moreEntries 'eachEntry'
+			let opIdx = try self.entryOpIndex.get(entry) otherwise panic("CseExpressionTable.findEqual: entryOpIndex.get OOB at {entry}")
+			let recordedAfterCalls = try self.entryCalls.get(entry) otherwise panic("CseExpressionTable.findEqual: entryCalls.get OOB at {entry}")
+			canonicalExpressionOf(try module.ops.get(opIdx) otherwise panic("CseExpressionTable.findEqual: recorded op index {opIdx} not in module.ops"), operands: candidate, subst: subst)
+
+			if recordedAfterCalls == self.callsOnPath and expression.computesSameValueAs(candidate) 'equal'
+				outcome.recordComputedBy(candidate.resultId)
+				return
+			end 'equal'
+
+			let next = try self.entryNext.get(entry) otherwise panic("CseExpressionTable.findEqual: entryNext.get OOB at {entry}")
+			moreEntries = next != entry
+			entry = next
+		end 'eachEntry'
+	end 'findEqual'
+end 'CseExpressionTable'

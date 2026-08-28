@@ -116,10 +116,21 @@ union PassKind
 	//
 	// `foldConstOperands` moves a const operand into an immediate so the literal never
 	// needs a register.
+	//
+	// `commonSubexpressionElimination` (EC13) replaces a PURE computation whose operator and operands a
+	// block has already evaluated with a read of that earlier result — `x * 31 + y` written three times
+	// becomes one `imul`/`lea` pair instead of three into three simultaneously-live registers. It runs
+	// LAST of the arithmetic passes, and ⭐ **after `foldConstOperands` is load-bearing rather than
+	// merely permitted**: the lowering mints a separate `const` op per literal occurrence (there is no
+	// constant interning), so until that pass has moved each literal INTO the op that reads it, three
+	// copies of one expression are three ops over three different value ids and no expression
+	// comparison can call them equal. It also benefits from that pass's move 1, which puts a
+	// commutative op's constant on the rhs.
 	pruneDeadBlockArgs
 	elimTrivialBlockArgs
 	foldConstants
 	foldConstOperands
+	commonSubexpressionElimination
 	// Phase 3.6: Std → Std ESCAPE ANALYSIS + STACK PROMOTION (`PromoteStackRecords`).
 	//
 	// ⭐ **IT RUNS LAST OF THE Std PASSES, AND EVERY ONE OF THEM IS A PRECONDITION IT READS.** The
@@ -173,6 +184,9 @@ function classifyPass(pass PassKind) returns PassClassification
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstants gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
+		// Intra-function by construction, and intra-BLOCK inside that: an expression is compared only
+		// against ones the same block already computed (see the pass's SCOPE note on dominance).
+		commonSubexpressionElimination gives PassClassification.perFunction
 		// The one whole-module Std pass: the constructor table and the parameter-escape summary are facts
 		// about the CALL GRAPH, and a call site cannot be judged without the callee's row.
 		promoteStackRecords gives PassClassification.wholeModule
@@ -197,6 +211,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstants gives CompilePhase.foldConstants
 		foldConstOperands gives CompilePhase.foldConstOperands
+		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
 		promoteStackRecords gives CompilePhase.promoteStackRecords
 	end 'phase'
 end 'compilePhaseOfPass'
@@ -215,6 +230,7 @@ function passKindToString(pass PassKind) returns String
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstants gives "foldConstants"
 		foldConstOperands gives "foldConstOperands"
+		commonSubexpressionElimination gives "commonSubexpressionElimination"
 		promoteStackRecords gives "promoteStackRecords"
 	end 'name'
 end 'passKindToString'
@@ -260,6 +276,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.elimTrivialBlockArgs)
 	passes.push(PassKind.foldConstants)
 	passes.push(PassKind.foldConstOperands)
+	passes.push(PassKind.commonSubexpressionElimination)
 	passes.push(PassKind.promoteStackRecords)
 	return passes
 end 'buildLoweringPasses'
@@ -424,6 +441,9 @@ export type PassPipeline
 			// other caller is `Compiler.compileToCodeResult`, which runs it a second time over the band the
 			// runtime installs append below the pipeline; see `foldConstOperands`' own header.
 			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
+			// The whole module, and no start index: like `foldConstants`, its other caller would be the
+			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
+			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 		end 'dispatch'
 

@@ -108,7 +108,7 @@ end 'ConstValueMap'
 // `StdOp` rosters; it is now ONE roster filling this record in place, created once per walk.
 //
 // ⭐ **ONE ROSTER, NOT TWO, AND THAT IS THE POINT RATHER THAN A SIDE EFFECT.** The prune asks BOTH
-// questions of the same op (`isRetiredDef` was "unreferenced const OR unreferenced identity", two
+// questions of the same op (`retiredDefs` was "unreferenced const OR unreferenced identity", two
 // matches over one union), so the two classifications were already taken together at the one call site
 // that needed both. Merged, a new `StdOp` variant is a compile error in ONE place instead of two, and
 // the two answers cannot disagree about which band a variant falls in.
@@ -341,9 +341,9 @@ end 'collectConstValues'
 // `substituteValuesInFunc` writes every op back for the same reason.
 function rewriteBinAndCmpOps(module StdModule, opIndices OpIndexArray, constMap ConstValueMap)
 	// ONE classification record for the whole walk, refilled per op and never re-created — see
-	// `StdBinaryOperands`' header for why the answer is written into a caller-owned record rather than
+	// `StdArithOperands`' header for why the answer is written into a caller-owned record rather than
 	// returned as a union.
-	var operands = StdBinaryOperands.create()
+	var operands = StdArithOperands.create()
 
 	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
@@ -377,11 +377,11 @@ function substituteIdentityImmediates(module StdModule, func IrFunction, opIndic
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
 		classifyFoldableDef(op, def: def)
 		if def.isIdentityDef() 'isIdentity'
-			recordIdentitySubstitution(subst, resultId: def.definedId, operand: def.identityOperand)
+			recordValueSubstitution(subst, resultId: def.definedId, replacement: def.identityOperand)
 		end 'isIdentity'
 	end 'eachOp'
 
-	// An EMPTY column means no identity was found — `recordIdentitySubstitution` always extends it by at
+	// An EMPTY column means no identity was found — `recordValueSubstitution` always extends it by at
 	// least the one slot it writes — so a function without one pays neither the rewrite walk nor the
 	// branch-edge rebuild. Most functions are in that case.
 	if subst.count() == 0 'nothingToRewrite'
@@ -390,31 +390,6 @@ function substituteIdentityImmediates(module StdModule, func IrFunction, opIndic
 
 	substituteValuesInFunc(module, func: func, subst: subst)
 end 'substituteIdentityImmediates'
-
-// Record that every read of `resultId` may read `operand` instead, extending `subst` to hold the id
-// with every NEW slot standing for ITSELF.
-//
-// ⚠ `resize` cannot build this column and the difference is a miscompile rather than a detail: it
-// zero-fills, and a zero in a substitution column means *"rewrite this read to value 0"*. The identity
-// seed is what makes `remappedValue` answer "unchanged" for every value the pass does not fold — the
-// same discipline `elimTrivialBlockArgs` seeds its union-find column with, grown to meet the ids as they
-// arrive rather than sized from a bound computed up front.
-//
-// `push` grows the backing store GEOMETRICALLY, so filling from 0 to the largest folded id is linear
-// overall — the trap `ConstValueMap.upsert` names, avoided the same way.
-//
-// The stored value is `operand` READ THROUGH THE COLUMN, which is what collapses a chain of identities
-// in one step; see `substituteIdentityImmediates` for why that is an optimization rather than a
-// correctness requirement.
-function recordIdentitySubstitution(subst ValueIdArray, resultId ValueId, operand ValueId)
-	var next = subst.count()
-	while next <= resultId 'grow'
-		subst.push(next)
-		next = next + 1
-	end 'grow'
-
-	try subst.set(resultId, value: remappedValue(operand, subst: subst)) otherwise panic("foldConstOperands: subst.set OOB at {resultId} against a column of {subst.count()}")
-end 'recordIdentitySubstitution'
 
 // THE per-opcode identity rule — `x <opcode> imm == x` — and the one place it lives, exactly as
 // `constFitsBinOpImmediate` below is the one place the per-opcode immediate RANGE lives.
@@ -467,7 +442,7 @@ let NoShift = 0 as Imm32
 // cost a heap box on a path walked once per op, and the op is a truthful answer that costs nothing
 // (the same cure, for the same reason, as `StdFoldableDef`'s).
 //
-// ⭐ **WHICH OPS ARE SUBJECTS AT ALL IS `classifyBinaryOperands`' ANSWER, NOT THIS FUNCTION'S.** This
+// ⭐ **WHICH OPS ARE SUBJECTS AT ALL IS `classifyArithOperands`' ANSWER, NOT THIS FUNCTION'S.** This
 // used to open with its own exhaustive `StdOp` match whose every arm but two returned `op` — the same
 // enumeration `foldConstants` would then have needed a SECOND copy of, in a second file that would
 // learn about a new variant separately. The roster is now the dialect's, stated once, and it is where
@@ -480,8 +455,8 @@ let NoShift = 0 as Imm32
 // (`storeIndirectImm`) with its own operand model, splitter and colorer arms, to save one `mov` per
 // constant store. Priced and not taken — the same call `binOpImm` made in reverse, where the win was
 // every literal in every expression rather than the initializing store of a global.
-function tryFold(op StdOp, constMap ConstValueMap, operands StdBinaryOperands) returns StdOp
-	classifyBinaryOperands(op, operands: operands)
+function tryFold(op StdOp, constMap ConstValueMap, operands StdArithOperands) returns StdOp
+	classifyArithOperands(op, operands: operands)
 
 	if operands.isBinaryArith() 'arith'
 		return tryFoldBinOp(op, resultId: operands.resultId, lhs: operands.lhs, rhs: operands.rhs, opcode: operands.opcode, operandType: operands.operandType, constMap: constMap)
@@ -548,26 +523,6 @@ function tryFoldCmp(op StdOp, resultId ValueId, lhs ValueId, rhs ValueId, pred S
 	end 'lhsConst'
 	return op
 end 'tryFoldCmp'
-
-function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
-	return match opcode 'o'
-		add gives true
-		mul gives true
-		sub gives false
-		bitAnd to bitXor gives true
-		shl to shrLogical gives false
-		// The three FLOAT-ONLY opcodes. Unreachable — `tryFoldBinOp` returns early for a float
-		// operand type — but the answer is stated rather than defaulted, and for `min`/`max` it is
-		// load-bearing rather than merely correct:
-		//   • `div` — `a / b` is not `b / a`.
-		//   • `min`/`max` — `min(a, b)` is `a` when `a < b` and `b` otherwise, `max(a, b)` is `a` when
-		//     `a > b` and `b` otherwise, and a STRICT comparison is FALSE on unordered — so `min(nan, 5.0)`
-		//     is `5.0` while `min(5.0, nan)` is `nan`, and `max` answers the same pair. A swap changes the
-		//     answer. v1 excludes its own `minF64`/`maxF64` from commuting for exactly this reason
-		//     (`CommuteForCoalescing.maxon:269`). See `StdBinOpcode`'s `min`/`max` header.
-		div to max gives false
-	end 'o'
-end 'binOpcodeIsCommutative'
 
 // Flip a comparison predicate for an operand swap: `a <pred> b` == `b <flip(pred)> a`.
 function flipCmpPred(pred StdCmpPred) returns StdCmpPred
@@ -659,44 +614,43 @@ end 'constAsImmediate'
 // immediate rewrite took out of their `binOp`/`cmp`, and the identity `binOpImm`s whose reads
 // `substituteIdentityImmediates` moved onto their own operand. Either one still feeding another op or a
 // phi branch edge is kept.
+//
+// ⭐ **IT DECIDES WHAT DIES; `removeOpsDefining` PERFORMS THE REMOVAL.** The block-rebuild half is the
+// dialect's, shared with `eliminateCommonSubexpressions`, which dooms an entirely different set for an
+// entirely different reason and used to need a second copy of the identical walk. What stays here is
+// the only part that is this pass's own — WHICH defs are retirable, which is `StdFoldableDef`'s two
+// kinds and a reference test.
 export function dceRetiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
-	let referenced = collectReferencedValues(module, func: func, opIndices: opIndices)
-	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("foldConstOperands: blockRef from func.blockRefs not in module.blocks")
-
-		// ⭐ **A BLOCK THAT LOSES NOTHING KEEPS THE COLUMN IT ALREADY HAS.** The rebuild allocates a fresh
-		// `OpIndexArray` and refills it, and MOST blocks in most functions retire no def at all — the
-		// unconditional rebuild was one allocation per block per function for a column that came out
-		// identical. The scan below is allocation-free, so asking first is strictly cheaper than
-		// rebuilding blind.
-		if not blockHasRetiredDef(module, block: block, referenced: referenced, def: def) 'nothingRetired'
-			continue
-		end 'nothingRetired'
-
-		var newRefs = OpIndexArray.create()
-		for opIdx in block.opRefs 'eachRef'
-			let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
-			if isRetiredDef(op, referenced: referenced, def: def) 'dead'
-				continue
-			end 'dead'
-			newRefs.push(opIdx)
-		end 'eachRef'
-		block.opRefs = newRefs
-	end 'eachBlock'
+	removeOpsDefining(module, func: func, doomed: retiredDefs(module, func: func, opIndices: opIndices, def: def))
 end 'dceRetiredDefs'
 
-// Whether `block` holds any def the prune would drop — the question that decides whether its `opRefs`
-// column has to be rebuilt at all. It asks `isRetiredDef` about exactly the ops the rebuild would, so
-// the two cannot disagree about what survives.
-function blockHasRetiredDef(module StdModule, block IrBlock, referenced StdValueUseSet, def StdFoldableDef) returns bool
-	for opIdx in block.opRefs 'eachRef'
+// The value ids the prune drops: a `const` or an identity `binOpImm` whose result appears in no
+// reference set. ONE classification answers for both kinds — see `StdFoldableDef` — where it used to be
+// two predicates over two unions, each with its own exhaustive `StdOp` roster.
+//
+// ⚠ The reference test is not a formality for the identity kind — it is the whole safety argument for
+// a substitution that was applied in walk order. See `substituteIdentityImmediates`.
+function retiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef) returns StdValueUseSet
+	let referenced = collectReferencedValues(module, func: func, opIndices: opIndices)
+	var doomed = StdValueUseSet.create()
+
+	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
-		if isRetiredDef(op, referenced: referenced, def: def) 'dead'
-			return true
-		end 'dead'
-	end 'eachRef'
-	return false
-end 'blockHasRetiredDef'
+		classifyFoldableDef(op, def: def)
+
+		if not def.isRetirableDef() 'notRetirable'
+			continue
+		end 'notRetirable'
+
+		if referenced.contains(def.definedId) 'stillRead'
+			continue
+		end 'stillRead'
+
+		doomed.insert(def.definedId)
+	end 'eachOp'
+
+	return doomed
+end 'retiredDefs'
 
 // Every value id READ by any live op, plus every value passed on a phi branch edge —
 // the reachability roots the const DCE keeps a def alive for.
@@ -716,18 +670,3 @@ function collectReferencedValues(module StdModule, func IrFunction, opIndices Op
 	end 'eachBlock'
 	return referenced
 end 'collectReferencedValues'
-
-// True for a def the prune drops: a `const` or an identity `binOpImm` whose result appears in no
-// reference set. ONE classification answers for both kinds — see `StdFoldableDef` — where it used to be
-// two predicates over two unions, each with its own exhaustive `StdOp` roster.
-//
-// ⚠ The reference test is not a formality for the identity kind — it is the whole safety argument for
-// a substitution that was applied in walk order. See `substituteIdentityImmediates`.
-function isRetiredDef(op StdOp, referenced StdValueUseSet, def StdFoldableDef) returns bool
-	classifyFoldableDef(op, def: def)
-	if not def.isRetirableDef() 'notRetirable'
-		return false
-	end 'notRetirable'
-
-	return not referenced.contains(def.definedId)
-end 'isRetiredDef'
