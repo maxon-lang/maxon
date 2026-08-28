@@ -68298,6 +68298,22 @@ export type Parser
 			// `emitCaptureRead` reads the slot back through those same two — and `capType` is the
 			// SOURCE type it recorded, which for a ranged alias is `named` and has no width of its own.
 			self.emitIndirectStore(env, offset: envSlotOffset(i), value: capValue, storageType: self.wordSlotStorageType(capType), range: range)
+			// ⭐⭐⭐ **AND THE CAPTURED VALUE IS NO LONGER THIS FRAME'S ALONE — THE ONE ROUTE TO A SECOND
+			// REFERENT THAT TAKES NO REFERENCE (SV1 wave 3).** Every other way a box gains one goes through an
+			// incref, and `markValueCoOwnsHeap` rides that op (see its header's five downgrade sites); a capture
+			// does not, by this function's own design — the env holds a BORROWED copy and owns nothing. So the
+			// only place that can say it is the store itself.
+			//
+			// ⛔ **MEASURED AS A DANGLING CAPTURE THROUGH THE SEND, WHICH IS WHAT MADE IT REACHABLE.** A value
+			// a closure captured still read `sole`, so `Parser.moveIntoGreenThread` MOVED it into a service's
+			// mailbox — the service freed it, and `peek()` went on reading the env slot that still pointed at
+			// it. `services.error.a-co-owned-value-may-not-be-sent` is that program, and it compiled clean.
+			//
+			// ⚠ **IT IS NOT MERELY CONSERVATIVE FOR THE OTHER TWO READERS — IT IS RIGHT FOR THEM.** A
+			// destructive move-out NULLS a slot of a box it will not re-read (`moveOutManagedPayload`,
+			// `moveOutThrownField`), and a closure that captured that box reads the slot afterwards. Stealing it
+			// was already the wrong answer there; nothing had asked the question.
+			self.markValueCoOwnsHeap(capValue)
 		end 'storeEach'
 
 		// `sole` — a fresh `__mm_alloc` four lines up, whose pointer nothing else has been handed.

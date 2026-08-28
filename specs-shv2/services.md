@@ -211,6 +211,10 @@ only `spawn` in this program is inside `Runner.start`.
 reason.** `Runner.start`'s `spawn` is the only one in the program, and `calc.maxon` — which parses to
 completion and names `Calc.handle` in a signature — is where a walk that skipped method bodies leaves the
 companion unresolved.
+
+⚠ `main` REACHES `start`, and `start` calls `serve`, because neither is decoration: a body no path from
+`main` reaches is not parsed at all (`skipUnreachedFunctionBody`), and an `export` nothing outside its file
+references is E3092. Both would have made this case pass without ever building the spawn it is about.
 ```maxon
 // --- file: calc.maxon
 export type Calc
@@ -239,16 +243,16 @@ type Runner
 
 	function start() returns int
 		let h = spawn Calc.create()
-		return 1
+		return serve(h)
 	end 'start'
 end 'Runner'
 
 function main() returns ExitCode
-	return 0
+	return Runner.create().start() as ExitCode
 end 'main'
 ```
 ```exitcode
-0
+1
 ```
 
 <!-- test: error.spawn-of-a-bare-function-refused -->
@@ -915,8 +919,16 @@ kept a1
 <!-- test: dropping-the-last-handle-shuts-the-service-down -->
 <!-- targets: x64-windows -->
 An ordinary program needs no shutdown boilerplate: the handle is an owned box, and its scope-exit drop is
-what closes the mailbox. `inner` is dropped at the end of the labelled block, well before `main` returns, so
-the service that prints `early` is finished while the second one is still being fed.
+what closes the mailbox. `inner` is dropped at the end of the labelled block and `outer` at `main`'s return,
+and BOTH services' queued work runs — which is the property under test.
+
+⚠⚠ **THE ORDER OF THE TWO LINES IS THE EXIT DRAIN'S AND NOT CAUSALITY, AND THIS CASE SAYS SO RATHER THAN
+IMPLYING OTHERWISE.** At the default `MAXON_MAX_PROCS=1` nothing runs on a service's green thread until the
+main thread stops running — an early handle drop closes the mailbox and publishes the parked receiver, but
+nobody drives it — so both handlers run at the exit drain, in the order the drain reaps them, which is
+spawn order. MEASURED stable across five runs at N=1 and three at N=4. A scheduler change may legitimately
+move this line; what may NOT move is that both lines appear and the process exits 0.
+`two-instances-are-independent` is the case whose order IS forced, by a handle transfer.
 ```maxon
 type Beeper
 	var tag as int
@@ -942,6 +954,10 @@ end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+beep 2
+beep 1
 ```
 
 <!-- test: a-cloned-handle-keeps-the-service-alive -->
@@ -1111,7 +1127,7 @@ type Calc
 end 'Calc'
 
 function main() returns ExitCode
-	let h = spawn Calc.create()
+	spawn Calc.create()
 	return Calc.request.unionCases.bump.rawValue as ExitCode
 end 'main'
 ```
@@ -1285,7 +1301,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:19:9: argument `buf` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
+error E3138: <fragment>:19:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
 ```
 
 <!-- test: error.a-borrowed-parameter-may-not-be-sent -->
@@ -1359,7 +1375,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:22:8: argument 'n' of the message 'Store.keep' cannot be sent: it is a Promise, which is a green-thread handle its awaiter owns and drives — a second green thread holding one would drop a thread this one is still waiting on
+error E3135: <fragment>:23:9: argument `value` of the message `Store.keep` is a Promise, which is a green-thread handle its awaiter owns, and a message MOVES its arguments to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message
 ```
 
 <!-- test: error.a-handle-of-another-service-is-refused -->
@@ -1398,7 +1414,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:28:8: argument type mismatch for 'peer': expected 'Calc.handle', got 'Logger.handle'
+error E3005: <fragment>:29:8: argument type mismatch for 'peer': expected 'Calc.handle', got 'Logger.handle'
 ```
 
 <!-- test: error.a-send-may-not-be-tried -->
