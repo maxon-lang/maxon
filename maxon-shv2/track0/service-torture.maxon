@@ -1,0 +1,124 @@
+// Track-0 SERVICE torture (SV1) — the first program in this directory whose
+// concurrency is REAL, and the one that flips `pin-matrix.sh`'s assertion 4.
+//
+// ⭐⭐ EVERY OTHER PROGRAM HERE IS A COROUTINE PROGRAM, AND `pin-matrix.sh` ASSERTS
+// `workers=1 steals=0` OF THEM. That assertion is the EC10 pin: an `async` frame
+// is a coroutine of the green thread that called it, published only to that
+// thread's own queue, so no worker M is ever created. A `spawn` is the opposite
+// by construction — `__svc_spawn` calls `__gt_spawn_green` and publishes to a P
+// RING (`GtRuntime.GtReadyName`), which is exactly what `__sched_wake_or_spawn`
+// starts a worker M for. So this program's row reads `workers >= 2` and
+// `steals > 0` at N >= 2 and `1/0` at N=1, and the script's header predicted
+// exactly that for the rung that landed `spawn`.
+//
+// ⭐⭐ IT IS ALSO THE CO-OWN SABOTAGE'S SUBJECT, AND THE SHAPE IS CHOSEN FOR THAT.
+// Every send hands over a FRESHLY BUILT `String`, which is legal under both
+// answers to "what does a send do to its argument" and races under only one:
+//
+//   • MOVE (shipped): the sending frame gives up the reference it holds and the
+//     SERVICE's loop drops the payload. One owner, one decref, one thread.
+//   • CO-OWN (`Parser.moveIntoGreenThread` routed to `transferConsumedArg`, which
+//     is `async`'s door and the 2026-08-12 ruling for it): the sender keeps its
+//     own reference and drops it at statement end while the service drops the
+//     one it was handed. TWO green threads step ONE refcount word, and since
+//     EC10 that step is a plain load/add/store (`MmRuntime.emitAdjustRefcount`).
+//
+// ⇒ the discriminator is the EXIT CODE, exactly as it is for `refcount-torture`:
+// a lost decref is 101 at the leak gate and a lost incref frees the record under
+// a live holder, which is 139. `aggregate=` is deceptive here for that program's
+// stated reason — it is computed by the SENDER and is byte-identical either way.
+//
+// ⚠ THE AGGREGATE IS THE SENDER'S BECAUSE SV1 HAS NO REPLY. A fire-and-forget
+// send delivers no value, so there is nothing to await and nothing a receiver
+// could hand back; what the services do is observable only through the leak gate
+// and the exit code. That is the whole of SV1's observability and it is enough
+// for this program's two subjects.
+
+typealias Integer = int(i64.min to i64.max)
+typealias SinkHandleArray = Array with Sink.handle
+
+// One service per M the scheduler will plausibly build. 12 is the default worker
+// pool size and the count `refcount-torture` takes its readings at.
+let sinkCount = 12
+
+// Messages per sink. Each is one fresh `String` moved across, so a round is
+// `sinkCount` allocations handed to `sinkCount` different green threads.
+let rounds = 400
+
+type Sink
+	var taken as Integer
+	var bytes as Integer
+
+	static function create() returns Self
+		return Self{taken: 0, bytes: 0}
+	end 'create'
+
+	// ⭐ THE PAYLOAD IS CONSUMED BY READING IT, WHICH IS WHAT MAKES THE DROP REAL.
+	// The loop drops every managed payload a handler did NOT consume; this one
+	// borrows `s`, so the drop is the loop's — and the co-own sabotage puts the
+	// sender's own drop on the same word at the same time.
+	export function take(s String)
+		self.taken = self.taken + 1
+		self.bytes = self.bytes + s.byteLength()
+	end 'take'
+
+	export function tick(by Integer)
+		self.taken = self.taken + by
+	end 'tick'
+end 'Sink'
+
+function main() returns ExitCode
+	var sinks = SinkHandleArray.create()
+
+	var i = 0
+
+	while i < sinkCount 'spawnEach'
+		sinks.push(spawn Sink.create())
+		i = i + 1
+	end 'spawnEach'
+
+	// The sender's own deterministic tally — an order-independent function of the
+	// inputs, so a difference between two processor counts is a send that ran
+	// twice or not at all rather than a scheduling artefact.
+	var total = 0
+
+	var r = 0
+
+	while r < rounds 'eachRound'
+		var k = 0
+
+		while k < sinkCount 'eachSink'
+			// ⚠ INTERPOLATION, not a literal: an immortal `.rdata` record takes
+			// `__str_retain`'s COPY arm and never touches a refcount, so a literal
+			// would make the co-own sabotage unobservable. This allocates.
+			let payload = "msg {r}:{k}"
+			total = total + payload.byteLength()
+			// The element is BORROWED — a send reads the mailbox out of the handle box
+			// and never takes the handle itself, so nothing here transfers a handle.
+			let sink = try sinks.get(k) otherwise panic("service-torture: sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+			sink.take(payload)
+			sink.tick(1)
+			k = k + 1
+		end 'eachSink'
+
+		r = r + 1
+	end 'eachRound'
+
+	// ⚠ READ BEFORE THE HANDLES DROP. `workers`/`steals` are cumulative counters,
+	// and every worker M this program creates was created by the FIRST `spawn` —
+	// long before this line — so reading here measures what the sends did rather
+	// than what the teardown did.
+	let workers = __Builtins.schedMaxActiveWorkers()
+	let steals = __Builtins.schedStealCount()
+	let cpus = __Builtins.cpuCount()
+
+	print("aggregate={total}\n")
+	print("workers={workers}\n")
+	print("steals={steals}\n")
+	print("cpucount={cpus}\n")
+
+	// The array's element drop is the HANDLE drop, so every service is shut down
+	// here — the last handle closes its mailbox, the loop drains whatever is
+	// still queued and reclaims itself. Nothing else in this program frees them.
+	return 42
+end 'main'

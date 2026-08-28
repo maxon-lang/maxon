@@ -19,7 +19,10 @@
 #   2. The exit code is identical at every N, and is never 101 (the runtime's leak
 #      gate) or 139 (a segfault).
 #   3. `leaked=0` from drop-running-torture at every N.
-#   4. ⭐ THE PIN ITSELF: `workers=1` and `steals=0` at EVERY N.
+#   4. ⭐ THE PIN ITSELF, AND IT IS NOW PER PROGRAM (SV1). A COROUTINE-ONLY
+#      program reads `workers=1` and `steals=0` at every N. A SPAWN-DRIVEN one
+#      (`service-torture`) reads `1/0` at N=1 and `workers >= 2`, `steals > 0`
+#      at every N >= 2 — which is this script's own prediction below, cashed.
 #
 # ⭐⭐ ASSERTION 4 IS WHAT THIS SCRIPT EXISTS FOR, AND IT IS THE ONE THAT FLIPPED.
 # Before EC10 every `async f(...)` published a GT to the SCHEDULER, so at N >= 2 a
@@ -41,12 +44,19 @@
 # (MEASURED at SV1 wave 1; the pre-EC10 spelling of the same sabotage read
 # 2/242, 7/393 and 12/410). A gate nobody has seen move is not a gate.
 #
-# ⚠ THE DAY `spawn` LANDS, ASSERTION 4 FLIPS BACK AND MUST. A `spawn` primitive
-# (SERVICES_DESIGN.md §"Ownership — the spine", "Send is a MOVE") creates REAL green threads, which
-# are exactly what W212's ring, its stealing and its worker loop schedule — all
-# still built, all still here. That rung re-pins this assertion to `workers >= 2`
-# and `steals > 0` for a spawn-driven program, and keeps it at 1/0 for a
-# coroutine-only one.
+# ⭐⭐ `spawn` HAS LANDED AND ASSERTION 4 HAS FLIPPED, EXACTLY WHERE THIS PARAGRAPH
+# SAID IT WOULD. A `spawn` (SERVICES_DESIGN.md §"Ownership — the spine", "Send is a
+# MOVE") creates REAL green threads, which are exactly what W212's ring, its
+# stealing and its worker loop schedule — all built before they had a producer.
+# `service-torture` is that producer, and it is the ONE program here whose row is
+# asserted the other way; every other program stays coroutine-only and stays 1/0.
+#
+# MEASURED at SV1 wave 3, same box, this script (12 services x 400 String sends
+# each): `workers/steals` of 1/0, 2/886, 7/7790 and 9/8120 at N=1/2/7/12, with a
+# byte-identical `aggregate=42680` and exit 42 at every N. The N=1 row is not a
+# weaker reading than the others — it is the control: with one P there is no
+# second M to wake, so the services are driven cooperatively by the main thread
+# and the same answer comes out.
 #
 # ⚠ refcount-torture IS IN THE LIST FOR ITS workers/steals ROW ONLY. Its own
 # subject — whether a contended refcount word survives — is INTERMITTENT, so a
@@ -85,7 +95,20 @@ MAXON="${MAXON:-$REPO/maxon-shv2/.maxon/maxon-shv2.exe}"
 
 WORK="$HERE/.pin-matrix"
 PROCS_LIST="${PROCS_LIST:-1 2 7 12}"
-PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture}"
+PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture}"
+
+# ⭐⭐ WHICH PROGRAMS CREATE REAL GREEN THREADS — the one fact assertion 4 is keyed
+# by, written down once so a program added to either family cannot inherit the
+# other's expectation by being appended to the wrong list. A `spawn` publishes to a
+# P RING; an `async` publishes to its caller's own coroutine queue.
+SPAWNING_PROGRAMS="${SPAWNING_PROGRAMS:-service-torture}"
+
+spawns_green_threads() {
+	case " $SPAWNING_PROGRAMS " in
+		*" $1 "*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
 
 LEAK_EXIT=101
 SEGV_EXIT=139
@@ -161,12 +184,33 @@ for prog in $PROGRAMS; do
 			bad "$prog procs=$p leaked=$lk (a dropped coroutine's struct was stranded)"
 		fi
 
-		# 4: THE PIN.
-		if [ "$wk" != "-" ] && [ "$wk" != 1 ]; then
-			bad "$prog procs=$p workers=$wk — a worker M ran, so something published a coroutine to the scheduler"
-		fi
-		if [ "$st" != "-" ] && [ "$st" != 0 ]; then
-			bad "$prog procs=$p steals=$st — a coroutine was stolen, so it reached a P ring"
+		# 4: THE PIN, per family — see the header. A program that prints neither
+		# counter (`-`) is asserted nothing, which is how it has always been.
+		if spawns_green_threads "$prog"; then
+			# A SPAWN-driven program. At N=1 there is no second M to wake, so it reads
+			# like a coroutine program and that row is the CONTROL for the others.
+			if [ "$p" = 1 ]; then
+				if [ "$wk" != "-" ] && [ "$wk" != 1 ]; then
+					bad "$prog procs=1 workers=$wk — with one P there is no second M for a spawned green thread to wake"
+				fi
+				if [ "$st" != "-" ] && [ "$st" != 0 ]; then
+					bad "$prog procs=1 steals=$st — with one P there is nobody to steal from"
+				fi
+			else
+				if [ "$wk" != "-" ] && [ "$wk" -lt 2 ]; then
+					bad "$prog procs=$p workers=$wk — a spawned green thread reached no worker M, so nothing published it to a P ring"
+				fi
+				if [ "$st" != "-" ] && [ "$st" -lt 1 ]; then
+					bad "$prog procs=$p steals=$st — a spawned green thread was never stolen, so the ring's work never crossed an M"
+				fi
+			fi
+		else
+			if [ "$wk" != "-" ] && [ "$wk" != 1 ]; then
+				bad "$prog procs=$p workers=$wk — a worker M ran, so something published a coroutine to the scheduler"
+			fi
+			if [ "$st" != "-" ] && [ "$st" != 0 ]; then
+				bad "$prog procs=$p steals=$st — a coroutine was stolen, so it reached a P ring"
+			fi
 		fi
 	done
 done
