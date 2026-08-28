@@ -2,13 +2,20 @@
 // or `cmp` into an IMMEDIATE, so the literal never occupies a register. It runs
 // after `lowerMaxonToStd` and before the backend lowers Std to Target.
 //
-// The design ("§Phase 2, foldConstOperands") splits this from the const-folding
-// pass `foldConstants` (evaluate `const <op> const`), which is DEFERRED: folding
-// every constant expression to a single `mov` would erase the codegen the spec
-// fragments exist to show. This pass touches ONLY the operand form — a const stays
-// materialized as a value; it just stops occupying a register at the op that reads
-// it — so `10 + 5*2` still lowers to real arithmetic, now `imul`/`lea` with the
-// literals as immediates instead of a register per literal.
+// The design ("§Phase 2, foldConstOperands") splits this from the const-folding pass `foldConstants`
+// (evaluate `const <op> const`). ⚠ **THAT PASS WAS DEFERRED AND NOW EXISTS (EC12, 2026-08-28)** — it is
+// scheduled immediately BEFORE this one, in `IR/Std/FoldConstants.maxon`. The deferral's stated reason
+// was that folding every constant expression to a single `mov` would erase the codegen the spec
+// fragments exist to show; goldens became REFERENCE rather than a gate on 2026-08-27 (`1152bbc566`), so
+// that reason expired, and the specs whose SUBJECT is the emitted arithmetic were rewritten to take a
+// runtime operand instead of a literal.
+//
+// The SPLIT itself is unchanged and is what the two passes still are. This one touches ONLY the operand
+// FORM — a const stays materialized as a value; it just stops occupying a register at the op that reads
+// it — so an expression with ONE live operand still lowers to real arithmetic, now `imul`/`lea` with the
+// literal as an immediate instead of a register per literal. `foldConstants` handles the case where
+// BOTH operands are constant, which is a different question with different traps (overflow, shift
+// windows, and a division that must not be answered for at all).
 //
 // Four moves — the design's three, plus the IDENTITY fold that only becomes visible once move 2 has
 // run:
@@ -117,7 +124,7 @@ enum StdFoldableDefKind
 	identityDef
 end 'StdFoldableDefKind'
 
-type StdFoldableDef
+export type StdFoldableDef
 	// ⚠ **THE THREE FIELDS BELOW ARE MEANINGLESS UNTIL `kind` SAYS WHICH OF THEM THE LAST
 	// classification FILLED** — the discipline the union enforced by construction, and the one thing a
 	// record has to state rather than enforce. Every reader asks a `kind` predicate first, and none of
@@ -133,7 +140,7 @@ type StdFoldableDef
 	// `definedId` may read instead.
 	export var identityOperand as ValueId
 
-	static function create() returns StdFoldableDef
+	export static function create() returns StdFoldableDef
 		return Self{kind: StdFoldableDefKind.neither, definedId: 0, constant: 0, identityOperand: 0}
 	end 'create'
 
@@ -189,7 +196,7 @@ end 'StdFoldableDef'
 // ⚠ The bands are pinned to the union's FIRST and LAST variants, so a variant APPENDED at the end (the
 // rule `StdOp`'s header states) falls outside all of them and is a COMPILE ERROR here rather than a
 // silently-missed classification.
-function classifyFoldableDef(op StdOp, def StdFoldableDef)
+export function classifyFoldableDef(op StdOp, def StdFoldableDef)
 	match op 'c'
 		const(resultId, value, _) then def.recordConst(resultId, value: value)
 		binOp to cmp then def.recordNeither()
@@ -333,9 +340,14 @@ end 'collectConstValues'
 // the store, and that union was a heap box per op: the skip cost more than the store it saved.
 // `substituteValuesInFunc` writes every op back for the same reason.
 function rewriteBinAndCmpOps(module StdModule, opIndices OpIndexArray, constMap ConstValueMap)
+	// ONE classification record for the whole walk, refilled per op and never re-created — see
+	// `StdBinaryOperands`' header for why the answer is written into a caller-owned record rather than
+	// returned as a union.
+	var operands = StdBinaryOperands.create()
+
 	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
-		try module.ops.set(opIdx, value: tryFold(op, constMap: constMap)) otherwise panic("foldConstOperands: ops.set OOB at {opIdx}")
+		try module.ops.set(opIdx, value: tryFold(op, constMap: constMap, operands: operands)) otherwise panic("foldConstOperands: ops.set OOB at {opIdx}")
 	end 'eachOp'
 end 'rewriteBinAndCmpOps'
 
@@ -440,99 +452,46 @@ end 'binOpImmIsIdentity'
 // sets no bit and flips none, which is the same statement about a bit that `+ 0` is about a sum.
 let AdditiveIdentity = 0 as Imm32
 let MultiplicativeIdentity = 1 as Imm32
+
 // ⚠ `-1`, NOT `0xFFFFFFFF`. The immediate field is SIGNED and every target sign-extends it to the
 // machine word, so `-1` is an all-ones 64-bit mask while `4294967295` would be a 32-bit TRUNCATION —
 // a different question, and one this fold must never answer yes to. (It cannot arrive here anyway:
 // `fitsImm32` rejects it, so a real u32 mask keeps its register operand.)
 let AllBitsSet = -1 as Imm32
+
 // A shift of zero moves no bit, at every width and in both directions.
 let NoShift = 0 as Imm32
 
-// Attempt to fold one op, answering with THE OP THAT BELONGS AT ITS INDEX — the folded immediate form,
-// or `op` itself where nothing folds. Never a union: "unchanged" spelled as a `FoldResult` case cost a
-// heap box on a path walked once per op, and the op is a truthful answer that costs nothing (the same
-// cure, for the same reason, as `StdFoldableDef`'s).
+// Attempt to fold one op, answering with THE OP THAT BELONGS AT ITS INDEX — the folded immediate
+// form, or `op` itself where nothing folds. Never a union: "unchanged" spelled as a `FoldResult` case
+// cost a heap box on a path walked once per op, and the op is a truthful answer that costs nothing
+// (the same cure, for the same reason, as `StdFoldableDef`'s).
 //
-// Only `binOp` and `cmp` are candidates; every other op is
-// unchanged. In particular `div`/`mod` are DELIBERATELY left alone (covered by the
-// `binOpImm to retVoid` range below): x64 `idiv` has no immediate divisor form, and the
-// division family is non-commutative, so there is nothing to canonicalize or fold to
-// an immediate — both operands stay register values. Exhaustive over StdOp, no bare
-// `default`.
-function tryFold(op StdOp, constMap ConstValueMap) returns StdOp
-	return match op 'f'
-		const gives op
-		binOp(resultId, lhs, rhs, opcode, operandType) gives tryFoldBinOp(op, resultId: resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, constMap: constMap)
-		unaryOp gives op
-		cmp(resultId, lhs, rhs, pred, operandType) gives tryFoldCmp(op, resultId: resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, constMap: constMap)
-		// Extended past `retVoid` to take in the memory band. Nothing there has an immediate form to
-		// fold INTO: `globalAddr` has no value operand at all, and a load's and a store's address is a
-		// register the `lea` produced — x64 can fold a RIP-relative address into a `mov`, but that is
-		// an addressing-mode fusion for the ISel, not a constant this pass can substitute.
-		//
-		// ⚠ A store's VALUE is deliberately not folded either, and it is the tempting one:
-		// `counter = 42` really does store a constant, and x64 really does have `mov [mem], imm32`.
-		// Taking it would mean `storeIndirect` growing an immediate twin (`storeIndirectImm`) with
-		// its own operand model, splitter and colorer arms, to save one `mov` per constant store.
-		// Priced and not taken — the same call `binOpImm` made in reverse, where the win was every
-		// literal in every expression rather than the initializing store of a global.
-		// Extended past `storeIndirect` to take in the system band and the `osWriteStdout`/`rdataAddr`
-		// tail. None has an immediate form to fold INTO: `osAllocPages`/`osWriteStdout` reach the OS in
-		// registers whatever wrote their operands, and `rdataAddr` has no operand at all. Extended past
-		// `rdataAddr` to the P1.4b tail (`tryCall`/`errorReturn`/`osExit`): none has an immediate form to
-		// fold into either.
-		// Extended past `osExit` to the P1.5-A1 tail (`funcAddr`/`callIndirect`): neither has an
-		// immediate form to fold INTO — `funcAddr` has no value operand at all, and `callIndirect`'s
-		// operands are the callee register and args, none an immediate.
-		binOpImm to osFreePages gives op
-		// The jump table has no immediate operand to fold into — its index rides a register, its table is
-		// block ids. (Its subject IS the biased index; folding a constant subject to a fixed target is a
-		// future optimization, not this pass's immediate-operand fold.)
-		switch gives op
-		// A witness call carries no immediate-foldable operand — its operands are the table address and args.
-		witnessCall gives op
-		witnessTryCall gives op
-		// P1.5 dogfood slice 1a: an IOCP op takes no const-foldable immediate operand.
-		osPipeCreate to osWriteFile gives op
-		// The wall-clock read's one operand is an out-param ADDRESS — never an immediate.
-		osReadWallClock gives op
-		// R4.1 + R4.2: every file op's operands are BUFFER or out-param addresses, a HANDLE or a byte
-		// COUNT the caller computed — never a const-foldable immediate.
-		osFileOpenRead to osFileAttributes gives op
-		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
-		osPanicValue gives op
-		osCommandLine gives op
-		// W5: the handle read has no operand at all, and the path fill's two are a buffer ADDRESS and a
-		// capacity the caller computed — neither has an immediate form to fold into.
-		osStdHandle gives op
-		osExecutablePath gives op
-		// W35: a buffer ADDRESS and a byte length reach the OS in registers on every lane — no immediate
-		// form to fold into, exactly as `osWriteStdout` has none.
-		osWriteStderr gives op
-		// It reads no value operand at all, so there is nothing to fold into an immediate.
-		stackRecordAddr gives op
-		// O3: a name POINTER, a scratch BUFFER, a handle and a byte count the caller computed — none has an
-		// immediate form to fold into, and the tick read has no operand at all.
-		osOpenNamedSegment to osTickCountMs gives op
-		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-		// band, the machine query AND the thread-CPU read — are import calls too: every operand is an address,
-		// a handle or a length the caller computed, so none has an immediate form to fold into.
-		osHandleSetInherit to osThreadCpuTicks gives op
-		// F1a: the decommit's two operands are an ADDRESS and a LENGTH the caller computed, each moved into a
-		// fixed argument register by the isel. Neither has an immediate form to fold into.
-		osDecommitPages gives op
-		// F1b: a fill's two operands are an ADDRESS and a LENGTH the caller computed, and the isel moves each
-		// into a fixed physical register of the ladder's own — neither has an immediate form to fold into.
-		memFill gives op
-		// F1c: the same two kinds of operand reaching the same fixed argument registers — an address and a
-		// length, neither with an immediate form to fold into.
-		osCommitPages to osReservePages gives op
-		// F2: an atomic's operands are an ADDRESS and the words it compares and stores, and the ISAs' atomic
-		// forms take a register for each — `lock cmpxchg`/`lock xadd` have no immediate operand at all, and an
-		// LL/SC loop compares and stores registers. The thread token and `TlsAlloc` have no operand to fold at
-		// all, and the remaining G1 members hand theirs to an import in a register.
-		atomicCas to osSetEvent gives op
-	end 'f'
+// ⭐ **WHICH OPS ARE SUBJECTS AT ALL IS `classifyBinaryOperands`' ANSWER, NOT THIS FUNCTION'S.** This
+// used to open with its own exhaustive `StdOp` match whose every arm but two returned `op` — the same
+// enumeration `foldConstants` would then have needed a SECOND copy of, in a second file that would
+// learn about a new variant separately. The roster is now the dialect's, stated once, and it is where
+// the reason each excluded band is excluded now lives: `div`/`mod` TRAP, the immediate forms carry no
+// second value operand, and the rest compute nothing an immediate could be folded into.
+//
+// ⚠ **ONE EXCLUSION IS THIS PASS'S OWN AND IS DELIBERATELY NOT IN THAT ROSTER: A STORE'S VALUE.** It
+// is the tempting one — `counter = 42` really does store a constant, and x64 really does have
+// `mov [mem], imm32`. Taking it would mean `storeIndirect` growing an immediate twin
+// (`storeIndirectImm`) with its own operand model, splitter and colorer arms, to save one `mov` per
+// constant store. Priced and not taken — the same call `binOpImm` made in reverse, where the win was
+// every literal in every expression rather than the initializing store of a global.
+function tryFold(op StdOp, constMap ConstValueMap, operands StdBinaryOperands) returns StdOp
+	classifyBinaryOperands(op, operands: operands)
+
+	if operands.isBinaryArith() 'arith'
+		return tryFoldBinOp(op, resultId: operands.resultId, lhs: operands.lhs, rhs: operands.rhs, opcode: operands.opcode, operandType: operands.operandType, constMap: constMap)
+	end 'arith'
+
+	if operands.isComparison() 'comparison'
+		return tryFoldCmp(op, resultId: operands.resultId, lhs: operands.lhs, rhs: operands.rhs, pred: operands.pred, operandType: operands.operandType, constMap: constMap)
+	end 'comparison'
+
+	return op
 end 'tryFold'
 
 // `resultId = lhs <opcode> rhs`. A const rhs folds directly. For a COMMUTATIVE op a
@@ -700,7 +659,7 @@ end 'constAsImmediate'
 // immediate rewrite took out of their `binOp`/`cmp`, and the identity `binOpImm`s whose reads
 // `substituteIdentityImmediates` moved onto their own operand. Either one still feeding another op or a
 // phi branch edge is kept.
-function dceRetiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
+export function dceRetiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
 	let referenced = collectReferencedValues(module, func: func, opIndices: opIndices)
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("foldConstOperands: blockRef from func.blockRefs not in module.blocks")

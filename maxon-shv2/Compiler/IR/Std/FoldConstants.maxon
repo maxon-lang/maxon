@@ -1,0 +1,523 @@
+// FoldConstants — a Std->Std pass that EVALUATES `const <op> const`, replacing the arithmetic with the
+// answer. `2 + 3 * 4` stops being `mov`/`imul`/`lea` and becomes one `const 14`; a `condBranch` whose
+// condition is a known constant becomes an unconditional `branch`.
+//
+// ⭐⭐ **IT IS A Std PASS AND NOT A PARSER ONE, AND THE POST-INLINE HALF IS THE BIGGER HALF.** The parser
+// already settles `const <op> const` written as such — `2 + 3 * 4` never reaches this pass at all. What
+// reaches it is what INLINING makes constant: `inlineLeaves` substitutes a literal argument into a
+// callee's body, so `x * 31 + y` called with `(3, 4)` becomes `const 3 * const 31 + const 4` in the
+// caller — three constant expressions the parser could not have seen, because at parse time they were
+// parameters. That is the shape this pass exists for, and it is why it is scheduled after BOTH inliners.
+//
+// ⭐⭐ **THE ARITHMETIC IS NOT THIS PASS'S OWN. IT IS THE PARSER'S CONSTANT FOLDER, ASKED.**
+// `TypeRules.foldIntBinOp`, `TypeRules.evalShift` and `TypeRules.foldIntCompare` are where this compiler
+// decides what `const <op> const` EVALUATES TO, and they had exactly one caller — `Parser.recordBinOpFold`,
+// which computes the answer and RECORDS it in the constant domain without rewriting the op. This pass is
+// the second caller, and it rewrites. A Std-tier evaluator of its own would have been a second answer to
+// one question, which is this project's signature bug (`.claude/CLAUDE.md` opens with it) and is exactly
+// how `Parser.recordBinOpFold`'s own header says a diagnostic was lost once already.
+//
+// The two tiers speak different opcode sets, so the bridge is `maxonBinOpOfStdOpcode` /
+// `maxonCmpOpOfStdPred` — CHECKED INVERSES of the lowering's own maps, which panic rather than answer if
+// the two directions ever diverge. See their header for why they live beside the forward map.
+//
+// ⭐ **WHY THE ANSWER IS THE SAME AT BOTH TIERS, WHICH IS WHAT MAKES THE SHARING SOUND.** A `ParsedInt` is
+// a signed 64-bit integer, and EVERY integer `binOp` and `cmp` in this compiler computes at the MACHINE
+// WORD on all three targets — x64 selects 64-bit register forms and reads no width at all, arm64 selects
+// the X-register forms, and wasm computes at `wasmMachineValTypeOf`, which is `i64` for every integer
+// type. A Std `operandType` is therefore a STORAGE class here and never an arithmetic one, and the host
+// arithmetic the folder runs is bit-for-bit the arithmetic the instruction would have run — WRAPPING
+// included: `i64.max + 1` folds to `i64.min`, which is what `add` produces. Comparisons are SIGNED at 64
+// bits on all three targets (`signedCondCodeForPred`, `emitCmpPred`), which is what `foldIntCompare` is.
+//
+// FOUR THINGS ARE DELIBERATELY NOT FOLDED, each for its own reason:
+//
+//   • **`div`/`mod` — they TRAP.** They are not even `binOp`s: integer division has its own `StdOp.div`/
+//     `StdOp.mod` variants carrying `isPure: false`, because x64 `idiv` faults on a zero divisor and on
+//     `i64.min / -1`. `classifyBinaryOperands` therefore never offers one as a subject, and the prune
+//     below (`dceRetiredDefs`) retires only `const`s, so neither can be dropped for being unread either.
+//     ⚠ Note that `foldIntDivision` is nonetheless RIGHT about the pair a division can and cannot answer
+//     — `i64.min / -1` has no representable quotient and declines, `i64.min mod -1` is `0` and folds —
+//     which is the A1x finding, and this pass rests on it rather than restating it.
+//   • **FLOAT arithmetic.** A separate argument, not a smaller one: signed zero (`-0.0 + 0.0` is `+0.0`,
+//     so folding changes which zero a program holds), NaN payloads (an operation may quiet a signalling
+//     NaN, and no two machines promise the same payload), and shortest-round-trip printing, which makes
+//     the difference OBSERVABLE in a program's output rather than only in its bits. `TypeRules` does have
+//     a float folder (`foldFloatBinOp`), and it documents its own divergence from the emitted `divsd` —
+//     that divergence is harmless in a constant DOMAIN, which only ever narrows a diagnostic, and would
+//     be a wrong ANSWER here. A float fold is a rung of its own.
+//   • **SHIFT COUNTS OUTSIDE THE UNGUARDED WINDOW** (`TypeRules.shiftCountIsUnguarded`, 0..63). See
+//     `evaluateIntBinOp` — the window is asked, not restated.
+//   • **UNARY ops.** `neg`/`bitNot` over a constant are foldable and are not folded here: the pass's
+//     subject is the BINARY shape (`classifyBinaryOperands`), and a unary fold is a third shape on that
+//     record rather than a second roster. `InsertRangeChecks.recordConstNeg` already folds a `neg` for
+//     its own purposes, so a unary fold would owe that site a look first.
+//
+// ⚠ **IT IS NOT A CONSTANT PROPAGATOR.** It reads only what a `const` op materializes; a value that is
+// constant on every path into a phi is not constant to this pass, and nothing here looks through memory
+// (`classifyFoldableDef`'s memory band states why a load's result is not its global's initializer).
+//
+// ⭐ **WHY THE OLD REASON FOR NOT HAVING THIS PASS IS GONE.** `FoldConstOperands`' header, `DEVLOG.md`
+// and `Parser.recordBinOpFold` all said the same thing: folding every constant expression to a single
+// `mov` would erase the codegen the spec fragments exist to show. Goldens became REFERENCE rather than a
+// gate on 2026-08-27 (user ruling, `1152bbc566`), so that argument no longer holds — and the specs whose
+// SUBJECT is the emitted arithmetic were rewritten to take a runtime input, which is strictly better
+// testing than a literal a correct compiler is entitled to fold.
+
+// Fold `const <op> const` throughout `module`, in place.
+//
+// It runs over the WHOLE module, and unlike `foldConstOperands` it takes no start index: its other
+// caller would be the appended runtime band, and the hand-built runtime bodies (`MmRuntime`,
+// `GtRuntime`, the synthesized cascades) contain no `const <op> const` at all — every arithmetic op
+// they emit has at least one live operand. A second run there would walk every appended function to
+// fold nothing.
+export function foldConstants(module StdModule)
+	logDebug(LogCategory.ir, message: function() gives "foldConstants: {module.funcCount()} function(s)")
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		foldConstantsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("foldConstants: fnIndex {fnIndex} is below module.functions.count()"))
+	end 'eachFunc'
+end 'foldConstants'
+
+// ⭐ **ONE FORWARD WALK IS ENOUGH, AND THAT IS A PROPERTY OF THE IR RATHER THAN AN APPROXIMATION.** Each
+// op is folded and then RECLASSIFIED, so the `const` it just became is in the map before the next op
+// reads it — which is what collapses `const 3 * const 31 + const 4` to one `const 97` in a single pass
+// without a worklist or a fixpoint.
+//
+// It leans on defs preceding uses, which `liveOpIndices` gives for a parser-generated CFG (blocks in
+// `func.blockRefs` LAYOUT order). The cost of a miss is exactly a MISSED FOLD: an operand whose `const`
+// has not been walked yet reads as non-constant and the op is left alone. There is no arrangement in
+// which a wrong constant is produced — the same argument, for the same reason, that
+// `foldConstOperands.substituteIdentityImmediates` makes about applying a substitution in walk order.
+//
+// ⚠⚠ **AND THE ORDER IS DEMONSTRABLY WRONG FOR SOME BLOCKS, WHICH IS WHY THE PRICE IS MEASURED RATHER
+// THAN ASSUMED.** Every block-splitting pass APPENDS its new blocks to `func.blockRefs`, so a block's
+// position there records WHEN IT WAS MINTED, not where it sits in the CFG. MEASURED on
+// `return (opaque(3) * 4 + 2) as ExitCode`, the order is `entry, __rc_ok, __rc_panic, __rc_chk,
+// __il_cont, __il_body` — `insertRangeChecks` ran first so its blocks come first, and the `const` the
+// arithmetic folds to is minted in `__il_cont`, three blocks LATER than the range-check compare that
+// would fold against it. That compare therefore does not fold, and the guard survives.
+//
+// ⭐ **A FIXPOINT WOULD CURE IT AND IS NOT WORTH IT — MEASURED, NOT ASSUMED.** Re-running the walk until
+// it converges (8 rounds, forced) against ONE round, on the committed `scripts/emitted-code-count.py`
+// corpus: **12,189 emitted ops against 12,191** — two ops, both in `probe.maxon`, and byte-identical
+// everywhere else. The exact cure is a def-before-use order (reverse postorder of the Std CFG) or a
+// sparse def-use worklist, either of which is a mechanism of its own; `EC13`'s CSE needs the first one
+// anyway, and that is the rung to build it in. Iterating this walk instead would trade a LINEAR pass for
+// one whose worst case is O(blocks x ops), for two ops.
+function foldConstantsInFunc(module StdModule, func IrFunction)
+	let opIndices = module.liveOpIndices(func)
+	var constMap = ConstValueMap.create()
+
+	evaluateOps(module, opIndices: opIndices, constMap: constMap)
+	// AFTER the op walk, because a `cmp` this pass folded is exactly how a branch condition becomes a
+	// known constant, and BEFORE the prune, which is what retires the condition `const` the branch
+	// fold stops reading.
+	//
+	// A fold ORPHANS the arm it did not take, and this pass must remove it itself — see
+	// `dropUnreachableBlocks` for the allocator invariant that says so.
+	if foldConstantBranches(module, func: func, constMap: constMap) 'branchesFolded'
+		dropUnreachableBlocks(module, func: func)
+	end 'branchesFolded'
+
+	// The `const`s this pass detached from their readers — the operands of every op it replaced, and the
+	// condition of every branch it made unconditional. Shared with `foldConstOperands` rather than
+	// re-derived: it is the same narrow rule (retire a `const` nothing reads), and the pass that owns it
+	// states at length why it must not grow into a general DCE.
+	//
+	// ⚠ Its other half — retiring an unreferenced IDENTITY `binOpImm` — is inert here and that is not a
+	// coincidence to rely on: `foldConstOperands` is the only producer of an immediate form and it runs
+	// AFTER this pass, so the pipeline reaches this call with none in the module. Should one ever arrive,
+	// dropping it is still correct (it is pure and unread); what would be missing is the SUBSTITUTION
+	// that gives its readers somewhere else to look, and an op with readers is never retired.
+	dceRetiredDefs(module, func: func, opIndices: opIndices, def: StdFoldableDef.create())
+end 'foldConstantsInFunc'
+
+// Replace every foldable op with the `const` it evaluates to, in place at the same op index (so block
+// `opRefs` and terminator slots stay valid), recording each constant as it appears.
+//
+// The store is UNCONDITIONAL for `rewriteBinAndCmpOps`' measured reason: `tryEvaluate` hands back the op
+// that belongs at the index, so an op that does not fold is written back over itself — a refcount and no
+// allocation, where a union saying "unchanged" would be a heap box per op.
+function evaluateOps(module StdModule, opIndices OpIndexArray, constMap ConstValueMap)
+	// ONE record of each kind for the whole walk, refilled per op and never re-created — see
+	// `StdBinaryOperands` and `StdFoldableDef` for why both answers are written into caller-owned records.
+	var operands = StdBinaryOperands.create()
+	var def = StdFoldableDef.create()
+
+	for opIdx in opIndices 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("foldConstants: live op index {opIdx} not in module.ops")
+		let folded = tryEvaluate(op, constMap: constMap, operands: operands)
+		try module.ops.set(opIdx, value: folded) otherwise panic("foldConstants: ops.set OOB at {opIdx}")
+
+		// The FOLDED op, not the original — recording the result is what feeds the next op's operands.
+		classifyFoldableDef(folded, def: def)
+		if def.isConstDef() 'isConst'
+			constMap.upsert(def.definedId, value: def.constant)
+		end 'isConst'
+	end 'eachOp'
+end 'evaluateOps'
+
+// Attempt to evaluate one op, answering with THE OP THAT BELONGS AT ITS INDEX — a `const` carrying the
+// computed value, or `op` itself where nothing folds.
+//
+// Which ops are subjects at all is `classifyBinaryOperands`' answer, shared with `foldConstOperands`:
+// the two passes act on the same two variants and no others, and that set is enumerated once.
+function tryEvaluate(op StdOp, constMap ConstValueMap, operands StdBinaryOperands) returns StdOp
+	classifyBinaryOperands(op, operands: operands)
+
+	if operands.isBinaryArith() 'arith'
+		return evaluateBinOp(op, resultId: operands.resultId, lhs: operands.lhs, rhs: operands.rhs, opcode: operands.opcode, operandType: operands.operandType, constMap: constMap)
+	end 'arith'
+
+	if operands.isComparison() 'comparison'
+		return evaluateCmp(op, resultId: operands.resultId, lhs: operands.lhs, rhs: operands.rhs, pred: operands.pred, operandType: operands.operandType, constMap: constMap)
+	end 'comparison'
+
+	return op
+end 'tryEvaluate'
+
+// ⭐ **THE ONE ADMISSION RULE, ASKED BY BOTH EVALUATORS.** Arithmetic and comparison ask exactly the
+// same two questions of their operands and would have answered them in two places, which is the
+// duplication this file is otherwise at pains to avoid.
+//
+// ⚠ **A FLOAT NEVER FOLDS, AND THE REASON IS NOT `foldConstOperands`'.** That pass refuses a float
+// because no SSE/NEON/wasm form takes an immediate — a fact about ENCODING. This one refuses because a
+// folded float bakes a decision about signed zero, NaN payloads and shortest-round-trip printing into
+// the program, where the same fold in a constant DOMAIN only ever narrows a diagnostic. `TypeRules` has
+// float folders (`foldFloatBinOp`, `foldFloatCompare`) and they are correct for the domain they were
+// written for; the guard is HERE, at the pass, because the decision belongs to the pass. It is
+// sabotage-measured: `specs-shv2/fold-constants.md`'s float control takes the x64 emitter down without
+// it (a folded float lands in a GPR immediate that every consumer expects in an XMM).
+function operandsAreFoldableIntegers(constMap ConstValueMap, lhs ValueId, rhs ValueId, operandType StdType) returns bool
+	if stdTypeIsFloat(operandType) 'float'
+		return false
+	end 'float'
+
+	return constMap.contains(lhs) and constMap.contains(rhs)
+end 'operandsAreFoldableIntegers'
+
+// `resultId = lhs <opcode> rhs` over two constants.
+function evaluateBinOp(op StdOp, resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, constMap ConstValueMap) returns StdOp
+	if not operandsAreFoldableIntegers(constMap, lhs: lhs, rhs: rhs, operandType: operandType) 'notFoldable'
+		return op
+	end 'notFoldable'
+
+	return match evaluateIntBinOp(opcode, lhs: constMap.constantOf(lhs), rhs: constMap.constantOf(rhs)) 'e'
+		folded(value) gives StdOp.const(resultId, value: value, valueType: FoldedArithType)
+		notFoldable gives op
+	end 'e'
+end 'evaluateBinOp'
+
+// `resultId = lhs <pred> rhs` over two constants, answering the 0/1 payload a `bool` value carries.
+//
+// TOTAL where `evaluateBinOp` is not: past the admission rule no comparison can decline
+// (`foldIntCompare` has no `FoldedInt` to return), because there is no division to trap and no shift
+// count to reject.
+function evaluateCmp(op StdOp, resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType, constMap ConstValueMap) returns StdOp
+	if not operandsAreFoldableIntegers(constMap, lhs: lhs, rhs: rhs, operandType: operandType) 'notFoldable'
+		return op
+	end 'notFoldable'
+
+	let verdict = foldIntCompare(maxonCmpOpOfStdPred(pred), lhs: constMap.constantOf(lhs), rhs: constMap.constantOf(rhs))
+	return StdOp.const(resultId, value: verdict, valueType: FoldedComparisonType)
+end 'evaluateCmp'
+
+// ⭐⭐ **THE FOLDED CONSTANT'S TYPE IS THE MACHINE WORD, NOT THE OP'S `operandType`, AND ON wasm THE
+// DIFFERENCE IS A MISCOMPILE.** A `binOp`'s RESULT is declared at `wasmMachineValTypeOf(operandType)` —
+// `i64` for every integer type — while a `const`'s is declared at `wasmValTypeOf(valueType)`, which is
+// `i32` for `i8`/`i16`/`i32`/`u8`/`u16`/`u32`. Carrying the op's own narrow `operandType` onto the
+// replacement `const` would therefore CHANGE THE VALUE'S LOCAL CLASS from i64 to i32 in the middle of a
+// function, and every later read of it would pop the wrong type. `i64` is not a widening here — it is
+// what the operation already computed at, on every target.
+let FoldedArithType = StdType.i64
+
+// A comparison's result is the i1 the `cmp` it replaces declared, which is what keeps its wasm local an
+// i32 (`recordDefValtype` types every `cmp` result i32, and `wasmValTypeOf(i1)` is i32).
+let FoldedComparisonType = StdType.i1
+
+// Evaluate `lhs <opcode> rhs` at the Std tier by asking THE PARSER'S FOLDER — see this file's header for
+// why there is no second evaluator.
+//
+// ⚠ **THE SHIFTS DO NOT GO THROUGH `foldIntBinOp`, AND THAT IS THAT FUNCTION'S OWN RULE RATHER THAN AN
+// EXCEPTION TO IT.** It answers `notFoldable` for every shift deliberately: a shift's rule is
+// `evalShift`'s and needs its COUNT checked first. So the count is checked here — against
+// `shiftCountIsUnguarded`, the same window `constFitsBinOpImmediate` folds an immediate shift count
+// into, and the window on which the imm8 form, the `cl` form and `evalShift` provably agree because the
+// hardware's mask is a no-op on it.
+//
+// ⭐⭐ **A COUNT OUTSIDE THE WINDOW IS LEFT ALONE, AND A NEGATIVE ONE IS WHY — SABOTAGE-MEASURED, NOT
+// ASSUMED.** The parser refuses a NEGATIVE literal count (E2054) and rewrites an out-of-range one, so
+// before EC5 no such constant could exist at all. `inlineLeaves` makes one: it substitutes a caller's
+// literal into a callee whose count was a PARAMETER, and for a parameter the parser emitted
+// `emitGuardedShift`'s saturation cascade rather than a diagnostic. **MEASURED 2026-08-28** with this
+// gate removed and `shiftLeft(1, n: -1)` compiled through such a leaf:
+//
+//     panic at TypeRules.maxon:1964: evalShift: negative count -1 — a negative count is E2054 and must
+//     never reach the folder
+//
+// i.e. the compiler DIES. (A negative literal does reach this pass as a single `const`, not as a `neg`
+// of one.) `specs-shv2/fold-constants.md`'s shift case carries both signs for exactly that reason.
+//
+// ⚠ **AN OUT-OF-RANGE POSITIVE COUNT IS A DIFFERENT AND MILDER STORY, AND SAYING SO IS THE HONEST
+// VERSION.** For counts of 64 and above `evalShift` SATURATES to the same value the emitted cascade
+// computes, so folding one would be correct — the same sabotage leaves every positive case GREEN.
+// The window is still the right gate: it is the one `constFitsBinOpImmediate` already folds a shift
+// immediate against, and asking it once covers both signs instead of adding a second negative-only
+// test that would have to be kept in step. Declining costs one unfolded shift inside a cascade that is
+// already six ops.
+function evaluateIntBinOp(opcode StdBinOpcode, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+	let op = maxonBinOpOfStdOpcode(opcode)
+
+	if shiftOperator(op) 'shift'
+		if not shiftCountIsUnguarded(rhs) 'outsideTheWindow'
+			return FoldedInt.notFoldable
+		end 'outsideTheWindow'
+
+		return FoldedInt.folded(evalShift(lhs, count: rhs, op: op))
+	end 'shift'
+
+	return foldIntBinOp(op, lhs: lhs, rhs: rhs)
+end 'evaluateIntBinOp'
+
+// Rewrite every `condBranch` whose condition is a known constant into the unconditional `branch` its
+// condition already decided.
+//
+// ⭐⭐ **THE ARM THAT CAN NO LONGER BE REACHED IS LEFT WHERE IT IS, AND THAT IS THE DESIGN.** Removing a
+// block is `EC11`'s `dropUnreachableBlocks` (Target tier, after `applyAllocation`), which does it
+// transitively and at the point where a block's emptiness is finally a fact rather than a prediction.
+// v1's `Canonicalize` makes exactly the same split — "dead block removal is left to the DCE pass" — and
+// an unreachable block is already an ordinary state of this IR (the parser mints `Terminator.dead`
+// blocks for code after a fully-terminated `if`/`else`). So a constant `if` costs one branch here and
+// nothing at all by the time the code is encoded.
+function foldConstantBranches(module StdModule, func IrFunction, constMap ConstValueMap) returns bool
+	var foldedAny = false
+
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("foldConstants: blockRef from func.blockRefs not in module.blocks")
+
+		if not block.hasTerminatorOp() 'noTerminator'
+			continue
+		end 'noTerminator'
+
+		let termIdx = block.terminatorIndex()
+		let term = try module.ops.get(termIdx) otherwise panic("foldConstants: terminator index {termIdx} not in module.ops")
+		if foldConstantBranchIn(module, block: block, termIdx: termIdx, term: term, constMap: constMap) 'folded'
+			foldedAny = true
+		end 'folded'
+	end 'eachBlock'
+
+	return foldedAny
+end 'foldConstantBranches'
+
+// Fold ONE block's terminator, when it is a `condBranch` on a value this pass knows.
+function foldConstantBranchIn(module StdModule, block IrBlock, termIdx OpIndex, term StdOp, constMap ConstValueMap) returns bool
+	return match term 'term'
+		// Everything BEFORE the conditional branch in the union — the arith band. None is a terminator at
+		// all, so none can reach here; the arm exists because the match must be exhaustive.
+		const to mod gives false
+		condBranch(condId, thenBlockId, elseBlockId) gives foldCondBranch(module, block: block, termIdx: termIdx, condId: condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, constMap: constMap)
+		// Every other terminator — `branch`, `ret`, `retVoid`, `errorReturn`, `switch`, `osExit` — carries
+		// no condition to know. ⚠ `switch` is the one with a foldable SUBJECT (a constant index selects a
+		// fixed arm); it is a jump-table fold, not a branch fold, and is left for the rung that takes it.
+		branch to osSetEvent gives false
+	end 'term'
+end 'foldConstantBranchIn'
+
+// ⚠ **A `condBranch` WHOSE TWO TARGETS ARE THE SAME BLOCK IS REFUSED.** Both edges name that block, and
+// after the rewrite exactly one of them must survive — but which one is a question about the ARGUMENTS
+// each arm passes to the successor's phis, and an edge carries no arm label to tell them apart. v1's
+// `Canonicalize` folds this shape on the reading that a dead predicate makes the arms equivalent; that is
+// true of the DCE-collapsed condBr it was written for and is NOT true in general, so shv2 declines rather
+// than pick an arm by position. (Nothing in the corpus produces it: the parser mints a distinct block per
+// arm.)
+function foldCondBranch(module StdModule, block IrBlock, termIdx OpIndex, condId ValueId, thenBlockId BlockId, elseBlockId BlockId, constMap ConstValueMap) returns bool
+	if thenBlockId == elseBlockId 'oneTargetTwoEdges'
+		return false
+	end 'oneTargetTwoEdges'
+
+	if not constMap.contains(condId) 'conditionNotKnown'
+		return false
+	end 'conditionNotKnown'
+
+	// The condition is an i1 the `cmp` fold above wrote as 0 or 1, or a literal `true`/`false` the parser
+	// materialized. Anything non-zero takes the then-arm, which is what `condBranch` means.
+	let conditionHolds = constMap.constantOf(condId) != ConditionIsFalse
+	let taken = thenBlockId if conditionHolds else elseBlockId
+	let dropped = elseBlockId if conditionHolds else thenBlockId
+
+	try module.ops.set(termIdx, value: StdOp.branch(taken)) otherwise panic("foldConstants: ops.set OOB at terminator index {termIdx}")
+	block.branchEdges = edgesWithoutTarget(block.branchEdges, droppedTarget: dropped)
+
+	logTrace(LogCategory.ir, message: function() gives "foldConstants: condBranch on a constant -> branch block_{taken} (block_{dropped} loses this predecessor)")
+
+	return true
+end 'foldCondBranch'
+
+// The i1 payload a FALSE condition carries. Named because it is a fact about the bool encoding
+// (`TypeRules.boolPayload`) rather than a number that happens to appear here.
+let ConditionIsFalse = 0 as ParsedInt
+
+// `edges` without the ONE edge to `droppedTarget` — the arm the fold made unreachable from this block.
+//
+// ⚠ A FRESH ARRAY, NEVER AN IN-PLACE REMOVAL. `IrBlock`'s header states the rule and the reason: the phi
+// arrays are SHARED all the way back into the parse memo, so mutating one corrupts every later compile of
+// the project, and nothing downstream re-reads the Maxon or Std phi model to catch it.
+//
+// It removes at most ONE edge even though `branchEdges` is not keyed — a block records an edge per
+// successor that CARRIES PHIS, so the not-taken target has either one edge here or none (the same-target
+// case, where it could have two, is refused by `foldCondBranch`).
+function edgesWithoutTarget(edges BranchEdgeArray, droppedTarget BlockId) returns BranchEdgeArray
+	var kept = BranchEdgeArray.create()
+	var alreadyDropped = false
+
+	for edge in edges 'eachEdge'
+		if not alreadyDropped and edge.targetBlockId == droppedTarget 'theNotTakenEdge'
+			alreadyDropped = true
+			continue
+		end 'theNotTakenEdge'
+
+		kept.push(edge)
+	end 'eachEdge'
+
+	return kept
+end 'edgesWithoutTarget'
+
+// ⭐⭐ **DROP EVERY BLOCK THIS FUNCTION CAN NO LONGER REACH — AND THIS PASS MUST DO IT ITSELF, WHICH IS
+// NOT WHAT THE ROW'S PLAN SAID.** The plan was to leave dead-block removal to `EC11`'s Target-tier
+// `dropUnreachableBlocks`, exactly as v1's `Canonicalize` leaves it to v1's DCE. **MEASURED 2026-08-28:
+// that breaks the register allocator**, on `match x` over a constant subject
+// (`specs-shv2/match-statements.md` `match-statements.function-call`):
+//
+//     panic at RegisterAllocator.maxon:1504: seedInUse: value 18 is live-in to block 11 but was never
+//     colored — a use dominates its def (structured-layout invariant broken)
+//
+// ⇒ **THE HAZARD IS NOT THE UNREACHABLE BLOCK. IT IS AN UNREACHABLE BLOCK THAT FEEDS A PHI.** Before
+// this pass, the only unreachable Std blocks were the parser's `dead` continuations, which have no
+// predecessor AND no branch edge — so nothing downstream had ever met one that passed a value to a live
+// block's `blockArgs`. Folding a `condBranch` makes one: the arm not taken keeps its edge into the merge
+// block, and the value it passes is defined in code no path reaches. `reorderFuncBlocksRpo` then APPENDS
+// every unreached block after the RPO ("they still hold ops that get emitted"), so that definition now
+// sits AFTER the merge block that uses it in layout order — which is precisely the structured-layout
+// invariant the allocator asserts. The allocator is right and the IR was wrong.
+//
+// ⇒ **A PASS THAT ORPHANS A BLOCK OWNS THE ORPHAN.** Removing it here removes its `branchEdges` with it,
+// which is the only thing that repairs the merge block's phi — nothing downstream can, because by the
+// time the allocator sees the function that edge looks exactly like a real one.
+//
+// It still composes with `EC11` rather than duplicating it: that pass drops what the TARGET tier
+// orphans — its own jump threading, and any block only unreachable once physical branches are elided —
+// which is a different set, discovered at a different time. This one is the Std tier's, and it runs only
+// on a function where a branch actually folded.
+//
+// Survivors keep their relative order, so nothing that depends on layout moves.
+//
+// ⚠ **A BLOCK WITH NO TERMINATOR OP FALLS THROUGH PHYSICALLY, AND THE OPS-DERIVED CFG CANNOT SEE THAT
+// EDGE** — `EC11`'s finding, restated here because this walk has the same hole and takes the same cure:
+// the physical edge is added explicitly, so dropping the block a live one falls into cannot silently
+// re-point it at whatever survived further down.
+function dropUnreachableBlocks(module StdModule, func IrFunction)
+	let blockCount = func.blockRefs.count()
+	if blockCount == 0 'noBlocks'
+		return
+	end 'noBlocks'
+
+	let byId = module.blockIndexById(func)
+	var reachable = BoolArray.create()
+	reachable.growFilled(blockCount, value: false)
+	var stack = BlockRefIndexArray.create()
+	var successors = BlockIdArray.create()
+
+	// The entry is position 0 and is reachable by definition — it is also the block that must stay
+	// first, which the ascending rebuild below preserves.
+	try reachable.set(0, value: true) otherwise panic("dropUnreachableBlocks: reachable.set OOB at the entry block")
+	stack.push(0)
+
+	while stack.count() > 0 'walk'
+		let position = try stack.pop() otherwise panic("dropUnreachableBlocks: stack.pop on a non-empty stack failed")
+		let blockRef = try func.blockRefs.get(position) otherwise panic("dropUnreachableBlocks: blockRefs.get OOB at {position}")
+		let block = try module.blocks.get(blockRef) otherwise panic("dropUnreachableBlocks: blockRef from func.blockRefs not in module.blocks")
+
+		successors.clear()
+		collectStdBlockSuccessorIds(module, block: block, out: successors)
+
+		for successorId in successors 'eachSucc'
+			markReachable(reachable, stack: stack, position: try byId.get(successorId) otherwise panic("dropUnreachableBlocks: block {successorId} is a branch target of this function but is not in its blockRefs"))
+		end 'eachSucc'
+
+		if not block.hasTerminatorOp() and position + 1 < blockCount 'fallsThroughPhysically'
+			markReachable(reachable, stack: stack, position: position + 1)
+		end 'fallsThroughPhysically'
+	end 'walk'
+
+	var kept = BlockRefArray.create()
+	for position in 0 upto blockCount 'eachBlock'
+		let survives = try reachable.get(position) otherwise panic("dropUnreachableBlocks: reachable.get OOB at {position}")
+		if survives 'keep'
+			kept.push(try func.blockRefs.get(position) otherwise panic("dropUnreachableBlocks: blockRefs.get OOB at {position}"))
+		end 'keep'
+	end 'eachBlock'
+
+	func.blockRefs = kept
+end 'dropUnreachableBlocks'
+
+// The worklist of `func.blockRefs` POSITIONS the reachability walk still owes a visit.
+typealias BlockRefIndexArray = Array with BlockRefIndex
+
+// Mark a block position reachable and queue it, once. Both columns are the caller's.
+function markReachable(reachable BoolArray, stack BlockRefIndexArray, position BlockRefIndex)
+	let seenBefore = try reachable.get(position) otherwise panic("markReachable: reachable.get OOB at {position}")
+	if seenBefore 'alreadySeen'
+		return
+	end 'alreadySeen'
+
+	try reachable.set(position, value: true) otherwise panic("markReachable: reachable.set OOB at {position}")
+	stack.push(position)
+end 'markReachable'
+
+// The block ids control can transfer to from `block` — its terminator's targets, appended to `out`.
+//
+// ⭐ **THREE ARMS NAME A SUCCESSOR AND EVERY OTHER OP NAMES NONE, WHICH IS AN ANSWER RATHER THAN A
+// DEFAULT.** An op that is not a branch either LEAVES THE FUNCTION (`ret`, `retVoid`, `errorReturn`) or
+// leaves the PROCESS (`osExit`, `osPanic`, `osPanicValue`) — in both cases control reaches no other
+// block of this function — or it is a body op that cannot be a terminator at all, which is
+// `IrModule.setTerminator`'s contract to keep and not this walk's to re-check. The question asked here
+// is "where can control go from here", and for every one of them the answer is "nowhere else".
+//
+// The Target tier's twin is `TargetLiveness.collectBlockSuccessorIds`, and the two cannot be shared: a
+// Target block's second successor is a `jcc` BODY op (`block.condBranch`), while a Std block's whole
+// exit is its one terminator.
+function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out BlockIdArray)
+	if not block.hasTerminatorOp() 'noTerminatorOp'
+		return
+	end 'noTerminatorOp'
+
+	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("collectStdBlockSuccessorIds: the terminator of block {block.id} is not in module.ops")
+	match op 'term'
+		const to mod then break 'term'
+		condBranch(_, thenBlockId, elseBlockId) then pushBothTargets(out, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
+		branch(targetBlockId) then out.push(targetBlockId)
+		ret to osFreePages then break 'term'
+		switch(_, denseTargetBlockIds, defaultBlockId) then pushSwitchTargets(out, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
+		witnessCall to osSetEvent then break 'term'
+	end 'term'
+end 'collectStdBlockSuccessorIds'
+
+// A conditional branch's two targets. A helper because a `match` arm is ONE statement and both edges
+// have to be recorded — the same shape `insertUsePair` takes for a two-operand op.
+function pushBothTargets(out BlockIdArray, thenBlockId BlockId, elseBlockId BlockId)
+	out.push(thenBlockId)
+	out.push(elseBlockId)
+end 'pushBothTargets'
+
+// A jump table's targets: every dense arm plus the default. Duplicates cost nothing — `markReachable`
+// answers once per position however many edges name it.
+function pushSwitchTargets(out BlockIdArray, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId)
+	for targetBlockId in denseTargetBlockIds 'eachArm'
+		out.push(targetBlockId)
+	end 'eachArm'
+
+	out.push(defaultBlockId)
+end 'pushSwitchTargets'

@@ -107,10 +107,18 @@ union PassKind
 	// self-sustaining dead phis first) and before `foldConstOperands`, whose const DCE can then
 	// drop a `const` whose only reader was a folded phi's edge.
 	//
+	// `foldConstants` EVALUATES `const <op> const`, replacing the arithmetic with the answer and
+	// turning a `condBranch` on a known constant into an unconditional `branch`. It runs AFTER BOTH
+	// INLINERS, which is the whole reason it is a Std pass rather than a parser one: `2 + 3 * 4` is
+	// already settled at parse time, and what is NOT is the constant a literal argument makes of a
+	// callee's parameter. It runs BEFORE `foldConstOperands` so a constant it could not fold — one
+	// operand live — still reaches the operand rewrite and becomes an immediate there.
+	//
 	// `foldConstOperands` moves a const operand into an immediate so the literal never
 	// needs a register.
 	pruneDeadBlockArgs
 	elimTrivialBlockArgs
+	foldConstants
 	foldConstOperands
 	// Phase 3.6: Std → Std ESCAPE ANALYSIS + STACK PROMOTION (`PromoteStackRecords`).
 	//
@@ -163,6 +171,7 @@ function classifyPass(pass PassKind) returns PassClassification
 		inlineManagedPrimitives gives PassClassification.perFunction
 		pruneDeadBlockArgs gives PassClassification.perFunction
 		elimTrivialBlockArgs gives PassClassification.perFunction
+		foldConstants gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
 		// The one whole-module Std pass: the constructor table and the parameter-escape summary are facts
 		// about the CALL GRAPH, and a call site cannot be judged without the callee's row.
@@ -186,6 +195,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		inlineManagedPrimitives gives CompilePhase.inlineManagedPrimitives
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
+		foldConstants gives CompilePhase.foldConstants
 		foldConstOperands gives CompilePhase.foldConstOperands
 		promoteStackRecords gives CompilePhase.promoteStackRecords
 	end 'phase'
@@ -203,6 +213,7 @@ function passKindToString(pass PassKind) returns String
 		inlineManagedPrimitives gives "inlineManagedPrimitives"
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
+		foldConstants gives "foldConstants"
 		foldConstOperands gives "foldConstOperands"
 		promoteStackRecords gives "promoteStackRecords"
 	end 'name'
@@ -247,6 +258,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.inlineManagedPrimitives)
 	passes.push(PassKind.pruneDeadBlockArgs)
 	passes.push(PassKind.elimTrivialBlockArgs)
+	passes.push(PassKind.foldConstants)
 	passes.push(PassKind.foldConstOperands)
 	passes.push(PassKind.promoteStackRecords)
 	return passes
@@ -405,6 +417,9 @@ export type PassPipeline
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
+			// The whole module, and no start index: see `foldConstants`' own header for why the appended
+			// runtime band has nothing for it to fold.
+			foldConstants then foldConstants(self.stdModule)
 			// From function 0 — the whole module, which is everything that EXISTS at this point. The pass's
 			// other caller is `Compiler.compileToCodeResult`, which runs it a second time over the band the
 			// runtime installs append below the pipeline; see `foldConstOperands`' own header.

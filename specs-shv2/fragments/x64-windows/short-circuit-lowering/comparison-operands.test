@@ -22,47 +22,31 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 4
-    x64.movRegImm32 rcx, 0
-    x64.movRegImm32 rdx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.movRegImm32 rsi, 0
-    x64.jcc lessEqual, scmerge#2
+    x64.movRegImm32 rax, 0
   andrhs#1:
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg greater, rsi
+    x64.movRegImm32 rcx, 0
   scmerge#2:
-    x64.cmpRegImm32 rsi, 0
+    x64.cmpRegImm32 rcx, 0
     x64.jcc equal, ifcont#4
   both:
-    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.movRegImm32 rax, 1
   ifcont#4:
-    x64.cmpRegImm32 rax, 0
-    x64.movRegImm32 rsi, 1
-    x64.jcc greater, scmerge#6
-  orrhs:
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg greater, rsi
+    x64.movRegImm32 rcx, 1
   scmerge#6:
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, ifcont#8
-  either:
-    x64.leaRegRegImm32 rdx, rdx, 2
-  ifcont#8:
-    x64.cmpRegImm32 rax, 0
-    x64.movRegImm32 rax, 0
-    x64.jcc lessEqual, scmerge#10
-  andrhs#9:
     x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rax
+    x64.jcc equal, andrhs#9
+  either:
+    x64.leaRegRegImm32 rax, rax, 2
+  andrhs#9:
+    x64.movRegImm32 rcx, 1
   scmerge#10:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 rcx, 0
     x64.jcc equal, critsplit
   mixed:
-    x64.leaRegRegImm32 r8, rdx, 4
+    x64.leaRegRegImm32 r8, rax, 4
     x64.jmp ifcont#12
   critsplit:
-    x64.movRegReg r8, rdx
+    x64.movRegReg r8, rax
   ifcont#12:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic

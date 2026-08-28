@@ -113,45 +113,13 @@ func @shrLowByte {
     x64.ret
 }
 
-func @bits {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rcx, 63
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+  __rc_ok#10:
     x64.movRegImm32 rcx, 10
-  __il_body#9:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow#12
-  __rc_chk#11:
-    x64.cmpRegImm32 rcx, 63
-    x64.jcc lessEqual, __il_body#13
-  __il_slow#12:
-    x64.callDirect bits
-    x64.movRegReg rcx, r8
   __il_body#13:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow#16
@@ -167,23 +135,14 @@ func @main {
     x64.movRegReg r8, rax
   __il_cont#7:
     x64.cmpRegImm32 r8, 204800
-    x64.jcc equal, ifcont#2
+    x64.jcc equal, __rc_ok#20
   tenBits:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#2:
+  __rc_ok#20:
     x64.movRegImm32 rcx, 56
-  __il_body#19:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow#22
-  __rc_chk#21:
-    x64.cmpRegImm32 rcx, 63
-    x64.jcc lessEqual, __il_body#23
-  __il_slow#22:
-    x64.callDirect bits
-    x64.movRegReg rcx, r8
   __il_body#23:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow#26
@@ -198,27 +157,16 @@ func @main {
     x64.shlRegCl rax, rax
     x64.movRegReg r8, rax
   __il_cont#17:
-    x64.movRegImm32 rax, 0
-    x64.movRegImm rcx, 72057594037927936
-    x64.subRegReg rax, rax, rcx
+    x64.movRegImm rax, 18374686479671623680
     x64.cmpRegReg r8, rax
-    x64.jcc equal, ifcont#4
+    x64.jcc equal, __rc_ok#30
   topByte:
     x64.movRegImm32 r8, 2
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#4:
+  __rc_ok#30:
     x64.movRegImm32 rcx, 3
-  __il_body#29:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow#32
-  __rc_chk#31:
-    x64.cmpRegImm32 rcx, 63
-    x64.jcc lessEqual, __il_body#33
-  __il_slow#32:
-    x64.callDirect bits
-    x64.movRegReg rcx, r8
   __il_body#33:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow#36
@@ -234,13 +182,13 @@ func @main {
     x64.movRegReg r8, rax
   __il_cont#27:
     x64.cmpRegImm32 r8, 25
-    x64.jcc equal, ifcont#6
+    x64.jcc equal, ifcont
   shrByte:
     x64.movRegImm32 r8, 3
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#6:
+  ifcont:
     x64.movRegImm32 r8, 42
     x64.epilogue 32
     x64.popReg rbp

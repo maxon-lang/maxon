@@ -50,28 +50,36 @@ runtime builder spells a comparison against a literal as an `emitConst` and a `c
 exactly the unfolded form — one materialized immediate and one register held for it, in bodies every
 array program links.
 
+### Why the left operand is read out of an array
+
+Every case below reads `x` back out of a one-element array rather than naming a literal, and that
+is what makes the eight identity cases pin an identity at all. A `binOpImm` whose LEFT operand is
+also constant is not an identity to recognise — it is arithmetic to EVALUATE, and `foldConstants`
+(EC12) evaluates it one pass earlier, leaving a single `mov` in which nothing about this pass is
+visible.
+
+⛔ **`x` USED TO BE THE RETURN OF A ONE-LINE `opaque(n)` HELPER, THROUGH TWO REASONS THAT BOTH
+EXPIRED.** The first was that a call keeps the PARSER's constant folder off the expression, which is
+true and was never sufficient. The second was written down when EC5 falsified the first: `opaque` is
+a tiny leaf, so `inlineLeaves` splices it in and the operand IS a `const` by the time this pass
+runs — and the case was kept on the reading that the Std tier has no constant propagation, so the
+`const` could only ever become an IMMEDIATE. EC12 is that reading expiring. What replaces the call
+is a MEMORY READ, because that rests on a rule the compiler STATES rather than on any pass's current
+policy: a load's result is never a compile-time constant, however constant the initializer looks,
+since any store since could have replaced it (`FoldConstOperands.classifyFoldableDef`, memory band).
+The `try … otherwise` merge makes the value a phi as well, which no constant domain here looks
+through either.
+
 ## Tests
 
 <!-- test: multiply-by-one-is-the-value -->
-`x * 1`. The operand is written as a CALL, which is what keeps the PARSER's own constant folder off
-it: that folder settles `const * const` at the source level, and a case it could settle would pin the
-parser rather than this pass.
-
-⚠ **"NOTHING UPSTREAM OF THE FOLD CAN SEE THE VALUE" IS NO LONGER WHY, AND HAS NOT BEEN SINCE EC5.**
-`opaque` is a tiny leaf, so `inlineLeaves` splices its body into `main` before this pass runs and the
-operand IS a `const` by the time `foldConstOperands` sees it. What the call still buys is the half
-that matters: the fold under test is a **Std-tier** identity (`binOpImm` whose immediate is its
-opcode's identity element), and it is still the only thing that removes the op — the Std tier has no
-constant propagation, so a `const` operand folds into an IMMEDIATE here and nowhere else. The case
-pins the same rule it always did; only the sentence explaining the shape had stopped being true.
+`x * 1`.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return (opaque(37) * 1) as ExitCode
+	let cell = [37]
+	let x = try cell.get(0) otherwise 0
+	return (x * 1) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -82,12 +90,10 @@ end 'main'
 `x + 0`.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return (opaque(37) + 0) as ExitCode
+	let cell = [37]
+	let x = try cell.get(0) otherwise 0
+	return (x + 0) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -99,12 +105,10 @@ end 'main'
 `sub` does not commute. `0 - x` is a negation and is left exactly where it is.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return (opaque(37) - 0) as ExitCode
+	let cell = [37]
+	let x = try cell.get(0) otherwise 0
+	return (x - 0) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -118,12 +122,10 @@ TRUNCATION and a different question — and it never reaches the rule, because a
 signed 32-bit immediate range keeps its register operand.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return (opaque(37) and -1) as ExitCode
+	let cell = [37]
+	let x = try cell.get(0) otherwise 0
+	return (x and -1) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -135,12 +137,10 @@ end 'main'
 about a sum.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return (opaque(37) or 0) as ExitCode
+	let cell = [37]
+	let x = try cell.get(0) otherwise 0
+	return (x or 0) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -151,12 +151,10 @@ end 'main'
 `x xor 0` — and an all-zero operand flips none.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return (opaque(37) xor 0) as ExitCode
+	let cell = [37]
+	let x = try cell.get(0) otherwise 0
+	return (x xor 0) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -168,12 +166,10 @@ end 'main'
 the `cl` form can never disagree — the hardware's mask is a no-op on it.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return (opaque(37) shl 0) as ExitCode
+	let cell = [37]
+	let x = try cell.get(0) otherwise 0
+	return (x shl 0) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -186,12 +182,10 @@ in, so the identity holds on a negative value too; the case returns a non-negati
 `ExitCode` cannot carry the other.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return (opaque(37) shr 0) as ExitCode
+	let cell = [37]
+	let x = try cell.get(0) otherwise 0
+	return (x shr 0) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -204,12 +198,10 @@ the fold to see through ITSELF: the `add`'s operand is the `mul`'s result, which
 the same walk. Both go, and the golden below is where that shows.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return ((opaque(37) * 1) + 0) as ExitCode
+	let cell = [37]
+	let x = try cell.get(0) otherwise 0
+	return ((x * 1) + 0) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -222,12 +214,10 @@ what makes the eight cases above evidence that the IDENTITY is what was recognis
 immediates are being dropped.
 
 ```maxon
-function opaque(n int) returns int
-	return n
-end 'opaque'
-
 function main() returns ExitCode
-	return ((opaque(18) * 2) + 1) as ExitCode
+	let cell = [18]
+	let x = try cell.get(0) otherwise 0
+	return ((x * 2) + 1) as ExitCode
 end 'main'
 ```
 ```exitcode

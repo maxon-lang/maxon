@@ -66,10 +66,6 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
-    x64.movRegImm32 r12, 0
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#15
   scope:
     x64.movRegImm32 rcx, 10
     x64.callDirect Node.create
@@ -82,9 +78,6 @@ func @main {
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.jmp ifcont
-  critsplit#15:
-    x64.movRegReg r13, r12
   ifcont:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -137,17 +130,10 @@ func @main {
     x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegImm32 rax, 0
-    x64.setccReg lessEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
+    x64.jcc lessEqual, __il_slow
   __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.imulRegRegImm32 rcx, rdx, 8
-    x64.leaRegRegReg rax, rax, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp __im_loaded
   __im_stride:
@@ -155,29 +141,23 @@ func @main {
     x64.jcc notEqual, __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegImm32 rax, 0
-    x64.setccReg lessEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
+    x64.jcc lessEqual, __il_slow
   __im_load#13:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded:
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#16
+    x64.jcc equal, critsplit#15
   __im_empty:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __il_slow
-  critsplit#17:
+  critsplit#16:
     x64.movRegReg rbx, rax
     x64.jmp __il_cont
-  critsplit#16:
+  critsplit#15:
     x64.movRegReg rbx, rax
     x64.jmp __il_cont
   __il_slow:

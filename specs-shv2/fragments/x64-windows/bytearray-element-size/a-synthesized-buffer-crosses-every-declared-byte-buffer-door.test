@@ -156,35 +156,11 @@ func @cwd {
     x64.ret
 }
 
-func @owned {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 4
-    x64.movRegImm32 rdx, 1
-    x64.callDirect __managed_mem_create
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @alwaysFails {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -292,7 +268,7 @@ func @main {
     x64.movRegReg r15, r8
     x64.storeSlotReg slot3, r15
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#10
+    x64.jcc equal, matchdefault
   tryerr#11:
     x64.movRegImm32 r15, 1
     x64.movRegReg rcx, r14
@@ -312,14 +288,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#10:
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchdefault
-  matcharm:
-    x64.callDirect owned
-    x64.movRegReg r13, r8
-    x64.jmp matchcont#14
   matchdefault:
     x64.movRegReg rcx, r15
     x64.callDirect __mm_incref

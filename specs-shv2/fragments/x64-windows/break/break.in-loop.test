@@ -18,19 +18,10 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rax, 0
-  whilehdr:
-    x64.movRegImm32 rcx, 1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit
   loop:
     x64.leaRegRegImm32 r8, rax, 1
     x64.cmpRegImm32 r8, 5
-    x64.jcc equal, whileexit
-  ifcont:
-    x64.movRegReg rax, r8
-    x64.jmp whilehdr
-  critsplit:
-    x64.movRegReg r8, rax
+    x64.jcc notEqual, ifcont
   whileexit:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
@@ -49,4 +40,7 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  ifcont:
+    x64.movRegReg rax, r8
+    x64.jmp loop
 }

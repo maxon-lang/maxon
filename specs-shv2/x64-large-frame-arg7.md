@@ -31,11 +31,20 @@ The self-hosted backend emits no `__chkstk` (it allocates even large frames with
 runs there, and still asserts that a seventh parameter survives the prologue — its GT stack guard
 does execute — but note the two lanes are guarding different things.
 
-The frame is forced past 4 KiB by 800 values that CANNOT be rematerialized: each is the result of a
-call, so it must occupy a stack slot rather than being re-derived from a constant. (Written as
-`let v = g + N`, the allocator simply re-emits the constant and the frame stays tiny — the test
-would then pass under any large-frame bug.) The result depends on parameter 7, so a clobbered RAX
-changes the answer: the pre-fix compiler returned 5568 — *the frame size itself*, read straight out
+The frame is forced past 4 KiB by 800 values the allocator does not rematerialize, so each occupies a
+stack slot. (Written as `let v = g + N`, the allocator simply re-emits the constant and the frame
+stays tiny — the test would then pass under any large-frame bug.)
+
+⚠ **THE REASON USED TO BE "each is the result of a CALL", AND THAT STOPPED BEING TRUE.** `opaque` is a
+tiny leaf, so `inlineLeaves` (EC5) splices it away and `foldConstants` (EC12) evaluates what is left:
+the golden now holds **9** `callDirect`s where it held 810, and 800 `movRegImm32`s where it held call
+results. **The frame survived anyway** — 6408 → 6344 bytes, with 788 `storeSlotReg`/`loadRegSlot`
+pairs — because shv2's allocator does not rematerialize a `const` across a spill. So the case still
+tests what it says it tests, and the golden's `x64.prologue 6344` is what says so; what changed is
+WHY the values are in slots. If a future rematerialization rung shrinks this frame below 4 KiB, this
+case needs a different source of pressure, not a smaller expectation.
+
+The result depends on parameter 7, so a clobbered RAX changes the answer: the pre-fix compiler returned 5568 — *the frame size itself*, read straight out
 of the register the prologue overwrote.
 
 **Targets: an x64-windows case ON ITS MERITS.** `__chkstk` is the Windows stack probe — Linux x64 grows

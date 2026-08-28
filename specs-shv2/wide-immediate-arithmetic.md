@@ -40,11 +40,22 @@ Every case below computes an answer the program checks, with a distinct exit cod
 check: a mis-materialised constant is a WRONG ANSWER, not a crash, and a raw wrong value
 could otherwise land on 0 by luck.
 
-### Why the operands come from a call
+### Why the left operand is read out of an array
 
-The left operand of every expression here is the return of `base()`, not a literal. A
-constant on BOTH sides folds in the parser and the arithmetic never reaches an immediate
-form at all — the test would then pin nothing about encoding.
+The left operand of every expression here is a value read back out of a one-element array,
+not a literal. A constant on BOTH sides is EVALUATED — by the parser when it is written as
+two literals, and by `foldConstants` (EC12) when inlining makes it one — and the arithmetic
+then never reaches an immediate form at all, so the test would pin nothing about encoding.
+
+⛔ **IT USED TO BE THE RETURN OF A ONE-LINE `base(p)` HELPER, AND THAT STOPPED WORKING.**
+`base` is a tiny leaf, so `inlineLeaves` (EC5) splices its body into the caller and the
+argument literal lands where the parameter was; `foldConstants` then evaluates the whole
+chain and every case below collapses to `return 0` — still GREEN, and pinning nothing. What
+replaces it is not another call but a MEMORY READ, because that rests on a rule the compiler
+states rather than on a pass's current inlining policy: a load's result is never a
+compile-time constant, however constant the initializer looks, since any store since could
+have replaced it (`FoldConstOperands.classifyFoldableDef`, memory band). The `try … otherwise`
+merge makes the value a phi as well, which no constant domain here looks through either.
 
 ### The scratch register is the risk, and it has to be one nothing else can hold
 
@@ -75,12 +86,9 @@ The plain 12-bit field and the first constant past it, on both `+` and `-`. `409
 largest immediate that encodes with no shift; `4096` is the first that needs the hi/lo
 split.
 ```maxon
-function base(p int) returns int
-	return p
-end 'base'
-
 function main() returns ExitCode
-	let x = base(1000)
+	let cell = [1000]
+	let x = try cell.get(0) otherwise 0
 	let addLo = x + 4095
 	if addLo != 5095 'addLo'
 		return 11
@@ -109,12 +117,9 @@ The top of the SHIFTED field and the top of the hi/lo pair — the last two cons
 still have an immediate form. `16773120` is `0xFFF000` (a shifted imm12 with an empty low
 half, so one instruction); `16777215` is `0xFFFFFF` (both halves live, so two).
 ```maxon
-function base(p int) returns int
-	return p
-end 'base'
-
 function main() returns ExitCode
-	let x = base(1000)
+	let cell = [1000]
+	let x = try cell.get(0) otherwise 0
 	let addShifted = x + 16773120
 	if addShifted != 16774120 'addShifted'
 		return 21
@@ -143,12 +148,9 @@ The first constant with NO arm64 immediate form (`16777216` = `0x1000000`), and 
 past it (`1000000007`, which needs three halfwords of the `movz`/`movk` ladder). Both must
 go through the scratch and the register form.
 ```maxon
-function base(p int) returns int
-	return p
-end 'base'
-
 function main() returns ExitCode
-	let x = base(1000)
+	let cell = [1000]
+	let x = try cell.get(0) otherwise 0
 	let addFirst = x + 16777216
 	if addFirst != 16778216 'addFirst'
 		return 31
@@ -188,12 +190,9 @@ selector must not DEPEND on that**: its own predicate reads the magnitude, and
 form" and materialises either way. Both halves are checked here precisely so the answer is
 pinned on both sides of a boundary that lives in another file for another target's reason.
 ```maxon
-function base(p int) returns int
-	return p
-end 'base'
-
 function main() returns ExitCode
-	let x = base(1000)
+	let cell = [1000]
+	let x = try cell.get(0) otherwise 0
 	let addNeg = x + -1000000007
 	if addNeg != -999999007 'addNeg'
 		return 41
@@ -234,10 +233,6 @@ between a ladder and the `add` that reads it would overwrite the constant, givin
 SUM rather than a crash. `p = 0`: `k1`..`k30` are `1`..`30` (sum 465), and the four wide
 values are `1000000007`, `1000000009`, `2000000011` and `2000000013` (sum 6000000040). Total 6000000505.
 ```maxon
-function base(p int) returns int
-	return p
-end 'base'
-
 function pressure(p int) returns int
 	let k1 = p + 1
 	let k2 = p + 2
@@ -277,7 +272,8 @@ function pressure(p int) returns int
 end 'pressure'
 
 function main() returns ExitCode
-	let total = pressure(base(0))
+	let cell = [0]
+	let total = pressure(try cell.get(0) otherwise 0)
 	if total != 6000000505 'total'
 		return 51
 	end 'total'
@@ -294,12 +290,9 @@ loop-carried values' live ranges rather than in straight-line code. `acc` starts
 takes `+ 1000000007` three times, and `i` counts with a small immediate beside it — the two
 bands in one block. `3 * 1000000007 = 3000000021`.
 ```maxon
-function base(p int) returns int
-	return p
-end 'base'
-
 function main() returns ExitCode
-	var acc = base(0)
+	let cell = [0]
+	var acc = try cell.get(0) otherwise 0
 	var i = 0
 	while i < 3 'loop'
 		acc = acc + 1000000007

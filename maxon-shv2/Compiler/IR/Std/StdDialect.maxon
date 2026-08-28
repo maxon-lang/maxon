@@ -2270,6 +2270,111 @@ end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
 
+// ⭐⭐ **WHICH OF THE TWO BINARY ARITHMETIC SHAPES AN OP CARRIES — ONE ROSTER, READ BY BOTH
+// ARITHMETIC REWRITE PASSES.** `foldConstOperands` (move a const OPERAND into an immediate) and
+// `foldConstants` (EVALUATE `const <op> const`) act on exactly the same two variants and no others:
+// `binOp` and `cmp`. Each used to open with its own exhaustive `StdOp` match whose every other arm
+// answered "unchanged" — the same set, enumerated twice, in two files that would learn about a new
+// variant separately. This is that enumeration, once.
+//
+// ⚠ **THE OTHER TWO ARITH VARIANTS ARE DELIBERATELY NOT SUBJECTS.** `binOpImm`/`cmpImm` carry an
+// IMMEDIATE rather than a second value operand, so neither pass's question ("are BOTH operands
+// constant?") is even askable of one; `div`/`mod` are `isPure: false` — they trap — and no fold may
+// remove them. Both facts are stated at the arms below rather than left to the range that covers them.
+//
+// A caller-owned RECORD, never a returned union, for `StdFoldableDef`'s measured reason: a
+// payload-bearing union heap-boxes EVERY case including the payload-free ones, and this sits on a
+// path walked once per op in the module.
+export enum StdBinaryShape
+	// Neither a `binOp` nor a `cmp`: no binary arithmetic rewrite applies.
+	neither
+	// A `binOp` — `opcode` and `operandType` are meaningful, `pred` is not.
+	binaryArith
+	// A `cmp` — `pred` and `operandType` are meaningful, `opcode` is not.
+	comparison
+end 'StdBinaryShape'
+
+export type StdBinaryOperands
+	// ⚠ **THE FIELDS BELOW ARE MEANINGLESS UNTIL `shape` SAYS WHICH OF THEM THE LAST classification
+	// FILLED**, and none may be read as a sentinel — ValueId 0 is a real value, `StdBinOpcode.add` is a
+	// real opcode and `StdCmpPred.eq` a real predicate. Every reader asks a `shape` predicate first.
+	var shape as StdBinaryShape
+	export var resultId as ValueId
+	export var lhs as ValueId
+	export var rhs as ValueId
+	// `binaryArith` only.
+	export var opcode as StdBinOpcode
+	// `comparison` only.
+	export var pred as StdCmpPred
+	// Set by BOTH shapes: it is the type the operation READS, and it is what tells either pass whether
+	// this is float arithmetic (which neither may touch — see each pass's own float guard).
+	export var operandType as StdType
+
+	export static function create() returns StdBinaryOperands
+		return Self{shape: StdBinaryShape.neither, resultId: 0, lhs: 0, rhs: 0, opcode: StdBinOpcode.add, pred: StdCmpPred.eq, operandType: StdType.i64}
+	end 'create'
+
+	function recordNeither()
+		self.shape = StdBinaryShape.neither
+	end 'recordNeither'
+
+	// The parameters are named for the ROLE rather than for the field, because a local that shadows a
+	// `self` field is E3006 — see the diagnostic's own wording on why the compiler refuses it.
+	function recordBinOp(defined ValueId, left ValueId, right ValueId, binOpcode StdBinOpcode, readType StdType)
+		self.shape = StdBinaryShape.binaryArith
+		self.resultId = defined
+		self.lhs = left
+		self.rhs = right
+		self.opcode = binOpcode
+		self.operandType = readType
+	end 'recordBinOp'
+
+	function recordCmp(defined ValueId, left ValueId, right ValueId, cmpPred StdCmpPred, readType StdType)
+		self.shape = StdBinaryShape.comparison
+		self.resultId = defined
+		self.lhs = left
+		self.rhs = right
+		self.pred = cmpPred
+		self.operandType = readType
+	end 'recordCmp'
+
+	export function isBinaryArith() returns bool
+		return self.shape == StdBinaryShape.binaryArith
+	end 'isBinaryArith'
+
+	export function isComparison() returns bool
+		return self.shape == StdBinaryShape.comparison
+	end 'isComparison'
+end 'StdBinaryOperands'
+
+// Fill `operands` with the binary arithmetic shape `op` carries. Exhaustive over StdOp, no bare
+// `default`.
+//
+// ⚠ The last arm is pinned to the union's CURRENT LAST variant, so a variant APPENDED at the end
+// (the rule `StdOp`'s header states) falls outside every arm and is a COMPILE ERROR here rather
+// than a silently-missed classification.
+export function classifyBinaryOperands(op StdOp, operands StdBinaryOperands)
+	match op 'b'
+		const then operands.recordNeither()
+		binOp(resultId, lhs, rhs, opcode, operandType) then operands.recordBinOp(resultId, left: lhs, right: rhs, binOpcode: opcode, readType: operandType)
+		// One operand, so no binary rewrite has anything to pair. (An arithmetic pass that grows a
+		// unary fold gives this record a third shape; it does not get a second roster.)
+		unaryOp then operands.recordNeither()
+		cmp(resultId, lhs, rhs, pred, operandType) then operands.recordCmp(resultId, left: lhs, right: rhs, cmpPred: pred, readType: operandType)
+		// Everything from the IMMEDIATE forms to the end of the union. Three bands are worth naming,
+		// because each is excluded for its OWN reason rather than by falling off the end of the list:
+		//   • `binOpImm`/`cmpImm` — the rhs is an ENCODED IMMEDIATE, not a value operand, so there is no
+		//     second operand for either pass to ask about. (They are also what `foldConstOperands`
+		//     PRODUCES, which is why it cannot want them as input.)
+		//   • `div`/`mod` — `isPure: false`. x64 `idiv` faults on a zero divisor and on `i64.min / -1`,
+		//     so they may be neither folded away nor dropped when unread; they are not a rewrite subject
+		//     at any tier of this compiler.
+		//   • everything else — terminators, calls, memory and the OS band define call returns, kernel
+		//     answers and addresses, none of which is a binary arithmetic shape at all.
+		binOpImm to osSetEvent then operands.recordNeither()
+	end 'b'
+end 'classifyBinaryOperands'
+
 // The set of value ids a function's ops READ. Every Std-tier pass that asks "does anything
 // still read this value?" — the const DCE, the dead-block-arg prune, the trivial-block-arg
 // elimination — reads it from `collectStdOpUses` below rather than re-matching the union, so a

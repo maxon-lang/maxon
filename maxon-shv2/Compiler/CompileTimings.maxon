@@ -331,6 +331,18 @@ export enum CompilePhase
 	// `prologueEpilogue` and `encode` see fewer blocks and fewer ops. Billed into `regalloc`, the cost
 	// and the saving would net off inside one number and neither would be readable.
 	branchCleanup
+	// The `const <op> const` evaluation (`foldConstants`, EC12). APPENDED HERE rather than beside the Std
+	// passes it runs among, for this enum's own reason — the ordinals are the `.metrics.tsv` wire format
+	// every trend row ever written is indexed by, so a member slotted into the middle would re-attribute
+	// every historical measurement to the wrong phase.
+	//
+	// Its OWN row rather than a slice of `foldConstOperands`, which it runs immediately before, because
+	// the two answer different questions and scale with different things: the operand fold's cost tracks
+	// the number of const OPERANDS, and this one's tracks the number of const EXPRESSIONS, which is what
+	// every future inlining win increases. It is also the one Std pass whose cost is expected to be paid
+	// back by the phases after it — `regalloc`, `isel` and `encode` see fewer ops and a narrower live set
+	// — and billed into a neighbour the cost and the saving would net off inside one number.
+	foldConstants
 end 'CompilePhase'
 
 // Per-compile timing state, owned by `Project` (which is already threaded through

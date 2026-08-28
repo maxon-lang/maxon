@@ -47335,8 +47335,15 @@ export type Parser
 	end 'emitBinOpOverCheckedOperands'
 
 	// Fold, when the parser holds both operands — so `x shl 63 + 1` is a count of 64 and not an unknown.
-	// RECORDED, not rewritten: this compiler emits the `add` either way (see FoldConstOperands' header on
-	// why `foldConstants` is deferred).
+	// RECORDED, not rewritten: the fold's answer lands in the parser's CONSTANT DOMAIN, where diagnostics
+	// read it, and the `add` is emitted either way.
+	//
+	// ⭐⭐ **AND THE Std TIER NOW REWRITES, THROUGH THIS SAME EVALUATOR (EC12).** `foldConstants`
+	// (`IR/Std/FoldConstants.maxon`) evaluates `const <op> const` and replaces the op — the expressions
+	// INLINING makes constant, which this site never sees because at parse time they were parameters. It
+	// calls `foldIntBinOp`/`evalShift`/`foldIntCompare` rather than carrying its own arithmetic, and it
+	// says at length why: a second answer to "what does `const <op> const` evaluate to" is this project's
+	// signature bug, and the paragraph below is this compiler having already paid for it once.
 	//
 	// It reads the ORIGINAL ids, not the promoted ones, and it cannot confuse the two: the gate is
 	// `tagIsInteger(resultTag)`, and a promotion happens only when the result is a float — so on every path

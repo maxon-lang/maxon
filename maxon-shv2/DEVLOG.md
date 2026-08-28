@@ -346,7 +346,10 @@ The design each milestone establishes is documented in
   in, all codegen-neutral — notably `maxPressure` now counts the reuse-copy `+1` transient (input outlives +
   another operand dies → `{lhs,rhs,dest}` simultaneously live), keeping the exact-χ the E5001 contract needs
   (same class as M5.1's dead-phi correction). Deferred `foldConstants` (const⊕const) — it would collapse the
-  test programs to `mov r8,k` and erase the codegen the fragments exist to show. 37/37.
+  test programs to `mov r8,k` and erase the codegen the fragments exist to show. 37/37. ⚠ **THAT DEFERRAL
+  IS CLOSED (EC12, 2026-08-28).** Goldens became REFERENCE rather than a gate on 2026-08-27, so the reason
+  expired; `foldConstants` is scheduled between `elimTrivialBlockArgs` and this pass, and the specs whose
+  SUBJECT was the emitted arithmetic were rewritten to take a runtime operand rather than a literal.
 - [x] **M5.4** integer `/` and `mod` (`ca57bf63b`) — the **first hard fixed-register constraint**. `StdOp.div`/
   `mod` (own variants, `isPure: false` — `idiv` traps), x64 `mov rax,dividend; cqo; idivReg divisor; mov
   result, rax|rdx`; new `cqo`/`idivReg` TargetOps carrying implicit RAX/RDX masks. The divisor is kept out of

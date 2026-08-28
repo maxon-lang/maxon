@@ -14,38 +14,11 @@ end 'main'
 ---
 ExitCode: 0
 ---
-func @maybeFatal {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, ifcont
-  y:
-    x64.movRegImm32 r8, 5
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 1
-  __il_body:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_cont
-  __il_slow:
-    x64.callDirect maybeFatal
   __il_cont:
     x64.leaRegRdata rcx, [rip + __str_rec_2]
     x64.callDirect print

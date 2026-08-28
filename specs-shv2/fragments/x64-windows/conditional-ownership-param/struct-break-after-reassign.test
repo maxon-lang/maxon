@@ -57,12 +57,10 @@ func @pick {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegReg rbx, rdx
     x64.callDirect __mm_retain
     x64.movRegReg r12, r8
-    x64.movRegImm32 r13, 0
   whilehdr:
     x64.cmpRegImm32 rbx, 0
     x64.jcc lessEqual, critsplit
@@ -72,7 +70,6 @@ func @pick {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.leaRegRegImm32 rax, r13, 1
     x64.movRegReg rcx, rbx
     x64.jmp whileexit
   critsplit:
@@ -81,8 +78,7 @@ func @pick {
     x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

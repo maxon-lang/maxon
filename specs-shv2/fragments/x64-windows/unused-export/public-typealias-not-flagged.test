@@ -19,49 +19,12 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @consumeAlias {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rcx, 100
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @entry {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 42
-  __il_body:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow
-  __rc_chk:
-    x64.cmpRegImm32 rcx, 100
-    x64.jcc lessEqual, __rc_ok
-  __il_slow:
-    x64.callDirect consumeAlias
-    x64.jmp __il_cont
-  __rc_ok:
-    x64.movRegReg r8, rcx
+    x64.movRegImm32 r8, 42
   __il_cont:
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

@@ -54,8 +54,7 @@ func @callA {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, ifcont
   c:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -73,8 +72,7 @@ func @callB {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, ifcont
   c:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -95,29 +93,18 @@ func @main {
     x64.callDirect callA
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryblkerr
+    x64.jcc notEqual, matcharm
   tryblkok#2:
     x64.movRegImm32 rcx, 0
     x64.callDirect callB
     x64.leaRegRegImm32 rax, r10, 1
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryblkok#3
-  tryblkerr:
-    x64.movRegImm32 rax, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext
-  matcharm#4:
+  matcharm:
     x64.movRegImm32 rax, 44
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchdead
-  matcharm#5:
-    x64.movRegImm32 rax, 33
   matchcont:
     x64.movRegReg r8, rax
     x64.jmp tryblkcont
-  matchdead:
   tryblkok#3:
     x64.leaRegRegReg r8, rbx, r8
   tryblkcont:

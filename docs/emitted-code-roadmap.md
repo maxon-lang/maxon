@@ -37,7 +37,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | Managed-primitive inlining | ✅ `InlineManagedPrimitives` (EC1) | ❌ n/a | ❌ n/a |
 | Const **operand** → immediate | ✅ `FoldConstOperands` | ◑ imm8/imm32 encodings only | ✅ `Canonicalize` |
 | Algebraic identity (`x+0`, `x*1`) | ✅ `FoldConstOperands` move 3 | ✅ `TryAlgebraicIdentity` | ✅ `Canonicalize` |
-| **Constant folding (`const ⊕ const`)** | ❌ **explicitly DEFERRED** | ❌ | ✅ `Canonicalize` |
+| **Constant folding (`const ⊕ const`)** | ✅ `FoldConstants` (EC12) | ❌ | ✅ `Canonicalize` |
 | **CSE / GVN** | ❌ | ❌ | ✅ `CommonSubexpressionElimination.maxon` (494) |
 | **LICM** | ❌ | ◑ refcount pairs only | ✅ `LoopInvariantCodeMotion.maxon` (596) |
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* | ✅ `DeadStoreEliminationPass` sub-pass 3 | ✅ `DeadCodeElimination.maxon` (728) |
@@ -206,6 +206,44 @@ Rewrite those to take a runtime input — strictly better testing, and the
 for *both* operators — the constant folder disagreeing with the language it folds for. Every fold
 must agree with the emitted instruction on every edge case; `i64.min / -1` and division by zero
 **trap** (`isPure: false`) and must not be folded away.
+
+✅ **LANDED 2026-08-28** as `maxon-shv2/Compiler/IR/Std/FoldConstants.maxon`, scheduled in
+`buildLoweringPasses` between `elimTrivialBlockArgs` and `foldConstOperands` — after BOTH inliners,
+which is what makes the post-inline constants visible, and before the operand rewrite so a constant it
+declines still becomes an immediate. `scripts/emitted-code-count.py`, committed corpus, before → after:
+
+| | ops | imul-imm | imul-pow2 | idiv |
+|---|---|---|---|---|
+| nbody | 9,504 → **9,481** | 45 → **40** | 41 → **37** | 8 → 8 |
+| fannkuch-redux | 2,567 → **2,458** | 33 → **24** | 33 → **24** | 3 → 3 |
+| cse2 | 75 → **67** | 3 → **0** | 0 → 0 | 0 → 0 |
+| probe | 67 → **59** | 2 → **0** | 2 → **0** | 3 → 3 |
+| TOTAL | 12,339 → **12,191** (−1.2%) | 84 → **65** | 77 → **62** | 14 → **14** |
+
+`idiv` is byte-identical, as it must be: a division is not a `binOp` at all (`StdOp.div`/`mod` carry
+`isPure: false` because `idiv` traps), so no fold can reach one and no prune can delete one.
+
+⭐⭐ **THE DUPLICATE-EVALUATOR QUESTION WAS ANSWERED BY SHARING.** `TypeRules.foldIntBinOp`,
+`TypeRules.evalShift` and `TypeRules.foldIntCompare` already decide what `const ⊕ const` evaluates to,
+for `Parser.recordBinOpFold`; the pass CALLS them rather than carrying its own arithmetic, bridging
+`StdBinOpcode`/`StdCmpPred` back to `MaxonBinOp`/`MaxonCmpOp` through CHECKED INVERSES of the
+lowering's own maps (`maxonBinOpOfStdOpcode`, `maxonCmpOpOfStdPred`) that panic if the two directions
+ever diverge. It is sound because every integer `binOp`/`cmp` in shv2 computes at the MACHINE WORD on
+all three targets and every comparison is signed — which is exactly the arithmetic a `ParsedInt` is.
+
+⚠ **THE ROW'S PLAN SAID DEAD-BLOCK REMOVAL COULD BE LEFT TO `EC11`. IT CANNOT.** MEASURED: `match x`
+over a constant subject panicked the register allocator (`seedInUse: value 18 is live-in to block 11
+but was never colored`). An unreachable block is harmless; an unreachable block that FEEDS A PHI is
+not, and folding a `condBranch` makes one — the arm not taken keeps its edge into the merge block, and
+`reorderFuncBlocksRpo` then appends it AFTER the block that reads it. The pass drops the orphaned arm
+at the Std tier itself.
+
+**Left open**: a `switch` on a constant subject (a jump-table fold, not a branch fold); UNARY folds
+(`neg`/`bitNot` over a constant), whose absence leaves the guarded-shift mask cascade half-folded; and
+a def-before-use walk order — `func.blockRefs` records when a block was MINTED, so a range check
+emitted before inlining is walked before the constant inlining created. That last one is MEASURED at
+2 ops out of 12,191 on this corpus, which is why the pass stays one linear forward walk; `EC13`'s CSE
+needs a dominance order anyway and is the rung to build it in.
 
 #### `EC13` · Common subexpression elimination
 

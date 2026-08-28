@@ -75,8 +75,7 @@ func @Countdown.advance {
     x64.cmpRegImm32 rax, 1
     x64.jcc greater, ifcont
   done:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -116,11 +115,8 @@ func @main {
     x64.callDirect Countable.createIterator
     x64.movRegReg r12, r8
     x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, forempty
   forhdr:
-    x64.cmpRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, forexit
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
@@ -129,14 +125,11 @@ func @main {
   forstep:
     x64.movRegReg rcx, r12
     x64.callDirect Countdown.advance
-    x64.movRegReg rcx, r10
+    x64.movRegReg rax, r10
     x64.jmp forhdr
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.jmp forjoin
-  forempty:
     x64.movRegReg r8, rbx
   forjoin:
     x64.cmpRegImm32 r8, 0

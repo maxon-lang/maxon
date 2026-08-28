@@ -476,9 +476,18 @@ end 'main'
 ```
 
 <!-- test: shift-by-parameter-count -->
-The same, with a count NO pass can see: a parameter. This is the case the GUARD exists for —
+The same, with a count the PARSER cannot see: a parameter. This is the case the GUARD exists for —
 unguarded, 65 masks to 1 and `7 shl 65` is 14; 100 masks to 36. Every answer here matches the
 constant-folded one above, which is the whole point: one rule, two readings.
+
+⚠ **"NO PASS CAN SEE IT" WAS TRUE WHEN THIS WAS WRITTEN AND IS NOT ANY MORE, AND THE CORRECTION
+MATTERS BECAUSE IT IS WHY THESE ANSWERS STILL AGREE.** `shiftLeft` is a tiny leaf, so `inlineLeaves`
+(EC5) substitutes the caller's literal for `count`, and `foldConstants` (EC12) then evaluates the
+shift itself — but ONLY for a count inside the window the instruction takes as written (`0..63`).
+`count: 3` is folded; `count: 65` and `count: 100` are not, because the fold declines outside that
+window and the saturation cascade the parser emitted computes them at run time. So the two readings
+this case pins are still both present, and they are now in ONE program rather than two.
+`specs-shv2/fold-constants.md` carries the same split with the negative counts added.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 

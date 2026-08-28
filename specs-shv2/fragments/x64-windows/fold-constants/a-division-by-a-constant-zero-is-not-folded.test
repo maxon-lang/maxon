@@ -1,0 +1,88 @@
+// Test: a-division-by-a-constant-zero-is-not-folded
+typealias Word = int(i64.min to i64.max)
+
+function pick(a Word) returns Word
+	return a
+end 'pick'
+
+function main() returns ExitCode
+	let ten = pick(10)
+	let zero = pick(0)
+	if (try (ten / zero) otherwise -77) != -77 'quotientByZeroStillThrows'
+		return 1
+	end 'quotientByZeroStillThrows'
+	if (try (ten mod zero) otherwise -78) != -78 'remainderByZeroStillThrows'
+		return 2
+	end 'remainderByZeroStillThrows'
+	if (try (ten / pick(3)) otherwise -79) != 3 'anOrdinaryDivisionStillDivides'
+		return 3
+	end 'anOrdinaryDivisionStillDivides'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rcx, 10
+  __il_cont#17:
+    x64.movRegImm32 rsi, 0
+  __il_cont#16:
+    x64.cmpRegImm32 rsi, 0
+    x64.setccReg equal, rdi
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rdi
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, trycont#3
+  tryerr#2:
+    x64.movRegImm rax, 18446744073709551539
+  trycont#3:
+    x64.cmpRegImm32 rax, -77
+    x64.jcc equal, ifcont#5
+  quotientByZeroStillThrows:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont#5:
+    x64.cmpRegImm32 rsi, 0
+    x64.setccReg equal, rdi
+    x64.cmpRegImm32 rsi, -1
+    x64.setccReg equal, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.andRegImm32 rax, rax, 10
+    x64.cqo
+    x64.idivReg rdi
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, tryok
+  tryerr#7:
+    x64.movRegImm rax, 18446744073709551538
+    x64.jmp trycont#8
+  tryok:
+    x64.movRegReg rax, rdx
+  trycont#8:
+    x64.cmpRegImm32 rax, -78
+    x64.jcc equal, __il_cont#20
+  remainderByZeroStillThrows:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  __il_cont#20:
+    x64.movRegImm32 rsi, 3
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+  trycont#13:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc equal, ifcont#15
+  anOrdinaryDivisionStillDivides:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont#15:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

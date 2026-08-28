@@ -1,0 +1,53 @@
+// Test: the-remainder-at-the-overflow-pair-is-zero
+typealias Word = int(i64.min to i64.max)
+
+function pick(a Word) returns Word
+	return a
+end 'pick'
+
+function main() returns ExitCode
+	if (try (pick(i64.min) mod pick(-1)) otherwise -79) != 0 'remainderAtTheOverflowPair'
+		return 1
+	end 'remainderAtTheOverflowPair'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, 9223372036854775808
+  __il_cont#7:
+    x64.movRegImm rcx, 18446744073709551615
+  __il_cont#6:
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rsi
+    x64.cmpRegImm32 rcx, -1
+    x64.setccReg equal, rcx
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.andRegReg rax, rax, rcx
+    x64.movRegReg rcx, rsi
+    x64.orRegImm32 rcx, rsi, -1
+    x64.cqo
+    x64.idivReg rcx
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm rax, 18446744073709551537
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, rdx
+  trycont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  remainderAtTheOverflowPair:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

@@ -310,6 +310,66 @@ function maxonCmpOpToStdPred(op MaxonCmpOp) returns StdCmpPred
 	end 'map'
 end 'maxonCmpOpToStdPred'
 
+// ⭐⭐ **THE INVERSE OF `maxonBinOpToStdOpcode`, AND THE REASON IT LIVES HERE RATHER THAN IN THE PASS
+// THAT NEEDS IT.** `foldConstants` (Std→Std) EVALUATES `const <op> const`, and the arithmetic it must
+// produce is the arithmetic THE PARSER'S OWN CONSTANT FOLDER already produces — `TypeRules.foldIntBinOp`
+// and `TypeRules.evalShift`, which speak `MaxonBinOp`. Rather than give the Std tier a second evaluator
+// (this project's signature bug: ONE FACT WRITTEN DOWN TWICE), a Std opcode is carried BACK to the
+// operator it lowered from and the one folder is asked.
+//
+// ⚠ **A DIVERGENCE FAILS LOUDLY INSTEAD OF SILENTLY, AND THAT IS WHY THIS IS BESIDE THE FORWARD MAP.**
+// Every answer is checked by ROUND-TRIPPING it: an editor who changes one direction and not the other
+// gets a panic on the first program that folds, rather than a folded constant that disagrees with the
+// instruction the other direction emits. A hand-written inverse in another file, with no such check,
+// would be exactly the second copy this function exists to avoid.
+export function maxonBinOpOfStdOpcode(opcode StdBinOpcode) returns MaxonBinOp
+	let op = match opcode 'map'
+		add gives MaxonBinOp.add
+		sub gives MaxonBinOp.sub
+		mul gives MaxonBinOp.mul
+		bitAnd gives MaxonBinOp.bitAnd
+		bitOr gives MaxonBinOp.bitOr
+		bitXor gives MaxonBinOp.bitXor
+		shl gives MaxonBinOp.shl
+		shr gives MaxonBinOp.shr
+		shrLogical gives MaxonBinOp.shrLogical
+		// The three FLOAT-ONLY opcodes (`stdBinOpcodeIsFloatOnly`). They have a `MaxonBinOp` twin and it
+		// is named here, because the round trip below is only a check when every arm answers: an arm that
+		// panicked "float-only" would be this file deciding what a CALLER may fold, which is the caller's
+		// own rule (`foldConstants` refuses a float operand type before it ever asks).
+		div gives MaxonBinOp.div
+		min gives MaxonBinOp.min
+		max gives MaxonBinOp.max
+	end 'map'
+
+	let roundTrip = maxonBinOpToStdOpcode(op)
+	if roundTrip != opcode 'notAnInverse'
+		panic("maxonBinOpOfStdOpcode: `{opcode.name}` answers `{op.name}`, which lowers back to `{roundTrip.name}` — the two directions of one correspondence have diverged")
+	end 'notAnInverse'
+
+	return op
+end 'maxonBinOpOfStdOpcode'
+
+// The comparison twin of `maxonBinOpOfStdOpcode`, checked the same way and there for the same reason:
+// `TypeRules.foldIntCompare` is the compiler's ONE integer comparison folder, and it speaks `MaxonCmpOp`.
+export function maxonCmpOpOfStdPred(pred StdCmpPred) returns MaxonCmpOp
+	let op = match pred 'map'
+		eq gives MaxonCmpOp.eq
+		ne gives MaxonCmpOp.ne
+		lt gives MaxonCmpOp.lt
+		gt gives MaxonCmpOp.gt
+		le gives MaxonCmpOp.le
+		ge gives MaxonCmpOp.ge
+	end 'map'
+
+	let roundTrip = maxonCmpOpToStdPred(op)
+	if roundTrip != pred 'notAnInverse'
+		panic("maxonCmpOpOfStdPred: `{pred.name}` answers `{op.name}`, which lowers back to `{roundTrip.name}` — the two directions of one correspondence have diverged")
+	end 'notAnInverse'
+
+	return op
+end 'maxonCmpOpOfStdPred'
+
 // Does any declared parameter have `float` type — the ONLY thing that can force an int→float
 // argument widening (see `MaxonToStdLowering.crossFloatDomainArgs`). A bounded scan (parameters
 // are capped at the register-arg ABI count), so it is O(1) per call and allocates nothing; it is what
