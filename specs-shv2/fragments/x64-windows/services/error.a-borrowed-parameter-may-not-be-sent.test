@@ -1,0 +1,34 @@
+// Test: error.a-borrowed-parameter-may-not-be-sent
+type Payload
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Payload'
+
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(p Payload)
+		self.n = self.n + 1
+	end 'keep'
+end 'Store'
+
+function forward(h Store.handle, p Payload)
+	h.keep(p)
+end 'forward'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let p = Payload.create()
+	forward(h, p: p)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it, and its type has no owning copy a send could take instead. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send

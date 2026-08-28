@@ -142,11 +142,11 @@ type Calc
 	end 'record'
 end 'Calc'
 
-function serve(h Calc.handle) returns int
+function serve(_ Calc.handle) returns int
 	return 1
 end 'serve'
 
-function describe(r Calc.request) returns int
+function describe(_ Calc.request) returns int
 	return 2
 end 'describe'
 
@@ -177,7 +177,7 @@ actually reached, which is precisely what a single-file case could not arrange w
 export type Calc
 	var count as int
 
-	static function create() returns Self
+	export static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
@@ -186,7 +186,7 @@ export type Calc
 	end 'bump'
 end 'Calc'
 
-export function serve(h Calc.handle) returns int
+export function serve(_ Calc.handle) returns int
 	return 1
 end 'serve'
 
@@ -216,7 +216,7 @@ companion unresolved.
 export type Calc
 	var count as int
 
-	static function create() returns Self
+	export static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
@@ -225,7 +225,7 @@ export type Calc
 	end 'bump'
 end 'Calc'
 
-export function serve(h Calc.handle) returns int
+export function serve(_ Calc.handle) returns int
 	return 1
 end 'serve'
 
@@ -510,7 +510,8 @@ so neither is subject to the transferability rule — a `Promise` parameter on e
 a type that is spawned, which is what this case pins. Compare
 `error.message-param-promise-not-transferable`, whose only difference is the `export`.
 ```maxon
-typealias IntPromise = Promise with int
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
 
 type Calc
 	var count as int
@@ -519,11 +520,11 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	static function fromPromise(p IntPromise) returns Self
+	static function fromPromise(_ IntPromise) returns Self
 		return Self{count: 0}
 	end 'fromPromise'
 
-	function record(p IntPromise) returns int
+	function record(_ IntPromise) returns int
 		return 1
 	end 'record'
 
@@ -533,12 +534,12 @@ type Calc
 end 'Calc'
 
 function main() returns ExitCode
-	let h = spawn Calc.create()
+	spawn Calc.create()
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:25:10: Unsupported: services are not lowered yet — SV1 wave 3
+```exitcode
+0
 ```
 
 <!-- test: a-factory-may-be-spelled-with-a-keyword -->
@@ -564,17 +565,17 @@ type Reader
 	end 'read'
 end 'Reader'
 
-function serve(h Reader.handle) returns int
+function serve(_ Reader.handle) returns int
 	return 1
 end 'serve'
 
 function main() returns ExitCode
-	let h = spawn Reader.from(3)
+	spawn Reader.from(3)
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:19:10: Unsupported: services are not lowered yet — SV1 wave 3
+```exitcode
+0
 ```
 
 <!-- test: spawn-is-not-a-keyword -->
@@ -827,7 +828,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: <fragment>:15:4: Type 'Calc.handle' has no member named 'record'
+error E3136: <fragment>:16:4: `record` is declared on `type Calc` but is not a message: only its `export` INSTANCE methods are on `Calc.handle`. That is the isolation boundary, and it is what makes a self-send unspellable — a private helper can only ever be reached by a DIRECT call, from inside a message body or from a `Calc` value. Export it to make it a message, or call it on a `Calc` value
 ```
 
 <!-- test: shutdown-drains-what-is-queued -->
@@ -1121,8 +1122,13 @@ end 'main'
 <!-- test: an-idle-service-that-is-never-sent-to-still-exits-zero -->
 <!-- targets: x64-windows -->
 Process exit must not hang on a service parked in `recv`, which is its steady state. Here the mailbox is
-closed by the handle's own scope-exit drop before `main` returns, so the loop's `recv` answers 0 the first
-time it is asked and the exit drain has one already-finished thread to reap.
+closed by the handle's own drop — at the end of the `spawn` STATEMENT, since nothing binds it — well before
+`main` returns, so the loop's `recv` answers 0 the first time it is asked and the exit drain has one
+already-finished thread to reap.
+
+⚠ The handle is deliberately NOT bound: an unread `let` is `E3012 unused variable`, which is the language's
+rule for every binding and not a service question (`reportUnusedBindings` follows both references). A case
+that wants a handle BOUND has to read it, which `dropping-the-last-handle-shuts-the-service-down` does.
 ```maxon
 type Idler
 	var n as int
@@ -1137,7 +1143,7 @@ type Idler
 end 'Idler'
 
 function main() returns ExitCode
-	let h = spawn Idler.create()
+	spawn Idler.create()
 	return 0
 end 'main'
 ```
@@ -1200,7 +1206,7 @@ every service whose handle is the only caller. It is credited by the send op nam
 export type Calc
 	var count as int
 
-	static function create() returns Self
+	export static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
@@ -1250,7 +1256,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:18:10: 'buf' was moved and cannot be read
+error E3102: <fragment>:18:10: use of moved value 'buf': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: error.a-co-owned-value-may-not-be-sent -->
@@ -1266,6 +1272,7 @@ type Store
 
 	export function keep(s String)
 		self.n = self.n + 1
+		print("kept {s}\n")
 	end 'keep'
 end 'Store'
 
@@ -1274,11 +1281,11 @@ function main() returns ExitCode
 	let buf = "hello {1}"
 	let peek = function() gives buf
 	h.keep(buf)
-	return 0
+	return peek().byteLength() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:18:8: argument 's' of the message 'Store.keep' cannot be sent: 'buf' is an owned value this frame has already taken a second reference to, and a message MOVES its arguments to another green thread — where a second owner on this one would make the plain refcount wrong. Send `buf.clone()` instead
+error E3138: <fragment>:19:9: argument `buf` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
 ```
 
 <!-- test: error.a-borrowed-parameter-may-not-be-sent -->
@@ -1318,7 +1325,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:23:8: argument 'p' of the message 'Store.keep' cannot be sent: 'p' is a borrowed value this frame does not own — a message MOVES its arguments to another green thread, and the frame this borrow belongs to would still be holding it. Send a `.clone()` of it instead
+error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it, and its type has no owning copy a send could take instead. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
 ```
 
 <!-- test: error.a-promise-may-not-be-sent -->
@@ -1338,8 +1345,8 @@ type Store
 		return Self{n: 0}
 	end 'create'
 
-	export function keep(n Integer)
-		self.n = n
+	export function keep(value Integer)
+		self.n = value
 	end 'keep'
 end 'Store'
 
@@ -1348,7 +1355,7 @@ function main() returns ExitCode
 	let p = async work()
 	h.keep(p)
 	let r = await p
-	return 0
+	return r as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -1417,7 +1424,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:2: Unsupported: `try h.bump()` — a fire-and-forget message carries no reply and so can deliver no error. The awaitable form `try await h.bump()`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2
+error E2015: <fragment>:16:2: Unsupported: `try` on the message `Calc.bump` — a fire-and-forget send carries no reply and so can deliver no error. The awaitable form `try await <handle>.<message>(…)`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2
 ```
 
 <!-- disabled-test: send-and-await-a-reply -->

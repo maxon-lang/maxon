@@ -9875,6 +9875,18 @@ enum SlotMismatchVoice
 	// FOLLOWING the offending argument (its `,` or the construct's `)`), which is where the reference
 	// compiler leaves its cursor after reading that argument.
 	payloadArgument
+	// ⭐⭐ **A SERVICE MESSAGE's ARGUMENT, filling one payload slot of the synthesized request union (SV1 wave
+	// 3).** It takes `containerElementArgument`'s SENTENCE for that voice's stated reason — a message is a call
+	// whose arguments never reach `SemanticCheck.checkArgTypes`, so the refusal has to be the argument sentence
+	// every other argument position takes — and differs in the ONE thing that sentence quotes. A container
+	// mutator's element parameter is always named `value` (`stdlib/Array.maxon` declares all three that way),
+	// so that voice can name it from a constant; a message's is the parameter the AUTHOR declared, which is
+	// the payload field's own name.
+	//
+	// ⚠ It is a third voice rather than a widening of the second because `slotMismatchError`'s header states
+	// the rule it would break: *"the selection is made HERE and not by the callers"*. Reading `placeName` in
+	// the container arm would take the choice back out to a caller that passes the METHOD's name there.
+	messageArgument
 end 'SlotMismatchVoice'
 
 // ⭐⭐ **WHY A UNION BOX'S PAYLOAD SLOTS ARE BEING FILLED — AND IT DECIDES TWO THINGS THAT MUST NOT BE
@@ -9907,7 +9919,7 @@ end 'PayloadFill'
 function payloadFillVoice(fill PayloadFill) returns SlotMismatchVoice
 	return match fill 'fill'
 		unionConstruct gives SlotMismatchVoice.payloadArgument
-		serviceMessage gives SlotMismatchVoice.containerElementArgument
+		serviceMessage gives SlotMismatchVoice.messageArgument
 	end 'fill'
 end 'payloadFillVoice'
 
@@ -29811,6 +29823,9 @@ export type Parser
 			// `enum-full.md`'s `expected Integer` (a ranged alias) and `union-cases.md`'s `expected Color` (an
 			// enum) under one rule instead of two.
 			payloadArgument gives ParseError.typeMismatchExpectedGot(self.declaredSlotDisplayName(declared, nameId: declaredNameId, gotTag: gotTag), got: got, line: line, column: column)
+			// The argument sentence one voice up, quoting the slot's OWN name — which for a request union's
+			// payload is the message parameter the author declared. See `SlotMismatchVoice.messageArgument`.
+			messageArgument gives ParseError.builtinArgumentType(String.from(placeName), expected: self.declaredSlotDisplayName(declared, nameId: declaredNameId, gotTag: gotTag), got: got, line: line, column: column)
 		end 'v'
 	end 'slotMismatchError'
 
@@ -50859,6 +50874,23 @@ export type Parser
 			end 'declared'
 		end 'enumRef'
 
+		// ⭐⭐ **`Calc.request.unionCases.bump` — A TYPE WHOSE NAME CARRIES A DOT (SV1 wave 3).** A service's
+		// request union is a synthesized companion, named `<T>.request`, and it is an ordinary union in every
+		// other respect: it has cases, tags and a `unionCases` companion of its own. The arm above cannot claim
+		// it because `containsEnum` is asked of the FIRST token alone, and `Calc` is a struct.
+		//
+		// ⚡ **THE GATE IS A `count()`, AND THAT IS THE WHOLE COST MODEL** — this line runs at every dotted
+		// primary in every program, and the QUESTION needs two tokens joined into a name. Only a companion type
+		// carries a dot, so `declaresACompanionType` is false for every program with no `spawn` in it and nothing
+		// is built. See `namespaceQualifiedCallDotsAt`'s `minimumDots` paragraph for the measurement that made
+		// this discipline a rule: an ungated join here was a LINEAR allocation term across the ladder.
+		//
+		// ⚠ The trailing `.` is part of the SHAPE and not decoration: `Calc.request` with nothing after it names
+		// a type and denotes no value, which is a different mistake and takes a different arm.
+		if self.dottedCompanionTypeAt(baseTok) 'companionTypeRef'
+			return try self.parseCompanionTypeLiteral(func)
+		end 'companionTypeRef'
+
 		// ⭐⭐ **`lib.inner.deepHelper()` — A MULTI-SEGMENT DIRECTORY-QUALIFIED FREE CALL (N1b), AND THE FOURTH
 		// CLAIMANT ON THIS `.` IS WHAT MADE IT NEED AN ARM AT ALL.** The `Type.method` arm below is a fixed
 		// THREE-TOKEN lookahead, so a longer chain fell past it to the LAST-RESORT bound arm and was refused as
@@ -50919,6 +50951,39 @@ export type Parser
 
 		return try self.parseTypeQualifiedBoundExpression()
 	end 'parseDottedPrimary'
+
+	// Does `<baseTok> . <member> .` name a declared UNION under its joined name? The SHAPE and the REGISTRY,
+	// both behind the program-wide gate that keeps the join off every other dotted primary's path.
+	function dottedCompanionTypeAt(baseTok Token) returns bool
+		if not self.signatures.declaresACompanionType() 'noDottedTypeNamesInThisProgram'
+			return false
+		end 'noDottedTypeNamesInThisProgram'
+
+		if self.kindAt((self.pos + 1) as TokenIndex) != TokenKind.dot or not tokenCanBeAName(self.tokenAt((self.pos + 2) as TokenIndex)) or self.kindAt((self.pos + 3) as TokenIndex) != TokenKind.dot 'notTwoSegmentsAndAMember'
+			return false
+		end 'notTwoSegmentsAndAMember'
+
+		return self.signatures.containsEnum(qualifiedMethodName(baseTok.value, methodName: self.tokenAt((self.pos + 2) as TokenIndex).value))
+	end 'dottedCompanionTypeAt'
+
+	// Consume the two-segment head and hand the rest to the member reader every one-segment head uses. The
+	// lookup cannot fail: `dottedCompanionTypeAt` has just asked the same registry with the same joined name.
+	//
+	// The head is re-read through `consumeTypeBaseToken` rather than taken from the caller's `baseTok`, which
+	// is the same token: that door is where `Self` becomes the type it denotes (D9), and reading it here keeps
+	// the two-segment head on exactly the road the one-segment head takes.
+	function parseCompanionTypeLiteral(func IrFunction) returns ValueId throws ParseError
+		let headTok = try self.consumeTypeBaseToken()
+		try self.consume(TokenKind.dot)
+		let memberTok = try self.consumeMemberNameToken()
+		try self.consume(TokenKind.dot)
+
+		let joined = qualifiedMethodName(headTok.value, methodName: memberTok.value)
+		return match self.signatures.enumOf(joined) 'declared'
+			declared(layout) gives try self.parseEnumLiteralMember(func, declaredLayout: layout, typeTok: headTok)
+			undeclared panic("parseCompanionTypeLiteral: `{String.from(joined)}` is declared by no enum registry — `dottedCompanionTypeAt` answered `containsEnum` for this very name two tokens ago, and the two read one registry under one key")
+		end 'declared'
+	end 'parseCompanionTypeLiteral'
 
 	// ⭐ **HOW MANY `.<name>` PAIRS AT `index` FORM A DIRECTORY-QUALIFIED CALLEE (N1b)** — `0` when the tokens
 	// are anything else, which is every dotted expression in every program that does not use the form.
@@ -51186,6 +51251,20 @@ export type Parser
 		let typeTok = try self.consumeTypeBaseToken()
 		try self.consume(TokenKind.dot)
 
+		return try self.parseEnumLiteralMember(func, declaredLayout: declaredLayout, typeTok: typeTok)
+	end 'parseEnumLiteral'
+
+	// ⭐⭐ **EVERYTHING PAST `<type> .`, SPLIT OFF FOR THE ONE HEAD THAT IS TWO SEGMENTS LONG (SV1 wave 3).** A
+	// SERVICE's request union is named `Calc.request`, so `Calc.request.unionCases.bump` opens with a type name
+	// carrying a dot of its own — and every member below means for it exactly what it means for a union the
+	// author wrote under one name. The split is what lets the two heads share the member reader instead of the
+	// second one re-dispatching into a copy of it.
+	//
+	// ⚠ `typeTok` is the head the AUTHOR wrote (`Calc`), which is where a diagnostic about a case the union
+	// does not have belongs — the same anchor the single-segment head uses, for the reason
+	// `unionCasesCompanionOf` states about `Shape` versus `unionCases`.
+	function parseEnumLiteralMember(func IrFunction, declaredLayout EnumLayout, typeTok Token) returns ValueId throws ParseError
+
 		// ⭐⭐ **`Shape.unionCases.<anything>` IS THE COMPANION'S `<anything>` — ONE HOP, THEN THIS FUNCTION
 		// CONTINUES AS IF THE COMPANION HAD BEEN NAMED DIRECTLY.** Every member below — a bare CASE,
 		// `allCases`, `allCaseNames`, `fromRawValue` — means for the companion exactly what it means for any
@@ -51354,7 +51433,7 @@ export type Parser
 		// An unboxed case's VALUE is its tag, which is the unboxed arm of the very function the hop above
 		// takes its tag from — so the two readings are one line and cannot come apart.
 		return self.emitEnumCaseTagConstant(layout, index: index, range: range)
-	end 'parseEnumLiteral'
+	end 'parseEnumLiteralMember'
 
 	// ⭐⭐ **`. <member>` — THE TWO-TOKEN SHAPE ITSELF, WRITTEN ONCE FOR BOTH SPELLINGS OF AN ENUM ACCESSOR.**
 	// A binding's (`op.rawValue`, `enumAccessorFieldAt`) and a type-qualified case's (`Op.doubleOp.rawValue`,
@@ -52526,14 +52605,14 @@ export type Parser
 	// what made `union-payload.error.wrong-struct` point at `tint` rather than at the argument.
 	function requirePayloadArgType(field PayloadField, declared MaxonType, class PayloadClass, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) throws ParseError
 		match class 'c'
-			scalar then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
+			scalar then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
 			// ⚠ The scalar rule, spelled as its OWN arm and deliberately not folded into a `scalar to typeParam`
 			// RANGE: `typeParam` is the last variant of `PayloadClass` and `scalar` the first, so that range
 			// would swallow every case between them — the band-append trap, one union down.
 			// `checkDeclaredType`'s type-parameter arm is where an argument meets an opaque formal, which is
 			// what checked this payload while it was classified `scalar`; the store-side split changed nothing
 			// an argument must satisfy.
-			typeParam then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
+			typeParam then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
 			// The shared managed door directly — `requireManagedPayloadArg` stood here and did nothing but
 			// forward, once the payload voice stopped needing a `<Union>.<case>(<field>)` label built for it.
 			managed(storage, isString) then try self.requireManagedValueMatches(storage, isString: isString, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, voice: voice, anchor: argTok)
@@ -52558,7 +52637,7 @@ export type Parser
 	// FUNCTION-alias payload is a `named` — an int — so `Payload.op(twice)` met the
 	// `functionIntoNonFunction` arm below and was refused E3005 on a program the payload cascade had, until
 	// this rung, never even classified as a scalar. Resolved, it is the function type the value is.
-	function requireScalarPayloadArg(field PayloadField, declared MaxonType, value ValueId, caseTok Token, argTok Token) throws ParseError
+	function requireScalarPayloadArg(field PayloadField, declared MaxonType, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) throws ParseError
 		let declaredTag = maxonTypeTag(declared)
 		let got = self.tagOf(value)
 
@@ -52578,7 +52657,7 @@ export type Parser
 
 		match checkDeclaredType(got, declared: declaredTag) 'declared'
 			ok then break 'declared'
-			mismatch then throw self.slotMismatchError(SlotMismatchVoice.payloadArgument, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(declaredTag), declared: declaredTag, declaredNameId: typeNameIdOf(declared), line: argTok.line, column: argTok.column)
+			mismatch then throw self.slotMismatchError(voice, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(declaredTag), declared: declaredTag, declaredNameId: typeNameIdOf(declared), line: argTok.line, column: argTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
 			// A FUNCTION VALUE into a scalar union PAYLOAD whose declared type is NOT a function — the same
 			// E3005 a function value meeting any other non-function slot earns. A function-ALIAS payload no
@@ -73886,16 +73965,27 @@ export type Parser
 	// Everything else is refused as **`SemanticServiceArgumentNotUnique`**, naming the value and the `.clone()`
 	// cure.
 	//
-	// ⚠ **THE TYPE QUESTION IS NOT ASKED HERE, AND ADDING IT WOULD BE A DEAD CLAIM.** A Promise, a function
-	// value, an interface value and an opaque type parameter are refused at the `spawn`, against the message's
-	// DECLARATION (`ServiceCompanions.untransferableParameterNoun`, E3135) — so no accepted message has a
-	// parameter one of them could be an argument to, and a spawn's state is the factory's own box by
-	// construction. A second, value-level copy of that rule would be a refusal no program can reach.
+	// ⚠⚠ **THE TYPE QUESTION IS ASKED HERE FOR EXACTLY ONE SHAPE, AND THAT SHAPE IS THE ONLY ONE THAT CAN
+	// REACH A SEND.** A function value, an interface value and an opaque type parameter are refused at the
+	// `spawn` against the message's DECLARATION (`ServiceCompanions.untransferableParameterNoun`, E3135), and
+	// no accepted message has a parameter one of them could be an ARGUMENT to — the type checker would refuse
+	// the call first. **A PROMISE IS THE EXCEPTION, AND ITS VALUE IS WHY: a promise handle is a bare INTEGER**
+	// (`valueIsPromise` is a per-value MARK precisely because the tag cannot say it), so
+	// `keep(n Integer)` takes one with no complaint from anybody. Sending it hands a second green thread a wait
+	// token whose completer is scheduled on this one — the exact shape E3100's linear-await rule exists to
+	// prevent, one thread further out.
+	//
+	// ⚠ It is asked BEFORE the scalar short-circuit below, which is the whole point: a promise IS a scalar to
+	// `valueIsManagedHeap`, so a check placed after it would never run.
 	//
 	// ⚠ **IT REFUSES BEFORE IT EMITS.** A promotion is the only thing it can emit and it emits it only on the
 	// accepting path, so a refused transfer leaves nothing behind — `emitBinOp`'s ordering rule, which every
 	// door that can throw mid-expression keeps.
 	function moveIntoGreenThread(value ValueId, blame String, anchor Token) returns ValueId throws ParseError
+		if self.valueIsPromise(value) 'aWaitToken'
+			throw ParseError.serviceValueNotTransferable(serviceUntransferableValueMessage(blame, noun: PromiseParameterNoun), line: anchor.line, column: anchor.column)
+		end 'aWaitToken'
+
 		if not self.valueIsManagedHeap(value) 'aMachineWord'
 			return value
 		end 'aMachineWord'

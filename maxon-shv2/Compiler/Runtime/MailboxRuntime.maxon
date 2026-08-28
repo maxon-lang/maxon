@@ -117,8 +117,8 @@ export let MboxHandleCloneBoxName = b"__mbox_handle_clone_box"
 // scope exit, an array element drop and a struct-field cascade all shut a service down.
 export let MboxHandleDropBoxName = b"__mbox_handle_drop_box"
 
-// `__mbox_service_exit(mbox, selfGt)` — the loop's last act. Exported because `ServiceLoop` emits the call
-// as the tail of every synthesized `<T>.__loop`.
+// `__mbox_service_exit(mbox)` — the loop's last act. Exported because `ServiceLoop` emits the call as the
+// tail of every synthesized `<T>.__loop`.
 export let MboxServiceExitName = b"__mbox_service_exit"
 
 // ⭐⭐ **INSTALL THE MAILBOX RUNTIME — behind `usesGt`, at its CALL SITE, exactly as `installSchedRuntime`
@@ -457,7 +457,7 @@ function buildMboxHandleDropBox(module StdModule)
 	module.functions.push(func)
 end 'buildMboxHandleDropBox'
 
-// `__mbox_service_exit(mbox, selfGt)` — the loop's last act. See `MboxServiceExitName`.
+// `__mbox_service_exit(mbox)` — the loop's last act. See `MboxServiceExitName`.
 //
 // ⚠⚠ **THE CONSUMER TICKET IS ADDED FROM INSIDE THE GREEN THREAD, AND ADDING IT AT THE SPAWN INSTEAD WOULD
 // BE A TOMBSTONE.** A service has no promise, so nobody else will ever call `__gt_owner_done` for it — the
@@ -465,17 +465,28 @@ end 'buildMboxHandleDropBox'
 // do not RUN this thread"*, so a ticket added at spawn would make a never-yet-run service read as abandoned
 // to every popper (`GtRuntime.emitGtIsDropped`). Added here it is the honest statement it looks like: this
 // thread is finished, and the driver that switched into it supplies the runner's half.
+//
+// ⭐⭐ **THE GREEN THREAD IS READ HERE AND IS NOT A PARAMETER, BECAUSE THE MAXON-TIER LOOP HAS NO WAY TO NAME
+// ONE.** `<T>.__loop` is ordinary program code (`ServiceLoop`) — its two parameters are the state and the
+// mailbox, and there is no expression in the language that means "the green thread I am running on". Taking
+// it as a parameter therefore left the loop passing ONE argument to a two-parameter entry, and `rdx` carried
+// whatever the preceding `__mm_decref` left in it straight into `__gt_owner_done`. **MEASURED: a service
+// whose state has TWO fields segfaulted where the same program with one field ran clean** — the difference
+// being only which garbage the state's drop happened to leave behind.
+//
+// ⚠ `emitLoadCurrentGt`'s precondition — the scheduler is initialized — is satisfied by construction and not
+// by convention: this function's only caller is a body RUNNING on a green thread the scheduler created.
 function buildMboxServiceExit(module StdModule)
-	var func = IrFunction.createFromStd(MboxServiceExitName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
+	var func = IrFunction.createFromStd(MboxServiceExitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var freeMbox = module.addBlock(func, label: b"exitfree")
 	var doneBlock = module.addBlock(func, label: b"exitdone")
 
-	emitParams(module, block: entry, count: 2)
+	emitParams(module, block: entry, count: 1)
 	let mbox = 0 as ValueId
-	let selfGt = 1 as ValueId
+	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
 
 	let priorRefs = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffRefs, delta: MboxCountDown, ids: ids)
 	let wasLastRef = emitMboxWasLastOwner(module, block: entry, prior: priorRefs, ids: ids)

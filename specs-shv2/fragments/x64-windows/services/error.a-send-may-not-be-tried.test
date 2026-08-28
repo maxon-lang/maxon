@@ -1,0 +1,21 @@
+// Test: error.a-send-may-not-be-tried
+type Calc
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	try h.bump()
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:16:2: Unsupported: `try` on the message `Calc.bump` — a fire-and-forget send carries no reply and so can deliver no error. The awaitable form `try await <handle>.<message>(…)`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2

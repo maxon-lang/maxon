@@ -228,7 +228,7 @@ end 'classifyServiceRoster'
 function untransferableParameterNoun(signatures ProgramSignatures, declared MaxonType, declFilePath FilePath) returns String
 	let resolved = signatures.declaredSlotType(declared, into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
 	if typeIsPromiseStorage(signatures, t: resolved) 'aPromise'
-		return "a Promise, which is a green-thread handle its awaiter owns"
+		return PromiseParameterNoun
 	end 'aPromise'
 
 	match maxonTypeTag(resolved) 'tag'
@@ -260,6 +260,20 @@ end 'untransferableParameterNoun'
 // The noun for a value held at an interface type — one string, because the two arms that reach that verdict
 // (an `interfaceRef` the parse minted, a bare `named` the sweep left) are one finding about one declaration.
 let InterfaceParameterNoun = "a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry"
+
+// ⭐⭐ **THE PROMISE NOUN, SHARED BY THE DECLARATION RULE AND THE VALUE RULE — AND IT IS THE ONE NOUN THAT
+// NEEDED TO BE SHARED.** Every other untransferable shape is refused at the message's DECLARATION and can
+// never be an argument to an accepted one, because its TYPE would not match. A Promise is the exception:
+// its value is a bare INTEGER handle, so `keep(n Integer)` accepts one without a word from the type checker.
+// `Parser.moveIntoGreenThread` therefore asks about the VALUE, and it says the same thing this does.
+module let PromiseParameterNoun = "a Promise, which is a green-thread handle its awaiter owns"
+
+// ⭐ **THE WORDS FOR A VALUE WHOSE TYPE MAY NOT CROSS, refused at the SEND rather than at the declaration.**
+// `serviceRosterRefusalMessage`'s twin one tier down: that one names a parameter the author DECLARED, this
+// names an argument they WROTE, and both end with the same three cures.
+module function serviceUntransferableValueMessage(blame String, noun String) returns String
+	return "{blame} is {noun}, and a message MOVES its arguments to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message"
+end 'serviceUntransferableValueMessage'
 
 // Does this bare `named` name a declared INTERFACE? Asked of the same registry the field/return normalization
 // asks (`ProgramSignatures.declaredFormOf` reads `interfaces`), so a parameter and a field of one interface
