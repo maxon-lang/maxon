@@ -50,8 +50,9 @@
 # SAID IT WOULD. A `spawn` (SERVICES_DESIGN.md §"Ownership — the spine", "Send is a
 # MOVE") creates REAL green threads, which are exactly what W212's ring, its
 # stealing and its worker loop schedule — all built before they had a producer.
-# `service-torture` is that producer, and it is the ONE program here whose row is
-# asserted the other way; every other program stays coroutine-only and stays 1/0.
+# `service-torture` and `service-fanin-torture` are that producer, and they are the
+# TWO programs here whose rows are asserted the other way; every other program stays
+# coroutine-only and stays 1/0.
 #
 # MEASURED at SV1 wave 3, same box, this script (12 services x 400 String sends
 # each): `workers/steals` of 1/0, 2/886, 7/7790 and 9/8120 at N=1/2/7/12, with a
@@ -91,11 +92,21 @@
 # a cross-thread flag. MEASURED at SV1 wave 4: `aggregate=42680 taken=4800` at
 # every N, with workers/steals of 1/0, 2/2, 7/20 and 12/23 at N=1/2/7/12.
 #
-# ⚠ AND THAT IS ALSO WHAT alloc-torture AND remote-free-torture NOW COST. Both
+# ⚠ AND THAT IS ALSO WHAT alloc-torture AND remote-free-torture STILL COST. Both
 # exist to drive the sharded allocator's CROSS-P paths, and both do it by getting
-# worker Ms to run their tasks. With no worker M they still run every task and
-# still prove determinism and leak-freedom — on ONE M. Their multi-M subject has
-# no producer until `spawn`, and no reading below should be read as covering it.
+# worker Ms to run their tasks. Their own rows still read `workers=1` at every N,
+# because their work is `async` and an `async` frame is a coroutine — so they still
+# prove determinism and leak-freedom on ONE M, and no row of theirs below should be
+# read as covering a cross-P free.
+#
+# ⭐⭐ WHAT CHANGED IS THAT THE SUBJECT NOW HAS A PRODUCER SOMEWHERE ELSE IN THIS
+# TABLE (SV1). `service-torture` moves 4,800 freshly built heap `String`s across to
+# twelve services and `service-fanin-torture` moves 4,800 the other way — in both,
+# a record allocated on the M that built it is RELEASED on whichever M ran its
+# receiver, which is the remote-free push these two were written for. Converting
+# them to drive it themselves is separate work and has not been done; what has
+# changed is that a green run of the two service rows IS a cross-P allocation
+# reading, where before SV1 nothing in this directory was.
 #
 # ⭐⭐ park-torture IS THE ONLY ONE THAT PARKS, WHICH IS WHY SV1 ADDED IT. Every
 # other program here spins and returns, so not one of them walks the deferred-park

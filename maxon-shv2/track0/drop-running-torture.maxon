@@ -42,10 +42,23 @@
 // and `51` at N=12, with `leaked=0` throughout.
 //
 // ⚠ **IT IS NOT DELETED, AND MUST NOT BE.** The teardown rendezvous it gates is
-// what makes a dropped-while-running thread safe, and `spawn` re-creates exactly
-// that shape for real green threads. This is that rung's gate, and W218's. Until
-// then it is a program whose subject has no producer, run for the leak reading it
-// still gives.
+// what makes a dropped-while-running thread safe, and it is W218's gate.
+//
+// ⛔⛔ **BUT `spawn` IS *NOT* ITS PRODUCER, AND THIS NOTE SAID IT WAS (corrected SV1
+// wave 4).** It read *"`spawn` re-creates exactly that shape for real green threads.
+// This is that rung's gate"*. `spawn` LANDED, and it does not: the shape needs a green
+// thread whose PROMISE is renounced while another M is executing it, and a `spawn`
+// yields a **handle**, not a `Promise`. A service's green thread is torn down by its
+// mailbox closing and its own loop exiting; nothing on the service path calls
+// `__gt_promise_drop` at all (VERIFIED — its only callers are the parser's scope-exit
+// drop machinery and `.cancel()`). ⇒ this program's multi-M subject STILL has no
+// producer, and the reason is a ⚖ RULING rather than an unbuilt rung: there is no bare
+// green-thread spawn, so there is no green thread anybody holds a promise to.
+//
+// ⇒ **THE SHAPE ARRIVES WITH `SV2`'s REPLY**, which is the first construct that gives a
+// caller something awaitable — and droppable un-awaited — over work running on another
+// green thread. Until then this is a program run for the leak reading it still gives,
+// and a green row here must not be read as covering its title.
 
 typealias Integer = int(i64.min to i64.max)
 
