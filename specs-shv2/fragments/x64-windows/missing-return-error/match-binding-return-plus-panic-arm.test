@@ -33,8 +33,7 @@ func @pick {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.epilogue 32
@@ -42,8 +41,7 @@ func @pick {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -70,24 +68,20 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r12 + 0], rax
     x64.storeBaseDispReg.word64 [r12 + 8], rbx
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm:
     x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
     x64.jmp __il_cont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __il_slow
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   __il_slow:
     x64.movRegReg rcx, r12
     x64.callDirect pick
     x64.movRegReg rbx, r8
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref

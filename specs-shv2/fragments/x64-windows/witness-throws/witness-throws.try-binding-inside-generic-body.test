@@ -61,12 +61,10 @@ func @Point.create {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -92,8 +90,7 @@ func @Point.digest {
     x64.movRegReg rbp, rsp
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 10
-    x64.jcc less, small
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   small:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -134,8 +131,7 @@ func @Box.itemDigest {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callMem [rbx + 24]
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -147,12 +143,10 @@ func @Box.itemDigest {
     x64.movRegImm32 r10, 0
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -203,37 +197,31 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect Box.itemDigest
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 rbx, 0
     x64.jmp trycont#3
   tryok#1:
     x64.movRegReg rbx, r8
-    x64.jmp trycont#3
   trycont#3:
     x64.leaRegRdata rdx, [rip + __witness_Point.Digest]
     x64.movRegReg rcx, r13
     x64.callDirect Box.itemDigest
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#5
-    x64.jmp tryok#4
+    x64.jcc equal, tryok#4
   tryerr#5:
     x64.movRegImm32 rax, 2
     x64.jmp trycont#6
   tryok#4:
     x64.movRegReg rax, r8
-    x64.jmp trycont#6
   trycont#6:
     x64.leaRegRegReg rbx, rbx, rax
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

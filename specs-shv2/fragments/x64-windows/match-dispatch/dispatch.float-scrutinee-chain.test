@@ -27,8 +27,7 @@ func @main {
     x64.setccReg aboveEqual, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm#1
-    x64.jmp matchnext#2
+    x64.jcc equal, matchnext#2
   matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
@@ -41,8 +40,7 @@ func @main {
     x64.setccReg aboveEqual, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm#3
-    x64.jmp matchnext#4
+    x64.jcc equal, matchnext#4
   matcharm#3:
     x64.movRegImm32 r8, 2
     x64.jmp matchcont
@@ -55,8 +53,7 @@ func @main {
     x64.setccReg aboveEqual, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm#5
-    x64.jmp matchnext#6
+    x64.jcc equal, matchnext#6
   matcharm#5:
     x64.movRegImm32 r8, 3
     x64.jmp matchcont
@@ -69,23 +66,19 @@ func @main {
     x64.setccReg aboveEqual, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm#7
-    x64.jmp matchnext#8
+    x64.jcc equal, matchnext#8
   matcharm#7:
     x64.movRegImm32 r8, 4
     x64.jmp matchcont
   matchnext#8:
     x64.movRegImm32 r8, 9
-    x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

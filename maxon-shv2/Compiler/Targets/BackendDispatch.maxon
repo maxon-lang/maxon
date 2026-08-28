@@ -160,6 +160,13 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	try allocateRegisters(targetModule, target: target, project: project, valueClasses: valueClasses)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
+	// EC11, and it must run HERE — after the allocator's `applyAllocation` and before the frame pass.
+	// A block whose only op is a `jmp` is genuinely empty only once SSA destruction has placed (or
+	// declined to place) its edge copies; before that it is an edge about to receive moves. The frame
+	// pass then sees the surviving blocks, so a callee-saved register or a `call` reachable only from
+	// dead code stops being paid for. See `X64BranchCleanup`'s header.
+	cleanUpX64Branches(targetModule, project: project)
+
 	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)
 	insertPrologueEpilogue(targetModule, target: target)
 	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)

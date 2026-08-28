@@ -33,68 +33,44 @@ func @main {
     x64.movRegImm32 rax, 5
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 6
-    x64.jcc equal, eqFalse
-    x64.jmp critsplit#16
+    x64.jcc notEqual, ifcont#2
   eqFalse:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp ifcont#2
-  critsplit#16:
-    x64.jmp ifcont#2
   ifcont#2:
     x64.cmpRegImm32 rax, 5
-    x64.jcc notEqual, neFalse
-    x64.jmp critsplit#17
+    x64.jcc equal, ifcont#4
   neFalse:
     x64.leaRegRegImm32 rcx, rcx, 2
-    x64.jmp ifcont#4
-  critsplit#17:
-    x64.jmp ifcont#4
   ifcont#4:
     x64.cmpRegImm32 rax, 5
-    x64.jcc greater, gtBoundary
-    x64.jmp critsplit#18
+    x64.jcc lessEqual, ifcont#6
   gtBoundary:
     x64.leaRegRegImm32 rcx, rcx, 4
-    x64.jmp ifcont#6
-  critsplit#18:
-    x64.jmp ifcont#6
   ifcont#6:
     x64.cmpRegImm32 rax, 5
-    x64.jcc lessEqual, leBoundary
-    x64.jmp critsplit#19
+    x64.jcc greater, ifcont#8
   leBoundary:
     x64.leaRegRegImm32 rcx, rcx, 8
-    x64.jmp ifcont#8
-  critsplit#19:
-    x64.jmp ifcont#8
   ifcont#8:
     x64.cmpRegImm32 rax, 5
-    x64.jcc greaterEqual, geBoundary
-    x64.jmp critsplit#20
+    x64.jcc less, ifcont#10
   geBoundary:
     x64.leaRegRegImm32 rcx, rcx, 16
-    x64.jmp ifcont#10
-  critsplit#20:
-    x64.jmp ifcont#10
   ifcont#10:
     x64.cmpRegImm32 rax, 5
-    x64.jcc less, ltFalse
-    x64.jmp critsplit#21
+    x64.jcc greaterEqual, critsplit
   ltFalse:
     x64.leaRegRegImm32 r8, rcx, 32
     x64.jmp ifcont#12
-  critsplit#21:
+  critsplit:
     x64.movRegReg r8, rcx
-    x64.jmp ifcont#12
   ifcont#12:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

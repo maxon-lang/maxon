@@ -1,0 +1,432 @@
+// X64BranchCleanup — the Target-tier CFG cleanup (EC11), on FULLY REGISTER-ALLOCATED PHYSICAL OPS.
+//
+// Four transforms, all of them local to one function's block layout:
+//
+//   1. JUMP ELISION       — a block whose terminator is `jmp T` where T is the block laid down
+//                           immediately after it loses the `jmp`. Control reaches T by falling off
+//                           the end.
+//   2. CONDITIONAL INVERSION — `jcc cond,T` + `jmp E` where T is the next block becomes
+//                           `jcc !cond,E` + a fall-through into T. Two instructions become one.
+//   3. JUMP THREADING     — a block whose ONLY op is `jmp U` is bypassed: every branch that named it
+//                           is re-pointed at U.
+//   4. UNREACHABLE-BLOCK ELIMINATION — the blocks the threading (or the parser's `dead`
+//                           continuations) left with no path from the entry are dropped.
+//
+// MEASURED before this pass existed (`scripts/emitted-code-count.py`, committed corpus, 2026-08-28):
+// **709 of 1,555 unconditional jumps — 46% — jumped to the block physically after them**, and 147
+// blocks held nothing but a `jmp`. Every one of those was a taken branch that did nothing. The C#
+// bootstrap emits zero of them on the same sources.
+//
+// ⭐⭐ WHY IT RUNS HERE — AFTER `applyAllocation`, AND NOT ONE PASS EARLIER. THIS IS THE WHOLE
+// CORRECTNESS ARGUMENT FOR TRANSFORM 3.
+//
+// SSA destruction places a phi edge's parallel copies ON THE EDGE, which for a critical edge means
+// inside the `critsplit` block that was spliced onto it. BEFORE that runs, a block whose only op is
+// a `jmp` is not empty — it is an edge that is ABOUT TO RECEIVE COPIES, and threading it away would
+// delete moves that had not been written yet. After `applyAllocation`, "the block's only op is a
+// `jmp`" is literally true and permanent: a `critsplit` that received edge copies holds `mov`s and
+// is correctly left alone, and one that received none is genuinely empty and is correctly threaded
+// away. That asymmetry is the reason for the placement, and it is not visible from the pass itself.
+//
+// The same placement answers the phi model: `applyAllocation` ends by calling `clearPhiModel`, so
+// every block's `blockArgs` and `branchEdges` are already EMPTY here. There is no phi metadata for
+// this pass to keep consistent — the ops are the only remaining statement of the CFG.
+//
+// ⚠ x64 ONLY, and that is a scope decision rather than a structural one. Transforms 1, 3 and 4 are
+// ISA-neutral (`retargetControlOp` already covers the arm64 branches and both jump tables, and
+// `Terminator.fallthrough` is a layout fact, not an encoding). Transform 2 is the x64-specific half:
+// it needs a condition-code complement, which is `invertX64Cond` below and would need an
+// `Arm64CondCode` twin. arm64 and wasm are deliberately untouched by this rung; adopting it there is
+// a separate change with its own goldens on a lane this host cannot run.
+//
+// ⛔ AND IT DOES NOT REORDER BLOCKS. It only DELETES — a branch, or a block nothing can reach — so
+// every surviving block keeps its position relative to every other. That matters because a block
+// with no terminator op (a parser `dead` continuation) reaches the backend relying on physically
+// falling into its neighbour, and the ops-derived CFG cannot see that edge. See
+// `dropUnreachableBlocks`, which is the one place that hole is closed.
+
+// The pass, over every function in the module. Called from `buildX64Backend` between
+// `allocateRegisters` and `insertPrologueEpilogue`: the frame pass then sees the SURVIVING blocks,
+// so a callee-saved register or a `call` that only unreachable code used stops being preserved.
+export function cleanUpX64Branches(module TargetModule, project Project)
+	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.branchCleanup)
+	logDebug(LogCategory.codegen, message: function() gives "Branch cleanup (x64): {module.funcCount()} function(s)")
+
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage — the discipline `insertPrologueEpilogue` states.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		cleanUpFunctionBranches(module, func: try module.functions.get(fnIndex) otherwise panic("cleanUpX64Branches: fnIndex {fnIndex} is below module.functions.count()"))
+	end 'eachFunc'
+
+	recordPhase(project, phase: CompilePhase.branchCleanup, probe: probe)
+end 'cleanUpX64Branches'
+
+// ⭐ THE ORDER OF THE FOUR IS LOAD-BEARING, and it splits at one line.
+//
+// Threading and reachability both need a CFG, and the CFG is derived FROM THE OPS — a block's second
+// successor is its `jcc`'s target and its first is its `jmp` terminator's. Transforms 1 and 2 DELETE
+// that `jmp`, which makes the else-edge unreadable from the ops (it becomes a layout fact instead).
+// So every question that needs the CFG is asked first, and the elision is last — after which nothing
+// in the compiler builds a CFG for this function again.
+function cleanUpFunctionBranches(module TargetModule, func IrFunction)
+	// The skeleton read off the ops, exactly as the allocator builds it — this pass derives no CFG of
+	// its own. Locals are LAYOUT positions (`buildFuncTopology` numbers them in `func.blockRefs`
+	// order), which is what makes "the physically next block" answerable as `local + 1`.
+	let topo = buildFuncTopology(module, func: func)
+	if topo.numBlocks == 0 'noBlocks'
+		return
+	end 'noBlocks'
+
+	let resolved = resolveJumpChains(module, topo: topo)
+	threadResolvedEdges(module, topo: topo, resolved: resolved)
+	dropUnreachableBlocks(module, func: func, topo: topo, resolved: resolved)
+	elideFallthroughBranches(module, func: func)
+end 'cleanUpFunctionBranches'
+
+// ==========================================================================
+// Transform 3 — jump threading
+// ==========================================================================
+
+// `resolved[L]` — the block a branch naming local `L` must be re-pointed at. `L` itself for every
+// block that stays; the far end of a chain of empty `jmp`-only blocks otherwise.
+//
+// Resolved with PATH COMPRESSION over an explicit path stack rather than a repeat-until-stable
+// sweep: a chain of K forwarding blocks converges in K rounds of the naive form, which is quadratic
+// in exactly the shape this pass exists to clean up (the inliners emit runs of them).
+function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIndexArray
+	let blockCount = topo.numBlocks
+
+	// Classified in ONE pass over the blocks, so the chain walk below dereferences no block at all.
+	var forwards = BoolArray.create()
+	forwards.resize(blockCount)
+	var forwardTargetOf = zeroColumn(blockCount)
+
+	// ⭐ LOCAL 0 — THE ENTRY — IS NEVER FORWARDED THROUGH, whatever its ops. It is the block
+	// `insertPrologueEpilogue` puts the prologue in, so a predecessor re-pointed PAST it would enter
+	// the function without a frame. (The parser gives a loop its own header rather than branching
+	// back to the entry, so this costs nothing today; it is the fact that must not have to be
+	// re-derived if that ever changes.)
+	for local in 1 upto blockCount 'eachBlock'
+		let target = emptyJumpTargetOf(module, topo: topo, local: local)
+		if target == local 'staysPut'
+			continue
+		end 'staysPut'
+
+		try forwards.set(local, value: true) otherwise panic("resolveJumpChains: forwards.set OOB at {local}")
+		try forwardTargetOf.set(local, value: target) otherwise panic("resolveJumpChains: forwardTargetOf.set OOB at {local}")
+	end 'eachBlock'
+
+	// `blockCount` is one past every valid local, so it can never collide with a real answer.
+	let unresolved = blockCount
+	var resolved = filledColumn(blockCount, value: unresolved)
+	var onPath = BoolArray.create()
+	onPath.resize(blockCount)
+	var path = CfgIndexArray.create()
+
+	for start in 0 upto blockCount 'eachStart'
+		if (try resolved.get(start) otherwise panic("resolveJumpChains: resolved.get OOB at {start}")) != unresolved 'alreadyAnswered'
+			continue
+		end 'alreadyAnswered'
+
+		path.clear()
+		var cur = start
+		var answer = unresolved
+		while answer == unresolved 'followChain'
+			// The three facts about `cur`, read up front: a `try` may not sit bare in an `if` condition
+			// (E3124), and reading them together keeps the chain below a plain three-way test.
+			let forwardsHere = try forwards.get(cur) otherwise panic("resolveJumpChains: forwards.get OOB at {cur}")
+			let answerHere = try resolved.get(cur) otherwise panic("resolveJumpChains: resolved.get OOB at {cur}")
+			let onPathHere = try onPath.get(cur) otherwise panic("resolveJumpChains: onPath.get OOB at {cur}")
+
+			if not forwardsHere 'chainEnds'
+				answer = cur
+			end 'chainEnds' else if answerHere != unresolved 'answerKnown'
+				answer = answerHere
+			end 'answerKnown' else if onPathHere 'cycle'
+				// A CYCLE of empty `jmp` blocks is an infinite loop with no exit, so there is nothing to
+				// forward it to. It resolves to the block the walk RE-ENTERED, which therefore stays —
+				// threading the whole cycle away would delete the loop.
+				answer = cur
+			end 'cycle' else 'follow'
+				try onPath.set(cur, value: true) otherwise panic("resolveJumpChains: onPath.set OOB at {cur}")
+				path.push(cur)
+				cur = try forwardTargetOf.get(cur) otherwise panic("resolveJumpChains: forwardTargetOf.get OOB at {cur}")
+			end 'follow'
+		end 'followChain'
+
+		for local in path 'compress'
+			try resolved.set(local, value: answer) otherwise panic("resolveJumpChains: resolved.set OOB at {local}")
+			try onPath.set(local, value: false) otherwise panic("resolveJumpChains: onPath.set OOB at {local}")
+		end 'compress'
+
+		// `start` is on the path only when it forwards; a block that ends the chain was never pushed.
+		if (try resolved.get(start) otherwise panic("resolveJumpChains: resolved.get OOB at {start}")) == unresolved 'startEndsTheChain'
+			try resolved.set(start, value: answer) otherwise panic("resolveJumpChains: resolved.set OOB at {start}")
+		end 'startEndsTheChain'
+	end 'eachStart'
+
+	return resolved
+end 'resolveJumpChains'
+
+// The local a block forwards control to when it is an EMPTY unconditional jump — no body ops at all,
+// no conditional branch, just a `jmp`. Answers `local` itself for every other block, and for a `jmp`
+// to ITSELF (an empty infinite loop, which has nothing to forward to).
+//
+// "No body ops" is the whole test, and after `applyAllocation` it means what it says: a `critsplit`
+// block that received this edge's parallel copies holds them as body ops and is refused here, while
+// one that received none is genuinely empty. See this file's header.
+function emptyJumpTargetOf(module TargetModule, topo FuncTopology, local CfgIndex) returns CfgIndex
+	let block = blockAt(module, topo: topo, local: local)
+	if block.opRefs.count() > 0 or block.hasCondBranchOp() 'carriesWork'
+		return local
+	end 'carriesWork'
+
+	return match unconditionalBranchTargetOf(module, block: block) 'terminator'
+		none gives local
+		blockId(target) gives localOfBlockId(topo, blockId: target)
+	end 'terminator'
+end 'emptyJumpTargetOf'
+
+// Re-point every edge whose target resolved elsewhere, through the one edge-retargeting
+// implementation in the compiler (`retargetControlOp`, SsaDestruction) — which covers the `jcc`, the
+// `jmp`, the arm64 branches AND both multiway jump tables, so no edge kind can be silently missed.
+//
+// COLLECT FIRST, THEN WRITE: `retargetControlOp` writes `module.ops`, which no live borrow of a
+// block out of `module.blocks` may overlap (E3070). It is also `splitCriticalEdgesInFunc`'s
+// discipline for the second reason — the reads classify against ONE consistent CFG, and each
+// redirect is independent of the others.
+function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved CfgIndexArray)
+	var predRefs = BlockRefArray.create()
+	var oldTargets = BlockIdArray.create()
+	var newTargets = BlockIdArray.create()
+
+	// ⚠ A SUCCESSOR MAY APPEAR TWICE IN ONE BLOCK'S LIST. `collectBlockSuccessorIds` pushes the
+	// `jcc`'s then-target and the `jmp`'s else-target without deduping, so a two-way branch whose two
+	// arms name one block lists it twice — and the SECOND redirect would find no edge left to move
+	// and hit `retargetControlOp`'s no-match panic. Marked and cleared per block rather than scanned:
+	// a dense jump table's successor list is long, and a membership scan over it would make this
+	// quadratic in the arm count.
+	var seen = BoolArray.create()
+	seen.resize(topo.numBlocks)
+
+	for local in 0 upto topo.numBlocks 'eachPred'
+		for k in 0 upto topo.succ.degree(local) 'eachSucc'
+			let succ = topo.succ.neighbour(local, k: k)
+			let alreadyListed = try seen.get(succ) otherwise panic("threadResolvedEdges: seen.get OOB at {succ}")
+			if alreadyListed 'duplicateEdge'
+				continue
+			end 'duplicateEdge'
+			try seen.set(succ, value: true) otherwise panic("threadResolvedEdges: seen.set OOB at {succ}")
+
+			let target = try resolved.get(succ) otherwise panic("threadResolvedEdges: resolved.get OOB at {succ}")
+			if target == succ 'edgeUnchanged'
+				continue
+			end 'edgeUnchanged'
+
+			predRefs.push(try topo.blockRefByLocal.get(local) otherwise panic("threadResolvedEdges: blockRefByLocal.get OOB at {local}"))
+			oldTargets.push(blockAt(module, topo: topo, local: succ).id)
+			newTargets.push(blockAt(module, topo: topo, local: target).id)
+		end 'eachSucc'
+
+		for k in 0 upto topo.succ.degree(local) 'clearSeen'
+			try seen.set(topo.succ.neighbour(local, k: k), value: false) otherwise panic("threadResolvedEdges: seen.set OOB while clearing")
+		end 'clearSeen'
+	end 'eachPred'
+
+	for k in 0 upto predRefs.count() 'eachRedirect'
+		retargetControlOp(module, predRef: try predRefs.get(k) otherwise panic("threadResolvedEdges: predRefs.get OOB at {k}"), oldTarget: try oldTargets.get(k) otherwise panic("threadResolvedEdges: oldTargets.get OOB at {k}"), newTarget: try newTargets.get(k) otherwise panic("threadResolvedEdges: newTargets.get OOB at {k}"))
+	end 'eachRedirect'
+end 'threadResolvedEdges'
+
+// ==========================================================================
+// Transform 4 — unreachable-block elimination
+// ==========================================================================
+
+// Drop every block with no path from the entry — the empty `jmp` blocks the threading above just
+// orphaned, plus whatever the parser's `dead` continuations already were. Survivors keep their
+// relative order, so nothing that depends on layout moves.
+//
+// ⚠⚠ A BLOCK WITH NO TERMINATOR OP FALLS THROUGH PHYSICALLY, AND THE OPS-DERIVED CFG CANNOT SEE
+// THAT EDGE. `Terminator.dead` / `Terminator.unset` name no op, so `collectBlockSuccessorIds` gives
+// such a block NO successors — its real successor is whatever is laid down next. That hole never
+// mattered while nothing removed blocks; it matters now, because dropping the block a live one falls
+// into would silently re-point it at whatever survived further down. So the walk adds the physical
+// edge, and it is added WITHOUT going through `resolved`: a fall-through is not a branch, threading
+// never moved it, and the block it names must survive verbatim.
+function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTopology, resolved CfgIndexArray)
+	var reachable = BoolArray.create()
+	reachable.resize(topo.numBlocks)
+	var stack = CfgIndexArray.create()
+
+	// The entry is local 0 and is reachable by definition — it is also the block that must stay first
+	// (the prologue goes in it), which the ascending rebuild below preserves.
+	try reachable.set(0, value: true) otherwise panic("dropUnreachableBlocks: reachable.set OOB at the entry block")
+	stack.push(0)
+
+	while stack.count() > 0 'walk'
+		let u = try stack.pop() otherwise panic("dropUnreachableBlocks: stack.pop on non-empty failed")
+
+		// The edges as they stand AFTER the threading above: every branch target goes through `resolved`.
+		for k in 0 upto topo.succ.degree(u) 'eachSucc'
+			markReachable(reachable, stack: stack, local: try resolved.get(topo.succ.neighbour(u, k: k)) otherwise panic("dropUnreachableBlocks: resolved.get OOB"))
+		end 'eachSucc'
+
+		if (not blockAt(module, topo: topo, local: u).hasTerminatorOp()) and u + 1 < topo.numBlocks 'fallsThroughPhysically'
+			markReachable(reachable, stack: stack, local: u + 1)
+		end 'fallsThroughPhysically'
+	end 'walk'
+
+	var kept = BlockRefArray.create()
+	for local in 0 upto topo.numBlocks 'eachBlock'
+		let survives = try reachable.get(local) otherwise panic("dropUnreachableBlocks: reachable.get OOB at {local}")
+		if survives 'keep'
+			kept.push(try topo.blockRefByLocal.get(local) otherwise panic("dropUnreachableBlocks: blockRefByLocal.get OOB at {local}"))
+		end 'keep'
+	end 'eachBlock'
+	func.blockRefs = kept
+end 'dropUnreachableBlocks'
+
+// Mark a block reachable and queue it, once. Both columns are the caller's.
+function markReachable(reachable BoolArray, stack CfgIndexArray, local CfgIndex)
+	let seenBefore = try reachable.get(local) otherwise panic("markReachable: reachable.get OOB at {local}")
+	if seenBefore 'alreadySeen'
+		return
+	end 'alreadySeen'
+
+	try reachable.set(local, value: true) otherwise panic("markReachable: reachable.set OOB at {local}")
+	stack.push(local)
+end 'markReachable'
+
+// ==========================================================================
+// Transforms 1 and 2 — jump elision and conditional inversion
+// ==========================================================================
+
+// The layout walk, on the FINAL block list. Runs last, and nothing derives a CFG for this function
+// afterwards — see `cleanUpFunctionBranches` for why that ordering is not optional.
+function elideFallthroughBranches(module TargetModule, func IrFunction)
+	// The LAST block has no physical successor, so it has nothing to fall through into. The count is
+	// at least 1 here — `cleanUpFunctionBranches` returns for a function with no blocks, and the drop
+	// above always keeps the entry — so the subtraction cannot leave the index type's range.
+	for i in 0 upto func.blockRefs.count() - 1 'eachBlock'
+		let nextRef = try func.blockRefs.get(i + 1) otherwise panic("elideFallthroughBranches: blockRefs.get OOB at {i + 1}")
+		let nextId = (try module.blocks.get(nextRef) otherwise panic("elideFallthroughBranches: blockRef {nextRef} not in module.blocks")).id
+		elideBranchInto(module, blockRef: try func.blockRefs.get(i) otherwise panic("elideFallthroughBranches: blockRefs.get OOB at {i}"), nextId: nextId)
+	end 'eachBlock'
+end 'elideFallthroughBranches'
+
+// One block's elision, against the id of the block that will be laid down immediately after it.
+// A terminator that is not the ISA's unconditional branch — a `ret`, a multiway jump table, an
+// op-less `dead` slot — carries nothing to elide.
+function elideBranchInto(module TargetModule, blockRef BlockRef, nextId BlockId)
+	let block = try module.blocks.get(blockRef) otherwise panic("elideBranchInto: blockRef {blockRef} not in module.blocks")
+	match unconditionalBranchTargetOf(module, block: block) 'terminator'
+		none then return
+		blockId(elseTarget) then elideAgainstNext(module, blockRef: blockRef, elseTarget: elseTarget, nextId: nextId)
+	end 'terminator'
+end 'elideBranchInto'
+
+// The two transforms, with the terminator's target in hand.
+function elideAgainstNext(module TargetModule, blockRef BlockRef, elseTarget BlockId, nextId BlockId)
+	if elseTarget == nextId 'fallsIntoElse'
+		// TRANSFORM 1. Whether or not the block also has a `jcc`: the `jcc` names the then-edge and is
+		// untouched, and the else-edge is now the fall-through it always was in the emitted layout.
+		elideTerminatorIn(module, blockRef: blockRef)
+		return
+	end 'fallsIntoElse'
+
+	// TRANSFORM 2.
+	match invertibleCondBranchIn(module, blockRef: blockRef) 'condSlot'
+		none then return
+		opIndex(condOpIndex) then invertBranchAndElide(module, blockRef: blockRef, condOpIndex: condOpIndex, nextId: nextId, elseTarget: elseTarget)
+	end 'condSlot'
+end 'elideAgainstNext'
+
+// The `jcc` op index of a block whose conditional half is a candidate for inversion, or `none`. Two
+// STRUCTURAL things must hold, and the second is the one that is not obvious:
+//
+//   • the block has a conditional branch at all;
+//   • ⚠ that `jcc` is the block's LAST BODY OP. An op sitting BETWEEN the `jcc` and the `jmp` runs
+//     only when the `jcc` is NOT taken, so inverting the pair would move it onto the other path —
+//     a silent wrong answer. `IrModule.appendOp` refuses to append past a recorded conditional
+//     branch, but the live-range splitter mints its ops through its own append and bypasses that
+//     guard (see `assertCondBranchIndicesComplete`), so this is CHECKED, never assumed.
+//
+// Whether it TARGETS the next block is decided where the op is read, so the `jcc` is dereferenced
+// exactly once — see `invertCondBranchOntoElse`.
+function invertibleCondBranchIn(module TargetModule, blockRef BlockRef) returns CondBranch
+	let block = try module.blocks.get(blockRef) otherwise panic("invertibleCondBranchIn: blockRef {blockRef} not in module.blocks")
+	let bodyCount = block.opRefs.count()
+	if bodyCount == 0 or not block.hasCondBranchOp() 'noConditionalHalf'
+		return CondBranch.none
+	end 'noConditionalHalf'
+
+	let condOpIndex = block.condBranchIndex()
+	let lastBodyOp = try block.opRefs.get(bodyCount - 1) otherwise panic("invertibleCondBranchIn: opRefs.get OOB at {bodyCount - 1}")
+	return CondBranch.opIndex(condOpIndex) if condOpIndex == lastBodyOp else CondBranch.none
+end 'invertibleCondBranchIn'
+
+// Invert the block's `jcc` onto the else target, and delete the `jmp` if it did.
+function invertBranchAndElide(module TargetModule, blockRef BlockRef, condOpIndex OpIndex, nextId BlockId, elseTarget BlockId)
+	if invertCondBranchOntoElse(module, blockRef: blockRef, condOpIndex: condOpIndex, nextId: nextId, elseTarget: elseTarget) 'inverted'
+		elideTerminatorIn(module, blockRef: blockRef)
+	end 'inverted'
+end 'invertBranchAndElide'
+
+// THE ONE PLACE THE `jcc` IS READ — the test and the rewrite together, so the op roster and its
+// staleness panic are written once. False when the `jcc` names anything but the physically next
+// block, which is the case where there is no fall-through to trade the `jmp` for.
+function invertCondBranchOntoElse(module TargetModule, blockRef BlockRef, condOpIndex OpIndex, nextId BlockId, elseTarget BlockId) returns bool
+	let op = try module.ops.get(condOpIndex) otherwise panic("invertCondBranchOntoElse: conditional branch op {condOpIndex} not in module.ops")
+	// The arm's work is a CALL because a `match` arm takes ONE statement — `retargetControlOp`'s
+	// reason for the same shape.
+	return match op 'cond'
+		jcc(cond, thenTarget) gives invertJccIfThenIsNext(module, condOpIndex: condOpIndex, cond: cond, thenTarget: thenTarget, nextId: nextId, elseTarget: elseTarget)
+		default panic("invertCondBranchOntoElse: block ref {blockRef} records its conditional branch at op {condOpIndex}, but that op is not a `jcc` — this pass runs on x64 only")
+	end 'cond'
+end 'invertCondBranchOntoElse'
+
+// `jcc cond,next` becomes `jcc !cond,else`. A `jcc` naming anything else is left exactly as it is.
+function invertJccIfThenIsNext(module TargetModule, condOpIndex OpIndex, cond X64CondCode, thenTarget BlockId, nextId BlockId, elseTarget BlockId) returns bool
+	if thenTarget != nextId 'thenIsNotNext'
+		return false
+	end 'thenIsNotNext'
+
+	try module.ops.set(condOpIndex, value: TargetOp.jcc(invertX64Cond(cond), targetBlockId: elseTarget)) otherwise panic("invertJccIfThenIsNext: ops.set OOB at {condOpIndex}")
+	return true
+end 'invertJccIfThenIsNext'
+
+// Delete a block's terminator branch. `Terminator.fallthrough` is the slot's declared state for
+// exactly this — *"terminator was deliberately elided at the target phase because the block falls
+// straight through to the next block in layout order"* — and this pass is its first producer;
+// `emitFunctionChunk` and the Target printer both already emit nothing for a block that has no
+// terminator OP. The `jmp` itself is left where it lies in `module.ops`: nothing walks that array
+// linearly, and rewriting every later op index to close the hole would cost far more than the word.
+function elideTerminatorIn(module TargetModule, blockRef BlockRef)
+	var block = try module.blocks.get(blockRef) otherwise panic("elideTerminatorIn: blockRef {blockRef} not in module.blocks")
+	block.terminator = Terminator.fallthrough
+end 'elideTerminatorIn'
+
+// The condition code that is TRUE exactly when `cond` is FALSE.
+//
+// ⭐ AN EXACT FLAG-LEVEL COMPLEMENT, NOT A "LOGICAL OPPOSITE", AND THE DIFFERENCE IS THE NaN EDGE.
+// Every x64 condition code is one of a pair testing the same flags for opposite values — JB/JAE on
+// CF, JE/JNE on ZF, JP/JNP on PF, JL/JGE on SF≠OF — so for any flag state exactly one of a pair is
+// taken. That is what makes the inversion safe for the float compares, where `ucomisd` reports an
+// unordered pair as ZF=PF=CF=1: swapping which target is the fall-through cannot change which of
+// `equal`/`notEqual` a NaN takes, because both still read the same ZF the compare set.
+function invertX64Cond(cond X64CondCode) returns X64CondCode
+	return match cond 'invert'
+		below gives X64CondCode.aboveEqual
+		aboveEqual gives X64CondCode.below
+		equal gives X64CondCode.notEqual
+		notEqual gives X64CondCode.equal
+		belowEqual gives X64CondCode.above
+		above gives X64CondCode.belowEqual
+		parity gives X64CondCode.noParity
+		noParity gives X64CondCode.parity
+		less gives X64CondCode.greaterEqual
+		greaterEqual gives X64CondCode.less
+		lessEqual gives X64CondCode.greater
+		greater gives X64CondCode.lessEqual
+	end 'invert'
+end 'invertX64Cond'

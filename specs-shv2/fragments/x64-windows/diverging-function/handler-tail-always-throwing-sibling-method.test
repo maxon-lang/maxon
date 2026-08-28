@@ -150,8 +150,7 @@ func @Worker.drain {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, broken
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   broken:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -175,14 +174,12 @@ func @Worker.collect {
     x64.movRegReg rcx, rbx
     x64.callDirect Worker.drain
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegReg rcx, rbx
     x64.callDirect Worker.abandon
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp tryok#3
+    x64.jcc equal, tryok#3
   tryerr#4:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -203,7 +200,6 @@ func @Worker.collect {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  afterdiverge:
 }
 
 func @main {
@@ -220,25 +216,21 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Worker.collect
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r12, 99
     x64.jmp trycont
   tryok:
     x64.movRegReg r12, r8
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic

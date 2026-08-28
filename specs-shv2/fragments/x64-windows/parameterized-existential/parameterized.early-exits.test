@@ -172,8 +172,7 @@ func @Numbered.advance {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.cmpRegReg rax, rdx
-    x64.jcc greaterEqual, atTheLast
-    x64.jmp ifcont
+    x64.jcc less, ifcont
   atTheLast:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -201,11 +200,9 @@ func @returnsOutOfTheBody {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegImm32 rax, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, walk
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   walk:
     x64.movRegReg rcx, rbx
     x64.callMem [r12 + 32]
@@ -213,8 +210,7 @@ func @returnsOutOfTheBody {
     x64.movRegReg rcx, r13
     x64.callDirect String.byteLength
     x64.cmpRegImm32 r8, 0
-    x64.jcc greater, theFirst
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   theFirst:
     x64.movRegReg rcx, r13
     x64.callDirect String.byteLength
@@ -231,7 +227,6 @@ func @returnsOutOfTheBody {
   ifcont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, rbx
     x64.callMem [r12 + 40]
@@ -260,11 +255,9 @@ func @breaksOutOfTheBody {
     x64.movRegReg r12, rdx
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rax, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, walk
-    x64.jmp critsplit
+    x64.jcc notEqual, critsplit
   walk:
     x64.movRegReg rcx, rbx
     x64.callMem [r12 + 32]
@@ -273,8 +266,7 @@ func @breaksOutOfTheBody {
     x64.callDirect String.byteLength
     x64.leaRegRegReg r13, r13, r8
     x64.cmpRegImm32 r13, 100
-    x64.jcc greater, enough
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   enough:
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
@@ -283,7 +275,6 @@ func @breaksOutOfTheBody {
   ifcont:
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, rbx
     x64.callMem [r12 + 40]
@@ -291,7 +282,6 @@ func @breaksOutOfTheBody {
     x64.jmp forhdr
   critsplit:
     x64.movRegReg r8, r13
-    x64.jmp forexit
   forexit:
     x64.epilogue 32
     x64.popReg r14
@@ -315,11 +305,9 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rbx, 200
-    x64.jcc less, many
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   many:
     x64.movRegImm32 rcx, 30
     x64.callDirect Numbered.create

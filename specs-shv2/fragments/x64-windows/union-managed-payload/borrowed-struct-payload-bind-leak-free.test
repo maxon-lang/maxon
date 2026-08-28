@@ -71,15 +71,13 @@ func @massOf {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegReg rcx, rbx
@@ -88,7 +86,6 @@ func @massOf {
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.movRegReg r8, r12
-    x64.jmp matchcont
   matchcont:
     x64.epilogue 32
     x64.popReg r12
@@ -118,11 +115,9 @@ func @main {
     x64.storeBaseDispReg.word64 [r12 + 8], rbx
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r13, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rbx, 300
-    x64.jcc less, spin
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   spin:
     x64.movRegReg rcx, r12
     x64.callDirect massOf
@@ -131,8 +126,7 @@ func @main {
     x64.jmp whilehdr
   whileexit:
     x64.cmpRegImm32 r13, 900
-    x64.jcc notEqual, wrong
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   wrong:
     x64.movRegImm32 rbx, 1
     x64.movRegReg rcx, r12

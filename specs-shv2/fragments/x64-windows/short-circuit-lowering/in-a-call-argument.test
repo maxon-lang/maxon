@@ -30,101 +30,61 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.jmp __il_body#11
   __il_body#11:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#10
   __il_cont#10:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#34
-    x64.jmp orrhs#1
-  critsplit#34:
-    x64.jmp scmerge#2
-  orrhs#1:
-    x64.jmp __il_body#13
+    x64.jcc notEqual, __il_body#16
   __il_body#13:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#12
   __il_cont#12:
     x64.movRegReg rcx, rax
-    x64.jmp scmerge#2
-  scmerge#2:
-    x64.jmp __il_body#16
   __il_body#16:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, isTrue#17
-    x64.jmp ifcont#18
+    x64.jcc equal, ifcont#18
   isTrue#17:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#15
+    x64.jmp __il_body#19
   ifcont#18:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#15
-  __il_cont#15:
-    x64.jmp __il_body#19
   __il_body#19:
     x64.movRegImm32 rcx, 1
-    x64.jmp __il_cont#14
   __il_cont#14:
     x64.movRegImm32 rdx, 0
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, andrhs
-    x64.jmp critsplit#35
-  andrhs:
-    x64.jmp __il_body#21
+    x64.jcc equal, critsplit
   __il_body#21:
     x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont#20
-  __il_cont#20:
-    x64.jmp scmerge#4
-  critsplit#35:
-    x64.movRegReg rcx, rdx
-    x64.jmp scmerge#4
-  scmerge#4:
     x64.jmp __il_body#24
+  critsplit:
+    x64.movRegReg rcx, rdx
   __il_body#24:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, isTrue#25
-    x64.jmp ifcont#26
+    x64.jcc equal, ifcont#26
   isTrue#25:
     x64.movRegImm32 rcx, 1
-    x64.jmp __il_cont#23
+    x64.jmp __il_body#27
   ifcont#26:
     x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont#23
-  __il_cont#23:
-    x64.jmp __il_body#27
   __il_body#27:
     x64.movRegImm32 rdx, 0
-    x64.jmp __il_cont#22
   __il_cont#22:
     x64.movRegImm32 rsi, 1
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, critsplit#36
-    x64.jmp orrhs#5
-  critsplit#36:
-    x64.jmp scmerge#6
-  orrhs#5:
-    x64.jmp __il_body#29
+    x64.jcc notEqual, __il_body#31
   __il_body#29:
     x64.movRegImm32 rdx, 1
-    x64.jmp __il_cont#28
   __il_cont#28:
     x64.movRegReg rsi, rdx
-    x64.jmp scmerge#6
-  scmerge#6:
-    x64.jmp __il_body#31
   __il_body#31:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, isTrue#32
-    x64.jmp ifcont#33
+    x64.jcc equal, ifcont#33
   isTrue#32:
     x64.movRegImm32 rdx, 1
     x64.jmp __il_cont#30
   ifcont#33:
     x64.movRegImm32 rdx, 0
-    x64.jmp __il_cont#30
   __il_cont#30:
     x64.imulRegRegImm32 rax, rax, 4
     x64.imulRegRegImm32 rcx, rcx, 2
@@ -132,12 +92,10 @@ func @main {
     x64.leaRegRegReg r8, rax, rdx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

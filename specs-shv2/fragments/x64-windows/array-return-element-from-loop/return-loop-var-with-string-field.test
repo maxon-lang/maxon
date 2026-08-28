@@ -73,17 +73,14 @@ func @findEntry {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, search
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   search:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.imulRegRegImm32 rcx, r13, 8
@@ -92,8 +89,7 @@ func @findEntry {
     x64.jmp __il_cont
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegReg rax, rax, r13
@@ -104,14 +100,12 @@ func @findEntry {
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get_unchecked
     x64.movRegReg r14, r8
-    x64.jmp __il_cont
   __il_cont:
     x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
     x64.movRegReg rdx, r12
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, found
-    x64.jmp ifcont
+    x64.jcc equal, forstep
   found:
     x64.movRegReg rcx, r14
     x64.callDirect __mm_retain
@@ -122,8 +116,6 @@ func @findEntry {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp forhdr

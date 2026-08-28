@@ -25,11 +25,9 @@ func @divLoop {
     x64.prologue 32
     x64.movRegImm32 r8, 0
     x64.movRegImm32 rsi, 1
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegReg rsi, rcx
-    x64.jcc lessEqual, loop
-    x64.jmp whileexit
+    x64.jcc greater, whileexit
   loop:
     x64.movRegImm32 rax, 50
     x64.cmpRegImm32 rsi, 0
@@ -39,8 +37,7 @@ func @divLoop {
     x64.cqo
     x64.idivReg r9
     x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -67,12 +64,10 @@ func @main {
     x64.callDirect divLoop
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

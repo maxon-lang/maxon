@@ -89,40 +89,26 @@ func @idleVarsPastABreak {
     x64.movRegImm32 r15, 0
     x64.storeSlotReg slot3, r15
     x64.movRegImm32 r15, 0
-    x64.jmp __il_body
   __il_body:
     x64.cmpRegImm32 rcx, 0
     x64.setccReg greaterEqual, rcx
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, guard
-    x64.jmp critsplit#11
+    x64.jcc equal, critsplit
   guard:
     x64.loadRegSlot rcx, slot3
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r15, 100
-    x64.jcc less, loop
-    x64.jmp critsplit#10
+    x64.jcc greaterEqual, ifcont
   loop:
     x64.leaRegRegReg rcx, rcx, r15
     x64.leaRegRegImm32 r15, r15, 1
     x64.cmpRegImm32 r15, 3
-    x64.jcc greater, done
-    x64.jmp ifcont#6
-  done:
-    x64.jmp whileexit
-  ifcont#6:
+    x64.jcc greater, ifcont
     x64.jmp whilehdr
-  critsplit#10:
-    x64.jmp whileexit
-  whileexit:
-    x64.jmp ifcont#7
-  critsplit#11:
+  critsplit:
     x64.loadRegSlot rcx, slot3
-    x64.jmp ifcont#7
-  ifcont#7:
+  ifcont:
     x64.leaRegRegReg rax, rcx, rax
     x64.leaRegRegReg rax, rax, rdx
     x64.leaRegRegReg rax, rax, rsi
@@ -159,8 +145,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect idleVarsPastABreak
     x64.cmpRegImm32 r8, 126
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

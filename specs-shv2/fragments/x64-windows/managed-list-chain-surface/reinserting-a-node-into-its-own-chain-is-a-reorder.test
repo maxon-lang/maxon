@@ -61,9 +61,8 @@ func @dump {
     x64.callDirect __list_head_checked
     x64.storeSlotReg slot0, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
-  tryerr#2:
+    x64.jcc equal, tryok#1
+  tryerr:
     x64.loadRegBaseDisp.word64 r12, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
     x64.leaRegRdata rax, [rip + __str_rec_16]
@@ -161,23 +160,18 @@ func @dump {
     x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
     x64.loadRegSlot rbx, slot0
-    x64.jmp whilehdr
   whilehdr:
     x64.storeSlotReg slot2, rbx
     x64.movRegImm32 rax, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, walk
-    x64.jmp critsplit
+    x64.jcc equal, whileexit
   walk:
     x64.movRegReg rcx, rbx
     x64.callDirect __list_node_next_checked
     x64.movRegReg r12, r8
     x64.storeSlotReg slot5, r12
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#7
-    x64.jmp tryok#6
-  tryerr#7:
-    x64.jmp whileexit
+    x64.jcc notEqual, whileexit
   tryok#6:
     x64.movRegReg rcx, rbx
     x64.callDirect __list_node_decref
@@ -226,8 +220,6 @@ func @dump {
     x64.loadRegSlot rax, slot5
     x64.movRegReg rbx, rax
     x64.jmp whilehdr
-  critsplit:
-    x64.jmp whileexit
   whileexit:
     x64.leaRegRdata rax, [rip + __str_rec_17]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]

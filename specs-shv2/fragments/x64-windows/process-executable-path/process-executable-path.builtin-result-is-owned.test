@@ -33,22 +33,16 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r12, 50
-    x64.jcc less, reads
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   reads:
     x64.callDirect __proc_exe_path
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc greater, nonEmpty
-    x64.jmp critsplit
+    x64.jcc lessEqual, ifcont#5
   nonEmpty:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#5
-  critsplit:
-    x64.jmp ifcont#5
   ifcont#5:
     x64.leaRegRegImm32 r12, r12, 1
     x64.movRegReg rcx, r8
@@ -56,8 +50,7 @@ func @main {
     x64.jmp whilehdr
   whileexit:
     x64.cmpRegImm32 rbx, 50
-    x64.jcc equal, allFifty
-    x64.jmp ifcont#7
+    x64.jcc notEqual, ifcont#7
   allFifty:
     x64.movRegImm32 r8, 6
     x64.epilogue 32

@@ -34,9 +34,6 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movsdRegRip xmm0, [rip + __fconst_1]
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
   __il_cont:
     x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.movsdRegRip xmm2, [rip + __fconst_1]
@@ -48,42 +45,33 @@ func @main {
     x64.setccReg equal, rax
     x64.divsdRegReg xmm1, xmm1, xmm0
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryblkerr
-    x64.jmp tryblkok
+    x64.jcc equal, tryblkok
   tryblkerr:
     x64.leaRegRegImm32 rax, rax, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm:
     x64.movRegImm32 r8, 42
-    x64.jmp matchcont#8
-  matchcont#8:
     x64.jmp tryblkcont
   matchdead:
   tryblkok:
     x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc above, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc belowEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 rax, 1
-    x64.jmp matchcont#5
+    x64.jmp matchcont
   ternaryfalse:
     x64.movRegImm32 rax, 2
-    x64.jmp matchcont#5
-  matchcont#5:
+  matchcont:
     x64.movRegReg r8, rax
-    x64.jmp tryblkcont
   tryblkcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

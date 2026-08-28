@@ -65,49 +65,36 @@ func @main {
     x64.movRegImm32 rcx, 42
     x64.callDirect Box.create
     x64.movRegImm32 rax, 0
-    x64.jmp __il_body#9
   __il_body#9:
     x64.cmpRegReg rbx, rbx
     x64.setccReg equal, rcx
-    x64.jmp __il_cont#8
   __il_cont#8:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, same
-    x64.jmp critsplit#12
+    x64.jcc equal, __il_body#11
   same:
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp ifcont#2
-  critsplit#12:
-    x64.jmp ifcont#2
-  ifcont#2:
-    x64.jmp __il_body#11
   __il_body#11:
     x64.cmpRegReg rbx, r8
     x64.setccReg equal, rcx
-    x64.jmp __il_cont#10
   __il_cont#10:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, diff
-    x64.jmp critsplit#13
+    x64.jcc equal, critsplit
   diff:
     x64.leaRegRegImm32 r12, rax, 10
-    x64.jmp ifcont#4
-  critsplit#13:
+    x64.jmp ifcont
+  critsplit:
     x64.movRegReg r12, rax
-    x64.jmp ifcont#4
-  ifcont#4:
+  ifcont:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

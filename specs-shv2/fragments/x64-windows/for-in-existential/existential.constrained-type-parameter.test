@@ -96,8 +96,7 @@ func @Upto.advance {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.cmpRegReg rax, rdx
-    x64.jcc greaterEqual, atTheLast
-    x64.jmp ifcont
+    x64.jcc less, ifcont
   atTheLast:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -143,16 +142,13 @@ func @Wrap.total {
     x64.movRegImm32 r12, 0
     x64.loadRegBaseDisp.word64 r13, [rcx + 0]
     x64.movRegImm32 rax, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, walk
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   walk:
     x64.movRegReg rcx, r13
     x64.callMem [rbx + 24]
     x64.leaRegRegReg r12, r12, r8
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r13
     x64.callMem [rbx + 32]

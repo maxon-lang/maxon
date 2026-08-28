@@ -76,8 +76,7 @@ func @tyLen {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegReg rcx, rbx
@@ -91,11 +90,9 @@ func @tyLen {
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.movRegImm32 r8, 0
-    x64.jmp matchcont
   matchcont:
     x64.epilogue 32
     x64.popReg r12
@@ -134,8 +131,7 @@ func @main {
     x64.storeSlotReg slot1, r8
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.loadRegBaseDisp.word64 r12, [r8 + 8]
     x64.movRegReg rcx, r12
@@ -148,12 +144,10 @@ func @main {
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.movRegImm32 r12, 0
     x64.movRegReg r13, r12
-    x64.jmp matchcont
   matchcont:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect tyLen

@@ -46,8 +46,7 @@ func @classify {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
@@ -58,19 +57,15 @@ func @classify {
     x64.setccReg lessEqual, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm#2
-    x64.jmp matchdead
+    x64.jcc equal, matchdead
   matcharm#2:
     x64.movRegImm32 r8, 2
-    x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 125
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -96,19 +91,15 @@ func @describeWide {
     x64.setccReg lessEqual, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm
-    x64.jmp matchdead
+    x64.jcc equal, matchdead
   matcharm:
     x64.movRegImm32 r8, 9
-    x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 125
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -130,11 +121,9 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rcx, 1
-    x64.jmp __il_body#5
   __il_body#5:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#6
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#6:
     x64.movRegImm32 rax, 1
     x64.jmp matchcont#10
@@ -145,29 +134,23 @@ func @main {
     x64.setccReg lessEqual, rdx
     x64.andRegReg rax, rax, rdx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm#7
-    x64.jmp matchdead#8
+    x64.jcc equal, matchdead#8
   matcharm#7:
     x64.movRegImm32 rax, 2
-    x64.jmp matchcont#10
   matchcont#10:
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __il_slow#13
-    x64.jmp __rc_chk#12
   __rc_chk#12:
     x64.cmpRegImm32 rax, 125
-    x64.jcc greater, __il_slow#13
-    x64.jmp __rc_ok#11
+    x64.jcc lessEqual, __rc_ok#11
   __il_slow#13:
     x64.callDirect classify
     x64.movRegReg rbx, r8
     x64.jmp __il_cont#4
   __rc_ok#11:
     x64.movRegReg rbx, rax
-    x64.jmp __il_cont#4
   __il_cont#4:
     x64.movRegImm32 rcx, 1
-    x64.jmp __il_body#14
   __il_body#14:
     x64.cmpRegImm32 rcx, 0
     x64.setccReg greaterEqual, rax
@@ -175,29 +158,23 @@ func @main {
     x64.setccReg lessEqual, rdx
     x64.andRegReg rax, rax, rdx
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm#15
-    x64.jmp matchdead#16
+    x64.jcc equal, matchdead#16
   matcharm#15:
     x64.movRegImm32 rax, 9
-    x64.jmp matchcont#17
   matchcont#17:
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __il_slow#20
-    x64.jmp __rc_chk#19
   __rc_chk#19:
     x64.cmpRegImm32 rax, 125
-    x64.jcc greater, __il_slow#20
-    x64.jmp __rc_ok#18
+    x64.jcc lessEqual, __rc_ok#18
   __il_slow#20:
     x64.callDirect describeWide
     x64.jmp __il_cont#3
   __rc_ok#18:
     x64.movRegReg r8, rax
-    x64.jmp __il_cont#3
   __il_cont#3:
     x64.cmpRegImm32 r8, 9
-    x64.jcc equal, wideOk
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   wideOk:
     x64.movRegReg r8, rbx
     x64.epilogue 40

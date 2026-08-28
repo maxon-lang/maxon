@@ -50,18 +50,11 @@ func @edgeAnchor {
     x64.leaRegRegImm32 rbx, rcx, 8
     x64.movRegImm32 r12, 0
     x64.cmpRegImm32 rcx, 0
-    x64.jcc greater, br
-    x64.jmp critsplit
+    x64.jcc lessEqual, __il_body
   br:
     x64.movRegReg r12, rax
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
-    x64.jmp __il_body
   __il_body:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp __il_cont
   __il_cont:
     x64.leaRegRegReg rdx, rdx, rsi
     x64.leaRegRegReg rdx, rdx, rdi
@@ -88,8 +81,7 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.callDirect edgeAnchor
     x64.cmpRegImm32 r8, 52
-    x64.jcc notEqual, taken
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   taken:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
@@ -100,8 +92,7 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.callDirect edgeAnchor
     x64.cmpRegImm32 r8, 39
-    x64.jcc notEqual, skipped
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   skipped:
     x64.movRegImm32 r8, 2
     x64.epilogue 32

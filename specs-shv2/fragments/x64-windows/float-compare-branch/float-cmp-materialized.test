@@ -44,33 +44,27 @@ func @main {
     x64.leaRegRegReg rsi, rcx, rdx
     x64.movRegImm32 rdi, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, isEq
-    x64.jmp critsplit#8
+    x64.jcc equal, critsplit#8
   isEq:
     x64.leaRegRegImm32 rax, rdi, 1
     x64.jmp ifcont#2
   critsplit#8:
     x64.movRegReg rax, rdi
-    x64.jmp ifcont#2
   ifcont#2:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, isNe
-    x64.jmp critsplit#9
+    x64.jcc equal, critsplit#9
   isNe:
     x64.leaRegRegImm32 r8, rax, 2
     x64.jmp ifcont#4
   critsplit#9:
     x64.movRegReg r8, rax
-    x64.jmp ifcont#4
   ifcont#4:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

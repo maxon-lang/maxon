@@ -59,8 +59,7 @@ func @mayFail {
     x64.movRegReg rbx, rcx
     x64.callDirect Runtime.yield
     x64.cmpRegImm32 rbx, 0
-    x64.jcc notEqual, ok
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   ok:
     x64.movRegImm32 r8, 10
     x64.movRegImm32 r10, 0
@@ -95,8 +94,7 @@ func @inner {
     x64.movRegReg rcx, r12
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -120,22 +118,16 @@ func @main {
     x64.prologue 32
     x64.callDirect inner
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, trycont
   tryerr:
     x64.movRegImm32 r8, 0
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
   trycont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

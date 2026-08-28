@@ -32,13 +32,9 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.movRegImm32 rax, 4096
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rax, 4095
-    x64.jcc equal, eqLo
-    x64.jmp ifcont#2
+    x64.jcc notEqual, ifcont#2
   eqLo:
     x64.movRegImm32 r8, 11
     x64.popReg rbp
@@ -48,8 +44,7 @@ func @main {
     x64.setccReg greater, rcx
     x64.xorRegImm32 rcx, rcx, 1
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, gtLo
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   gtLo:
     x64.movRegImm32 r8, 12
     x64.popReg rbp
@@ -59,16 +54,14 @@ func @main {
     x64.setccReg equal, rcx
     x64.xorRegImm32 rcx, rcx, 1
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, eqHi
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont#6
   eqHi:
     x64.movRegImm32 r8, 13
     x64.popReg rbp
     x64.ret
   ifcont#6:
     x64.cmpRegImm32 rax, 4096
-    x64.jcc greater, gtHi
-    x64.jmp ifcont#8
+    x64.jcc lessEqual, ifcont#8
   gtHi:
     x64.movRegImm32 r8, 14
     x64.popReg rbp
@@ -78,8 +71,7 @@ func @main {
     x64.setccReg less, rax
     x64.xorRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, ltNext
-    x64.jmp ifcont#10
+    x64.jcc equal, ifcont#10
   ltNext:
     x64.movRegImm32 r8, 15
     x64.popReg rbp

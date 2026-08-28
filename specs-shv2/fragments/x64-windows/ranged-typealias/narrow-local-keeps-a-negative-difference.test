@@ -40,17 +40,12 @@ func @main {
     x64.prologue 72
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 rax, rax, -65
-    x64.jmp __il_body#7
-  __il_body#7:
-    x64.jmp __il_cont#6
   __il_cont#6:
     x64.cmpRegImm32 rax, -2147483648
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rax, 2147483647
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
@@ -66,15 +61,11 @@ func @main {
   __rc_ok:
     x64.leaRegRegImm32 rbx, rax, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, neg
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   neg:
     x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.jmp __il_body#9
-  __il_body#9:
-    x64.jmp __il_cont#8
   __il_cont#8:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -127,7 +118,6 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.jmp ifcont
   ifcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 72

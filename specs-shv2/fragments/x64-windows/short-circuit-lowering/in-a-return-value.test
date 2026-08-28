@@ -32,24 +32,14 @@ func @bothTrue {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body#4
   __il_body#4:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#3
-  __il_cont#3:
+  __il_cont:
     x64.movRegImm32 r8, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, andrhs
-    x64.jmp critsplit
-  andrhs:
-    x64.jmp __il_body#6
+    x64.jcc equal, scmerge
   __il_body#6:
     x64.movRegImm32 r8, 1
-    x64.jmp __il_cont#5
-  __il_cont#5:
-    x64.jmp scmerge
-  critsplit:
-    x64.jmp scmerge
   scmerge:
     x64.popReg rbp
     x64.ret
@@ -59,24 +49,14 @@ func @eitherTrue {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body#4
   __il_body#4:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#3
-  __il_cont#3:
+  __il_cont:
     x64.movRegImm32 r8, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit
-    x64.jmp orrhs
-  critsplit:
-    x64.jmp scmerge
-  orrhs:
-    x64.jmp __il_body#6
+    x64.jcc notEqual, scmerge
   __il_body#6:
     x64.movRegImm32 r8, 1
-    x64.jmp __il_cont#5
-  __il_cont#5:
-    x64.jmp scmerge
   scmerge:
     x64.popReg rbp
     x64.ret
@@ -91,33 +71,25 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.callDirect bothTrue
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, a
-    x64.jmp critsplit#8
+    x64.jcc equal, ifcont#2
   a:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#2
-  critsplit#8:
-    x64.jmp ifcont#2
   ifcont#2:
     x64.callDirect eitherTrue
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, b
-    x64.jmp critsplit#9
+    x64.jcc equal, critsplit
   b:
     x64.leaRegRegImm32 r8, rbx, 2
     x64.jmp ifcont#4
-  critsplit#9:
+  critsplit:
     x64.movRegReg r8, rbx
-    x64.jmp ifcont#4
   ifcont#4:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

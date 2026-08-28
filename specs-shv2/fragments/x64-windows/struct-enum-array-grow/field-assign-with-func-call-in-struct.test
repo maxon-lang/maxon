@@ -212,8 +212,7 @@ func @initProject {
     x64.loadRegBaseDisp.byte rax, [rbx + 8]
     x64.xorRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, init
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   init:
     x64.callDirect createModule
     x64.movRegImm32 rdx, 0
@@ -232,7 +231,6 @@ func @initProject {
     x64.storeBaseDispReg.word64 [rbx + 0], r12
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.byte [rbx + 8], rax
-    x64.jmp ifcont
   ifcont:
     x64.epilogue 32
     x64.popReg r12
@@ -304,12 +302,10 @@ func @main {
     x64.callDirect __destruct_Project
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

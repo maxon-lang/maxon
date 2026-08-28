@@ -27,73 +27,49 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.cmpRegImm32 rax, 0
     x64.movRegImm32 rsi, 0
-    x64.jcc greater, andrhs#1
-    x64.jmp critsplit#16
+    x64.jcc lessEqual, scmerge#2
   andrhs#1:
     x64.cmpRegImm32 rcx, 0
     x64.setccReg greater, rsi
-    x64.jmp scmerge#2
-  critsplit#16:
-    x64.jmp scmerge#2
   scmerge#2:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, both
-    x64.jmp critsplit#17
+    x64.jcc equal, ifcont#4
   both:
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp ifcont#4
-  critsplit#17:
-    x64.jmp ifcont#4
   ifcont#4:
     x64.cmpRegImm32 rax, 0
     x64.movRegImm32 rsi, 1
-    x64.jcc greater, critsplit#18
-    x64.jmp orrhs
-  critsplit#18:
-    x64.jmp scmerge#6
+    x64.jcc greater, scmerge#6
   orrhs:
     x64.cmpRegImm32 rcx, 0
     x64.setccReg greater, rsi
-    x64.jmp scmerge#6
   scmerge#6:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, either
-    x64.jmp critsplit#19
+    x64.jcc equal, ifcont#8
   either:
     x64.leaRegRegImm32 rdx, rdx, 2
-    x64.jmp ifcont#8
-  critsplit#19:
-    x64.jmp ifcont#8
   ifcont#8:
     x64.cmpRegImm32 rax, 0
     x64.movRegImm32 rax, 0
-    x64.jcc greater, andrhs#9
-    x64.jmp critsplit#20
+    x64.jcc lessEqual, scmerge#10
   andrhs#9:
     x64.cmpRegImm32 rcx, 0
     x64.setccReg equal, rax
-    x64.jmp scmerge#10
-  critsplit#20:
-    x64.jmp scmerge#10
   scmerge#10:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, mixed
-    x64.jmp critsplit#21
+    x64.jcc equal, critsplit
   mixed:
     x64.leaRegRegImm32 r8, rdx, 4
     x64.jmp ifcont#12
-  critsplit#21:
+  critsplit:
     x64.movRegReg r8, rdx
-    x64.jmp ifcont#12
   ifcont#12:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

@@ -133,17 +133,14 @@ func @clearDepsFor {
     x64.movRegReg r12, r8
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegReg r14, rax
-    x64.jcc less, scan
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   scan:
     x64.loadRegBaseDisp.word64 rax, [r13 + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.imulRegRegImm32 rcx, r14, 8
@@ -152,8 +149,7 @@ func @clearDepsFor {
     x64.jmp __il_cont
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.leaRegRegReg rax, rax, r14
@@ -164,11 +160,10 @@ func @clearDepsFor {
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get_unchecked
     x64.movRegReg r15, r8
-    x64.jmp __il_cont
   __il_cont:
     x64.loadRegBaseDisp.word64 rax, [r15 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jumpTable rax, default=matchdead [[0]=matcharm#5, [1]=matcharm#6, [2]=matcharm#7, [3]=matcharm#8] @__jumptable_7
+    x64.jumpTable rax, default=matchdead [[0]=matcharm#5, [1]=matcharm#6, [2]=forstep, [3]=matcharm#8] @__jumptable_7
   matchdead:
   matcharm#5:
     x64.movRegReg rcx, r15
@@ -176,15 +171,13 @@ func @clearDepsFor {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
     x64.callDirect __managed_push
-    x64.jmp matchcont
+    x64.jmp forstep
   matcharm#6:
     x64.movRegReg rcx, r15
     x64.callDirect __mm_incref
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
     x64.callDirect __managed_push
-    x64.jmp matchcont
-  matcharm#7:
     x64.jmp forstep
   matcharm#8:
     x64.movRegReg rcx, r15
@@ -192,9 +185,6 @@ func @clearDepsFor {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
     x64.callDirect __managed_push
-    x64.jmp matchcont
-  matchcont:
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr
@@ -343,12 +333,10 @@ func @main {
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r13, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic

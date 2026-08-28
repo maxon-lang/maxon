@@ -63,8 +63,7 @@ func @inspect {
     x64.movRegReg rbp, rsp
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, neg
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   neg:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -91,36 +90,28 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 rax, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, inner
-    x64.jmp critsplit
+    x64.jcc equal, ifcont
   inner:
     x64.movRegReg rcx, rbx
     x64.callDirect inspect
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rax, 0
     x64.jmp trycont
   tryok:
     x64.movRegReg rax, r8
-    x64.jmp trycont
   trycont:
     x64.movRegReg r12, rax
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
   ifcont:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

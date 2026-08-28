@@ -27,19 +27,16 @@ func @main {
     x64.movRegImm32 rsi, 0
     x64.movRegImm32 rdi, 0
     x64.movRegImm32 r8, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r8, 20
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.movRegImm32 r9, 2
     x64.movRegReg rax, r8
     x64.cqo
     x64.idivReg r9
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, even
-    x64.jmp ifelse
+    x64.jcc notEqual, ifelse
   even:
     x64.leaRegRegReg rax, rcx, r8
     x64.leaRegRegImm32 rcx, rdi, 1
@@ -49,7 +46,6 @@ func @main {
     x64.movRegReg rsi, rax
     x64.movRegReg rax, rcx
     x64.movRegReg rcx, rdi
-    x64.jmp ifcont
   ifcont:
     x64.leaRegRegImm32 r8, r8, 1
     x64.movRegReg rdi, rcx
@@ -61,12 +57,10 @@ func @main {
     x64.andRegImm32 r8, r8, 125
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

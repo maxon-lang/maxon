@@ -133,23 +133,19 @@ func @main {
     x64.movRegImm32 rcx, 7
     x64.callDirect mk
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.loadRegBaseDisp.word64 rax, [r10 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm:
     x64.loadRegBaseDisp.word64 rbx, [r10 + 8]
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, matchcont
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -158,8 +154,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.jmp matchcont
   matchcont:
     x64.movRegReg rcx, r10
     x64.callDirect __mm_decref
@@ -168,7 +162,6 @@ func @main {
   matchdead:
   tryok:
     x64.movRegReg r8, rbx
-    x64.jmp trycont
   trycont:
     x64.epilogue 40
     x64.popReg rbx

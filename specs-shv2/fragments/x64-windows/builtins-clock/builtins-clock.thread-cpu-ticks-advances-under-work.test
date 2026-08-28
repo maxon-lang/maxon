@@ -29,14 +29,11 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
     x64.movRegImm32 rax, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rax, 2000000
-    x64.jcc less, spin
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   spin:
     x64.leaRegRegReg r12, r12, rax
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 rax, rax, 1
     x64.jmp forhdr
@@ -44,32 +41,24 @@ func @main {
     x64.callDirect __thread_cpu_ticks
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r12, 0
-    x64.jcc greater, workHappened
-    x64.jmp critsplit#12
+    x64.jcc lessEqual, ifcont#6
   workHappened:
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp ifcont#6
-  critsplit#12:
-    x64.jmp ifcont#6
   ifcont#6:
     x64.cmpRegReg r8, rbx
-    x64.jcc greater, cpuAdvanced
-    x64.jmp critsplit#13
+    x64.jcc lessEqual, critsplit
   cpuAdvanced:
     x64.leaRegRegImm32 r8, rax, 3
     x64.jmp ifcont#8
-  critsplit#13:
+  critsplit:
     x64.movRegReg r8, rax
-    x64.jmp ifcont#8
   ifcont#8:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

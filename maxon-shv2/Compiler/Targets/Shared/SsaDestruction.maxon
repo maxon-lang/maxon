@@ -723,12 +723,19 @@ end 'buildFuncTopologyByIndex'
 // Redirect the predecessor's branch to `oldTarget` (its `jcc` conditional branch or its
 // `jmp` terminator) so it targets `newTarget` instead. Exactly one control op matches.
 //
+// ⭐ THE ONE PLACE AN EDGE IS RE-POINTED, and it has TWO callers with opposite intents: the
+// critical-edge split above INSERTS a block onto an edge, and `X64BranchCleanup` (which runs on
+// fully allocated ops) REMOVES one. Both ask the same question of the same op roster — which is why
+// there is one implementation and neither writes its own walk over the branch-carrying op kinds.
+// Every kind that names a block is covered here, the multiway `x64JumpTable`/`arm64JumpTable`
+// included, so a caller cannot silently miss an edge.
+//
 // Both branches are addressed DIRECTLY, off the block's own `condBranch` / `terminator`
 // indices — the `jcc` used to be found by scanning every op of the predecessor, the same
 // O(ops-in-block) search the CFG builder paid (see `CondBranch`). The rewrite is in place at
 // the op's existing index, so the recorded index stays valid and there is no cached target
 // to invalidate.
-function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget BlockId, newTarget BlockId)
+export function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget BlockId, newTarget BlockId)
 	var retargeted = false
 	// ⚠ **THE PREDECESSOR IS READ OUT AND LET GO BEFORE THE FIRST WRITE.** `module.blocks.get` hands back a
 	// BORROW of `module` (E3070), and every `retarget*` below writes `module.ops` — so holding the block

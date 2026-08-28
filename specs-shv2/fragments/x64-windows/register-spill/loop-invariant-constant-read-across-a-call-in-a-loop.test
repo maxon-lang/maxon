@@ -46,11 +46,9 @@ func @loopConst {
     x64.leaRegRegImm32 rcx, rcx, 5
     x64.movRegImm32 r9, 0
     x64.movRegImm32 r10, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r10, 3
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.leaRegRegReg r9, r9, rdx
     x64.leaRegRegReg r9, r9, rsi
@@ -59,9 +57,6 @@ func @loopConst {
     x64.leaRegRegReg r9, r9, rcx
     x64.movRegReg r11, rax
     x64.subRegReg r11, rax, r10
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rbx, rax
     x64.subRegReg rbx, rax, r10
@@ -90,8 +85,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect loopConst
     x64.cmpRegImm32 r8, 6087
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

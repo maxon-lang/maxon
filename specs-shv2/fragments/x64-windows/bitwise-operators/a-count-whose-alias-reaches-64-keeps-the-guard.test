@@ -45,11 +45,9 @@ func @shlBy {
     x64.movRegReg rax, rcx
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rdx, 64
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -83,11 +81,9 @@ func @shrBy {
     x64.movRegReg r8, rcx
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rdx, 64
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -118,11 +114,9 @@ func @shrWordBy {
     x64.movRegReg rax, rcx
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rdx, 64
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -156,11 +150,9 @@ func @widen {
     x64.imulRegRegImm32 r8, rcx, 64
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 64
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
@@ -181,33 +173,24 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rcx, 1
-    x64.jmp __il_body#9
   __il_body#9:
     x64.imulRegRegImm32 rbx, rcx, 64
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __il_slow#12
-    x64.jmp __rc_chk#11
   __rc_chk#11:
     x64.cmpRegImm32 rbx, 64
-    x64.jcc greater, __il_slow#12
-    x64.jmp __rc_ok#10
+    x64.jcc lessEqual, __il_cont#8
   __il_slow#12:
     x64.callDirect widen
     x64.movRegReg rbx, r8
-    x64.jmp __il_cont#8
-  __rc_ok#10:
-    x64.jmp __il_cont#8
   __il_cont#8:
     x64.movRegImm32 rax, 7
-    x64.jmp __il_body#13
   __il_body#13:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __il_slow#16
-    x64.jmp __rc_chk#15
   __rc_chk#15:
     x64.cmpRegImm32 rbx, 64
-    x64.jcc greater, __il_slow#16
-    x64.jmp __rc_ok#14
+    x64.jcc lessEqual, __rc_ok#14
   __il_slow#16:
     x64.movRegReg rcx, rax
     x64.movRegReg rdx, rbx
@@ -226,11 +209,9 @@ func @main {
     x64.notReg rdx, rdx
     x64.andRegReg rax, rax, rdx
     x64.movRegReg r8, rax
-    x64.jmp __il_cont#7
   __il_cont#7:
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, shl
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   shl:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
@@ -240,15 +221,12 @@ func @main {
   ifcont#2:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 rax, rax, -1
-    x64.jmp __il_body#18
   __il_body#18:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __il_slow#21
-    x64.jmp __rc_chk#20
   __rc_chk#20:
     x64.cmpRegImm32 rbx, 64
-    x64.jcc greater, __il_slow#21
-    x64.jmp __rc_ok#19
+    x64.jcc lessEqual, __rc_ok#19
   __il_slow#21:
     x64.movRegReg rcx, rax
     x64.movRegReg rdx, rbx
@@ -266,13 +244,11 @@ func @main {
     x64.movRegReg rcx, rdx
     x64.sarRegCl rax, rax
     x64.movRegReg r8, rax
-    x64.jmp __il_cont#17
   __il_cont#17:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 rax, rax, -1
     x64.cmpRegReg r8, rax
-    x64.jcc notEqual, shrSign
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   shrSign:
     x64.movRegImm32 r8, 2
     x64.epilogue 40
@@ -281,15 +257,12 @@ func @main {
     x64.ret
   ifcont#4:
     x64.movRegImm rax, 18446744073709551615
-    x64.jmp __il_body#23
   __il_body#23:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __il_slow#26
-    x64.jmp __rc_chk#25
   __rc_chk#25:
     x64.cmpRegImm32 rbx, 64
-    x64.jcc greater, __il_slow#26
-    x64.jmp __rc_ok#24
+    x64.jcc lessEqual, __rc_ok#24
   __il_slow#26:
     x64.movRegReg rcx, rax
     x64.movRegReg rdx, rbx
@@ -308,11 +281,9 @@ func @main {
     x64.notReg rdx, rdx
     x64.andRegReg rax, rax, rdx
     x64.movRegReg r8, rax
-    x64.jmp __il_cont#22
   __il_cont#22:
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, shrZeroFill
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont#6
   shrZeroFill:
     x64.movRegImm32 r8, 3
     x64.epilogue 40

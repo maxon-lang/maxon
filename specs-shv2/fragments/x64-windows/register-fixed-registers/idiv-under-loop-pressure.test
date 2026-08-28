@@ -51,11 +51,9 @@ func @press {
     x64.leaRegRegImm32 rcx, rcx, 19
     x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 1
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r14, 5
-    x64.jcc lessEqual, loop
-    x64.jmp whileexit
+    x64.jcc greater, whileexit
   loop:
     x64.leaRegRegReg rax, rsi, rdi
     x64.leaRegRegReg rax, rax, r8
@@ -66,8 +64,7 @@ func @press {
     x64.leaRegRegReg rax, rax, r12
     x64.leaRegRegReg rax, rax, rcx
     x64.cmpRegImm32 r14, 1
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc greaterEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -104,8 +101,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect press
     x64.cmpRegImm32 r8, 307
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

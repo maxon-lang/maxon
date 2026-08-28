@@ -37,25 +37,19 @@ func @twoPerms {
     x64.leaRegRegImm32 rdi, rcx, 2
     x64.leaRegRegImm32 rcx, rcx, 3
     x64.movRegImm32 r8, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r8, 4
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.movRegImm32 r9, 2
     x64.movRegReg rax, r8
     x64.cqo
     x64.idivReg r9
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, even
-    x64.jmp ifelse
-  even:
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   ifelse:
     x64.xchgRegReg rdi, rsi
     x64.xchgRegReg rsi, rcx
-    x64.jmp ifcont
   ifcont:
     x64.leaRegRegImm32 r8, r8, 1
     x64.xchgRegReg rsi, rdi
@@ -77,8 +71,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect twoPerms
     x64.cmpRegImm32 r8, 312
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

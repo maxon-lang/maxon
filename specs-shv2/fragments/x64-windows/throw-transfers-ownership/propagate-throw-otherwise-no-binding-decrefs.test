@@ -65,8 +65,7 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.callDirect tokenize
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r10
@@ -78,18 +77,15 @@ func @main {
     x64.ret
   tryok:
     x64.cmpRegImm32 rbx, 0
-    x64.jcc notEqual, ranOk
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   ranOk:
     x64.leaRegRegImm32 r8, r8, 5
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

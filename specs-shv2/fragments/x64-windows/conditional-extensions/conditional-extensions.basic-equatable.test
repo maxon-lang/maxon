@@ -70,17 +70,14 @@ func @IntList.has {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegImm32 rax, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, loop
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   loop:
     x64.movRegReg rcx, rbx
     x64.callDirect IntList.current
     x64.cmpRegReg r8, r12
-    x64.jcc equal, found
-    x64.jmp ifcont
+    x64.jcc notEqual, forstep
   found:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
@@ -88,8 +85,6 @@ func @IntList.has {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, rbx
     x64.callDirect IntList.advance
@@ -113,8 +108,7 @@ func @IntList.current {
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rax + 24]
     x64.cmpRegImm32 rcx, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rcx, [rax + 8]
     x64.cmpRegImm32 rdx, 0
@@ -124,7 +118,6 @@ func @IntList.current {
     x64.orRegReg rsi, rsi, rcx
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#9
   __im_load#9:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.imulRegRegImm32 rsi, rdx, 8
@@ -133,8 +126,7 @@ func @IntList.current {
     x64.jmp __im_loaded
   __im_stride:
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rcx, [rax + 8]
     x64.cmpRegImm32 rdx, 0
@@ -144,22 +136,18 @@ func @IntList.current {
     x64.orRegReg rsi, rsi, rcx
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#10
   __im_load#10:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.leaRegRegReg rcx, rcx, rdx
     x64.loadRegBaseDisp.byte rcx, [rcx + 0]
-    x64.jmp __im_loaded
   __im_loaded:
     x64.movRegImm32 rsi, 0
     x64.loadRegBaseDisp.word64 rdi, [rax + 40]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#12
+    x64.jcc equal, critsplit#12
   __im_empty:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __il_slow
-    x64.jmp critsplit#13
   critsplit#13:
     x64.movRegReg r8, rcx
     x64.jmp __il_cont
@@ -170,11 +158,9 @@ func @IntList.current {
     x64.movRegReg rcx, rax
     x64.callDirect __managed_get
     x64.movRegReg rsi, r10
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -197,8 +183,7 @@ func @IntList.advance {
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegReg rax, rdx
-    x64.jcc greaterEqual, done
-    x64.jmp ifcont
+    x64.jcc less, ifcont
   done:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -226,8 +211,7 @@ func @IntList.create {
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, empty
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   empty:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
@@ -284,8 +268,7 @@ func @main {
     x64.callDirect IntList.create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 2
     x64.epilogue 32
@@ -298,8 +281,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect IntList.has
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, yes
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   yes:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx

@@ -26,11 +26,9 @@ func @pick {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 10
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -40,8 +38,7 @@ func @pick {
     x64.ret
   __rc_ok:
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greater, yes
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   yes:
     x64.movRegReg r8, rcx
     x64.epilogue 32
@@ -60,33 +57,25 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 99
-    x64.jmp __il_body#3
-  __il_body#3:
-    x64.jmp __il_cont#2
   __il_cont#2:
     x64.movRegImm32 rdx, 1
-    x64.jmp __il_body#4
-  __il_body#4:
+  __il_body:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 10
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __il_slow:
     x64.callDirect pick
     x64.jmp __il_cont#1
   __rc_ok:
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greater, yes
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   yes:
     x64.movRegReg r8, rcx
     x64.jmp __il_cont#1
   ifcont:
     x64.movRegImm32 r8, 3
-    x64.jmp __il_cont#1
   __il_cont#1:
     x64.epilogue 32
     x64.popReg rbp

@@ -73,74 +73,52 @@ func @main {
     x64.loadRegBaseDisp.byte rax, [r8 + 0]
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#22
-    x64.jmp orrhs#1
-  critsplit#22:
-    x64.jmp scmerge#2
+    x64.jcc notEqual, __il_body#11
   orrhs#1:
     x64.loadRegBaseDisp.byte rax, [r8 + 8]
     x64.movRegReg rcx, rax
-    x64.jmp scmerge#2
-  scmerge#2:
-    x64.jmp __il_body#11
   __il_body#11:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, isTrue#12
-    x64.jmp ifcont#13
+    x64.jcc equal, ifcont#13
   isTrue#12:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#10
   ifcont#13:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#10
   __il_cont#10:
     x64.loadRegBaseDisp.byte rcx, [r8 + 0]
     x64.movRegImm32 rdx, 0
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, andrhs
-    x64.jmp critsplit#23
+    x64.jcc equal, critsplit
   andrhs:
     x64.loadRegBaseDisp.byte rcx, [r8 + 16]
-    x64.jmp scmerge#4
-  critsplit#23:
-    x64.movRegReg rcx, rdx
-    x64.jmp scmerge#4
-  scmerge#4:
     x64.jmp __il_body#15
+  critsplit:
+    x64.movRegReg rcx, rdx
   __il_body#15:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, isTrue#16
-    x64.jmp ifcont#17
+    x64.jcc equal, ifcont#17
   isTrue#16:
     x64.movRegImm32 rcx, 1
     x64.jmp __il_cont#14
   ifcont#17:
     x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont#14
   __il_cont#14:
     x64.loadRegBaseDisp.byte rdx, [r8 + 8]
     x64.movRegImm32 rsi, 1
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, critsplit#24
-    x64.jmp orrhs#5
-  critsplit#24:
-    x64.jmp scmerge#6
+    x64.jcc notEqual, __il_body#19
   orrhs#5:
     x64.loadRegBaseDisp.byte rdx, [r8 + 8]
     x64.movRegReg rsi, rdx
-    x64.jmp scmerge#6
-  scmerge#6:
-    x64.jmp __il_body#19
   __il_body#19:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, isTrue#20
-    x64.jmp ifcont#21
+    x64.jcc equal, ifcont#21
   isTrue#20:
     x64.movRegImm32 rdx, 1
     x64.jmp __il_cont#18
   ifcont#21:
     x64.movRegImm32 rdx, 0
-    x64.jmp __il_cont#18
   __il_cont#18:
     x64.imulRegRegImm32 rax, rax, 4
     x64.imulRegRegImm32 rcx, rcx, 2
@@ -150,12 +128,10 @@ func @main {
     x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

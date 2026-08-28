@@ -1386,43 +1386,63 @@ function opIsCondBranch(op TargetOp) returns bool
 	end 'check'
 end 'opIsCondBranch'
 
+// The block a terminator branches to UNCONDITIONALLY — `jmp` for x64, `arm64Branch` for arm64 — or
+// `none` for a terminator that is neither (a `ret`, a multiway jump table, an op-less `dead` slot).
+//
+// ⭐ THE ONE ROSTER FOR "IS THIS THE ISA'S UNCONDITIONAL BRANCH, AND WHERE DOES IT GO?". Two callers
+// need the two halves of that answer and neither may restate the arm list: `terminatorIsUnconditionalBranch`
+// below wants only the yes/no (it is the else-edge carrier a `condBranch` must be paired with), and
+// `X64BranchCleanup` wants the target (to compare it against the physically next block). A second
+// enumeration of `TargetOp` would be a copy that goes stale at the next op added to the dialect.
+export union UnconditionalBranchTarget
+	none
+	blockId(id BlockId)
+end 'UnconditionalBranchTarget'
+
+export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) returns UnconditionalBranchTarget
+	if not block.hasTerminatorOp() 'noTerm'
+		return UnconditionalBranchTarget.none
+	end 'noTerm'
+	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("unconditionalBranchTargetOf: terminator not in module.ops")
+	return match op 'check'
+		prologue to ret gives UnconditionalBranchTarget.none
+		jmp(target) gives UnconditionalBranchTarget.blockId(target)
+		jcc to divideReg gives UnconditionalBranchTarget.none
+		pushReg to popReg gives UnconditionalBranchTarget.none
+		storeSlotReg to loadRegSlot gives UnconditionalBranchTarget.none
+		andRegReg to movqXmmGpr gives UnconditionalBranchTarget.none
+		arm64Ret gives UnconditionalBranchTarget.none
+		arm64Branch(target) gives UnconditionalBranchTarget.blockId(target)
+		arm64CondBranch to arm64Fcsel gives UnconditionalBranchTarget.none
+		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing body ops,
+		// never a terminator — so never the ISA's unconditional branch.
+		leaRegFunc to x64Syscall gives UnconditionalBranchTarget.none
+		// A jump table IS a terminator, but a MULTIWAY one — not the ISA's UNconditional single-target
+		// branch that a `condBranch` op's else-edge needs, so `none` (a jump-table block records no
+		// `condBranch`, so this is never consulted for one, but the classifier must be exhaustive).
+		x64JumpTable to arm64JumpTable gives UnconditionalBranchTarget.none
+		// The witness call is a body op, not an unconditional branch.
+		callMem gives UnconditionalBranchTarget.none
+		// Both stack-argument ops are body ops, not branches.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives UnconditionalBranchTarget.none
+		// Both arm64 bit reinterpretations are body ops, not branches.
+		arm64FmovGprFp to arm64FmovFpGpr gives UnconditionalBranchTarget.none
+		// A frame address is a body op, not a branch.
+		leaRegSlot gives UnconditionalBranchTarget.none
+		// F1b: a fill ladder is a body op, not a branch — its branches are internal to its own encoding.
+		x64MemFill to arm64MemFill gives UnconditionalBranchTarget.none
+		// F2: every atomic is a body op, not a branch.
+		x64LockCmpxchg to arm64ThreadPointer gives UnconditionalBranchTarget.none
+	end 'check'
+end 'unconditionalBranchTargetOf'
+
 // True iff the block's terminator is the ISA's UNCONDITIONAL branch — `jmp` for x64, `arm64Branch`
 // for arm64. This is the else-edge carrier that must accompany a conditional branch (whose op names
 // only the then-edge); without it a two-way block would contribute one CFG successor.
 function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) returns bool
-	if not block.hasTerminatorOp() 'noTerm'
-		return false
-	end 'noTerm'
-	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("terminatorIsUnconditionalBranch: terminator not in module.ops")
-	return match op 'check'
-		prologue to ret gives false
-		jmp gives true
-		jcc to divideReg gives false
-		pushReg to popReg gives false
-		storeSlotReg to loadRegSlot gives false
-		andRegReg to movqXmmGpr gives false
-		arm64Ret gives false
-		arm64Branch gives true
-		arm64CondBranch to arm64Fcsel gives false
-		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing body ops,
-		// never a terminator — so never the ISA's unconditional branch.
-		leaRegFunc to x64Syscall gives false
-		// A jump table IS a terminator, but a MULTIWAY one — not the ISA's UNconditional single-target
-		// branch that a `condBranch` op's else-edge needs, so `false` (a jump-table block records no
-		// `condBranch`, so this is never consulted for one, but the classifier must be exhaustive).
-		x64JumpTable to arm64JumpTable gives false
-		// The witness call is a body op, not an unconditional branch.
-		callMem gives false
-		// Both stack-argument ops are body ops, not branches.
-		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
-		// Both arm64 bit reinterpretations are body ops, not branches.
-		arm64FmovGprFp to arm64FmovFpGpr gives false
-		// A frame address is a body op, not a branch.
-		leaRegSlot gives false
-		// F1b: a fill ladder is a body op, not a branch — its branches are internal to its own encoding.
-		x64MemFill to arm64MemFill gives false
-		// F2: every atomic is a body op, not a branch.
-		x64LockCmpxchg to arm64ThreadPointer gives false
+	return match unconditionalBranchTargetOf(module, block: block) 'check'
+		none gives false
+		blockId gives true
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 

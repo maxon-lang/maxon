@@ -73,11 +73,9 @@ func @fill {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 65536
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -93,16 +91,13 @@ func @fill {
     x64.callDirect __managed_create
     x64.movRegReg r12, r8
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegReg r13, rbx
-    x64.jcc less, push
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   push:
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, r12
     x64.callDirect __managed_push
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp forhdr
@@ -138,33 +133,27 @@ func @main {
     x64.subRegReg r8, r8, r12
     x64.movRegImm32 rcx, 0
     x64.cmpRegReg r8, rax
-    x64.jcc greater, bytesScaleWithTheRequest
-    x64.jmp critsplit#8
+    x64.jcc lessEqual, critsplit#8
   bytesScaleWithTheRequest:
     x64.leaRegRegImm32 rax, rcx, 2
     x64.jmp ifcont#2
   critsplit#8:
     x64.movRegReg rax, rcx
-    x64.jmp ifcont#2
   ifcont#2:
     x64.cmpRegImm32 r8, 1024
-    x64.jcc greaterEqual, atLeastThePayloadAsked
-    x64.jmp critsplit#9
+    x64.jcc less, critsplit#9
   atLeastThePayloadAsked:
     x64.leaRegRegImm32 r8, rax, 3
     x64.jmp ifcont#4
   critsplit#9:
     x64.movRegReg r8, rax
-    x64.jmp ifcont#4
   ifcont#4:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

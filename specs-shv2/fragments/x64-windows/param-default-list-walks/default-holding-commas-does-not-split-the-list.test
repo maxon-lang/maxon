@@ -59,35 +59,25 @@ func @main {
     x64.prologue 40
     x64.movRegImm32 rbx, 39
     x64.callDirect __paramDefault#pick#1
-    x64.jmp __il_body#6
   __il_body#6:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#5
-  __il_cont#5:
-    x64.jmp __il_body#7
   __il_body#7:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, yes
-    x64.jmp ifcont
+    x64.jcc equal, __il_cont
   yes:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.leaRegRegImm32 rax, rax, 39
     x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
     x64.leaRegRegReg rbx, rax, rcx
-    x64.jmp __il_cont#4
-  ifcont:
-    x64.jmp __il_cont#4
-  __il_cont#4:
+  __il_cont:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

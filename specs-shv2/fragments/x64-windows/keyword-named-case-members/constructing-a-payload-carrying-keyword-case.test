@@ -41,8 +41,7 @@ func @tagOf {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.epilogue 32
@@ -50,19 +49,16 @@ func @tagOf {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.leaRegRegReg r8, rax, rcx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -90,11 +86,9 @@ func @main {
     x64.prologue 40
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r12, 2
-    x64.jcc less, spin
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   spin:
     x64.movRegImm32 r13, 20
     x64.movRegImm32 r14, 1
@@ -106,51 +100,41 @@ func @main {
     x64.storeBaseDispReg.word64 [r15 + 0], rax
     x64.storeBaseDispReg.word64 [r15 + 8], r13
     x64.storeBaseDispReg.word64 [r15 + 16], r14
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [r15 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#11
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#11:
     x64.loadRegBaseDisp.word64 rax, [r15 + 8]
     x64.jmp __il_cont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#12
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#12:
     x64.loadRegBaseDisp.word64 rax, [r15 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r15 + 16]
     x64.leaRegRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __il_slow
-    x64.jmp __rc_chk#17
   __rc_chk#17:
     x64.cmpRegImm32 rax, 1000
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok#16
+    x64.jcc lessEqual, __il_cont
   __il_slow:
     x64.movRegReg rcx, r15
     x64.callDirect tagOf
     x64.movRegReg rax, r8
-    x64.jmp __il_cont
-  __rc_ok#16:
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rax, 21
     x64.setccReg equal, r13
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, ok
-    x64.jmp critsplit
+    x64.jcc equal, critsplit
   ok:
     x64.leaRegRegImm32 rax, rbx, 21
     x64.jmp ifcont
   critsplit:
     x64.movRegReg rax, rbx
-    x64.jmp ifcont
   ifcont:
     x64.leaRegRegImm32 r12, r12, 1
     x64.movRegReg rbx, rax
@@ -159,12 +143,10 @@ func @main {
   whileexit:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk#8
   __rc_chk#8:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok#6
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -177,7 +159,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#6:
+  __rc_ok:
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r15
@@ -187,5 +169,4 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchcont:
 }

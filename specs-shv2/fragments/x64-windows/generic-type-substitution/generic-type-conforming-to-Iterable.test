@@ -73,8 +73,7 @@ func @BoxIter.create {
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, empty
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   empty:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
@@ -120,8 +119,7 @@ func @BoxIter.current {
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rax + 24]
     x64.cmpRegImm32 rcx, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rcx, [rax + 8]
     x64.cmpRegImm32 rdx, 0
@@ -131,7 +129,6 @@ func @BoxIter.current {
     x64.orRegReg rsi, rsi, rcx
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#9
   __im_load#9:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.imulRegRegImm32 rsi, rdx, 8
@@ -140,8 +137,7 @@ func @BoxIter.current {
     x64.jmp __im_loaded
   __im_stride:
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rcx, [rax + 8]
     x64.cmpRegImm32 rdx, 0
@@ -151,22 +147,18 @@ func @BoxIter.current {
     x64.orRegReg rsi, rsi, rcx
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#10
   __im_load#10:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.leaRegRegReg rcx, rcx, rdx
     x64.loadRegBaseDisp.byte rcx, [rcx + 0]
-    x64.jmp __im_loaded
   __im_loaded:
     x64.movRegImm32 rsi, 0
     x64.loadRegBaseDisp.word64 rdi, [rax + 40]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#12
+    x64.jcc equal, critsplit#12
   __im_empty:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __il_slow
-    x64.jmp critsplit#13
   critsplit#13:
     x64.movRegReg rdx, rcx
     x64.jmp __il_cont
@@ -178,11 +170,9 @@ func @BoxIter.current {
     x64.callDirect __managed_get
     x64.movRegReg rdx, r8
     x64.movRegReg rsi, r10
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -211,8 +201,7 @@ func @BoxIter.advance {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.cmpRegReg rax, rcx
-    x64.jcc greaterEqual, done
-    x64.jmp ifcont
+    x64.jcc less, ifcont
   done:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -263,8 +252,7 @@ func @Box.createIterator {
     x64.movRegReg rcx, rbx
     x64.callDirect BoxIter.create
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -309,20 +297,15 @@ func @main {
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr
+    x64.jcc notEqual, forjoin
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, walk
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   walk:
     x64.leaRegRdata rdx, [rip + __layout_BoxIter_Integer]
     x64.movRegReg rcx, r14
     x64.callDirect BoxIter.current
     x64.leaRegRegReg r13, r13, r8
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r14
     x64.callDirect BoxIter.advance
@@ -331,18 +314,13 @@ func @main {
   forexit:
     x64.movRegReg rcx, r14
     x64.callDirect __destruct_BoxIter_Integer
-    x64.jmp forjoin
-  forempty:
-    x64.jmp forjoin
   forjoin:
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r13, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

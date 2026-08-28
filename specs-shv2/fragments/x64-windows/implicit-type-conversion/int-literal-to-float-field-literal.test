@@ -53,23 +53,16 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.callDirect Reading.make
-    x64.jmp __il_body#7
   __il_body#7:
     x64.loadRegBaseDisp.word64 xmm0, [r8 + 0]
-    x64.jmp __il_cont#6
   __il_cont#6:
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc parity, ifcont
-    x64.jmp fordered
   fordered:
-    x64.jcc equal, exact
-    x64.jmp ifcont
-  exact:
-    x64.jmp __il_body#9
+    x64.jcc notEqual, ifcont
   __il_body#9:
     x64.loadRegBaseDisp.word64 xmm0, [r8 + 0]
-    x64.jmp __il_cont#8
   __il_cont#8:
     x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.mulsdRegReg xmm0, xmm0, xmm1
@@ -78,12 +71,10 @@ func @main {
     x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

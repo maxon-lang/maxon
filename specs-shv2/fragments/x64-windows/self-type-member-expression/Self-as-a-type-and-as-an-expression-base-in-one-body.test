@@ -32,11 +32,9 @@ func @Toggle.isOff {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body
   __il_body:
     x64.cmpRegImm32 rcx, 0
     x64.setccReg equal, r8
-    x64.jmp __il_cont
   __il_cont:
     x64.popReg rbp
     x64.ret
@@ -52,25 +50,17 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Toggle.isOff
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, ok
-    x64.jmp ifcont#4
-  ok:
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
+    x64.jcc equal, ifcont
   __il_cont:
     x64.cmpRegImm32 rbx, 0
-    x64.jcc equal, ok2
-    x64.jmp ifcont#3
+    x64.jcc notEqual, ifcont
   ok2:
     x64.movRegImm32 r8, 42
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#3:
-    x64.jmp ifcont#4
-  ifcont#4:
+  ifcont:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
     x64.popReg rbx

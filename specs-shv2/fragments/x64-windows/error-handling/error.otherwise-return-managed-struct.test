@@ -72,8 +72,7 @@ func @makeBox {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, check
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   check:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -98,8 +97,7 @@ func @getBoxValue {
     x64.prologue 40
     x64.callDirect makeBox
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm r8, 18446744073709551615
     x64.epilogue 40
@@ -125,22 +123,18 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect getBoxValue
     x64.cmpRegImm32 r8, 7
-    x64.jcc equal, g
-    x64.jmp ifcont#4
+    x64.jcc notEqual, ifcont
   g:
     x64.movRegImm32 rcx, 1
     x64.callDirect getBoxValue
     x64.cmpRegImm32 r8, -1
-    x64.jcc equal, b
-    x64.jmp ifcont#3
+    x64.jcc notEqual, ifcont
   b:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#3:
-    x64.jmp ifcont#4
-  ifcont#4:
+  ifcont:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp

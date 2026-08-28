@@ -25,31 +25,26 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rbx, 65536
-    x64.jcc less, scan
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   scan:
     x64.movRegReg rcx, rbx
     x64.callDirect __ucd_bmp_at
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, negative
-    x64.jmp critsplit
+    x64.jcc greaterEqual, critsplit
   negative:
     x64.leaRegRegImm32 rax, r12, 1
     x64.jmp ifcont#5
   critsplit:
     x64.movRegReg rax, r12
-    x64.jmp ifcont#5
   ifcont#5:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.movRegReg r12, rax
     x64.jmp whilehdr
   whileexit:
     x64.cmpRegImm32 r12, 0
-    x64.jcc equal, allUnsigned
-    x64.jmp ifcont#7
+    x64.jcc notEqual, ifcont#7
   allUnsigned:
     x64.movRegImm32 r8, 5
     x64.epilogue 32

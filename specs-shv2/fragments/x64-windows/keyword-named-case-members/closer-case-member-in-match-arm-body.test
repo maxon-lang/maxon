@@ -31,32 +31,26 @@ func @pick {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchdefault
+    x64.jcc notEqual, matchdefault
   matcharm#1:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_body
   __il_body:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#6
-    x64.jmp matchnext#10
+    x64.jcc notEqual, matchnext#10
   matcharm#6:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont
   matchnext#10:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#7
-    x64.jmp matchnext#11
+    x64.jcc notEqual, matchnext#11
   matcharm#7:
     x64.movRegImm32 rax, 2
     x64.jmp __il_cont
   matchnext#11:
     x64.cmpRegImm32 rax, 2
-    x64.jcc equal, matcharm#8
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#8:
     x64.movRegImm32 rax, 3
-    x64.jmp __il_cont
   __il_cont:
     x64.imulRegRegImm32 r8, rax, 21
     x64.popReg rbp
@@ -66,8 +60,6 @@ func @pick {
     x64.movRegImm32 r8, 9
     x64.popReg rbp
     x64.ret
-  matchcont#3:
-  matchcont#12:
 }
 
 func @main {
@@ -79,12 +71,10 @@ func @main {
     x64.callDirect pick
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

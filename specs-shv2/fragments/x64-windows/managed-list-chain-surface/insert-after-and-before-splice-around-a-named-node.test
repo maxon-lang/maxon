@@ -87,9 +87,8 @@ func @main {
     x64.callDirect __list_head_checked
     x64.storeSlotReg slot18, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
-  tryerr#2:
+    x64.jcc equal, tryok#1
+  tryerr:
     x64.movRegReg rcx, r15
     x64.callDirect __list_node_decref
     x64.movRegReg rcx, r14
@@ -161,23 +160,18 @@ func @main {
     x64.loadRegSlot rcx, slot21
     x64.callDirect __str_decref
     x64.loadRegSlot rbx, slot18
-    x64.jmp whilehdr
   whilehdr:
     x64.storeSlotReg slot15, rbx
     x64.movRegImm32 rax, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, walk
-    x64.jmp critsplit
+    x64.jcc equal, whileexit
   walk:
     x64.movRegReg rcx, rbx
     x64.callDirect __list_node_next_checked
     x64.movRegReg r15, r8
     x64.storeSlotReg slot17, r15
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#7
-    x64.jmp tryok#6
-  tryerr#7:
-    x64.jmp whileexit
+    x64.jcc notEqual, whileexit
   tryok#6:
     x64.movRegReg rcx, rbx
     x64.callDirect __list_node_decref
@@ -234,8 +228,6 @@ func @main {
     x64.loadRegSlot rax, slot17
     x64.movRegReg rbx, rax
     x64.jmp whilehdr
-  critsplit:
-    x64.jmp whileexit
   whileexit:
     x64.movRegReg rcx, r12
     x64.callDirect __list_node_value

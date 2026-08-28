@@ -29,56 +29,36 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rax, 1
     x64.movRegImm32 rcx, 0
-    x64.jmp whilehdr
-  whilehdr:
-    x64.jmp __il_body#12
   __il_body#12:
     x64.cmpRegImm32 rax, 0
     x64.setccReg greater, rdx
-    x64.jmp __il_cont#11
-  __il_cont#11:
+  __il_cont:
     x64.movRegImm32 rsi, 0
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, andrhs
-    x64.jmp critsplit#16
-  andrhs:
-    x64.jmp __il_body#14
+    x64.jcc equal, critsplit
   __il_body#14:
     x64.cmpRegImm32 rax, 4
     x64.setccReg less, rdx
-    x64.jmp __il_cont#13
-  __il_cont#13:
     x64.jmp scmerge
-  critsplit#16:
+  critsplit:
     x64.movRegReg rdx, rsi
-    x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, loop
-    x64.jmp critsplit#15
+    x64.jcc equal, whileexit
   loop:
     x64.leaRegRegImm32 rax, rax, 1
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.cmpRegImm32 rcx, 10
-    x64.jcc greater, runaway
-    x64.jmp ifcont
-  runaway:
-    x64.jmp whileexit
-  ifcont:
-    x64.jmp whilehdr
-  critsplit#15:
-    x64.jmp whileexit
+    x64.jcc lessEqual, __il_body#12
   whileexit:
     x64.imulRegRegImm32 rax, rax, 10
     x64.leaRegRegReg r8, rax, rcx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

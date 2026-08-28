@@ -27,11 +27,9 @@ func @widen {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 1114111
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -57,11 +55,9 @@ func @narrow {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 100
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -86,31 +82,25 @@ func @main {
     x64.callDirect widen
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 28
-    x64.jmp __il_body
   __il_body:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow
-    x64.jmp __rc_chk#7
   __rc_chk#7:
     x64.cmpRegImm32 rcx, 100
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok#6
+    x64.jcc lessEqual, __rc_ok#6
   __il_slow:
     x64.callDirect narrow
     x64.jmp __il_cont
   __rc_ok#6:
     x64.movRegReg r8, rcx
-    x64.jmp __il_cont
   __il_cont:
     x64.subRegReg rbx, rbx, r8
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk#3
   __rc_chk#3:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok#1
+    x64.jcc lessEqual, __rc_ok#1
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

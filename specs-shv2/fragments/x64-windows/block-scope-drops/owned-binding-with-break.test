@@ -95,11 +95,9 @@ func @main {
     x64.pushReg r12
     x64.prologue 32
     x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rbx, 100
-    x64.jcc less, loop
-    x64.jmp critsplit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.movRegReg rcx, rbx
     x64.callDirect build
@@ -108,8 +106,7 @@ func @main {
     x64.callDirect print
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.cmpRegImm32 rbx, 3
-    x64.jcc greater, stop
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   stop:
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
@@ -118,8 +115,6 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
     x64.jmp whilehdr
-  critsplit:
-    x64.jmp whileexit
   whileexit:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

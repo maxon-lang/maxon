@@ -54,7 +54,6 @@ func @wide {
     x64.loadRegBaseDisp.word64 r15, [rbp + 152]
     x64.storeSlotReg slot13, r15
     x64.loadRegBaseDisp.word64 r15, [rbp + 160]
-    x64.jmp __il_body#3
   __il_body#3:
     x64.leaRegRegReg rcx, rcx, rdx
     x64.leaRegRegReg rcx, rcx, rax
@@ -83,9 +82,6 @@ func @wide {
     x64.loadRegSlot r11, slot13
     x64.leaRegRegReg rcx, rcx, r11
     x64.leaRegRegReg rcx, rcx, r15
-    x64.jmp __il_cont#2
-  __il_cont#2:
-    x64.jmp __il_body#4
   __il_body#4:
     x64.loadRegSlot r11, slot4
     x64.leaRegRegReg rdx, r11, rdx
@@ -118,8 +114,7 @@ func @wide {
     x64.loadRegSlot r11, slot13
     x64.leaRegRegReg rdx, rdx, r11
     x64.leaRegRegReg rdx, rdx, r15
-    x64.jmp __il_cont#1
-  __il_cont#1:
+  __il_cont:
     x64.leaRegRegReg rcx, rcx, rdx
     x64.loadRegSlot rdx, slot4
     x64.leaRegRegReg rcx, rcx, rdx
@@ -215,12 +210,10 @@ func @main {
     x64.callDirect wide
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

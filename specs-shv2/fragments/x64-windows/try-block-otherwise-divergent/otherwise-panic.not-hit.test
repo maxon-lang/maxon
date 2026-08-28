@@ -30,8 +30,7 @@ func @maybeFail {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -55,18 +54,12 @@ func @main {
     x64.callDirect maybeFail
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, critsplit#7
-    x64.jmp tryblkok#2
-  critsplit#7:
-    x64.jmp tryblkerr
+    x64.jcc notEqual, tryblkerr
   tryblkok#2:
     x64.movRegImm32 rcx, 0
     x64.callDirect maybeFail
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, critsplit#8
-    x64.jmp tryblkok#3
-  critsplit#8:
-    x64.jmp tryblkerr
+    x64.jcc equal, tryblkok#3
   tryblkerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -79,12 +72,10 @@ func @main {
     x64.leaRegRegReg r8, rbx, r8
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

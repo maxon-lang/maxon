@@ -100,12 +100,10 @@ func @main {
     x64.callDirect Container.create
     x64.storeSlotReg slot1, r8
     x64.movRegImm32 rbx, 0
-    x64.jmp forhdr
   forhdr:
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 rbx, 3
-    x64.jcc less, fill
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   fill:
     x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -161,7 +159,6 @@ func @main {
     x64.loadRegSlot rcx, slot1
     x64.movRegReg rdx, rbx
     x64.callDirect Container.push
-    x64.jmp forstep
   forstep:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 rax, rax, 1
@@ -171,8 +168,7 @@ func @main {
     x64.loadRegSlot rcx, slot1
     x64.callDirect Container.count
     x64.cmpRegImm32 r8, 3
-    x64.jcc equal, check
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot1

@@ -41,8 +41,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rax, 1
     x64.cmpRegImm32 rax, 2
-    x64.jcc less, g1
-    x64.jmp ifelse#2
+    x64.jcc greaterEqual, ifelse#2
   g1:
     x64.movRegImm32 rax, 1
     x64.movRegImm32 rcx, 2
@@ -54,11 +53,9 @@ func @main {
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 30
     x64.movRegImm32 rsi, 40
-    x64.jmp ifcont#3
   ifcont#3:
     x64.cmpRegImm32 rax, 0
-    x64.jcc greater, g2
-    x64.jmp ifelse#5
+    x64.jcc lessEqual, ifelse#5
   g2:
     x64.leaRegRegImm32 rax, rax, 100
     x64.leaRegRegImm32 rdx, rdx, 100
@@ -66,11 +63,9 @@ func @main {
   ifelse#5:
     x64.leaRegRegImm32 rcx, rcx, 100
     x64.leaRegRegImm32 rsi, rsi, 100
-    x64.jmp ifcont#6
   ifcont#6:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc greater, g3
-    x64.jmp ifelse#8
+    x64.jcc lessEqual, ifelse#8
   g3:
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegReg rdx, rdx, rsi
@@ -78,7 +73,6 @@ func @main {
   ifelse#8:
     x64.leaRegRegImm32 rcx, rax, -1
     x64.leaRegRegImm32 rsi, rdx, -1
-    x64.jmp ifcont#9
   ifcont#9:
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegReg rax, rax, rdx
@@ -86,12 +80,10 @@ func @main {
     x64.andRegImm32 r8, r8, 125
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

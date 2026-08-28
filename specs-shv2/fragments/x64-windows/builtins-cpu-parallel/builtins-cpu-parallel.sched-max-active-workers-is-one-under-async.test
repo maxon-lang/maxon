@@ -54,12 +54,10 @@ func @work {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#2
-    x64.jmp __rc_chk#3
   __rc_chk#3:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic#2
-    x64.jmp __rc_ok#1
+    x64.jcc lessEqual, __rc_ok#1
   __rc_panic#2:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -73,12 +71,10 @@ func @work {
     x64.leaRegRegImm32 r8, rbx, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#5
-    x64.jmp __rc_chk#6
   __rc_chk#6:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic#5
-    x64.jmp __rc_ok#4
+    x64.jcc lessEqual, __rc_ok#4
   __rc_panic#5:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -125,23 +121,19 @@ func @main {
     x64.callDirect __sched_max_active_workers
     x64.leaRegRegReg rax, rbx, r12
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, stillSingleM
-    x64.jmp critsplit
+    x64.jcc notEqual, critsplit
   stillSingleM:
     x64.leaRegRegImm32 r8, rax, 2
     x64.jmp ifcont
   critsplit:
     x64.movRegReg r8, rax
-    x64.jmp ifcont
   ifcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

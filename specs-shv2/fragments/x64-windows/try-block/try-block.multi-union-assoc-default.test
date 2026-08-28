@@ -55,8 +55,7 @@ func @callA {
     x64.pushReg rbx
     x64.prologue 40
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
     x64.movRegImm32 rbx, 50
     x64.movRegImm32 rcx, 16
@@ -86,8 +85,7 @@ func @callB {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -111,8 +109,7 @@ func @main {
     x64.callDirect callA
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryblkthrow
-    x64.jmp tryblkok#2
+    x64.jcc equal, tryblkok#2
   tryblkthrow:
     x64.loadRegBaseDisp.word64 rax, [r10 + 0]
     x64.movRegReg rcx, r10
@@ -121,32 +118,24 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect callB
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, critsplit
-    x64.jmp tryblkok#4
+    x64.jcc equal, tryblkok#4
   critsplit:
     x64.movRegReg rcx, r10
     x64.movRegReg rax, r10
-    x64.jmp tryblkerr
   tryblkerr:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchdefault
+    x64.jcc notEqual, matchdefault
   matcharm:
     x64.movRegImm32 r8, 99
-    x64.jmp matchcont
-  matchcont:
     x64.jmp tryblkcont
   matchdefault:
     x64.cmpRegImm32 rax, 0
-    x64.jcc greaterEqual, errunionclean
-    x64.jmp errunionnext
+    x64.jcc less, errunionnext
   errunionclean:
     x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, errunionfree
-    x64.jmp errunionnext
+    x64.jcc greater, errunionnext
   errunionfree:
     x64.callDirect __mm_decref
-    x64.jmp errunionnext
   errunionnext:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -157,16 +146,13 @@ func @main {
     x64.ret
   tryblkok#4:
     x64.leaRegRegReg r8, rbx, r8
-    x64.jmp tryblkcont
   tryblkcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

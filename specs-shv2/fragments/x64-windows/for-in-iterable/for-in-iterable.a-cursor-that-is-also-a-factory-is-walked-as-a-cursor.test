@@ -89,8 +89,7 @@ func @Resumable.current {
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rax + 24]
     x64.cmpRegImm32 rcx, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rcx, [rax + 8]
     x64.cmpRegImm32 rdx, 0
@@ -100,7 +99,6 @@ func @Resumable.current {
     x64.orRegReg rsi, rsi, rcx
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#9
   __im_load#9:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.imulRegRegImm32 rsi, rdx, 8
@@ -109,8 +107,7 @@ func @Resumable.current {
     x64.jmp __im_loaded
   __im_stride:
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rcx, [rax + 8]
     x64.cmpRegImm32 rdx, 0
@@ -120,22 +117,18 @@ func @Resumable.current {
     x64.orRegReg rsi, rsi, rcx
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#10
   __im_load#10:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.leaRegRegReg rcx, rcx, rdx
     x64.loadRegBaseDisp.byte rcx, [rcx + 0]
-    x64.jmp __im_loaded
   __im_loaded:
     x64.movRegImm32 rsi, 0
     x64.loadRegBaseDisp.word64 rdi, [rax + 40]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#12
+    x64.jcc equal, critsplit#12
   __im_empty:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __il_slow
-    x64.jmp critsplit#13
   critsplit#13:
     x64.movRegReg r8, rcx
     x64.jmp __il_cont
@@ -146,11 +139,9 @@ func @Resumable.current {
     x64.movRegReg rcx, rax
     x64.callDirect __managed_get
     x64.movRegReg rsi, r10
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -173,8 +164,7 @@ func @Resumable.advance {
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegReg rax, rdx
-    x64.jcc greaterEqual, atEnd
-    x64.jmp ifcont
+    x64.jcc less, ifcont
   atEnd:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -223,8 +213,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect Resumable.advance
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -239,8 +228,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect Resumable.advance
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp tryok#3
+    x64.jcc equal, tryok#3
   tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -254,16 +242,13 @@ func @main {
   tryok#3:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rax, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, each
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   each:
     x64.movRegReg rcx, r12
     x64.callDirect Resumable.current
     x64.leaRegRegReg r13, r13, r8
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r12
     x64.callDirect Resumable.advance
@@ -276,12 +261,10 @@ func @main {
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r13, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic

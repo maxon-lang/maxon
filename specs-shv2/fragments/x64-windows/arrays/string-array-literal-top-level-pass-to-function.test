@@ -33,8 +33,7 @@ func @useString {
     x64.leaRegRdata rdx, [rip + __str_rec_1]
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, check
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   check:
     x64.movRegImm32 r8, 42
     x64.epilogue 32
@@ -55,17 +54,14 @@ func @main {
     x64.leaRegGlobal rax, __data_items
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.movRegImm32 rdx, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc less, loop
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   loop:
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.imulRegRegImm32 rcx, rdx, 8
@@ -74,8 +70,7 @@ func @main {
     x64.jmp __il_cont
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, rdx
@@ -84,7 +79,6 @@ func @main {
   __il_slow:
     x64.callDirect __managed_get_unchecked
     x64.movRegReg rcx, r8
-    x64.jmp __il_cont
   __il_cont:
     x64.callDirect useString
     x64.epilogue 32
@@ -95,7 +89,4 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  forstep:
-    x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp forhdr
 }

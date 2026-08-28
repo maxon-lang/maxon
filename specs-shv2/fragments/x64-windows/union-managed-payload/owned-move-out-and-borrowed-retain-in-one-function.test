@@ -55,34 +55,29 @@ func @mixed {
     x64.storeBaseDispReg.word64 [r13 + 8], r8
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext#4
+    x64.jcc notEqual, matchnext#4
   matcharm#1:
     x64.movRegImm32 r12, 0
     x64.jmp matchcont#5
   matchnext#4:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead#3
+    x64.jcc notEqual, matchdead#3
   matcharm#2:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r13 + 8], rax
     x64.movRegImm32 r12, 1
     x64.callDirect __str_decref
-    x64.jmp matchcont#5
   matchcont#5:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#6
-    x64.jmp matchnext#9
+    x64.jcc notEqual, matchnext#9
   matcharm#6:
     x64.movRegImm32 rax, 0
     x64.jmp matchcont#10
   matchnext#9:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#7
-    x64.jmp matchdead#8
+    x64.jcc notEqual, matchdead#8
   matcharm#7:
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
     x64.movRegReg rcx, rbx
@@ -91,7 +86,6 @@ func @mixed {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegReg rax, r14
-    x64.jmp matchcont#10
   matchcont#10:
     x64.leaRegRegReg rbx, r12, rax
     x64.movRegReg rcx, r13
@@ -130,12 +124,10 @@ func @main {
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic

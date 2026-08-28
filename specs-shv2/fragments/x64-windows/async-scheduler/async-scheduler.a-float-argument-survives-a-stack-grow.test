@@ -72,8 +72,7 @@ func @scale {
     x64.pushReg rbx
     x64.prologue 40
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, base
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   base:
     x64.cvttsd2siRegReg r8, xmm0
     x64.epilogue 40
@@ -103,8 +102,7 @@ func @sweep {
     x64.movRegImm32 rcx, 0
     x64.callDirect scale
     x64.cmpRegImm32 r8, 20
-    x64.jcc notEqual, bad0
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   bad0:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
@@ -115,8 +113,7 @@ func @sweep {
     x64.movRegImm32 rcx, 1
     x64.callDirect scale
     x64.cmpRegImm32 r8, 60
-    x64.jcc notEqual, bad1
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   bad1:
     x64.movRegImm32 r8, 2
     x64.epilogue 32
@@ -127,8 +124,7 @@ func @sweep {
     x64.movRegImm32 rcx, 2
     x64.callDirect scale
     x64.cmpRegImm32 r8, 140
-    x64.jcc notEqual, bad2
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont#6
   bad2:
     x64.movRegImm32 r8, 3
     x64.epilogue 32
@@ -139,8 +135,7 @@ func @sweep {
     x64.movRegImm32 rcx, 3
     x64.callDirect scale
     x64.cmpRegImm32 r8, 300
-    x64.jcc notEqual, bad3
-    x64.jmp ifcont#8
+    x64.jcc equal, ifcont#8
   bad3:
     x64.movRegImm32 r8, 4
     x64.epilogue 32
@@ -168,12 +163,10 @@ func @main {
     x64.callDirect __gt_await
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

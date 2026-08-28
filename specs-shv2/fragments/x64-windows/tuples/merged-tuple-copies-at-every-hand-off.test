@@ -60,8 +60,7 @@ func @risky {
     x64.pushReg r12
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, ok
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   ok:
     x64.movRegImm32 rbx, 7
     x64.movRegImm32 r12, 8
@@ -96,8 +95,7 @@ func @viaMerge {
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc equal, ternaryfalse
   ternarytrue:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -115,7 +113,6 @@ func @viaMerge {
     x64.callDirect __mm_alloc
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
     x64.storeBaseDispReg.word64 [r8 + 8], r12
-    x64.jmp matchcont
   matchcont:
     x64.epilogue 32
     x64.popReg r12
@@ -134,8 +131,7 @@ func @viaFallback {
     x64.movRegImm32 rcx, 0
     x64.callDirect risky
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, trycont
   tryerr:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -144,9 +140,6 @@ func @viaFallback {
     x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.storeBaseDispReg.word64 [r8 + 8], rax
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
   trycont:
     x64.epilogue 40
     x64.popReg rbx
@@ -379,12 +372,10 @@ func @main {
     x64.leaRegRegImm32 rbx, rax, 9
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_8]
     x64.callDirect mrt_panic

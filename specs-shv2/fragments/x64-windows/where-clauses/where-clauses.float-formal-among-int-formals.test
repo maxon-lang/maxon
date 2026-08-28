@@ -53,11 +53,9 @@ func @Point.create {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -150,10 +148,8 @@ func @main {
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc parity, ifcont
-    x64.jmp fordered
   fordered:
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12

@@ -28,11 +28,9 @@ func @from {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic#2
-    x64.jmp __rc_chk#3
   __rc_chk#3:
     x64.cmpRegImm32 rcx, 125
-    x64.jcc greater, __rc_panic#2
-    x64.jmp __rc_ok#1
+    x64.jcc lessEqual, __rc_ok#1
   __rc_panic#2:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -44,11 +42,9 @@ func @from {
     x64.leaRegRegImm32 r8, rcx, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#5
-    x64.jmp __rc_chk#6
   __rc_chk#6:
     x64.cmpRegImm32 r8, 125
-    x64.jcc greater, __rc_panic#5
-    x64.jmp __rc_ok#4
+    x64.jcc lessEqual, __rc_ok#4
   __rc_panic#5:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -69,11 +65,9 @@ func @take {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 100
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -94,46 +88,31 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 41
-    x64.jmp __il_body#3
   __il_body#3:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow#6
-    x64.jmp __rc_chk#5
   __rc_chk#5:
     x64.cmpRegImm32 rcx, 100
-    x64.jcc greater, __il_slow#6
-    x64.jmp __rc_ok#4
+    x64.jcc lessEqual, __il_body#7
   __il_slow#6:
     x64.callDirect take
     x64.movRegReg rcx, r8
-    x64.jmp __il_cont#2
-  __rc_ok#4:
-    x64.jmp __il_cont#2
-  __il_cont#2:
-    x64.jmp __il_body#7
   __il_body#7:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow#12
-    x64.jmp __rc_chk#9
   __rc_chk#9:
     x64.cmpRegImm32 rcx, 125
     x64.jcc greater, __il_slow#12
-    x64.jmp __rc_ok#8
-  __rc_ok#8:
+  __rc_ok:
     x64.leaRegRegImm32 r8, rcx, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __il_slow#12
-    x64.jmp __rc_chk#11
   __rc_chk#11:
     x64.cmpRegImm32 r8, 125
-    x64.jcc greater, __il_slow#12
-    x64.jmp __rc_ok#10
+    x64.jcc lessEqual, __il_cont
   __il_slow#12:
     x64.callDirect from
-    x64.jmp __il_cont#1
-  __rc_ok#10:
-    x64.jmp __il_cont#1
-  __il_cont#1:
+  __il_cont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

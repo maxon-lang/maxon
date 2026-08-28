@@ -41,7 +41,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | **CSE / GVN** | ❌ | ❌ | ✅ `CommonSubexpressionElimination.maxon` (494) |
 | **LICM** | ❌ | ◑ refcount pairs only | ✅ `LoopInvariantCodeMotion.maxon` (596) |
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* | ✅ `DeadStoreEliminationPass` sub-pass 3 | ✅ `DeadCodeElimination.maxon` (728) |
-| **Block merging / branch simplification** | ❌ | ◑ cond-br then-edge only | ✅ `CfgAnalysis` + `Canonicalize` |
+| **Block merging / branch simplification** | ◑ `X64BranchCleanup` (EC11) — elision, inversion, threading, unreachable; **no reordering** | ◑ cond-br then-edge only | ✅ `CfgAnalysis` + `Canonicalize` |
 | **Strength reduction** (`mul`→`shl`, magic div) | ❌ | ❌ | ❌ |
 | **Scaled-index addressing** (`[base+idx*8]`) | ❌ *dialect cannot express it* | ❌ | ❌ |
 | Store-forwarding / dead-store elim | ❌ | ✅ `StoreForwardingPass` + `DeadStoreEliminationPass` | ✅ via `Mem2Reg` |
@@ -149,10 +149,37 @@ inlining win rather than shrinking.
 
 Reference for the conditional half: `StandardToX86Conversion.cs:953` ("THE FALLTHROUGH INVARIANT"),
 whose comment also records the two x64-only **silent miscompiles** that came from assuming the
-invariant instead of enforcing it. ⚠ shv2 already depends on a fallthrough contract on x64
-(`StdCondBrOp` emits one `jcc` to Else; arm64 emits both) — see
-`[[project_condbr_fallthrough_is_an_x64_only_contract]]`. **A reordering pass must not break it**,
-and that is the whole of this rung's risk.
+invariant instead of enforcing it.
+
+⛔ **THIS ROW'S STATED RISK WAS FALSE, AND IT NAMED THE WRONG COMPILER.** It read *"shv2 already
+depends on a fallthrough contract on x64 (`StdCondBrOp` emits one `jcc` to Else)"*, citing
+`[[project_condbr_fallthrough_is_an_x64_only_contract]]`. **MEASURED 2026-08-28: shv2 does not.**
+`StdToX64Conversion.lowerCondBranch` (`:3724`) emits **BOTH** edges — a `jcc` body op naming the then
+target, then a `jmp` TERMINATOR naming the else target — and its own comment says why: *"An
+unconditional `jmp` to the else target is emitted for EVERY layout so correctness never depends on
+block ordering (a later pass may elide a fall-through)."* The contract that memory names is the **C#
+bootstrap's** `StdCondBrOp` (`maxon-sharp`, the `G24` row on `PLAN.md`), a different compiler. Block
+order is semantically free at the shv2 Target tier — which is what makes this rung a DELETION rather
+than a reordering, and is the whole of why it is low risk.
+
+✅ **LANDED 2026-08-28** as `maxon-shv2/Compiler/Targets/X64/X64BranchCleanup.maxon`, scheduled in
+`buildX64Backend` between `allocateRegisters` and `insertPrologueEpilogue` — after `applyAllocation`,
+which is the whole correctness argument for the threading half (before SSA destruction has placed its
+edge copies, a "jmp-only" block is an edge ABOUT to receive moves). Four transforms landed: jump
+elision, conditional inversion, jump threading, unreachable-block elimination. **Block REORDERING did
+NOT land and is still open** — it is what would CREATE new fall-through opportunities, where this
+rung collects the ones already there. `scripts/emitted-code-count.py`, committed corpus, before
+→ after:
+
+| | ops | jmp | jmp→next | jmponly-blocks |
+|---|---|---|---|---|
+| nbody | 10,389 → **9,504** | 1,016 → **131** | 410 → **0** | 112 → **0** |
+| fannkuch-redux | 3,014 → **2,567** | 520 → **73** | 286 → **0** | 34 → **0** |
+| TOTAL | 13,687 → **12,339** (−9.8%) | 1,555 → **207** (−87%) | 709 → **0** | 147 → **0** |
+
+⚠ The `jmp` column falls by far more than the `jmp→next` count alone, and the reason is worth
+knowing: threading deletes whole forwarding BLOCKS, so each one's own `jmp` goes with it and the
+branches that named it now reach the real target directly. Elision alone would have removed 709.
 
 **ACCEPTANCE**: nbody's jump-to-next count 410 → 0; total emitted ops down ≥3%; byte-identical
 self-host fixpoint; suite green on x64-windows and wasm; `--emit-ir` diff audited on the anchor loop.
@@ -425,7 +452,7 @@ function main() returns ExitCode
 	t = t + addZero(1)
 	t = t + foldConst()
 	t = t + cse(2, b: 3)
-	print("t={t}")
+	print("t=\{t}")   // \{ is a LITERAL brace: this probe is about arithmetic, not interpolation
 	return 0
 end 'main'
 ```

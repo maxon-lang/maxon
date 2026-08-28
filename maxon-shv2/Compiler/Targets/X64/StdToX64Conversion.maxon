@@ -3775,8 +3775,14 @@ type StdToX64Lowering
 
 	// The FIRST block of a split float equality: it asks "unordered?" and nothing else. The
 	// `ucomisd` is already in this block — `lowerCmp` emitted it as a body op — so all that is
-	// left is the parity jump and the fall-through into `ordered` (which
+	// left is the parity jump and an explicit `jmp` to `ordered` (which
 	// `reserveFloatEqualityBlocks` has already emitted, complete).
+	//
+	// ⚠ AN EXPLICIT `jmp`, NOT A FALL-THROUGH, and this comment said the opposite until 2026-08-28.
+	// `addOrderedBlock` APPENDS `ordered` to `blockRefs`, so it is not the physically next block
+	// even before the RPO reorder moves it again — and this lowering emits BOTH edges for the
+	// reason `lowerCondBranch` gives above: correctness may never rest on block ordering. What
+	// turns the pair into a real fall-through is `X64BranchCleanup`, once the layout is final.
 	function lowerFloatEqualityBranch(blockRef BlockRef, thenBlockId BlockId, elseBlockId BlockId, orderedId BlockId, dstBlock IrBlock)
 		let pred = try self.cmpPreds.get(blockRef) otherwise panic("lowerFloatEqualityBranch: block ref {blockRef} fuses no compare, but an `ordered` block was reserved for its branch")
 		let parityTarget = parityTargetOf(pred, thenBlockId: thenBlockId, elseBlockId: elseBlockId)

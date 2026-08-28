@@ -61,11 +61,9 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __mm_incref
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r14, 8
-    x64.jcc less, churn
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   churn:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -79,7 +77,6 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __list_reinsert_last
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr
@@ -196,8 +193,7 @@ func @main {
     x64.callDirect __list_head_checked
     x64.storeSlotReg slot13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rbx, 1
     x64.loadRegSlot rcx, slot7

@@ -21,45 +21,33 @@ func @main {
     x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, critsplit#10
-    x64.jmp fordered#8
-  critsplit#10:
-    x64.jmp ifcont#2
+    x64.jcc parity, ifcont#2
   fordered#8:
-    x64.jcc equal, tieRoundsToEven
-    x64.jmp critsplit#12
+    x64.jcc notEqual, ifcont#2
   tieRoundsToEven:
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp ifcont#2
-  critsplit#12:
-    x64.jmp ifcont#2
   ifcont#2:
     x64.movsdRegRip xmm0, [rip + __fconst_2]
     x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, critsplit#11
-    x64.jmp fordered#9
+    x64.jcc noParity, fordered#9
   critsplit#11:
     x64.movRegReg r8, rax
     x64.jmp ifcont#4
   fordered#9:
-    x64.jcc equal, stickyBitRoundsUp
-    x64.jmp critsplit#13
+    x64.jcc notEqual, critsplit#13
   stickyBitRoundsUp:
     x64.leaRegRegImm32 r8, rax, 2
     x64.jmp ifcont#4
   critsplit#13:
     x64.movRegReg r8, rax
-    x64.jmp ifcont#4
   ifcont#4:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

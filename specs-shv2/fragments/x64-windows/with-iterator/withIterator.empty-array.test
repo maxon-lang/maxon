@@ -37,17 +37,14 @@ func @main {
     x64.storeSlotReg slot0, rbx
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, loop
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   loop:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.imulRegRegImm32 rcx, r13, 8
@@ -56,8 +53,7 @@ func @main {
     x64.jmp __il_cont
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegReg rax, rax, r13
@@ -68,10 +64,8 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get_unchecked
     x64.movRegReg rax, r8
-    x64.jmp __il_cont
   __il_cont:
     x64.leaRegRegReg r12, r12, rax
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp forhdr

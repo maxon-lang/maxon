@@ -29,44 +29,32 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rcx, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.movRegImm32 rdx, 1
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, spin
-    x64.jmp critsplit#11
+    x64.jcc notEqual, critsplit
   spin:
     x64.movRegImm32 rdx, 1
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, inner
-    x64.jmp critsplit#12
+    x64.jcc notEqual, ifcont
   inner:
     x64.leaRegRegImm32 rax, rax, 21
-    x64.jmp ifcont#5
-  critsplit#12:
-    x64.jmp ifcont#5
-  ifcont#5:
+  ifcont:
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.cmpRegImm32 rcx, 2
-    x64.jcc equal, done
-    x64.jmp ifcont#7
+    x64.jcc notEqual, whilehdr
   done:
     x64.movRegReg r8, rax
     x64.jmp whileexit
-  ifcont#7:
-    x64.jmp whilehdr
-  critsplit#11:
+  critsplit:
     x64.movRegReg r8, rax
-    x64.jmp whileexit
   whileexit:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

@@ -46,8 +46,7 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r12 + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rdx, 0
@@ -57,7 +56,6 @@ func @main {
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#12
   __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.imulRegRegImm32 rcx, rdx, 8
@@ -66,8 +64,7 @@ func @main {
     x64.jmp __im_loaded
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __il_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rdx, 0
@@ -77,48 +74,36 @@ func @main {
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#13
   __im_load#13:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __im_loaded
   __im_loaded:
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#15
+    x64.jcc equal, __il_cont
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_slow
-    x64.jmp critsplit#16
-  critsplit#16:
-    x64.jmp __il_cont
-  critsplit#15:
-    x64.jmp __il_cont
+    x64.jcc notEqual, __il_cont
   __il_slow:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.movRegReg rax, r8
     x64.movRegReg rcx, r10
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_rec_7]
     x64.jmp trycont
   tryok:
     x64.movRegReg rcx, rax
-    x64.jmp trycont
   trycont:
     x64.storeSlotReg slot1, rcx
     x64.callDirect String.byteLength
     x64.cmpRegImm32 r8, 0
-    x64.jcc greater, inner
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   inner:
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
@@ -176,7 +161,6 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot3
     x64.callDirect __managed_decref
-    x64.jmp ifcont
   ifcont:
     x64.leaRegRdata rax, [rip + __str_rec_10]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]

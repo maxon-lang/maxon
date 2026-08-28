@@ -56,8 +56,7 @@ func @Vault.stashIf {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, wanted
-    x64.jmp iffalse
+    x64.jcc equal, iffalse
   wanted:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect __managed_push
@@ -65,7 +64,6 @@ func @Vault.stashIf {
   iffalse:
     x64.movRegReg rcx, r9
     x64.callDirect __drop_type_param
-    x64.jmp ifcont
   ifcont:
     x64.epilogue 32
     x64.popReg rbp
@@ -114,12 +112,10 @@ func @main {
     x64.pushReg r15
     x64.prologue 120
     x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 rbx, 3
-    x64.jcc less, grow
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   grow:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp whilehdr
@@ -243,8 +239,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect Vault.count
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, check
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot1

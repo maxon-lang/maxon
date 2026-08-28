@@ -32,8 +32,7 @@ func @checkColor {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdefault
+    x64.jcc notEqual, matchdefault
   matcharm:
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r10, 0
@@ -45,7 +44,6 @@ func @checkColor {
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
-  matchcont:
 }
 
 func @main {
@@ -56,8 +54,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect checkColor
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 99
     x64.epilogue 32

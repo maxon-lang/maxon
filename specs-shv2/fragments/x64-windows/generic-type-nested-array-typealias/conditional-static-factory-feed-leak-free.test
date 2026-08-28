@@ -60,8 +60,7 @@ func @Holder.ofMaybe {
     x64.callDirect __managed_create
     x64.movRegReg r14, r8
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, maybe
-    x64.jmp iffalse
+    x64.jcc equal, iffalse
   maybe:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, rbx
@@ -71,7 +70,6 @@ func @Holder.ofMaybe {
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, rbx
     x64.callDirect __drop_type_param
-    x64.jmp ifcont
   ifcont:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -114,13 +112,11 @@ func @main {
     x64.prologue 72
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rbx, 0
-    x64.jmp forhdr
   forhdr:
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 rbx, 200
-    x64.jcc less, loop
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   loop:
     x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -171,7 +167,6 @@ func @main {
     x64.leaRegRegReg r12, rax, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder_String
-    x64.jmp forstep
   forstep:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 rax, rax, 1
@@ -181,8 +176,7 @@ func @main {
   forexit:
     x64.loadRegSlot rax, slot1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, check
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 r8, 0
     x64.epilogue 72

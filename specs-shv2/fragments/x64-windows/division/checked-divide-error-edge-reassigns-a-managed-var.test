@@ -35,9 +35,6 @@ func @main {
     x64.pushReg r15
     x64.prologue 40
     x64.movRegImm32 rbx, 0
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
   __il_cont:
     x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -64,13 +61,11 @@ func @main {
     x64.cqo
     x64.idivReg rcx
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRegImm32 rax, rcx, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm:
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
@@ -93,13 +88,10 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 24], rax
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
-    x64.jmp matchcont
-  matchcont:
     x64.jmp trycont
   matchdead:
   tryok:
     x64.movRegReg r13, r14
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, r13
     x64.callDirect print

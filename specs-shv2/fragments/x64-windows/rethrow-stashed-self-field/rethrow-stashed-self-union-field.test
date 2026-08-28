@@ -124,8 +124,7 @@ func @Holder.outer {
     x64.movRegReg rcx, rbx
     x64.callDirect Holder.inner
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
     x64.movRegReg rcx, rbx
@@ -157,13 +156,11 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Holder.outer
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.loadRegBaseDisp.word64 rax, [r10 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#3
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#3:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, r10
@@ -178,8 +175,7 @@ func @main {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#4
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#4:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, r10
@@ -203,5 +199,4 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchcont:
 }

@@ -62,16 +62,11 @@ func @big {
     x64.movRegImm32 r8, 5
     x64.movRegImm32 r9, 6
     x64.movRegImm32 r10, 0
-    x64.jmp whilehdr#1
   whilehdr#1:
     x64.cmpRegReg r10, rcx
-    x64.jcc less, L0
-    x64.jmp whileexit#3
-  L0:
-    x64.jmp __il_body#8
+    x64.jcc greaterEqual, whileexit#3
   __il_body#8:
     x64.leaRegRegImm32 r11, r10, 1
-    x64.jmp __il_cont#7
   __il_cont#7:
     x64.leaRegRegReg rax, rax, r11
     x64.leaRegRegReg rdx, rdx, r11
@@ -94,16 +89,11 @@ func @big {
     x64.movRegImm32 r9, 5
     x64.movRegImm32 r10, 6
     x64.movRegImm32 r11, 0
-    x64.jmp whilehdr#4
   whilehdr#4:
     x64.cmpRegReg r11, rcx
-    x64.jcc less, L1
-    x64.jmp whileexit#6
-  L1:
-    x64.jmp __il_body#10
+    x64.jcc greaterEqual, whileexit#6
   __il_body#10:
     x64.leaRegRegImm32 rbx, r11, 1
-    x64.jmp __il_cont#9
   __il_cont#9:
     x64.leaRegRegReg rdx, rdx, rbx
     x64.leaRegRegReg rsi, rsi, rbx
@@ -134,12 +124,10 @@ func @main {
     x64.callDirect big
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

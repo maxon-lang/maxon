@@ -319,6 +319,18 @@ export enum CompilePhase
 	// instead of as functions to allocate and emit. Billed into a neighbour, the cost and the saving
 	// would net off inside one number and neither would be readable.
 	inlineLeaves
+	// The Target-tier CFG cleanup (`cleanUpX64Branches`, EC11): jump elision, conditional inversion,
+	// jump threading and unreachable-block elimination on fully register-allocated ops. APPENDED HERE
+	// rather than beside `regalloc`, between which and `prologueEpilogue` it runs, for this enum's own
+	// reason — the ordinals are the `.metrics.tsv` wire format every trend row ever written is indexed
+	// by, so a member slotted into the middle would re-attribute every historical measurement to the
+	// wrong phase.
+	//
+	// Its OWN row rather than a slice of `regalloc`, because it is not register allocation and because
+	// it is the one backend phase whose cost is expected to be paid back by the phases after it —
+	// `prologueEpilogue` and `encode` see fewer blocks and fewer ops. Billed into `regalloc`, the cost
+	// and the saving would net off inside one number and neither would be readable.
+	branchCleanup
 end 'CompilePhase'
 
 // Per-compile timing state, owned by `Project` (which is already threaded through

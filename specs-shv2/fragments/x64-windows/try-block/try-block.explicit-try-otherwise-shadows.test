@@ -45,8 +45,7 @@ func @callA {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -65,8 +64,7 @@ func @callB {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
@@ -89,43 +87,34 @@ func @main {
     x64.movRegImm32 rcx, 1
     x64.callDirect callA
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rbx, 0
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
-    x64.jmp trycont
   trycont:
     x64.movRegImm32 rcx, 0
     x64.callDirect callB
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryblkerr
-    x64.jmp tryblkok
+    x64.jcc equal, tryblkok
   tryblkerr:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm:
     x64.movRegImm32 r8, 99
-    x64.jmp matchcont
-  matchcont:
     x64.jmp tryblkcont
   matchdead:
   tryblkok:
     x64.leaRegRegReg r8, rbx, r8
-    x64.jmp tryblkcont
   tryblkcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

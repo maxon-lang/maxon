@@ -47,12 +47,10 @@ func @Box.create {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -82,12 +80,10 @@ func @Box.doubled {
     x64.leaRegRegReg r8, rax, rcx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -112,12 +108,10 @@ func @callThunk {
     x64.callReg rbx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -143,12 +137,10 @@ func @run {
     x64.prologue 40
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rcx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
@@ -161,8 +153,7 @@ func @run {
     x64.ret
   __rc_ok:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc greater, pos
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   pos:
     x64.callDirect Box.create
     x64.movRegReg rbx, r8
@@ -203,24 +194,18 @@ func @run$closure_0 {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.leaRegRegReg r8, rax, rdx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __il_slow
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __il_cont
   __il_slow:
     x64.callDirect Box.doubled
-    x64.jmp __il_cont
-  __rc_ok:
-    x64.jmp __il_cont
   __il_cont:
     x64.epilogue 32
     x64.popReg rbp
