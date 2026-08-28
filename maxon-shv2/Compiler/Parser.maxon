@@ -74036,6 +74036,14 @@ export type Parser
 			throw ParseError.serviceArgumentNotUnique(serviceSharedTransferMessage(blame, source: self.transferredValueName(value)), line: anchor.line, column: anchor.column)
 		end 'aSecondOwnerMayExist'
 
+		// ⭐⭐⭐ **AND THE SAME QUESTION ABOUT WHAT THE RECORD HOLDS — the gate the two above cannot be**
+		// (SV1 review). Sole ownership of the BOX licenses nothing about the box's contents; see
+		// `unclosedTransferSlotNoun` for the four measured programs that crossed a co-owned record here.
+		let unclosed = self.unclosedTransferSlotNoun(value)
+		if not unclosed.isEmpty() 'itsGraphIsNotClosed'
+			throw ParseError.serviceArgumentNotUnique(serviceUnclosedRecordTransferMessage(blame, source: self.transferredValueName(value), noun: unclosed), line: anchor.line, column: anchor.column)
+		end 'itsGraphIsNotClosed'
+
 		// ⭐ **BOTH HALVES, UNCONDITIONALLY, AND EACH IS A NO-OP ON THE OTHER'S CASE.** A value is never in
 		// `ownedBindings` and `pendingTempDrops` at once (`markValueOwnsHeap`'s invariant), so this is the shape
 		// `transferConsumedArg`'s opaque arm already uses — and unlike `storeOwnedValueIntoDurableSink`, which
@@ -74045,6 +74053,90 @@ export type Parser
 		self.removeFromPendingTemps(value)
 		return value
 	end 'moveIntoGreenThread'
+
+	// ⭐⭐⭐ **WHAT THIS RECORD HOLDS THAT MAY HAVE A SECOND OWNER, or EMPTY when it holds nothing of the kind
+	// — the transfer rule's THIRD question, and `untransferableParameterNoun`'s shape one tier down: a NOUN
+	// and not a bool, so the one routine that DECIDES is the one that SAYS.**
+	//
+	// ⛔⛔ **SOLENESS IS NOT TRANSITIVE, AND THE TWO QUESTIONS ABOVE ONLY ASK ABOUT THE BOX.**
+	// `OwnedHeapExclusivity`'s header retires exactly this inference one frame in — *"A box this frame solely
+	// owns can hold a payload it only CO-owns, because `moveManagedValueInto`'s `borrowedManaged` arm stores by
+	// `__mm_incref` rather than by move"* — and a cross to a green thread is where it is FATAL rather than
+	// merely wrong: the second owner is left behind on this thread and its later decref races the service's,
+	// both being plain load/add/store since EC10.
+	//
+	// ⛔ **MEASURED (SV1 review), four programs, EVERY ONE compiled clean and exited 0** — each with the
+	// `__mm_incref`/`__str_retain` that mints the second owner visible in `main`'s own emitted code, and the
+	// record then crossing whole through `__svc_spawn` / `__mbox_send` while `main` went on reading it:
+	//   • `spawn Calc.create(s)` onto a `var name as String` — main retains, the factory retains and releases
+	//     main's, and main prints `s` after the spawn;
+	//   • the same through a `var c as Cell` struct field, `spawn` and `h.take(…)` alike;
+	//   • the same where the FACTORY takes the reference itself — `let alias = src` before `return Self{c: alias}`
+	//     defeats the swept consume scan, so the caller passes a BORROW and never emits a retain at all;
+	//   • `cs.push(cell)` and then a send of `cs` — the container's element, retained in `main`.
+	//
+	// ⚠⚠ **THE THIRD OF THOSE IS WHY THIS IS ASKED OF THE TYPE AND NOT OF THE VALUE.** The retain happens in a
+	// frame the send cannot see, so no caller-side mark — not `valueOwnsHeapAlone`, not `valueFromFreshReturn`
+	// — can be made to answer it. A whole-program summary could, and does not exist.
+	//
+	// ⇒ **A RECORD MAY CROSS ONLY IF ITS OWN SLOTS HOLD NO REFERENCE TO ANOTHER RECORD.** ONE level, and it
+	// needs no recursion by construction: a slot that is itself an aggregate already fails, so the walk never
+	// descends. A byte record is the one managed shape closed by construction — its slots hold BYTES.
+	//
+	// ⚠ **IT IS CONSERVATIVE AND IT REFUSES SOUND PROGRAMS TOO** — a service whose `String` field its own
+	// factory built is safe and is refused here. That direction is deliberate and is the only one available:
+	// a wrong "closed" is heap corruption with no diagnostic anywhere, a wrong "unclosed" is a diagnostic that
+	// says what may cross. Proving the safe half needs a record's graph tracked through the co-owning stores.
+	function unclosedTransferSlotNoun(value ValueId) returns String
+		let tag = self.tagOf(value)
+		// A byte record's slots hold a `.rdata` or heap BYTE BUFFER and a length — never a reference to a
+		// second refcounted record — so it is closed however it was built. This is what keeps a `String`
+		// message argument crossing.
+		if tagIsByteRecord(tag) 'aByteRecord'
+			return ""
+		end 'aByteRecord'
+
+		if tag == ValueTypeTag.genericInstance 'aContainer'
+			return ContainerTransferNoun
+		end 'aContainer'
+
+		if tag == ValueTypeTag.interfaceRef 'anExistential'
+			return InterfaceParameterNoun
+		end 'anExistential'
+
+		// Unreachable from either door today — a generic service is refused at the `spawn` and a
+		// type-parameter-typed message parameter with it — and it answers rather than falling through to the
+		// closed default for `untransferableParameterNoun`'s reason: "closed" is the wrong default for the one
+		// shape whose layout the send site cannot know.
+		if tag == ValueTypeTag.typeParameter 'opaque'
+			return "an opaque type parameter, whose slots the send site cannot see"
+		end 'opaque'
+
+		if not tagIsStructRef(tag) and tag != ValueTypeTag.named 'namesNoRecord'
+			return "a managed value whose record carries no name here, so what it holds cannot be read"
+		end 'namesNoRecord'
+
+		let name = self.valueTypeName(value)
+		// A boxed union: `emitEnumBox` tags its box `named`, so this arm and the struct arm below split on
+		// which registry declares the name rather than on the tag.
+		if self.signatures.containsEnum(name) 'aUnionBox'
+			return "" if not self.signatures.unionHasManagedPayload(name) else "a `{String.from(name)}` whose variant carries a managed payload — a reference the sending frame may still hold"
+		end 'aUnionBox'
+
+		if not self.signatures.containsStruct(name) 'noSuchRecord'
+			return "a managed value of `{String.from(name)}`, which no declaration this rule can read describes"
+		end 'noSuchRecord'
+
+		// ⚠ **`structHasManagedField` IS BLIND TO A SLOT STANDING AT A BARE TYPE PARAMETER (W183)**, and
+		// `valueIsCopyableTuple` records the freed-record measurement that blindness cost one door over. The
+		// same pairing is required here and for a strictly worse reason: there the miss is a bad copy, here it
+		// is a reference handed to a second green thread.
+		if self.recordRestsAnOpaqueSlot(name) 'anOpaqueSlot'
+			return "a `type {String.from(name)}` with a slot standing at a bare type parameter, whose managed-ness the send cannot see"
+		end 'anOpaqueSlot'
+
+		return "" if not self.signatures.structHasManagedField(name) else "a `type {String.from(name)}` with a managed field — a reference the sending frame may still hold"
+	end 'unclosedTransferSlotNoun'
 
 	// The source NAME a refused transfer should point the author at — the live owning binding's, or the empty
 	// name for a value no binding holds (a temporary, an element read, a field read). Split out because both

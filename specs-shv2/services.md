@@ -1391,6 +1391,132 @@ end 'main'
 error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it, and its type has no owning copy a send could take instead. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
 ```
 
+<!-- test: a-scalar-only-record-crosses-whole -->
+<!-- targets: x64-windows -->
+⭐ The POSITIVE CONTROL for the three cases below, and the shape the transfer rule admits: a record whose
+every slot is a machine word holds no reference to anything, so moving it moves the whole of it. Built at the
+send, so this frame gives up the only reference there was.
+```maxon
+type Point
+	export var x as int
+	export var y as int
+
+	export static function create(x int, y int) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+type Plot
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function at(p Point)
+		self.n = self.n + 1
+		print("at {p.x},{p.y} ({self.n})\n")
+	end 'at'
+end 'Plot'
+
+function main() returns ExitCode
+	let h = spawn Plot.create()
+	h.at(Point.create(1, y: 2))
+	h.at(Point.create(3, y: 4))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+at 1,2 (1)
+at 3,4 (2)
+```
+
+<!-- test: error.a-record-with-a-managed-field-may-not-cross -->
+⭐⭐ **SOLENESS IS NOT TRANSITIVE, AND THIS IS THE CASE THAT SAYS SO.** `main` owns `cell` and owns the
+`Calc` the factory handed back — each of them ALONE — and the two facts together still do not say that
+`main` and the service will not both own the `Cell`. The factory's `Self{c: alias}` increfs rather than
+moves, so the record has two owners across two green threads, whose plain refcount steps then race.
+
+⚠ **THE RETAIN IS THE FACTORY'S, WHICH IS WHY THE RULE IS ABOUT THE TYPE.** `let alias = src` puts the store
+out of reach of the swept consume scan, so `main` passes a BORROW and emits no retain of its own: nothing
+observable at the SEND distinguishes this from the safe program. Before the rule existed this compiled clean
+and exited 0.
+```maxon
+type Cell
+	export var n as int
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+type Calc
+	var c as Cell
+
+	static function create(src Cell) returns Self
+		let alias = src
+		return Self{c: alias}
+	end 'create'
+
+	export function bump()
+		self.c.n = self.c.n + 100
+	end 'bump'
+end 'Calc'
+
+function main() returns ExitCode
+	var cell = Cell.create()
+	let h = spawn Calc.create(cell)
+	h.bump()
+	return cell.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:25:21: the state `spawn Calc.create(…)` would start the service with is a `type Calc` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, and a record whose every slot is one of those; proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
+```
+
+<!-- test: error.a-container-may-not-cross -->
+A container is unclosed whatever its element type is, and `Cell` is the proof that the ELEMENT's own
+scalar-ness is not the question: `push` INCREFS what it is handed, so `cell` is owned by `main` and by `cs`
+at once. Sending `cs` would hand the second owner's record to another green thread.
+```maxon
+type Cell
+	export var n as int
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Svc
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(cs CellArray)
+		print("svc {cs.count()}\n")
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var cell = Cell.create()
+	var cs = CellArray.create()
+	cs.push(cell)
+	let h = spawn Svc.create()
+	h.take(cs)
+	return cell.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:29:9: argument `cs` of the message `Svc.take` is a container, whose elements a push increfs rather than moves — so this frame may still own what is in it (`cs`). This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, and a record whose every slot is one of those; proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
+```
+
 <!-- test: error.a-promise-may-not-be-sent -->
 A `Promise` is a green-thread handle its awaiter owns, and its value is a bare integer — so a message
 declaring an `int` parameter would take one without a word if the send site did not ask. It asks.
