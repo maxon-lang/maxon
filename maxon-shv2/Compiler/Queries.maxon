@@ -663,7 +663,7 @@ function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatu
 		for i in 0 upto tokens.count() 'eachToken'
 			let tok = try tokens.get(i) otherwise panic("noteWholeProgramTokenFactsIn: tokens.get OOB at {i} below count {tokens.count()}")
 			if tokenIsTheSpawnKeyword(tok) 'aSpawnMayStartHere'
-				noteServiceSpawnFollowing(signatures, tokens: tokens, index: i)
+				noteServiceSpawnFollowing(signatures, tokens: tokens, index: i, path: path)
 			end 'aSpawnMayStartHere'
 
 			if tok.kind != TokenKind.type 'notATypeKeyword'
@@ -712,7 +712,7 @@ end 'noteWholeProgramTokenFactsIn'
 // `bump` is an instance method — see `ServiceTargetVerdict`. A shape this probe DECLINES is still refused at
 // the site: `Parser.parseSpawn` claims every `spawn <name>` the grammar can reach and answers for the ones
 // no candidate was noted for.
-function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArray, index TokenIndex)
+function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArray, index TokenIndex, path FilePath)
 	let typeTok = try tokens.get(index + 1) otherwise return
 	if not tokenCanBeAName(typeTok) 'notATypeName'
 		return
@@ -733,7 +733,10 @@ function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArr
 		return
 	end 'notACall'
 
-	signatures.noteServiceSpawnCandidate(typeTok.value, member: memberTok.value)
+	// The `spawn` KEYWORD's position, not the type token's: it is the construct the note names, and it is
+	// what an author scanning for "where did this become a service?" is looking for.
+	let spawnTok = try tokens.get(index) otherwise return
+	signatures.noteServiceSpawnCandidate(typeTok.value, member: memberTok.value, declFilePath: path, line: spawnTok.line, column: spawnTok.column)
 end 'noteServiceSpawnFollowing'
 
 // Does the type header beginning at `headerStart` name `BuiltinArrayLiteral` as one of its OWN conformances?
@@ -2257,6 +2260,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		serviceArgumentNotUnique(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceArgumentNotUnique, message: explanation, line: line, column: column, filePath: path)
 		serviceNotAMessage(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceNotAMessage, message: explanation, line: line, column: column, filePath: path)
 		serviceReplyNotCarriable(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceReplyNotCarriable, message: explanation, line: line, column: column, filePath: path)
+		serviceReplyAliasesState(explanation, line, column, note) then reportPositionedWithNote(project, code: ErrorCode.semanticServiceReplyAliasesState, message: explanation, line: line, column: column, filePath: path, note: note)
 	end 'kind'
 end 'reportParseError'
 

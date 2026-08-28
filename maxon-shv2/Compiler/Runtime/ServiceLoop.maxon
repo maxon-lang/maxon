@@ -99,8 +99,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	var fn = SynthesizedFunction.open(module, project: project, name: serviceLoopSymbol(typeName), returnType: MaxonReturnType.void, paramTypes: paramTypes)
 
 	let range = SourceRange.none()
-	let requestName = serviceRequestCompanionName(typeName)
-	let request = serviceRequestLayout(signatures, requestName: requestName)
+	let request = requireServiceRequestLayout(signatures, typeName: typeName)
 
 	let entry = fn.currentBlock()
 	let receive = fn.openBlock(b"serve")
@@ -201,7 +200,7 @@ function buildServiceAbandon(module MaxonModule, project Project, signatures Pro
 
 	let range = SourceRange.none()
 	let requestName = serviceRequestCompanionName(typeName)
-	let request = serviceRequestLayout(signatures, requestName: requestName)
+	let request = requireServiceRequestLayout(signatures, typeName: typeName)
 	let box = ServiceAbandonBoxParam
 
 	let entry = fn.currentBlock()
@@ -478,13 +477,11 @@ let ServiceReceiverArgCount = 1 as ParamCount
 
 // The request union's layout, or a panic: a service's companions were minted before the parse
 // (`ServiceCompanions.synthesizeServiceCompanions`), so a service whose union is missing here is a compiler
-// bug rather than a program's.
-function serviceRequestLayout(signatures ProgramSignatures, requestName ByteArray) returns EnumLayout
-	return match signatures.enumOf(requestName) 'e'
-		declared(layout) gives layout
-		undeclared panic("serviceRequestLayout: nothing declares `union {String.from(requestName)}` — the companions are minted for every accepted spawn target inside `queryProgramSignatures`, before any body is parsed")
-	end 'e'
-end 'serviceRequestLayout'
+// bug rather than a program's. The LOOKUP is `ServiceCompanions.serviceRequestLayoutOf`'s — see there for
+// why it throws and its knowing callers panic in their own words.
+function requireServiceRequestLayout(signatures ProgramSignatures, typeName ByteArray) returns EnumLayout
+	return try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise panic("requireServiceRequestLayout: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — the companions are minted for every accepted spawn target inside `queryProgramSignatures`, before any body is parsed")
+end 'requireServiceRequestLayout'
 
 // A handler's declared return type, `void` for an undeclared callee — which is a program SemanticCheck
 // rejects with E3004, reached here only because this synthesis runs over a module that may still be doomed.

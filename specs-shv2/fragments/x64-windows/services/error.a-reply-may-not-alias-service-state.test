@@ -1,0 +1,21 @@
+// Test: error.a-reply-may-not-alias-service-state
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function itself() returns Store
+		return self
+	end 'itself'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3137: <fragment>:10:3: `Store.itself` returns a value reachable from `self`, and this `spawn` makes `Store` a service — so the caller would hold a second reference to the service's own state, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:15:10: the `spawn` that makes `Store` a service

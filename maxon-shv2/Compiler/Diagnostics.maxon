@@ -16,9 +16,15 @@
 // registry. To add a code: edit `docs/error-codes.txt`, run
 // `maxon error-codes generate`.
 
-// A SECOND source position on one diagnostic — where it was RAISED, when that is
-// not where it is BLAMED. `none` for the overwhelming majority; see
-// `Diagnostic.blamedAt`, the ONE producer of an `at`.
+// A SECOND source position on one diagnostic — a line the reader has to see beside
+// the one the error is anchored at. `none` for the overwhelming majority.
+//
+// ⭐ **TWO PRODUCERS SINCE SV2, AND THEY DIFFER IN WHETHER THEY SWAP.**
+// `Diagnostic.blamedAt` MOVES a library line into the note and promotes the user's
+// construct to the primary slot, with fixed text. `reportPositionedWithNote` ADDS
+// one: both sites are the author's, neither displaces the other, and the text is
+// the caller's — a service rule fires where the method is written and has to name
+// the `spawn` that made the type a service, which may be in another file.
 export union DiagnosticNote
 	none
 	at(message String, line LineNumber, column ColumnNumber, filePath FilePath)
@@ -81,6 +87,13 @@ export type Diagnostic
 			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, line: blamedLine, column: blamedColumn, filePath: blamedPath, note: DiagnosticNote.at(LibraryBlameNoteText, line: self.line, column: self.column, filePath: self.filePath)}
 		end 'blame'
 	end 'blamedAt'
+
+	// The same diagnostic carrying a second source position. Split from `create` because a note is the
+	// exception rather than a parameter every one of the hundreds of `create` calls would have to answer —
+	// and split from `blamedAt` because that one SWAPS and this one ADDS (see `reportPositionedWithNote`).
+	export function withNote(second DiagnosticNote) returns Diagnostic
+		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: self.filePath, note: second}
+	end 'withNote'
 
 	// Render as `error <code>: <message>` — the exact wire format the spec's
 	// `maxoncstderr` blocks compare against. The code's `.rawValue` is the 4-digit
@@ -148,6 +161,22 @@ end 'CompileError'
 export function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
 	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
 end 'reportPositioned'
+
+// ⭐⭐ **THE SAME FUNNEL FOR A DIAGNOSTIC THAT CARRIES A SECOND SITE — the note producer that is not a BLAME
+// SWAP (SV2).** `Diagnostic.blamedAt` was the only `DiagnosticNote.at` there had ever been, and it is a swap
+// with FIXED text: it moves a library line into the note and puts the user's construct in the primary slot.
+//
+// ⭐ **THIS ONE ADDS RATHER THAN SWAPS, AND THE TEXT IS THE CALLER'S.** A service diagnostic is raised where
+// the author wrote the offending line and has to name a SECOND line the author also wrote — the `spawn` that
+// made the type a service, which may be in a different file entirely — so neither site displaces the other
+// and the note says what the second one IS. `E3137` is its first caller; `E3139` renders one hop of a cycle
+// per note.
+//
+// ⚠ It goes through `reportDiagnostic` like everything else, so the capture `spec-test` reads back is the
+// bytes a command line would have printed — the property that sink's header rests on.
+export function reportPositionedWithNote(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath, note DiagnosticNote)
+	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath).withNote(note))
+end 'reportPositionedWithNote'
 
 // ⭐⭐ **THE ONE WRITER OF A COMPILER-FACING DIAGNOSTIC LINE — so a caller compiling IN PROCESS can
 // READ exactly what a command line would have PRINTED.**

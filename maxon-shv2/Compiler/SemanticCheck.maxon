@@ -87,6 +87,10 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// E3073 — a spawn whose callee can never suspend. Whole-program like the summary above it, and for the same
 	// reason: whether `f` yields depends on what `f` calls, which is only knowable once every file has merged.
 	checkAsyncYielding(project, module: module, funcNames: funcNames)
+	// E3139 — two services that can await replies from each other. Whole-program for `checkAsyncYielding`'s
+	// exact reason, and over the same closure: whether a message blocks on a service depends on what it
+	// CALLS, which is only knowable once every file has merged. See `ServiceCallCycleCheck`.
+	checkServiceCallCycles(project, module: module, signatures: signatures, funcNames: funcNames)
 	// E3070: a collection mutated while an element borrowed out of it is still live. The facts are the
 	// PARSER's (a binding exists nowhere else in shv2), and this is the first point that holds the
 	// whole-program `mutationSummary` its call-argument half asks — which is why it runs here rather than in
@@ -3619,7 +3623,7 @@ end 'buildYieldingSummary'
 // difference stays where it is, because carrying it in here would mean either a function-value parameter (a
 // mechanism no other call site in this compiler uses) or a mode flag selecting between two predicates, which
 // is the enumerated door this file spends its length arguing against.
-function markSeededCallers(edges CallGraphEdges, seeds BoolArray, nodeCount CsrIndex) returns BoolArray
+module function markSeededCallers(edges CallGraphEdges, seeds BoolArray, nodeCount CsrIndex) returns BoolArray
 	return reverseReachabilityMark(buildCsr(edges.calleeIndices, to: edges.callerIndices, nodeCount: nodeCount), seeds: seeds)
 end 'markSeededCallers'
 
@@ -3688,10 +3692,21 @@ function calleeYields(callee ByteArray, funcIndexByName FuncIndexByName, callerI
 		return true
 	end 'parksTheGreenThread'
 
-	let calleeIndex = try funcIndexByName.get(callee) otherwise return true
-	edges.record(calleeIndex, callerIndex: callerIndex)
-	return false
+	return not recordCallGraphEdge(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
 end 'calleeYields'
+
+// ⭐ **RECORD THE (callee, caller) EDGE FOR ONE NAMED CALLEE, AND SAY WHETHER THE MODULE HOLDS THAT CALLEE.**
+// A name no `IrFunction` declares — a restored intrinsic, an extern, a runtime entry — contributes no edge,
+// and every summary that closes over this graph has to decide for itself what an unresolvable callee MEANS:
+// the yield summary reads it as *"assume it yields"* (its accepting direction), and the blocking graph reads
+// it as *"no edge"* (its accepting direction). The two answers are opposite because the two diagnostics
+// refuse in opposite directions, which is exactly why the verdict is the CALLER's and the recording is
+// shared. ⚠ `module`, for `CallGraphEdges`' reason.
+module function recordCallGraphEdge(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+	let calleeIndex = try funcIndexByName.get(callee) otherwise return false
+	edges.record(calleeIndex, callerIndex: callerIndex)
+	return true
+end 'recordCallGraphEdge'
 
 // ⭐⭐ **THE PARK POINTS — THE ONLY SEEDS OF THE YIELD CLOSURE, AND EACH ONE REALLY SUSPENDS.** Every name here
 // is a runtime entry whose body switches the green thread off the CPU, so this predicate describes measured
@@ -3750,7 +3765,10 @@ end 'ioYieldingRuntimeCallee'
 // written that way first, and it read GREEN on its own acceptance case for the only reason a wrong answer
 // ever reads green: nothing propagated at all, because the single callee in that program was not a seed.
 // These neighbours ARE the callers.
-type CallGraphEdges
+// ⚠ **`module` SINCE SV2**, whose acyclic blocking graph is a third whole-program summary over the same
+// relation — see `ServiceCallCycleCheck`, which builds its own edges from its own seed walk exactly as the
+// two summaries here do, and closes them through `markSeededCallers` rather than re-deriving the closure.
+module type CallGraphEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as CsrColumn
 

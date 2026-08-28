@@ -808,6 +808,30 @@ end 'AsyncSpawnSite'
 // `asyncCall` op index ⇒ that spawn's quotable text and position. See `Project.asyncSpawnSites`.
 export typealias AsyncSpawnSiteMap = Map with (OpIndex, AsyncSpawnSite)
 
+// ⭐⭐ **WHAT THE ACYCLIC BLOCKING GRAPH NEEDS ABOUT ONE `await` AND CANNOT GET AT ITS OWN TIER (SV2).**
+// Whether an `await` blocks on a SERVICE — and on which — is `Parser.awaitedPromiseFacts`' answer, and that
+// routine resolves the promise through the storage road, the spawn road and a merge PHI. Re-deriving it over
+// the merged module would be a second resolver, free to disagree with the first about the one shape it is
+// hardest to get right: a re-armed `var` awaited past a merge.
+//
+// ⇒ the parser records what it already knows, keyed by the `await`/`tryAwait` op it is about, exactly as
+// `AsyncSpawnSite` is. The op index is what tells the check which FUNCTION the await sits in, so nothing
+// here carries a function name.
+export type ServiceAwaitSite
+	// The SERVICE whose reply this await blocks on — the `A` in an `A -> B` edge's `B`.
+	export let serviceTypeName as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let declFilePath as FilePath
+
+	export static function create(serviceTypeName ByteArray, line LineNumber, column ColumnNumber, declFilePath FilePath) returns ServiceAwaitSite
+		return Self{serviceTypeName: serviceTypeName, line: line, column: column, declFilePath: declFilePath}
+	end 'create'
+end 'ServiceAwaitSite'
+
+// `await`/`tryAwait` op index ⇒ the service its reply comes from. See `ServiceAwaitSite`.
+export typealias ServiceAwaitSiteMap = Map with (OpIndex, ServiceAwaitSite)
+
 // ⭐ `__mm_alloc` call op index ⇒ the mm-trace TAG that box carries. See `Project.allocTagSites`.
 export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
 
@@ -6787,6 +6811,11 @@ export type Project
 	// the column its author wrote it) and carried here. Folded from the per-file artifact by `mergeArtifact`
 	// with the same op offset `opRanges` uses. Cold path only.
 	export var asyncSpawnSites as AsyncSpawnSiteMap
+	// ⭐ Every `await` of a SERVICE REPLY in the program, by op index (SV2) — the seed set of the acyclic
+	// blocking graph. Folded from the per-file artifact with the merge's op offset, exactly as
+	// `asyncSpawnSites` is. EMPTY for every program that awaits no reply, which is every program with no
+	// service in it, and the check reads that count as its own gate.
+	export var serviceAwaitSites as ServiceAwaitSiteMap
 	// ⭐⭐ **THE mm-trace TAG FOR A BOX THE PARSER MINTS THAT IS NOT ANY DECLARED TYPE'S** — an interpolated
 	// part's scratch byte run, a closure's captured environment, and the one-slot cell a reassigned
 	// by-reference parameter is promoted into. Keyed by the `__mm_alloc` call's own op index, SPARSE like
@@ -6909,6 +6938,7 @@ export type Project
 			asyncTrace: false,
 			debugStream: false,
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
+			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),

@@ -238,6 +238,9 @@ export type FileParseArtifact
 	// exactly as `opRanges` and `valueOrigins` are folded. See `Project.asyncSpawnSites` for why the text has
 	// to be captured here rather than recovered downstream.
 	export var asyncSpawnSites as AsyncSpawnSiteMap
+	// The SV2 twin of `asyncSpawnSites`: every `await` of a service reply this file holds, keyed by the op
+	// index in THIS artifact's module and folded with the merge's offset. See `Project.serviceAwaitSites`.
+	export var serviceAwaitSites as ServiceAwaitSiteMap
 	// The mm-trace tag of each compiler-minted box this file allocates that is not any declared type's.
 	// `mergeArtifact` folds it into `project.allocTagSites` with the merge's op offset, exactly as
 	// `asyncSpawnSites` is. See `Project.allocTagSites` for why it is a side channel and not a type.
@@ -398,6 +401,7 @@ export type FileParseArtifact
 			module: MaxonModule.create(),
 			opRanges: SourceRangeTable.create(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
+			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
@@ -465,6 +469,12 @@ export type FileParseArtifact
 	export function recordAsyncSpawnSite(site AsyncSpawnSite)
 		self.asyncSpawnSites.upsert(self.module.opCount(), value: site)
 	end 'recordAsyncSpawnSite'
+
+	// The SV2 twin, on the same read-it-through-here contract and for its reason: the site lands on the op
+	// the parser is ABOUT to append, so the key is the current count.
+	export function recordServiceAwaitSite(site ServiceAwaitSite)
+		self.serviceAwaitSites.upsert(self.module.opCount(), value: site)
+	end 'recordServiceAwaitSite'
 
 	// Record the mm-trace TAG of the box the op `emitOp` is about to append allocates — the same
 	// read-it-through-here contract `recordAsyncSpawnSite` states, and for its reason: the tag lands on the
@@ -1499,6 +1509,9 @@ end 'commitPendingTransformArities'
 // relocation `opRanges` gets by appending in order, spelled out here because a map cannot express it by
 // position. Without the offset every file after the first would quote the wrong spawn's text.
 function commitAsyncSpawnTexts(project Project, artifact FileParseArtifact, opOffset OpIndex)
+	for (opIndex, awaitSite) in artifact.serviceAwaitSites 'eachServiceAwait'
+		project.serviceAwaitSites.upsert(opIndex + opOffset, value: awaitSite)
+	end 'eachServiceAwait'
 	for (opIndex, site) in artifact.asyncSpawnSites 'each'
 		project.asyncSpawnSites.upsert(opIndex + opOffset, value: site)
 	end 'each'

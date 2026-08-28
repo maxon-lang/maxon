@@ -1,0 +1,410 @@
+// ServiceCallCycleCheck.maxon — DEADLOCK FREEDOM BY CONSTRUCTION (E3139), the acyclic blocking graph.
+//
+// ⭐⭐ **MUTUAL REENTRANCY IS NOT DIAGNOSED AT RUN TIME, IT IS MADE UNREPRESENTABLE.**
+// `SERVICES_DESIGN.md` §"Deadlock freedom by construction": the compiler builds a directed graph over
+// service TYPES and refuses any cycle in it. An edge `A → B` exists iff a message of `A` **awaits a reply**
+// from a `B.handle`.
+//
+// **Why acyclicity is SUFFICIENT and not merely suggestive.** An acyclic graph has a topological order. The
+// service lowest in that order awaits nobody, so it always makes progress; when it replies, its callers
+// unblock; by induction on the order every blocked caller eventually resumes. There is no configuration in
+// which everyone is waiting. That is a proof, and it is the static analogue of lock-ordering discipline —
+// with the ordering checked rather than documented.
+//
+// ⭐⭐⭐ **ONLY BLOCKING EDGES COUNT, AND THAT IS THE WHOLE DESIGN DECISION.** A fire-and-forget send is NOT
+// an edge, because a non-blocking send cannot participate in a wait cycle — which is what keeps
+// peer-to-peer messaging legal, and is the difference between a rule authors can live with and one that
+// bans how actor systems are written. `services.fire-and-forget-cycle-is-legal` is the case that pins it:
+// two services that message each other in a ring, compiling and running. Treat a `serviceSend` as a call
+// edge here — one line, in `noteServiceCallEdges` — and that case goes red, which is the sabotage this
+// file's rule is proved by.
+//
+// ⭐⭐ **IT OWNS NO GRAPH ALGORITHM OF ITS OWN**, on `TypeCycleCheck.maxon`'s discipline and stated in its
+// words: *"this file contributes the GRAPH and the WORDS, and nothing else. A second cycle finder here
+// would be the one-fact-twice bug at the algorithm level."* `CsrGraph.nodesOnACycle` (Tarjan, one sweep for
+// every node) finds them and `shortestCycleThrough` (BFS) renders the SMALLEST loop, so a cycle is reported
+// as the short ring the author can actually see rather than as whatever a DFS happened to walk.
+//
+// ⭐⭐ **NOR ITS OWN CALL-GRAPH CLOSURE.** An edge is transitive through ordinary functions — a message of
+// `A` that calls a helper which awaits a `B.handle` still produces `A → B` — which is a fixed point over
+// the call graph, and shv2 already computes exactly that shape twice (`SemanticCheck.buildYieldingSummary`,
+// `buildEffectFreeSummary`). This is the third: its own seed walk fills `CallGraphEdges`, and
+// `markSeededCallers` — the ONE closure step, whose header records the orientation mistake that shipped
+// green — pushes each seed's mark up into every caller.
+//
+// ⚠⚠ **THE ONE INCOMPLETENESS, SAID PLAINLY: AN UNKNOWN CALLEE CONTRIBUTES NO EDGE.** An `indirectCall`
+// through a closure, a `witnessDispatch`, a callee no `IrFunction` declares — none of them can be followed,
+// so a blocking await reached ONLY through one is invisible here and its cycle is not refused. That is the
+// ACCEPTING direction, deliberately: this diagnostic REFUSES, and a false refusal is not something an
+// author can work around, while a missed one costs the guarantee for a program shape the design document's
+// *"there is no back door"* paragraph did not consider. `SemanticCheck.recordCallGraphEdge`'s header states
+// the same choice from the yield summary's opposite side.
+//
+// ⚠ **AN `async` SPAWN IS AN EDGE**, exactly as it is in the yield summary and for its reason: `async f()`
+// blocks this frame on `f` the moment the promise is awaited, so a message that spawns a helper which
+// awaits a reply is blocked on that reply. A spawn whose promise is DROPPED is not, and treating it as an
+// edge over-approximates there — the refusing direction — which is the one place this file is deliberately
+// stricter than the run-time truth. It is unreachable in practice: a `spawn` inside a message body that
+// awaits another service and then renounces the promise is a program nobody has written, and the
+// alternative is to ask whether each spawn is awaited, which is the linear-await analysis again.
+
+// A service's dense node key is its position in `serviceTypeRoster` — first-spawn order, and therefore
+// stable across compiles. It is spelled `CsrIndex` rather than given an alias of its own, on
+// `TypeCycleCheck`'s precedent: the graph walks take that type and a second name for it would have to be
+// unwrapped at every boundary.
+
+// ⭐ **THE BLOCKING GRAPH: the service names, the edges, and — per edge — the AWAIT that made it.** The
+// site is carried on the EDGE rather than looked up when a cycle is found, for `TypeCycleGraph`'s reason:
+// the walk that knows which await produced an edge is the walk that built it, and recovering it afterwards
+// would be a second spelling of *"which await blocks this message"*.
+type ServiceBlockingGraph
+	// Node ⇒ the service type's declared name.
+	var serviceNames as ByteArrayArray
+	// The edges, as the parallel columns `buildCsr` consumes: `edgeOwners[i]` is the service whose message
+	// blocks, `edgeAwaited[i]` the service it blocks on.
+	var edgeOwners as CsrColumn
+	var edgeAwaited as CsrColumn
+	// Per edge: the MESSAGE that blocks, and where the blocking `await` is written.
+	var edgeMessages as ByteArrayArray
+	var edgeSites as ServiceAwaitSiteArray
+
+	static function create(serviceNames ByteArrayArray) returns ServiceBlockingGraph
+		return Self{serviceNames: serviceNames, edgeOwners: CsrColumn.create(), edgeAwaited: CsrColumn.create(), edgeMessages: ByteArrayArray.create(), edgeSites: ServiceAwaitSiteArray.create()}
+	end 'create'
+
+	function nodeCount() returns CsrIndex
+		return self.serviceNames.count()
+	end 'nodeCount'
+
+	function serviceNameOf(node CsrIndex) returns ByteArray
+		return try self.serviceNames.get(node) otherwise panic("ServiceBlockingGraph.serviceNameOf: serviceNames.get OOB at {node} below count {self.nodeCount()}")
+	end 'serviceNameOf'
+
+	// The node a service name occupies, or `NoServiceNode` when the program spawns no such service. A NAME
+	// with no node is an ordinary property of the program — a message may name a handle type whose service
+	// some later refusal removed from the roster — so the absence is a real answer rather than a panic.
+	function nodeOfService(typeName ByteArray) returns CsrIndex
+		for node in 0 upto self.nodeCount() 'eachService'
+			if self.serviceNameOf(node).equals(typeName) 'found'
+				return node
+			end 'found'
+		end 'eachService'
+
+		return NoServiceNode
+	end 'nodeOfService'
+
+	function addEdge(owner CsrIndex, awaited CsrIndex, message ByteArray, site ServiceAwaitSite)
+		self.edgeOwners.push(owner)
+		self.edgeAwaited.push(awaited)
+		self.edgeMessages.push(message)
+		self.edgeSites.push(site)
+	end 'addEdge'
+
+	// The adjacency both walks read, built on demand — `TypeCycleGraph.adjacency`'s arrangement and its
+	// reason: `nodesOnACycle` asks once per compile and `shortestCycleThrough` only on a program that is
+	// already being rejected.
+	function adjacency() returns CsrGraph
+		return buildCsr(self.edgeOwners, to: self.edgeAwaited, nodeCount: self.nodeCount())
+	end 'adjacency'
+
+	// The first edge from `owner` to `awaited`. Linear over the edge list, on the error path only —
+	// `TypeCycleGraph.edgeIndexBetween`'s discipline and its stated reason.
+	function edgeIndexBetween(owner CsrIndex, awaited CsrIndex) returns CsrIndex
+		for index in 0 upto self.edgeOwners.count() 'eachEdge'
+			let ownerAt = try self.edgeOwners.get(index) otherwise panic("ServiceBlockingGraph.edgeIndexBetween: edgeOwners.get OOB at {index}")
+			let awaitedAt = try self.edgeAwaited.get(index) otherwise panic("ServiceBlockingGraph.edgeIndexBetween: edgeAwaited.get OOB at {index}")
+			if ownerAt == owner and awaitedAt == awaited 'theStepThePathTook'
+				return index
+			end 'theStepThePathTook'
+		end 'eachEdge'
+
+		panic("ServiceBlockingGraph.edgeIndexBetween: the cycle steps from node {owner} to node {awaited}, but no edge joins them — `shortestCycleThrough` walks the very adjacency these columns were built into")
+	end 'edgeIndexBetween'
+
+	function edgeMessageAt(index CsrIndex) returns ByteArray
+		return try self.edgeMessages.get(index) otherwise panic("ServiceBlockingGraph.edgeMessageAt: edgeMessages.get OOB at {index} below count {self.edgeMessages.count()}")
+	end 'edgeMessageAt'
+
+	function edgeSiteAt(index CsrIndex) returns ServiceAwaitSite
+		return try self.edgeSites.get(index) otherwise panic("ServiceBlockingGraph.edgeSiteAt: edgeSites.get OOB at {index} below count {self.edgeSites.count()}")
+	end 'edgeSiteAt'
+end 'ServiceBlockingGraph'
+
+// ⭐ **"NO NODE" AS A VALUE, NOT AS A SENTINEL INSIDE THE KEY SPACE** — `TypeCycleCheck.NoTypeCycleNode`'s
+// rule: `CsrIndex` is 0-based and 0 is a real node, so the absence sits above every key a program can mint.
+let NoServiceNode = u64.max as CsrIndex
+
+typealias ServiceAwaitSiteArray = Array with ServiceAwaitSite
+
+// ⭐ **THE E3139 CHECK.** Build the blocking graph, ask `nodesOnACycle` once for the whole of it, and report
+// the EARLIEST-SPAWNED service that lies on a cycle.
+//
+// ⚠ **EARLIEST-SPAWNED, because mutual reentrancy is ONE defect reachable from either end** —
+// `blameForTypeCycles`' rule, one graph over. Reporting it against both services would double-diagnose one
+// mistake, and reporting whichever the roster happened to yield first would make the diagnostic a property
+// of iteration order; the roster IS first-spawn order, so the lowest node is the one the author wrote first.
+//
+// ⚠ **THE GATE IS `serviceAwaitSites`, WHICH IS EMPTY FOR EVERY PROGRAM THAT AWAITS NO REPLY.** That is
+// every program with no service in it and every SV1-shaped program that only sends fire-and-forget, so the
+// overwhelming majority of compiles pay one `count()` and nothing else — no roster walk, no call-graph
+// pass, no CSR.
+export function checkServiceCallCycles(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
+	if project.serviceAwaitSites.count() == 0 'nothingBlocksOnAReply'
+		return
+	end 'nothingBlocksOnAReply'
+
+	let graph = buildServiceBlockingGraph(project, module: module, signatures: signatures, funcNames: funcNames)
+	let onCycle = nodesOnACycle(graph.adjacency())
+	for node in 0 upto graph.nodeCount() 'eachService'
+		let lies = try onCycle.get(node) otherwise panic("checkServiceCallCycles: node {node} is outside the {onCycle.count()}-node answer the graph was built over")
+		if lies 'liesOnACycle'
+			reportServiceCallCycle(project, graph: graph, node: node)
+			return
+		end 'liesOnACycle'
+	end 'eachService'
+end 'checkServiceCallCycles'
+
+// ⭐⭐ **THE GRAPH, IN ONE CALL-GRAPH PASS PLUS ONE CLOSURE PER SERVICE.** The pass fills the call edges and,
+// per service, the functions whose OWN body awaits a reply from it; the closure then pushes each of those
+// marks up into every caller, and a marked function that is itself a MESSAGE contributes the edge.
+//
+// ⚡ **ONE EDGE WALK, `services` CLOSURES.** The alternative — one closure over a bit-set per function —
+// would need a per-function set and a widened `markSeededCallers`; a program has one or two services and the
+// closure is linear in the call graph, so `services` sweeps over one shared edge list is the cheaper shape
+// AND leaves the shared closure untouched.
+function buildServiceBlockingGraph(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns ServiceBlockingGraph
+	var graph = ServiceBlockingGraph.create(serviceTypeRoster(signatures))
+	var edges = CallGraphEdges.create()
+	var awaitedPerFunc = ServiceAwaitSiteArray.create()
+	var awaitsSomething = BoolArray.create()
+	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = try funcNames.functions.get(funcIndex) otherwise panic("buildServiceBlockingGraph: functions.get OOB at {funcIndex}")
+		let site = noteServiceCallEdges(project, module: module, func: func, funcIndexByName: funcNames.byName, callerIndex: funcIndex, edges: edges)
+		awaitsSomething.push(serviceAwaitSiteIsReal(site))
+		awaitedPerFunc.push(site)
+	end 'eachFunc'
+
+	for awaited in 0 upto graph.nodeCount() 'eachAwaitedService'
+		addBlockingEdgesTo(graph, awaited: awaited, signatures: signatures, funcNames: funcNames, edges: edges, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething)
+	end 'eachAwaitedService'
+	return graph
+end 'buildServiceBlockingGraph'
+
+// One awaited service's closure and the edges it produces. Split from the walk above so each half is one
+// statement of one idea, and because the seed column has to be rebuilt per service anyway.
+function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, signatures ProgramSignatures, funcNames FunctionNameIndex, edges CallGraphEdges, awaitedPerFunc ServiceAwaitSiteArray, awaitsSomething BoolArray)
+	let awaitedName = graph.serviceNameOf(awaited)
+	var seeds = BoolArray.create()
+	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
+		seeds.push(functionDirectlyAwaits(awaitedName, funcIndex: funcIndex, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething))
+	end 'eachFunc'
+
+	let blocks = markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count())
+	for funcIndex in 0 upto funcNames.functions.count() 'eachBlockedFunc'
+		if not (try blocks.get(funcIndex) otherwise panic("addBlockingEdgesTo: blocks.get OOB at {funcIndex} below count {blocks.count()}")) 'blocksOnNothing'
+			continue
+		end 'blocksOnNothing'
+
+		let func = try funcNames.functions.get(funcIndex) otherwise panic("addBlockingEdgesTo: functions.get OOB at {funcIndex}")
+		match serviceMessageOwnerOf(signatures, callee: func.name) 'owner'
+			notAMessage then continue
+			ofService(ownerName, _) then noteBlockingEdge(graph, owner: ownerName, awaited: awaited, message: func.name, site: blockingSiteFor(funcIndex, awaitedName: awaitedName, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething))
+		end 'owner'
+	end 'eachBlockedFunc'
+end 'addBlockingEdgesTo'
+
+// The edge, once its owner has been resolved to a node. A service whose roster entry is gone contributes
+// nothing — see `ServiceBlockingGraph.nodeOfService` for why that is a real answer.
+function noteBlockingEdge(graph ServiceBlockingGraph, owner ByteArray, awaited CsrIndex, message ByteArray, site ServiceAwaitSite)
+	let ownerNode = graph.nodeOfService(owner)
+	if ownerNode == NoServiceNode 'spawnsNoSuchService'
+		return
+	end 'spawnsNoSuchService'
+
+	graph.addEdge(ownerNode, awaited: awaited, message: message, site: site)
+end 'noteBlockingEdge'
+
+// Does this function's OWN body await a reply from `awaitedName`?
+function functionDirectlyAwaits(awaitedName ByteArray, funcIndex FuncIndex, awaitedPerFunc ServiceAwaitSiteArray, awaitsSomething BoolArray) returns bool
+	if not (try awaitsSomething.get(funcIndex) otherwise panic("functionDirectlyAwaits: awaitsSomething.get OOB at {funcIndex}")) 'awaitsNoReplyAtAll'
+		return false
+	end 'awaitsNoReplyAtAll'
+
+	return (try awaitedPerFunc.get(funcIndex) otherwise panic("functionDirectlyAwaits: awaitedPerFunc.get OOB at {funcIndex}")).serviceTypeName.equals(awaitedName)
+end 'functionDirectlyAwaits'
+
+// ⭐ **WHERE THE DIAGNOSTIC POINTS FOR ONE HOP: the blocking `await` itself.** The message's own body is the
+// common case and the right answer; a message that blocks only THROUGH a helper has no await of its own, and
+// the honest anchor is then the helper's — which is genuinely where the thread stops. The first recorded
+// await of that service is what the fallback names, because the closure proves one is reachable from here
+// without saying which.
+function blockingSiteFor(funcIndex FuncIndex, awaitedName ByteArray, awaitedPerFunc ServiceAwaitSiteArray, awaitsSomething BoolArray) returns ServiceAwaitSite
+	if functionDirectlyAwaits(awaitedName, funcIndex: funcIndex, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething) 'awaitsItHere'
+		return try awaitedPerFunc.get(funcIndex) otherwise panic("blockingSiteFor: awaitedPerFunc.get OOB at {funcIndex}")
+	end 'awaitsItHere'
+
+	return firstAwaitOf(awaitedName, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething)
+end 'blockingSiteFor'
+
+function firstAwaitOf(awaitedName ByteArray, awaitedPerFunc ServiceAwaitSiteArray, awaitsSomething BoolArray) returns ServiceAwaitSite
+	for funcIndex in 0 upto awaitedPerFunc.count() 'eachFunc'
+		if functionDirectlyAwaits(awaitedName, funcIndex: funcIndex, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething) 'awaitsItHere'
+			return try awaitedPerFunc.get(funcIndex) otherwise panic("firstAwaitOf: awaitedPerFunc.get OOB at {funcIndex}")
+		end 'awaitsItHere'
+	end 'eachFunc'
+
+	panic("firstAwaitOf: no function awaits a reply from `{String.from(awaitedName)}`, yet the closure marked one as blocking on it — a mark reaches a caller only from a seed, and a seed is a direct await")
+end 'firstAwaitOf'
+
+// ⭐⭐ **ONE FUNCTION'S CALL EDGES, AND THE FIRST SERVICE REPLY ITS OWN BODY AWAITS.** Both come out of ONE
+// pass over its ops, on `functionYieldsDirectly`'s shape and for its reason.
+//
+// ⭐⭐⭐ **A `serviceSend` IS EXCLUDED, AND THAT IS THE RULE THIS WHOLE FILE RESTS ON.**
+// `maxonOpCalleeKind` answers `direct` for a send — which is right for `UnusedExportCheck`, whose question
+// is *"is this export referenced?"* — but a send is not a CALL in this frame: it enqueues, returns, and the
+// handler runs on another green thread. Counting it here would make every peer-to-peer ring a cycle and
+// would refuse `services.fire-and-forget-cycle-is-legal`, which is the case that exists to catch exactly
+// this. Delete the guard and watch it go red.
+function noteServiceCallEdges(project Project, module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns ServiceAwaitSite
+	var awaited = noServiceAwait()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("noteServiceCallEdges: blockRef from func.blockRefs not in module.blocks")
+		for opIndex in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIndex) otherwise panic("noteServiceCallEdges: opIndex {opIndex} not in module.ops")
+			if opIsACallGraphEdge(op) 'aCall'
+				_ = recordCallGraphEdge(maxonOpCalleeName(op), funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+			end 'aCall'
+
+			if let site = try project.serviceAwaitSites.get(opIndex) 'awaitsAReply'
+				awaited = site
+			end 'awaitsAReply'
+		end 'eachOp'
+	end 'eachBlock'
+	return awaited
+end 'noteServiceCallEdges'
+
+// Does this op hand control to a NAMED function in this frame? See `noteServiceCallEdges` for why a
+// `serviceSend` — which `maxonOpCalleeKind` also calls `direct` — is not one.
+function opIsACallGraphEdge(op MaxonOp) returns bool
+	if opIsAServiceSend(op) 'enqueuesRatherThanCalls'
+		return false
+	end 'enqueuesRatherThanCalls'
+
+	return match maxonOpCalleeKind(op) 'kind'
+		noCallee gives false
+		direct gives true
+		// A `functionRef` names a function VALUE rather than a call — nothing runs at that op, and the
+		// `indirectCall` that eventually runs it is a target this walk cannot follow (see the header's
+		// incompleteness note).
+		functionValue gives false
+	end 'kind'
+end 'opIsACallGraphEdge'
+
+// The one-variant test above, split out so its `match` covers the union exhaustively rather than through a
+// `default` this project's rules bar.
+function opIsAServiceSend(op MaxonOp) returns bool
+	return match op 'op'
+		call to serviceSpawn gives false
+		serviceSend gives true
+		serviceReplyCell gives false
+	end 'op'
+end 'opIsAServiceSend'
+
+// ⭐ **"THIS FUNCTION AWAITS NO REPLY" AS A VALUE.** A parallel `BoolArray` carries the absence rather than a
+// magic name inside the record, for `NoServiceNode`'s reason: an empty `ByteArray` is a name a comparison
+// could match. The record's fields are never read while the flag is false.
+function noServiceAwait() returns ServiceAwaitSite
+	return ServiceAwaitSite.create(EmptySourceText, line: 0, column: 0, declFilePath: FilePath from "")
+end 'noServiceAwait'
+
+function serviceAwaitSiteIsReal(site ServiceAwaitSite) returns bool
+	return not site.serviceTypeName.isEmpty()
+end 'serviceAwaitSiteIsReal'
+
+// ⭐ The message, and the second — and only other — walk of the graph: `shortestCycleThrough` runs here and
+// nowhere else, so a program that compiles never pays for it. `TypeCycleCheck.reportTypeCycle`'s discipline.
+//
+// ⭐⭐ **THE FULL PATH GOES IN THE MESSAGE, ONE `file:line` PER HOP, AND IT IS ONE DIAGNOSTIC.** A cycle
+// reported as a single site is unactionable — the author has to see which message awaits which service at
+// each step to know where to break the ring — and reporting one diagnostic PER HOP would say one defect
+// twice, which is the mistake `blameForTypeCycles` refuses one graph over. A `Diagnostic` carries at most one
+// note, so the path is rendered into the sentence, exactly as `TypeCycleGraph.renderCyclePath` renders its
+// own; `SERVICES_DESIGN.md`'s worked example is this shape.
+//
+// ⚠ **A SELF-EDGE IS ONE HOP AND IS SAID PLAINLY**, because it is the case users hit most: two instances of
+// one service cannot await each other. The design document records that cost and asks that the diagnostic
+// name the WORKAROUND rather than just the cycle, which is what the closing sentence does.
+function reportServiceCallCycle(project Project, graph ServiceBlockingGraph, node CsrIndex)
+	let cycle = shortestCycleThrough(graph.adjacency(), start: node)
+	let anchor = graph.edgeSiteAt(graph.edgeIndexBetween(node, awaited: cycleStepAfter(cycle, index: 0, start: node)))
+	reportPositioned(project, code: ErrorCode.semanticServiceCallCycle, message: serviceCallCycleMessage(graph, cycle: cycle, start: node), line: anchor.line, column: anchor.column, filePath: anchor.declFilePath)
+end 'reportServiceCallCycle'
+
+// The whole sentence: the rule, the ring one hop per line, and the workaround.
+//
+// ⛔⛔ **THE SENTENCE THE PATH HANGS UNDER, AND BOTH OF ITS SPELLINGS WERE WRONG ONCE.**
+//
+// It was a module-level `String` for one build, seeded straight into the accumulator (`var message =
+// ServiceCycleHeadline` over a `String` constant), and **MEASURED: the message ACCUMULATED ACROSS
+// COMPILES.** The second cyclic program in the suite printed the FIRST one's path — file names and all —
+// and the third printed both. A module-level `String` is a lazily-initialized static, a `var` bound to one
+// CO-OWNS its record, and `append` then wrote through into the static.
+//
+// It was then a module-level BYTE literal wrapped in `String.from`, which mints a fresh record per call and
+// fixed that — and **MEASURED: the em-dash came out as an ASCII `-`.** shv2 refuses a non-ASCII codepoint
+// in a byte literal outright (`E1004: Codepoint U+2014 exceeds the byte range 0-255`); the BOOTSTRAP, which
+// compiles this file at stage-1, silently transliterates it. Reported; it is not this file's to fix.
+//
+// ⇒ a `String` literal INSIDE the function, which is the one spelling that is fresh per call (a borrowed
+// `.rdata` literal is promoted to an owned copy at the bind) and carries its own bytes.
+function serviceCallCycleMessage(graph ServiceBlockingGraph, cycle CsrColumn, start CsrIndex) returns String
+	var message = "service call cycle — these messages can deadlock waiting on each other:"
+	for index in 0 upto cycle.count() 'eachHop'
+		message.append(serviceCallCycleHopLine(graph, cycle: cycle, start: start, index: index))
+	end 'eachHop'
+
+	message.append(ServiceCyclePathSeparator)
+	message.append(serviceCallCycleCure(graph, cycle: cycle, start: start))
+	return message
+end 'serviceCallCycleMessage'
+
+// One hop: which message blocks, where it is written, and which service it blocks on.
+function serviceCallCycleHopLine(graph ServiceBlockingGraph, cycle CsrColumn, start CsrIndex, index CsrIndex) returns String
+	let owner = cycleStepAt(cycle, index: index)
+	let awaited = cycleStepAfter(cycle, index: index, start: start)
+	let edge = graph.edgeIndexBetween(owner, awaited: awaited)
+	let site = graph.edgeSiteAt(edge)
+	return "{ServiceCyclePathSeparator}`{String.from(graph.edgeMessageAt(edge))}` ({site.declFilePath.toString()}:{site.line}:{site.column}) awaits a reply from `{String.from(graph.serviceNameOf(awaited))}`"
+end 'serviceCallCycleHopLine'
+
+// ⚠ **THE CURE DIFFERS BETWEEN A RING AND A SELF-EDGE, and only the self-edge needs the reason.** A ring is
+// broken by making any one of its calls fire-and-forget; a SELF-EDGE names a shape that would not actually
+// deadlock at run time — two distinct instances — so the sentence has to say why it is refused anyway before
+// the workaround reads as anything but arbitrary.
+function serviceCallCycleCure(graph ServiceBlockingGraph, cycle CsrColumn, start CsrIndex) returns String
+	if cycle.count() == 1 'aSelfEdge'
+		return "Two distinct instances of `{String.from(graph.serviceNameOf(start))}` would not deadlock — but edges are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the instances apart and must be conservative. Make the peer call fire-and-forget (send it as a statement and have the peer reply with a separate message), or split the role into two types"
+	end 'aSelfEdge'
+
+	return "A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph"
+end 'serviceCallCycleCure'
+
+// The line break each hop and the closing sentence open with. Named because it is one fact — the path is a
+// LIST — and three literals would be three chances to render one of them differently.
+let ServiceCyclePathSeparator = "\n    "
+
+
+function cycleStepAt(cycle CsrColumn, index CsrIndex) returns CsrIndex
+	return try cycle.get(index) otherwise panic("cycleStepAt: cycle.get OOB at {index} below count {cycle.count()}")
+end 'cycleStepAt'
+
+// The node the hop at `index` blocks on — the next step, or the node the path started at for the step that
+// CLOSES the loop. `TypeCycleGraph.renderCyclePath`'s formula, which is what lets a one-node self-edge and
+// an N-node ring share this walk.
+function cycleStepAfter(cycle CsrColumn, index CsrIndex, start CsrIndex) returns CsrIndex
+	if index + 1 < cycle.count() 'notTheClosingStep'
+		return cycleStepAt(cycle, index: index + 1)
+	end 'notTheClosingStep'
+
+	return start
+end 'cycleStepAfter'

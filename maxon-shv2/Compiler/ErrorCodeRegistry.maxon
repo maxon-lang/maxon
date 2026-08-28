@@ -1386,6 +1386,23 @@ export enum ErrorCode
 	// It is neither E3018 (a missing FIELD) nor E3004 (an undefined FUNCTION): the member usually exists, on
 	// the type, and saying otherwise would read as a typo.
 	semanticServiceNotAMessage = "E3136"
+	// An `export` method of a SERVICE returns a value the service's own state can still reach, so the caller
+	// would end up holding a second reference to it -- on another green thread.
+	// A service is a green thread with a mailbox, and the language guarantees one green thread per box: that
+	// is what makes a reference-count step a plain load/add/store rather than an atomic one. A reply that
+	// aliased service state would put one box in two green threads' hands, which corrupts the heap rather
+	// than merely being slow -- the same rule a message ARGUMENT obeys by MOVING, read from the other end.
+	// What is refused is a return this frame does not solely own: a field read yields a BORROW, and so does
+	// `self`. An ordinary function promotes such a return by taking a reference (`__mm_retain`), and that
+	// promotion is exactly what would make the second namer. What passes is a value this frame MINTED -- a
+	// fresh record, an interpolation, a `.clone()` -- or a call result the compiler can prove fresh; and a
+	// scalar, which owns nothing at all.
+	// The cure is `.clone()`, and here the clone is RIGHT rather than a workaround: the caller genuinely
+	// asked for a copy, and a copy is the only thing that can cross.
+	// The diagnostic names the RETURN and carries the `spawn` that made the type a service as a note --
+	// whether a type is a service is a whole-program property, and the `spawn` deciding it may be in a
+	// different file from the method the rule fires on.
+	semanticServiceReplyAliasesState = "E3137"
 	// A message argument cannot be proven to have exactly one owner, so it may not be sent.
 	// A send MOVES: the service becomes the argument's one owner, and the sending frame gives up the
 	// reference it held. That is what keeps reference counting PLAIN rather than atomic -- the language
@@ -1412,6 +1429,25 @@ export enum ErrorCode
 	// record's whole graph tracked through the co-owning stores, which is a whole-program fact shv2 does not
 	// compute. The cure is to send the scalars the record is built from.
 	semanticServiceArgumentNotUnique = "E3138"
+	// Two or more services can await replies from each other, so a message of each could be blocked waiting
+	// on the other. Mutual reentrancy is made UNREPRESENTABLE rather than diagnosed at run time.
+	// The compiler builds a directed graph over service TYPES and refuses any cycle in it. An edge `A -> B`
+	// exists when a message of `A` AWAITS a reply from a `B.handle` -- transitively through ordinary
+	// functions, so a message that calls a helper that awaits still contributes the edge.
+	// ONLY BLOCKING EDGES COUNT. A fire-and-forget send is not an edge, because a non-blocking send cannot
+	// participate in a wait cycle -- which is what keeps peer-to-peer messaging legal, and is the whole of
+	// why the rule is not crippling.
+	// Why acyclicity is sufficient rather than merely suggestive: an acyclic graph has a topological order,
+	// the service lowest in it awaits nobody and so always makes progress, and by induction every blocked
+	// caller eventually resumes. There is no configuration in which everyone is waiting.
+	// A SELF-EDGE is a cycle too, and it is the one users hit most: a `Worker` whose message awaits a reply
+	// from another `Worker` is refused even though two distinct instances would not actually deadlock. Edges
+	// are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the
+	// instances apart and must be conservative -- the guarantee is deadlock freedom.
+	// The cure is to break the cycle: make one of the calls fire-and-forget (drop the `returns` and `throws`
+	// clauses, or send it as a statement and do not await it) and have the peer reply with a separate
+	// message, or split the role into two types.
+	semanticServiceCallCycle = "E3139"
 	// A `spawn` makes a type a SERVICE, and one of its reply-bearing messages declares a reply the compiler
 	// cannot carry back to a sender.
 	// A reply resolves through a CELL -- a green thread that never runs -- and a cell carries exactly TWO

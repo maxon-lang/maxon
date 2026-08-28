@@ -1,0 +1,44 @@
+// Test: cycle-through-a-free-function-is-refused
+function relay(b B.handle, peer A.handle) returns int
+	return try await b.pong(peer.clone()) otherwise 0
+end 'relay'
+
+type A
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping(b B.handle, peer A.handle) returns int
+		return relay(b, peer: peer)
+	end 'ping'
+
+	export function ack() returns int
+		return 1
+	end 'ack'
+end 'A'
+
+type B
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function pong(peer A.handle) returns int
+		return try await peer.ack() otherwise 0
+	end 'pong'
+end 'B'
+
+function main() returns ExitCode
+	let a = spawn A.create()
+	let b = spawn B.create()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3139: <fragment>:3:13: service call cycle — these messages can deadlock waiting on each other:
+    `A.ping` (<fragment>:3:13) awaits a reply from `B`
+    `B.pong` (<fragment>:30:14) awaits a reply from `A`
+    A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph

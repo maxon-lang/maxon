@@ -36,9 +36,18 @@
 module type ServiceSpawnCandidate
 	export let typeName as ByteArray
 	export let member as ByteArray
+	// ⭐ **WHERE THE `spawn` IS WRITTEN (SV2) — the note every whole-program service rule needs.** A service
+	// rule fires on a METHOD, and whether that method's type is a service is decided by a `spawn` the author
+	// may have written in a different file; a diagnostic that could not name it would be telling the reader
+	// their method is wrong without saying what made it so. The FIRST spawn of a type is the one carried:
+	// `noteServiceSpawnCandidate` dedupes by (type, member) and the roster dedupes by type, so a second
+	// `spawn` of the same type keeps the first one's site rather than moving the note about.
+	export let declFilePath as FilePath
+	export let line as LineNumber
+	export let column as ColumnNumber
 
-	export static function create(typeName ByteArray, member ByteArray) returns ServiceSpawnCandidate
-		return Self{typeName: typeName, member: member}
+	export static function create(typeName ByteArray, member ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber) returns ServiceSpawnCandidate
+		return Self{typeName: typeName, member: member, declFilePath: declFilePath, line: line, column: column}
 	end 'create'
 end 'ServiceSpawnCandidate'
 
@@ -529,6 +538,20 @@ module function serviceSendCannotBeTriedRefusal(callee ByteArray) returns String
 	return "`try` on the message `{String.from(callee)}` — a SEND is not the reply. It enqueues and returns, so it can fail at nothing; what carries an error is the reply, and awaiting it is what makes that error this frame's. Write `try await <handle>.<message>(…)`, or drop the `try` on a message that returns nothing and throws nothing"
 end 'serviceSendCannotBeTriedRefusal'
 
+// ⭐⭐ **THE WORDS FOR A REPLY THAT WOULD ALIAS SERVICE STATE (SV2).** See
+// `Parser.requireServiceReplyDoesNotAliasState` for the rule and for why `.clone()` is the right answer
+// rather than a workaround.
+module function serviceReplyAliasesStateRefusal(typeName ByteArray, methodName ByteArray) returns String
+	return "`{String.from(typeName)}.{String.from(methodName)}` returns a value reachable from `self`, and this `spawn` makes `{String.from(typeName)}` a service — so the caller would hold a second reference to the service's own state, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs"
+end 'serviceReplyAliasesStateRefusal'
+
+// ⭐ **WHAT THE NOTE ON A WHOLE-PROGRAM SERVICE DIAGNOSTIC SAYS, written once for every rule that carries
+// one.** The note's job is to answer the question the primary line raises — *"since when is this a
+// service?"* — so it says what the site IS rather than repeating the rule.
+module function serviceSpawnNoteText(typeName ByteArray) returns String
+	return "the `spawn` that makes `{String.from(typeName)}` a service"
+end 'serviceSpawnNoteText'
+
 // ⭐ **WHAT ONE MESSAGE ARGUMENT IS**, its twin one construct over. Here the author DID name the value's
 // destination, so the blame names the parameter and the message rather than the send.
 module function serviceSendArgumentBlame(typeName ByteArray, methodName ByteArray, paramName ByteArray) returns String
@@ -756,6 +779,82 @@ end 'buildServiceHandleStruct'
 // ⚠ It DEDUPES, because two `spawn`s of one type through two different factories are two CANDIDATES and one
 // service. The mint below still asks the registry as well, for the reason its own comment gives; this makes
 // the LOOP builder — which has no registry to collide with — correct by construction.
+// ⭐⭐ **WHERE THE `spawn` THAT MADE `typeName` A SERVICE IS WRITTEN (SV2), for the note every
+// whole-program service rule carries.** The FIRST candidate naming the type wins — see
+// `ServiceSpawnCandidate.declFilePath` for why that is a choice and not an accident.
+//
+// ⚠ Asked only of a type already known to be a service, so a miss is a compiler bug: the roster IS the list
+// of types some candidate named.
+// ⭐ **THE SERVICE A QUALIFIED MESSAGE NAME BELONGS TO.** A message is `<T>.<m>` by construction
+// (`qualifiedMethodName` is its one builder), so the owner is the roster entry the name starts with — asked
+// of the ROSTER rather than by splitting the string, because a service type name may itself contain a dot
+// (a namespaced declaration) and a split would pick the wrong half.
+module function serviceTypeOfMessage(signatures ProgramSignatures, messageName ByteArray) returns ByteArray
+	match serviceMessageOwnerOf(signatures, callee: messageName) 'owner'
+		notAMessage then panic("serviceTypeOfMessage: `{String.from(messageName)}` is on no service's message roster — every caller reached it through a `serviceReplyCell`, which only a send of a real message mints")
+		ofService(typeName, _) then return typeName
+	end 'owner'
+end 'serviceTypeOfMessage'
+
+module function serviceSpawnSiteOf(signatures ProgramSignatures, typeName ByteArray) returns ServiceSpawnCandidate
+	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
+		if candidate.typeName.equals(typeName) 'theFirstSpawnOfThisType'
+			return candidate
+		end 'theFirstSpawnOfThisType'
+	end 'eachCandidate'
+
+	panic("serviceSpawnSiteOf: nothing spawns `{String.from(typeName)}` — every caller has it off `serviceTypeRoster`, which is built from the candidate list this walks")
+end 'serviceSpawnSiteOf'
+
+// ⭐⭐ **IS THIS FUNCTION A MESSAGE, AND OF WHICH SERVICE? (SV2)** Asked of a qualified method name, which is
+// what an `IrFunction` carries. It is the door the reply-escape rule and the cycle check both ask, so the
+// two cannot come to disagree about what a message is — and the answer is read off the REQUEST UNION, the
+// same roster `dispatchOnServiceHandle` resolves a send against.
+//
+// ⚠ **VARIANT 0 IS EXCLUDED.** `__shutdown` is the compiler's pill and no source declares a function under
+// that name, so it can never be the enclosing function of anything.
+module function serviceMessageOwnerOf(signatures ProgramSignatures, callee ByteArray) returns ServiceMessageOwner
+	for typeName in serviceTypeRoster(signatures) 'eachService'
+		let request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue
+		for caseIndex in 0 upto request.caseCount() 'eachVariant'
+			if caseIndex == ServiceShutdownCaseIndex 'theCompilersOwnPill'
+				continue
+			end 'theCompilersOwnPill'
+
+			if qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)).equals(callee) 'thisMessage'
+				return ServiceMessageOwner.ofService(typeName, methodName: request.caseNameAt(caseIndex))
+			end 'thisMessage'
+		end 'eachVariant'
+	end 'eachService'
+
+	return ServiceMessageOwner.notAMessage
+end 'serviceMessageOwnerOf'
+
+// The answer above. A union rather than an empty name, because "this function is not a message" is the
+// answer for almost every function in almost every program and an empty `ByteArray` would be a sentinel a
+// caller could index with.
+module union ServiceMessageOwner
+	notAMessage
+	ofService(typeName ByteArray, methodName ByteArray)
+end 'ServiceMessageOwner'
+
+// ⭐⭐ **`<T>.request`'s LAYOUT — the ONE door, and it had THREE spellings before SV2 asked for a fourth.**
+// `Parser.dispatchOnServiceHandle` resolves a send against it, `ServiceLoop` builds the dispatch and the
+// abandon switch from it, and the two whole-program service rules read it to answer *"is this function a
+// message?"*. Each had its own lookup and its own panic text.
+//
+// ⚠ **IT `throws` AND THE CALLERS THAT KNOW BETTER PANIC AT THEIR OWN SITE.** The companions are minted for
+// every accepted spawn target before any body is parsed, so a caller that reached a HANDLE has already
+// proved the layout exists and says so in its own words; a caller walking the roster over a program that may
+// still be doomed has not, and inventing a layout for it would report a second finding about the first one's
+// wreckage.
+module function serviceRequestLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns EnumLayout throws MapError
+	match signatures.enumOf(serviceRequestCompanionName(typeName)) 'lookup'
+		declared(layout) then return layout
+		undeclared then throw MapError.keyNotFound
+	end 'lookup'
+end 'serviceRequestLayoutOf'
+
 module function serviceTypeRoster(signatures ProgramSignatures) returns ByteArrayArray
 	var services = ByteArrayArray.create()
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'

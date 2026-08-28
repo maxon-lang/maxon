@@ -2300,3 +2300,43 @@ E3140 SemanticServiceReplyNotCarriable
 	doc into a body the service really runs, whether or not the program ever sends that message.
 	doc The cure is to return a value that fits the word and throw a payload-free `enum`, or to drop the
 	doc `returns` and `throws` clauses -- which makes the message fire-and-forget, with no reply to carry.
+
+E3137 SemanticServiceReplyAliasesState
+	shv2 semanticServiceReplyAliasesState
+	doc An `export` method of a SERVICE returns a value the service's own state can still reach, so the caller
+	doc would end up holding a second reference to it -- on another green thread.
+	doc A service is a green thread with a mailbox, and the language guarantees one green thread per box: that
+	doc is what makes a reference-count step a plain load/add/store rather than an atomic one. A reply that
+	doc aliased service state would put one box in two green threads' hands, which corrupts the heap rather
+	doc than merely being slow -- the same rule a message ARGUMENT obeys by MOVING, read from the other end.
+	doc What is refused is a return this frame does not solely own: a field read yields a BORROW, and so does
+	doc `self`. An ordinary function promotes such a return by taking a reference (`__mm_retain`), and that
+	doc promotion is exactly what would make the second namer. What passes is a value this frame MINTED -- a
+	doc fresh record, an interpolation, a `.clone()` -- or a call result the compiler can prove fresh; and a
+	doc scalar, which owns nothing at all.
+	doc The cure is `.clone()`, and here the clone is RIGHT rather than a workaround: the caller genuinely
+	doc asked for a copy, and a copy is the only thing that can cross.
+	doc The diagnostic names the RETURN and carries the `spawn` that made the type a service as a note --
+	doc whether a type is a service is a whole-program property, and the `spawn` deciding it may be in a
+	doc different file from the method the rule fires on.
+
+E3139 SemanticServiceCallCycle
+	shv2 semanticServiceCallCycle
+	doc Two or more services can await replies from each other, so a message of each could be blocked waiting
+	doc on the other. Mutual reentrancy is made UNREPRESENTABLE rather than diagnosed at run time.
+	doc The compiler builds a directed graph over service TYPES and refuses any cycle in it. An edge `A -> B`
+	doc exists when a message of `A` AWAITS a reply from a `B.handle` -- transitively through ordinary
+	doc functions, so a message that calls a helper that awaits still contributes the edge.
+	doc ONLY BLOCKING EDGES COUNT. A fire-and-forget send is not an edge, because a non-blocking send cannot
+	doc participate in a wait cycle -- which is what keeps peer-to-peer messaging legal, and is the whole of
+	doc why the rule is not crippling.
+	doc Why acyclicity is sufficient rather than merely suggestive: an acyclic graph has a topological order,
+	doc the service lowest in it awaits nobody and so always makes progress, and by induction every blocked
+	doc caller eventually resumes. There is no configuration in which everyone is waiting.
+	doc A SELF-EDGE is a cycle too, and it is the one users hit most: a `Worker` whose message awaits a reply
+	doc from another `Worker` is refused even though two distinct instances would not actually deadlock. Edges
+	doc are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the
+	doc instances apart and must be conservative -- the guarantee is deadlock freedom.
+	doc The cure is to break the cycle: make one of the calls fire-and-forget (drop the `returns` and `throws`
+	doc clauses, or send it as a statement and do not await it) and have the peer reply with a separate
+	doc message, or split the role into two types.

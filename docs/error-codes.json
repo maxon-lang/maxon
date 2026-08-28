@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "1f44ae38a141b196",
+  "sourceHash": "35e443a2774b2b06",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1545,12 +1545,30 @@
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
+      "code": 3137,
+      "tag": "E3137",
+      "name": "SemanticServiceReplyAliasesState",
+      "stage": "semantic",
+      "doc": "An `export` method of a SERVICE returns a value the service's own state can still reach, so the caller\nwould end up holding a second reference to it -- on another green thread.\nA service is a green thread with a mailbox, and the language guarantees one green thread per box: that\nis what makes a reference-count step a plain load/add/store rather than an atomic one. A reply that\naliased service state would put one box in two green threads' hands, which corrupts the heap rather\nthan merely being slow -- the same rule a message ARGUMENT obeys by MOVING, read from the other end.\nWhat is refused is a return this frame does not solely own: a field read yields a BORROW, and so does\n`self`. An ordinary function promotes such a return by taking a reference (`__mm_retain`), and that\npromotion is exactly what would make the second namer. What passes is a value this frame MINTED -- a\nfresh record, an interpolation, a `.clone()` -- or a call result the compiler can prove fresh; and a\nscalar, which owns nothing at all.\nThe cure is `.clone()`, and here the clone is RIGHT rather than a workaround: the caller genuinely\nasked for a copy, and a copy is the only thing that can cross.\nThe diagnostic names the RETURN and carries the `spawn` that made the type a service as a note --\nwhether a type is a service is a whole-program property, and the `spawn` deciding it may be in a\ndifferent file from the method the rule fires on.",
+      "emittedBy": {"shv2": "semanticServiceReplyAliasesState"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
       "code": 3138,
       "tag": "E3138",
       "name": "SemanticServiceArgumentNotUnique",
       "stage": "semantic",
       "doc": "A message argument cannot be proven to have exactly one owner, so it may not be sent.\nA send MOVES: the service becomes the argument's one owner, and the sending frame gives up the\nreference it held. That is what keeps reference counting PLAIN rather than atomic -- the language\nguarantees one green thread per box -- so an argument this frame still shares with something else\nwould put one box in two green threads' hands, which corrupts the heap rather than merely being slow.\nThree shapes fail it, and E3135 is the neighbouring rule about the argument's TYPE rather than its\nownership. The first is an OWNED value this frame has already taken a second reference to -- a value a\nclosure captured, one pushed into a container, one handed to another consuming call. The second is a\nBORROWED aggregate this frame does not own at all -- a struct read out of a field, an element, or a\nparameter -- for which there is no owning copy the send could take instead. (A borrowed `String` is\nnot in this class: a byte record has a cheap owning copy, so the send promotes it and the source stays\nreadable.)\nThe cure for those two is `.clone()`, which is explicit precisely because it is O(n) and the language\nmakes costs visible; or restructuring so the value is freshly built at the send.\nThe THIRD is about what the record HOLDS rather than about the record: SOLENESS IS NOT TRANSITIVE.\nA box this frame owns alone may point at a record a second owner holds too, because every co-owning\nstore (a struct-field or union-payload move-in of a borrow, a consuming call, a container push) takes\na reference where a move would give one up -- and a send moves the record WHOLE, leaving that second\nowner behind on this green thread with a plain refcount racing the service's. It is asked of the\nrecord's TYPE, because the retain can happen inside a callee the send site cannot see. What may cross\nis a scalar, a `String` (whose slots hold bytes, never a second reference), a service HANDLE, and a\nrecord whose every slot is one of those; a container never crosses, whatever its element type is.\nThis arm is deliberately conservative and refuses sound programs too -- proving the safe half needs a\nrecord's whole graph tracked through the co-owning stores, which is a whole-program fact shv2 does not\ncompute. The cure is to send the scalars the record is built from.",
       "emittedBy": {"shv2": "semanticServiceArgumentNotUnique"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3139,
+      "tag": "E3139",
+      "name": "SemanticServiceCallCycle",
+      "stage": "semantic",
+      "doc": "Two or more services can await replies from each other, so a message of each could be blocked waiting\non the other. Mutual reentrancy is made UNREPRESENTABLE rather than diagnosed at run time.\nThe compiler builds a directed graph over service TYPES and refuses any cycle in it. An edge `A -> B`\nexists when a message of `A` AWAITS a reply from a `B.handle` -- transitively through ordinary\nfunctions, so a message that calls a helper that awaits still contributes the edge.\nONLY BLOCKING EDGES COUNT. A fire-and-forget send is not an edge, because a non-blocking send cannot\nparticipate in a wait cycle -- which is what keeps peer-to-peer messaging legal, and is the whole of\nwhy the rule is not crippling.\nWhy acyclicity is sufficient rather than merely suggestive: an acyclic graph has a topological order,\nthe service lowest in it awaits nobody and so always makes progress, and by induction every blocked\ncaller eventually resumes. There is no configuration in which everyone is waiting.\nA SELF-EDGE is a cycle too, and it is the one users hit most: a `Worker` whose message awaits a reply\nfrom another `Worker` is refused even though two distinct instances would not actually deadlock. Edges\nare by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the\ninstances apart and must be conservative -- the guarantee is deadlock freedom.\nThe cure is to break the cycle: make one of the calls fire-and-forget (drop the `returns` and `throws`\nclauses, or send it as a statement and do not await it) and have the peer reply with a separate\nmessage, or split the role into two types.",
+      "emittedBy": {"shv2": "semanticServiceCallCycle"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

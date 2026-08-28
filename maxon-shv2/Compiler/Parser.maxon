@@ -1519,6 +1519,11 @@ export union ParseError implements Error
 	// from the declaration, so a message the cell cannot carry would put a wrong-width store in a body the
 	// service really runs, whether or not the program ever sends one.
 	serviceReplyNotCarriable(explanation String, line LineNumber, column ColumnNumber)
+	// ⭐ **THE SIXTH (SV2), AND IT IS THE ONLY SERVICE RULE THAT FIRES ON A `return`.** It carries the
+	// `spawn` that made the type a service as a NOTE, because the two sites are in different files as often
+	// as not, and it is the one arm of this union that does — which is why it threads the note rather than
+	// widening every other arm with a field they would all answer `none` to.
+	serviceReplyAliasesState(explanation String, line LineNumber, column ColumnNumber, note DiagnosticNote)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -30750,6 +30755,12 @@ export type Parser
 		// every program that compiled before.
 		let returned = self.coerceToDeclared(retVal, declared: declaredTag, anchor: anchor)
 
+		// ⭐⭐ **THE REPLY-ESCAPE RULE (SV2), ASKED BEFORE THE PROMOTION AND NOT AFTER.** `emitOwnedValueReturn`
+		// turns a borrowed managed return into an owned one by taking a REFERENCE, and that reference is
+		// precisely what would make the caller a second namer of the service's own state. Asked here, the
+		// value is still what the author wrote.
+		try self.requireServiceReplyDoesNotAliasState(func, value: returned, anchor: anchor)
+
 		try self.emitOwnedValueReturn(returned, anchor: anchor)
 
 		// P1.9: a `return` in a ranged-int-alias-returning function is a narrowing site. `returned` is the
@@ -30775,6 +30786,48 @@ export type Parser
 			self.rangeCheckReturnSites.push(RangeCheckReturnSite.create(returned, block: self.currentBlock.id, line: anchor.line, column: anchor.column))
 		end 'rangedReturn'
 	end 'parseCheckedValueReturn'
+
+	// ⭐⭐⭐ **AN `export` METHOD OF A SERVICE MAY NOT RETURN A VALUE ITS OWN STATE CAN STILL REACH (SV2,
+	// E3137).** A service is a green thread and the language guarantees one green thread per box — which is
+	// what makes a refcount step a plain load/add/store rather than an atomic one. A reply that aliased
+	// service state would put one box in two green threads' hands, which corrupts the heap rather than merely
+	// being slow. It is the MESSAGE ARGUMENT rule (`moveIntoGreenThread`) read from the other end, and it
+	// asks the SAME question that door's third arm asks: does this frame provably hold the only reference?
+	//
+	// ⭐ **`valueIsSolelyOwnedHere` IS THE WHOLE PREDICATE, AND IT IS NOT `valueIsOwnedHeap`.** Owned is not
+	// enough: `var x = self.field` CO-OWNS (the bind increfs a borrowed aggregate), so `return x` is an owned
+	// value that aliases state exactly as `return self.field` does. Soleness admits only a value this frame
+	// MINTED — a fresh record, an interpolation, a `.clone()` — or a call result the freshness summary
+	// proves (`valueFromFreshReturn`). Both of those are copies, which is the only thing that can cross.
+	//
+	// ⚠ **A SCALAR RETURNS UNCONDITIONALLY**, which is most messages: it owns nothing, so there is nothing
+	// for a second green thread to name.
+	//
+	// ⚠ **THE GATE IS THE VALUE, THEN THE ENCLOSING TYPE, IN THAT ORDER.** A managed-and-not-sole return is
+	// rare; a program with no service in it must not pay a roster walk per `return`, and this way it pays one
+	// only where a return really is a borrow — where the roster is empty and the walk is a `count()`.
+	function requireServiceReplyDoesNotAliasState(func IrFunction, value ValueId, anchor Token) throws ParseError
+		if not self.valueIsManagedHeap(value) 'aMachineWord'
+			return
+		end 'aMachineWord'
+
+		if self.valueIsSolelyOwnedHere(value) 'mintedHereOrProvenFresh'
+			return
+		end 'mintedHereOrProvenFresh'
+
+		match serviceMessageOwnerOf(self.signatures, callee: func.name) 'enclosing'
+			notAMessage then return
+			ofService(typeName, methodName) then throw self.serviceReplyAliasesStateError(typeName, methodName: methodName, anchor: anchor)
+		end 'enclosing'
+	end 'requireServiceReplyDoesNotAliasState'
+
+	// The refusal, built where the `spawn` site is read so the arm above stays one statement. The note names
+	// the `spawn` because whether a type is a service is a WHOLE-PROGRAM property and the site that decided
+	// it may be in a file this one does not mention.
+	function serviceReplyAliasesStateError(typeName ByteArray, methodName ByteArray, anchor Token) returns ParseError
+		let site = serviceSpawnSiteOf(self.signatures, typeName: typeName)
+		return ParseError.serviceReplyAliasesState(serviceReplyAliasesStateRefusal(typeName, methodName: methodName), line: anchor.line, column: anchor.column, note: DiagnosticNote.at(serviceSpawnNoteText(typeName), line: site.line, column: site.column, filePath: site.declFilePath))
+	end 'serviceReplyAliasesStateError'
 
 	// ⭐ **IS THE `return` DOOR'S GUARD PROVABLY DEAD? — the destination unwrapped, then the one shared
 	// containment (A4f).** It is reached only behind `rangeCheckReturnAlias` being non-empty, which is the
@@ -54547,7 +54600,7 @@ export type Parser
 	// spelling that reaches here anyway, and it answers the same way an absent member does.
 	function dispatchOnServiceHandle(func IrFunction, base StructBase, baseTok Token, memberTok Token, resultUsed bool) returns ValueId throws ParseError
 		let typeName = self.signatures.serviceOfHandle(base.layout.name)
-		let request = self.serviceRequestLayoutOf(typeName)
+		let request = try serviceRequestLayoutOf(self.signatures, typeName: typeName) otherwise panic("dispatchOnServiceHandle: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it beside the handle, and this caller reached a handle")
 		let caseIndex = request.indexOfCase(memberTok.value)
 
 		if caseIndex < request.caseCount() and caseIndex != ServiceShutdownCaseIndex 'aMessage'
@@ -54564,15 +54617,6 @@ export type Parser
 
 		throw ParseError.serviceNotAMessage(serviceNotAMessageRefusal(typeName, handleName: base.layout.name, member: memberTok.value, declaresIt: self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: memberTok.value))), line: memberTok.line, column: memberTok.column)
 	end 'dispatchOnServiceHandle'
-
-	// The `<T>.request` layout, or a panic — `serviceHandleLayout`'s twin, one companion over, and for its
-	// reason: the pair is minted by one act for every accepted spawn target, before any body is parsed.
-	function serviceRequestLayoutOf(typeName ByteArray) returns EnumLayout
-		return match self.signatures.enumOf(serviceRequestCompanionName(typeName)) 'lookup'
-			declared(layout) gives layout
-			undeclared panic("serviceRequestLayoutOf: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it beside the handle, and this caller reached a handle")
-		end 'lookup'
-	end 'serviceRequestLayoutOf'
 
 	// ⭐⭐ **`h.m(…)` — BUILD THE REQUEST BOX AND ENQUEUE IT.** The arguments are read by the ORDINARY call
 	// reader (`parseCallArgs` + `fillOmittedArgDefaults`), so a message takes labels, defaults and every
@@ -73823,6 +73867,10 @@ export type Parser
 		// `__gt_promise_drop`, which calls the releaser with the result NOT consumed precisely because no
 		// await ever reached this line.
 		self.enrolOwnedCallTemp(result)
+		// ⭐⭐ **THE ONE PLACE THE BLOCKING GRAPH'S SEEDS ARE MINTED (SV2).** `awaitedPromiseFacts` has just
+		// resolved which road this promise came by — including a merge PHI — so the fact is free here and
+		// would be a second resolver anywhere else. See `Project.serviceAwaitSites`.
+		self.recordServiceReplyAwait(func, promise: promise, awaitTok: awaitTok)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.await(result, promise: promise), range: SourceRange.ofToken(awaitTok))
 		// The await consumes the thread — the runtime reclaims its struct here — so its owning binding must not
 		// also drop it at scope exit (P1.5-B2 #88). Covers `try await` too: `parseTryCallTarget` emits its target
@@ -73830,6 +73878,19 @@ export type Parser
 		self.consumePromiseThread(promise)
 		return result
 	end 'emitAwaitOp'
+
+	// File the `await` whose promise is a SERVICE REPLY, so `checkServiceCallCycles` can seed its graph from
+	// it. A promise from any other road records nothing, which is every `async` program in the corpus.
+	//
+	// ⚠ **THE OP INDEX IS THE ARTIFACT'S CURRENT COUNT, so this must run IMMEDIATELY BEFORE the emit** —
+	// `recordServiceAwaitSite`'s contract, and `recordAsyncSpawnSite`'s before it. A `tryAwait` is the SAME
+	// op index: `parseTryCallTarget` REWRITES the op this line keys rather than appending a second one.
+	function recordServiceReplyAwait(func IrFunction, promise ValueId, awaitTok Token)
+		match self.awaitedPromiseFacts(func, promise: promise).tryTarget 'target'
+			named to promise then return
+			serviceReply(messageName) then self.artifact.recordServiceAwaitSite(ServiceAwaitSite.create(serviceTypeOfMessage(self.signatures, messageName: messageName), line: awaitTok.line, column: awaitTok.column, declFilePath: self.filePath))
+		end 'target'
+	end 'recordServiceReplyAwait'
 
 	// ⭐ **TRANSFER OWNERSHIP OF EVERY CONSUMED ARGUMENT** (P1.4a wave 2). For a callee that consumes at
 	// least one parameter, slot each SOURCE argument to its parameter position (positional by index,

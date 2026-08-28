@@ -1935,8 +1935,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:9:3: `Store.itself` returns a value reachable from `self`, and this `spawn` makes `Store` a service — so the caller would hold a second reference to the service's own state, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:14:11: the `spawn` that makes `Store` a service
+error E3137: <fragment>:10:3: `Store.itself` returns a value reachable from `self`, and this `spawn` makes `Store` a service — so the caller would hold a second reference to the service's own state, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:15:10: the `spawn` that makes `Store` a service
 ```
 
 <!-- test: error.two-services-that-await-each-other-are-refused -->
@@ -1981,9 +1981,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3139: <fragment>:9:10: service call cycle — a message may not await a reply from a service that can await back, because both would be blocked on each other:
-note: <fragment>:9:10: `A.ping` awaits a reply from `B`
-note: <fragment>:25:10: `B.pong` awaits a reply from `A`
+error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
+    `A.ping` (<fragment>:10:14) awaits a reply from `B`
+    `B.pong` (<fragment>:26:14) awaits a reply from `A`
+    A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph
 ```
 
 <!-- test: a-reply-error-type-with-one-member-is-nameable -->
@@ -2360,10 +2361,13 @@ error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that th
 
 <!-- test: cycle-through-a-free-function-is-refused -->
 An edge is transitive through ordinary functions: `A.ping` calls `relay`, which awaits a `B.handle`, so the
-edge `A -> B` exists even though `A`'s own body names no `B` message.
+edge `A → B` exists even though `A`'s own body names no `B` message.
+
+⚠ The hop is anchored at `relay`'s `await` rather than at `A.ping` — that IS where the thread stops, and a
+message that blocks only through a helper has no await of its own to point at.
 ```maxon
-function relay(b B.handle) returns int
-	return try await b.pong() otherwise 0
+function relay(b B.handle, peer A.handle) returns int
+	return try await b.pong(peer.clone()) otherwise 0
 end 'relay'
 
 type A
@@ -2373,8 +2377,8 @@ type A
 		return Self{n: 0}
 	end 'create'
 
-	export function ping(b B.handle) returns int
-		return relay(b)
+	export function ping(b B.handle, peer A.handle) returns int
+		return relay(b, peer: peer)
 	end 'ping'
 
 	export function ack() returns int
@@ -2401,9 +2405,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3139: <fragment>:13:10: service call cycle — a message may not await a reply from a service that can await back, because both would be blocked on each other:
-note: <fragment>:13:10: `A.ping` awaits a reply from `B`
-note: <fragment>:29:10: `B.pong` awaits a reply from `A`
+error E3139: <fragment>:3:13: service call cycle — these messages can deadlock waiting on each other:
+    `A.ping` (<fragment>:3:13) awaits a reply from `B`
+    `B.pong` (<fragment>:30:14) awaits a reply from `A`
+    A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph
 ```
 
 <!-- test: cycle-same-type-self-edge-is-refused -->
@@ -2434,8 +2439,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3139: <fragment>:9:10: service call cycle — a message may not await a reply from a service that can await back, because both would be blocked on each other:
-note: <fragment>:9:10: `Worker.ask` awaits a reply from `Worker`
+error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
+    `Worker.ask` (<fragment>:10:14) awaits a reply from `Worker`
+    Two distinct instances of `Worker` would not deadlock — but edges are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the instances apart and must be conservative. Make the peer call fire-and-forget (send it as a statement and have the peer reply with a separate message), or split the role into two types
 ```
 
 <!-- test: deep-acyclic-chain-runs -->
