@@ -1630,6 +1630,9 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		// ⭐ A SEND REACHES ITS MESSAGE, so it is an EDGE exactly as an `async` spawn is — the handler runs on
 		// another green thread, but it is the same function and it reaches whatever that function reaches.
 		serviceSend(_, callee, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		// A REPLY CELL names the message only to derive its releaser symbol; the `serviceSend` beside it is
+		// the edge to that message, and noting it twice would credit one call graph edge to two ops.
+		serviceReplyCell then break 'op'
 	end 'op'
 end 'noteSubstrateEdge'
 

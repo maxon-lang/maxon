@@ -725,6 +725,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// cascade fixpoint to close over them — the same obligation, and the same ordering, the cascades have.
 	let asyncSpawnTargets = collectAsyncSpawnTargets(module)
 	declareAsyncReleaserNeeds(usage, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+	// ⭐ **SV2: a REPLY CELL's releaser is the same obligation over a different plan** — it frees the managed
+	// result of a reply nobody took, so the drop callee its body will name has to be rooted here for the same
+	// reason and at the same moment. `serviceReplyReleasePlanFor` states what the two plans differ in.
+	let serviceReplyTargets = collectServiceReplyTargets(module)
+	declareServiceReplyReleaserNeeds(usage, targets: serviceReplyTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
 	// ⚠ **`declareCharacterSetRuntimeNeeds` STOOD HERE AND WENT WITH THE `__cs_*` RUNTIME (W129).** It rooted the
 	// `__destruct_Set_Character` cascade `__cs_decref`'s body would name, which is the obligation any FUTURE
 	// synthesized body owning a declared generic's instance still carries — see `declareAsyncReleaserNeeds`
@@ -1160,6 +1165,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// pipeline (see `asyncSpawnTargets`), installed here already-lowered like the cascades above; a callee
 	// with nothing managed to release gets none, which is why a scalar async program is unchanged.
 	installAsyncReleasers(pipeline.stdModule, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+	// The `__gt_reply_release_<message>` twins, for the managed RESULT of a reply cell nobody awaited (SV2).
+	installServiceReplyReleasers(pipeline.stdModule, targets: serviceReplyTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
 	// The per-enum `<Enum>.fromRawValue` lookups — the same already-lowered append, and only the helpers the
 	// module CALLS. See `Runtime/EnumLookupRuntime.maxon` for why this one member of the enum reflection
 	// surface is a function while its four siblings expand in the parser.

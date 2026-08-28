@@ -57,6 +57,7 @@
 export function installServiceLoops(module MaxonModule, project Project, signatures ProgramSignatures)
 	for typeName in serviceTypeRoster(signatures) 'eachService'
 		buildServiceLoop(module, project: project, signatures: signatures, typeName: typeName)
+		buildServiceAbandon(module, project: project, signatures: signatures, typeName: typeName)
 	end 'eachService'
 end 'installServiceLoops'
 
@@ -100,7 +101,6 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	let range = SourceRange.none()
 	let requestName = serviceRequestCompanionName(typeName)
 	let request = serviceRequestLayout(signatures, requestName: requestName)
-	let abandonCallee = signatures.unionBoxDropCallee(requestName)
 
 	let entry = fn.currentBlock()
 	let receive = fn.openBlock(b"serve")
@@ -121,7 +121,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 
 	var armIds = BlockIdArray.create()
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
-		armIds.push(buildServiceArm(fn, signatures: signatures, typeName: typeName, request: request, caseIndex: caseIndex, req: req, abandonCallee: abandonCallee, receive: receive, exit: exit, range: range).id)
+		armIds.push(buildServiceArm(fn, signatures: signatures, typeName: typeName, request: request, caseIndex: caseIndex, req: req, receive: receive, exit: exit, range: range).id)
 	end 'eachVariant'
 
 	// ⚠ **THE DEFAULT IS THE EXIT, NOT AN ABORT, AND THAT IS A CHOICE ABOUT A CASE THAT CANNOT HAPPEN.** The
@@ -132,25 +132,30 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	fn.terminateBlock(dispatch, op: MaxonOp.switch(tag, denseTargetBlockIds: armIds, defaultBlockId: exit.id), range: range)
 	fn.terminateBlock(receive, op: MaxonOp.condBranch(noRequest, thenBlockId: exit.id, elseBlockId: dispatch.id), range: range)
 
-	buildServiceDrain(fn, project: project, signatures: signatures, stateType: stateType, abandonCallee: abandonCallee, exit: exit, range: range)
+	buildServiceDrain(fn, project: project, signatures: signatures, stateType: stateType, exit: exit, range: range)
 end 'buildServiceLoop'
 
 // The exit path: drain whatever is still queued through the request union's own cascade, drop the state, and
 // hand back this green thread's own ticket. `exit` has already closed the mailbox.
-function buildServiceDrain(fn SynthesizedFunction, project Project, signatures ProgramSignatures, stateType MaxonType, abandonCallee ByteArray, exit IrBlock, range SourceRange)
+function buildServiceDrain(fn SynthesizedFunction, project Project, signatures ProgramSignatures, stateType MaxonType, exit IrBlock, range SourceRange)
 	let drain = fn.openBlock(b"drain")
 	let leftover = fn.emitPositionalCall(MboxRecvName, args: argsOf(ServiceMailboxParam), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 	let drained = fn.emitCompare(leftover, rhs: fn.emitTypedLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
 	fn.terminateBlock(exit, op: MaxonOp.branch(drain.id), range: range)
 
-	// ⭐ **AN ABANDONED REQUEST TAKES THE UNION'S OWN CASCADE, WHERE A HANDLED ONE TAKES A SHELL DECREF — and
-	// the difference is which of them still owns its payloads.** A handled message's arguments were consumed
-	// or dropped slot by slot by the arm that ran it; an abandoned one still holds every one of them, and the
-	// tag-conditional `__destruct_<T>.request` is the only thing that knows which. That is the design's own
-	// argument for a closed union: *a closure-based mailbox holds erased environments, cannot know what to
-	// free, and would fail the leak gate.*
+	// ⭐ **AN ABANDONED REQUEST TAKES `<T>.__abandon`, WHERE A HANDLED ONE TAKES A SHELL DECREF — and the
+	// difference is which of them still owns its payloads AND whether anybody is waiting on it.** A handled
+	// message's arguments were consumed or dropped slot by slot by the arm that ran it and its reply was
+	// answered; an abandoned one still holds every payload and still owes its sender an answer, and
+	// `<T>.__abandon` is what does both — `ServiceError.stopped` into the reply slot, then the
+	// tag-conditional `__destruct_<T>.request`, which is the only thing that knows what the payloads are.
+	// That is the design's own argument for a closed union: *a closure-based mailbox holds erased
+	// environments, cannot know what to free, and would fail the leak gate.*
+	//
+	// ⚠ It goes through the MAILBOX's own pointer rather than naming the symbol — see `MboxAbandonName` for
+	// the E3004 that forced it and for why one door is better than two anyway.
 	let abandonOne = fn.openBlock(b"abandon")
-	fn.emitPositionalCallDiscarding(abandonCallee, args: argsOf(leftover), range: range)
+	fn.emitPositionalCallDiscarding(MboxAbandonName, args: twoArgs(ServiceMailboxParam, second: leftover), range: range)
 	fn.terminateBlock(abandonOne, op: MaxonOp.branch(drain.id), range: range)
 
 	let teardown = fn.openBlock(b"finished")
@@ -163,15 +168,97 @@ function buildServiceDrain(fn SynthesizedFunction, project Project, signatures P
 	fn.terminate(MaxonOp.retVoid, range: range)
 end 'buildServiceDrain'
 
+// ⭐⭐⭐ **`<T>.__abandon(box)` — WHAT A REQUEST NOBODY WILL HANDLE GETS (SV2), AND IT IS A LIVENESS
+// OBLIGATION BEFORE IT IS A MEMORY ONE.** Two roads reach it, and both are races the design admits: a send
+// that finds the mailbox already CLOSED (`MailboxRuntime.buildMboxSend`'s abandon arm, on the SENDER's own
+// green thread), and the loop's DRAIN, which empties whatever was queued behind a `__shutdown` pill. In both
+// the message dies unprocessed — and its awaiter is parked on a reply that will never come.
+//
+// ```
+// tag = load(box, tagOffset)
+// switch tag
+//   variant with a reply -> __gt_cell_complete(load(box, replySlot), 0, ServiceError.stopped + bias)
+//   variant without      -> (nothing)
+// destruct: __destruct_<T>.request(box)
+// ```
+//
+// ⭐ **THE ANSWER COMES FIRST AND THE PAYLOAD DROP SECOND, and the order is not arbitrary.** The cascade
+// frees what the box owns; the reply slot is a raw integer the cascade skips, but reading it after the box
+// has been released would be a use-after-free the day a request union grows a payload the cascade rewrites.
+//
+// ⭐ **THE ERROR WORD IS ALREADY FUSED.** `ServiceError` is the transport member, pinned at
+// `ErrorFlagOrdinalBias`, so `stopped`'s fused ordinal IS the ordinary scalar flag — no shift, and the same
+// number an awaiter's `match e ... stopped` arm dispatches on whether the message throws or not.
+//
+// ⚠ **IT IS SYNTHESIZED FOR EVERY SERVICE, INCLUDING ONE WHOSE MESSAGES ALL LACK REPLIES**, where its
+// switch has nothing to do and it is the union's cascade wearing a name. That is deliberate: the mailbox
+// holds ONE `abandonFn` pointer, and a per-service choice between two symbols would be a second place that
+// knows which services have replies.
+function buildServiceAbandon(module MaxonModule, project Project, signatures ProgramSignatures, typeName ByteArray)
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(MaxonType.integer)
+	var fn = SynthesizedFunction.open(module, project: project, name: serviceAbandonSymbol(typeName), returnType: MaxonReturnType.void, paramTypes: paramTypes)
+
+	let range = SourceRange.none()
+	let requestName = serviceRequestCompanionName(typeName)
+	let request = serviceRequestLayout(signatures, requestName: requestName)
+	let box = ServiceAbandonBoxParam
+
+	let entry = fn.currentBlock()
+	let tag = fn.mintOfType(MaxonType.integer)
+	fn.emit(MaxonOp.loadIndirect(tag, addr: box, offset: UnionTagOffset, valueType: MaxonType.integer), range: range)
+
+	// Opened BEFORE the arms so every arm has a block id to branch to — `buildServiceLoop`'s arrangement, for
+	// its reason.
+	let destruct = fn.openBlock(b"abandondrop")
+	fn.emitPositionalCallDiscarding(signatures.unionBoxDropCallee(requestName), args: argsOf(box), range: range)
+	fn.terminate(MaxonOp.retVoid, range: range)
+
+	var armIds = BlockIdArray.create()
+	for caseIndex in 0 upto request.caseCount() 'eachVariant'
+		armIds.push(buildServiceAbandonArm(fn, signatures: signatures, request: request, caseIndex: caseIndex, box: box, destruct: destruct, range: range).id)
+	end 'eachVariant'
+
+	// The default is the DROP, which is also every arm's exit: the table covers every tag the union has, so
+	// the default is unreachable by construction and answering it with the release is the conservative answer
+	// to a request nothing recognises — `buildServiceLoop`'s call, for its reason.
+	fn.terminateBlock(entry, op: MaxonOp.switch(tag, denseTargetBlockIds: armIds, defaultBlockId: destruct.id), range: range)
+end 'buildServiceAbandon'
+
+// One abandon arm: answer this variant's reply if it has one, then fall through to the shared release.
+function buildServiceAbandonArm(fn SynthesizedFunction, signatures ProgramSignatures, request EnumLayout, caseIndex CaseIndex, box ValueId, destruct IrBlock, range SourceRange) returns IrBlock
+	let arm = fn.openBlock(request.caseNameAt(caseIndex))
+	let payloads = request.payloadsAt(caseIndex)
+	match serviceReplySlotIndex(payloads) 'reply'
+		absent then break 'reply'
+		at then fn.emitPositionalCallDiscarding(GtCellCompleteName, args: threeArgs(loadServiceReplyCell(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: box, range: range), second: fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range), third: fn.emitTypedLiteral(serviceStoppedErrorFlag(signatures), valueType: MaxonType.integer, range: range)), range: range)
+	end 'reply'
+
+	fn.terminate(MaxonOp.branch(destruct.id), range: range)
+	return arm
+end 'buildServiceAbandonArm'
+
+// `<T>.__abandon`'s one parameter, by the ValueId the parameter numbering reserves for it —
+// `ServiceStateParam`'s shape, and for its reason.
+let ServiceAbandonBoxParam = 0 as ValueId
+
 // ⭐ **ONE DISPATCH ARM.** Variant 0 is the compiler's `__shutdown` pill and stops the loop; every other is a
 // message, and runs its handler.
-function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, req ValueId, abandonCallee ByteArray, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
+function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
 	let arm = fn.openBlock(request.caseNameAt(caseIndex))
+	let payloads = request.payloadsAt(caseIndex)
 	if request.caseNameAt(caseIndex).equals(ServiceShutdownCaseName) 'thePoisonPill'
-		// The pill carries only its (unused, SV1) reply slot, which is a scalar — so the cascade has nothing
-		// to cascade to and this is the shell decref spelled through the one router. Whatever is queued
-		// BEHIND it is the exit path's to abandon.
-		fn.emitPositionalCallDiscarding(abandonCallee, args: argsOf(req), range: range)
+		// ⭐⭐ **THE PILL'S REPLY IS HANDED TO THE MAILBOX, NOT COMPLETED HERE (SV2), AND THAT IS WHAT MAKES
+		// `await h.shutdown()` A REAL RENDEZVOUS.** Completing it in this arm would resume the awaiter while
+		// the service still had a queue to drain and a state to drop; parking the cell on the mailbox instead
+		// lets `__mbox_service_exit` — the loop's LAST act, after the drain and after the state's drop —
+		// answer it. The alternative was a value threaded through the drain LOOP as a block argument, which
+		// is a phi carrying one pointer through three blocks to reach the same instant.
+		//
+		// ⚠ The pill's only payload IS the reply slot, so there is nothing else on the box: the shell decref
+		// below is the whole release. Whatever is queued BEHIND it is the exit path's to abandon.
+		fn.emit(MaxonOp.storeIndirect(ServiceMailboxParam, offset: MboxOffShutdownReply, value: loadServiceReplyCell(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: req, range: range), valueType: MaxonType.integer), range: range)
+		fn.emitPositionalCallDiscarding(MmDecrefName, args: argsOf(req), range: range)
 		fn.terminate(MaxonOp.branch(exit.id), range: range)
 		return arm
 	end 'thePoisonPill'
@@ -183,7 +270,6 @@ function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, t
 	// "it cannot miss" invariant is `ServiceCompanions.serviceFirstDeclOf`'s, stated once for all four
 	// places that rest on it.
 	let decl = serviceFirstDeclOf(signatures.overloadedDeclsOf(callee), key: callee)
-	let payloads = request.payloadsAt(caseIndex)
 
 	// ⚠ **ONLY THE DECLARED PARAMETERS ARE LOADED, AND THE `__reply` SLOT IS NOT ONE.** A message with a
 	// reply carries a trailing integer slot the request union declares and SV1 never fills (the send stores
@@ -201,7 +287,7 @@ function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, t
 		args.push(loaded)
 	end 'eachParam'
 
-	emitServiceHandlerCall(fn, signatures: signatures, callee: callee, args: args, range: range)
+	emitServiceHandlerCall(fn, signatures: signatures, callee: callee, args: args, reply: serviceArmReply(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: req, range: range), range: range)
 	dropUnconsumedPayloads(fn, signatures: signatures, callee: callee, request: request, caseIndex: caseIndex, classes: payloadClasses, args: args, range: range)
 
 	// ⭐ **THE SHELL, AND ONLY THE SHELL.** The payloads were consumed by the handler or dropped by the loop
@@ -224,25 +310,57 @@ function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, t
 	return arm
 end 'buildServiceArm'
 
-// The handler call itself. A THROWING message needs the dual-register form and needs its error flag
-// released; everything else is one positional call whose result is dropped if it owns heap.
+// ⭐ **WHERE THIS ARM'S REPLY GOES, OR THAT IT HAS NONE (SV2).** `serviceReplySlotIndex` is the one
+// authority on which variants carry a cell; this loads it where there is one.
+function serviceArmReply(fn SynthesizedFunction, request EnumLayout, caseIndex CaseIndex, payloads PayloadFieldArray, req ValueId, range SourceRange) returns ServiceReplyTarget
+	match serviceReplySlotIndex(payloads) 'reply'
+		absent then return ServiceReplyTarget.fireAndForget
+		at then return ServiceReplyTarget.cell(loadServiceReplyCell(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: req, range: range))
+	end 'reply'
+end 'serviceArmReply'
+
+// The cell pointer out of this variant's `__reply` payload slot. Asked only where the slot exists, so the
+// panic names a caller that skipped its own gate.
+function loadServiceReplyCell(fn SynthesizedFunction, request EnumLayout, caseIndex CaseIndex, payloads PayloadFieldArray, req ValueId, range SourceRange) returns ValueId
+	let slot = match serviceReplySlotIndex(payloads) 'reply'
+		absent panic("loadServiceReplyCell: variant `{String.from(request.caseNameAt(caseIndex))}` of `{String.from(request.name)}` carries no `__reply` payload — every caller gates on `serviceReplySlotIndex`")
+		at(index) gives index
+	end 'reply'
+
+	let cell = fn.mintOfType(MaxonType.integer)
+	fn.emit(MaxonOp.loadIndirect(cell, addr: req, offset: request.payloadSlotOffset(slot), valueType: MaxonType.integer), range: range)
+	return cell
+end 'loadServiceReplyCell'
+
+// ⭐ **WHAT AN ARM OWES ITS SENDER.** A union rather than a `ValueId` plus a flag, for `ServiceReplyValue`'s
+// reason one tier up: a fire-and-forget message has no cell at all, and `v0` is a real SSA value.
+union ServiceReplyTarget
+	fireAndForget
+	cell(value ValueId)
+end 'ServiceReplyTarget'
+
+// ⭐⭐ **THE HANDLER CALL, AND WHAT BECOMES OF ITS TWO OUTCOMES (SV2).** A message with a reply hands both
+// to the CELL and drops neither: the awaiter takes the value's reference (`__gt_try_await` releases the
+// arguments with the result CONSUMED) and reads the error word. A message WITHOUT a reply returns nothing
+// and throws nothing by construction — that is exactly what `serviceMessageHasAReply` answers `false` for —
+// so its call has no outcome to place at all.
 //
-// ⚠⚠ **A THROWING MESSAGE IS SENDABLE IN SV1 AND THIS ARM IS LIVE — THE COMMENT THAT STOOD HERE SAID THE
-// OPPOSITE AND WAS WRONG.** It read *"no send can produce a throwing variant in SV1 — `emitServiceSend`
-// refuses one"*. It does not, and it should not: a `throws` clause is exactly what makes a message
-// REPLY-BEARING (`ServiceCompanions.serviceMessageHasAReply` counts it beside a return type), and SV1's
-// fire-and-forget half is the design's own — the send fills the reply slot with 0 and the error has nowhere
-// to go, so this loop drops it. **SV2 is what gives it somewhere to go.**
+// ⛔⛔ **THAT IS WHY THREE DROP HELPERS LEFT THIS FILE.** SV1 dropped a fire-and-forget message's managed
+// RESULT, its thrown ERROR BOX, and the result again on the non-throwing edge — all three reachable only
+// because a value-returning or throwing message had nowhere to send its answer. Every such message now has
+// a cell, so all three became unreachable, and an unreachable drop in a leak-gated compiler is a claim
+// nothing can check. (The one that would still be reachable — a thrown BOX — cannot arrive either: a
+// message throwing a payload-carrying union is refused at the `spawn`, E3140, precisely because a reply's
+// one error word holds a fused ordinal and not a pointer.)
 //
-// ⛔ **AND THE ARM BEING LIVE IS HOW A LEAK GOT IN.** A `tryCall` opens an error-edge DIAMOND, so the ops
-// after this call land in the merge rather than in the arm's own block — which `buildServiceArm` did not
-// account for. MEASURED: exit 101 on a two-message program whose second message throws. See the terminator
-// at the end of `buildServiceArm` for what that cost and why it is `fn.terminate`.
+// ⛔ **A `tryCall` OPENS AN ERROR-EDGE DIAMOND, so the ops after this call land in that diamond's MERGE
+// rather than in the arm's own block** — which `buildServiceArm` did not account for at SV1 wave 3 and paid
+// exit 101 for. See the terminator at the end of `buildServiceArm` for what that cost and why it is
+// `fn.terminate`.
 //
 // A plain `call` to a throwing callee is **E3057** at `SemanticCheck.validatePlainCall` (which walks this
-// synthesized body like any other), so the `tryCall` is FORCED; and a boxed error union's flag IS a heap
-// pointer, so releasing it is the only non-leaking thing to do with it.
-function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, args ValueIdArray, range SourceRange)
+// synthesized body like any other), so the `tryCall` is FORCED.
+function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, args ValueIdArray, reply ServiceReplyTarget, range SourceRange)
 	let returned = serviceHandlerReturnType(signatures, callee: callee, typeNames: signatures.indexTypeNames())
 	let resultTag = match returned 'r'
 		void gives ValueTypeTag.void
@@ -255,7 +373,7 @@ function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignat
 
 	if not throwsClauseIsThrowing(signatures.throwsOf(callee)) 'nonThrowing'
 		let result = fn.emitPositionalCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range)
-		dropServiceHandlerResult(fn, signatures: signatures, returned: returned, result: result, range: range)
+		completeServiceReply(fn, reply: reply, result: serviceReplyResultWord(fn, returned: returned, result: result, range: range), threw: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), range: range)
 		return
 	end 'nonThrowing'
 
@@ -265,96 +383,61 @@ function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignat
 
 	let threw = fn.emitCompare(errorFlag, rhs: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.ne, range: range)
 	let caught = fn.currentBlock()
-	let releaseError = fn.openBlock(b"dropthrown")
-	dropServiceHandlerError(fn, signatures: signatures, callee: callee, errorFlag: errorFlag, range: range)
-	let handled = fn.openBlock(b"handled")
-	fn.terminateBlock(caught, op: MaxonOp.condBranch(threw, thenBlockId: releaseError.id, elseBlockId: handled.id), range: range)
-	fn.terminateBlock(releaseError, op: MaxonOp.branch(handled.id), range: range)
-	fn.resumeBlock(handled)
+
+	// ⭐⭐ **THE THROWN EDGE WRITES THE FUSED ORDINAL, NOT THE RAW FLAG.** A reply's one error word carries a
+	// `(member, case)` pair on a two-member dispatch line, and the handler's own flag is the SECOND member's
+	// half of it — so the shift `ServiceCompanions.serviceReplyHandlerFusedShift` computes is added here, and
+	// `Parser.serviceReplyErrorMembers` builds the awaiter's table from the very same offset.
+	let thrown = fn.openBlock(b"replythrew")
+	completeServiceReply(fn, reply: reply, result: fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range), threw: emitFusedHandlerFlag(fn, signatures: signatures, callee: callee, errorFlag: errorFlag, range: range), range: range)
 
 	// ⚠ On the THROWN path the success register holds whatever the exit left there — the undefined slot
-	// `AsyncReleaser`'s header calls a wild free — so the result is released only where it was actually
-	// produced. That is what the `handled` merge is: both edges reach it, and only the non-throwing one
-	// carries a value, which is why the drop cannot be emitted before the branch.
-	dropServiceHandlerResultIfNotThrown(fn, signatures: signatures, returned: returned, result: result, threw: threw, range: range)
+	// `AsyncReleaser`'s header calls a wild free — so the VALUE word is written only on the edge that really
+	// produced one, and the thrown edge writes a 0 the releaser's null guard reads as "nothing was put here".
+	let answered = fn.openBlock(b"replyok")
+	completeServiceReply(fn, reply: reply, result: serviceReplyResultWord(fn, returned: returned, result: result, range: range), threw: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), range: range)
+
+	let handled = fn.openBlock(b"handled")
+	fn.terminateBlock(caught, op: MaxonOp.condBranch(threw, thenBlockId: thrown.id, elseBlockId: answered.id), range: range)
+	fn.terminateBlock(thrown, op: MaxonOp.branch(handled.id), range: range)
+	fn.terminateBlock(answered, op: MaxonOp.branch(handled.id), range: range)
+	fn.resumeBlock(handled)
 end 'emitServiceHandlerCall'
 
-// A managed RESULT nobody asked for. SV1 has no reply, so a value-returning message is fire-and-forget and
-// the value is dropped here — the loop is its one owner from the moment the handler returned it.
-function dropServiceHandlerResult(fn SynthesizedFunction, signatures ProgramSignatures, returned MaxonReturnType, result ValueId, range SourceRange)
-	match returned 'r'
-		void then return
-		value(inner) then dropServiceManagedValue(fn, signatures: signatures, valueType: inner, value: result, range: range)
+// One reply answered, or nothing at all for a fire-and-forget message. Written once because both edges of a
+// throwing call and the whole of a non-throwing one reach it, and the ORDER of the three words
+// `__gt_cell_complete` writes is the runtime's to state, not this file's.
+function completeServiceReply(fn SynthesizedFunction, reply ServiceReplyTarget, result ValueId, threw ValueId, range SourceRange)
+	match reply 'r'
+		fireAndForget then return
+		cell(value) then fn.emitPositionalCallDiscarding(GtCellCompleteName, args: threeArgs(value, second: result, third: threw), range: range)
 	end 'r'
-end 'dropServiceHandlerResult'
+end 'completeServiceReply'
 
-// One value released through the SHARED field-drop router, iff it owns heap. The `if` is the whole body,
-// which is why it is a function rather than an arm: a `match` arm is one statement.
-function dropServiceManagedValue(fn SynthesizedFunction, signatures ProgramSignatures, valueType MaxonType, value ValueId, range SourceRange)
-	if not signatures.typeIsManaged(valueType, from: signatures.indexTypeNames()) 'ownsNoHeap'
-		return
-	end 'ownsNoHeap'
-
-	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: valueType), args: argsOf(value), range: range)
-end 'dropServiceManagedValue'
-
-// The same drop, on the ONE path that produced a value. See `emitServiceHandlerCall` for why a throwing
-// call's success register may not be read on the error edge.
-function dropServiceHandlerResultIfNotThrown(fn SynthesizedFunction, signatures ProgramSignatures, returned MaxonReturnType, result ValueId, threw ValueId, range SourceRange)
-	if not serviceHandlerReturnsHeap(signatures, returned: returned) 'ownsNoHeap'
-		return
-	end 'ownsNoHeap'
-
-	let inner = serviceHandlerReturnedType(returned)
-	let merge = fn.currentBlock()
-	let dropIt = fn.openBlock(b"dropresult")
-	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: inner), args: argsOf(result), range: range)
-	let after = fn.openBlock(b"resultdropped")
-	fn.terminateBlock(merge, op: MaxonOp.condBranch(threw, thenBlockId: after.id, elseBlockId: dropIt.id), range: range)
-	fn.terminateBlock(dropIt, op: MaxonOp.branch(after.id), range: range)
-	fn.resumeBlock(after)
-end 'dropServiceHandlerResultIfNotThrown'
-
-// Does this handler hand back a value that owns heap? Split from the drop above because the CONDITIONAL
-// drop needs the answer before it opens any block — a `match` arm cannot carry the four statements the
-// diamond takes.
-function serviceHandlerReturnsHeap(signatures ProgramSignatures, returned MaxonReturnType) returns bool
+// The VALUE word a reply carries: the handler's result, or a 0 for a message that returns nothing. A void
+// call names no value at all, so it cannot be passed as an argument — the literal is what says "there is
+// nothing here" in a word that must always be written.
+function serviceReplyResultWord(fn SynthesizedFunction, returned MaxonReturnType, result ValueId, range SourceRange) returns ValueId
 	return match returned 'r'
-		void gives false
-		value(inner) gives signatures.typeIsManaged(inner, from: signatures.indexTypeNames())
+		void gives fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range)
+		value gives result
 	end 'r'
-end 'serviceHandlerReturnsHeap'
+end 'serviceReplyResultWord'
 
-// The type a handler returns. Asked only where `serviceHandlerReturnsHeap` has already answered true, so
-// `void` is a caller that skipped its own gate rather than a case to answer with a placeholder.
-function serviceHandlerReturnedType(returned MaxonReturnType) returns MaxonType
-	return match returned 'r'
-		void panic("serviceHandlerReturnedType: asked for the returned type of a VOID handler — every caller gates on `serviceHandlerReturnsHeap`, which answers false for one")
-		value(inner) gives inner
-	end 'r'
-end 'serviceHandlerReturnedType'
+// The handler's raw error flag, shifted onto the reply's fused dispatch line. A shift of 0 emits nothing,
+// which is what a first-member placement would give — but the handler is always the SECOND member here, so
+// the zero arm is the structural case rather than the common one.
+function emitFusedHandlerFlag(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, errorFlag ValueId, range SourceRange) returns ValueId
+	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise panic("emitFusedHandlerFlag: `{String.from(callee)}` reached the THROWN edge of its own dispatch arm with no `throws` clause — the caller emits that edge only for a callee `throwsClauseIsThrowing` accepted")
+	let shift = serviceReplyHandlerFusedShift(signatures, errorName: errorName.toByteArray())
+	if shift == 0 'alreadyOnTheLine'
+		return errorFlag
+	end 'alreadyOnTheLine'
 
-// A thrown error, released iff it is a heap BOX. `asyncErrorSlotsOf`'s exact test, one runtime over: a
-// SCALAR error clause travels as `ordinal + ErrorFlagOrdinalBias` — a small integer that owns nothing and
-// must never reach a drop callee — while a boxed union's flag IS the box pointer, written verbatim by
-// `LowerMaxonToStd.lowerThrowError`.
-function dropServiceHandlerError(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, errorFlag ValueId, range SourceRange)
-	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return
-	if not serviceErrorIsBoxed(signatures, errorName: errorName.toByteArray()) 'aScalarOrdinal'
-		return
-	end 'aScalarOrdinal'
-
-	fn.emitPositionalCallDiscarding(signatures.unionBoxDropCallee(errorName.toByteArray()), args: argsOf(errorFlag), range: range)
-end 'dropServiceHandlerError'
-
-// Is this declared error union BOXED? Split out so the `declared` arm above stays one statement and the
-// registry is asked through one door.
-function serviceErrorIsBoxed(signatures ProgramSignatures, errorName ByteArray) returns bool
-	return match signatures.enumOf(errorName) 'e'
-		declared(layout) gives layout.isBoxed()
-		undeclared gives false
-	end 'e'
-end 'serviceErrorIsBoxed'
+	let fused = fn.mintOfType(MaxonType.integer)
+	fn.emit(MaxonOp.binOp(fused, lhs: errorFlag, rhs: fn.emitTypedLiteral(shift, valueType: MaxonType.integer, range: range), op: MaxonBinOp.add), range: range)
+	return fused
+end 'emitFusedHandlerFlag'
 
 // ⭐⭐ **DROP EVERY MANAGED PAYLOAD THE HANDLER DID NOT TAKE OWNERSHIP OF.** The request box holds exactly
 // one reference to each of its managed payloads — the one `Parser.moveIntoGreenThread` moved in at the send

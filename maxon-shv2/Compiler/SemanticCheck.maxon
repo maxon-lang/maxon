@@ -1432,6 +1432,9 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 		// words rather than reaching that function's disagreement panic.
 		serviceSpawn(_, _, state) then return isTrackedValue(state, subject: subject, func: func)
 		serviceSend(_, _, handle, request) then return isTrackedValue(handle, subject: subject, func: func) or isTrackedValue(request, subject: subject, func: func)
+		// A REPLY CELL takes no operand at all — it mints a fresh GT struct out of the slab — so no value of
+		// this frame's can escape through it.
+		serviceReplyCell then break 'op'
 	end 'op'
 	return false
 end 'opEscapesValue'
@@ -1505,7 +1508,7 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 		errorFlagEncode then break 'term'
 		// Both service ops are BODY ops — a spawn defines a value the next statement stores, and a send is a
 		// statement of its own.
-		serviceSpawn to serviceSend then break 'term'
+		serviceSpawn to serviceReplyCell then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesValue'
@@ -1838,7 +1841,7 @@ function collectCallParamEdgesAt(project Project, op MaxonOp, func IrFunction, c
 		// arguments are no longer the caller's: `Parser.moveIntoGreenThread` MOVED each of them into the
 		// request box, so a handler writing one writes a value this frame has given up. A `serviceSpawn`'s
 		// state is a factory's own fresh box and was never a parameter of anybody.
-		serviceSpawn to serviceSend then break 'op'
+		serviceSpawn to serviceReplyCell then break 'op'
 	end 'op'
 end 'collectCallParamEdgesAt'
 
@@ -2030,7 +2033,7 @@ function opConsumesAPromise(op MaxonOp) returns bool
 		errorFlagEncode gives false
 		// A SERVICE's green thread is not a promise and neither op reclaims one — a Promise may not be sent at
 		// all (`Parser.moveIntoGreenThread` refuses it), which is what keeps this answer true.
-		serviceSpawn to serviceSend gives false
+		serviceSpawn to serviceReplyCell gives false
 	end 'op'
 end 'opConsumesAPromise'
 
@@ -2092,7 +2095,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				// The error-flag encode is not an await site: it reads an enum value, never a promise handle.
 				errorFlagEncode then break 'op'
 				// Neither service op awaits or cancels: SV1's send is fire-and-forget and has no reply to wait on.
-				serviceSpawn to serviceSend then break 'op'
+				serviceSpawn to serviceReplyCell then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -2308,7 +2311,7 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		errorFlagEncode then break 'op'
 		// Neither service op re-awaits: a spawn DEFINES a mailbox pointer (so it falls through to the re-arm
 		// test below, exactly as a `call` does) and a send reads a mailbox and a box, never a promise handle.
-		serviceSpawn to serviceSend then break 'op'
+		serviceSpawn to serviceReplyCell then break 'op'
 	end 'op'
 	return rearmRoleIfDefines(op, promise: promise)
 end 'classifyOpForPromise'
@@ -2386,7 +2389,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		// The error-flag encode is a BODY op, so it is never the terminator whose successors this walks.
 		errorFlagEncode then break 'term'
 		// Both service ops are BODY ops, so neither is the terminator whose successors this walks.
-		serviceSpawn to serviceSend then break 'term'
+		serviceSpawn to serviceReplyCell then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -2538,6 +2541,11 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// service refusal and a `sleep` refusal cannot become two spellings of one rejection.
 					serviceSpawn then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "'spawn'", entry: SvcSpawnName, blameTargetErrorsHere: blameTargetErrorsHere)
 					serviceSend then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "a message send", entry: MboxSendName, blameTargetErrorsHere: blameTargetErrorsHere)
+					// ⭐ A REPLY CELL reaches the scheduler substrate exactly as the two above do — it mints a
+					// green-thread struct and steps `__gt_live_count` — and it is emitted only beside a
+					// `serviceSend`, so this arm never fires alone. It names its own entry anyway, because a
+					// refusal that named a neighbour's would be a wrong attribution rather than a missing one.
+					serviceReplyCell then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "an awaited message send", entry: GtCellAllocName, blameTargetErrorsHere: blameTargetErrorsHere)
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -3463,7 +3471,7 @@ function reportIfNonYielding(project Project, op MaxonOp, opIndex OpIndex, func 
 		// overlaps waiting and cannot overlap execution — so a non-yielding one is pure waste. A service's
 		// green thread is scheduled independently and CPU-bound work is exactly what one is for; a message
 		// handler that never parks is the normal case, not a defect.
-		serviceSpawn to serviceSend then return
+		serviceSpawn to serviceReplyCell then return
 	end 'op'
 end 'reportIfNonYielding'
 
@@ -3668,7 +3676,7 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncI
 		// `__sched_lock` and returns. The handler runs on the SERVICE's thread, so whether it can park says
 		// nothing about whether this frame can — which is the exact opposite of `asyncCall`, whose coroutine
 		// runs on this frame's own thread and therefore contributes its edge.
-		serviceSpawn to serviceSend gives false
+		serviceSpawn to serviceReplyCell gives false
 	end 'op'
 end 'opYields'
 
@@ -3859,7 +3867,7 @@ function opShowsAnEffect(op MaxonOp, funcIndexByName FuncIndexByName, callerInde
 		errorFlagEncode gives false
 		// Starting a service and delivering a message are both effects no return type expresses — a send has
 		// no result at all, so its whole reason for existing is the effect.
-		serviceSpawn to serviceSend gives true
+		serviceSpawn to serviceReplyCell gives true
 	end 'op'
 end 'opShowsAnEffect'
 
@@ -4869,7 +4877,7 @@ function closureEscapeReason(op MaxonOp) returns String
 		// factory's own box, so no closure can be either operand — but `opEscapesValue` reports the escape
 		// structurally, and a `break` here would send a program that somehow reached it to that function's
 		// disagreement panic instead of to a sentence.
-		serviceSpawn to serviceSend then return "cannot hand a closure that captures to a service: a message MOVES its arguments to another green thread, and a capturing closure's environment is a box this one would still hold. {CapturingClosureEscapeSuffix}"
+		serviceSpawn to serviceReplyCell then return "cannot hand a closure that captures to a service: a message MOVES its arguments to another green thread, and a capturing closure's environment is a box this one would still hold. {CapturingClosureEscapeSuffix}"
 	end 'op'
 
 	// Reached only if `opEscapesValue` reported an escape at an op this mapping believes cannot persist a
@@ -5725,7 +5733,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 			// The error-flag encode hands nothing back through the return registers — its result is a routed edge's.
 			errorFlagEncode then break 'op'
 			// Neither service op is a `ret`, so neither hands anything back through the return registers.
-			serviceSpawn to serviceSend then break 'op'
+			serviceSpawn to serviceReplyCell then break 'op'
 		end 'op'
 	end 'eachOp'
 end 'checkReturnsAgainstInterface'

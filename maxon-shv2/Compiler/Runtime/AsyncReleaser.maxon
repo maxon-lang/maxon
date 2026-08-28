@@ -176,6 +176,94 @@ export function asyncCalleeNeedsReleaser(callee ByteArray, funcSignatures FuncSi
 	return not asyncReleasePlanFor(callee, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames).isInert()
 end 'asyncCalleeNeedsReleaser'
 
+// ⭐⭐ **THE REPLY CELL's RELEASER (SV2) — the SAME body, over a DIFFERENT plan.** A cell owes exactly one
+// release: the managed RESULT a message answered that nobody ever took, which the second arrival at the
+// teardown rendezvous (`__gt_reclaim`) frees with `ownedByThisDrop`. Its symbol is in its own namespace
+// because the plans differ in what they name: `__gt_release_<callee>` is the plan of a SPAWN of `<callee>`
+// and lists that callee's arguments, while this one lists nothing but the result — so a program that both
+// `async`s and message-sends one function would otherwise have two plans fighting over one symbol.
+export function serviceReplyReleaserName(messageName ByteArray) returns ByteArray
+	return "{String.from(ServiceReplyReleaserPrefix)}{String.from(messageName)}".toByteArray()
+end 'serviceReplyReleaserName'
+
+let ServiceReplyReleaserPrefix = b"__gt_reply_release_"
+
+// ⭐⭐ **DOES THIS REPLY NEED A RELEASER? — ONE fact, read by the two sites that must not disagree**, exactly
+// as `asyncCalleeNeedsReleaser` is: `LowerMaxonToStd.emitServiceReplyCell` NAMES the address it stores into
+// `cell.releaser`, and `installServiceReplyReleasers` decides whether anything is there to name. See
+// `asyncCalleeNeedsReleaser` for what each of the two disagreements costs.
+export function serviceReplyNeedsReleaser(messageName ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns bool
+	return not serviceReplyReleasePlanFor(messageName, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames).isInert()
+end 'serviceReplyNeedsReleaser'
+
+// ⭐ **THE PLAN, AND ITS THREE DEPARTURES FROM `asyncReleasePlanFor` ARE THE THREE FACTS ABOUT A CELL.**
+//
+//   • **NO ARGUMENT SLOTS.** A message's arguments were moved into the request BOX at the send and are
+//     released by `<T>.__loop` (consumed by the handler, or dropped slot by slot beside it) — the GT
+//     struct's inline argument region is untouched and stays at the slab's zero. Deriving them from the
+//     message's parameters, as the async plan does, would name offsets nothing ever wrote.
+//   • **NO ERROR SLOT.** A reply's `threw` word carries the FUSED ORDINAL of a scalar dispatch line, never a
+//     box: `Parser.requireServiceReplyErrorIsCarriable` refuses a message whose `throws` names a
+//     payload-carrying union, precisely so this word can never be a pointer.
+//   • **`calleeThrows` IS UNCONDITIONALLY TRUE**, because a reply ALWAYS throws `ServiceError` whatever the
+//     message declares — which is what gates the result release on `threw == 0`, the one reading that keeps
+//     a transport failure's zero result slot away from a drop callee.
+//
+// ⚠ **AN UNDECLARED MESSAGE ANSWERS THE INERT PLAN**, on `asyncReleasePlanFor`'s reason plus one of its own:
+// `<T>.shutdown` is the compiler's own pill, which no file declares and which answers nothing, so the
+// lookup below failing IS the correct answer for it rather than a doomed program's symptom.
+function serviceReplyReleasePlanFor(messageName ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
+	let noSlots = AsyncManagedSlotArray.create()
+	let sig = try funcSignatures.get(messageName) otherwise return AsyncReleasePlan.create(noSlots, resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true)
+	return AsyncReleasePlan.create(noSlots, resultSlots: asyncResultSlotsOf(messageName, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true)
+end 'serviceReplyReleasePlanFor'
+
+// Every MESSAGE a reply cell is minted for anywhere in the module, in first-seen source order, deduped —
+// `collectAsyncSpawnTargets`' twin, over the op that mints a cell rather than the one that spawns a thread.
+export function collectServiceReplyTargets(module MaxonModule) returns ByteArrayArray
+	var seen = AsyncReleaserSet.create()
+	var targets = ByteArrayArray.create()
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("collectServiceReplyTargets: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				noteIfServiceReplyCell(try module.ops.get(opIdx) otherwise panic("collectServiceReplyTargets: opIdx {opIdx} not in module.ops"), seen: seen, targets: targets)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return targets
+end 'collectServiceReplyTargets'
+
+function noteIfServiceReplyCell(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayArray)
+	match op 'op'
+		serviceReplyCell(_, messageName) then noteAsyncCallee(messageName, seen: seen, targets: targets)
+		// Every other op mints no reply cell. Two ranges rather than one because `serviceReplyCell` is the
+		// union's LAST variant and the rest of the dialect sits below it.
+		call to errorFlagEncode then break 'op'
+		serviceSpawn to serviceSend then break 'op'
+	end 'op'
+end 'noteIfServiceReplyCell'
+
+// The reply releasers' half of `declareAsyncReleaserNeeds` — see there for why a body built after the
+// pipeline has to declare what it will call before `noteDestructorUsage` runs its fixpoint.
+export function declareServiceReplyReleaserNeeds(usage RuntimeUsage, targets ByteArrayArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
+	for messageName in targets 'eachMessage'
+		declareSlotDropNeeds(usage, slots: serviceReplyReleasePlanFor(messageName, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames).resultSlots)
+	end 'eachMessage'
+end 'declareServiceReplyReleaserNeeds'
+
+// Install the reply releaser for every message that needs one, through the SAME synthesis the async plans
+// go through — the two differ in their plan and in their symbol, and in nothing else.
+export function installServiceReplyReleasers(module StdModule, targets ByteArrayArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
+	for messageName in targets 'eachMessage'
+		let plan = serviceReplyReleasePlanFor(messageName, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
+		if plan.isInert() 'nothingToRelease'
+			continue
+		end 'nothingToRelease'
+		synthesizeReleaser(module, name: serviceReplyReleaserName(messageName), plan: plan)
+	end 'eachMessage'
+end 'installServiceReplyReleasers'
+
 // Build the release plan for `callee` off its declared signature.
 //
 // ⚠ **AN UNDECLARED CALLEE ANSWERS THE INERT PLAN RATHER THAN PANICKING.** Its program is already rejected
@@ -344,7 +432,7 @@ function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayAr
 		// A SERVICE's green thread owns its state and its request boxes and releases them in its own loop
 		// (`ServiceLoop`), so it needs no per-callee releaser: the GT-struct release protocol this file
 		// implements is the `async` PROMISE's, and a service has no promise.
-		serviceSpawn to serviceSend then break 'op'
+		serviceSpawn to serviceReplyCell then break 'op'
 	end 'op'
 end 'noteIfAsyncSpawn'
 
@@ -398,15 +486,21 @@ export function installAsyncReleasers(module StdModule, targets ByteArrayArray, 
 		if plan.isInert() 'nothingToRelease'
 			continue
 		end 'nothingToRelease'
-		synthesizeAsyncReleaser(module, callee: callee, plan: plan)
+		synthesizeReleaser(module, name: asyncReleaserName(callee), plan: plan)
 	end 'eachCallee'
 end 'installAsyncReleasers'
 
-// `__gt_release_<callee>(gt, resultConsumed)` — release this GT's managed arguments always, and its managed
+// `<name>(gt, resultConsumed)` — release this GT's managed arguments always, and its managed
 // result-or-error only when `resultConsumed` is 0. See this file's header for which caller passes which and
 // what each of the two mistakes costs.
-function synthesizeAsyncReleaser(module StdModule, callee ByteArray, plan AsyncReleasePlan)
-	var func = IrFunction.createFromStd(asyncReleaserName(callee), returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+//
+// ⚠ **THE NAME IS A PARAMETER BECAUSE TWO FAMILIES SHARE THIS BODY (SV2)** — `__gt_release_<callee>` for an
+// `async` spawn and `__gt_reply_release_<message>` for a reply cell. They differ in their PLAN (see
+// `serviceReplyReleasePlanFor` for the three facts that differ) and in nothing this function does, so a
+// second copy of the guard order — arguments always, result under `resultConsumed`, success under
+// `threw == 0` — would be the one place a wrong copy is a double free.
+function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleasePlan)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -437,7 +531,7 @@ function synthesizeAsyncReleaser(module StdModule, callee ByteArray, plan AsyncR
 
 	module.setTerminator(done, op: StdOp.retVoid)
 	module.functions.push(func)
-end 'synthesizeAsyncReleaser'
+end 'synthesizeReleaser'
 
 // The RESULT-or-ERROR arm, reached only on the drop path.
 //

@@ -50,9 +50,10 @@
 //     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
 //     cannot be cited about the next.
 // ⇒ **THE PICKING RULE ABOVE IS UNCHANGED AND STILL MEANS WHAT IT SAYS**: the next entry takes the next
-// FREE number above 70, which is now 94 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
-// W215's arena alignment, and SV1 took 92/93 for the scheduler's two — a deadlocked drive and a park note
-// carrying a kind nothing writes) — 77 went to `managedListNodeNotInThisChain`, 81 to
+// FREE number above 70, which is now 95 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
+// W215's arena alignment, SV1 took 92/93 for the scheduler's two — a deadlocked drive and a park note
+// carrying a kind nothing writes — and SV2 took 94 for a promise naming a mailbox-parked thread) — 77 went
+// to `managedListNodeNotInThisChain`, 81 to
 // `managedListNodeElementMovedOut`, 82/83/84/88 to the slab ARENA's four (`SlabArena.maxon`) and 85/86/87 to
 // the slab OBJECT layer's three (`SlabRuntime.maxon`), while 76
 // and 80 stay vacant for the reason this paragraph gives, and S5 took 89 and 90 for the SHARDED allocator's
@@ -255,6 +256,19 @@ export enum RuntimeAbort
 	// the direction that reads as completeness. The kinds are enumerated by NAME above rather than counted so
 	// that the next one has to be spelled here to be believed; do not reintroduce a bare number.
 	schedulerUnknownParkKind = 93
+	// ⛔⛔ `__gt_promise_drop`: a PROMISE named a green thread parked in `__mbox_recv`. Its `waiting` road
+	// deregisters the timer, process and in-flight-read stores and there is nothing anywhere that clears
+	// `mbox.parkedGt` but the waker's own store, so falling through it would free a thread the mailbox still
+	// points at — after which the next `__mbox_send` writes `ready` into freed memory and publishes a freed
+	// GT. It is a COMPILER bug rather than a program's: SV2's reply cell is a promise but runs nothing
+	// (`funcPtr == 0`), and `__mbox_recv`'s only callers are inside `<T>.__loop`, whose green thread no
+	// promise names — `buildGtPromiseDrop` re-derives that at the site.
+	//
+	// ⚠ **IT IS A SEPARATE CODE FROM `schedulerUnknownParkKind` (93), WHICH IS THE NEIGHBOURING FAULT AND NOT
+	// THIS ONE.** 93 is a park note carrying a kind no site writes; this is a kind four sites DO write,
+	// reaching a reclamation path that has no answer for it. This registry's founding rule: two different
+	// faults may not report one number.
+	schedulerPromiseParkedOnAMailbox = 94
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

@@ -4389,6 +4389,23 @@ module function serviceLoopSymbol(typeName ByteArray) returns ByteArray
 	return qualifiedMethodName(typeName, methodName: ServiceLoopMemberName)
 end 'serviceLoopSymbol'
 
+// The member half of the ABANDON function's symbol — `__`-prefixed for `ServiceLoopMemberName`'s reason.
+let ServiceAbandonMemberName = b"__abandon"
+
+// ⭐⭐ **`<T>.__abandon` — WHAT A REQUEST THAT WILL NEVER BE HANDLED GETS (SV2), SPELLED ONCE FOR ITS THREE
+// READERS.** `ServiceLoop.buildServiceAbandon` BUILDS it, `LowerMaxonToStd.lowerServiceSpawn` emits the
+// `funcAddr` that stores its address into the mailbox's `abandonFn`, and `ServiceLoop.buildServiceDrain`
+// calls it by name on the way out.
+//
+// ⭐ **IT REPLACED A BARE `__destruct_<T>.request`, AND THE DIFFERENCE IS A LIVENESS OBLIGATION.** SV1 handed
+// the mailbox the request union's own drop cascade, which frees an unhandled message's payloads and stops.
+// A message that dies unprocessed now also has an AWAITER, and leaving it parked for a reply that will never
+// come is a hang with no diagnostic — so the abandon path answers `ServiceError.stopped` into the reply slot
+// FIRST and then drops the payloads through that same cascade.
+module function serviceAbandonSymbol(typeName ByteArray) returns ByteArray
+	return qualifiedMethodName(typeName, methodName: ServiceAbandonMemberName)
+end 'serviceAbandonSymbol'
+
 // ⭐⭐ **`__shutdown` IS VARIANT 0 OF EVERY REQUEST UNION, SO ADDING A MESSAGE NEVER RENUMBERS IT.** The
 // poison pill is the one variant the RUNTIME will construct from a literal tag, and the roster above it is
 // the author's to reorder; putting it last would move it every time a method was added. It wears the `__`
@@ -4402,16 +4419,35 @@ export let ServiceShutdownCaseName = b"__shutdown"
 export let ServiceShutdownCaseIndex = 0 as CaseIndex
 
 // ⭐⭐ **THE REPLY SLOT IS AN `Integer`, DELIBERATELY, AND THE P1.3 CASCADE IS WHY.** It is a raw cell
-// pointer (0 = fire-and-forget), NOT a managed box: the `__destruct_<U>` payload cascade must SKIP it, and
-// it does so structurally because a scalar payload is not managed. Completing an abandoned reply cell is the
-// RUNTIME's job (SV2), not a decref's — and a managed-typed slot here would hand the cascade a box it must
-// not free.
+// pointer, NOT a managed box: the `__destruct_<U>` payload cascade must SKIP it, and it does so structurally
+// because a scalar payload is not managed. Answering an abandoned reply cell is `<T>.__abandon`'s job (SV2),
+// not a decref's — and a managed-typed slot here would hand the cascade a box it must not free.
+//
+// ⚠ **A VARIANT EITHER HAS THIS SLOT OR DOES NOT, AND THERE IS NO `0` STANDING FOR "NO REPLY" (SV2).** SV1
+// carried an `export let ServiceNoReplyCell = 0` and stored it into every reply slot, because its send could
+// mint no cell; since a send does, the presence of the slot IS the question and
+// `ServiceCompanions.serviceReplySlotIndex` is the one place it is asked. A zero left as a second spelling
+// of the same fact would be a sentinel every reader had to remember not to dereference.
 module let ServiceReplySlotName = b"__reply"
 
-// ⭐ **WHAT SV1 STORES IN THAT SLOT: NOTHING, SPELLED ONCE.** A reply cell is a GT pointer and 0 is "no
-// awaiter" — which is what makes a value-returning message legal fire-and-forget in SV1: the loop runs the
-// handler and drops the result because there is nobody to hand it to.
-export let ServiceNoReplyCell = 0 as ParsedInt
+// ⭐ **THE TRANSPORT HALF OF EVERY REPLY'S ERROR TYPE, AS A NAME (SV2).** `stdlib/Builtins.maxon` declares
+// `public enum ServiceError`, and the compiler has to look that declaration up to place its cases on a
+// reply's fused dispatch line — so the spelling is here, once, rather than as a byte literal at each of the
+// three sites that ask (`ServiceCompanions.serviceReplyTransportPlacement`,
+// `Parser.serviceReplyErrorMembers` and `Parser.serviceReplyErrorTypeName`).
+module let ServiceErrorTypeName = b"ServiceError"
+
+// ⭐ **THE ONE CASE OF `ServiceError`, AS A NAME.** `<T>.__abandon` transcribes its ORDINAL into a reply's
+// error word, which makes the case ORDER a wire format — so the transcription is checked against the
+// declaration on every compile (`BuiltinErrorOrdinalCheck`), exactly as the three `__Managed*Error`
+// families' are, and this constant is what names the case at both ends of that check.
+module let ServiceErrorStoppedCaseName = b"stopped"
+
+// ⭐ **THE DERIVED SPELLING A TWO-MEMBER REPLY ERROR TYPE IS QUOTED BY (SV2)** — `Calc.divide.errors`,
+// `SERVICES_DESIGN.md`'s own. It is a DIAGNOSTIC STRING and nothing else: no registry holds it, nothing
+// resolves it, and that is exactly what makes a bare `try` over such a reply E3059 — there is no `throws`
+// clause an author could write that names it. `Parser.serviceReplyErrorTypeName` is its one builder.
+module let ServiceReplyErrorSuffix = b"errors"
 
 // The one field of `<T>.handle`: the mailbox pointer. A real 8-byte box on `managedFileLayout`'s shape
 // rather than a parse-time mark, so moves, E3102, struct fields, arrays and the drop cascade all reach it

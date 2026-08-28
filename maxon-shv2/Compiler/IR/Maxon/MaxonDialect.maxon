@@ -1481,6 +1481,26 @@ export union MaxonOp
 	// of its own. It can never reach the overload RESOLVER's rewrite: an overloaded message is refused at the
 	// `spawn` (`ServiceCompanions.classifyServiceRoster`), so `Calc.bump` is never an overload set's key.
 	serviceSend(result ValueId, callee ByteArray, handle ValueId, request ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+	// ⭐⭐⭐ **`serviceReplyCell(result, messageName)` — MINT THE REPLY CELL ONE AWAITABLE SEND WILL RESOLVE
+	// THROUGH (SV2).** `result` is the cell POINTER, an integer, and it is a `Promise` to everything above:
+	// the parser marks it (`markValuePromise`), slots it into the request union's `__reply` payload as an
+	// ordinary integer argument, and `await` / `try await` / `gtIsComplete` / E3100 all take it unchanged.
+	//
+	// ⭐ **THE OP CARRIES THE MESSAGE'S NAME AND NOTHING ELSE, ON `serviceSpawn`'s PRECEDENT AND FOR ITS
+	// REASON.** The one address the lowering needs — `__gt_reply_release_<message>`, the plan that drops a
+	// reply nobody took — is DERIVED from that name at the single place that emits its `funcAddr`, so the
+	// send site and the synthesis (`Runtime/AsyncReleaser.installServiceReplyReleasers`) cannot come to name
+	// different symbols. Whether one exists at all is `serviceReplyNeedsReleaser`'s single answer.
+	//
+	// ⚠ **IT IS A SEPARATE OP RATHER THAN A FIELD ON `serviceSend`, AND THE REASON IS THE BOX.** The cell has
+	// to exist BEFORE `emitEnumBox` runs, because it is one of that box's payload values — so minting it here
+	// lets the reply slot be filled by the ORDINARY slot fill every other argument goes through, where a
+	// field on the send would need the lowering to store over a slot the parser had already written.
+	//
+	// ⚠ **`maxonOpCalleeKind` answers `noCallee`**, and the field is `messageName` rather than `callee` to
+	// say so: the message is credited to `UnusedExportCheck` by the `serviceSend` beside this op, and the
+	// name here may be `<T>.shutdown` — the compiler's pill, which no file declares.
+	serviceReplyCell(result ValueId, messageName ByteArray) = MaxonOpMeta{category: OpCategory.awaiting}
 end 'MaxonOp'
 
 // ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
@@ -1618,6 +1638,9 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		serviceSpawn gives MaxonCalleeKind.noCallee
 		// A SEND names the message it delivers, which is what credits an export reachable no other way.
 		serviceSend gives MaxonCalleeKind.direct
+		// A REPLY CELL names the message only to derive its releaser symbol; the `serviceSend` emitted
+		// beside it is what credits the export, and this op's name may be the compiler's own `<T>.shutdown`.
+		serviceReplyCell gives MaxonCalleeKind.noCallee
 	end 'op'
 end 'maxonOpCalleeKind'
 

@@ -88,6 +88,16 @@ module union ServiceRosterVerdict
 	// A message parameter of a type that cannot cross to another green thread. `noun` is what it IS, so the
 	// sentence reads as the reason rather than as a spelling (see `untransferableParameterNoun`).
 	messageParameterIsNotTransferable(methodName ByteArray, paramName ByteArray, noun String)
+	// ⭐⭐ **A MESSAGE WHOSE REPLY WILL NOT FIT THE CELL (SV2).** A reply travels in TWO WORDS — the value, and
+	// one error word holding the fused ordinal of `{ServiceError, throwsOf(<message>)}` — so a `float`
+	// result (which returns in XMM0) or a payload-carrying error union (whose flag is a heap BOX POINTER)
+	// has nowhere to go. `noun` is what it IS, exactly as the arm above.
+	//
+	// ⛔ **IT IS THE ROSTER'S AND NOT THE SEND'S, BECAUSE `<T>.__loop` IS SYNTHESIZED FROM THE DECLARATION.**
+	// The loop completes a reply for every reply-bearing variant whether or not the program ever sends one,
+	// so a message the cell cannot carry would put `__gt_cell_complete(cell, <a float>, 0)` in a body the
+	// service really runs. Refusing it at the send would leave that body built.
+	messageReplyIsNotCarriable(methodName ByteArray, noun String)
 end 'ServiceRosterVerdict'
 
 // ⭐⭐ **IS THIS A SPAWN TARGET? — the whole rule, in one place.** The order of the arms is the order the
@@ -193,6 +203,11 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 		end 'overloaded'
 
 		let decl = serviceFirstDeclOf(decls, key: messageKey)
+		let replyNoun = uncarriableReplyNoun(signatures, messageKey: messageKey, decl: decl, declFilePath: layout.declFilePath)
+		if not replyNoun.isEmpty() 'replyCannotBeCarried'
+			return ServiceRosterVerdict.messageReplyIsNotCarriable(methodName, noun: replyNoun)
+		end 'replyCannotBeCarried'
+
 		for p in 0 upto decl.paramTypes.count() 'eachParam'
 			let declared = try decl.paramTypes.get(p) otherwise panic("classifyServiceRoster: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(typeName)}.{String.from(methodName)}'")
 			let noun = untransferableParameterNoun(signatures, declared: declared, declFilePath: layout.declFilePath)
@@ -204,6 +219,72 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 
 	return ServiceRosterVerdict.rosterIsDispatchable
 end 'classifyServiceRoster'
+
+// ⭐⭐ **WHAT A MESSAGE'S REPLY *IS* WHEN THE CELL CANNOT CARRY IT, or EMPTY when it can (SV2).** Two words
+// travel back — the value and one error word — and each has a shape it cannot hold.
+//
+// ⚠ **A MESSAGE WITH NO REPLY IS ASKED NOTHING**, which is what keeps a fire-and-forget roster unchanged: a
+// message that returns nothing and throws nothing has no reply slot, mints no cell, and reaches none of the
+// machinery below.
+function uncarriableReplyNoun(signatures ProgramSignatures, messageKey ByteArray, decl OverloadedDecl, declFilePath FilePath) returns String
+	if not serviceMessageHasAReply(signatures, key: messageKey, decl: decl) 'fireAndForget'
+		return ""
+	end 'fireAndForget'
+
+	let resultNoun = uncarriableReplyResultNoun(signatures, returnType: decl.returnType, declFilePath: declFilePath)
+	if not resultNoun.isEmpty() 'theValueWord'
+		return resultNoun
+	end 'theValueWord'
+
+	return uncarriableReplyErrorNoun(signatures, messageKey: messageKey)
+end 'uncarriableReplyNoun'
+
+// The VALUE word. It is one i64 the trampoline never touches — `__gt_cell_complete` writes it and
+// `__gt_try_await` reads it back — so exactly what an `async` result may be, asked through the same
+// predicate (`tagRidesAsyncGprChannel`) rather than through a second list of the same three shapes.
+function uncarriableReplyResultNoun(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath) returns String
+	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
+		return ""
+	end 'nothingComesBack'
+
+	let resolved = signatures.declaredSlotType(serviceReturnedType(returnType), into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
+	if tagRidesAsyncGprChannel(maxonTypeTag(resolved)) 'fitsTheWord'
+		return ""
+	end 'fitsTheWord'
+
+	return "a reply whose value is {maxonTypeTag(resolved).name}, which does not travel in the single integer word a reply cell carries — a `float` comes back in XMM0, and a value held at an interface type or an opaque type parameter is released through a companion the cell does not carry"
+end 'uncarriableReplyResultNoun'
+
+// The ERROR word. It holds the FUSED ORDINAL of the reply's two-member dispatch line, so a payload-carrying
+// union (whose flag is a box POINTER) will not fit — and neither will an error enum whose own tags cannot be
+// placed above `ServiceError`'s slice, which a FLOAT-backed enum's IEEE-754 bit patterns really can be.
+function uncarriableReplyErrorNoun(signatures ProgramSignatures, messageKey ByteArray) returns String
+	let errorName = try throwsClauseName(signatures.throwsOf(messageKey)) otherwise return ""
+	// An UNDECLARED error type is a program `SemanticCheck` refuses with E3113; answering nothing here leaves
+	// that refusal undisturbed rather than accusing the reply of a shape the declaration does not have.
+	if not signatures.containsEnum(errorName.toByteArray()) 'notAnErrorType'
+		return ""
+	end 'notAnErrorType'
+
+	if serviceReplyErrorLayout(signatures, errorName: errorName.toByteArray()).isBoxed() 'aBoxedUnion'
+		return "a reply that throws `{errorName}`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word already carries the fused ordinal that tells `ServiceError` apart from the message's own error, and a pointer is not an ordinal"
+	end 'aBoxedUnion'
+
+	if not serviceReplyHandlerPlacement(signatures, errorName: errorName.toByteArray()).fusable 'tooWideToFuse'
+		return "a reply that throws `{errorName}`, whose case tags span more of the i64 range than the reply's fused error line can hold above `ServiceError`'s own slice (a FLOAT-backed enum's tags are IEEE-754 bit patterns, so two cases can be ~1.8e19 apart)"
+	end 'tooWideToFuse'
+
+	return ""
+end 'uncarriableReplyErrorNoun'
+
+// The declared type a non-void return carries. Asked only where the `void` arm has already been taken, so
+// the panic names a caller that skipped its own gate rather than inventing a placeholder.
+function serviceReturnedType(returnType MaxonReturnType) returns MaxonType
+	return match returnType 'r'
+		void panic("serviceReturnedType: asked for the returned type of a VOID message — `uncarriableReplyResultNoun` matches `void` before reaching here")
+		value(declared) gives declared
+	end 'r'
+end 'serviceReturnedType'
 
 // ⭐⭐ **WHAT A PARAMETER *IS* WHEN IT CANNOT CROSS A GREEN THREAD, or EMPTY when it can.** A NOUN and not a
 // spelling, because the sentence has to say why: `'p' is a Promise` is the reason, where `'p' is
@@ -356,6 +437,7 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 		rosterIsDispatchable then panic("serviceRosterRefusalMessage: asked for the words of a DISPATCHABLE roster on `type {String.from(typeName)}` — the caller refuses only the other arms")
 		messageIsOverloaded(methodName, declarationCount) then return "`{String.from(typeName)}.{String.from(methodName)}` is a message of the service `{String.from(typeName)}` and is declared {declarationCount} times. A message becomes ONE variant of the synthesized `{String.from(serviceRequestCompanionName(typeName))}` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names"
 		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
+		messageReplyIsNotCarriable(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry"
 	end 'why'
 end 'serviceRosterRefusalMessage'
 
@@ -431,11 +513,12 @@ module function serviceNotAMessageRefusal(typeName ByteArray, handleName ByteArr
 	return "`type {String.from(typeName)}` declares no `{String.from(member)}`, so `{String.from(handleName)}` has no such message. A handle's surface is exactly the service's `export` instance methods"
 end 'serviceNotAMessageRefusal'
 
-// ⭐ **THE WORDS FOR A SEND WHOSE VALUE THE AUTHOR TRIED TO USE.** SV1 delivers no reply, so a message has
-// no value — and the author who bound one is asking for the awaitable form, which is a thing that will
-// exist. E2015, therefore, and the sentence names the row that builds it.
+// ⭐ **THE WORDS FOR A SEND WHOSE VALUE THE AUTHOR TRIED TO USE.** A message that returns nothing and throws
+// nothing is FIRE-AND-FORGET by construction — it carries no `__reply` slot, so there is no cell, no promise
+// and nothing to bind. The cure is on the DECLARATION rather than at the call, which is what the sentence
+// says: give the message a `returns` clause or a `throws` clause and its send becomes awaitable.
 module function serviceSendHasNoValueRefusal(typeName ByteArray, member ByteArray) returns String
-	return "the value of `{String.from(typeName)}.{String.from(member)}` sent as a MESSAGE — a fire-and-forget send delivers no reply, so there is nothing to bind. The awaitable form `try await <handle>.{String.from(member)}(…)`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2. Send it as a statement, or reach the value another way"
+	return "the value of `{String.from(typeName)}.{String.from(member)}` sent as a MESSAGE — it returns nothing and throws nothing, so it carries no reply slot and a send of it delivers no value. Give it a `returns` clause or a `throws` clause and `try await <handle>.{String.from(member)}(…)` resolves through a reply cell; otherwise send it as a statement"
 end 'serviceSendHasNoValueRefusal'
 
 // ⭐ **THE WORDS FOR A `try` ON A SEND**, and it is a SENTENCE rather than a rejection for the reason
@@ -443,7 +526,7 @@ end 'serviceSendHasNoValueRefusal'
 // and `try` is exactly its first token. Refusing it as *"`try` must be applied to a call"* would be true and
 // useless.
 module function serviceSendCannotBeTriedRefusal(callee ByteArray) returns String
-	return "`try` on the message `{String.from(callee)}` — a fire-and-forget send carries no reply and so can deliver no error. The awaitable form `try await <handle>.<message>(…)`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2"
+	return "`try` on the message `{String.from(callee)}` — a SEND is not the reply. It enqueues and returns, so it can fail at nothing; what carries an error is the reply, and awaiting it is what makes that error this frame's. Write `try await <handle>.<message>(…)`, or drop the `try` on a message that returns nothing and throws nothing"
 end 'serviceSendCannotBeTriedRefusal'
 
 // ⭐ **WHAT ONE MESSAGE ARGUMENT IS**, its twin one construct over. Here the author DID name the value's
@@ -503,9 +586,15 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 	return payloads
 end 'serviceRequestPayloads'
 
-// Does this message deliver a reply? A value-returning message obviously does; a THROWING one does too, and
-// that is the half a `returns`-only test would miss — `try await h.wipe()` on a `function wipe() throws E`
+// Does this DECLARATION deliver a reply? A value-returning message obviously does; a THROWING one does too,
+// and that is the half a `returns`-only test would miss — `try await h.wipe()` on a `function wipe() throws E`
 // has an error to carry back and nothing else.
+//
+// ⚠ **IT IS THE BUILDER'S QUESTION AND NOT THE AUTHORITY EVERY OTHER SITE READS (SV2).** What decides
+// whether a SEND mints a cell, whether the loop completes one and whether the abandon path answers
+// `stopped` is `serviceReplySlotIndex` — asked of the VARIANT this answer built — because variant 0 carries
+// a reply slot with no declaration behind it at all (the compiler's `__shutdown` pill, whose completion
+// `await h.shutdown()` is), and a second by-name test would answer `false` for exactly that one.
 function serviceMessageHasAReply(signatures ProgramSignatures, key ByteArray, decl OverloadedDecl) returns bool
 	if not maxonReturnTypeIsVoid(decl.returnType) 'returnsAValue'
 		return true
@@ -516,6 +605,107 @@ function serviceMessageHasAReply(signatures ProgramSignatures, key ByteArray, de
 		throwing gives true
 	end 'throws'
 end 'serviceMessageHasAReply'
+
+// ⭐⭐ **WHICH PAYLOAD SLOT OF ONE VARIANT IS THE `__reply` CELL, IF ANY — THE ONE AUTHORITY THREE SITES
+// READ (SV2).** The send mints a cell into it (`Parser.fillMessageReplySlot`), the loop completes what it
+// finds there (`ServiceLoop.buildServiceArm`) and the abandon path answers `ServiceError.stopped` into it
+// (`ServiceLoop.buildServiceAbandon`) — and a disagreement between any two of them is a HANG: a cell minted
+// by a send the loop never completes leaves its awaiter parked for ever, with no leak and no diagnostic.
+//
+// It is asked of the PAYLOAD LIST rather than of the declaration for the reason `serviceMessageHasAReply`
+// records: variant 0's slot has no declaration behind it.
+module function serviceReplySlotIndex(payloads PayloadFieldArray) returns ServiceReplySlotIndex
+	for slot in 0 upto payloads.count() 'eachSlot'
+		let field = try payloads.get(slot) otherwise panic("serviceReplySlotIndex: payloads.get OOB at {slot} on a list walked to its own count")
+		if field.name.equals(ServiceReplySlotName) 'theReplySlot'
+			return ServiceReplySlotIndex.at(slot)
+		end 'theReplySlot'
+	end 'eachSlot'
+
+	return ServiceReplySlotIndex.absent
+end 'serviceReplySlotIndex'
+
+// The answer above, as a union rather than a sentinel index: a fire-and-forget message has NO reply slot,
+// and `-1` would be a number every reader had to remember not to index with.
+module union ServiceReplySlotIndex
+	absent
+	at(slot CaseIndex)
+end 'ServiceReplySlotIndex'
+
+// ⭐⭐⭐ **THE REPLY'S ERROR UNION IS `{ServiceError, throwsOf(<message>)}`, AND ITS TWO POSITIONS ARE
+// COMPUTED HERE ONCE FOR BOTH SIDES OF THE WIRE (SV2).** A reply carries ONE error word, and what that word
+// holds is the FUSED ORDINAL of a two-member dispatch line — exactly the line a block-form `try` builds when
+// its body routes two error types, and placed by exactly the same arithmetic
+// (`Parser.fusedPlacementAtTheBias` / `fusedPlacementAt`), so `match e` over a reply is an ordinary enum
+// match and needs no second dispatch engine.
+//
+// ⛔⛔ **THE TWO SIDES ARE IN DIFFERENT PROCESSES OF THE COMPILER AND MUST AGREE TO THE DIGIT.**
+// `ServiceLoop.buildServiceArm` SHIFTS the handler's raw error flag by `offset - ErrorFlagOrdinalBias`
+// before writing it into the cell, and `Parser.serviceReplyErrorMembers` builds the layout the awaiter's
+// `match e` dispatches against from the same offsets. A disagreement is not a crash: it is an arm running
+// for a case that was not raised.
+//
+// ⭐ **THE TRANSPORT MEMBER IS FIRST AND PINNED AT THE BIAS**, which is what makes a message that throws
+// NOTHING cost nothing at all: its reply's only member is `ServiceError`, its fused ordinal IS the ordinary
+// `ordinal + bias` flag, and the awaiter binds a plain `ServiceError` with no union machinery anywhere.
+// ⭐⭐ **THE ERROR WORD `<T>.__abandon` WRITES: `ServiceError.stopped`, ALREADY FUSED (SV2).** The transport
+// member is pinned at `ErrorFlagOrdinalBias`, so its fused ordinal IS the ordinary scalar error flag
+// `ordinal + bias` — which is why a message that throws nothing needs no shift anywhere and its awaiter
+// binds a plain `ServiceError`.
+//
+// ⚠ **IT TRANSCRIBES AN ORDINAL, WHICH IS WHY `Project.BuiltinErrorOrdinalCheck` HAS A ROW FOR THIS
+// FAMILY.** The number this returns is written into a word another green thread decodes against the
+// DECLARED layout, so a reordering of `stdlib/Builtins.maxon`'s cases with this transcription left behind
+// would select the wrong arm silently. SV1 correctly added no such row — nothing transcribed the ordinal
+// then — and this is the site that makes it due.
+module function serviceStoppedErrorFlag(signatures ProgramSignatures) returns ParsedInt
+	let layout = serviceReplyErrorLayout(signatures, errorName: ServiceErrorTypeName)
+	let index = layout.indexOfCase(ServiceErrorStoppedCaseName)
+	if index >= layout.caseCount() 'noStoppedCase'
+		panic("serviceStoppedErrorFlag: `enum {String.from(ServiceErrorTypeName)}` declares no `{String.from(ServiceErrorStoppedCaseName)}` case — `stdlib/Builtins.maxon` declares it and `Project.BuiltinErrorOrdinalCheck` verifies the transcription, so reaching here means the stdlib this program was compiled against is not the one that declares it")
+	end 'noStoppedCase'
+
+	return layout.tagOfIndex(index) + ErrorFlagOrdinalBias
+end 'serviceStoppedErrorFlag'
+
+module function serviceReplyTransportPlacement(signatures ProgramSignatures) returns FusedPlacement
+	return fusedPlacementAtTheBias(enumTagSpan(serviceReplyErrorLayout(signatures, errorName: ServiceErrorTypeName)))
+end 'serviceReplyTransportPlacement'
+
+// The HANDLER member's position — the slice one past the transport member's top. `tooWide` is a real answer
+// and not a compiler bug: a FLOAT-backed error enum's tags are IEEE-754 bit patterns and one spanning a
+// negative and a positive double is wider than the whole i64 line, so such a message is refused at the send
+// (`Parser.requireServiceReplyIsCarriable`) rather than silently mis-dispatched.
+module function serviceReplyHandlerPlacement(signatures ProgramSignatures, errorName ByteArray) returns FusedPlacement
+	return fusedPlacementAt(serviceReplyTransportPlacement(signatures).top + 1, span: enumTagSpan(serviceReplyErrorLayout(signatures, errorName: errorName)))
+end 'serviceReplyHandlerPlacement'
+
+// ⭐⭐ **WHAT `<T>.__loop` ADDS TO A HANDLER'S OWN ERROR FLAG BEFORE WRITING IT INTO THE CELL (SV2).** A
+// scalar flag is `ordinal + ErrorFlagOrdinalBias` and the fused ordinal is `ordinal + offset`, so the shift
+// is exactly `offset - bias` — and it is ZERO for a message that throws nothing, which is the case where
+// nothing is emitted at all.
+//
+// ⚠ It is the same `offset` `Parser.serviceReplyErrorMembers` builds the awaiter's dispatch table from,
+// read through the same function. A second derivation is an arm running for a case that was not raised.
+module function serviceReplyHandlerFusedShift(signatures ProgramSignatures, errorName ByteArray) returns ParsedInt
+	let placement = serviceReplyHandlerPlacement(signatures, errorName: errorName)
+	if not placement.fusable 'refusedAtTheSpawn'
+		panic("serviceReplyHandlerFusedShift: `{String.from(errorName)}` cannot be placed on a reply's fused error line — `classifyServiceRoster` refuses such a message at the `spawn` (E3140), so no loop is ever synthesized for one")
+	end 'refusedAtTheSpawn'
+
+	return placement.offset - ErrorFlagOrdinalBias
+end 'serviceReplyHandlerFusedShift'
+
+// The layout of one member of a reply's error union. An UNDECLARED name answers an EMPTY layout rather than
+// panicking: `ServiceError` is declared by `stdlib/Builtins.maxon`, so its absence means a program compiled
+// without the stdlib, and a message throwing a type nothing declares is a program `SemanticCheck` refuses
+// with its own diagnostic — neither is this function's to report.
+module function serviceReplyErrorLayout(signatures ProgramSignatures, errorName ByteArray) returns EnumLayout
+	return match signatures.enumOf(errorName) 'e'
+		declared(layout) gives layout
+		undeclared gives EnumLayout.create(errorName, isUnion: false, conformsTo: sharedEmptyDeclaredConformances, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
+	end 'e'
+end 'serviceReplyErrorLayout'
 
 // Append one variant with the AUTO-INCREMENT tag its declaration position gives it. The tag is DERIVED from
 // the case count rather than written down, exactly as `Project.addBuiltinEnumCase` derives a builtin error

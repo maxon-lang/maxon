@@ -57,7 +57,22 @@ let MboxOffRefs = 0x28 as ByteOffset
 // A closure-based mailbox could not know what to free, which is `SERVICES_DESIGN.md`'s own argument for the
 // synthesized union.
 let MboxOffAbandonFn = 0x30 as ByteOffset
-let MboxStructSize = 0x38 as ParsedInt
+
+// ⭐⭐ **THE `__shutdown` PILL'S REPLY CELL, PARKED HERE UNTIL THE SERVICE HAS FINISHED (SV2), OR 0.** It is
+// what makes `await h.shutdown()` a real DRAINED rendezvous rather than a "the pill was dequeued" one: the
+// loop's pill arm stores the cell here and `__mbox_service_exit` — the loop's last act, after the queue is
+// drained and the state is dropped — answers it. `ServiceLoop.buildServiceArm` states why it is a mailbox
+// word rather than a value threaded through the drain loop as a block argument.
+//
+// ⚠ **IT IS WRITTEN AND READ BY THE SERVICE'S OWN GREEN THREAD ONLY**, which is why it is a plain store
+// where the four words above it are `__sched_lock`'s: nothing else in the process can reach a mailbox's
+// shutdown cell, because nothing else runs `<T>.__loop`.
+//
+// ⚠ EXPORTED, unlike its six siblings, because the site that WRITES it is the Maxon-tier `<T>.__loop`
+// (`ServiceLoop`) while the site that reads it is `__mbox_service_exit` here — the two files must spell one
+// number, which is `GtParkKindMailbox`'s rule read from the other end.
+export let MboxOffShutdownReply = 0x38 as ByteOffset
+let MboxStructSize = 0x40 as ParsedInt
 
 // An envelope: the intrusive link and the request box. 16 bytes out of the slab, freed the moment its box is
 // handed to the loop — the queue costs one small allocation per message and nothing while it is empty.
@@ -121,6 +136,15 @@ export let MboxHandleDropBoxName = b"__mbox_handle_drop_box"
 // tail of every synthesized `<T>.__loop`.
 export let MboxServiceExitName = b"__mbox_service_exit"
 
+// ⭐⭐ **`__mbox_abandon(mbox, box)` — GIVE ONE UNDELIVERED REQUEST TO THIS MAILBOX'S OWN ABANDON FUNCTION
+// (SV2).** Both roads to an abandoned message reach `<T>.__abandon`, and they reach it from opposite tiers:
+// `__mbox_send`'s closed arm has the mailbox in a register, and the loop's DRAIN is Maxon-tier code that
+// cannot NAME the symbol — `<T>.__abandon` is synthesized, so a call to it by name is `E3004: call to
+// undefined function` from the very pass that walks the synthesized body (MEASURED, on all 23 running
+// service cases at once). Asking the mailbox is what both can do, and it also means the drain and the send
+// cannot come to abandon through two different functions.
+export let MboxAbandonName = b"__mbox_abandon"
+
 // ⭐⭐ **INSTALL THE MAILBOX RUNTIME — behind `usesGt`, at its CALL SITE, exactly as `installSchedRuntime`
 // is.** There is no program that wants a mailbox without the green-thread substrate under it: `__svc_spawn`
 // calls `__gt_spawn_green` and every wake goes through `__sched_publish_locked`. And there is no bit of its
@@ -136,6 +160,7 @@ export function installMailboxRuntime(module StdModule)
 	buildMboxHandleCloneBox(module)
 	buildMboxHandleDropBox(module)
 	buildMboxServiceExit(module)
+	buildMboxAbandon(module)
 end 'installMailboxRuntime'
 
 // ⭐⭐ **THE WAKE, WRITTEN ONCE FOR THE TWO EVENTS THAT OWE IT — an arriving envelope and a close.** Both
@@ -274,8 +299,7 @@ function buildMboxSend(module StdModule)
 	// LEAVE would release nothing, which is the silent hang `GtRuntime.GtRunnerDoneName` records for the
 	// neighbouring rule.
 	emitSchedLockLeave(module, block: abandon, ids: ids)
-	let abandonFn = emitLoadField(module, block: abandon, record: mbox, offset: MboxOffAbandonFn, ids: ids)
-	module.appendOp(abandon, op: StdOp.callIndirect(ids.mint(), calleeReg: abandonFn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(box)))
+	module.appendOp(abandon, op: StdOp.call(ids.mint(), callee: MboxAbandonName, args: twoArgs(mbox, second: box)))
 	module.setTerminator(abandon, op: StdOp.branch(doneBlock.id))
 
 	// The envelope is cut from the slab INSIDE the scheduler lock, which is the allowed nesting direction:
@@ -482,11 +506,18 @@ function buildMboxServiceExit(module StdModule)
 	var entry = module.addBlock(func, label: b"entry")
 	var freeMbox = module.addBlock(func, label: b"exitfree")
 	var doneBlock = module.addBlock(func, label: b"exitdone")
+	var answerShutdown = module.addBlock(func, label: b"exitanswershutdown")
+	var ownerDone = module.addBlock(func, label: b"exitownerdone")
 
 	emitParams(module, block: entry, count: 1)
 	let mbox = 0 as ValueId
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
 
+	// ⭐⭐ **THE PILL'S REPLY IS READ BEFORE THE MAILBOX CAN BE FREED, AND ANSWERED AFTER (SV2).** The load has
+	// to precede the release below — this thread may be the mailbox's last owner — while the completion has
+	// to follow the state drop the loop performed one call earlier, which is the whole point of parking the
+	// cell on the mailbox rather than completing it in the pill's arm.
+	let shutdownReply = emitLoadField(module, block: entry, record: mbox, offset: MboxOffShutdownReply, ids: ids)
 	let priorRefs = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffRefs, delta: MboxCountDown, ids: ids)
 	let wasLastRef = emitMboxWasLastOwner(module, block: entry, prior: priorRefs, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
@@ -494,11 +525,37 @@ function buildMboxServiceExit(module StdModule)
 	module.appendOp(freeMbox, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(mbox)))
 	module.setTerminator(freeMbox, op: StdOp.branch(doneBlock.id))
 
-	module.appendOp(doneBlock, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(selfGt)))
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	// A service stopped by its LAST HANDLE DROP never received a pill, so the slot is the slab's zero and
+	// there is nothing to answer.
+	let noReply = emitConst(module, block: doneBlock, value: 0, ids: ids)
+	let hasReply = emitCmp(module, block: doneBlock, a: shutdownReply, b: noReply, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(doneBlock, op: StdOp.condBranch(hasReply, thenBlockId: answerShutdown.id, elseBlockId: ownerDone.id))
+
+	module.appendOp(answerShutdown, op: StdOp.call(ids.mint(), callee: GtCellCompleteName, args: threeArgs(shutdownReply, second: noReply, third: noReply)))
+	module.setTerminator(answerShutdown, op: StdOp.branch(ownerDone.id))
+
+	module.appendOp(ownerDone, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(selfGt)))
+	module.setTerminator(ownerDone, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildMboxServiceExit'
+
+// `__mbox_abandon(mbox, box)`. See `MboxAbandonName`.
+function buildMboxAbandon(module StdModule)
+	var func = IrFunction.createFromStd(MboxAbandonName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let mbox = 0 as ValueId
+	let box = 1 as ValueId
+
+	let abandonFn = emitLoadField(module, block: entry, record: mbox, offset: MboxOffAbandonFn, ids: ids)
+	module.appendOp(entry, op: StdOp.callIndirect(ids.mint(), calleeReg: abandonFn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(box)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMboxAbandon'
 
 // ⭐⭐ **WHAT `__gt_register_park`'s MAILBOX ARM DOES — emitted HERE because the mailbox's fields are this
 // file's, and the arm is one act over them (W218's second half).** The caller holds `__sched_lock` and has

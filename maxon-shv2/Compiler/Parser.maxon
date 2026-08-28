@@ -1513,6 +1513,12 @@ export union ParseError implements Error
 	// export boundary deliberately left off the handle, which is the property that makes a self-send
 	// unspellable. The sentence has to say that or it reads as a typo.
 	serviceNotAMessage(explanation String, line LineNumber, column ColumnNumber)
+	// ⭐ **THE FIFTH (SV2), AND IT IS ABOUT WHAT COMES BACK RATHER THAN ABOUT WHAT GOES OUT.** Every arm above
+	// refuses a value CROSSING TO the service; this one refuses a message whose REPLY will not fit the two
+	// words a cell carries. It fires at the same `spawn` for the same reason — `<T>.__loop` is synthesized
+	// from the declaration, so a message the cell cannot carry would put a wrong-width store in a body the
+	// service really runs, whether or not the program ever sends one.
+	serviceReplyNotCarriable(explanation String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -1563,8 +1569,22 @@ export typealias DeferredNameDiagnosticArray = Array with DeferredNameDiagnostic
 
 // The result of recovering a promise handle's AWAITED callee name from its defining `asyncCall`
 // (P1.5-B2b) — `found` for a real async spawn's result, `none` for a value that is not one.
+// ⭐⭐ **WHAT AN AWAITABLE SEND HANDS BACK (SV2) — a reply CELL, or nothing at all.** A union rather than a
+// bare `ValueId` plus a flag: a fire-and-forget message has NO cell, and a zero ValueId is a real SSA value
+// (`v0` is a function's first parameter), so a sentinel here would name one.
+union ServiceReplyValue
+	fireAndForget
+	cell(promise ValueId)
+end 'ServiceReplyValue'
+
 union AsyncCalleeLookup
 	found(callee ByteArray)
+	// ⭐ **A SERVICE REPLY CELL (SV2)** — a promise whose defining op is a `serviceReplyCell`, naming the
+	// MESSAGE whose reply it will carry. It is a distinct arm rather than a second `found` because the two
+	// roads describe the promise differently at every door: an `async` spawn's facts come off the callee's
+	// own signature, a reply's off the message's PLUS `ServiceError`, which the callee's signature does not
+	// mention and never will.
+	serviceReply(messageName ByteArray)
 	none
 end 'AsyncCalleeLookup'
 
@@ -1591,8 +1611,20 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		errorFlagEncode gives AsyncCalleeLookup.none
 		// A `spawn` mints a MAILBOX pointer, not a promise; a send mints nothing.
 		serviceSpawn to serviceSend gives AsyncCalleeLookup.none
+		// ⭐ A REPLY CELL mints a promise, and this is the road `awaitedPromiseFacts` finds it by (SV2).
+		serviceReplyCell(result, messageName) gives serviceReplyIfEqual(result, messageName: messageName, promise: promise)
 	end 'op'
 end 'asyncCalleeIfMatch'
+
+// `serviceReply(messageName)` when `result` IS the tracked promise (this `serviceReplyCell` minted it),
+// else `none` — `foundCalleeIfEqual`'s twin one road over, split for its reason: a match arm cannot host the
+// equality test inline.
+function serviceReplyIfEqual(result ValueId, messageName ByteArray, promise ValueId) returns AsyncCalleeLookup
+	if result == promise 'eq'
+		return AsyncCalleeLookup.serviceReply(messageName)
+	end 'eq'
+	return AsyncCalleeLookup.none
+end 'serviceReplyIfEqual'
 
 // `found(callee)` when `result` IS the tracked promise (this `asyncCall` minted it), else `none`.
 function foundCalleeIfEqual(result ValueId, callee ByteArray, promise ValueId) returns AsyncCalleeLookup
@@ -8564,7 +8596,11 @@ end 'TryHandler'
 //                   flag is a box pointer or an `ordinal + bias`.
 union IfCondition
 	plain(test ValueId)
-	tryCatch(test ValueId, result ValueId, flag ValueId, errorType MaxonType)
+	// ⚠ **IT CARRIES THE CAUGHT-ERROR FORM AS WELL AS THE TYPE SINCE SV2**, because a SERVICE REPLY's `(e)`
+	// binds a synthesized two-member union rather than one declared enum — and the `else` branch that decodes
+	// it is parsed a long way from the `try` target that decided which. Carrying only the type would have made
+	// `if try await h.divide(…) 'ok' … else (e) 'bad' match e …` bind `e` to a name no registry holds.
+	tryCatch(test ValueId, result ValueId, flag ValueId, errorType MaxonType, form CaughtErrorForm)
 end 'IfCondition'
 
 // The optional success binder in front of a catching condition — `if let x = try …` / `if var x = try …`.
@@ -8579,7 +8615,7 @@ end 'IfBinder'
 function ifConditionTest(cond IfCondition) returns ValueId
 	return match cond 'shape'
 		plain(test) gives test
-		tryCatch(test, _, _, _) gives test
+		tryCatch(test, _, _, _, _) gives test
 	end 'shape'
 end 'ifConditionTest'
 
@@ -8629,6 +8665,12 @@ union TryTarget
 	// SemanticCheck's E3004 reports the real mistake rather than an E3055 about a function that does not
 	// exist. A storage type has no such case: its clause is read off the type, which is always there.
 	promise(storageName ByteArray, throwsClause ThrowsClause)
+	// ⭐⭐ **A SERVICE REPLY (SV2): the MESSAGE's name, and nothing else.** Unlike `witness` and `promise` it
+	// carries no clause, because a reply's error type is not a fact anybody RECORDED — it is DERIVED, from
+	// `ServiceError` merged with whatever the message itself throws, and deriving it once at
+	// `tryTargetThrows` is what stops the plain-`await` reject (E3057), the `otherwise (e)` binding and the
+	// propagate check (E3059) from coming to three different answers about the same reply.
+	serviceReply(messageName ByteArray)
 end 'TryTarget'
 
 // ⭐⭐ **WHAT AN `await` NEEDS TO KNOW ABOUT ITS PROMISE, FROM WHICHEVER SOURCE HAS IT (P1.5-B2c).** A
@@ -8661,6 +8703,7 @@ function tryTargetNoun(target TryTarget, signatures ProgramSignatures) returns B
 		named(callee) gives tryTargetNamedNoun(callee, signatures: signatures)
 		witness(methodName, _) gives methodName
 		promise(storageName, _) gives storageName
+		serviceReply(messageName) gives messageName
 	end 'kind'
 end 'tryTargetNoun'
 
@@ -9295,7 +9338,11 @@ typealias TryBlockErrorMemberArray = Array with TryBlockErrorMember
 // travel together because they are one decision: `offset` is what a routed edge and the synthesized layout
 // both add to the member's own tag, `top` is the highest fused tag it can produce (where the next member
 // starts one past), and `fusable` says whether the arithmetic that produced them was performable at all.
-type FusedPlacement
+// ⚠ **`module` SINCE SV2**, whose reply error union is placed by the same arithmetic: `ServiceCompanions`
+// asks for the two members' positions and `ServiceLoop` reads the handler member's offset back to shift the
+// flag it writes into the cell. A second computation of the same line would be one fact in two places, and a
+// disagreement between them is a `match e` arm dispatching on the wrong member.
+module type FusedPlacement
 	export let fusable as bool
 	export let offset as ParsedInt
 	export let top as ParsedInt
@@ -9321,7 +9368,7 @@ let FusedTagFloor = I64MinBound + 4
 // ⭐ **PLACE A MEMBER WHOSE FUSED RANGE MUST START AT `floor`** — every member but the first scalar one.
 // The offset that achieves it is `floor - <the member's lowest tag>`, and both that subtraction and the
 // resulting top are checked before either is performed.
-function fusedPlacementAt(floor ParsedInt, span EnumTagSpan) returns FusedPlacement
+module function fusedPlacementAt(floor ParsedInt, span EnumTagSpan) returns FusedPlacement
 	return match span 'span'
 		// A declaration with no cases can throw nothing, so it occupies no position: the next member starts
 		// exactly where this one would have, and the layout contributes no fused case for it to collide with.
@@ -9359,7 +9406,7 @@ end 'fusedPlacementOfSpan'
 // ⭐ **PLACE THE FIRST SCALAR MEMBER, WHOSE OFFSET IS PINNED TO `ErrorFlagOrdinalBias`** — the one member
 // whose position is chosen rather than derived, because pinning it there makes its fused ordinal the FLAG
 // ITSELF and so costs a one-member block nothing. Only its top has to be checked.
-function fusedPlacementAtTheBias(span EnumTagSpan) returns FusedPlacement
+module function fusedPlacementAtTheBias(span EnumTagSpan) returns FusedPlacement
 	return match span 'span'
 		noCases gives FusedPlacement.create(ErrorFlagOrdinalBias, top: ErrorFlagOrdinalBias - 1)
 		spanning(_, high) gives FusedPlacement.tooWide() if high > FusedTagCeiling - ErrorFlagOrdinalBias else FusedPlacement.create(ErrorFlagOrdinalBias, top: high + ErrorFlagOrdinalBias)
@@ -31296,6 +31343,11 @@ export type Parser
 			named(callee) gives self.signatures.functionAlwaysThrows(callee)
 			witness gives false
 			promise gives false
+			// ⚠ **A REPLY ALWAYS THROWS `ServiceError` AND STILL ANSWERS `false` HERE, WHICH IS NOT A
+			// CONTRADICTION.** This asks whether the target throws on EVERY path — the fact that lets the ok
+			// edge be pruned — and a reply's transport failure is a fact about the SERVICE's state at
+			// delivery, not about the message's body. A service that is running answers normally.
+			serviceReply gives false
 		end 'shape'
 	end 'tryTargetAlwaysThrows'
 
@@ -31630,9 +31682,9 @@ export type Parser
 			// The error-flag encode is emitted by the ROUTER, never by a call's result production, so it can never be
 			// the reinterpretation sitting on top of one.
 			errorFlagEncode gives false
-			// Neither service op reinterprets a call's result — a spawn's result is a mailbox pointer it
-			// produced itself, and a send produces nothing.
-			serviceSpawn to serviceSend gives false
+			// No service op reinterprets a call's result — a spawn's result is a mailbox pointer it produced
+			// itself, a send produces nothing, and a reply cell produces a promise of its own.
+			serviceSpawn to serviceReplyCell gives false
 		end 'reinterpretation'
 	end 'opReinterpretsResultOf'
 
@@ -31657,9 +31709,9 @@ export type Parser
 			literal to panicAbortValue gives DiscardedCallee.notACall
 			// The error-flag encode defines a value, but never a CALL's result — this test is about a direct call's.
 			errorFlagEncode gives DiscardedCallee.notACall
-			// A `spawn` defines a mailbox pointer and a send defines nothing; neither is a direct call whose
-			// result a `try` or a discarded-result probe could be about.
-			serviceSpawn to serviceSend gives DiscardedCallee.notACall
+			// A `spawn` defines a mailbox pointer, a send defines nothing and a reply cell defines a promise;
+			// none is a direct call whose result a `try` or a discarded-result probe could be about.
+			serviceSpawn to serviceReplyCell gives DiscardedCallee.notACall
 		end 'producer'
 	end 'directCallDefining'
 
@@ -31737,6 +31789,9 @@ export type Parser
 			// exactly its first token. Refusing it as *"`try` must be applied to a call"* would be true and
 			// useless.
 			serviceSend(_, callee, _, _) gives try self.rejectTriedServiceSend(tryTok, callee: callee)
+			// A reply CELL is never the last op of a send expression — the `serviceSend` above it is — so this
+			// arm is the structural backstop, and it answers as every other non-call op does.
+			serviceReplyCell gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -31816,6 +31871,7 @@ export type Parser
 			for opIdx in block.opRefs 'eachOp'
 				match asyncCalleeIfMatch(try self.artifact.module.ops.get(opIdx) otherwise panic("resolveAsyncCallee: opIdx {opIdx} not in module.ops"), promise: promise) 'm'
 					found(callee) then return AsyncCalleeLookup.found(callee)
+					serviceReply(messageName) then return AsyncCalleeLookup.serviceReply(messageName)
 					none then break 'm'
 				end 'm'
 			end 'eachOp'
@@ -31824,6 +31880,7 @@ export type Parser
 		for incoming in self.phiIncomingValues(func, phi: promise) 'eachIncoming'
 			match self.resolveAsyncCallee(func, promise: incoming, visited: visited) 'r'
 				found(callee) then return AsyncCalleeLookup.found(callee)
+				serviceReply(messageName) then return AsyncCalleeLookup.serviceReply(messageName)
 				none then break 'r'
 			end 'r'
 		end 'eachIncoming'
@@ -31898,6 +31955,9 @@ export type Parser
 			named(callee) then try self.requireThrowingNamedTryTarget(callee, tryTok: tryTok)
 			witness(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
 			promise(storageName, throwsClause) then try requireThrowingClauseTryTarget(storageName, throwsClause: throwsClause, tryTok: tryTok)
+			// A reply ALWAYS throws `ServiceError`, whatever the message declares, so there is no
+			// non-throwing reply for E3055 to refuse — `tryTargetThrows` answers `throwing` for every one.
+			serviceReply then break 'kind'
 		end 'kind'
 	end 'requireThrowingTryTarget'
 
@@ -32373,11 +32433,11 @@ export type Parser
 
 		// Block forms own their caught box end-to-end (`parseOtherwiseBlock` enrols, binds and drops it).
 		if self.at(TokenKind.leftParen) 'bindingForm'
-			return try self.parseOtherwiseBinding(func, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: CaughtErrorForm.singleCall)
+			return try self.parseOtherwiseBinding(func, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, flag: flag))
 		end 'bindingForm'
 
 		if self.at(TokenKind.charLiteral) 'blockForm'
-			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: CaughtErrorForm.singleCall)
+			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, flag: flag))
 		end 'blockForm'
 
 		// ⭐ **THE NON-BLOCK FORMS DISCARD THE CAUGHT ERROR, SO ITS BOX MUST DROP HERE.** `otherwise ignore`,
@@ -32983,10 +33043,24 @@ export type Parser
 			edge.attachFusedOrdinal(ordinal)
 		end 'attachEach'
 
+		return ErrorUnionMatch.synthesized(fusedErrorUnionInfo(ctx.members, fusedOrdinal: fusedPhi))
+	end 'synthesizeErrorUnion'
+
+	// ⭐⭐ **THE DISPATCH TABLE FOR A FUSED ERROR UNION — the `(member, case)` pairs in member-then-declaration
+	// order, carrying the FUSED tags.** `ErrorUnionInfo`'s header says why it holds no payload slots and why
+	// it is registered nowhere.
+	//
+	// ⚠ **TWO CONSTRUCTS BUILD ONE (SV2), AND THEY DIFFER ONLY IN WHERE THE MEMBERS AND THE SUBJECT COME
+	// FROM.** A block-form `try` collects its members from what its body ROUTED and its subject is a phi over
+	// the throw edges; a service REPLY's two members are `ServiceError` and whatever the message declares,
+	// and its subject is the reply's error FLAG, which the service wrote already fused. Everything after that
+	// — the table, the ordering, the tag arithmetic — is one operation, and a second copy of it would be a
+	// `match e` arm selected by a table the other half did not build.
+	function fusedErrorUnionInfo(members TryBlockErrorMemberArray, fusedOrdinal ValueId) returns ErrorUnionInfo
 		var layout = EnumLayout.create(SynthesizedErrorUnionName, isUnion: true, conformsTo: ByteArrayArray.create(), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 		var caseMembers = TryBlockErrorMemberArray.create()
-		for m in 0 upto ctx.members.count() 'eachMember'
-			let member = try ctx.members.get(m) otherwise panic("synthesizeErrorUnion: members.get OOB at {m} on a list walked to its own count")
+		for m in 0 upto members.count() 'eachMember'
+			let member = try members.get(m) otherwise panic("fusedErrorUnionInfo: members.get OOB at {m} on a list walked to its own count")
 			for i in 0 upto member.layout.caseCount() 'eachCase'
 				// `declaresRawValue: false` is the literal truth and not a default: this layout exists only to
 				// dispatch the fused `match` and no value is ever TYPED by it, so nothing can interpolate one.
@@ -32995,8 +33069,60 @@ export type Parser
 			end 'eachCase'
 		end 'eachMember'
 
-		return ErrorUnionMatch.synthesized(ErrorUnionInfo.create(layout, caseMembers: caseMembers, fusedOrdinal: fusedPhi))
-	end 'synthesizeErrorUnion'
+		return ErrorUnionInfo.create(layout, caseMembers: caseMembers, fusedOrdinal: fusedOrdinal)
+	end 'fusedErrorUnionInfo'
+
+	// ⭐⭐ **WHAT `(e)` BINDS FOR A SINGLE-CALL `try` — and the ONE target shape that is not a single enum
+	// (SV2).** Every other target throws exactly one declared type, which `declareCaughtError` decodes; a
+	// SERVICE REPLY throws `{ServiceError, throwsOf(<message>)}`, and when the message really does throw that
+	// is TWO members with no declaration between them. So the reply hands the handler the same synthesized
+	// union a block-form `try` hands it, and every arm/dispatch/exhaustiveness rule downstream is the one
+	// that already exists.
+	//
+	// ⭐ **THE SUBJECT IS THE FLAG ITSELF, WHICH IS WHY THIS COSTS NOTHING AT RUN TIME.** A block-form `try`
+	// computes a fused ordinal per throw edge and merges them through a phi; a reply has ONE edge, and the
+	// SERVICE already wrote the fused ordinal into the cell's error word (`ServiceLoop.buildServiceArm`
+	// shifts the handler's flag by exactly the offset this table is built from). So `e` and the dispatch
+	// subject are one value and no op is emitted here at all.
+	function caughtErrorFormFor(target TryTarget, flag ValueId) returns CaughtErrorForm
+		match target 'kind'
+			named to promise then break 'kind'
+			serviceReply(messageName) then return self.serviceReplyCaughtForm(messageName, flag: flag)
+		end 'kind'
+
+		return CaughtErrorForm.singleCall
+	end 'caughtErrorFormFor'
+
+	// A reply's caught-error form: the fused union when the message throws, and the ORDINARY single-enum
+	// decode when it does not — one member is not a union, and `ServiceError` alone is a declared enum `e`
+	// can be bound at directly.
+	function serviceReplyCaughtForm(messageName ByteArray, flag ValueId) returns CaughtErrorForm
+		let members = self.serviceReplyErrorMembers(messageName)
+		if members.count() < 2 'oneErrorTypeIsNoUnion'
+			return CaughtErrorForm.singleCall
+		end 'oneErrorTypeIsNoUnion'
+
+		return CaughtErrorForm.blockForm(ErrorUnionMatch.synthesized(fusedErrorUnionInfo(members, fusedOrdinal: flag)))
+	end 'serviceReplyCaughtForm'
+
+	// ⭐⭐ **THE REPLY'S ERROR MEMBERS — `ServiceError` first, ALWAYS, then the message's own if it declares
+	// one.** The transport member is first because its position is what makes a non-throwing message's reply
+	// free: pinned at `ErrorFlagOrdinalBias`, its fused ordinal IS the flag, so nothing is shifted anywhere.
+	//
+	// ⚠ **NEITHER MEMBER IS BOXED, AND THAT IS ENFORCED RATHER THAN ASSUMED.** `ServiceError` is a
+	// payload-free enum in `stdlib/Builtins.maxon`, and a message whose `throws` names a payload-carrying
+	// union is refused at the send (`requireServiceReplyIsCarriable`) precisely so this stays true — a boxed
+	// member's fused ordinal is a LOAD out of the box, and there is no landing pad on a reply's one edge to
+	// put it in.
+	function serviceReplyErrorMembers(messageName ByteArray) returns TryBlockErrorMemberArray
+		var members = TryBlockErrorMemberArray.create()
+		members.push(TryBlockErrorMember.create(ServiceErrorTypeName, clause: ThrowsClause.throwing(String.from(ServiceErrorTypeName)), isBoxed: false, layout: serviceReplyErrorLayout(self.signatures, errorName: ServiceErrorTypeName), placement: serviceReplyTransportPlacement(self.signatures)))
+
+		let clause = self.signatures.throwsOf(messageName)
+		let errorName = try throwsClauseName(clause) otherwise return members
+		members.push(TryBlockErrorMember.create(errorName.toByteArray(), clause: clause, isBoxed: false, layout: serviceReplyErrorLayout(self.signatures, errorName: errorName.toByteArray()), placement: serviceReplyHandlerPlacement(self.signatures, errorName: errorName.toByteArray())))
+		return members
+	end 'serviceReplyErrorMembers'
 
 	// The value one recorded edge contributes to the fused phi. The two SCALAR shapes settled theirs where the
 	// edge was built (`routedEdgeFusedValue`); a BOXED member's is emitted HERE, into the landing pad that
@@ -33759,8 +33885,30 @@ export type Parser
 			named(callee) gives self.signatures.throwsOf(callee)
 			witness(_, throwsClause) gives throwsClause
 			promise(_, throwsClause) gives throwsClause
+			serviceReply(messageName) gives ThrowsClause.throwing(self.serviceReplyErrorTypeName(messageName))
 		end 'kind'
 	end 'tryTargetThrows'
+
+	// ⭐⭐ **WHAT A REPLY THROWS, AS A NAME (SV2).** A reply ALWAYS carries `ServiceError` — a service can be
+	// gone, whatever the message declares — so the answer is never `none`, which is what makes a plain
+	// `await h.m()` E3057 by construction and needs no rule of its own.
+	//
+	// ⭐ **ONE MEMBER IS A REAL NAME AND TWO ARE NOT, AND THAT ASYMMETRY IS THE FEATURE.** A message that
+	// throws nothing has `ServiceError` alone, an ordinary declared enum a `throws` clause can spell — so
+	// `function fetch(h Calc.handle) returns int throws ServiceError  return try await h.total()` PROPAGATES.
+	// A message that throws has a two-member union no declaration can name, and a bare `try` over it is
+	// therefore E3059 against whatever the enclosing function declares. The derived spelling
+	// `<message>.errors` is what that diagnostic quotes: it is `SERVICES_DESIGN.md`'s own `Calc.divide.errors`
+	// and it is a DIAGNOSTIC STRING, not a type reference — nothing resolves it, and it is deliberately not a
+	// name any registry holds, because a two-member union has no declaration for one to hold.
+	function serviceReplyErrorTypeName(messageName ByteArray) returns String
+		match self.signatures.throwsOf(messageName) 'handlerThrows'
+			none then return String.from(ServiceErrorTypeName)
+			throwing then break 'handlerThrows'
+		end 'handlerThrows'
+
+		return "{String.from(messageName)}.{String.from(ServiceReplyErrorSuffix)}"
+	end 'serviceReplyErrorTypeName'
 
 	function tryErrorEnumType(throwsClause ThrowsClause) returns MaxonType
 		return match throwsClause 'k'
@@ -36332,7 +36480,7 @@ export type Parser
 	function parseElseBody(func IrFunction, elseBlock IrBlock, cond IfCondition, ifTok Token) returns IrBlock throws ParseError
 		match cond 'shape'
 			plain then break 'shape'
-			tryCatch(_, _, flag, errorType) then return try self.parseCatchingElseBody(func, elseBlock: elseBlock, flag: flag, errorType: errorType, ifTok: ifTok)
+			tryCatch(_, _, flag, errorType, form) then return try self.parseCatchingElseBody(func, elseBlock: elseBlock, flag: flag, errorType: errorType, form: form, ifTok: ifTok)
 		end 'shape'
 
 		try self.consume(TokenKind.else)
@@ -36367,7 +36515,7 @@ export type Parser
 	// ⭐ **IT RUNS EVEN WHEN NO `else` IS WRITTEN**, because the error edge exists either way and a caught box
 	// has to die on it. With nothing written the branch is empty: the release is all it holds and it falls
 	// straight through to the merge, carrying the entry values the caller already restored.
-	function parseCatchingElseBody(func IrFunction, elseBlock IrBlock, flag ValueId, errorType MaxonType, ifTok Token) returns IrBlock throws ParseError
+	function parseCatchingElseBody(func IrFunction, elseBlock IrBlock, flag ValueId, errorType MaxonType, form CaughtErrorForm, ifTok Token) returns IrBlock throws ParseError
 		let elseWritten = self.at(TokenKind.else)
 		let ownedFloor = self.ownedBindings.count()
 		self.scope.pushScope()
@@ -36389,7 +36537,7 @@ export type Parser
 		// The decode (and, for a boxed error, the enrolment) belongs at the TOP of the error edge — before a
 		// nested `else if`'s own condition, and before the written body's first statement.
 		self.currentBlock = elseBlock
-		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, form: CaughtErrorForm.singleCall, anchor: anchor)
+		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, form: form, anchor: anchor)
 
 		var elseEnd = elseBlock
 		if elseWritten 'writtenBody'
@@ -36538,14 +36686,14 @@ export type Parser
 
 		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryTok))
 		let test = try self.emitCompare(flag, rhs: zero, op: MaxonCmpOp.eq, opTok: tryTok)
-		return IfCondition.tryCatch(test, result: result, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)))
+		return IfCondition.tryCatch(test, result: result, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, flag: flag))
 	end 'parseCatchingCondition'
 
 	// Parse the then branch's body, giving a catching `if`'s success value the home its condition could not.
 	function parseIfThenBody(func IrFunction, thenBlock IrBlock, label ByteArray, cond IfCondition, binder IfBinder, anchor Token) returns IrBlock throws ParseError
 		match cond 'shape'
 			plain then break 'shape'
-			tryCatch(_, result, _, _) then return try self.parseCaughtThenBody(func, thenBlock: thenBlock, label: label, result: result, binder: binder, anchor: anchor)
+			tryCatch(_, result, _, _, _) then return try self.parseCaughtThenBody(func, thenBlock: thenBlock, label: label, result: result, binder: binder, anchor: anchor)
 		end 'shape'
 
 		return try self.parseBlockBody(func, block: thenBlock, label: label)
@@ -38070,8 +38218,8 @@ export type Parser
 			call(result, callee, _, _, _, _, _, _) then return result == source and throwsClauseIsIterationError(self.signatures.throwsOf(callee))
 			literal to switch then return false
 			witnessDispatch to errorFlagEncode then return false
-			// Neither service op is a throwing call whose result a `for … in` iterates.
-			serviceSpawn to serviceSend then return false
+			// No service op is a throwing call whose result a `for … in` iterates.
+			serviceSpawn to serviceReplyCell then return false
 		end 'op'
 	end 'sourceCameFromAnIterationThrowingCall'
 
@@ -45706,6 +45854,9 @@ export type Parser
 			// cross a green thread is a rule that will never relax, so E3135.
 			messageIsOverloaded then throw ParseError.unsupported(serviceRosterRefusalMessage(roster, typeName: typeTok.value), line: spawnTok.line, column: spawnTok.column)
 			messageParameterIsNotTransferable then throw ParseError.serviceValueNotTransferable(serviceRosterRefusalMessage(roster, typeName: typeTok.value), line: spawnTok.line, column: spawnTok.column)
+			// A reply the cell cannot carry is neither of those: it is about what comes BACK, and it has its
+			// own code (E3140) so a corpus can pin each separately.
+			messageReplyIsNotCarriable then throw ParseError.serviceReplyNotCarriable(serviceRosterRefusalMessage(roster, typeName: typeTok.value), line: spawnTok.line, column: spawnTok.column)
 		end 'roster'
 
 		// ⭐⭐ **THE FACTORY IS CALLED DIRECTLY, THROUGH THE ORDINARY STATIC-CALL DOOR.** `spawn Calc.create(…)`
@@ -52108,13 +52259,29 @@ export type Parser
 		end 'fill'
 	end 'transferPayloadsIntoAGreenThread'
 
-	// The loop, split from the `match` above so the arm stays one statement. Every payload goes through the ONE
-	// transfer door, the reply slot included — that slot is an integer, which `moveIntoGreenThread` passes
-	// through untouched, so it needs no case of its own here.
+	// The loop, split from the `match` above so the arm stays one statement. Every payload the AUTHOR wrote
+	// goes through the ONE transfer door.
+	//
+	// ⛔⛔ **THE `__reply` SLOT IS SKIPPED, AND SINCE SV2 THAT IS LOAD-BEARING RATHER THAN A SAVING.** This
+	// loop used to say the slot *"is an integer, which `moveIntoGreenThread` passes through untouched, so it
+	// needs no case of its own"* — true while a send filled it with a literal 0, and FALSE the moment a send
+	// mints a real cell: `moveIntoGreenThread`'s FIRST question is `valueIsPromise`, asked deliberately ahead
+	// of the scalar short-circuit, so the cell earned **E3135 naming `__reply` as the author's own argument**
+	// on every reply-bearing send in the suite.
+	//
+	// ⭐ **AND THE REFUSAL WOULD BE WRONG ON ITS OWN TERMS, NOT MERELY MISPLACED.** That rule is about a
+	// REFERENCE-COUNTED box reaching two green threads with a plain refcount between them. A cell is not
+	// refcounted: it is the two-party TEARDOWN RENDEZVOUS itself (`GtRuntime.GtOffTeardown`), whose whole
+	// design is that the sender and the service each hold it and each arrive at it exactly once. Handing it
+	// over IS the mechanism the rule exists to protect.
 	function moveMessagePayloads(serviceTypeName ByteArray, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) throws ParseError
 		for i in 0 upto payloads.count() 'eachPayload'
 			let arg = try args.get(i) otherwise panic("moveMessagePayloads: args.get OOB at {i} — the caller sized the columns to the variant's payload count")
 			let field = try payloads.get(i) otherwise panic("moveMessagePayloads: payloads.get OOB at {i} — the loop is bounded by that same count")
+			if field.name.equals(ServiceReplySlotName) 'theCompilersOwnCell'
+				continue
+			end 'theCompilersOwnCell'
+
 			let anchorIndex = try argAnchors.get(i) otherwise panic("moveMessagePayloads: argAnchors.get OOB at {i} — filled in lockstep with the args")
 			let blame = serviceSendArgumentBlame(serviceTypeName, methodName: caseTok.value, paramName: field.name)
 			try args.set(i, value: try self.moveIntoGreenThread(arg, blame: blame, anchor: self.tokenAt(anchorIndex))) otherwise panic("moveMessagePayloads: args.set OOB at {i}")
@@ -54388,7 +54555,7 @@ export type Parser
 		end 'aMessage'
 
 		if memberTok.value.equals(ServiceShutdownMethodName) 'thePoisonPill'
-			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, resultUsed: resultUsed)
+			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request)
 		end 'thePoisonPill'
 
 		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
@@ -54419,9 +54586,9 @@ export type Parser
 	// nothing to type. That is the same position a parser-intrinsic container mutator is in, and the refusal
 	// takes the same voice for the same reason (`SlotMismatchVoice.containerElementArgument`).
 	function emitServiceSend(func IrFunction, base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, resultUsed bool) returns ValueId throws ParseError
-		try self.requireServiceSendResultUnused(resultUsed, typeName: typeName, memberTok: memberTok)
-
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
+		try self.requireServiceSendResultUnused(resultUsed, request: request, caseIndex: caseIndex, typeName: typeName, memberTok: memberTok)
+
 		let memberIndex = self.pos
 		try self.consumeNameToken(NamePosition.declaration)
 		try self.consume(TokenKind.leftParen)
@@ -54452,11 +54619,11 @@ export type Parser
 		self.seedMessageSlots(payloads.count(), anchor: memberIndex, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
 
 		try self.slotMessageArgs(callee, args: args, argLabels: argLabels, argAnchors: argAnchors, memberIndex: memberIndex, slotValues: slotValues, filled: filled, slotAnchors: slotAnchors, memberTok: memberTok)
-		self.fillMessageReplySlot(payloads, slotValues: slotValues, filled: filled, range: range)
+		let reply = self.fillMessageReplySlot(payloads, callee: callee, slotValues: slotValues, filled: filled, range: range)
 		try self.requireEveryMessageArgumentGiven(callee, payloads: payloads, filled: filled, given: args.count(), memberTok: memberTok)
 
 		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
-		return self.emitServiceSendOp(base, box: box, callee: callee, range: range)
+		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, range: range)
 	end 'emitServiceSend'
 
 	// ⭐ **THE FOUR LAYOUT-PARALLEL COLUMNS A REQUEST BOX IS FILLED THROUGH, SEEDED FOR ONE VARIANT.** Both
@@ -54485,26 +54652,38 @@ export type Parser
 	// ⚠ The BOX is enrolled as an owned temporary by `emitEnumBox`, and it must be DRAINED here: the mailbox
 	// owns it from the moment the op is emitted, and the statement-end drop would free a request the service
 	// is about to read.
-	function emitServiceSendOp(base StructBase, box ValueId, callee ByteArray, range SourceRange) returns ValueId
+	function emitServiceSendOp(base StructBase, box ValueId, callee ByteArray, reply ServiceReplyValue, range SourceRange) returns ValueId
 		let mailbox = self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)
 		self.removeFromPendingTemps(box)
 		let sent = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.serviceSend(sent, callee: callee, handle: mailbox, request: box), range: range)
-		return sent
+
+		// ⭐ **THE VALUE OF AN AWAITABLE SEND IS ITS REPLY CELL, NOT THE SEND (SV2).** The `serviceSend` op
+		// still defines a void `sent` — it is a statement, and every op in this dialect names a result — but
+		// what the expression yields is the PROMISE the cell op minted one box earlier, which is what `await`
+		// and `try await` are then applied to.
+		return match reply 'r'
+			fireAndForget gives sent
+			cell(promise) gives promise
+		end 'r'
 	end 'emitServiceSendOp'
 
 	// ⭐ **`h.shutdown()` — THE COMPILER'S POISON PILL, ENQUEUED LIKE ANY OTHER MESSAGE.** Variant 0 carries
-	// only its reply slot, which SV1 fills with 0, so the box is built through the same `emitEnumBox` an
-	// author's message goes through and the drain behind it is the loop's.
-	function emitServiceShutdown(base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, resultUsed bool) returns ValueId throws ParseError
-		try self.requireServiceSendResultUnused(resultUsed, typeName: typeName, memberTok: memberTok)
-
+	// only its reply slot, so the box is built through the same `emitEnumBox` an author's message goes
+	// through and the drain behind it is the loop's.
+	//
+	// ⭐⭐ **IT TAKES NO `resultUsed`, AND THAT IS THE PILL'S OWN RULE RATHER THAN AN OMISSION (SV2).** Variant
+	// 0 ALWAYS carries a reply slot — `ServiceCompanions.buildServiceRequestUnion` gives it one to every
+	// request union there will ever be, because a graceful drain that could not be waited on would be a race
+	// written into the language — so `await h.shutdown()` is legal for every service and there is no
+	// value-position refusal left to make.
+	function emitServiceShutdown(base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout) returns ValueId throws ParseError
 		try self.consumeNameToken(NamePosition.declaration)
 		try self.consume(TokenKind.leftParen)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		let range = SourceRange.between(baseTok, last: rparenTok)
-		// ⭐ **THE PILL'S ONLY PAYLOAD IS THE REPLY SLOT, so the fill EVERY message's box takes fills the whole
+		// ⭐ **THE PILL'S ONLY PAYLOAD IS THE REPLY SLOT, so the mint EVERY message's box takes fills the whole
 		// variant here and there is no argument to slot.** `buildServiceRequestUnion` gives variant 0 exactly one
 		// payload, `__reply`, and gives it to every request union there will ever be — so this is not a shape
 		// this door assumes, it is the shape that door builds.
@@ -54514,10 +54693,11 @@ export type Parser
 		var bareLocal = BoolArray.create()
 		var slotAnchors = TokenIndexArray.create()
 		self.seedMessageSlots(payloads.count(), anchor: self.pos, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
-		self.fillMessageReplySlot(payloads, slotValues: slotValues, filled: filled, range: range)
+		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
+		let reply = self.fillMessageReplySlot(payloads, callee: callee, slotValues: slotValues, filled: filled, range: range)
 
 		let box = try self.emitEnumBox(request, caseIndex: ServiceShutdownCaseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
-		return self.emitServiceSendOp(base, box: box, callee: qualifiedMethodName(typeName, methodName: memberTok.value), range: range)
+		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, range: range)
 	end 'emitServiceShutdown'
 
 	// ⭐ **`h.clone()` — A SECOND HANDLE TO THE SAME SERVICE, NEVER A SECOND SERVICE.** It cannot take
@@ -54532,15 +54712,21 @@ export type Parser
 		return self.emitOwnedRuntimeResult(MboxHandleCloneBoxName, args: singletonArgs(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: SourceRange.between(baseTok, last: memberTok))
 	end 'emitServiceHandleClone'
 
-	// SV1's send delivers no reply, so there is no value for the author to bind. It is E2015 and not a type
-	// error because the awaitable form is a thing that WILL exist — SV2 — and the sentence names it.
-	function requireServiceSendResultUnused(resultUsed bool, typeName ByteArray, memberTok Token) throws ParseError
+	// ⭐ **A FIRE-AND-FORGET SEND STILL DELIVERS NO REPLY, SO THERE IS STILL NOTHING TO BIND (SV2).** A
+	// message that returns nothing and throws nothing carries no `__reply` slot, so no cell is minted and the
+	// send has no value — and the sentence now names the DECLARATION that would give it one rather than a
+	// rung that has landed.
+	function requireServiceSendResultUnused(resultUsed bool, request EnumLayout, caseIndex CaseIndex, typeName ByteArray, memberTok Token) throws ParseError
 		if not resultUsed 'aStatement'
 			return
 		end 'aStatement'
 
-		throw ParseError.unsupported(serviceSendHasNoValueRefusal(typeName, member: memberTok.value), line: memberTok.line, column: memberTok.column)
+		match serviceReplySlotIndex(request.payloadsAt(caseIndex)) 'reply'
+			at then return
+			absent then throw ParseError.unsupported(serviceSendHasNoValueRefusal(typeName, member: memberTok.value), line: memberTok.line, column: memberTok.column)
+		end 'reply'
 	end 'requireServiceSendResultUnused'
+
 
 	// Slot every source argument into the variant's payload column, through `argSlotPosition` — the one home
 	// of the label-to-position mapping, asked over the DECLARATION's own parameter names. A label naming no
@@ -54569,20 +54755,37 @@ export type Parser
 		end 'eachArg'
 	end 'slotMessageArgs'
 
-	// The reply slot SV1 does not use, pinned to 0. A message that returns nothing and throws nothing has no
-	// such slot at all (`ServiceCompanions.serviceMessageHasAReply`), so this fills what is there and nothing
-	// more — which is also why the loop below cannot be a fixed one-slot write.
-	function fillMessageReplySlot(payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, range SourceRange)
-		for slot in 0 upto payloads.count() 'eachSlot'
-			let field = try payloads.get(slot) otherwise panic("fillMessageReplySlot: payloads.get OOB at {slot}")
-			if not field.name.equals(ServiceReplySlotName) 'anArgument'
-				continue
-			end 'anArgument'
-
-			try slotValues.set(slot, value: self.emitLiteral(ServiceNoReplyCell, valueType: MaxonType.integer, range: range)) otherwise panic("fillMessageReplySlot: slotValues.set OOB at {slot}")
-			try filled.set(slot, value: true) otherwise panic("fillMessageReplySlot: filled.set OOB at {slot}")
-		end 'eachSlot'
+	// ⭐⭐ **MINT THE REPLY CELL AND SLOT IT (SV2) — the one place a send becomes awaitable.** A variant with a
+	// `__reply` payload gets a fresh cell; one without has no slot at all
+	// (`ServiceCompanions.serviceReplySlotIndex` is the authority) and this fills nothing.
+	//
+	// ⭐ **THE CELL IS SLOTTED AS AN ORDINARY INTEGER ARGUMENT, WHICH IS WHY THE OP GOES HERE AND NOT AT THE
+	// SEND.** `emitEnumBox` types each slot against the payload field and that field is `MaxonType.integer`
+	// deliberately — a raw cell pointer the P1.3 destructor cascade skips — so the cell has to EXIST before
+	// the box is built, and minting it here is what lets it ride the same fill every other argument does.
+	//
+	// ⚠ **AND IT IS ENROLLED AS AN OWNED PROMISE IN THE SAME BREATH**, exactly as `emitAsyncCall` enrols a
+	// spawn's: `markValuePromise` makes `await`/`try await`/E3100 see it, and `pendingTempDrops` makes an
+	// UNBOUND send (`h.say("a")` as a statement) drop it at statement end through `__gt_promise_drop` — the
+	// abandoned-cell road `services.reply-discarded-is-dropped-clean` pins.
+	function fillMessageReplySlot(payloads PayloadFieldArray, callee ByteArray, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
+		match serviceReplySlotIndex(payloads) 'reply'
+			absent then return ServiceReplyValue.fireAndForget
+			at(slot) then return self.mintServiceReplyCell(slot, callee: callee, slotValues: slotValues, filled: filled, range: range)
+		end 'reply'
 	end 'fillMessageReplySlot'
+
+	// The mint itself, split out because a `match` arm is ONE statement and this is five.
+	function mintServiceReplyCell(slot CaseIndex, callee ByteArray, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
+		let cell = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.markValuePromise(cell)
+		self.pendingTempDrops.push(cell)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.serviceReplyCell(cell, messageName: callee), range: range)
+
+		try slotValues.set(slot, value: cell) otherwise panic("mintServiceReplyCell: slotValues.set OOB at {slot} — the columns are sized to the variant's payload count and the slot came from that same list")
+		try filled.set(slot, value: true) otherwise panic("mintServiceReplyCell: filled.set OOB at {slot} — the columns are sized to the variant's payload count and the slot came from that same list")
+		return ServiceReplyValue.cell(cell)
+	end 'mintServiceReplyCell'
 
 	// Every payload slot the source was responsible for must have been given a value. Reported in the
 	// ARGUMENT-COUNT voice rather than the union's missing-field one, because what the author wrote is a call
@@ -63763,6 +63966,11 @@ export type Parser
 		if self.valueOwnsGreenThread(value) 'aSpawn'
 			match self.asyncCallCalleeOf(func, promise: value) 'callee'
 				found(callee) then return callee
+				// ⚠ A SERVICE REPLY may not be stored in a `Promise with …` and falls to the refusal below.
+				// Its error type is the reply's synthesized union, which the storage type's `ErrorType`
+				// argument cannot spell — so admitting it would let a container claim a `throws` it cannot
+				// name. `awaitAny` over an array of replies is SV3's, and needs that question answered first.
+				serviceReply then break 'callee'
 				none then break 'callee'
 			end 'callee'
 		end 'aSpawn'
@@ -73457,9 +73665,25 @@ export type Parser
 
 		match self.asyncCallCalleeOf(func, promise: promise) 'callee'
 			found(callee) then return AwaitedPromise.create(self.calleeReturnType(callee), tryTarget: TryTarget.named(callee))
-			none then panic("awaitedPromiseFacts: promise v{promise} is neither a stored promise nor defined by an `asyncCall` — `valueIsPromise` admits exactly those two, and every caller gates on it")
+			// ⭐ **THE THIRD ROAD (SV2): a SERVICE REPLY.** Its result is the message's declared return type,
+			// exactly as a spawn's is its callee's — the difference is entirely in the error type, which is
+			// `tryTargetThrows`' to derive.
+			serviceReply(messageName) then return AwaitedPromise.create(self.serviceReplyResultType(messageName), tryTarget: TryTarget.serviceReply(messageName))
+			none then panic("awaitedPromiseFacts: promise v{promise} is neither a stored promise nor defined by an `asyncCall` or a `serviceReplyCell` — `valueIsPromise` admits exactly those three, and every caller gates on it")
 		end 'callee'
 	end 'awaitedPromiseFacts'
+
+	// ⭐ **WHAT `await <reply>` YIELDS.** The message's declared return type, repaired through the same swept
+	// walk `calleeReturnType` uses — and VOID for a message nothing declares, which is the compiler's own
+	// `<T>.shutdown` pill rather than a doomed program. That is the one place the two differ:
+	// `calleeReturnType`'s undeclared arm is an `integer` PLACEHOLDER for a program SemanticCheck is about to
+	// reject with E3004, and the pill is a legal send whose reply really does carry nothing.
+	function serviceReplyResultType(messageName ByteArray) returns MaxonReturnType
+		return match self.signatures.returnTypeOf(messageName, into: self.artifact.typeNames) 'r'
+			declared(declaredReturn) gives self.repairSweptReturnType(declaredReturn)
+			undeclared gives MaxonReturnType.void
+		end 'r'
+	end 'serviceReplyResultType'
 
 	// **THE OPERAND'S TYPE AS THE `await` DIAGNOSTIC NAMES IT** — the value-KIND vocabulary (`integer`,
 	// `boolean`, `float`, `string`), which is NOT `typeTagName`'s ABI vocabulary (`int`, `bool`). The two
@@ -73509,11 +73733,18 @@ export type Parser
 			undeclared gives MaxonReturnType.value(MaxonType.integer)
 		end 'r'
 
+		return self.repairSweptReturnType(swept)
+	end 'calleeReturnType'
+
+	// The swept-type repair applied to a RETURN type — see `calleeReturnType`'s header for the two wrong
+	// answers an unrepaired one produced. Split out because the reply road (`serviceReplyResultType`) owes
+	// exactly the same repair and differs only in what it answers for a name nothing declares.
+	function repairSweptReturnType(swept MaxonReturnType) returns MaxonReturnType
 		return match swept 'repair'
 			void gives swept
 			value(inner) gives MaxonReturnType.value(self.repairSweptType(inner))
 		end 'repair'
-	end 'calleeReturnType'
+	end 'repairSweptReturnType'
 
 	// The declared return type of `callee` as a value tag, VOID included. The tag that TYPES the awaited
 	// value, so a ranged alias deliberately stays `named` here — see `asyncCarriedResultTag`.

@@ -1781,8 +1781,9 @@ error E3005: <fragment>:29:8: argument type mismatch for 'peer': expected 'Calc.
 ```
 
 <!-- test: error.a-send-may-not-be-tried -->
-A `try` on a send has nothing to catch in SV1: a fire-and-forget message delivers no reply and therefore no
-error. The refusal names the form that WILL carry one rather than reporting a syntax fault.
+A `try` on a SEND has nothing to catch: the send enqueues and returns, and it is the REPLY that carries an
+error. The refusal names the awaitable form rather than reporting a syntax fault — and for `bump`, which
+returns nothing and throws nothing, it names the other cure too: there is no reply at all, so drop the `try`.
 ```maxon
 type Calc
 	var n as int
@@ -1803,11 +1804,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:16:2: Unsupported: `try` on the message `Calc.bump` — a fire-and-forget send carries no reply and so can deliver no error. The awaitable form `try await <handle>.<message>(…)`, which resolves through a reply cell and merges the handler's error union with `ServiceError`, is SV2
+error E2015: <fragment>:16:2: Unsupported: `try` on the message `Calc.bump` — a SEND is not the reply. It enqueues and returns, so it can fail at nothing; what carries an error is the reply, and awaiting it is what makes that error this frame's. Write `try await <handle>.<message>(…)`, or drop the `try` on a message that returns nothing and throws nothing
 ```
 
-<!-- disabled-test: send-and-await-a-reply -->
-<!-- SV2: the reply cell -->
+<!-- test: send-and-await-a-reply -->
+<!-- targets: x64-windows -->
 A value-returning message is awaitable RPC.
 ```maxon
 type Calc
@@ -1837,8 +1838,8 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: a-message-throws-and-the-error-merges-with-serviceerror -->
-<!-- SV2: the reply cell and the two-member synthesized error union -->
+<!-- test: a-message-throws-and-the-error-merges-with-serviceerror -->
+<!-- targets: x64-windows -->
 The merge is always two-way — transport plus one handler.
 ```maxon
 enum MathError implements Error
@@ -1856,7 +1857,7 @@ type Calc
 		if by == 0 'zero'
 			throw MathError.divideByZero
 		end 'zero'
-		return n / by
+		return try (n / by) otherwise 0
 	end 'divide'
 end 'Calc'
 
@@ -1875,8 +1876,8 @@ end 'main'
 71
 ```
 
-<!-- disabled-test: a-call-after-shutdown-answers-stopped -->
-<!-- SV2: the reply cell resolves pending replies with ServiceError.stopped -->
+<!-- test: a-call-after-shutdown-answers-stopped -->
+<!-- targets: x64-windows -->
 A stopped service resolves its pending replies rather than hanging their awaiters.
 ```maxon
 type Calc
@@ -1906,20 +1907,26 @@ end 'main'
 9
 ```
 
-<!-- disabled-test: error.a-reply-may-not-alias-service-state -->
-<!-- SV2: the reply-escape rule at parseCheckedValueReturn -->
-A handler must not return a value reachable from `self`, or the caller ends up aliasing service state.
+<!-- test: error.a-reply-may-not-alias-service-state -->
+A handler must not return a value reachable from `self`, or the caller ends up aliasing service state — two
+green threads naming one box, with a plain refcount between them. `return self` is the shortest way to say it
+and the only one a service state can currently spell: a state record may hold nothing but scalars
+(`error.a-record-with-a-managed-field-may-not-cross`), so a FIELD read has nothing managed to hand back yet.
+
+⚠ The blame names the RETURN, and the note names the **`spawn`** that made the type a service — whether a
+type is a service is a whole-program property, and the `spawn` deciding it may be in another file entirely
+from the method the rule fires on.
 ```maxon
 type Store
-	var buf as String
+	var n as int
 
 	static function create() returns Self
-		return Self{buf: "x"}
+		return Self{n: 1}
 	end 'create'
 
-	export function read() returns String
-		return self.buf
-	end 'read'
+	export function itself() returns Store
+		return self
+	end 'itself'
 end 'Store'
 
 function main() returns ExitCode
@@ -1928,11 +1935,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3136: <fragment>:14:10: 'Store.read' returns a value reachable from 'self'
+error E3137: <fragment>:9:3: `Store.itself` returns a value reachable from `self`, and this `spawn` makes `Store` a service — so the caller would hold a second reference to the service's own state, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:14:11: the `spawn` that makes `Store` a service
 ```
 
-<!-- disabled-test: error.two-services-that-await-each-other-are-refused -->
-<!-- SV2: the acyclic blocking graph (SemanticServiceCallCycle) -->
+<!-- test: error.two-services-that-await-each-other-are-refused -->
 Mutual reentrancy is made unrepresentable rather than diagnosed at run time.
 ```maxon
 type A
@@ -1958,8 +1965,432 @@ type B
 		return Self{n: 0}
 	end 'create'
 
-	export function pong(a A.handle) returns int
-		return try await a.ack() otherwise 0
+	export function pong() returns int
+		return try await spawnA().ack() otherwise 0
+	end 'pong'
+end 'B'
+
+function spawnA() returns A.handle
+	return spawn A.create()
+end 'spawnA'
+
+function main() returns ExitCode
+	let a = spawn A.create()
+	let b = spawn B.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3139: <fragment>:9:10: service call cycle — a message may not await a reply from a service that can await back, because both would be blocked on each other:
+note: <fragment>:9:10: `A.ping` awaits a reply from `B`
+note: <fragment>:25:10: `B.pong` awaits a reply from `A`
+```
+
+<!-- test: a-reply-error-type-with-one-member-is-nameable -->
+<!-- targets: x64-windows -->
+⭐ **A MESSAGE THAT THROWS NOTHING HAS A ONE-MEMBER REPLY ERROR TYPE, AND ONE MEMBER IS A NAME.** The reply of
+`total()` can fail only in transport, so its error type is `ServiceError` itself — an ordinary declared enum a
+`throws` clause can spell, which is what lets a bare `try` PROPAGATE it out of an intermediate function. Only a
+message that throws needs the two-member union, and that one has no spelling (see the case below).
+```maxon
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns int
+		return self.count
+	end 'total'
+end 'Calc'
+
+function fetch(h Calc.handle) returns int throws ServiceError
+	return try await h.total()
+end 'fetch'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let v = try fetch(h) otherwise 1
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.bare-try-propagation-of-a-two-member-reply-is-refused -->
+A message that THROWS has a two-member reply error type, and no `throws` clause can name it — so a bare `try`
+that would re-publish the flag to this function's caller is refused with the same E3059 an ordinary type
+mismatch earns. The cure is to CATCH the reply here, which is what `otherwise (e)` is for.
+```maxon
+enum MathError implements Error
+	divideByZero
+end 'MathError'
+
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n int, by int) returns int throws MathError
+		if by == 0 'zero'
+			throw MathError.divideByZero
+		end 'zero'
+		return try (n / by) otherwise 0
+	end 'divide'
+end 'Calc'
+
+function fetch(h Calc.handle) returns int throws MathError
+	return try await h.divide(10, by: 2)
+end 'fetch'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:22:9: try propagates 'Calc.divide.errors' but enclosing function throws 'MathError' — add 'otherwise' to convert
+```
+
+<!-- test: shutdown-resolves-pending-replies -->
+<!-- targets: x64-windows -->
+⭐ **THE LIVENESS OBLIGATION, ON BOTH OF ITS ROADS.** A message that dies unprocessed must not hang its awaiter.
+The FIRST send is queued behind the poison pill and is abandoned by the loop's own drain; the SECOND arrives
+after the mailbox is already closed and is abandoned by the send. Both answer `ServiceError.stopped`, and the
+case passes by TERMINATING at all.
+```maxon
+type Slow
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function value() returns int
+		return self.n
+	end 'value'
+end 'Slow'
+
+function main() returns ExitCode
+	var stops = 0
+	let h = spawn Slow.create()
+	h.shutdown()
+	try await h.value() otherwise (e) 'first'
+		match e 'w1'
+			stopped then stops = stops + 1
+		end 'w1'
+	end 'first'
+	try await h.value() otherwise (e) 'second'
+		match e 'w2'
+			stopped then stops = stops + 1
+		end 'w2'
+	end 'second'
+	return stops as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: a-string-moves-in-and-a-fresh-string-comes-back -->
+<!-- targets: x64-windows -->
+The reply carries a MANAGED value across green threads. It is sound for the reason the send's move is: the
+handler's result is freshly minted in the handler's own frame, so the service gives up its only reference and
+the awaiter takes it — one owner throughout, which is what a plain refcount requires.
+```maxon
+type Echo
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function say(s String) returns String
+		return "[{s}]"
+	end 'say'
+end 'Echo'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	let out = try await h.say("hi") otherwise (e) 'gone'
+		return 9 as ExitCode
+	end 'gone'
+	print("{out}\n")
+	return 0
+end 'main'
+```
+```stdout
+[hi]
+```
+
+<!-- test: reply-discarded-is-dropped-clean -->
+<!-- targets: x64-windows -->
+⭐ A reply-bearing message sent in STATEMENT position mints a cell nobody binds, so the promise is dropped at
+statement end while the cell is still PENDING. The dropper may not free it — the replier is about to write into
+it — so it adds the consumer ticket only, and the reply's own completion supplies the runner's half. The managed
+result nobody took is released by whichever arrives second.
+```maxon
+type Echo
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function say(s String) returns String
+		return "[{s}]"
+	end 'say'
+end 'Echo'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	h.say("a")
+	h.say("b")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: pending-reply-dropped-then-answered -->
+<!-- targets: x64-windows -->
+The dropped cell of the first send is still pending when the SECOND send's await drives the service, so the
+replier writes into a cell its awaiter has already renounced. That is the ordering the teardown rendezvous
+exists for, and freeing the cell at the drop is a clobbered green thread rather than a leak.
+```maxon
+type Echo
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function say(s String) returns String
+		return "[{s}]"
+	end 'say'
+
+	export function count() returns int
+		return 5
+	end 'count'
+end 'Echo'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	h.say("a")
+	let n = try await h.count() otherwise 0
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: completed-reply-dropped-is-reclaimed -->
+<!-- targets: x64-windows -->
+The other order: `p`'s first cell COMPLETES while the middle await drives the service (its message is ahead in
+FIFO order), and only THEN is it dropped — by the RE-ARM on the next line. The drop finds the runner ticket
+already there and reclaims; an arm that took a completed cell as merely queued would strand the struct
+invisibly, because the green-thread count the exit gate reads has already been debited.
+```maxon
+type Echo
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 4}
+	end 'create'
+
+	export function count() returns int
+		return self.n
+	end 'count'
+end 'Echo'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	var p = h.count()
+	let n = try await h.count() otherwise 0
+	p = h.count()
+	let m = try await p otherwise 0
+	return (n + m) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: rpc-from-inside-a-service -->
+<!-- targets: x64-windows -->
+⭐⭐ **THE FIRST CROSS-GREEN-THREAD WAKE IN THE LANGUAGE.** `Outer`'s message awaits a reply from `Inner`, so a
+green thread — not the main one — is the awaiter, and the drive that completes its cell runs `Inner` from
+`Outer`'s own stack. The graph `Outer → Inner` is acyclic, which is what makes this legal.
+⚠ The peer's handle crosses as a message ARGUMENT and not as `Outer`'s state: a state record may hold nothing
+managed at all (`error.a-record-with-a-managed-field-may-not-cross`), which is a live limit of SV1's transfer
+rule rather than anything this rung changes.
+```maxon
+type Inner
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	export function value() returns int
+		return self.n
+	end 'value'
+end 'Inner'
+
+type Outer
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function doubled(inner Inner.handle) returns int
+		let v = try await inner.value() otherwise 0
+		return v * 2
+	end 'doubled'
+end 'Outer'
+
+function main() returns ExitCode
+	let i = spawn Inner.create()
+	let o = spawn Outer.create()
+	let v = try await o.doubled(i) otherwise 0
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: error.double-await-of-a-reply -->
+Per-await linearity composes for free, because it keys on the promise's own identity rather than on what
+produced it — a reply cell is a `Promise` like any other.
+```maxon
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function total() returns int
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let p = h.total()
+	let a = try await p otherwise 0
+	let b = try await p otherwise 0
+	return (a + b) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3100: <fragment>:18:14: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+```
+
+<!-- test: error.plain-await-of-a-reply -->
+A reply ALWAYS throws `ServiceError`, whatever the message itself declares — so a plain `await` of one is
+E3057 by construction and there is no reply in the language that can be awaited without `try`.
+```maxon
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function total() returns int
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let n = await h.total()
+	return n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:16:10: throwing function requires try: 'await' on a promise from a function that throws 'ServiceError' drops the error and leaks its payload — use 'try await'
+```
+
+<!-- test: error.a-message-that-throws-a-payload-carrying-union-is-refused -->
+⚠ **THE ONE ERROR SHAPE A REPLY CANNOT CARRY, REFUSED RATHER THAN MISCOMPILED.** The reply's error word is a
+single word carrying the FUSED ordinal of a two-member dispatch line, which is what lets `match e` tell
+`ServiceError` apart from the handler's own error; a payload-carrying union's flag is a heap POINTER instead,
+so the two facts would need two words and the box would cross green threads with no soleness rule to say it
+may.
+
+⚠ **IT FIRES AT THE `spawn` AND NOT AT A SEND, AND THAT IS FORCED RATHER THAN CONVENTIONAL.** `<T>.__loop` is
+synthesized from the DECLARATION and completes a reply for every reply-bearing message of the type, so a
+message the cell cannot carry would put a wrong-width store into a body the service really runs — whether or
+not the program ever sends that message. There is no `spawn`-free program here to check it against.
+```maxon
+union Trouble implements Error
+	detail(text String)
+end 'Trouble'
+
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function wipe() returns int throws Trouble
+		throw Trouble.detail("no")
+	end 'wipe'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that throws `Trouble`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word already carries the fused ordinal that tells `ServiceError` apart from the message's own error, and a pointer is not an ordinal, and this `spawn` makes `Store` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry
+```
+
+<!-- test: cycle-through-a-free-function-is-refused -->
+An edge is transitive through ordinary functions: `A.ping` calls `relay`, which awaits a `B.handle`, so the
+edge `A -> B` exists even though `A`'s own body names no `B` message.
+```maxon
+function relay(b B.handle) returns int
+	return try await b.pong() otherwise 0
+end 'relay'
+
+type A
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping(b B.handle) returns int
+		return relay(b)
+	end 'ping'
+
+	export function ack() returns int
+		return 1
+	end 'ack'
+end 'A'
+
+type B
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function pong(peer A.handle) returns int
+		return try await peer.ack() otherwise 0
 	end 'pong'
 end 'B'
 
@@ -1970,7 +2401,100 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:30:10: service call cycle — these messages can deadlock waiting on each other
+error E3139: <fragment>:13:10: service call cycle — a message may not await a reply from a service that can await back, because both would be blocked on each other:
+note: <fragment>:13:10: `A.ping` awaits a reply from `B`
+note: <fragment>:29:10: `B.pong` awaits a reply from `A`
+```
+
+<!-- test: cycle-same-type-self-edge-is-refused -->
+⚠ **A SELF-EDGE IS A CYCLE, AND THIS IS THE ONE USERS WILL HIT.** Two instances of the same service could not
+actually deadlock, but edges are by TYPE — which is what makes them statically knowable at all — so the
+analysis cannot tell the instances apart and must be conservative. The message says the workaround.
+```maxon
+type Worker
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ask(peer Worker.handle) returns int
+		return try await peer.answer() otherwise 0
+	end 'ask'
+
+	export function answer() returns int
+		return 1
+	end 'answer'
+end 'Worker'
+
+function main() returns ExitCode
+	let w = spawn Worker.create()
+	w.ask(w.clone())
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3139: <fragment>:9:10: service call cycle — a message may not await a reply from a service that can await back, because both would be blocked on each other:
+note: <fragment>:9:10: `Worker.ask` awaits a reply from `Worker`
+```
+
+<!-- test: deep-acyclic-chain-runs -->
+<!-- targets: x64-windows -->
+Three services in a chain, each awaiting the next. An acyclic graph has a topological order, so the service
+lowest in it awaits nobody and always makes progress — which is the induction the whole rule rests on, run.
+
+⚠ `A.value` forwards `last` with a `.clone()`: a message PARAMETER arrives borrowed, and a send MOVES — so the
+handle it forwards has to be one this frame owns. The original is dropped by the loop as an un-consumed
+payload, which is what shuts `C` down once the chain has answered.
+```maxon
+type C
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function value() returns int
+		return self.n
+	end 'value'
+end 'C'
+
+type B
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function value(next C.handle) returns int
+		let v = try await next.value() otherwise 0
+		return v + 10
+	end 'value'
+end 'B'
+
+type A
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function value(next B.handle, last C.handle) returns int
+		let v = try await next.value(last.clone()) otherwise 0
+		return v + 20
+	end 'value'
+end 'A'
+
+function main() returns ExitCode
+	let c = spawn C.create()
+	let b = spawn B.create()
+	let a = spawn A.create()
+	let v = try await a.value(b, last: c) otherwise 0
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+31
 ```
 
 <!-- disabled-test: awaitany-returns-the-completed-index -->

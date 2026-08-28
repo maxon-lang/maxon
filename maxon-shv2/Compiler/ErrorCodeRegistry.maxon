@@ -1412,6 +1412,29 @@ export enum ErrorCode
 	// record's whole graph tracked through the co-owning stores, which is a whole-program fact shv2 does not
 	// compute. The cure is to send the scalars the record is built from.
 	semanticServiceArgumentNotUnique = "E3138"
+	// A `spawn` makes a type a SERVICE, and one of its reply-bearing messages declares a reply the compiler
+	// cannot carry back to a sender.
+	// A reply resolves through a CELL -- a green thread that never runs -- and a cell carries exactly TWO
+	// words: the value, and one error word.
+	// The VALUE word is one machine word the awaiter reads back verbatim, so it holds what a green thread's
+	// result register holds: an integer, a `bool`, a `String`, a struct, a service handle. A `float` comes
+	// back in a floating-point register the cell has no slot for; a value held at an interface type or an
+	// opaque type parameter is a pair whose second half is released through a companion the cell does not
+	// carry.
+	// The ERROR word holds the FUSED ORDINAL of a two-member dispatch line -- `ServiceError` (what the
+	// transport can fail with, whatever the message declares) beneath the message's own error type -- which
+	// is what lets `match e` tell a stopped service apart from a handler that threw, using the same
+	// tag-interval dispatch every other `match` uses. A payload-free `enum` fits that line exactly, because
+	// its flag IS an ordinal. A payload-carrying `union`'s flag is a heap BOX POINTER instead, and a
+	// float-backed enum's tags are IEEE-754 bit patterns that can span more of the i64 range than the line
+	// has left above `ServiceError`'s own slice.
+	// It fires at the `spawn` rather than at a send, as every service diagnostic does, and for a reason of
+	// its own beyond the usual one: the dispatch loop the compiler synthesizes completes a reply for every
+	// reply-bearing message of the type, so a message the cell cannot carry would put a wrong-width store
+	// into a body the service really runs, whether or not the program ever sends that message.
+	// The cure is to return a value that fits the word and throw a payload-free `enum`, or to drop the
+	// `returns` and `throws` clauses -- which makes the message fire-and-forget, with no reply to carry.
+	semanticServiceReplyNotCarriable = "E3140"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

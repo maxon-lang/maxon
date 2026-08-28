@@ -167,7 +167,7 @@ function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary)
 		// parameter; a message's arguments went into the request box through `Parser.moveIntoGreenThread`,
 		// which PROMOTES a borrowed byte record to a fresh owned copy — so nothing immortal survives to the
 		// handler. A `serviceSpawn`'s only operand is the factory's own fresh box.
-		serviceSpawn to serviceSend gives false
+		serviceSpawn to serviceReplyCell gives false
 	end 'op'
 end 'opCallsAWritingCallee'
 
@@ -265,7 +265,7 @@ type ArgProvenance
 			errorFlagEncode then break 'op'
 			// Neither service op DEFINES a byte record: a spawn's result is a mailbox pointer and a send
 			// defines nothing at all.
-			serviceSpawn to serviceSend then break 'op'
+			serviceSpawn to serviceReplyCell then break 'op'
 		end 'op'
 	end 'noteOp'
 
@@ -330,7 +330,7 @@ function promoteCallAt(project Project, module MaxonModule, opIdx OpIndex, func 
 		errorFlagEncode then break 'op'
 		// See `opCallsAWritingCallee`: a message's arguments are owned records by the time they reach the
 		// request box, so there is no immortal one here to promote.
-		serviceSpawn to serviceSend then break 'op'
+		serviceSpawn to serviceReplyCell then break 'op'
 	end 'op'
 
 	newRefs.push(opIdx)

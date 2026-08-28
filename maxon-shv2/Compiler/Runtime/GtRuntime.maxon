@@ -796,6 +796,35 @@ let GtReclaimName = b"__gt_reclaim"
 // that attribution rather than assuming it.
 export let GtIsCompleteName = b"__gt_is_complete"
 
+// ⭐⭐⭐ **THE REPLY CELL — A GREEN THREAD THAT NEVER RUNS (SV2).** `__gt_cell_alloc(releaser) -> cell` cuts a
+// `GtStructSize` slot out of the slab and leaves it **UNPUBLISHED**: `stackBase = 0`, `funcPtr = 0`,
+// `status = waiting`, on no queue and in no store. It is a wait token plus a result slot, and it is a
+// `Promise` to everything above it — which is the whole claim of `SERVICES_DESIGN.md §"Reply channel"`, and
+// the reason `__gt_await`, `__gt_try_await`, `__gt_is_complete` and E3100's linearity are all **UNCHANGED**
+// by this rung. The cost is one 296-byte struct rather than a 2 KB stack.
+//
+// ⭐ **`funcPtr == 0` IS THE DISCRIMINATOR (`emitGtIsReplyCell`), AND IT IS A PREDICATE RATHER THAN A KIND
+// WORD** — `emitGtIsGreenThread`'s rule, for its reason: `__gt_spawn` stores the callee's address into that
+// word before it publishes anything, so *"nothing will ever run this GT"* and *"this word is zero"* are one
+// fact, where a second field saying `isReplyCell` would be free to disagree with it.
+//
+// ⚠ **A P's INLINE SCHEDULER GT ALSO CARRIES `funcPtr == 0`, AND CANNOT REACH THE PREDICATE.** The one
+// reader is `__gt_promise_drop`, which is only ever handed a PROMISE — an `async` coroutine (whose funcPtr
+// the spawn wrote) or a reply cell. A P's scheduler context is named by no promise, so the two populations
+// the predicate must tell apart are exactly the two it can see.
+export let GtCellAllocName = b"__gt_cell_alloc"
+
+// ⭐⭐ **`__gt_cell_complete(cell, result, threw)` — THE REPLIER's HALF, AND THE FIRST CROSS-GREEN-THREAD
+// WAKE IN THE LANGUAGE (SV2).** Called from the SERVICE's green thread (or from `__mbox_send`'s closed arm,
+// on the sender's), it writes the two answer words and then publishes `completed` — **in the trampoline's
+// own order**, because the awaiter's `__gt_drive_until` tests `status` and only then loads `result`/`threw`,
+// so a status published first would hand it two undefined words.
+//
+// It then supplies the RUNNER's half of the teardown rendezvous (`__gt_runner_done`, whose stack free
+// `stackBase == 0` skips). **Nothing may read the cell after that call**: if the awaiter had already
+// renounced its promise, the runner is the second arrival and the struct is back in the slab.
+export let GtCellCompleteName = b"__gt_cell_complete"
+
 // P1.5 mid-body-yield entry points. `__gt_sleep` is the front-end target for `sleep(ms)`; the rest are the
 // scheduler internals it and the await drivers share.
 export let GtSleepName = b"__gt_sleep"
@@ -1903,6 +1932,11 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// The non-blocking PEEK, beside the two blocking drivers it exists as the alternative to. See
 	// `buildGtIsComplete` for why it is unconditional where `__proc_pid` is bit-gated.
 	buildGtIsComplete(module)
+	// The reply cell's two doors (SV2), beside the rendezvous they step and the drop that renounces them.
+	// Unconditional for `buildGtCoroEnqueue`'s stated reason: whether a program can REACH one is
+	// `DeadFunctionElimination`'s question, and answering it here would be a second reachability analysis.
+	buildGtCellAlloc(module)
+	buildGtCellComplete(module)
 	buildGtSleep(module, asyncTrace: asyncTrace, tags: tags)
 	// The deferred park's registrar, beside the store door it dispatches to (W218).
 	buildGtRegisterPark(module)
@@ -3810,17 +3844,116 @@ function buildGtIsComplete(module StdModule)
 	module.functions.push(func)
 end 'buildGtIsComplete'
 
+// ⭐⭐⭐ **IS THIS PROMISE A REPLY CELL RATHER THAN A THREAD ANYTHING WILL RUN? — `funcPtr == 0` (SV2).** See
+// `GtCellAllocName` for why the discriminator is this word and not a kind field, and for the one population
+// that shares the zero and cannot reach this predicate.
+//
+// ⚠ NOT exported: its single reader is `__gt_promise_drop`, in this file. A cell needs no such question
+// anywhere else — `__gt_await`, `__gt_try_await` and `__gt_is_complete` treat it as the ordinary promise it
+// is, which is the design's whole claim.
+function emitGtIsReplyCell(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
+	let funcPtr = emitLoadField(module, block: block, record: gt, offset: GtOffFuncPtr, ids: ids)
+	let nothingToRun = emitConst(module, block: block, value: 0, ids: ids)
+	return emitCmp(module, block: block, a: funcPtr, b: nothingToRun, pred: StdCmpPred.eq, ids: ids)
+end 'emitGtIsReplyCell'
+
+// ⭐⭐ **`__gt_cell_alloc(releaser) -> cell` — MINT A REPLY CELL (SV2).** See `GtCellAllocName` for what a
+// cell is and why it is a `Promise`.
+//
+// ⚠ **IT IS NOT `__gt_spawn`, AND THE THREE DIFFERENCES ARE EACH LOAD-BEARING** (`SERVICES_DESIGN.md`
+// §"Reply channel" states all three): no STACK is committed (nothing runs on it), no `funcPtr` is stored
+// (that zero IS the discriminator), and it is never PUBLISHED to a queue — `__gt_spawn` takes `__sched_lock`
+// to publish, and a cell nobody schedules must not be discoverable by a scheduler at all.
+//
+// ⭐ **THE STATUS IS `waiting` AND THE OWNER IS THE AWAITER'S GREEN THREAD.** `waiting` is what
+// `__gt_is_complete` and the drive loop's exit test read as *"not yet"*; the owner is copied off the
+// CURRENT GT's owner, exactly as a coroutine's is, so `__gt_promise_drop`'s sweep on the way out reaches a
+// real queue rather than dereferencing a null (`buildGtSpawn` records that a zero owner is not a benign
+// default). `owner != cell`, so `emitGtIsGreenThread` answers false for a cell and the coroutine sweep is
+// the one it takes — which is right: a cell is in NO queue, so the sweep finds nothing and costs two loads.
+//
+// ⚠ **THE LIVE-COUNT CREDIT IS THE SPAWN'S, AND THE DEBIT IS `__gt_owner_done`'s.** A cell is owned by
+// exactly one promise, so the exit gate counts it exactly as it counts a coroutine — and a cell whose
+// awaiter never arrives is therefore a `greenThreadLeak` (75) with the count in it, not a silent exit.
+function buildGtCellAlloc(module StdModule)
+	var func = IrFunction.createFromStd(GtCellAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let releaser = 0 as ValueId
+
+	let structSize = emitConst(module, block: entry, value: GtStructSize, ids: ids)
+	let cell = ids.mint()
+	module.appendOp(entry, op: StdOp.call(cell, callee: SlabAllocName, args: argsOf(structSize)))
+
+	let waitingStatus = emitConst(module, block: entry, value: GtStatusWaiting, ids: ids)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffStatus, value: waitingStatus)
+	let owner = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffOwner, ids: ids)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffOwner, value: owner)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffReleaser as ByteOffset, value: releaser)
+
+	let credit = emitConst(module, block: entry, value: OneMore, ids: ids)
+	_ = emitGlobalAccumulate(module, block: entry, label: GtLiveCountLabel, delta: credit, multiM: true, ids: ids)
+
+	module.setTerminator(entry, op: StdOp.ret(cell))
+	module.functions.push(func)
+end 'buildGtCellAlloc'
+
+// ⭐⭐ **`__gt_cell_complete(cell, result, threw)` — ANSWER A REPLY (SV2).** See `GtCellCompleteName` for the
+// store order and for why nothing may read the cell after the arrival below.
+function buildGtCellComplete(module StdModule)
+	var func = IrFunction.createFromStd(GtCellCompleteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 3)
+	let cell = 0 as ValueId
+	let result = 1 as ValueId
+	let threw = 2 as ValueId
+
+	emitStoreField(module, block: entry, record: cell, offset: GtOffResult, value: result)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffThrew, value: threw)
+	let completed = emitConst(module, block: entry, value: GtStatusCompleted, ids: ids)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffStatus, value: completed)
+
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(cell)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtCellComplete'
+
 // ⭐ **`__gt_promise_drop(gt)` — RENOUNCE AN UN-AWAITED GREEN THREAD (P1.5-B2 #88).** The ownership DUAL of
 // the `__gt_await` reclaim: the front-end enrols an `async` spawn's Promise as an owned value and emits this
 // call on every path to scope exit / a re-arm that neither `await`s nor re-arms it, and `p.cancel()` arrives
 // by the same road.
 //
-// ⭐⭐ **IT HAS TWO ARMS, NOT FOUR, AND THE ONE QUESTION IT ASKS IS `waiting?`.** Everything a drop owes a
-// thread that is queued, RUNNING on another M, or already completed is the same thing — the consumer's half
-// of the teardown rendezvous (`GtOffTeardown`) — so those three collapse into one arm that cannot be got
-// wrong by misreading a state. **A PARKED thread is the one genuine exception**: it is registered in the
-// timer store, in the process store, or in an in-flight OVERLAPPED read, and no runner will ever come back
-// for it, so it must be DEREGISTERED first and then given up from BOTH sides by this same call.
+// ⭐⭐⭐ **A REPLY CELL TAKES THE FIRST ARM, AND IT IS THE ONE POPULATION THIS FUNCTION MAY NEVER FREE (SV2).**
+// A cell is a `Promise` whose status is `waiting` for its whole life, so without this arm it would fall into
+// the `waiting` road below, miss both store scans, re-read `waiting` and take `soleOwner` — freeing a struct
+// the REPLIER is about to write three words into. ⇒ a cell adds **the consumer's ticket only, never a free**,
+// and the pair still closes exactly once on every (state × consumer) combination:
+//
+//   • **PENDING, dropped, then answered** — the drop adds the consumer ticket and returns; the replier's
+//     `__gt_cell_complete` writes into a live struct and its `__gt_runner_done` finds the consumer ticket
+//     already there, so the REPLIER reclaims. (`services.pending-reply-dropped-then-answered`.)
+//   • **COMPLETED, then dropped** — the runner ticket is already there, so `__gt_owner_done` is second and
+//     the DROPPER reclaims. Taking the `waiting` road for this one would have stranded the struct
+//     INVISIBLY: `__gt_owner_done` has already debited `__gt_live_count`, so the exit gate reads clean.
+//     (`services.completed-reply-dropped-is-reclaimed`.)
+//   • **PENDING, then AWAITED** — no drop happens at all; `__gt_try_await` is the consumer and the replier
+//     the runner, in whichever order they arrive. (`services.send-and-await-a-reply`.)
+//   • **ANSWERED and never dropped nor awaited** — impossible: the promise is enrolled owned at the send
+//     (`Parser.emitServiceSend`), so every path either awaits it or drops it, and `__gt_live_count` would
+//     report a `greenThreadLeak` if one did not.
+//
+// ⭐⭐ **IT HAS THREE ARMS, AND THE TWO QUESTIONS IT ASKS ARE `a reply cell?` AND `waiting?`.** Everything a
+// drop owes a thread that is queued, RUNNING on another M, or already completed is the same thing — the
+// consumer's half of the teardown rendezvous (`GtOffTeardown`) — so those three collapse into one arm that
+// cannot be got wrong by misreading a state. **A PARKED thread is the one genuine exception**: it is
+// registered in the timer store, in the process store, or in an in-flight OVERLAPPED read, and no runner
+// will ever come back for it, so it must be DEREGISTERED first and then given up from BOTH sides by this
+// same call.
 //
 //   • `waiting` (3) — the thread ran up to a `sleep`/`runProcess` and parked. Remove it from BOTH stores (a
 //     parked GT is on exactly one, but both scans are cheap and safe; the process scan `CloseHandle`s the
@@ -3855,7 +3988,10 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool, rawFree ByteArray)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var notAReplyCell = module.addBlock(func, label: b"notreplycell")
+	var mailboxParked = module.addBlock(func, label: b"droppedmailboxpark")
 	var waitingArm = module.addBlock(func, label: b"waitingarm")
+	var waitingStores = module.addBlock(func, label: b"waitingstores")
 	var waitingProc = module.addBlock(func, label: b"waitingproc")
 	var waitingUnlock = module.addBlock(func, label: b"waitingunlock")
 	var soleOwner = module.addBlock(func, label: b"soleowner")
@@ -3867,55 +4003,73 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool, rawFree ByteArray)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
-	// entry: `waiting` → deregister; anything else → the shared consumer's half. The status word decides
-	// nothing about ownership here — only whether a store has to be emptied first.
-	let status = emitLoadField(module, block: entry, record: gt, offset: GtOffStatus, ids: ids)
-	let isWaiting = emitGtStatusEquals(module, block: entry, status: status, want: GtStatusWaiting, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isWaiting, thenBlockId: waitingArm.id, elseBlockId: queuedArm.id))
+	// entry: a REPLY CELL → the consumer's half alone (see the ⭐⭐⭐ block above; it is `waiting` for its whole
+	// life and must never be freed here). Otherwise `waiting` → deregister, anything else → the shared
+	// consumer's half. The status word decides nothing about ownership — only whether a store has to be
+	// emptied first.
+	let isReplyCell = emitGtIsReplyCell(module, block: entry, gt: gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isReplyCell, thenBlockId: queuedArm.id, elseBlockId: notAReplyCell.id))
+
+	let status = emitLoadField(module, block: notAReplyCell, record: gt, offset: GtOffStatus, ids: ids)
+	let isWaiting = emitGtStatusEquals(module, block: notAReplyCell, status: status, want: GtStatusWaiting, ids: ids)
+	module.setTerminator(notAReplyCell, op: StdOp.condBranch(isWaiting, thenBlockId: waitingArm.id, elseBlockId: queuedArm.id))
 
 	// waiting arm: an in-flight OVERLAPPED READ (ioParked != 0) is DEREGISTERED via the cross-thread cancel/drain
 	// handshake (the completion thread still holds its OVERLAPPED — this is the one in-flight I/O shv2 now has to
 	// abort); a timer/proc-parked GT (ioParked == 0) takes the existing store-removal path. Under `usesIocp` the
 	// distinction exists; without it there is no read runtime, so ioParked is always 0 and the path is byte-identical.
 	//
-	// ⛔⛔ **THE DEREGISTRATION ROSTER IS THREE OF `emitGtPark`'s FOUR KINDS, AND THE FOURTH IS UNREACHABLE
-	// RATHER THAN HANDLED (SV1 review).** `__gt_register_park` registers TIMER, PROC, IO and — since SV1 —
-	// MAILBOX (`MailboxRuntime.emitMboxRegisterPark`, which stores the GT into `mbox.parkedGt`). This arm
-	// empties the first three stores and there is NOTHING anywhere that clears `mbox.parkedGt` except the
-	// waker's own store. A mailbox-parked GT reaching here would read `waiting`, miss both scans, re-read
-	// `waiting`, take `soleOwner` — and free the stack, and possibly the struct, while `mbox.parkedGt` still
-	// points at it. The next `__mbox_send` / `__mbox_close` then stores `ready` into freed memory and
-	// publishes a freed GT.
+	// ⛔⛔⛔ **THE FOURTH PARK KIND IS ANSWERED HERE, AND THE ANSWER IS AN ABORT (SV2 — the trap SV1's review
+	// left on this row).** `__gt_register_park` registers FOUR kinds — TIMER, PROC, IO and, since SV1,
+	// MAILBOX (`MailboxRuntime.emitMboxRegisterPark`, which stores the GT into `mbox.parkedGt`). The road
+	// below empties the first three stores, and NOTHING anywhere clears `mbox.parkedGt` but the waker's own
+	// store — so a mailbox-parked GT falling through it would miss both scans, re-read `waiting`, take
+	// `soleOwner`, and free the stack (and possibly the struct) while `mbox.parkedGt` still pointed at it.
+	// The next `__mbox_send` / `__mbox_close` would then store `ready` into freed memory and publish a freed
+	// GT: a cross-green-thread use-after-free.
 	//
-	// ⚠ **IT CANNOT ARRIVE, ON TWO INDEPENDENT STRUCTURAL GROUNDS, BOTH MEASURED AT REVIEW.** This function is
-	// a PROMISE drop, and (1) `spawn` lowers to `__svc_spawn` and yields a `<T>.handle` box, never a promise
-	// (`LowerMaxonToStd:3969-3975`), so no promise names a service's green thread; (2) `__mbox_recv` — the one
-	// producer of a mailbox park — has exactly two callers, both inside the synthesized `<T>.__loop`
-	// (`ServiceLoop.maxon:84`, `:119`), which no `async` spawns.
+	// ⭐⭐ **SV2 RETIRED ONE OF THE TWO GROUNDS THAT MADE IT UNREACHABLE AND THE OTHER STILL HOLDS, WHICH IS
+	// WHY THIS IS AN ABORT AND NOT A FOURTH DEREGISTRATION.** The review recorded two independent grounds:
+	// (1) `spawn` yields a `<T>.handle` box and never a promise, so no promise named a service's green
+	// thread; (2) `__mbox_recv` — the ONE producer of a mailbox park — has exactly two callers, both inside
+	// the synthesized `<T>.__loop`. **(1) is gone**: a reply cell IS a promise and this function is exactly
+	// the door it travels through. **(2) is UNCHANGED and is re-derived at the code for SV2's own shape**: a
+	// reply cell has `funcPtr == 0` and is never enqueued, so it can execute nothing and can never call
+	// `__mbox_recv`; `<T>.__loop` is reached only by `__gt_spawn_green` from `__svc_spawn`, which still hands
+	// back a mailbox rather than a promise; and no `async` can spawn `<T>.__loop`, whose symbol
+	// (`serviceLoopSymbol`) is `__`-prefixed and unspellable in source (E2051). ⇒ **the only GT that can be
+	// mailbox-parked is a service's own green thread, and nothing in the language names one with a
+	// `Promise`.**
 	//
-	// ⛔ **SV2 IS THE RUNG THAT MAKES IT LIVE**, because a reply cell is a promise a message's sender awaits —
-	// at which point ground (1) is gone. The cure is a fourth removal beside the two below, clearing
-	// `mbox.parkedGt` under the lock this arm already holds; the mbox pointer is on the GT already, in
-	// `GtOffParkArg`. It is NOT written here because nothing in this tree can execute it, and unverifiable
-	// emitter code in a reclamation path is the worse of the two risks — but it is a debt with a named
-	// trigger, not an omission.
+	// ⇒ **What is written here is the STOP, not a repair.** A fourth deregistration would be emitter code
+	// nothing in this tree can execute, in a reclamation path, deciding a question the design has not
+	// answered — what a service whose loop is freed mid-`recv` owes its mailbox's `refs` and its state. The
+	// abort turns a silent use-after-free into a named exit at the instruction that caused it, and it is
+	// SABOTAGE-PROVABLE where a deregistration would not be: point the compare at `GtParkKindTimer` and a
+	// dropped sleeping promise exits 94.
+	let parkKind = emitLoadField(module, block: waitingArm, record: gt, offset: GtOffParkKind, ids: ids)
+	let mailboxKind = emitConst(module, block: waitingArm, value: GtParkKindMailbox, ids: ids)
+	let parkedOnAMailbox = emitCmp(module, block: waitingArm, a: parkKind, b: mailboxKind, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(waitingArm, op: StdOp.condBranch(parkedOnAMailbox, thenBlockId: mailboxParked.id, elseBlockId: waitingStores.id))
+	emitRuntimeAbort(module, func: func, block: mailboxParked, abort: RuntimeAbort.schedulerPromiseParkedOnAMailbox, ids: ids)
+
 	if usesIocp 'ioAware'
 		var waitingTimer = module.addBlock(func, label: b"waitingtimer")
 		var ioArm = module.addBlock(func, label: b"ioarm")
 		let ioParked = ids.mint()
-		module.appendOp(waitingArm, op: StdOp.loadIndirect(ioParked, addrId: gt, offset: GtOffIoParked, valueType: StdType.i64))
+		module.appendOp(waitingStores, op: StdOp.loadIndirect(ioParked, addrId: gt, offset: GtOffIoParked, valueType: StdType.i64))
 		let ioZeroConst = ids.mint()
-		module.appendOp(waitingArm, op: StdOp.const(ioZeroConst, value: 0, valueType: StdType.i64))
+		module.appendOp(waitingStores, op: StdOp.const(ioZeroConst, value: 0, valueType: StdType.i64))
 		let isInFlightRead = ids.mint()
-		module.appendOp(waitingArm, op: StdOp.cmp(isInFlightRead, lhs: ioParked, rhs: ioZeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
-		module.setTerminator(waitingArm, op: StdOp.condBranch(isInFlightRead, thenBlockId: ioArm.id, elseBlockId: waitingTimer.id))
+		module.appendOp(waitingStores, op: StdOp.cmp(isInFlightRead, lhs: ioParked, rhs: ioZeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
+		module.setTerminator(waitingStores, op: StdOp.condBranch(isInFlightRead, thenBlockId: ioArm.id, elseBlockId: waitingTimer.id))
 		emitGtIoCancelArm(module, func: func, ids: ids, startBlock: ioArm, gt: gt, cont: soleOwner, queuedCont: queuedArm, rawFree: rawFree)
 		emitSchedLockEnter(module, block: waitingTimer, ids: ids)
 		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingTimer, gt: gt, cont: waitingProc)
 		emitGtProcStoreRemove(module, func: func, ids: ids, startBlock: waitingProc, gt: gt, cont: waitingUnlock)
 	end 'ioAware' else 'timerProcOnly'
-		emitSchedLockEnter(module, block: waitingArm, ids: ids)
-		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingArm, gt: gt, cont: waitingProc)
+		emitSchedLockEnter(module, block: waitingStores, ids: ids)
+		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingStores, gt: gt, cont: waitingProc)
 		emitGtProcStoreRemove(module, func: func, ids: ids, startBlock: waitingProc, gt: gt, cont: waitingUnlock)
 	end 'timerProcOnly'
 

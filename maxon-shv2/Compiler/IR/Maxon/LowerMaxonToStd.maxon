@@ -762,9 +762,9 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 		// The error-flag encode carries no program LITERAL — the only constant it needs is the bias, which the
 		// lowering mints for itself rather than reading out of the op.
 		errorFlagEncode then break 'op'
-		// Neither service op carries a program literal: a `spawn`'s bytes are a TYPE NAME the lowering turns
-		// into two symbols, and a send's are a callee name no `.rdata` blob holds.
-		serviceSpawn to serviceSend then break 'op'
+		// No service op carries a program literal: a `spawn`'s bytes are a TYPE NAME the lowering turns into
+		// two symbols, and a send's and a reply cell's are callee names no `.rdata` blob holds.
+		serviceSpawn to serviceReplyCell then break 'op'
 	end 'op'
 end 'registerIfProgramLiteral'
 
@@ -1349,11 +1349,12 @@ type MaxonToStdLowering
 			// The error flag a routed bare `throw` carries to its block handler — `throwError`'s encode,
 			// as a value rather than as a terminator's side effect.
 			errorFlagEncode(result, errorValue, errorIsBoxed) then self.lowerErrorFlagEncode(result, errValue: errorValue, errIsBoxed: errorIsBoxed, dstBlock: dstBlock)
-			// The two service ops (SV1 wave 3). Both go through a SMALL re-match for `lowerWitnessDispatch`'s
-			// reason — an arm here binds nothing, so a field added to either op cannot be dropped by this
-			// match while another reader keeps it.
+			// The three service ops (SV1 wave 3, SV2). All go through a SMALL re-match for
+			// `lowerWitnessDispatch`'s reason — an arm here binds nothing, so a field added to any of them
+			// cannot be dropped by this match while another reader keeps it.
 			serviceSpawn then self.lowerServiceSpawn(hlOp, dstBlock: dstBlock)
 			serviceSend then self.lowerServiceSend(hlOp, dstBlock: dstBlock)
+			serviceReplyCell then self.lowerServiceReplyCell(hlOp, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -1389,7 +1390,7 @@ type MaxonToStdLowering
 			witnessDispatch to witnessTryDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
 			panicAbortValue then panic("lowerMaxonToStd: a `panicAbortValue` op appeared as a block terminator (parser bug — like `panicAbort` it is a body op followed by a dead return terminator)")
 			errorFlagEncode then panic("lowerMaxonToStd: an `errorFlagEncode` op appeared as a block terminator (parser bug — it DEFINES the flag a routed throw's edge carries, so it is a value-producing body op emitted ahead of that edge's branch)")
-			serviceSpawn to serviceSend then panic("lowerMaxonToStd: a service op appeared as a block terminator (parser bug — a `spawn` produces a mailbox pointer the next op stores, and a send is a statement; both are body ops, never terminators)")
+			serviceSpawn to serviceReplyCell then panic("lowerMaxonToStd: a service op appeared as a block terminator (parser bug — a `spawn` produces a mailbox pointer the next op stores, a send is a statement and a reply cell is a value the send that follows it reads; all three are body ops, never terminators)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -3949,12 +3950,12 @@ type MaxonToStdLowering
 	// deriving them at the parse would put the loop's symbol in a second place and the abandon callee in a
 	// third — and a `funcAddr` naming a symbol nothing built is a link failure with no line on it.
 	//
-	// ⭐ **THE ABANDON CALLEE IS THE REQUEST UNION'S OWN DROP CASCADE, not a synthesized `<T>.__abandon`.**
-	// `SERVICES_DESIGN.md` reserved such a function and then said what it would be: *"in shv2 that is the
-	// tag-conditional `__destruct_<U>` cascade P1.3 already emits for every union with owned payloads"*.
-	// `unionBoxDropCallee` hands back exactly that — or the trivial `__mm_decref` for a request union whose
-	// every payload is a scalar — so a second per-service function would be a second implementation of a
-	// solved problem, in the file where a wrong answer is a leak.
+	// ⭐⭐ **THE ABANDON CALLEE IS `<T>.__abandon` SINCE SV2, AND IT WAS THE REQUEST UNION'S BARE CASCADE.**
+	// `SERVICES_DESIGN.md` reserved such a function and SV1 argued it away — *"in shv2 that is the
+	// tag-conditional `__destruct_<U>` cascade P1.3 already emits"* — which was right while a dead message
+	// owed nothing but its payloads. A dead message now also owes its AWAITER an answer, and leaving one
+	// parked for a reply that will never come is a hang with no diagnostic; `Project.serviceAbandonSymbol`
+	// states the obligation, and `<T>.__abandon`'s own body still ends in that very cascade.
 	//
 	// ⚠ Both symbols are ROOTED by these two `funcAddr`s, which `DeadFunctionElimination` treats as static
 	// edges (`funcAddrCalleeEdge` — v1 shipped that arm MISSING). The loop is additionally reachable from
@@ -3970,7 +3971,7 @@ type MaxonToStdLowering
 		let loopPtr = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(loopPtr, funcName: serviceLoopSymbol(typeName)))
 		let abandonPtr = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(abandonPtr, funcName: self.signatures.unionBoxDropCallee(serviceRequestCompanionName(typeName))))
+		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(abandonPtr, funcName: serviceAbandonSymbol(typeName)))
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: SvcSpawnName, args: threeArgs(loopPtr, second: state, third: abandonPtr)))
 	end 'emitServiceSpawn'
 
@@ -3984,6 +3985,31 @@ type MaxonToStdLowering
 			default panic("lowerServiceSend: expected a `serviceSend` op, got a different MaxonOp variant — `lowerOp` routes only `serviceSend` here")
 		end 's'
 	end 'lowerServiceSend'
+
+	// ⭐⭐ **`serviceReplyCell` → `__gt_cell_alloc(&__gt_reply_release_<message>)` (SV2).** The op carries the
+	// MESSAGE's name and the one address is derived here, from that name, on `emitServiceSpawn`'s precedent
+	// and for its reason: deriving it at the parse would put the releaser's symbol in a second place, and a
+	// `funcAddr` naming a symbol nothing built is a link failure with no line on it.
+	//
+	// ⚠ **A MESSAGE WHOSE REPLY OWNS NO HEAP WRITES A NULL RELEASER, and that is the common case.** The cell
+	// is slab-zeroed, so a plan `serviceReplyNeedsReleaser` answers false for stores nothing at all and both
+	// release sites read the 0 and SKIP — `emitAsyncReleaserStore`'s arrangement one road over.
+	function lowerServiceReplyCell(hlOp MaxonOp, dstBlock IrBlock)
+		match hlOp 's'
+			serviceReplyCell(result, messageName) then self.emitServiceReplyCell(result, messageName: messageName, dstBlock: dstBlock)
+			default panic("lowerServiceReplyCell: expected a `serviceReplyCell` op, got a different MaxonOp variant — `lowerOp` routes only `serviceReplyCell` here")
+		end 's'
+	end 'lowerServiceReplyCell'
+
+	function emitServiceReplyCell(result ValueId, messageName ByteArray, dstBlock IrBlock)
+		let releaserPtr = self.mintStdValueId()
+		if serviceReplyNeedsReleaser(messageName, funcSignatures: self.funcSignatures, signatures: self.signatures, typeNames: self.typeNames) 'ownsAResult'
+			self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(releaserPtr, funcName: serviceReplyReleaserName(messageName)))
+		end 'ownsAResult' else 'nothingToRelease'
+			self.stdModule.appendOp(dstBlock, op: StdOp.const(releaserPtr, value: 0, valueType: StdType.i64))
+		end 'nothingToRelease'
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtCellAllocName, args: argsOf(releaserPtr)))
+	end 'emitServiceReplyCell'
 
 	// `await p` → `__gt_await(p)`. The scheduler drive is entirely in the runtime; here it is a plain call
 	// yielding the awaited scalar in R8.
