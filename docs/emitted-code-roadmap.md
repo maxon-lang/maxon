@@ -25,37 +25,41 @@ the **allocation column** — which still grows with program size, the signature
 — and the **absolute instruction quality** measured directly below, which is a deficit against good
 codegen rather than against either reference compiler.
 
-## ⭐⭐ END-TO-END: WHAT THE WORKSTREAM ACTUALLY BOUGHT — MEASURED 2026-08-29
+## ⭐⭐ END-TO-END: WHAT THE WORKSTREAM ACTUALLY BOUGHT — FINAL, MEASURED 2026-08-29
 
-Six rows in (`EC11` `EC12` `EC13` `EC16` `EC15` `EC14`), A/B'd by the coordinator against a compiler
-built from `01eaf6ea4e` — the commit before the first row — **both compilers built in one session,
-runs interleaved, same box**. Both binaries print byte-identical answers.
+All eight rows in (`EC11` `EC12` `EC13` `EC16` `EC15` `EC14` `EC17` `EC19` `EC18`), A/B'd against a
+compiler built from `01eaf6ea4e` — the commit before the first row. **Both compilers built in one
+session, runs interleaved, same box, three runs each. All three programs print byte-identical
+output.**
 
-| program | pre | post | time | code size |
+| program | pre (ms) | post (ms) | time | code size |
 |---|---|---|---|---|
-| `examples/fannkuch-redux.maxon` | 18,732 / 18,661 / 18,715 ms | **10,528 / 10,539 / 10,518 ms** | **−43.7% (×1.78 faster)** | 37,073 → 28,881 B (**−22.1%**) |
-| `examples/nbody.maxon` | 11,306 / 10,981 / 10,895 ms | **10,419 / 10,294 / 10,227 ms** | **−6.2%** | 87,402 → 76,650 B (**−12.3%**) |
+| `fannkuch-redux` — array indexing | 19,209 / 18,678 / 18,678 | **10,267 / 9,835 / 9,841** | **−47.3% (×1.90)** | 37,073 → 28,881 B (**−22.1%**) |
+| `fmt` — float formatting | 4,875 / 4,747 / 4,769 | **3,286 / 3,188 / 3,187** | **−33.2% (×1.50)** | 81,077 → 71,793 B (**−11.5%**) |
+| `nbody` — float arithmetic | 11,271 / 10,799 / 10,750 | **10,602 / 10,144 / 10,168** | **−5.8%** | 87,402 → 76,582 B (**−12.4%**) |
 
-Three runs each, interleaved; every `post` run beat every `pre` run on both programs, and
-fannkuch's spread is under 0.4%.
+Every `post` run beats every `pre` run on all three; fannkuch's and fmt's arms are separated by more
+than 4× their own spread.
 
-⭐ **THE SELF-COMPILE RATIO, the one program that is not a benchmark.** Measured by the coordinator
-at `EC17` (2026-08-29), same source both sides: **stage-1 (bootstrap-emitted) self-compiles in 157 s;
-stage-2 (shv2-emitted) in 78 s — ×0.50.** `W222` read that ratio at **×0.62** on 2026-08-27, before
-any of these rows. Same logic in both binaries, so the whole difference is codegen. The fixpoint
-holds byte-identically (9,004,190 B), which is what says the two are the same compiler.
+**The compiler compiling itself**, which is the one program here that is not a benchmark:
+stage-1 (bootstrap-emitted) self-compiles in **162 s**, stage-2 (shv2-emitted) in **77 s** —
+**×0.475**, where `W222` read that ratio at **×0.62** on 2026-08-27 before any of these rows. Same
+logic in both binaries, so the whole difference is codegen. The fixpoint holds byte-identically
+(9,033,004 B) and **the whole suite passes under stage-2** (6,834 / 0).
 
-⚠⚠ **AND THIS IS WHY `EC14`'s FINDING MUST NOT BE OVER-READ.** `EC14` measured its OWN row at
-*"nbody 10.02 s either way"* and concluded the instruction count is a proxy that does not track
-time — **true for that row on that shape, and false as a statement about the workstream.** The two
-readings are consistent: LICM moved two L1 loads out of a loop an out-of-order core was already
-absorbing them in, while `EC16` + `EC15` deleted a *runtime branch and a multiply per array access*,
-which fannkuch — an array-indexing benchmark — pays on every element.
+⚠⚠ **THE SPREAD ACROSS PROGRAMS IS THE POINT, AND IT IS WHY AN INSTRUCTION COUNT IS ONLY A
+HYPOTHESIS.** The same compiler change is ×1.90 on one program and −5.8% on another. Each row's win
+lives in a *shape*: `EC16`+`EC15` deleted a runtime branch and a multiply from every array access,
+which fannkuch pays on every element and nbody barely touches; `EC18` deleted four `idiv` per
+formatted number, which only `fmt` pays; `EC14` deleted two L1 loads from a loop an out-of-order core
+was already absorbing them in, and measured **zero**. ⇒ **Attribute the shape before predicting the
+win, and settle it with a timed A/B on a program that exercises it.**
 
-⇒ **The honest rule: an instruction count is a hypothesis, and only a timed A/B on a program that
-exercises the shape can settle it.** Neither the static counter nor `scale-test`'s `codeBytes` could
-see fannkuch's 1.78×; `scale-test` read a delta of exactly **0** for `EC14` because `ScaleCorpus`'s
-array knob emits no loop over an array at all (filed).
+⚠ And the corpus must be able to SEE the shape. Three times in this workstream it could not:
+`scale-test` read a delta of exactly **0** for `EC14` because `ScaleCorpus` has no loop over an
+array; `cse2.maxon` stopped being a CSE probe when `EC12` folded it away; and an int-formatting
+probe read `idiv 0` because that path is hand-emitted runtime. Each was fixed by building a probe
+that carries the shape — `cse3.maxon`, `fmt.maxon` — not by trusting the zero.
 
 ## The three-way inventory — the answer to "what do the other two have that shv2 lacks?"
 
