@@ -3079,6 +3079,32 @@ generated **Target IR** (via `IR/Target/TargetPrinter.maxon` — an exhaustive `
 `TargetOp`, so a new op is a compile error, never a silent `??`), captured through `build --emit-ir`;
 or the normalized diagnostic for an error test. They are byte-deterministic and committed.
 
+**A fragment renders the PROGRAM, not what the program was supplied with.** Two provenances are
+withheld — the compiler's emitted runtime (`mrt_start`, the allocator, the `__str_*`/`__managed_*`
+families) and the **library**, every body shv2 compiled out of `stdlib/` — because neither is code the
+case's author wrote and both are invariant across every program that reaches them. The one rule is
+`TargetPrinter.isSuppliedFunction`, and the library half reads the same per-function provenance the
+rest of the compiler asks by (`StdlibSource.isStdlibFunction`); `--emit-ir-runtime=<name>` (a
+```RequiredRuntime block) is the per-build opt-in that renders a NAMED withheld body anyway.
+
+> ⚠ **The library half arrived late (2026-08-29), and its absence was an artifact of the compilation
+> model rather than a decision.** v1 compiles `stdlib/` once into a separate cached `StdModule` and
+> merely LINKS it, so its user pipeline's final IR structurally *cannot* hold a stdlib body; shv2
+> compiles the library from source into the same module, and the printer rendered whatever was there.
+> MEASURED at the fix: `abs/abs.rt-float.test` — a five-line program — was **5,846 lines**, of which
+> `main` was 120; it is now **135**. `String.byteLength` appeared in **858** committed fragments,
+> `utf8DecodeAt` in 438, `URL.parse` in 162. The whole x64-windows lane went **132 MB → 40 MB** over
+> one regeneration, with the suite reading **6871 passed, 0 failed** on both sides of it. The cost the
+> noise carried was not disk: every edit to `stdlib/` moved thousands of goldens at once, which is a
+> diff nobody reviews, and the drift signal the fragments exist for was inside it.
+>
+> ⚠ **ONLY THE HOST'S OWN LANE WAS REGENERATED, AND THE OTHER LANES STILL CARRY THE LIBRARY.** A golden
+> is minted only by a test that PASSED, and a cross-compiled binary cannot be run here — so
+> `--update-required` on Windows rewrites `fragments/x64-windows` and nothing else. As of 2026-08-29
+> `fragments/x64-linux` (105 MB) and `fragments/arm64-macos` (35 MB) are still pre-filter; the first
+> `--update-required` run on each of those hosts regenerates them, and until then their whole lane
+> reports drift. (`fragments/arm64-linux` already held no stdlib body — checked, not assumed.)
+
 **Fragments are COMPARED REFERENCE, not gates and not outputs.** `checkTestFragment` **compares** the
 emitted IR against the committed golden and, on a difference, hands the parent a `GoldenDrift.drifted`
 that `Main` prints beneath the summary on stderr — it never touches the failed count or the exit code

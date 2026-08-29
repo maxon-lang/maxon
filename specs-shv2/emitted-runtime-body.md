@@ -8,11 +8,19 @@ category: codegen
 
 ## Documentation
 
-The compiler EMITS more code than the program declares. The entry stub `mrt_start`, the
+A compiled program CONTAINS more code than its author declares. The entry stub `mrt_start`, the
 `__mm_*`/`__slab_*` allocator, the `__str_*`/`__managed_*` families and the `__destruct_*`
 thunks are all synthesized by the backend, and a golden fragment shows NONE of them: the
-fragment renders only functions parsed from source, because the shared scaffolding is
-identical in every test and would be pure noise in all of them.
+fragment renders only the functions parsed from the PROGRAM's own source, because the shared
+scaffolding is identical in every test and would be pure noise in all of them.
+
+The **library** is withheld by the same rule and for the same reason. shv2 compiles `stdlib/`
+from source into the same module as the program, so `String.trim`, `Array.reserve` and every
+grapheme helper the cone reaches are ordinary module functions the printer could render — and
+until 2026-08-29 it did. That made `abs/abs.rt-float.test`, a five-line program, a **5,846-line**
+golden of which 120 lines were `main`; it is now 135. What the noise cost was not disk: an edit
+anywhere in `stdlib/` moved thousands of goldens at once, and the drift signal the fragments exist
+to carry was inside that diff.
 
 That default is right for the scaffolding and wrong for a body a rung has just written.
 `__str_bytes_view` publishes a zero-copy `Array with Byte` over a String's own bytes and
@@ -22,12 +30,17 @@ exit code, nor the leak gate, nor any golden can see it.
 
 ### Naming a body to render: ```RequiredRuntime
 
-A test opts one or more emitted runtime functions INTO its own golden with a
+A test opts one or more withheld functions INTO its own golden with a
 `RequiredRuntime` block, one name per line:
 
 ```
 __str_bytes_view
 ```
+
+A **stdlib** body is named the same way and by the same list — `String.trim`, `Array.reserve` —
+which is how a case whose subject IS a library body pins the one body it is about. The name has to
+be one the program REACHES: an unreached stdlib function is eliminated before the back end, so
+naming it renders nothing and is refused exactly as a misspelling is.
 
 Only the named functions are added, and only to that test's fragment; every test without
 the block renders byte-identically to a test written before the block existed. A name
@@ -196,6 +209,32 @@ end 'main'
 ```
 ```RequiredRuntime
 __gt_morestack
+```
+
+<!-- test: a-library-body-named-into-the-golden -->
+The LIBRARY half of the same block. `String.trim` is `stdlib/String.maxon`'s own code — withheld
+from every fragment by default, exactly as `mrt_start` is — and this is the route that puts one
+body back. The case is this door's only gate: withdraw the stdlib half of
+`TargetPrinter.isSuppliedFunction` and the block stops pinning anything new (the fragment would
+render `String.trim` anyway, and the compiler refuses a name it already shows); withdraw the
+NAMING half and the compiler refuses the block outright. Either way this case goes red, which is
+what a case that would otherwise only assert an exit code cannot do.
+
+⚠ Its zero-argument sibling `String.trim#` — the overload that supplies
+`CharacterSet.whitespacesAndNewlines()` — is what `main` actually calls, and it is NOT named here:
+one body per name, and the golden shows the two-argument scan this pins rather than the forwarder.
+
+```maxon
+function main() returns ExitCode
+	let s = "  abc  "
+	return s.trim().byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```RequiredRuntime
+String.trim
 ```
 
 <!-- test: string-byte-at-body -->

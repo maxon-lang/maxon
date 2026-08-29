@@ -49,9 +49,11 @@ let ChunkByteSeparator = " "
 let OpenBrace = "\{"
 let CloseBrace = "\}"
 
-// The emitted-runtime functions a rendering names — a `--emit-ir-runtime=` list, which a spec
-// case writes as a ```RequiredRuntime block. EMPTY is the ordinary case and is not a sentinel: it
-// is the literal count of names the caller gave.
+// The WITHHELD functions a rendering names — the compiler's emitted runtime, or a `stdlib/` body — as
+// a `--emit-ir-runtime=` list, which a spec case writes as a ```RequiredRuntime block. EMPTY is the
+// ordinary case and is not a sentinel: it is the literal count of names the caller gave. (The alias
+// keeps the `Runtime` spelling the flag and the fence are both named by; what it selects is stated at
+// `isSuppliedFunction`, which is the one rule deciding it.)
 export typealias RuntimeFunctionNameArray = Array with String
 
 // The `.data` section a module carries, rendered first by `printTargetModule` — which is the reason
@@ -94,7 +96,27 @@ end 'printDataSection'
 // order the register allocator and lowering preserve), separated by one blank
 // line, with no trailing blank line.
 //
-// ⭐⭐ **`runtimeNames` IS THE ONLY WAY A COMPILER-EMITTED BODY REACHES A GOLDEN, AND IT IS OPT-IN
+// ⭐⭐ **A FRAGMENT RENDERS THE PROGRAM, NOT WHAT THE PROGRAM WAS SUPPLIED WITH — so the LIBRARY is
+// withheld exactly as the emitted runtime is (`isSuppliedFunction`).** shv2 compiles `stdlib/` from
+// source into the SAME module as the user's code, which v1 does not: v1 compiles the library once
+// into a separate cached `StdModule` and merely LINKS it, so its user pipeline's final IR — the text
+// its `// CompiledIR` fragment section carries — structurally cannot hold a stdlib body. That
+// difference is an artifact of shv2's compilation model and was never a decision about what a golden
+// should show, but it leaked all the way into the corpus: MEASURED before this filter, a five-line
+// program whose whole body is `print("hello".trim())` rendered **6,101 lines across 36 functions**,
+// of which `main` was 20 lines and ONE function; `String.byteLength` appeared in **858** committed
+// fragments, `utf8DecodeAt` in 438 and `URL.parse` in 162. A golden that is 99% library says almost
+// nothing about the case it is named after, and every edit to `stdlib/` rewrote thousands of them at
+// once — drowning the drift signal the fragments exist to carry in a diff nobody can read.
+//
+// ⚠ **THE FACT IS THE FUNCTION'S OWN PROVENANCE, ASKED THE ONE WAY THIS COMPILER ASKS IT.** The set
+// arrives as `project.stdlibFacts.stdlibFunctions` — the per-function form of "came from `stdlib/`"
+// that `StdlibSource` derives once per compile and that `isStdlibFunction` is the reader of. It is
+// NOT re-derived here from paths or from name shapes: a `String.`/`Array.` prefix test would be a
+// second answer to a question that already has one, and would misfile a user's own `String`-named
+// method the moment one existed.
+//
+// ⭐⭐ **`runtimeNames` IS THE ONLY WAY A WITHHELD BODY REACHES A GOLDEN, AND IT IS OPT-IN
 // PER BUILD.** The emitted-runtime/entry functions (`mrt_start`, `__slab_*`/`__mm_*`/`__destruct_*`,
 // the `__str_*`/`__managed_*` families) are skipped by default because the shared scaffolding is
 // identical in every test and would be pure noise in all of them — and, until BATCH8, "by default"
@@ -112,6 +134,12 @@ end 'printDataSection'
 // identical. A name that RENDERED nothing is REFUSED (`requireEveryNameRendered`), because a
 // misspelling that quietly rendered nothing would leave a test claiming a gate it does not have.
 //
+// ⭐ **AND IT NAMES A STDLIB BODY BY THE SAME ROUTE, for the same reason it names an emitted one:**
+// once the library is withheld, `String.trim`'s lowered code has no golden either, and a case whose
+// SUBJECT is a stdlib body (a retirement of a synthesized surface onto `stdlib/`, a codegen fix for a
+// container primitive) has to be able to pin the one body it is about. The list is the whole opt-in —
+// a case that names nothing is byte-for-byte the program's own functions.
+//
 // ⭐⭐ **AND THE LIST REACHES THE HAND-ASSEMBLED CHUNKS TOO — they are not `module.functions`, but they
 // ARE addressable.** `mrt_panic`, the green-thread pieces and (on arm64) the entry stub are raw bytes
 // rather than `TargetOp`s, so there is no IR body to print for them — and the block used to be REFUSED
@@ -126,7 +154,7 @@ end 'printDataSection'
 // The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
 // owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
 // would make printing a module quadratic in its own output.
-export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray) returns String
+export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray, stdlibFunctions FunctionNameSet) returns String
 	var body = StringBuilder.create()
 	let dataText = printDataSection(globalData)
 	body.append(dataText)
@@ -152,17 +180,21 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 
 	for func in module.functions 'eachFunc'
 		let named = markNamedBy(runtimeNames, name: func.name, rendered: rendered)
+		// ONE question, asked ONCE per function and read by both rules below — the refusal and the skip.
+		// Asking it twice is what the flag column's own header warns against, in the shape that reports a
+		// WRONG ANSWER rather than an error.
+		let supplied = isSuppliedFunction(func, stdlibFunctions: stdlibFunctions)
 
 		// Naming a function the fragment ALREADY shows says nothing new, and reading the block as if it
 		// had would be a reader's mistake. It is caught here rather than in a pre-pass so it, too, reads
 		// the one selection rule.
-		if named and not isRuntimeFunction(func) 'notEmitted'
-			panic("printTargetModule: '{String.from(func.name)}' is not a compiler-emitted runtime function — it is parsed from {func.sourceFilePath} and the fragment already renders it, so naming it in a ```RequiredRuntime block pins nothing new")
-		end 'notEmitted'
+		if named and not supplied 'notWithheld'
+			panic("printTargetModule: '{String.from(func.name)}' is the PROGRAM's own function — it is parsed from {func.sourceFilePath}, which is not the library, and the fragment already renders it, so naming it in a ```RequiredRuntime block pins nothing new")
+		end 'notWithheld'
 
-		if isRuntimeFunction(func) and not named 'skipRuntime'
+		if supplied and not named 'skipSupplied'
 			continue
-		end 'skipRuntime'
+		end 'skipSupplied'
 
 		if afterFirst 'separator'
 			body.append("\n")
@@ -326,11 +358,12 @@ end 'hexDigit'
 // would pass for ever while pinning exactly what it pinned before — the "a gate that cannot see its
 // own property must not report PASS" rule, arriving through a spelling mistake.
 //
-// The cause is a misspelling, or a runtime family this program does not use: the emitted runtime is
+// The cause is a misspelling, or a piece this program does not contain: the emitted runtime is
 // installed on DEMAND, so `__str_bytes_view` exists only in a program whose stdlib cone takes a
-// String's bytes, and `__gt_morestack` only in one that runs a green thread. (The other way to name
-// nothing — naming a function the fragment already shows — is caught inside the render loop, where the
-// function is in hand.)
+// String's bytes, and `__gt_morestack` only in one that runs a green thread — and a STDLIB body is
+// dropped by dead-function elimination unless the program reaches it, so `String.trim` is nameable
+// only from a program that trims. (The other way to name nothing — naming a function the fragment
+// already shows — is caught inside the render loop, where the function is in hand.)
 //
 // ⚠ **"IT IS A HAND-ASSEMBLED CHUNK" USED TO BE LISTED HERE AS A THIRD, UNFIXABLE CAUSE. IT IS NOT A
 // CAUSE AT ALL ANY MORE**, and the message must not send a reader after a spelling that will never
@@ -346,7 +379,7 @@ function requireEveryNameRendered(runtimeNames RuntimeFunctionNameArray, rendere
 	for (iter, name) in runtimeNames.withIterator() 'eachName'
 		let didRender = try rendered.get(iter.index()) otherwise panic("requireEveryNameRendered: flag read at {iter.index()} is outside a column sized by the same list")
 		if not didRender 'noSuchFunction'
-			panic("printTargetModule: this program emits nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the golden would pin nothing. Check the spelling, or pick a program whose runtime includes it: the emitted runtime is installed on demand")
+			panic("printTargetModule: this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the golden would pin nothing. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, and an unreached stdlib body is eliminated")
 		end 'noSuchFunction'
 	end 'eachName'
 end 'requireEveryNameRendered'
@@ -393,8 +426,31 @@ function isRuntimeFunction(func IrFunction) returns bool
 	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and func.sourceFilePath.isEmpty()
 end 'isRuntimeFunction'
 
-// ⭐⭐ **MAY THIS FUNCTION SKIP THE GREEN-THREAD STACK GUARD?** — the OTHER question the predicate above
-// was answering, split out by the §6 review of spec-port `lazy-static` (finding 1).
+// ⭐⭐ **EVERYTHING A PROGRAM WAS SUPPLIED WITH RATHER THAN WROTE — the ONE rule the render, the skip
+// and the refusal all read** (see `printTargetModule`). Two disjoint provenances, one question:
+//
+//   * the compiler's own emitted scaffolding (`isRuntimeFunction`), which is invariant across every
+//     program and identical in every fragment; and
+//   * the LIBRARY — every function the merged module got from `stdlib/` source, which is invariant
+//     across every program that uses the same corner of it.
+//
+// ⚠ **IT IS NOT `isRuntimeFunction` WIDENED, and the two must not be merged.** `isRuntimeFunction` has
+// a SECOND reader with an entirely different question — `skipsGreenThreadStackGuard`, which asks
+// whether a frame may skip the stack-growth check — and a stdlib function is an ordinary frame a green
+// thread runs and MUST grow for. Folding the library into that predicate would hand `String.trim` the
+// scheduler's exemption, which is the exact class of defect (a safety exemption keyed on the wrong
+// fact) that `isRuntimeFunction`'s own header records as a reachable SIGSEGV.
+//
+// The library half is a set lookup rather than a path test for the reason `StdlibSource`'s header
+// gives: provenance is materialized ONCE per compile, and re-deriving it with `FilePath.isInside`
+// costs about four String allocations per question.
+function isSuppliedFunction(func IrFunction, stdlibFunctions FunctionNameSet) returns bool
+	return isRuntimeFunction(func) or stdlibFunctions.contains(func.name)
+end 'isSuppliedFunction'
+
+// ⭐⭐ **MAY THIS FUNCTION SKIP THE GREEN-THREAD STACK GUARD?** — the OTHER question
+// `isRuntimeFunction` was answering, split out by the §6 review of spec-port `lazy-static`
+// (finding 1).
 //
 // The two are not the same question and only looked it while every synthesized function was scaffolding.
 // `isRuntimeFunction` asks about PROVENANCE — "is this the compiler's own invariant machinery?" — and that

@@ -20,8 +20,9 @@
 // the produced executable. `outputOverride` (the `-o`/`--output` value, empty
 // when unset) wins over the derived output name. `emitIr` (the `--emit-ir` flag)
 // additionally writes the lowered Target IR beside the exe as `<output>.ir`, and
-// `runtimeIrNames` (the `--emit-ir-runtime=` list) names the compiler-EMITTED
-// functions that IR must also render — empty for every build that names none.
+// `runtimeIrNames` (the `--emit-ir-runtime=` list) names the WITHHELD functions —
+// the compiler's emitted runtime, or a `stdlib/` body — that IR must also render,
+// and is empty for every build that names none.
 //
 // ⭐⭐ **THE COMMAND LINE'S ADAPTER OVER `compileToProduct`, AND THE ONE THING IT ADDS IS THE `.ir`
 // SIDECAR.** A `build` wants a FILE beside the exe; a caller compiling IN PROCESS wants the TEXT and
@@ -180,18 +181,25 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// module, every chunk and the data section; `File.writeText` is one call nobody ever read this
 	// row for.
 	//
-	// The emitted runtime — the entry stub `mrt_start`, the allocator, the `__str_*`/`__managed_*`
-	// families — is invariant scaffolding, so it is excluded and both the fragment and `--emit-ir`
-	// show the program's own functions. `runtimeIrNames` (`--emit-ir-runtime=`) is how a caller asks
-	// for a NAMED one of those bodies anyway: it is the only route an emitted body has to a golden,
-	// and it is per-build so no fragment that does not ask for one moves a byte. The CHUNKS ride
-	// along for that same list's sake — a hand-assembled runtime piece has no `IrFunction` to print,
-	// so `printTargetModule` renders its assembled bytes instead, and this is the only place holding
-	// both the module and the chunks it was encoded into. See `printTargetModule`.
+	// Two provenances are excluded, and for ONE reason — neither is code this program's author wrote,
+	// and both are invariant across every program that reaches them. The emitted runtime (the entry
+	// stub `mrt_start`, the allocator, the `__str_*`/`__managed_*` families) is the compiler's; the
+	// LIBRARY — every function the merged module got from `stdlib/` source — is the checkout's, and it
+	// is in this module at all only because shv2 compiles `stdlib/` from source alongside the program
+	// where v1 links a separately-cached one. So both the fragment and `--emit-ir` show the program's
+	// own functions. `stdlibFacts.stdlibFunctions` is the per-function provenance the whole compiler
+	// asks this by (`StdlibSource.isStdlibFunction`), passed rather than re-derived.
+	//
+	// `runtimeIrNames` (`--emit-ir-runtime=`) is how a caller asks for a NAMED one of those withheld
+	// bodies anyway: it is the only route either has to a golden, and it is per-build so no fragment
+	// that does not ask for one moves a byte. The CHUNKS ride along for that same list's sake — a
+	// hand-assembled runtime piece has no `IrFunction` to print, so `printTargetModule` renders its
+	// assembled bytes instead, and this is the only place holding both the module and the chunks it was
+	// encoded into. See `printTargetModule`.
 	var irText = ""
 	if emitIr 'emitIr'
 		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
-		irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks)
+		irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks, stdlibFunctions: project.stdlibFacts.stdlibFunctions)
 		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
 	end 'emitIr'
 

@@ -479,15 +479,21 @@ end 'traceFenceOf'
 let RequiredDataFence = "```RequiredData"
 let RequiredRdataFence = "```RequiredRdata"
 
-// ⭐⭐ **THE EMITTED RUNTIME FUNCTIONS THIS TEST'S GOLDEN RENDERS — one `__`/`mrt_`-prefixed name per
-// line, and the reason is that a compiler EMITS more than a program DECLARES.**
+// ⭐⭐ **THE WITHHELD FUNCTIONS THIS TEST'S GOLDEN RENDERS — one name per line, and the reason is that
+// a compiled program CONTAINS more than its author DECLARES.**
 //
-// A golden fragment shows only functions parsed from source (`TargetPrinter.isRuntimeFunction`), so
-// the entry stub, the allocator, and the whole `__str_*`/`__managed_*` family carry NO golden at all —
-// the one gate that could see them renders none of them, and the miss is measured rather than
+// A golden fragment shows only the functions parsed from the PROGRAM's own source
+// (`TargetPrinter.isSuppliedFunction`), so two families carry NO golden at all: the emitted runtime —
+// the entry stub, the allocator, the whole `__str_*`/`__managed_*` family — and the LIBRARY, every
+// body shv2 compiled out of `stdlib/` into this same module. The runtime miss is measured rather than
 // feared: `__str_bytes_view`'s owed-base arm holds an incref whose loss is a use-after-free that
 // BALANCES (the matching release goes with it), so the exit code, the leak gate and every fragment
 // stayed green over it together.
+//
+// ⚠ **A STDLIB NAME IS SPELLED HERE JUST AS AN EMITTED ONE IS** — `String.trim`, `Array.reserve` — and
+// it is the route a case whose SUBJECT is a library body uses to pin the one body it is about. The name
+// must be one the PROGRAM REACHES: an unreached stdlib function is eliminated before the back end, so
+// naming it renders nothing and is refused (`TargetPrinter.requireEveryNameRendered`).
 //
 // ⚠ **IT IS OPT-IN PER TEST, AND THAT IS THE WHOLE DESIGN.** Rendering the runtime everywhere would
 // inject thousands of identical lines into every one of the corpus's goldens and move all of them at
