@@ -228,6 +228,16 @@ let Arm64OpBr = 0xD61F0000
 // jump table's signed i32 slot load). `0xB8A07800 | (Rm << 16) | (Rn << 5) | Rt`.
 let Arm64OpLdrswRegLsl2 = 0xB8A07800
 
+// The SHIFT AMOUNT field (imm6, bits 15-10) of a DATA-PROCESSING SHIFTED-REGISTER form —
+// `ADD Xd, Xn, Xm, LSL #amount`, EC16's scaled-index address computation. It sits at the same bit
+// position as `Arm64ImmShift` and is a DIFFERENT field of a DIFFERENT instruction (that one is the
+// imm12 of ADD/SUB-immediate), so it is named separately rather than shared: an encoding coincidence
+// is not a fact, and merging the two would make a change to either silently move the other.
+//
+// The SHIFT TYPE (bits 23-22) stays 00 = LSL, which is `Arm64OpAdd`'s own base value — the only type
+// an address scale can want.
+let Arm64ShiftedRegAmountShift = 10
+
 // RET returns through x30 (LR); the LR is baked into this fully-formed encoding.
 let Arm64OpRet = 0xD65F03C0
 
@@ -1400,6 +1410,13 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		arm64ThreadPointer(dest) then arm64EmitThreadPointer(code, dest: arm64GprField(dest))
 		// x64's atomics never reach the arm64 encoder, exactly as its fill ladder and jump table do not.
 		x64LockCmpxchg to x64GsLoadRegBase then panic("emitArm64TargetOp: an x64-only atomic or TEB read reached the arm64 encoder — arm64's atomics are `arm64AtomicCas`/`arm64AtomicRmw` and its thread token is `arm64ThreadPointer`")
+		// EC16 — x64's scaled-index band. arm64 spells the same address as `arm64AddLsl` below, and has no
+		// equivalent of the indexed load/store here at all (see `TargetDialect.arm64AddLsl`).
+		leaRegBaseIndexScale to storeBaseIndexScaleReg then panic("emitArm64TargetOp: an x64 scaled-index address or access reached the arm64 encoder — arm64's scaled-index address is `arm64AddLsl`, and its loads and stores carry no index")
+		// `ADD Xd, Xn, Xm, LSL #amount` — the shifted-register form of the `add` one band up, and the same
+		// three-register emitter: the shift amount is a FIELD of the opcode word (bits 15-10), not a fourth
+		// operand, so nothing about the register encoding changes.
+		arm64AddLsl(dest, base, index, scale) then emitArm64Rrr(code, opcode: Arm64OpAdd or (memoryIndexScaleShift(scale) shl Arm64ShiftedRegAmountShift), rd: arm64GprField(dest), rn: arm64GprField(base), rm: arm64GprField(index))
 	end 'emit'
 end 'emitArm64TargetOp'
 

@@ -665,6 +665,10 @@ function opIsArm64Band(op TargetOp) returns bool
 		// exact: the x64 four are contiguous and the arm64 three follow them.
 		x64LockCmpxchg to x64GsLoadRegBase gives false
 		arm64AtomicCas to arm64ThreadPointer gives true
+		// EC16: the scaled-index band splits by ISA exactly as the atomics above do — the three x64 forms
+		// are x64's, the shifted-register `add` is arm64's.
+		leaRegBaseIndexScale to storeBaseIndexScaleReg gives false
+		arm64AddLsl gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -891,6 +895,19 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) gives "arm64AtomicCas {arm64VregName(dest)}, [{arm64VregName(addrReg)}], {arm64VregName(expectedReg)}, {arm64VregName(replacementReg)}"
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) gives "arm64AtomicRmw.{opcode.name} {arm64VregName(dest)}, [{arm64VregName(addrReg)}], {arm64VregName(operandReg)}"
 		arm64ThreadPointer(dest) gives "arm64ThreadPointer {arm64VregName(dest)}"
+		// --- EC16: the scaled-index band ---
+		//
+		// Rendered in the SOURCE shape `[base + index*scale + disp]` rather than as the op's field list,
+		// which is the choice `loadRegBaseDisp`/`storeBaseDispReg` already make one band up: a golden is
+		// read to see what address an access computes, and `*8` beside the index is the whole point of
+		// the op. The multiplier is printed, not the shift — that is what the program said.
+		leaRegBaseIndexScale(dest, base, index, scale) gives "leaRegBaseIndexScale {vregName(dest)}, [{vregName(base)} + {vregName(index)}*{memoryIndexScaleFactor(scale)}]"
+		loadRegBaseIndexScale(dest, base, index, scale, disp, width) gives "loadRegBaseIndexScale.{accessWidthName(width)} {sharedVregName(dest, cpu: cpu)}, [{sharedVregName(base, cpu: cpu)} + {sharedVregName(index, cpu: cpu)}*{memoryIndexScaleFactor(scale)} + {disp}]"
+		storeBaseIndexScaleReg(base, index, scale, disp, src, width) gives "storeBaseIndexScaleReg.{accessWidthName(width)} [{sharedVregName(base, cpu: cpu)} + {sharedVregName(index, cpu: cpu)}*{memoryIndexScaleFactor(scale)} + {disp}], {sharedVregName(src, cpu: cpu)}"
+		// The arm64 twin prints as the INSTRUCTION it is (`add xd, xn, xm, lsl #k`), not as a bracketed
+		// address: on AArch64 this is arithmetic, and the shift — not the multiplier — is what the
+		// instruction's field holds.
+		arm64AddLsl(dest, base, index, scale) gives "arm64AddLsl {arm64VregName(dest)}, {arm64VregName(base)}, {arm64VregName(index)}, lsl #{memoryIndexScaleShift(scale)}"
 	end 'op'
 end 'formatTargetOp'
 

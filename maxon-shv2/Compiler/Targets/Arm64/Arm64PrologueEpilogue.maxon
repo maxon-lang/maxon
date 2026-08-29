@@ -142,6 +142,9 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				// F2: an atomic names no frame fact — its operands are ordinary coloured registers and its scratch is
 				// the encoder's, so there is nothing for this pass to resolve.
 				x64LockCmpxchg to arm64ThreadPointer then break 'o'
+				// EC16: a scaled-index address or access names no frame fact — its base, index and value are
+				// ordinary coloured registers and its scale/displacement are immediates.
+				leaRegBaseIndexScale to arm64AddLsl then break 'o'
 			end 'o'
 		end 'eachOp'
 
@@ -297,6 +300,11 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// derivation rather than a second hand-written operand list. The x16/x17 encoder scratch is deliberately
 		// absent: it is outside the allocatable pool and callee-saved of nothing.
 		x64LockCmpxchg to arm64ThreadPointer gives arm64MaskFromOperands(op, buf: buf)
+		// EC16: `arm64AddLsl`'s three operands can each be coloured into a callee-saved register, so all
+		// MUST be counted — read through the shared operand model like every other arm here. The x64
+		// forms never reach an arm64 program and answer through the same derivation rather than a second
+		// hand-written list.
+		leaRegBaseIndexScale to arm64AddLsl gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -367,5 +375,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		x64MemFill to arm64MemFill gives false
 		// F2: every atomic is a body op, never an `arm64Ret`.
 		x64LockCmpxchg to arm64ThreadPointer gives false
+		// EC16: an address computation and a memory access are body ops, never an `arm64Ret`.
+		leaRegBaseIndexScale to arm64AddLsl gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

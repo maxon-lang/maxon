@@ -746,3 +746,298 @@ export function calleeResultClass(funcNames FunctionNameIndex, callee ByteArray)
 
 	return returnTypeResultClass(func.returnType)
 end 'calleeResultClass'
+
+// ==================================================================================================
+// EC16 — SCALED-INDEX ADDRESSING: which `base + index*scale` chains an addressing mode can carry
+// ==================================================================================================
+
+// ⭐⭐ **THE ONE ANSWER TO "IS THIS ADDRESS A SCALED INDEX, AND IS IT THIS OP'S ALONE?", read by BOTH
+// native ISELs (docs/emitted-code-roadmap.md, EC16).**
+//
+// The shape it matches is what `ManagedMemoryRuntime.emitSlotAddr` emits for EVERY element access in
+// the language — `binOpImm(mul, index, stride)` feeding `binOp(add, buffer, offset)` feeding a
+// `loadIndirect`/`storeIndirect` — which `InlineManagedPrimitives` (EC1) then puts inline at every
+// array read and write. On x64 that is `imul` + `lea` + `mov`, three instructions for what
+// `mov rax, [rbx + r13*8]` does in one.
+//
+// It lives HERE, beside `buildValueClassColumns`, for that function's reason: the MATCH is a fact
+// about the Std graph and names no ISA. The one thing that IS per-ISA is `foldsIntoMemoryOps` —
+// whether the target's load/store carries the index itself, which x64's does and arm64's does not on
+// the terms this fold needs (see `TargetDialect.arm64AddLsl`).
+//
+// ⚠ **THREE CONDITIONS, AND EACH IS LOAD-BEARING:**
+//   1. **SINGLE READER.** If the multiply (or the add) has a second reader it must be materialised
+//      anyway, so folding it into the address ADDS an instruction rather than removing one. Asked of
+//      `StdValueUseSet.containsRepeat`, which counts every operand of every op AND every phi branch
+//      edge — including a second operand of the SAME op, which is how `t + t` is refused without a
+//      special case.
+//   2. **SAME BLOCK.** SSA would make a cross-block fold correct (the add's def dominates the memory
+//      op, so its own operands do too), but the LIVE RANGES of `base` and `index` would then stretch
+//      across a block boundary in place of a single value's — and shv2 REFUSES rather than spills
+//      (`RegisterPressureDiagnostic`, and EC13's measured E5001), so a lengthened range is a compile
+//      error and not a slower program. Inside one block the extension is bounded by the window
+//      between the add and its reader, which for the shape above is empty. Cross-block is left open.
+//   3. **AN INTEGER MULTIPLY BY 1, 2, 4 OR 8.** `MemoryIndexScale` states that set once; a float
+//      `binOp` is not address arithmetic and is refused by `operandType`.
+//
+// ⭐ FLAGS ARE SAFE IN ONE DIRECTION ONLY, AND THIS IS THE SAFE ONE: the fold DELETES an `imul`
+// (which writes OF/CF) and replaces a `lea` (which writes none) with another `lea`. It can only
+// REMOVE a flag write. `StdToX64Conversion.recordFusableCompare` runs on the Std graph before this
+// and stops at the first flag-clobbering op walking back from a branch, so its answer is either
+// unchanged or was already "do not fuse" — and declining to fuse is always safe.
+export type ScaledIndexFolds
+	// A `binOpImm(mul, index, 2^k)` result the walk has SEEN. A candidate only — it is promoted into
+	// `retiredScaleDefs` when an address `add` in the same block consumes it.
+	var scaleCandidates as StdValueUseSet
+	// … the ones that were consumed. Their multiply is emitted NOWHERE: the address op carries it.
+	var retiredScaleDefs as StdValueUseSet
+	// A `binOp(add, base, scaledIndex)` result that IS a `base + index*scale` address.
+	var indexedAddrDefs as StdValueUseSet
+	// … of which these are carried by their ONE memory reader, so the address op emits nothing either.
+	var fusedAddrDefs as StdValueUseSet
+	// The three halves of the address, and the block the defining op was found in — dense columns over
+	// the function's value space, the representation `FoldConstOperands` gives its reason for (a
+	// ValueId is already a dense function-local index, so a hash map would buy nothing and allocate
+	// per entry).
+	//
+	// ⚠ THEY ARE MEANINGLESS UNLESS ONE OF THE SETS ABOVE HOLDS THE ID, the rule `StdArithOperands`
+	// states for its own fields: `growFilled` seeds them with 0, which is a real ValueId and a real
+	// BlockRef, never a sentinel. `baseColumn` in particular is written only for an ADDRESS entry — a
+	// scale candidate has no base.
+	var baseColumn as ValueIdArray
+	var indexColumn as ValueIdArray
+	var scaleColumn as MemoryIndexScaleArray
+	var defBlockColumn as BlockRefArray
+	// Every value the function reads, WITH MULTIPLICITY — condition 1 above.
+	var valueUses as StdValueUseSet
+	// The two scratch records the walk refills per op. Fields rather than locals for
+	// `StdToX64Conversion.fuseIfDefines`' measured reason: a fresh heap object per op of every function
+	// the backend lowers cost ~3,500 allocations on the SMALLEST scale rung.
+	var operands as StdArithOperands
+	var scaleMatch as MemoryIndexScaleMatch
+
+	// Created ONCE per lowering and `reset` per function, not created per function: `Array.clear` keeps
+	// capacity, so the second function's records reuse the first's buffers and the whole analysis
+	// allocates once per compilation.
+	export static function create() returns ScaledIndexFolds
+		return Self{scaleCandidates: StdValueUseSet.create(), retiredScaleDefs: StdValueUseSet.create(), indexedAddrDefs: StdValueUseSet.create(), fusedAddrDefs: StdValueUseSet.create(), baseColumn: ValueIdArray.create(), indexColumn: ValueIdArray.create(), scaleColumn: MemoryIndexScaleArray.create(), defBlockColumn: BlockRefArray.create(), valueUses: StdValueUseSet.createTrackingRepeats(), operands: StdArithOperands.create(), scaleMatch: MemoryIndexScaleMatch.create()}
+	end 'create'
+
+	// ⭐ THE ENTRY POINT. Re-decide every fold for `func`, discarding the previous function's (ValueIds
+	// are function-local, so a leftover entry would answer for a DIFFERENT value — the cross-function
+	// table leak EC13's commit records as a miscompile).
+	//
+	// ⚠ **THERE IS EXACTLY ONE `blockRefs` → `opRefs` DESCENT IN THIS TYPE, AND THAT IS DELIBERATE.**
+	// A first cut had a second one — a cheap pre-scan for the multiply that starts every chain, to skip
+	// the use walk for the many functions with no element access. Two descents over the same ops is the
+	// failure this file's own header warns about, and here it fails SILENTLY IN THE PERMISSIVE
+	// DIRECTION: had the pre-scan ever come to visit fewer ops than the record walk, the whole function
+	// would simply stop folding, and the goldens would be MINTED showing the unfolded three-instruction
+	// chain with nothing red anywhere. The use walk itself is `collectFunctionValueUses`, which is
+	// StdDialect's and shared with `FoldConstOperands` — so this type owns one descent and borrows one.
+	export function computeForFunction(module StdModule, func IrFunction, foldsIntoMemoryOps bool)
+		self.reset()
+		collectFunctionValueUses(module, func: func, referenced: self.valueUses)
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("computeScaledIndexFolds: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("computeScaledIndexFolds: opIdx {opIdx} not in module.ops")
+				self.recordOp(op, blockRef: blockRef, foldsIntoMemoryOps: foldsIntoMemoryOps)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'computeForFunction'
+
+	// --- What the ISEL asks ---
+
+	// Whether this `binOpImm(mul, …)` result is carried by an address op and must emit NOTHING.
+	export function retiresScaleDef(valueId ValueId) returns bool
+		return self.retiredScaleDefs.contains(valueId)
+	end 'retiresScaleDef'
+
+	// Whether this `binOp(add, …)` result is a `base + index*scale` address.
+	export function isIndexedAddress(valueId ValueId) returns bool
+		return self.indexedAddrDefs.contains(valueId)
+	end 'isIndexedAddress'
+
+	// … and whether its ONE memory reader carries the whole address, so the address op emits nothing.
+	// Always a subset of `isIndexedAddress`.
+	export function fusesIntoMemoryOp(valueId ValueId) returns bool
+		return self.fusedAddrDefs.contains(valueId)
+	end 'fusesIntoMemoryOp'
+
+	// ⚠ `base` IS THE ADDRESS ROLE'S FIELD ALONE, which is why this guard is stronger than the two
+	// below: a scale candidate is `index * scale` and has no base at all, so its `baseColumn` entry is
+	// the `growFilled` zero and would silently name value 0.
+	export function baseOf(valueId ValueId) returns ValueId
+		if not self.indexedAddrDefs.contains(valueId) 'notAnAddress'
+			panic("ScaledIndexFolds.baseOf: value {valueId} is not a matched scaled-index address — ask `isIndexedAddress` first; a scale candidate has no base, and the column holds a `growFilled` zero for it")
+		end 'notAnAddress'
+		return try self.baseColumn.get(valueId) otherwise panic("ScaledIndexFolds.baseOf: baseColumn.get OOB at {valueId}")
+	end 'baseOf'
+
+	export function indexOf(valueId ValueId) returns ValueId
+		self.requireEntry(valueId, what: "indexOf")
+		return try self.indexColumn.get(valueId) otherwise panic("ScaledIndexFolds.indexOf: indexColumn.get OOB at {valueId}")
+	end 'indexOf'
+
+	export function scaleOf(valueId ValueId) returns MemoryIndexScale
+		self.requireEntry(valueId, what: "scaleOf")
+		return try self.scaleColumn.get(valueId) otherwise panic("ScaledIndexFolds.scaleOf: scaleColumn.get OOB at {valueId}")
+	end 'scaleOf'
+
+	// `index` and `scale` are written by BOTH roles, so their guard is the weaker "was anything
+	// recorded for this id?" — the ANALYSIS reads them off a SCALE CANDIDATE (`tryIndexedAddress`,
+	// copying the multiply's operands onto the address it is building) where `indexedAddrDefs` is still
+	// false, and the ISEL reads them off an ADDRESS. Without a guard the columns answer with the
+	// `growFilled` zero, which is a real ValueId and a real scale and never reads as absent.
+	function requireEntry(valueId ValueId, what String)
+		if not self.scaleCandidates.contains(valueId) and not self.indexedAddrDefs.contains(valueId) 'noEntry'
+			panic("ScaledIndexFolds.{what}: nothing was recorded for value {valueId} — ask `retiresScaleDef` or `isIndexedAddress` first; the columns hold a `growFilled` zero for every other id, which is a real ValueId and a real scale rather than a sentinel")
+		end 'noEntry'
+	end 'requireEntry'
+
+	// --- The walk ---
+
+	function reset()
+		self.scaleCandidates.clear()
+		self.retiredScaleDefs.clear()
+		self.indexedAddrDefs.clear()
+		self.fusedAddrDefs.clear()
+		self.baseColumn.clear()
+		self.indexColumn.clear()
+		self.scaleColumn.clear()
+		self.defBlockColumn.clear()
+		self.valueUses.clear()
+	end 'reset'
+
+	function recordOp(op StdOp, blockRef BlockRef, foldsIntoMemoryOps bool)
+		classifyArithOperands(op, operands: self.operands)
+
+		if self.operandsAreAScaleMultiply() 'scaleDef'
+			// `base: 0` is the field this role does not have — see the columns' declaration. It is never
+			// read for a scale candidate: `baseOf` refuses one outright.
+			self.recordEntry(self.operands.resultId, base: 0, index: self.operands.lhs, scale: self.scaleMatch.value, blockRef: blockRef)
+			self.scaleCandidates.insert(self.operands.resultId)
+			return
+		end 'scaleDef'
+
+		if self.operandsAreAnAddressAdd() 'addressDef'
+			self.recordIndexedAddress(blockRef)
+			return
+		end 'addressDef'
+
+		if not foldsIntoMemoryOps 'addressFormOnly'
+			return
+		end 'addressFormOnly'
+
+		self.recordMemoryFold(op, blockRef: blockRef)
+	end 'recordOp'
+
+	// Whether the LAST classified op is an integer `binOpImm(mul, index, k)` whose multiplier an
+	// addressing mode can carry. Writes `scaleMatch` as its second answer — the admission test and the
+	// conversion in one call, so the two cannot come to disagree (`memoryIndexScaleOfFactor`).
+	function operandsAreAScaleMultiply() returns bool
+		if not self.operands.isBinaryArithImm() 'notImmForm'
+			return false
+		end 'notImmForm'
+		if self.operands.opcode != StdBinOpcode.mul 'notMultiply'
+			return false
+		end 'notMultiply'
+		if stdTypeIsFloat(self.operands.operandType) 'float'
+			return false
+		end 'float'
+		return memoryIndexScaleOfFactor(self.operands.imm, scale: self.scaleMatch)
+	end 'operandsAreAScaleMultiply'
+
+	function operandsAreAnAddressAdd() returns bool
+		if not self.operands.isBinaryArith() 'notRegForm'
+			return false
+		end 'notRegForm'
+		if self.operands.opcode != StdBinOpcode.add 'notAdd'
+			return false
+		end 'notAdd'
+		return not stdTypeIsFloat(self.operands.operandType)
+	end 'operandsAreAnAddressAdd'
+
+	// `+` is commutative, so EITHER operand may be the scaled one. The RIGHT one is probed first because
+	// that is where `emitSlotAddr` puts the offset and `foldConstOperands` reorders only around a
+	// CONSTANT operand, which neither of these is — but the second probe is not decoration: a matcher
+	// that knew one spelling is exactly the shape [[w10-opaque-feed-spelling-closed]] records.
+	function recordIndexedAddress(blockRef BlockRef)
+		let resultId = self.operands.resultId
+		let lhs = self.operands.lhs
+		let rhs = self.operands.rhs
+		if self.tryIndexedAddress(resultId, base: lhs, scaled: rhs, blockRef: blockRef) 'rhsIsScaled'
+			return
+		end 'rhsIsScaled'
+		// At most ONE operand can match — the first probe returned false — so this answer is the
+		// function's, and there is nothing after it to guard.
+		_ = self.tryIndexedAddress(resultId, base: rhs, scaled: lhs, blockRef: blockRef)
+	end 'recordIndexedAddress'
+
+	// ⚠ `containsRepeat` IS ALSO THE `t + t` GUARD, and that is not a coincidence worth economising on:
+	// an add whose two operands are the same value inserts that id TWICE, so it reads as multiply-used
+	// and is refused here — which is exactly right, because `base` would otherwise be the very value the
+	// fold deletes.
+	function tryIndexedAddress(resultId ValueId, base ValueId, scaled ValueId, blockRef BlockRef) returns bool
+		if not self.scaleCandidates.contains(scaled) 'notScaled'
+			return false
+		end 'notScaled'
+		if self.blockOf(scaled) != blockRef 'otherBlock'
+			return false
+		end 'otherBlock'
+		if self.valueUses.containsRepeat(scaled) 'sharedMultiply'
+			return false
+		end 'sharedMultiply'
+
+		self.retiredScaleDefs.insert(scaled)
+		self.recordEntry(resultId, base: base, index: self.indexOf(scaled), scale: self.scaleOf(scaled), blockRef: blockRef)
+		self.indexedAddrDefs.insert(resultId)
+		return true
+	end 'tryIndexedAddress'
+
+	// The two ops whose ADDRESS operand an indexed form can absorb. Every other `StdOp` breaks: the
+	// ranges are written as ranges rather than a bare `default` so that an op APPENDED to the union
+	// fails to compile here until somebody decides whether it addresses memory.
+	function recordMemoryFold(op StdOp, blockRef BlockRef)
+		match op 'mem'
+			const to globalAddr then break 'mem'
+			loadIndirect(_, addrId, _, _) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef)
+			storeIndirect(addrId, _, _, _) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef)
+			osAllocPages to osSetEvent then break 'mem'
+		end 'mem'
+	end 'recordMemoryFold'
+
+	// ⚠ A STORE WHOSE STORED VALUE **IS** ITS ADDRESS is refused by `containsRepeat` for
+	// `tryIndexedAddress`' reason: the op reads the id twice, so it is multiply-used.
+	function fuseAddressIntoMemoryOp(addrId ValueId, blockRef BlockRef)
+		if not self.indexedAddrDefs.contains(addrId) 'notIndexed'
+			return
+		end 'notIndexed'
+		if self.blockOf(addrId) != blockRef 'otherBlock'
+			return
+		end 'otherBlock'
+		if self.valueUses.containsRepeat(addrId) 'sharedAddress'
+			return
+		end 'sharedAddress'
+
+		self.fusedAddrDefs.insert(addrId)
+	end 'fuseAddressIntoMemoryOp'
+
+	function recordEntry(valueId ValueId, base ValueId, index ValueId, scale MemoryIndexScale, blockRef BlockRef)
+		self.baseColumn.growFilled(valueId + 1, value: 0)
+		self.indexColumn.growFilled(valueId + 1, value: 0)
+		self.scaleColumn.growFilled(valueId + 1, value: MemoryIndexScale.byOne)
+		self.defBlockColumn.growFilled(valueId + 1, value: 0)
+
+		try self.baseColumn.set(valueId, value: base) otherwise panic("ScaledIndexFolds.recordEntry: baseColumn.set OOB at {valueId}")
+		try self.indexColumn.set(valueId, value: index) otherwise panic("ScaledIndexFolds.recordEntry: indexColumn.set OOB at {valueId}")
+		try self.scaleColumn.set(valueId, value: scale) otherwise panic("ScaledIndexFolds.recordEntry: scaleColumn.set OOB at {valueId}")
+		try self.defBlockColumn.set(valueId, value: blockRef) otherwise panic("ScaledIndexFolds.recordEntry: defBlockColumn.set OOB at {valueId}")
+	end 'recordEntry'
+
+	function blockOf(valueId ValueId) returns BlockRef
+		return try self.defBlockColumn.get(valueId) otherwise panic("ScaledIndexFolds.blockOf: defBlockColumn.get OOB at {valueId} — every recorded id sized the column to itself")
+	end 'blockOf'
+end 'ScaledIndexFolds'

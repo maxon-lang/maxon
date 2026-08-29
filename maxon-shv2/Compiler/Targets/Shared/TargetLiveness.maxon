@@ -1383,6 +1383,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		// F2: every atomic is a body op, not a branch — the arm64 retry loop's branches are internal to its own
 		// encoding, exactly as the fill ladder's are.
 		x64LockCmpxchg to arm64ThreadPointer gives false
+		// EC16: every scaled-index form is a body op, not a branch.
+		leaRegBaseIndexScale to arm64AddLsl gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1433,6 +1435,8 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 		x64MemFill to arm64MemFill gives UnconditionalBranchTarget.none
 		// F2: every atomic is a body op, not a branch.
 		x64LockCmpxchg to arm64ThreadPointer gives UnconditionalBranchTarget.none
+		// EC16: every scaled-index form is a body op, not a branch.
+		leaRegBaseIndexScale to arm64AddLsl gives UnconditionalBranchTarget.none
 	end 'check'
 end 'unconditionalBranchTargetOf'
 
@@ -1498,6 +1502,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
 			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
+			leaRegBaseIndexScale to arm64AddLsl then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a scaled-index address or access body op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -3254,6 +3259,8 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 			x64MemFill to arm64MemFill then break 'capture'
 			// F2: not a `movRegReg`, so never an entry param capture.
 			x64LockCmpxchg to arm64ThreadPointer then break 'capture'
+			// EC16: not a `movRegReg`, so never an entry param capture.
+			leaRegBaseIndexScale to arm64AddLsl then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3973,6 +3980,9 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// a heap or global address the isel handed it, and the two thread-token reads touch no memory the
 		// residency model tracks at all.
 		x64LockCmpxchg to arm64ThreadPointer gives OpSlotRole.touchesNoSlot
+		// EC16: a scaled-index access touches no stack SLOT — it addresses the heap or global region its
+		// base register names, exactly as `loadRegBaseDisp`/`storeBaseDispReg` do.
+		leaRegBaseIndexScale to arm64AddLsl gives OpSlotRole.touchesNoSlot
 	end 'k'
 end 'deriveSlotRole'
 

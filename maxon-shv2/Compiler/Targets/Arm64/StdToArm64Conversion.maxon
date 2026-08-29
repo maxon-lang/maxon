@@ -406,8 +406,15 @@ type StdToArm64Lowering
 	// its own carried f64 type), so it is not threaded into `buildValueClassColumns`.
 	var calleeParamClasses as CalleeParamClassMap
 
+	// EC16 — the `base + index*scale` chains this function's element accesses spell (`ScaledIndexFolds`,
+	// in the shared lowering). arm64 answers `foldsIntoMemoryOps: FALSE`: `LDR Xt, [Xn, Xm, LSL #3]`
+	// exists, but its `S` bit selects a shift of 0 or exactly log2(access size) and the register-offset
+	// form carries no displacement at all — see `TargetDialect.arm64AddLsl`. So the address fold lands
+	// here and the memory fold does not.
+	var scaledIndexFolds as ScaledIndexFolds
+
 	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
 	end 'create'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks` (preserving the
@@ -436,9 +443,18 @@ type StdToArm64Lowering
 	function lowerFunction(funcIdx FuncIndex)
 		// Every read of the source function happens HERE, before the walk, so the walk holds no borrow of it
 		// while `applyOutgoingArgSize` writes to the TARGET function of the same index (E3019).
+		self.prepareScaledIndexFolds(funcIdx)
 		let outgoingArgBytes = self.lowerFunctionBlocks(funcIdx)
 		self.applyOutgoingArgSize(funcIdx, bytes: outgoingArgBytes)
 	end 'lowerFunction'
+
+	// EC16 — decide this function's scaled-index folds before the walk, in a SCOPED read of the source
+	// function: the borrow ends with this call, which is `lowerFunction`'s stated reason for reading
+	// everything up front.
+	function prepareScaledIndexFolds(funcIdx FuncIndex)
+		let srcFunc = self.stdModule.getFunc(funcIdx)
+		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, foldsIntoMemoryOps: false)
+	end 'prepareScaledIndexFolds'
 
 	// Walk the function's blocks, and return the OUTGOING stack-argument bytes its largest call needs — a
 	// running MAX, not a sum, because the region is REUSED by every call site. Only shv2-to-shv2 calls
@@ -854,6 +870,15 @@ type StdToArm64Lowering
 			return
 		end 'float'
 
+		// EC16 — this `+` is the second half of a `base + index*scale` element address, so it becomes ONE
+		// `ADD Xd, Xn, Xm, LSL #k` and the multiply that fed it emits nothing. That is a bigger saving here
+		// than on x64: AArch64 has no multiply-immediate, so `lowerMulImm` was materialising the stride into
+		// the IP scratch and following with a register `MUL` — three instructions where this is one.
+		if self.scaledIndexFolds.isIndexedAddress(resultId) 'scaledIndexAddress'
+			self.emit(dstRef, op: TargetOp.arm64AddLsl(TargetVReg.virtual(resultId), base: TargetVReg.virtual(self.scaledIndexFolds.baseOf(resultId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(resultId)), scale: self.scaledIndexFolds.scaleOf(resultId)))
+			return
+		end 'scaledIndexAddress'
+
 		let dest = TargetVReg.virtual(resultId)
 		let lhsReg = TargetVReg.virtual(lhs)
 		let rhsReg = TargetVReg.virtual(rhs)
@@ -988,6 +1013,12 @@ type StdToArm64Lowering
 	// and all three fall back the same way: materialise the constant into the IP scratch, use the
 	// register form.
 	function lowerBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, dstRef BlockRef)
+		// EC16 — an element-index scaling the shifted-register `ADD` above carries. Neither the scratch
+		// materialisation nor the `MUL` is emitted.
+		if self.scaledIndexFolds.retiresScaleDef(resultId) 'foldedIntoAddress'
+			return
+		end 'foldedIntoAddress'
+
 		let dest = TargetVReg.virtual(resultId)
 		let src = TargetVReg.virtual(lhs)
 		match opcode 'op'

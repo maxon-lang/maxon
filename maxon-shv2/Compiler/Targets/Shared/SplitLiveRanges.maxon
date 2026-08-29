@@ -4917,6 +4917,9 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// F2: every atomic READS MEMORY (or, for the two thread-token reads, the OS thread's own state), so no
 		// def here can be rebuilt from an immediate this pass carries. Not rematerializable.
 		x64LockCmpxchg to arm64ThreadPointer gives false
+		// EC16: every scaled-index form READS registers the pass cannot reconstruct — its immediates are a
+		// scale and a displacement, not the value it produces. Not rematerializable.
+		leaRegBaseIndexScale to arm64AddLsl gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -5747,6 +5750,9 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		x64MemFill to arm64MemFill panic("constDefInfo: def is not a constant materialization")
 		// `opIsConstMaterialization` answers false for every atomic, so none reaches here; named rather than swallowed.
 		x64LockCmpxchg to arm64ThreadPointer panic("constDefInfo: def is not a constant materialization")
+		// `opIsConstMaterialization` answers false for every scaled-index form, so none reaches here; named
+		// rather than swallowed.
+		leaRegBaseIndexScale to arm64AddLsl panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -5991,6 +5997,11 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then return TargetOp.arm64AtomicCas(substituteVReg(dest, from: from, to: to), addrReg: substituteVReg(addrReg, from: from, to: to), expectedReg: substituteVReg(expectedReg, from: from, to: to), replacementReg: substituteVReg(replacementReg, from: from, to: to))
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then return TargetOp.arm64AtomicRmw(substituteVReg(dest, from: from, to: to), addrReg: substituteVReg(addrReg, from: from, to: to), operandReg: substituteVReg(operandReg, from: from, to: to), opcode: opcode)
 		arm64ThreadPointer(dest) then return TargetOp.arm64ThreadPointer(substituteVReg(dest, from: from, to: to))
+		// EC16 — the scaled-index band. Register operands substitute; the scale/disp/width immediates ride through.
+		leaRegBaseIndexScale(dest, base, index, scale) then return TargetOp.leaRegBaseIndexScale(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale)
+		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then return TargetOp.loadRegBaseIndexScale(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale, disp: disp, width: width)
+		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then return TargetOp.storeBaseIndexScaleReg(substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale, disp: disp, src: substituteVReg(src, from: from, to: to), width: width)
+		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale)
 	end 'rewrite'
 end 'substituteValueInOp'
 

@@ -452,6 +452,15 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// arm64-only ops, 0 for the reason the arm64 arms above give. Their x16/x17 scratch is outside every
 		// allocatable pool and callee-saved of nothing, so there is nothing to count there either.
 		arm64AtomicCas to arm64ThreadPointer gives 0
+		// ⚠ EC16's scaled-index band MUST be counted, and this is a REAL-MISCOMPILE arm for the reason the
+		// `loadRegBaseDisp`/`storeBaseDispReg` arms above give: every operand here is an ordinary coloured
+		// register that can land in rbx/r12-r15, and a register missing from this mask is one the prologue
+		// never pushes and the function silently clobbers for its CALLER.
+		leaRegBaseIndexScale(d, b, i, _) gives physRegBit(d) or physRegBit(b) or physRegBit(i)
+		loadRegBaseIndexScale(d, b, i, _, _, _) gives physRegBit(d) or physRegBit(b) or physRegBit(i)
+		storeBaseIndexScaleReg(b, i, _, _, s, _) gives physRegBit(b) or physRegBit(i) or physRegBit(s)
+		// arm64-only, 0 for the reason every other arm64 arm above gives.
+		arm64AddLsl gives 0
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -604,5 +613,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		x64MemFill to arm64MemFill gives false
 		// F2: every atomic is a body op, never a `ret`.
 		x64LockCmpxchg to arm64ThreadPointer gives false
+		// EC16: every scaled-index form is a body op, never a `ret`.
+		leaRegBaseIndexScale to arm64AddLsl gives false
 	end 'check'
 end 'blockEndsWithReturn'

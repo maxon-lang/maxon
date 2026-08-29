@@ -631,7 +631,11 @@ end 'dceRetiredDefs'
 // ⚠ The reference test is not a formality for the identity kind — it is the whole safety argument for
 // a substitution that was applied in walk order. See `substituteIdentityImmediates`.
 function retiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef) returns StdValueUseSet
-	let referenced = collectReferencedValues(module, func: func, opIndices: opIndices)
+	// The reachability roots this prune keeps a def alive for. `collectFunctionValueUses` (StdDialect)
+	// is the one statement of "every value this function reads" — it walks the same ops `opIndices`
+	// names, and it is what keeps the branch-edge half from being forgotten at one of its two callers.
+	var referenced = StdValueUseSet.create()
+	collectFunctionValueUses(module, func: func, referenced: referenced)
 	var doomed = StdValueUseSet.create()
 
 	for opIdx in opIndices 'eachOp'
@@ -651,22 +655,3 @@ function retiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, 
 
 	return doomed
 end 'retiredDefs'
-
-// Every value id READ by any live op, plus every value passed on a phi branch edge —
-// the reachability roots the const DCE keeps a def alive for.
-function collectReferencedValues(module StdModule, func IrFunction, opIndices OpIndexArray) returns StdValueUseSet
-	var referenced = StdValueUseSet.create()
-	for opIdx in opIndices 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
-		collectStdOpUses(op, referenced: referenced)
-	end 'eachOp'
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("foldConstOperands: blockRef from func.blockRefs not in module.blocks")
-		for edge in block.branchEdges 'eachEdge'
-			for argId in edge.argIds 'eachArg'
-				referenced.insert(argId)
-			end 'eachArg'
-		end 'eachEdge'
-	end 'eachBlock'
-	return referenced
-end 'collectReferencedValues'

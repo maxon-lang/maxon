@@ -85,10 +85,13 @@ let ModRmRmSibFollows = 4
 
 // SIB byte fields: scale in bits 6-7 (00 = scale 1), index in bits 3-5, base in bits
 // 0-2. Index field 100 with REX.X clear means "no index" (only rsp triggers this —
-// see encodeLeaRegRegImm32); base field 101 with mod=00 means "no base, disp32" (so an
+// see X64SibNoIndex); base field 101 with mod=00 means "no base, disp32" (so an
 // rbp/r13 base is forced to mod=01) — see RbpR13Low3.
+//
+// ⚠ THERE IS NO `SibScale1` CONSTANT. The scale field's four values are `MemoryIndexScale`'s case
+// list, and `memoryIndexScaleShift` is the one map to these bits — a second name for `byOne`'s shift
+// would be the set written down twice, one of them unable to grow.
 let SibScaleShift = 6
-let SibScale1 = 0
 let SibNoIndexField = 4
 
 // SIB base field 101 with mod=00 means "NO base register — a disp32-only absolute address" (the same bit
@@ -100,6 +103,43 @@ let SibBaseDisp32Field = 5
 // base field 101 means "no base", so an rbp/r13 base MUST use mod=01 (disp8, zero when
 // there is no real displacement). R13 is x64's silent-lea-miscompile trap.
 let RbpR13Low3 = 5
+
+// ⭐ **THE SIB INDEX OF AN x64 MEMORY OPERAND — this register, or `X64SibNoIndex` for none (EC16).**
+//
+// It is what lets `[base + disp]` and `[base + index*scale + disp]` be ONE address operand and
+// therefore ONE assembler (`emitBaseDispModRmBits`). Every `[base + disp]` LOAD/STORE encoder in this
+// file takes the pair `index` + `indexScale` with these defaults, so the 150-odd hand-assembly call
+// sites that address `[base + disp]` say nothing about an index and the scaled-index band says exactly
+// one thing more. (`encodeCmpRegBaseDisp` and the two GS-ABSOLUTE forms do not: nothing indexes a
+// compare's memory operand, and a `gs:[disp32]` has no base register to index off.)
+//
+// ⚠ **THE "NONE" SPELLING IS x64'S OWN, NOT AN INVENTED SENTINEL.** SIB index field 100 with REX.X
+// clear IS "no index register" — that is `SibNoIndexField`, the value `sibByte` is given for a
+// bare `[base + disp]` — and 100 is rsp's encoding number. A register the ISA has already spent on
+// meaning "absent" cannot also mean itself, which is exactly why rsp can never be a real index and why
+// `x64SibIndex` PANICS on one rather than encoding it.
+//
+// ⚠ **IT IS TWO SCALARS AND NOT A RECORD, AND THAT IS MEASURED.** A record-typed parameter with a
+// `none()` default is CONSTRUCTED at every call, and these encoders run once per emitted instruction:
+// the first cut of EC16 did exactly that and `scale-test` charged `phase:encode` **+47% allocations**
+// (372,734 → 548,168 at rung 5) for it, against a control taken the same session. `StdArithOperands`'
+// header records the same trap one tier up, for the same reason.
+// EXPORTED because a DEFAULT ARGUMENT is evaluated in the CALLER's scope: the hand-assembled runtimes
+// call these encoders without naming an index, and the default they get has to be a name they can see.
+export let X64SibNoIndex = X64Register.rsp
+
+// The colored register an INDEXED operand names, asserted to be a real index.
+//
+// A colored rsp reaching an index field would not be refused by the assembler — it IS `X64SibNoIndex`,
+// so the operand would silently lose its index and address the wrong element. rsp is not allocatable,
+// so a hit here is an allocator bug and not a user one. Every caller that has an index passes through
+// this; the ones that have none pass `X64SibNoIndex` and never reach it.
+function x64SibIndex(index X64Register) returns X64Register
+	if index == X64SibNoIndex 'rspIndex'
+		panic("x64SibIndex: RSP cannot be a SIB index — index field 100 with REX.X clear encodes 'no index' (`X64SibNoIndex`), so this operand would silently drop its index; the allocator must never colour an index to rsp, which is not allocatable")
+	end 'rspIndex'
+	return requireClass(index, class: RegClass.gpr)
+end 'x64SibIndex'
 
 // ModR/M rm field value 101 with mod=00: on x64 this combination does NOT mean `[rbp]`
 // — it is repurposed as `[rip + disp32]`, the disp32 measured from the END of the
@@ -150,7 +190,6 @@ let OpcodeGrp2Cl = 0xD3  // group-2 SHIFT, r/m, cl — the count is IMPLICIT, in
 let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
 let OpcodeMovzxRegRm8 = 0xB6  // movzx r, r/m8 (two-byte 0F B6 /r; reg field = dest)
 let OpcodeMovsxd = 0x63  // movsxd r64, r/m32 (REX.W 63 /r; reg field = dest) — the jump table's signed i32 load
-let SibScale4 = 2  // SIB scale field 10 = ×4 — the jump table's i32-slot index scaling
 let OpcodeCqo = 0x99  // cqo: sign-extend RAX into RDX:RAX (REX.W 99), no ModR/M
 let OpcodeCallRel32 = 0xE8  // call rel32
 let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
@@ -458,7 +497,12 @@ end 'regIsExtended'
 // numbers 4..7 name AH/CH/DH/BH when NO REX is present and SPL/BPL/SIL/DIL when ANY
 // REX is. rsi/rdi are allocatable argument registers here, so without the forced
 // prefix `setcc sil` would silently assemble as `setcc dh` and set the wrong register.
-function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Register, force bool = false)
+// ⭐ **ONE REX EMITTER, ALL FOUR BITS.** `indexIsExtended` is the SIB INDEX's extension bit (REX.X) —
+// the one field `regField`/`rmField` cannot express — and it defaults to `false`, which is the right
+// answer for every operand shape that has no index at all (register-direct, `[base + disp]`, RIP-
+// relative). It used to be a separate `emitRexRXB` differing in that one bit and in nothing else,
+// which is the same fact written down twice, one bit apart.
+function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Register, force bool = false, indexIsExtended bool = false)
 	var rex = RexBase
 	if wide 'w'
 		rex = rex or RexW
@@ -466,6 +510,9 @@ function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Reg
 	if regIsExtended(regField) 'r'
 		rex = rex or RexR
 	end 'r'
+	if indexIsExtended 'x'
+		rex = rex or RexX
+	end 'x'
 	if regIsExtended(rmField) 'b'
 		rex = rex or RexB
 	end 'b'
@@ -473,29 +520,6 @@ function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Reg
 		code.push(rex)
 	end 'needed'
 end 'emitRex'
-
-// Emit the REX prefix for an instruction with a ModR/M reg field, a SIB INDEX, and a
-// SIB BASE — the `lea dest, [base + index]` shape, the one form that needs REX.X.
-// `emitRex`'s reg/rm split cannot express the index, so this is its three-field
-// sibling. `wide` (REX.W) is always true for the 64-bit `lea`.
-function emitRexRXB(code ByteArray, wide bool, regField X64Register, indexField X64Register, baseField X64Register)
-	var rex = RexBase
-	if wide 'w'
-		rex = rex or RexW
-	end 'w'
-	if regIsExtended(regField) 'r'
-		rex = rex or RexR
-	end 'r'
-	if regIsExtended(indexField) 'x'
-		rex = rex or RexX
-	end 'x'
-	if regIsExtended(baseField) 'b'
-		rex = rex or RexB
-	end 'b'
-	if wide or rex != RexBase 'needed'
-		code.push(rex)
-	end 'needed'
-end 'emitRexRXB'
 
 // The two's-complement low 32 bits of a signed immediate/displacement, as an unsigned
 // word `writeDword` can emit. A negative value wraps by adding 2^32 (the standard
@@ -572,14 +596,16 @@ end 'encodeModRmExtDirect'
 // `movsd xmm, [base+disp]` shares this assembler — and therefore the rsp-SIB and rbp-disp8
 // traps — with every GPR load and store rather than forking a second memory-operand path (v1
 // forks one: `emitXmmMemDisp`).
-function encodeModRmBaseDisp(code ByteArray, twoByteEscape bool, opcode MachineWord, regField X64Register, base X64Register, disp Imm32, wide bool, forceRex bool = false, ssePrefix SseMandatoryPrefix = SseMandatoryPrefix.none)
+function encodeModRmBaseDisp(code ByteArray, twoByteEscape bool, opcode MachineWord, regField X64Register, base X64Register, disp Imm32, wide bool, forceRex bool = false, ssePrefix SseMandatoryPrefix = SseMandatoryPrefix.none, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	emitSseMandatoryPrefix(code, prefix: ssePrefix)
-	emitRex(code, wide: wide, regField: regField, rmField: base, force: forceRex)
+	// REX.X extends the SIB INDEX. `X64SibNoIndex` is rsp, whose encoding number is 4, so the absent
+	// case answers `false` through the very same test rather than needing a presence check of its own.
+	emitRex(code, wide: wide, regField: regField, rmField: base, force: forceRex, indexIsExtended: regIsExtended(index))
 	if twoByteEscape 'esc'
 		code.push(TwoByteOpcodeEscape)
 	end 'esc'
 	code.push(opcode)
-	emitBaseDispModRm(code, regField: regField, base: base, disp: disp)
+	emitBaseDispModRm(code, regField: regField, base: base, disp: disp, index: index, indexScale: indexScale)
 end 'encodeModRmBaseDisp'
 
 // ModR/M byte for a RIP-relative operand (mod=00, rm=101 — see ModRmRmRipRelative).
@@ -800,15 +826,15 @@ end 'roundsdImm8'
 // encoder. A GPR in either list assembles as the XMM sharing its low nibble (`rbx` → `xmm3`) and a GPR in
 // the BASE position would address off the wrong register, both silently. That is exactly the doctrine
 // `requireClass` states, applied to the two functions this commit widened the blast radius of.
-export function encodeMovsdRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32)
-	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRegRm, regField: requireClass(destReg, class: RegClass.xmm), base: requireClass(base, class: RegClass.gpr), disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
+export function encodeMovsdRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRegRm, regField: requireClass(destReg, class: RegClass.xmm), base: requireClass(base, class: RegClass.gpr), disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble, index: index, indexScale: indexScale)
 end 'encodeMovsdRegBaseDisp'
 
 // `movsd [base + disp], srcXmm` (F2 0F 11 /r) — the store mirror of `encodeMovsdRegBaseDisp`, class
 // gates included, for the reason stated there. The opcode is the ONLY other difference (0x11 puts the
 // XMM in the reg field as the SOURCE, the same reg-field-is-source shape `mov r/m, r` has).
-export function encodeMovsdBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register)
-	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRmReg, regField: requireClass(srcReg, class: RegClass.xmm), base: requireClass(base, class: RegClass.gpr), disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
+export function encodeMovsdBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRmReg, regField: requireClass(srcReg, class: RegClass.xmm), base: requireClass(base, class: RegClass.gpr), disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble, index: index, indexScale: indexScale)
 end 'encodeMovsdBaseDispReg'
 
 // `movsd dest, [rip + <.rdata constant>]` — materialize an f64 literal. The float twin of
@@ -863,19 +889,19 @@ end 'emitRegRegMove'
 // ⭐ ONE encoder serves both BECAUSE A SPILL SLOT IS 8 BYTES AND AN f64 IS 8 BYTES. That is the
 // whole reason floats leave the frame layout untouched, and the reason the splitter needs no
 // float spill op: the slot the allocator already reserves fits the value it already has.
-function emitWord64Load(code ByteArray, dest X64Register, base X64Register, disp Imm32)
+function emitWord64Load(code ByteArray, dest X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	match registerClass(dest) 'c'
-		gpr then encodeLoadRegBaseDisp(code, destReg: dest, base: base, disp: disp, wide: true)
-		xmm then encodeMovsdRegBaseDisp(code, destReg: dest, base: base, disp: disp)
+		gpr then encodeLoadRegBaseDisp(code, destReg: dest, base: base, disp: disp, wide: true, index: index, indexScale: indexScale)
+		xmm then encodeMovsdRegBaseDisp(code, destReg: dest, base: base, disp: disp, index: index, indexScale: indexScale)
 	end 'c'
 end 'emitWord64Load'
 
 // A 64-bit store to `[base + disp]`, dispatched on the SOURCE's file — `emitWord64Load`'s
 // mirror, shared by `storeSlotReg` and the data-section band's word64 store.
-function emitWord64Store(code ByteArray, base X64Register, disp Imm32, src X64Register)
+function emitWord64Store(code ByteArray, base X64Register, disp Imm32, src X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	match registerClass(src) 'c'
-		gpr then encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: src)
-		xmm then encodeMovsdBaseDispReg(code, base: base, disp: disp, srcReg: src)
+		gpr then encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: src, index: index, indexScale: indexScale)
+		xmm then encodeMovsdBaseDispReg(code, base: base, disp: disp, srcReg: src, index: index, indexScale: indexScale)
 	end 'c'
 end 'emitWord64Store'
 
@@ -951,32 +977,16 @@ function encodeCqo(code ByteArray)
 	code.push(OpcodeCqo)
 end 'encodeCqo'
 
-// `lea dest, [base + index]` — the 3-operand `+` (REX.W 8D /r + SIB, scale 1). No
-// flags, and — because dest/base/index are independent — no copy. THE two x64 SIB
-// traps live here: RSP cannot be an index (SIB index 100 with REX.X clear means "no
-// index"), and an rbp/r13 base cannot use mod=00 (base 101 means "no base"), so it is
-// forced to mod=01 with a zero disp8.
-export function encodeLeaRegRegReg(code ByteArray, dest X64Register, base X64Register, index X64Register)
-	if index == X64Register.rsp 'rspIndex'
-		panic("encodeLeaRegRegReg: RSP cannot be a SIB index (index field 100 with REX.X clear encodes 'no index') — the allocator must never color the index operand of `+` to rsp")
-	end 'rspIndex'
-	emitRexRXB(code, wide: true, regField: dest, indexField: index, baseField: base)
-	code.push(OpcodeLea)
-	// The 3-operand `+` carries no displacement, so its mod field / trailing disp go
-	// through the SAME shared trap as `[base + disp]` (chooseDispMod + emitTrailingDisp):
-	// a zero disp is mod=00 for a normal base, but an rbp/r13 base is forced to mod=01
-	// with a zero disp8 (mod=00 base=101 means "no base"). rm is ALWAYS 100 (SIB follows)
-	// here — unlike `[base + disp]`, the SIB carries the real index.
-	let modField = chooseDispMod(0, baseIsRbpR13: regLow3(base) == RbpR13Low3)
-	code.push(modField or (regLow3(dest) shl 3) or ModRmRmSibFollows)
-	emitSibScale1(code, index: index, base: base)
-	emitTrailingDisp(code, modField: modField, disp: 0)
-end 'encodeLeaRegRegReg'
-
-// The SIB byte for `[base + index*1]`: scale 00 (×1), index and base in their fields.
-function emitSibScale1(code ByteArray, index X64Register, base X64Register)
-	code.push((SibScale1 shl SibScaleShift) or (regLow3(index) shl 3) or regLow3(base))
-end 'emitSibScale1'
+// `lea dest, [base + index*scale]` — the 3-operand `+` at scale 1, and EC16's scaled-index address
+// computation at 2/4/8 (REX.W 8D /r + SIB). No flags, and — because dest/base/index are independent —
+// no copy. Both SIB traps belong to the SHARED assembler: an rsp index panics in `x64SibIndex`
+// and an rbp/r13 base is forced to mod=01 by `chooseDispMod`.
+//
+// ⚠ ONE ENCODER FOR ALL FOUR SCALES, not a scale-1 encoder plus a scaled one: they differ in two bits
+// of one byte, which `MemoryIndexScale` already names.
+export function encodeLeaRegBaseIndexScale(code ByteArray, dest X64Register, base X64Register, index X64Register, scale MemoryIndexScale)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeLea, regField: dest, base: base, disp: 0, wide: true, index: x64SibIndex(index), indexScale: scale)
+end 'encodeLeaRegBaseIndexScale'
 
 // `lea dest, [base + disp]` — `a + imm` / `a - imm` (REX.W 8D /r, signed disp). No
 // index, so no REX.X; the shared `[base + disp]` assembler writes the REX, the ModR/M
@@ -989,22 +999,36 @@ end 'encodeLeaRegRegImm32'
 // operand. disp8 when it fits a signed byte, else disp32; a zero displacement still
 // needs disp8 for an rbp/r13 base (mod=00 base=101 is RIP-relative, not [rbp]). One
 // place the [base+disp] address form is assembled — no per-op respelling.
-function emitBaseDispModRm(code ByteArray, regField X64Register, base X64Register, disp Imm32)
-	emitBaseDispModRmBits(code, regFieldBits: regLow3(regField), base: base, disp: disp)
+function emitBaseDispModRm(code ByteArray, regField X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	emitBaseDispModRmBits(code, regFieldBits: regLow3(regField), base: base, disp: disp, index: index, indexScale: indexScale)
 end 'emitBaseDispModRm'
 
 // The `[base + disp]` ModR/M (+ SIB + displacement) with the reg field given as RAW BITS — a register's
 // low 3 bits for a memory load/store, or an OPCODE EXTENSION (`/2` for `call r/m64`) for a group-5 memory
 // form. The one home of the rsp-SIB / rbp-disp8 traps, split from the register-taking `emitBaseDispModRm`
 // exactly as `encodeModRmExtDirect` splits the extension form off `encodeModRmDirect`.
-function emitBaseDispModRmBits(code ByteArray, regFieldBits MachineWord, base X64Register, disp Imm32)
+function emitBaseDispModRmBits(code ByteArray, regFieldBits MachineWord, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	let baseBits = regLow3(base)
 	let baseIsRbpR13 = baseBits == RbpR13Low3
 	let modField = chooseDispMod(disp, baseIsRbpR13: baseIsRbpR13)
-	code.push(modField or (regFieldBits shl 3) or baseBits)
-	if baseBits == ModRmRmSibFollows 'sib'
-		emitSibNoIndex(code, base: base)
-	end 'sib'
+
+	// ⭐ AN INDEX FORCES rm=100 (a SIB follows) WHATEVER THE BASE IS — the SIB then carries the real
+	// index — where a bare `[base + disp]` needs one only for an rsp/r12 base, whose own low-3 bits
+	// ARE 100. Both spellings share `chooseDispMod` and `emitTrailingDisp`, so the rbp/r13 zero-disp8
+	// trap is answered once for the whole family (mod=00 with base field 101 means "no base", so an
+	// rbp/r13 base is forced to mod=01 with a zero disp8).
+	if index != X64SibNoIndex 'indexed'
+		code.push(modField or (regFieldBits shl 3) or ModRmRmSibFollows)
+		code.push(sibByte(indexScale, indexBits: regLow3(index), baseBits: baseBits))
+	end 'indexed' else 'noIndex'
+		code.push(modField or (regFieldBits shl 3) or baseBits)
+		if baseBits == ModRmRmSibFollows 'sib'
+			// An rsp/r12 base has low-3 bits 100, which the rm field spends on "a SIB follows" — so the
+			// real base has to move into the SIB, with the index field saying there is none.
+			code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: baseBits))
+		end 'sib'
+	end 'noIndex'
+
 	emitTrailingDisp(code, modField: modField, disp: disp)
 end 'emitBaseDispModRmBits'
 
@@ -1036,9 +1060,17 @@ end 'chooseDispMod'
 
 // The SIB byte for `[base + disp]` with an rsp/r12 base (rm=100 forces a SIB): scale 1,
 // index field 100 (no index), base in its field.
-function emitSibNoIndex(code ByteArray, base X64Register)
-	code.push((SibScale1 shl SibScaleShift) or (SibNoIndexField shl 3) or regLow3(base))
-end 'emitSibNoIndex'
+// THE SIB BYTE — scale in bits 6-7, index in 3-5, base in 0-2, and the ONE place those three fields
+// are packed. Four call sites spelled it out before EC16: the no-index form an rsp/r12 base forces,
+// the two GS-absolute `[disp32]` forms, and the scaled-index form. Only the last of them ever varies
+// the scale, which is exactly why it is the one a future edit reaches for — and why the other three
+// must not be a separate spelling of the same byte.
+//
+// ⚠ `scale` IS IGNORED BY THE HARDWARE WHEN THERE IS NO INDEX, so the three unindexed callers pass
+// `byOne` — the identity, and the only honest answer for a field that scales nothing.
+function sibByte(scale MemoryIndexScale, indexBits MachineWord, baseBits MachineWord) returns MachineWord
+	return (memoryIndexScaleShift(scale) shl SibScaleShift) or (indexBits shl 3) or baseBits
+end 'sibByte'
 
 // `imul dest, src, imm32` — the 3-operand signed multiply (REX.W 69 /r id): reg field
 // the DESTINATION, rm field the SOURCE, then a signed imm32. Reuses the shared
@@ -1054,8 +1086,8 @@ end 'encodeImulRegRegImm32'
 // rather than a hardcoded rsp precisely so those are ONE encoder: an rsp base forces a SIB
 // byte and an rbp base forces a disp8, and both traps already live in the shared
 // `[base + disp]` assembler this routes through.
-export function encodeStoreBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register)
-	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRmReg, regField: srcReg, base: base, disp: disp, wide: true)
+export function encodeStoreBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRmReg, regField: srcReg, base: base, disp: disp, wide: true, index: index, indexScale: indexScale)
 end 'encodeStoreBaseDispReg'
 
 // `mov destReg, [base + disp]` — a LOAD (8B /r, the `r, r/m` form: reg field = dest, r/m =
@@ -1063,8 +1095,8 @@ end 'encodeStoreBaseDispReg'
 // vs 32-bit; the 32-bit form ZERO-EXTENDS into the full register, which is how the runtime
 // reads the DWORD fields it must not sign-extend — an EXCEPTION_RECORD's ExceptionCode
 // (0xC0000094 would otherwise become negative) and the symbol table's i32 columns.
-export function encodeLoadRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32, wide bool)
-	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRegRm, regField: destReg, base: base, disp: disp, wide: wide)
+export function encodeLoadRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32, wide bool, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRegRm, regField: destReg, base: base, disp: disp, wide: wide, index: index, indexScale: indexScale)
 end 'encodeLoadRegBaseDisp'
 
 // `cmp destReg, [base + disp]` — the LOAD-form 64-bit compare (3B /r, `reg, r/m`: reg field = the register,
@@ -1078,15 +1110,15 @@ end 'encodeCmpRegBaseDisp'
 // `mov [base + disp], srcReg8` — an 8-BIT store (88 /r), how the panic runtime's hex
 // formatter writes one ASCII digit into its frame buffer. The REX prefix is FORCED for the
 // AH/CH/DH/BH-vs-SPL/BPL/SIL/DIL trap `encodeModRmBaseDisp` documents.
-export function encodeStoreBaseDispReg8(code ByteArray, base X64Register, disp Imm32, srcReg X64Register)
-	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRm8Reg8, regField: srcReg, base: base, disp: disp, wide: false, forceRex: true)
+export function encodeStoreBaseDispReg8(code ByteArray, base X64Register, disp Imm32, srcReg X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRm8Reg8, regField: srcReg, base: base, disp: disp, wide: false, forceRex: true, index: index, indexScale: indexScale)
 end 'encodeStoreBaseDispReg8'
 
 // `movzx destReg, byte [base + disp]` — load one byte, zero-extended to 64 bits (REX.W
 // 0F B6 /r). The panic runtime's `strlen` reads a C string a byte at a time through this;
 // zero-extension is what makes the `cmp dest, 0` NUL test correct for a high byte.
-export function encodeMovzxRegByteBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32)
-	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovzxRegRm8, regField: destReg, base: base, disp: disp, wide: true)
+export function encodeMovzxRegByteBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovzxRegRm8, regField: destReg, base: base, disp: disp, wide: true, index: index, indexScale: indexScale)
 end 'encodeMovzxRegByteBaseDisp'
 
 // --- Intra-CHUNK rel32 resolution ---
@@ -1181,20 +1213,12 @@ end 'patchLocalForwardBranch'
 let JumpTableBaseReg = X64Register.r10
 let JumpTableEntryReg = X64Register.r11
 
-// `movsxd dest, [base + index*4]` (REX.W 63 /r + SIB scale=4) — the jump table's signed i32 slot load. The
-// shape of `encodeLeaRegRegReg` but with the `movsxd` opcode and a ×4 SIB scale, so the rbp/r13-base trap
-// (mod=00 base=101 means "no base") goes through the SAME `chooseDispMod`/`emitTrailingDisp` guard; the base
-// is always r10 here, so the trap never fires, but the general form keeps the encoder self-contained.
+// `movsxd dest, [base + index*4]` (REX.W 63 /r + SIB scale=4) — the jump table's signed i32 slot load.
+// The `lea` above with the `movsxd` opcode and a ×4 scale, through the SAME memory-operand assembler, so
+// the rsp-index and rbp/r13-base traps are answered once for both. The base is always r10 here, so the
+// base trap never fires; the general form keeps the encoder self-contained.
 function encodeMovsxdRegBaseIndexScale4(code ByteArray, dest X64Register, base X64Register, index X64Register)
-	if index == X64Register.rsp 'rspIndex'
-		panic("encodeMovsxdRegBaseIndexScale4: RSP cannot be a SIB index — the biased jump-table index must never be colored to rsp (rsp is not allocatable)")
-	end 'rspIndex'
-	emitRexRXB(code, wide: true, regField: dest, indexField: index, baseField: base)
-	code.push(OpcodeMovsxd)
-	let modField = chooseDispMod(0, baseIsRbpR13: regLow3(base) == RbpR13Low3)
-	code.push(modField or (regLow3(dest) shl 3) or ModRmRmSibFollows)
-	code.push((SibScale4 shl SibScaleShift) or (regLow3(index) shl 3) or regLow3(base))
-	emitTrailingDisp(code, modField: modField, disp: 0)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovsxd, regField: dest, base: base, disp: 0, wide: true, index: x64SibIndex(index), indexScale: MemoryIndexScale.byFour)
 end 'encodeMovsxdRegBaseIndexScale4'
 
 // `jmp r/m64` (FF /4, mod=11) — the jump table's register-indirect branch to the computed target address.
@@ -1214,7 +1238,7 @@ function encodeX64JumpTable(code ByteArray, rdataRelocs RdataRelocationArray, re
 	encodeJcc(code, rel32Fixups: rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: defaultTarget)
 	encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: JumpTableBaseReg, label: tableLabel)
 	encodeMovsxdRegBaseIndexScale4(code, dest: JumpTableEntryReg, base: JumpTableBaseReg, index: indexReg)
-	encodeLeaRegRegReg(code, dest: JumpTableBaseReg, base: JumpTableBaseReg, index: JumpTableEntryReg)
+	encodeLeaRegBaseIndexScale(code, dest: JumpTableBaseReg, base: JumpTableBaseReg, index: JumpTableEntryReg, scale: MemoryIndexScale.byOne)
 	encodeJmpReg(code, reg: JumpTableBaseReg)
 	jumpTables.push(JumpTablePending.create(String.from(tableLabel), caseTargets: caseTargets))
 end 'encodeX64JumpTable'
@@ -1321,7 +1345,7 @@ end 'encodeMemFillOverlappingSpan'
 function encodeX64MemFill(code ByteArray, fillByte ParsedInt)
 	encodeMovRegImm64(code, dest: MemFillPatternReg, value: memFillPatternWord(fillByte))
 	// end = cursor + count, computed BEFORE the ladder touches either.
-	encodeLeaRegRegReg(code, dest: MemFillEndReg, base: MemFillCursorReg, index: MemFillCountReg)
+	encodeLeaRegBaseIndexScale(code, dest: MemFillEndReg, base: MemFillCursorReg, index: MemFillCountReg, scale: MemoryIndexScale.byOne)
 
 	// The band dispatch. UNSIGNED throughout — a byte count is a length, never negative, and a signed
 	// compare would send a >= 2^63 count (which no allocation can produce) down the wrong arm rather than
@@ -1486,19 +1510,19 @@ end 'encodeLeaRegRdata'
 // through `mov` or `movsd`, so a `float64` width would be that same fact written a second time,
 // free to disagree with the first. `word64` is honest — an f64 IS 64 bits — and the shared
 // `emitWord64Load` is the one place the instruction is chosen.
-function emitDataLoad(code ByteArray, dest X64Register, base X64Register, disp Imm32, width X64AccessWidth)
+function emitDataLoad(code ByteArray, dest X64Register, base X64Register, disp Imm32, width X64AccessWidth, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	match width 'w'
-		byte then encodeMovzxRegByteBaseDisp(code, destReg: requireClass(dest, class: RegClass.gpr), base: base, disp: disp)
-		word64 then emitWord64Load(code, dest: dest, base: base, disp: disp)
+		byte then encodeMovzxRegByteBaseDisp(code, destReg: requireClass(dest, class: RegClass.gpr), base: base, disp: disp, index: index, indexScale: indexScale)
+		word64 then emitWord64Load(code, dest: dest, base: base, disp: disp, index: index, indexScale: indexScale)
 	end 'w'
 end 'emitDataLoad'
 
 // Store `src` to `[base + disp]` at the op's width — `emitDataLoad`'s mirror, over the same
 // byte and word64 encoders.
-function emitDataStore(code ByteArray, base X64Register, disp Imm32, src X64Register, width X64AccessWidth)
+function emitDataStore(code ByteArray, base X64Register, disp Imm32, src X64Register, width X64AccessWidth, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	match width 'w'
-		byte then encodeStoreBaseDispReg8(code, base: base, disp: disp, srcReg: requireClass(src, class: RegClass.gpr))
-		word64 then emitWord64Store(code, base: base, disp: disp, src: src)
+		byte then encodeStoreBaseDispReg8(code, base: base, disp: disp, srcReg: requireClass(src, class: RegClass.gpr), index: index, indexScale: indexScale)
+		word64 then emitWord64Store(code, base: base, disp: disp, src: src, index: index, indexScale: indexScale)
 	end 'w'
 end 'emitDataStore'
 
@@ -1750,7 +1774,7 @@ export function encodeMovGsAbsReg(code ByteArray, disp Imm32, srcReg X64Register
 	emitRex(code, wide: true, regField: srcReg, rmField: X64Register.rax)
 	code.push(OpcodeMovRmReg)
 	code.push(ModRmMod00 or (regLow3(srcReg) shl 3) or ModRmRmSibFollows)
-	code.push((SibScale1 shl SibScaleShift) or (SibNoIndexField shl 3) or SibBaseDisp32Field)
+	code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: SibBaseDisp32Field))
 	writeImm32Signed(code, value: disp)
 end 'encodeMovGsAbsReg'
 
@@ -1764,7 +1788,7 @@ export function encodeMovRegGsAbs(code ByteArray, dest X64Register, disp Imm32)
 	emitRex(code, wide: true, regField: dest, rmField: X64Register.rax)
 	code.push(OpcodeMovRegRm)
 	code.push(ModRmMod00 or (regLow3(dest) shl 3) or ModRmRmSibFollows)
-	code.push((SibScale1 shl SibScaleShift) or (SibNoIndexField shl 3) or SibBaseDisp32Field)
+	code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: SibBaseDisp32Field))
 	writeImm32Signed(code, value: disp)
 end 'encodeMovRegGsAbs'
 
@@ -1910,7 +1934,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		imulRegReg(dest, _, rhs) then encodeImulRegReg(code, dest: resolveGpr(dest), src: resolveGpr(rhs))
 		negReg(dest, _) then encodeGrp3Reg(code, ext: Grp3ExtNeg, reg: resolveGpr(dest))
 		cmpRegReg(lhsReg, rhsReg) then encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: resolveGpr(lhsReg), src: resolveGpr(rhsReg), wide: true)
-		leaRegRegReg(dest, base, index) then encodeLeaRegRegReg(code, dest: resolveGpr(dest), base: resolveGpr(base), index: resolveGpr(index))
+		leaRegRegReg(dest, base, index) then encodeLeaRegBaseIndexScale(code, dest: resolveGpr(dest), base: resolveGpr(base), index: resolveGpr(index), scale: MemoryIndexScale.byOne)
 		leaRegRegImm32(dest, base, disp) then encodeLeaRegRegImm32(code, dest: resolveGpr(dest), base: resolveGpr(base), disp: disp)
 		imulRegRegImm32(dest, src, imm) then encodeImulRegRegImm32(code, dest: resolveGpr(dest), src: resolveGpr(src), imm: imm)
 		cmpRegImm32(reg, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: resolveGpr(reg), imm: imm)
@@ -2067,6 +2091,20 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// The arm64 atomics never reach this encoder (`buildBackend` dispatches on `target.cpu`), exactly as
 		// the arm64 `fmov` pair above does not — x64's own atomics are the three locked forms one line up.
 		arm64AtomicCas to arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd` and its thread token is `x64TebSelfPointer`")
+		// --- EC16: the scaled-index band ---
+		//
+		// ⭐ ALL THREE GO THROUGH THE ENCODERS THE `[base + disp]` BAND ALREADY USES, with the index
+		// riding in the `index`/`indexScale` pair every one of them already takes. So the width
+		// decision, the register-file dispatch (an f64 element loads through `movsd`), the rbp/r13
+		// zero-disp8 trap and the rsp-index panic are all answered ONCE, for the indexed forms and the
+		// unindexed ones together.
+		//
+		// `base` and `index` are ALWAYS GPRs — an address is an integer — while `dest`/`src` are
+		// class-dispatched at word64, exactly as `loadRegBaseDisp`/`storeBaseDispReg` are.
+		leaRegBaseIndexScale(dest, base, index, scale) then encodeLeaRegBaseIndexScale(code, dest: resolveGpr(dest), base: resolveGpr(base), index: resolveGpr(index), scale: scale)
+		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then emitDataLoad(code, dest: resolvePhysical(dest), base: resolveGpr(base), disp: disp, width: width, index: x64SibIndex(resolveGpr(index)), indexScale: scale)
+		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then emitDataStore(code, base: resolveGpr(base), disp: disp, src: resolvePhysical(src), width: width, index: x64SibIndex(resolveGpr(index)), indexScale: scale)
+		arm64AddLsl then panic("emitX64TargetOp: an arm64 shifted-register `add` reached the x64 encoder — x64 spells a scaled-index address as `leaRegBaseIndexScale`")
 	end 'emit'
 end 'emitTargetOp'
 

@@ -358,6 +358,8 @@ function isCaptureMove(op TargetOp) returns bool
 		x64MemFill to arm64MemFill gives false
 		// F2: no atomic is a `movRegReg`, so none is a call-result capture move.
 		x64LockCmpxchg to arm64ThreadPointer gives false
+		// EC16: no scaled-index form is a `movRegReg`, so none is a call-result capture move.
+		leaRegBaseIndexScale to arm64AddLsl gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -525,6 +527,8 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		x64MemFill to arm64MemFill then return false
 		// F2: not a move at all, so never a physical self-move.
 		x64LockCmpxchg to arm64ThreadPointer then return false
+		// EC16: not a move at all, so never a physical self-move.
+		leaRegBaseIndexScale to arm64AddLsl then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -818,6 +822,7 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 		// CFG edge redirects all of them through the one split block.
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return retargetJumpTableX64(module, opIdx: opIdx, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, oldTarget: oldTarget, newTarget: newTarget)
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return retargetJumpTableArm64(module, opIdx: opIdx, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, oldTarget: oldTarget, newTarget: newTarget)
+		leaRegBaseIndexScale to arm64AddLsl then panic("retargetTerminatorOp: a scaled-index address or access is a body op, not a terminator — it names no block")
 	end 'term'
 end 'retargetTerminatorOp'
 

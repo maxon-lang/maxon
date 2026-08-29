@@ -484,6 +484,21 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// use's register.
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then pushDefThreeUse(buf, dest: dest, a: addrReg, b: expectedReg, c: replacementReg)
 		arm64AtomicRmw(dest, addrReg, operandReg, _) then pushDefTwoUse(buf, dest: dest, a: addrReg, b: operandReg)
+		// --- EC16: the scaled-index band ---
+		//
+		// ⭐ EVERY ONE OF THESE REUSES AN EXISTING OPERAND SHAPE, exactly as the SSE band does, and for
+		// the same reason: the operand model answers "which registers does this op read and write?", and a
+		// SCALE is an immediate that names no register. The two address computations have
+		// `leaRegRegReg`'s shape; the indexed load has `loadRegBaseDisp`'s plus one more read; the indexed
+		// store has `storeBaseDispReg`'s plus one more read.
+		//
+		// ⚠ THE LOAD IS `pushDefTwoUse` AND NOT A REUSE, for `loadRegBaseDisp`'s reason stated one band up:
+		// x64 `mov r, [m]` is not two-address, so claiming a reuse would tell the allocator that `dest` MUST
+		// share a register with `base` — false, and a copy at every load.
+		leaRegBaseIndexScale(dest, base, index, _) then pushDefTwoUse(buf, dest: dest, a: base, b: index)
+		loadRegBaseIndexScale(dest, base, index, _, _, _) then pushDefTwoUse(buf, dest: dest, a: base, b: index)
+		storeBaseIndexScaleReg(base, index, _, _, src, _) then pushThreeUse(buf, a: base, b: index, c: src)
+		arm64AddLsl(dest, base, index, _) then pushDefTwoUse(buf, dest: dest, a: base, b: index)
 	end 'operands'
 end 'targetOpOperands'
 
@@ -538,6 +553,15 @@ function pushDefFromUse(buf OperandList, dest TargetVReg, src TargetVReg)
 	pushUse(buf, vreg: src)
 	pushDef(buf, vreg: dest)
 end 'pushDefFromUse'
+
+// Three INDEPENDENT reads and NO def — the indexed store's shape (its base, its index and the word it
+// writes are all read, and a store defines nothing). The three-operand sibling of `pushCmpOperands`,
+// which is the two-read-no-def shape; `pushDefThreeUse` one screen up is the same arity WITH a def.
+function pushThreeUse(buf OperandList, a TargetVReg, b TargetVReg, c TargetVReg)
+	pushUse(buf, vreg: a)
+	pushUse(buf, vreg: b)
+	pushUse(buf, vreg: c)
+end 'pushThreeUse'
 
 // A compare reads both registers and defines none (it sets flags only).
 function pushCmpOperands(buf OperandList, lhs TargetVReg, rhs TargetVReg)

@@ -43,7 +43,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* | ✅ `DeadStoreEliminationPass` sub-pass 3 | ✅ `DeadCodeElimination.maxon` (728) |
 | **Block merging / branch simplification** | ◑ `X64BranchCleanup` (EC11) — elision, inversion, threading, unreachable; **no reordering** | ◑ cond-br then-edge only | ✅ `CfgAnalysis` + `Canonicalize` |
 | **Strength reduction** (`mul`→`shl`, magic div) | ❌ | ❌ | ❌ |
-| **Scaled-index addressing** (`[base+idx*8]`) | ❌ *dialect cannot express it* | ❌ | ❌ |
+| **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half | ❌ | ❌ |
 | Store-forwarding / dead-store elim | ❌ | ✅ `StoreForwardingPass` + `DeadStoreEliminationPass` | ✅ via `Mem2Reg` |
 | mem2reg / SROA | **n/a — see below** | ❌ | ✅ `Mem2Reg.maxon` (2,331) |
 | Escape analysis → stack | ✅ `PromoteStackRecords` | ✅ `StackPromotionAnalysisPass` | ◑ |
@@ -61,6 +61,9 @@ constant folding, no CSE, no inlining, no LICM either, and shv2 already beats it
 reference**, and shv2 has now taken THREE of its six classical passes (branch simplification `EC11`,
 constant folding `EC12`, CSE `EC13`) — each written against shv2's own IR rather than ported, and each
 citing what it took from v1's version and what it deliberately did not.
+
+⭐ **`EC16` is the row NEITHER reference could have been read for**: no compiler in this tree emits a
+scaled-index address, so the addressing-mode row is the first where shv2 is ahead of both.
 
 ### Three things NOT to port, each with its reason
 
@@ -88,9 +91,9 @@ to argue anything.
 
 ## THE ANCHOR — one 3-line loop, and every missing pass visible at once
 
-`for v in a` over `Array with Integer`, summing (`temp/codegen-probe/arr.maxon`). **Re-measured at
-`d9de57c455`, after `EC11` and `EC12`**: the executed hot path is **14 instructions per element**,
-down from 15 — and what remains is a list of the rows still open.
+`for v in a` over `Array with Integer`, summing (`temp/codegen-probe/arr.maxon`). **Re-measured after
+`EC11`, `EC12`, `EC13` and `EC16`**: the executed hot path is **12 instructions per element**, down
+from 15 — and what remains is a list of the rows still open.
 
 ```
   forhdr:     load rax,[rbx+8]      ← length, RELOADED every trip          (EC14 LICM)
@@ -99,9 +102,7 @@ down from 15 — and what remains is a list of the rows still open.
               cmp rax,8 ; jcc notEqual,__im_stride   ← a RUNTIME stride dispatch on a
                                                        type whose stride is 8 at COMPILE TIME (EC15)
   __im_word:  load rax,[rbx+0]      ← buffer base, RELOADED every trip     (EC14 LICM)
-              imul rcx,r13,8        ← index scaling by IMUL                (EC16 addressing mode)
-              lea  rax,rax,rcx
-              load rax,[rax+0]
+              load rax,[rax+r13*8]  ← EC16 folded the `imul` AND the `lea` into this operand
               jmp  __il_cont        ← __im_stride is physically next, so EC11 cannot elide this.
                                       BLOCK REORDERING would (filed, not taken)
   __il_cont:  lea  r12,r12,rax      ← EC11 elided this block's `jmp forstep`
@@ -110,8 +111,8 @@ down from 15 — and what remains is a list of the rows still open.
 ```
 
 An ideal x64 body is **5**: `mov rax,[rbx+r13*8]` · `add r12,rax` · `inc r13` · `cmp r13,len` · `jl`.
-**14 → 5.** Each row of the ranking below is one of the reasons for the other nine, and they are
-independent of each other.
+**12 → 5**, and the element read itself is now the ideal instruction — every one of the seven that
+remain is a row still open. They are independent of each other.
 
 ⚠ Note what this is NOT: the `__im_*` arms are `EC1`'s inlined fast path, and `EC1` was a large
 measured win (a checked read went 176 → 26 instructions). The defect is that the inlined arm is
@@ -371,13 +372,95 @@ shrinks what `EC11` then has to lay out.
 
 #### `EC16` · Scaled-index addressing
 
-shv2's x64 dialect has exactly `loadRegBaseDisp(base, disp)` and `leaRegRegReg(base, index)` at
-**scale 1** (`TargetDialect.maxon:455`) — there is no `[base + index*scale + disp]`. So every element
-access pays a separate `imul`/`lea` to scale the index. **MEASURED** on nbody: **41 of 45 `imul`-by-immediate
-are by a power of two, and 36 of those are `×8` — element-index scaling, one per array access**. Adding `loadRegBaseIndexScale` /
-`storeBaseIndexScaleReg` folds three ops into one on the hottest shape in the language. arm64 has
-the same instruction (`LDR Xd,[Xn,Xm,LSL #3]`) and the same gap — **one of the few rows where the
-cross-target change is genuinely equivalent**, so do both.
+shv2's x64 dialect had exactly `loadRegBaseDisp(base, disp)` and `leaRegRegReg(base, index)` at
+**scale 1** — there was no `[base + index*scale + disp]`. So every element access paid a separate
+`imul`/`lea` to scale the index. **MEASURED** on nbody: **40 `imul`-by-immediate, 37 of them by a power
+of two and 36 of those `×8`** — element-index scaling, one per array access. This is the hottest shape
+in the language: `EC1`'s `inlineManagedPrimitives` puts an inline element access at every array read
+and write in every program.
+
+✅ **LANDED 2026-08-28.** Four new `TargetOp`s appended at the union tail — x64's
+`leaRegBaseIndexScale` / `loadRegBaseIndexScale` / `storeBaseIndexScaleReg` and arm64's `arm64AddLsl`
+— plus `StdLoweringShared.ScaledIndexFolds`, the instruction-selection analysis that matches
+`binOpImm(mul, index, 2^k)` → `binOp(add, buffer, offset)` → `loadIndirect`/`storeIndirect` and hands
+the whole address to the memory op. `scripts/emitted-code-count.py`, committed corpus, before → after:
+
+| | ops | imul-imm | imul-pow2 |
+|---|---|---|---|
+| nbody | 9,477 → **9,407** | 40 → **5** | 37 → **2** |
+| fannkuch-redux | 2,456 → **2,408** | 24 → **0** | 24 → **0** |
+| arr | 126 → **124** | 1 → **0** | 1 → **0** |
+| TOTAL | 12,207 → **12,087** (−1.0%) | 66 → **6** | 62 → **2** |
+
+**−2 ops per folded chain, not −1**: 60 `imul`s went and `ops` fell by 120, so every one of them took
+its `lea` with it — the full 3 → 1 collapse. `jmp`, `jmp→next`, `jmp-only blocks` and `idiv` are
+byte-identical, as they must be.
+
+⭐ **THE COMPILER ALLOCATES LESS FOR IT, WHICH THE ROW DID NOT PREDICT.** Against a real control (the
+same tree with the change stashed, both binaries built and laddered in one session): emitted **code
+bytes −0.39%…−0.46% at every rung**, for **−1.59% of compile allocations** at rung 5 — `phase:regalloc`
+alone is **−4.97%** (and its CPU −4.6%), because the two intermediates the fold deletes are two fewer
+values to colour. The price is `phase:isel`: +0.12% allocations and **+17.3% CPU**, which is the
+analysis's two O(ops) walks over every function whether or not it indexes anything — 2.3% of the
+compile, so +0.4% overall, and linear on the ladder (×1.64…×1.93 per doubling). The scale corpus
+contains little array indexing, so −0.4% of emitted code is a floor rather than the win on real code.
+
+⭐⭐ **NO PARALLEL ENCODER WAS WRITTEN, WHICH WAS THE STANDING INSTRUCTION AFTER EC12 AND EC13.** The
+SIB index became an OPTIONAL PARAMETER of `X64Backend`'s existing `[base + disp]` assembler
+(`emitBaseDispModRmBits`), so `[base + disp]` and `[base + index*scale + disp]` are one address
+operand with one home for the rsp-index and rbp/r13-disp8 traps — and `encodeLeaRegRegReg` and the
+jump table's `encodeMovsxdRegBaseIndexScale4`, which each hand-spelled their own SIB, now route
+through it. `emitRexRXB` was deleted into `emitRex` (it differed in the REX.X bit and in nothing
+else), and `classifyArithOperands` — the dialect's one answer to "what does this op compute?" — is
+what the new analysis matches on, gaining only an `isBinaryArithImm()` predicate.
+
+⚠ **THAT +17.3% WAS +4.8% UNTIL REVIEW, AND THE DIFFERENCE IS A DELIBERATE TRADE.** The first cut
+skipped the use walk for functions with no scale multiply, through a SECOND `blockRefs` → `opRefs`
+descent — and two descents over the same ops fail here in the PERMISSIVE direction and in silence: a
+pre-scan that came to visit fewer ops than the record walk would stop the fold for that whole
+function, and the goldens would simply be MINTED showing the unfolded three-instruction chain with
+nothing red anywhere. One descent, 0.4% of compile CPU.
+
+⚠ **THE FIRST CUT COST +47% OF `phase:encode`'s ALLOCATIONS, AND ONLY THE CONTROL SAW IT.** The index
+was a RECORD with a `none()` default, and a record-typed default is CONSTRUCTED at every call — of an
+encoder that runs once per emitted instruction: 372,734 → 548,168 allocations at rung 5, with the
+emitted code byte-identical either way. It is two scalars now (`index` + `indexScale`), where "no
+index" is spelled `X64Register.rsp` — not an invented sentinel but x64's own encoding, since SIB index
+field 100 with REX.X clear IS "no index" and 100 is rsp's number, which is exactly why rsp can never
+be a real index. `StdArithOperands`' header records the same trap one tier up.
+
+**Scope, and the three conditions that set it** (`specs-shv2/scaled-index-addressing.md` is the pin):
+
+- **The multiplier must be 1, 2, 4 or 8**, stated once as `MemoryIndexScale`'s case list because it is
+  what x64's two SIB scale bits and AArch64's `LSL` amount both hold.
+- **The intermediate must have NO OTHER READER**, or it must be materialised anyway and the fold ADDS
+  an instruction. `StdValueUseSet` gained an OPT-IN repeat column for it — the same walk, one more bit
+  of resolution — and `collectFunctionValueUses` (its whole-function wrapper, now shared with
+  `FoldConstOperands`) is what makes the count complete: op operands, terminators, phi branch-edge
+  args, and a value read TWICE by one op, which is how `t + t` is refused with no special case.
+- **The chain must be in ONE BLOCK.** Cross-block is SOUND (the add's def dominates the memory op, so
+  its operands do too) but stretches `base` and `index` across a block boundary in place of one
+  value's, and shv2 REFUSES rather than spills — EC13 measured exactly that as an `E5001`. **Measured
+  here: no E5001 anywhere in a 6,806-case run**, and `generic-hash-table-regalloc/…witness-dispatch-inside-a-pressured-loop`
+  — EC13's red case — stays green.
+
+**arm64 took the ADDRESS half and NOT the memory half, and the asymmetry is the row's one correction
+to its own premise.** `ADD Xd, Xn, Xm, LSL #k` is exactly `lea [base + index*2^k]` and arm64 gains
+MORE from it than x64 does — AArch64 has no multiply-immediate at all, so `lowerMulImm` was
+materialising the stride into the IP scratch and following with a register `MUL`, three instructions
+where this is one. But `LDR Xt, [Xn, Xm, LSL #3]` is **NOT** `loadRegBaseIndexScale`'s equivalent: its
+`S` bit selects a shift of 0 or exactly log2(access size) — there is no `LSL #1`/`#2` for a 64-bit
+access — and the register-offset form carries **no displacement field at all**, over three more
+encodings (LDR Xt / LDR Dt / LDRB Wt and their stores). ⇒ the isel asks for `foldsIntoMemoryOps:
+false` on that lane. ⚠ **UNVERIFIED: this host cannot run the arm64 suite, and that lane's goldens
+will move when one does.**
+
+**Left open**: the arm64 memory fold above; a CROSS-BLOCK chain (bounded by the pressure argument, not
+by soundness); an ADDRESS with two memory readers, where folding into both would delete the `add`
+outright; a non-zero DISPLACEMENT, which the op carries and nothing currently produces (every element
+access loads at `+0`); and the BYTE-width indexed forms, which the shared width dispatcher gives for
+free and which no lowering can currently reach — a one-byte element has stride 1, so `index * 1` is
+folded to `index` by `foldConstOperands`' identity rule and there is no multiply left to absorb.
 
 #### `EC2` *(already on the board, ⬜ FREE)*
 
@@ -447,8 +530,10 @@ range checks. **Measure the corpus first**; this may be a row with nothing behin
 ## What is deliberately absent from this roadmap
 
 - **arm64-macos and wasm32-wasi as first-class rows.** Design and measure on x64-windows (the host
-  lane); each row states what it owes the other lanes. `EC16` is the exception — the arm64
-  instruction is the same instruction and should land together.
+  lane); each row states what it owes the other lanes. `EC16` was filed as the exception — "the arm64
+  instruction is the same instruction" — and that held for the ADDRESS and NOT for the ACCESS; see the
+  row for what AArch64's register-offset load actually encodes. It landed on both lanes anyway, at
+  different depths, and owes arm64 a golden mint on a Mac.
 - **Compiler-speed work.** `scale-test` and `docs/optimization-log.md` are a different axis; a row
   here is judged by `self-host-ab.sh` and `--emit-ir`, not by the ladder.
 

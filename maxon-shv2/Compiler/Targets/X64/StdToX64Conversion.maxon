@@ -880,6 +880,13 @@ type StdToX64Lowering
 	// binds it), and then it emits `cmp` + `setcc` + `jcc` — sound because `setcc` and `movzx`
 	// READ the flags rather than writing them.
 	var valuesReadFromRegisters as StdValueUseSet
+	// EC16 — the `base + index*scale` chains this function's element accesses spell, and which of them
+	// the memory op itself can carry (`ScaledIndexFolds`, in the shared lowering). x64 answers
+	// `foldsIntoMemoryOps: true`: its `mov`/`movsd`/`movzx` all take a full SIB operand with a
+	// displacement, so a whole `imul`+`lea`+`mov` chain collapses to one instruction.
+	//
+	// Created ONCE and RESET per function, unlike the three tables above — see the type's `create`.
+	var scaledIndexFolds as ScaledIndexFolds
 	// The module's CHECKED name index (`FunctionNameIndex`, A2l), built by `eliminateDeadFunctions` over the
 	// array it left behind and threaded down from `buildBackend`. It answers "what register FILE does this
 	// callee's result come back in?" — XMM0 for a float-returning callee, R8 otherwise (see
@@ -897,7 +904,7 @@ type StdToX64Lowering
 	var calleeParamClasses as CalleeParamClassMap
 
 	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns StdToX64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), fusedUnsignedCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), fusedUnsignedCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
 	end 'create'
 
 	// The value-class column producer — the pass that answers "what register file does this op's
@@ -1114,6 +1121,7 @@ type StdToX64Lowering
 		self.fusedUnsignedCmps = StdValueUseSet.create()
 		self.computeFusedCmps(srcFunc, fused: self.cmpPreds, floatCmps: self.fusedFloatCmps, unsignedCmps: self.fusedUnsignedCmps)
 		self.valuesReadFromRegisters = self.computeValuesReadFromRegisters(srcFunc)
+		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, foldsIntoMemoryOps: true)
 	end 'prepareFunctionTables'
 
 	// The function's block count as the STD module knows it — a scoped read, so the caller holds
@@ -1677,6 +1685,15 @@ type StdToX64Lowering
 			return
 		end 'float'
 
+		// EC16 — this `+` is the second half of a `base + index*scale` element address: it emits the
+		// whole address as ONE `lea` (the multiply that fed it emitted nothing), or NOTHING AT ALL when
+		// its one memory reader carries the address itself. Asked before the opcode match because the
+		// answer replaces the instruction rather than choosing between forms of it.
+		if self.scaledIndexFolds.isIndexedAddress(resultId) 'scaledIndexAddress'
+			self.lowerScaledIndexAddress(resultId, dstBlock: dstBlock)
+			return
+		end 'scaledIndexAddress'
+
 		let dest = TargetVReg.virtual(resultId)
 		let lhsReg = TargetVReg.virtual(lhs)
 		let rhsReg = TargetVReg.virtual(rhs)
@@ -1866,6 +1883,12 @@ type StdToX64Lowering
 	// literal needs no register and the op sets no flags); `mul` to the 3-operand `imul
 	// dest, lhs, imm`. None is two-address, so no reuse copy is ever needed.
 	function lowerBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, dstBlock IrBlock)
+		// EC16 — an element-index scaling the addressing mode carries for free. The `imul` is not
+		// emitted anywhere; the address op that reads this value names `lhs` and the scale directly.
+		if self.scaledIndexFolds.retiresScaleDef(resultId) 'foldedIntoAddress'
+			return
+		end 'foldedIntoAddress'
+
 		let dest = TargetVReg.virtual(resultId)
 		let base = TargetVReg.virtual(lhs)
 		match opcode 'op'
@@ -1907,13 +1930,42 @@ type StdToX64Lowering
 	// `loadIndirect` → `mov dest, [base + disp]` / `movzx dest, byte [base + disp]`. The width and
 	// displacement doors (`accessWidthFor`, `memoryDisplacement`) are shared with the arm64 lowering.
 	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstBlock IrBlock)
+		// EC16 — the address is a `base + index*scale` chain nothing else reads, so the SIB operand
+		// carries it and the `imul`/`lea` that computed it emitted nothing. The op's own `offset`
+		// rides the displacement field, so a field read off an indexed element is still ONE `mov`.
+		if self.scaledIndexFolds.fusesIntoMemoryOp(addrId) 'indexed'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseIndexScale(TargetVReg.virtual(resultId), base: TargetVReg.virtual(self.scaledIndexFolds.baseOf(addrId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(addrId)), scale: self.scaledIndexFolds.scaleOf(addrId), disp: memoryDisplacement(offset), width: accessWidthFor(valueType)))
+			return
+		end 'indexed'
+
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), width: accessWidthFor(valueType)))
 	end 'lowerLoadIndirect'
 
 	// `storeIndirect` → `mov [base + disp], src`.
 	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstBlock IrBlock)
+		// EC16 — the store mirror of the indexed load above.
+		if self.scaledIndexFolds.fusesIntoMemoryOp(addrId) 'indexed'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseIndexScaleReg(TargetVReg.virtual(self.scaledIndexFolds.baseOf(addrId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(addrId)), scale: self.scaledIndexFolds.scaleOf(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
+			return
+		end 'indexed'
+
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
 	end 'lowerStoreIndirect'
+
+	// EC16 — emit a matched `base + index*scale` address: NOTHING when the one memory op reading it
+	// carries the address itself, else the single `lea` that replaces the `imul`+`lea` pair.
+	//
+	// ⭐ IT IS PRESSURE-NEUTRAL EVEN IN THE `lea` CASE, which is why it fires whether or not the memory
+	// fold does: before, `index` was live to the `imul` and the multiply's RESULT live from there to the
+	// `add`; after, `index` is live to the `lea` and there is no intermediate at all. Same count of
+	// simultaneously-live values at every point, one fewer instruction.
+	function lowerScaledIndexAddress(resultId ValueId, dstBlock IrBlock)
+		if self.scaledIndexFolds.fusesIntoMemoryOp(resultId) 'carriedByTheAccess'
+			return
+		end 'carriedByTheAccess'
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegBaseIndexScale(TargetVReg.virtual(resultId), base: TargetVReg.virtual(self.scaledIndexFolds.baseOf(resultId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(resultId)), scale: self.scaledIndexFolds.scaleOf(resultId)))
+	end 'lowerScaledIndexAddress'
 
 	// Lower a Std `div`/`mod` to the x64 divide sequence. Both group-3 divides read the
 	// 128-bit RDX:RAX and divide it by the divisor, leaving the QUOTIENT in RAX and the REMAINDER in

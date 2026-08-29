@@ -1595,6 +1595,63 @@ export union TargetOp
 	// One plain def and no use; it needs no scratch, because the three instructions read and write `dest`
 	// alone. `isMemory: false` — a system-register read touches no memory.
 	arm64ThreadPointer(dest TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// --- EC16: the SCALED-INDEX addressing band (docs/emitted-code-roadmap.md) ---
+	//
+	// APPENDED AT THE END OF THE UNION, past `arm64ThreadPointer`, per the band-append invariant the BIT
+	// band states at length: every range arm over `TargetOp` stops at or before the old tail, so an op
+	// inserted anywhere else is silently swallowed by one of them.
+	//
+	// ⭐⭐ **WHAT THESE EXIST FOR.** Until EC16 the dialect could express exactly `[base + disp]` and
+	// `[base + index]` at scale 1, so EVERY indexed element access paid a separate multiply to scale the
+	// index: `imul rcx, idx, 8` / `lea rax, [buf + rcx]` / `mov rax, [rax]`, three instructions for what
+	// x64 addresses in one. `InlineManagedPrimitives` (EC1) puts one of those at every array read and
+	// write in every program, which is why 36 of nbody's 40 `imul`-by-immediate were `×8`.
+	//
+	// ⚠ **THE SCALE IS AN ENUM, NOT A SHIFT COUNT** — see `MemoryIndexScale`. Four values, because the
+	// hardware carries four.
+	//
+	// `lea dest, [base + index*scale]` (REX.W 8D /r + SIB). `leaRegRegReg`'s shape and metadata exactly
+	// — three INDEPENDENT operands (no reuse, so no seed copy) and NO flags, which is the asymmetry that
+	// makes this a strict win over the `imul` it replaces: `imul` writes OF/CF and this writes none, so
+	// deleting the multiply can only REMOVE a flag write, never add one.
+	//
+	// Its arm64 twin is `arm64AddLsl`, not this op — x64 spells `+` as a `lea` and arm64 as an `add`, so
+	// the two ISAs already have separate ops for the scale-1 case (`leaRegRegReg` / `arm64Add`) and this
+	// band keeps that split rather than inventing a shared one for the scaled case alone.
+	leaRegBaseIndexScale(dest TargetVReg, base TargetVReg, index TargetVReg, scale MemoryIndexScale) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `mov dest, [base + index*scale + disp]` (word64) / `movzx dest, byte [base + index*scale + disp]`
+	// — `loadRegBaseDisp` with the index the dialect could not carry. Same metadata and the same operand
+	// shape as that op plus one more use: `dest` is INDEPENDENT of both address registers (a load's
+	// destination need not be either), so no seed copy is ever emitted.
+	//
+	// ⚠ **THE DISPLACEMENT IS CORRECT BY CONSTRUCTION AND CURRENTLY DEAD, AND THAT IS WORTH SAYING
+	// PLAINLY** — an earlier draft of this comment claimed it "subsumes the `+ field` of a struct field
+	// read off an indexed element", and that was MEASURED FALSE: every `loadRegBaseIndexScale` and
+	// `storeBaseIndexScaleReg` in the committed goldens carries `+ 0`, without exception. An element
+	// slot of a struct-typed array holds a POINTER, so the field read is a separate `loadRegBaseDisp`
+	// off the loaded pointer and never a displacement on this operand. The field costs nothing (it
+	// shares `chooseDispMod`/`emitTrailingDisp` with the heavily-exercised unindexed path) and it is
+	// what a future lowering with a non-zero element offset would use — but nothing produces one today.
+	loadRegBaseIndexScale(dest TargetVReg, base TargetVReg, index TargetVReg, scale MemoryIndexScale, disp Imm32, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `mov [base + index*scale + disp], src` — the store mirror. THREE uses and no def.
+	storeBaseIndexScaleReg(base TargetVReg, index TargetVReg, scale MemoryIndexScale, disp Imm32, src TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `ADD Xd, Xn, Xm, LSL #shift` — the arm64 twin of `leaRegBaseIndexScale`, and `arm64Add`'s shape
+	// with the shifted-register field filled in. Three independent operands, no flags (`ADD`, not `ADDS`).
+	//
+	// ⭐ **arm64 GAINS MORE FROM THIS THAN x64 DOES, because AArch64 has no multiply-immediate at all**:
+	// `StdToArm64Conversion.lowerMulImm` materialises the multiplier into the IP scratch and follows with
+	// a register `MUL`, so the scaling that costs x64 one `imul` costs arm64 TWO instructions plus a
+	// scratch register. This op replaces all three (movz, mul, add) with one.
+	//
+	// ⚠ **arm64's INDEXED LOAD/STORE IS DELIBERATELY ABSENT, and it is not an oversight.** `LDR Xt, [Xn,
+	// Xm, LSL #3]` exists, but it is NOT the equivalent of `loadRegBaseIndexScale`: its `S` bit selects
+	// shift 0 or exactly log2(access size) — there is no `LSL #1`/`#2` for a 64-bit access — and the
+	// register-offset form carries NO displacement field at all. So the fold that is one rule on x64 is
+	// three conditions on arm64, over three more encodings (LDR Xt / LDR Dt / LDRB Wt and their stores),
+	// on a lane this project cannot run. `StdToArm64Conversion` therefore asks for the address fold and
+	// declines the memory fold; the remaining `add` is one instruction, which is where arm64 already
+	// stood before the multiply existed.
+	arm64AddLsl(dest TargetVReg, base TargetVReg, index TargetVReg, scale MemoryIndexScale) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the
@@ -1610,6 +1667,83 @@ export enum X64AccessWidth
 	byte
 	word64
 end 'X64AccessWidth'
+
+// ⭐ **THE INDEX SCALE OF A `[base + index*scale]` ADDRESS — the four multipliers a hardware
+// addressing mode carries for free, and the ONE place they are named (EC16).**
+//
+// TARGET-NEUTRAL for `FloatRoundMode`'s reason: x64's SIB scale field (00/01/10/11) and AArch64's
+// `LSL #amount` are two ENCODINGS of one decision, and the decision is the ISEL's. Each encoder maps
+// this to its own bits; nothing else does. Both readings are derived from the enum below rather than
+// written out again — `memoryIndexScaleShift` is the field both ISAs actually encode, and
+// `memoryIndexScaleFactor` is the multiplier the Std-tier `binOpImm(mul, …)` carried — so the set
+// {1, 2, 4, 8} is stated exactly once, as this enum's case list.
+//
+// ⚠ IT IS NOT A GENERAL POWER-OF-TWO: x64 SIB has two scale bits and AArch64's load/store `S` bit
+// reaches only the access width, so a multiply by 16 has NO addressing form on either and must stay
+// an instruction. That is why the domain is an enum with four cases rather than a shift count — a
+// fifth case is a hardware claim, and it would fail to compile at every encoder until made good.
+export enum MemoryIndexScale
+	byOne
+	byTwo
+	byFour
+	byEight
+end 'MemoryIndexScale'
+
+// The SHIFT the scale denotes — x64's 2-bit SIB scale field verbatim, and AArch64's `LSL #amount`
+// verbatim. Two bits wide because that is the whole domain (see the enum's header).
+export typealias MemoryIndexScaleShift = int(0 to 3)
+
+// The MULTIPLIER the scale denotes — what a Std `binOpImm(mul, index, imm)` carried before the fold.
+export typealias MemoryIndexScaleFactor = int(1 to 8)
+
+// A dense per-value column of scales — what `ScaledIndexFolds` records against each address it matched.
+export typealias MemoryIndexScaleArray = Array with MemoryIndexScale
+
+export function memoryIndexScaleShift(scale MemoryIndexScale) returns MemoryIndexScaleShift
+	return match scale 's'
+		byOne gives 0
+		byTwo gives 1
+		byFour gives 2
+		byEight gives 3
+	end 's'
+end 'memoryIndexScaleShift'
+
+export function memoryIndexScaleFactor(scale MemoryIndexScale) returns MemoryIndexScaleFactor
+	return match scale 's'
+		byOne gives 1
+		byTwo gives 2
+		byFour gives 4
+		byEight gives 8
+	end 's'
+end 'memoryIndexScaleFactor'
+
+// The scale a `binOpImm(mul, index, multiplier)` denotes, or `notAScale` — the ISEL's admission test
+// and its conversion in ONE answer, so the two cannot come to disagree about which multipliers the
+// hardware carries. The case list is walked rather than re-spelled as four comparisons: the set lives
+// in the enum, and a case added there is admitted here with no edit at all.
+export function memoryIndexScaleOfFactor(multiplier Imm32, scale MemoryIndexScaleMatch) returns bool
+	for candidate in MemoryIndexScale.allCases 'eachScale'
+		if multiplier == memoryIndexScaleFactor(candidate) 'isThisOne'
+			scale.value = candidate
+			return true
+		end 'isThisOne'
+	end 'eachScale'
+	return false
+end 'memoryIndexScaleOfFactor'
+
+// The out-parameter `memoryIndexScaleOfFactor` writes through. A RECORD the caller owns rather than a
+// returned union, for `StdArithOperands`' reason: the admission test runs on every `binOpImm` of every
+// function the backend lowers, and a fresh heap object per op is what `fuseIfDefines`' header records
+// costing ~3,500 allocations on the smallest scale rung.
+//
+// ⚠ `value` IS MEANINGLESS UNTIL A CALL RETURNS `true` — `byOne` is a real scale, not a sentinel.
+export type MemoryIndexScaleMatch
+	export var value as MemoryIndexScale
+
+	export static function create() returns MemoryIndexScaleMatch
+		return Self{value: MemoryIndexScale.byOne}
+	end 'create'
+end 'MemoryIndexScaleMatch'
 
 // ⭐ THE ROUNDING DIRECTION a `roundsd`/`frint` performs — the operand carried by x64's
 // `roundsdRegReg` and arm64's `arm64Frint`, and the ONE place the three directions the language

@@ -573,7 +573,7 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(store)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: bufferDisp)
-	encodeLeaRegRegReg(asm.code, dest: X64Register.r9, base: X64Register.r9, index: X64Register.rax)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r9, base: X64Register.r9, index: X64Register.rax, scale: MemoryIndexScale.byOne)
 	encodeStoreBaseDispReg8(asm.code, base: X64Register.r9, disp: 0, srcReg: X64Register.rdx)
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
@@ -643,7 +643,7 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
 	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: SymtabEntryShift)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
-	encodeLeaRegRegReg(asm.code, dest: X64Register.r9, base: X64Register.r9, index: X64Register.r8)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r9, base: X64Register.r9, index: X64Register.r8, scale: MemoryIndexScale.byOne)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.r9, disp: SymtabOffEntries)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: SymtabEntryOffCodeOffset, wide: false)
@@ -666,7 +666,7 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 
 	// name_ptr = symtable + best (nameOffset is relative to the table's start)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
-	encodeLeaRegRegReg(asm.code, dest: X64Register.rcx, base: X64Register.rcx, index: X64Register.rax)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rcx, base: X64Register.rcx, index: X64Register.rax, scale: MemoryIndexScale.byOne)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: newline)
 
@@ -846,7 +846,7 @@ function buildFaultBacktraceChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: StackWindowBytes)
-	encodeLeaRegRegReg(asm.code, dest: X64Register.r8, base: X64Register.r8, index: X64Register.rax)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r8, base: X64Register.r8, index: X64Register.rax, scale: MemoryIndexScale.byOne)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
 
 	return asm.finishFunction(FaultBacktraceName)

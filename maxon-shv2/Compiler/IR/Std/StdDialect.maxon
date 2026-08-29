@@ -2402,6 +2402,14 @@ export type StdArithOperands
 		return self.shape == StdArithShape.comparison
 	end 'isComparison'
 
+	// The IMMEDIATE binary-arithmetic shape — `binOpImm`, an `opcode` over `lhs` and `imm`. Named
+	// beside `isBinaryArith` because a reader that cares WHICH binary shape it has cannot ask
+	// `hasImmediate()`: that is true of `comparisonImm` too, whose `opcode` field was never written
+	// (see the header — the fields are meaningless until the shape says which were filled).
+	export function isBinaryArithImm() returns bool
+		return self.shape == StdArithShape.binaryArithImm
+	end 'isBinaryArithImm'
+
 	// Whether this record describes an arithmetic op at all — the admission test for a pass whose
 	// subject is EVERY shape rather than one of them.
 	export function isArithmetic() returns bool
@@ -2577,10 +2585,55 @@ end 'classifyArithOperands'
 // for the `Set` it replaces, with the same three operations and no hashing at all.
 export type StdValueUseSet
 	var member as BoolArray
+	// ⭐ THE SECOND READING THE SAME WALK CAN GIVE: which ids were inserted MORE THAN ONCE — "this
+	// value has another reader", which is the admission test of every fold that CONSUMES a value
+	// rather than merely reading it (EC16's scaled-index address is the first).
+	//
+	// ⚠ THE **GROWTH** IS OPT-IN, NOT THE FIELD — and the difference is measured. A second `BoolArray`
+	// over the function's whole value space is real memory, and nine of this type's ten users only ever
+	// ask `contains`, so `create` leaves `tracksRepeats` false and `insert` never GROWS the column for
+	// them. What they still pay is the empty `BoolArray.create()` in the constructor: `scale-test`
+	// charges that ~25,000 allocations at rung 5, one per `StdValueUseSet.create()`, spread over
+	// `foldConstOperands` / `foldConstants` / `promoteStackRecords` / `pruneDeadBlockArgs` / `isel`
+	// (see `docs/optimization-log.md`'s EC16 row). It is +0.06% of a compile against the −1.59% the
+	// fold this column serves buys back — stated because an unexplained number in that table is the
+	// thing the instrument exists to prevent, not because it is large.
+	var tracksRepeats as bool
+	var repeated as BoolArray
 
 	export static function create() returns StdValueUseSet
-		return Self{member: BoolArray.create()}
+		return Self{member: BoolArray.create(), tracksRepeats: false, repeated: BoolArray.create()}
 	end 'create'
+
+	// The counting form — same set, plus `containsRepeat`. See `tracksRepeats`.
+	export static function createTrackingRepeats() returns StdValueUseSet
+		return Self{member: BoolArray.create(), tracksRepeats: true, repeated: BoolArray.create()}
+	end 'createTrackingRepeats'
+
+	// Empty the set, KEEPING the column's capacity — for a per-function set that is hoisted out of
+	// the function loop rather than re-created inside it (`Array.clear` keeps capacity, so the second
+	// function's inserts reuse the first's buffer and the whole walk allocates once per compilation).
+	export function clear()
+		self.member.clear()
+		self.repeated.clear()
+	end 'clear'
+
+	// Whether `valueId` was inserted MORE THAN ONCE — i.e. some second op, branch edge or second
+	// operand of the same op also reads it.
+	//
+	// It PANICS on a set that was not created counting, rather than answering `false`: a reader that
+	// asks this of a plain `create()` set is asking a question the walk never recorded, and `false`
+	// would mean "nothing else reads it" — the permissive answer, which for a consuming fold is a
+	// WRONG ANSWER and not a missed one.
+	export function containsRepeat(valueId ValueId) returns bool
+		if not self.tracksRepeats 'notCounting'
+			panic("StdValueUseSet.containsRepeat: this set was built by `create()`, which records membership only — a reader that needs multiplicity must build it with `createTrackingRepeats()`")
+		end 'notCounting'
+		if valueId >= self.repeated.count() 'neverRepeated'
+			return false
+		end 'neverRepeated'
+		return try self.repeated.get(valueId) otherwise panic("StdValueUseSet.containsRepeat: repeated.get OOB at {valueId}")
+	end 'containsRepeat'
 
 	export function insert(valueId ValueId)
 		// `growFilled`, NOT `resize`: this column is extended ONE ENTRY AT A TIME (inserting ids in
@@ -2589,6 +2642,11 @@ export type StdValueUseSet
 		// on the first cut of this very type: +4 GB at scale rung 5, with the byte curve at exponent 2.0.
 		// `growFilled` grows the capacity geometrically and clears what the growth added.
 		self.member.growFilled(valueId + 1, value: false)
+
+		if self.tracksRepeats and self.contains(valueId) 'secondReader'
+			self.repeated.growFilled(valueId + 1, value: false)
+			try self.repeated.set(valueId, value: true) otherwise panic("StdValueUseSet.insert: repeated.set OOB at {valueId}")
+		end 'secondReader'
 
 		try self.member.set(valueId, value: true) otherwise panic("StdValueUseSet.insert: member.set OOB at {valueId}")
 	end 'insert'
@@ -2607,6 +2665,37 @@ export type StdValueUseSet
 		return self.member.count() == 0
 	end 'isEmpty'
 end 'StdValueUseSet'
+
+// ⭐ EVERY VALUE ID A FUNCTION READS — every operand of every live op, its terminator included, plus
+// every value passed on a phi branch edge. The whole-function wrapper around `collectStdOpUses`, whose
+// contract stops at ONE op and deliberately excludes the branch-edge args (they live on the
+// predecessor's `IrBlock`, not on any op), so a caller that forgot the edges would silently believe a
+// phi operand had no reader.
+//
+// The set is HANDED IN rather than returned, which is what lets a caller choose the counting form
+// (`StdValueUseSet.createTrackingRepeats`) or reuse one buffer across every function of a module.
+//
+// It walks `func.blockRefs` directly rather than `IrModule.liveOpIndices`, which visits exactly the
+// same ops and allocates a fresh `OpIndexArray` to say so.
+export function collectFunctionValueUses(module StdModule, func IrFunction, referenced StdValueUseSet)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectFunctionValueUses: blockRef from func.blockRefs not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			collectStdOpUses(try module.ops.get(opIdx) otherwise panic("collectFunctionValueUses: opIdx {opIdx} not in module.ops"), referenced: referenced)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			collectStdOpUses(try module.ops.get(block.terminatorIndex()) otherwise panic("collectFunctionValueUses: terminatorIndex not in module.ops"), referenced: referenced)
+		end 'hasTerm'
+
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				referenced.insert(argId)
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+end 'collectFunctionValueUses'
 
 // Add the value ids `op` READS to `referenced` — its DEFS are not uses, and neither are the
 // branch-edge args (those live on the predecessor's `IrBlock`, not on the op). Exhaustive
