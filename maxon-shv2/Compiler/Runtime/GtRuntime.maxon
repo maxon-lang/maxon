@@ -3163,6 +3163,21 @@ export let PromiseSlotBytes = PointerFieldBytes
 // `__gt_cell_complete` for a reply) and read here, and a read that misses a status published a microsecond
 // ago simply drives once more and reads it on the next pass.
 //
+// ⚠⚠ **BUT A STALE READ IS THE ONLY FAILURE THIS SCAN MAY HAVE, AND WHAT RULES OUT THE OTHER ONE IS THE
+// PLATFORM RATHER THAN THIS CODE.** Both writers publish `completed` LAST, after the two answer words — the
+// trampoline's hand-assembled `mov`s (`X64GtRuntime.buildGtTrampolineChunk`) and `__gt_cell_complete`'s three
+// `storeIndirect`s, which `GtCellCompleteName` records as *"in the trampoline's own order"*. Neither carries a
+// fence or a release store, so a scanner on ANOTHER M sees `completed` only after `result`/`threw` **because
+// x86-TSO does not reorder stores with stores**, and its own two loads — the slot, then `status` through it —
+// are load-load ordered for the same reason. That is sound at this rung and cheap, and it is sound only while
+// the substrate is x64-windows, which `SemanticCheck.calleeNeedsWin32Substrate` refuses to leave.
+//
+// ⛔ **SO IT IS A THING W223 OWES, NOT A THING W223 INHERITS.** The day the scheduler reaches arm64 its store
+// order becomes observable and these three publications each need a release, or the scan reads a `completed`
+// GT whose result slot nobody wrote — a WRONG ANSWER on the awaited value, not a crash, and no gate on this
+// lane can see it. Written down here because this scan is the SECOND reader of that order, and the first one
+// (`__gt_drive_until`) reads a status it was handed the address of, where this one reads K it inferred.
+//
 // ⚠ **A `0` SLOT IS SKIPPED RATHER THAN DEREFERENCED.** `Array.resize` publishes length over slots nobody
 // filled and the gap past the old length is always ZERO, so a zero inside `[0, length)` is a slot with no
 // promise in it — reading `status` through it would fault on the null page.
