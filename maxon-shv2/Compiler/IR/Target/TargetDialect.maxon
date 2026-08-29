@@ -1652,6 +1652,30 @@ export union TargetOp
 	// declines the memory fold; the remaining `add` is one instruction, which is where arm64 already
 	// stood before the multiply existed.
 	arm64AddLsl(dest TargetVReg, base TargetVReg, index TargetVReg, scale MemoryIndexScale) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// ⭐⭐ **`imul r/m64` — the ONE-OPERAND group-3 signed multiply (`REX.W F7 /5`): RDX:RAX ⟸ RAX × src,
+	// and this op is the half of it a division-by-constant needs, the HIGH one in RDX (EC18).**
+	//
+	// ⚠ **ITS REGISTER MODEL IS `divideReg`'s, EXACTLY, AND FOR THE SAME REASON.** RAX is an implicit
+	// USE (the other multiplicand) and RAX+RDX are implicit DEFS (the 128-bit product), so the masks
+	// are byte-identical to the divide's: `implicitUses: 0x1` (RAX) and `implicitDefs: 0x5` (RAX|RDX).
+	// `forbidOperandsFromImplicit` is what then keeps `src` out of both, which is what lets
+	// `StdToX64Conversion.lowerMulHighSigned` pre-move one multiplicand into RAX and read the answer
+	// back out of RDX — the same three-op shape `lowerDivMod` already emits.
+	//
+	// ⚠ It carries NO `DivideSignedness`, unlike `divideReg`, and the asymmetry is deliberate rather
+	// than an oversight: `divideReg` carries one because BOTH group-3 divides are reachable from
+	// `StdOp.div`'s own signedness field, while `StdBinOpcode` has only `mulHighSigned` today. The
+	// unsigned form is `F7 /4` (`mul`), and the rung that needs it (the unsigned magic sequence, which
+	// wants a 65-bit multiplier and an "add indicator" fixup) is the rung that gives this op a
+	// signedness field — at which point the two arms are two extensions of one encoder, as the divide's
+	// already are.
+	//
+	// IT SETS FLAGS (`imul` writes OF/CF), which is why nothing may be fused across it.
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `arm64AddLsl`, per the band-append invariant this file
+	// states at `andRegReg`: every range arm over `TargetOp` in the passes stops at or before the
+	// current tail, so an op inserted anywhere else would be silently swallowed by one of them.
+	imulHighReg(src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0x5}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

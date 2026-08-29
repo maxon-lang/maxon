@@ -1954,6 +1954,9 @@ type WasmFuncEmitter
 		match opcode 'op'
 			add to div then self.emitFloatAluOp(lhs, rhs: rhs, opcode: opcode)
 			min to max then self.emitFloatMinMax(lhs, rhs: rhs, kind: floatMinMaxKindFor(opcode))
+			// EC18's high multiply is INTEGER-ONLY, so it is the one opcode this dispatch cannot route
+			// into `emitFloatAluOp`'s "everything else" arm — there is no float 128-bit product.
+			mulHighSigned then panic("wasm: `mulHighSigned` is INTEGER-ONLY — it is the high half of a 128-bit integer product and no float form of it exists")
 		end 'op'
 
 		self.body.localSet(resultId as Wasm32Index)
@@ -2003,6 +2006,7 @@ type WasmFuncEmitter
 			div then self.body.f64Div()
 			bitAnd to shrLogical then panic("wasm: `binOp({opcode.rawValue})` has no float form — the bitwise/shift operators are integer-only and a float operand is rejected at the Maxon tier")
 			min to max then panic("wasm: `{opcode.name}` is not an ALU opcode — it is a float compare + `select` (`emitFloatMinMax`), which needs each operand on the stack twice, and `emitFloatBinOp` routes it there")
+			mulHighSigned then panic("wasm: `mulHighSigned` is INTEGER-ONLY and has no float form at all")
 		end 'op'
 	end 'emitFloatAluOp'
 
@@ -2043,6 +2047,13 @@ type WasmFuncEmitter
 			shr then self.body.i64ShrS()
 			shrLogical then self.body.i64ShrU()
 			div to max then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`/`max`")
+			// ⭐⭐ **EC18 — WASM HAS NO 64x64 -> 128 MULTIPLY AT ALL, AND THAT IS WHY THE REDUCTION IS
+			// TARGET-GATED RATHER THAN UNIVERSAL.** There is no `i64.mul_high_s`; the only way to spell
+			// it here is four 32x32 products with carries, twenty-odd instructions against the ONE
+			// `i64.div_s` the reduction would be replacing. So `StrengthReduceDivision` asks
+			// `targetLowersMulHigh`, gets `false` for wasm32 and rewrites nothing — which is also why a
+			// wasm golden cannot move for that row. Reaching here means the gate was bypassed.
+			mulHighSigned then panic("wasm: `mulHighSigned` has no wasm form — there is no `i64.mul_high_s`, and emulating it costs ~20 instructions against the one `i64.div_s` it would replace. `StrengthReduceDivision` declines this target through `targetLowersMulHigh`; reaching here means that gate was bypassed")
 		end 'w'
 	end 'emitBinOpcode'
 

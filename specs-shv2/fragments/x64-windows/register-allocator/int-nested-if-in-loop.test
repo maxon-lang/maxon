@@ -37,14 +37,19 @@ func @main {
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.jmp whilehdr
   whileexit:
-    x64.movRegImm32 rcx, 256
-    x64.cqo
-    x64.idivReg rcx
-    x64.cmpRegImm32 rdx, 0
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 56
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.sarRegImm8 rcx, rcx, 8
+    x64.imulRegRegImm32 rcx, rcx, 256
+    x64.movRegReg r8, rax
+    x64.subRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rdx, rax
+    x64.cmpRegReg r8, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
@@ -54,7 +59,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, rdx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

@@ -153,9 +153,23 @@ union PassKind
 	// lengthens one live range instead of three. It hoists LOADS as well as arithmetic, and the two
 	// safety rules that licence that (the loop writes no memory; the load was going to execute anyway)
 	// are the whole content of its header.
+	//
+	// `strengthReduceDivision` (EC18) replaces `x / K` and `x mod K`, for a constant `K`, with a
+	// multiply-and-shift sequence — an `idiv` is 20–40 cycles and the sequence is five or six ALU ops.
+	// ⭐ **ITS POSITION IS DECIDED BY THE THREE PASSES AFTER IT, EACH OF WHICH READS THE SEQUENCE AS
+	// ARITHMETIC IT CAN IMPROVE, AND BY THE ONE BEFORE IT.** After `foldConstants`, which is what MAKES
+	// the divisor a bare `const` in the first place: the checked-division expansion divides by
+	// `divisor or errorFlag`, and only after the fold has evaluated that guard away is there a constant
+	// here to see. Before `foldConstOperands`, so every shift count and the multiply-back become
+	// IMMEDIATES; before `commonSubexpressionElimination`, which is what collapses the quotient chain of
+	// `n / 10` and the one inside `n mod 10` into a single computation wherever a program writes both —
+	// the shape of every decimal renderer, and one no isel-tier rewrite could ever reach, because two
+	// `idiv`s are `isPure: false` and can never be CSE'd; and before `loopInvariantCodeMotion`, which can
+	// now hoist a reduced quotient out of a loop where an `idiv` could not leave one.
 	pruneDeadBlockArgs
 	elimTrivialBlockArgs
 	foldConstants
+	strengthReduceDivision
 	foldConstOperands
 	commonSubexpressionElimination
 	loopInvariantCodeMotion
@@ -214,6 +228,7 @@ function classifyPass(pass PassKind) returns PassClassification
 		foldConstOperands gives PassClassification.perFunction
 		// Intra-function by construction: an expression is compared only against ones computed in blocks
 		// that DOMINATE it, and dominance is a fact about one function's CFG (see the pass's SCOPE note).
+		strengthReduceDivision gives PassClassification.perFunction
 		commonSubexpressionElimination gives PassClassification.perFunction
 		// Intra-function by construction: a natural loop, its preheader and the values it defines are all
 		// inside one function, and nothing about a callee is consulted.
@@ -242,6 +257,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstants gives CompilePhase.foldConstants
 		foldConstOperands gives CompilePhase.foldConstOperands
+		strengthReduceDivision gives CompilePhase.strengthReduceDivision
 		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
 		loopInvariantCodeMotion gives CompilePhase.loopInvariantCodeMotion
 		promoteStackRecords gives CompilePhase.promoteStackRecords
@@ -262,6 +278,7 @@ function passKindToString(pass PassKind) returns String
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstants gives "foldConstants"
 		foldConstOperands gives "foldConstOperands"
+		strengthReduceDivision gives "strengthReduceDivision"
 		commonSubexpressionElimination gives "commonSubexpressionElimination"
 		loopInvariantCodeMotion gives "loopInvariantCodeMotion"
 		promoteStackRecords gives "promoteStackRecords"
@@ -308,6 +325,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.pruneDeadBlockArgs)
 	passes.push(PassKind.elimTrivialBlockArgs)
 	passes.push(PassKind.foldConstants)
+	passes.push(PassKind.strengthReduceDivision)
 	passes.push(PassKind.foldConstOperands)
 	passes.push(PassKind.commonSubexpressionElimination)
 	passes.push(PassKind.loopInvariantCodeMotion)
@@ -474,6 +492,11 @@ export type PassPipeline
 			// From function 0 — the whole module, which is everything that EXISTS at this point. The pass's
 			// other caller is `Compiler.compileToCodeResult`, which runs it a second time over the band the
 			// runtime installs append below the pipeline; see `foldConstOperands`' own header.
+			// From function 0 — the whole module, which is everything that EXISTS at this point. Like
+			// `foldConstOperands`, this pass's other caller is `Compiler.compileToCodeResult`, which runs it
+			// over the band the runtime installs append below the pipeline; see the pass's own header for
+			// which divisions live there and why they are worth a second run.
+			strengthReduceDivision then strengthReduceDivision(self.project, module: self.stdModule, firstFuncIndex: 0)
 			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
 			// The whole module, and no start index: like `foldConstants`, its other caller would be the
 			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).

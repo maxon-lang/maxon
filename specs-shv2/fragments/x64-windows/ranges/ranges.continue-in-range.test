@@ -18,22 +18,26 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 r8, 0
-    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rax, 1
   forhdr:
-    x64.cmpRegImm32 rcx, 10
+    x64.cmpRegImm32 rax, 10
     x64.jcc greater, forexit
   loop:
-    x64.movRegImm32 rsi, 2
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 63
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.sarRegImm8 rcx, rcx, 1
+    x64.imulRegRegImm32 rcx, rcx, 2
+    x64.movRegReg rdx, rax
+    x64.subRegReg rdx, rax, rcx
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, forstep
   ifcont:
-    x64.leaRegRegReg rax, r8, rcx
-    x64.movRegReg r8, rax
+    x64.leaRegRegReg rcx, r8, rax
+    x64.movRegReg r8, rcx
   forstep:
-    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp forhdr
   forexit:
     x64.cmpRegImm32 r8, 0

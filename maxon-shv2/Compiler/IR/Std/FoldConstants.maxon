@@ -271,6 +271,17 @@ let FoldedComparisonType = StdType.i1
 // test that would have to be kept in step. Declining costs one unfolded shift inside a cascade that is
 // already six ops.
 function evaluateIntBinOp(opcode StdBinOpcode, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+	// ⚠ **EC18's HIGH MULTIPLY IS DECLINED BEFORE THE BRIDGE, NOT INSIDE IT.** Two independent facts
+	// say no and it needs only the first: its answer is bits 64..127 of a 128-bit product, which a
+	// 64-bit `ParsedInt` cannot hold, so this pass has no arithmetic for it; and it has no `MaxonBinOp`
+	// twin at all, so `maxonBinOpOfStdOpcode` PANICS rather than answering. The guard is therefore ahead
+	// of the bridge. It is unreachable today — `StrengthReduceDivision` is scheduled AFTER this pass, so
+	// no `mulHighSigned` exists in the module when it runs — and it is written anyway, because "the
+	// schedule keeps it away" is exactly the kind of premise a later reordering falsifies silently.
+	if opcode == StdBinOpcode.mulHighSigned 'noHostArithmeticAndNoSourceOperator'
+		return FoldedInt.notFoldable
+	end 'noHostArithmeticAndNoSourceOperator'
+
 	let op = maxonBinOpOfStdOpcode(opcode)
 
 	if shiftOperator(op) 'shift'

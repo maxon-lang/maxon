@@ -1,0 +1,98 @@
+// Test: a-signed-power-of-two-truncates-toward-zero
+typealias Word = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	if -7 / 2 != -3 'minusSevenHalved'
+		return 1
+	end 'minusSevenHalved'
+	if -1 / 2 != 0 'minusOneHalved'
+		return 2
+	end 'minusOneHalved'
+	if -9 / 8 != -1 'minusNineEighthed'
+		return 3
+	end 'minusNineEighthed'
+	if -7 mod 2 != -1 'remainderTakesTheDividendSign'
+		return 4
+	end 'remainderTakesTheDividendSign'
+	let n = i64.min as Word
+	if n / 2 != -4611686018427387904 'minHalved'
+		return 5
+	end 'minHalved'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, 18446744073709551609
+    x64.sarRegImm8 rax, rax, 63
+    x64.shrRegImm8 rax, rax, 63
+    x64.leaRegRegImm32 rax, rax, -7
+    x64.sarRegImm8 rax, rax, 1
+    x64.cmpRegImm32 rax, -3
+    x64.jcc equal, ifcont#2
+  minusSevenHalved:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm rax, 18446744073709551615
+    x64.sarRegImm8 rax, rax, 63
+    x64.shrRegImm8 rax, rax, 63
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.sarRegImm8 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#4
+  minusOneHalved:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm rax, 18446744073709551607
+    x64.sarRegImm8 rax, rax, 63
+    x64.shrRegImm8 rax, rax, 61
+    x64.leaRegRegImm32 rax, rax, -9
+    x64.sarRegImm8 rax, rax, 3
+    x64.cmpRegImm32 rax, -1
+    x64.jcc equal, ifcont#6
+  minusNineEighthed:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm rax, 18446744073709551609
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 63
+    x64.leaRegRegImm32 rcx, rcx, -7
+    x64.sarRegImm8 rcx, rcx, 1
+    x64.imulRegRegImm32 rcx, rcx, 2
+    x64.subRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, -1
+    x64.jcc equal, ifcont#8
+  remainderTakesTheDividendSign:
+    x64.movRegImm32 r8, 4
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm rax, 9223372036854775808
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 63
+    x64.leaRegRegReg rax, rax, rcx
+    x64.sarRegImm8 rax, rax, 1
+    x64.movRegImm rcx, 13835058055282163712
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, ifcont#10
+  minHalved:
+    x64.movRegImm32 r8, 5
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

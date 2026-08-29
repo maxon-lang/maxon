@@ -319,7 +319,11 @@ end 'foldConstOperandsInFunc'
 
 // Map each `const` result value id to its constant. Value ids are function-local, so
 // the map is rebuilt per function.
-function collectConstValues(module StdModule, opIndices OpIndexArray, def StdFoldableDef) returns ConstValueMap
+// ⚠ `export` SINCE EC18: `strengthReduceDivision` needs the same map, of the same function, for the
+// same reason — its subject is a `div`/`mod` whose DIVISOR is a `const`. A second collector would be a
+// second answer to "which values in this function are constants", over the same shared
+// `classifyFoldableDef` roster, and the two would be free to drift about which ops count.
+export function collectConstValues(module StdModule, opIndices OpIndexArray, def StdFoldableDef) returns ConstValueMap
 	var constMap = ConstValueMap.create()
 	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
@@ -417,6 +421,12 @@ function binOpImmIsIdentity(opcode StdBinOpcode, imm Imm32) returns bool
 		bitOr to bitXor gives imm == AdditiveIdentity
 		shl to shrLogical gives imm == NoShift
 		div to max gives false
+		// EC18's high multiply HAS no immediate form (`constFitsBinOpImmediate` refuses every constant
+		// for it), so no `binOpImm(mulHighSigned, …)` is ever produced and this arm is unreachable.
+		// `false` is nevertheless the right answer rather than a placeholder: `mulhi(x, 1)` is 0 for
+		// every non-negative x and -1 for every negative one — it is not `x`, so there is no immediate
+		// this operation is the identity at.
+		mulHighSigned gives false
 	end 'o'
 end 'binOpImmIsIdentity'
 
@@ -594,6 +604,12 @@ function constFitsBinOpImmediate(v ParsedInt, opcode StdBinOpcode) returns bool
 		// `tryFoldBinOp` returns first), and `false` is the answer that stays correct if it ever
 		// stops being unreachable.
 		div to max gives false
+		// ⭐ EC18 — NO constant fits the high multiply, and this arm is LOAD-BEARING rather than
+		// defensive. x64's one-operand `imul r/m64` has no immediate form at all, and the multiplier
+		// this opcode exists to carry is a full 64-BIT magic number that an `Imm32` field could not
+		// hold in the first place. Answering `true` for the magics that DO happen to fit 32 bits (every
+		// divisor above 2^32 has one) would mint a `binOpImm(mulHighSigned, …)` that no backend lowers.
+		mulHighSigned gives false
 	end 'o'
 end 'constFitsBinOpImmediate'
 

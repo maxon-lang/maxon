@@ -368,6 +368,24 @@ export enum CompilePhase
 	// is also one of the passes whose cost is expected to be paid back by the phases after it, and billed
 	// into a neighbour the cost and the saving would net off inside one number.
 	loopInvariantCodeMotion
+	// Strength reduction of a division by a constant (`strengthReduceDivision`, EC18). APPENDED HERE
+	// rather than beside the Std passes it runs among, for this enum's own reason — the ordinals are the
+	// `.metrics.tsv` wire format every trend row ever written is indexed by, so a member slotted into the
+	// middle would re-attribute every historical measurement to the wrong phase.
+	//
+	// Its OWN row rather than a slice of `foldConstants`, which it runs immediately after, because the
+	// two scale with different things: the fold's cost tracks the number of constant EXPRESSIONS, and
+	// this one's tracks the number of DIVISIONS — a quantity almost every function has none of, which is
+	// exactly why it needs its own row to show that. It is also one of the passes whose cost is expected
+	// to be paid back later (its sequence is what `commonSubexpressionElimination` then merges), and
+	// billed into a neighbour the cost and the saving would net off inside one number.
+	strengthReduceDivision
+	// The SAME pass over the APPENDED RUNTIME BAND (`Compiler.compileToCodeResult`), which no pipeline
+	// pass sees — `foldEmittedConstOperands` is its exact precedent, one row up the same band. Its own
+	// row rather than a widening of `strengthReduceDivision` above, because the two measure different
+	// populations: one is the program's divisions and the other is the runtime's, and a program that
+	// prints one integer pays the second and almost none of the first.
+	strengthReduceEmittedDivision
 end 'CompilePhase'
 
 // Per-compile timing state, owned by `Project` (which is already threaded through

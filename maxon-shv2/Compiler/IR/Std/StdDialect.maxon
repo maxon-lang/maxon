@@ -447,6 +447,22 @@ export enum StdBinOpcode
 	div
 	min
 	max
+	// ⭐⭐ **THE HIGH 64 BITS OF THE 128-BIT SIGNED PRODUCT — the one operation a division by a
+	// compile-time constant cannot be replaced without (`EC18`, `StrengthReduceDivision`).** `n * M`
+	// at 128 bits, keeping bits 64..127. x64 spells it `imul r/m64` (the ONE-operand group-3 form,
+	// `TargetOp.imulHighReg`), AArch64 `SMULH`, and wasm has NO form of it at all — which is why the
+	// pass that produces it asks `targetLowersMulHigh` and reduces nothing on a target that cannot
+	// spell it.
+	//
+	// It is COMMUTATIVE and PURE — an ordinary `binOp` in every respect. It carries no signedness
+	// field because there is no unsigned twin YET: the unsigned magic sequence needs a 65-bit
+	// multiplier and an "add indicator" fixup this rung did not take, and inventing the opcode for it
+	// now would be a case no lowering could serve. `mulHighUnsigned` is what that rung appends.
+	//
+	// ⚠ APPENDED AT THE END, PAST `max`, per the band-append invariant — and note it is NOT float-only,
+	// so it is the first opcode since `shrLogical` that a `div to max` range arm must NOT swallow. It
+	// cannot: every such arm stops at `max` and fails to compile until it names this one.
+	mulHighSigned
 end 'StdBinOpcode'
 
 // ⭐⭐ **THE STD BINARY OPCODES WITH NO INTEGER FORM** — THE one place that set is stated, for the
@@ -470,6 +486,9 @@ export function stdBinOpcodeIsFloatOnly(opcode StdBinOpcode) returns bool
 	return match opcode 'k'
 		add to shrLogical gives false
 		div to max gives true
+		// EC18's high multiply is INTEGER-ONLY, which is the opposite exception and needs its own arm:
+		// there is no float 128-bit product, and `appendStdBinOp` would be right to refuse one.
+		mulHighSigned gives false
 	end 'k'
 end 'stdBinOpcodeIsFloatOnly'
 
@@ -2532,6 +2551,12 @@ export function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 		sub gives false
 		bitAnd to bitXor gives true
 		shl to shrLogical gives false
+		// EC18 — `mulhi(a, b)` is `mulhi(b, a)`: the 128-bit product is commutative and taking its top
+		// half does not change that. ⚠ Answering it here costs `commutesForCoalescing` nothing, because
+		// that reader asks `integerBinOpIsTwoAddress` as well and x64's `imul r/m64` is a FIXED-REGISTER
+		// form rather than a two-address one — so no swap is ever taken on this opcode today. The answer
+		// is still the opcode's own, and stating it any other way would make this roster lie.
+		mulHighSigned gives true
 		// The three FLOAT-ONLY opcodes:
 		//   • `div` — `a / b` is not `b / a`.
 		//   • `min`/`max` — `min(a, b)` is `a` when `a < b` and `b` otherwise, `max(a, b)` is `a` when

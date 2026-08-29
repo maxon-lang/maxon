@@ -1204,6 +1204,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// ⚠ It is deliberately OUTSIDE both brackets above: billing an optimizer to the builder whose output it
 	// reads would report one cost as part of another, and the two scale with different things (see
 	// `CompilePhase.foldEmittedConstOperands`).
+	// ⭐ EC18 — BEFORE the fold, and for the pipeline's reason: the sequence it emits carries shift counts
+	// and a multiply-back that the fold then turns into IMMEDIATES. This band is where `__int_to_string`'s
+	// per-digit `div`/`mod` by 10 and `graphemeBreakProperty`'s `mod 28` live, neither of which any
+	// pipeline pass can reach.
+	let emittedReduceProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.strengthReduceEmittedDivision)
+	strengthReduceDivision(project, module: pipeline.stdModule, firstFuncIndex: firstEmittedFuncIndex)
+	recordPhase(project, phase: CompilePhase.strengthReduceEmittedDivision, probe: emittedReduceProbe)
+
 	let emittedFoldProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.foldEmittedConstOperands)
 	foldConstOperands(pipeline.stdModule, firstFuncIndex: firstEmittedFuncIndex)
 	recordPhase(project, phase: CompilePhase.foldEmittedConstOperands, probe: emittedFoldProbe)

@@ -23,33 +23,37 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 r8, 0
-    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rax, 0
   whilehdr#1:
-    x64.cmpRegImm32 rcx, 3
+    x64.cmpRegImm32 rax, 3
     x64.jcc greaterEqual, whileexit#3
   outer:
-    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rcx, 0
   whilehdr#4:
-    x64.cmpRegImm32 rsi, 3
+    x64.cmpRegImm32 rcx, 3
     x64.jcc greaterEqual, whileexit#6
   inner:
-    x64.leaRegRegReg rax, rcx, rsi
-    x64.movRegImm32 rdi, 2
-    x64.cqo
-    x64.idivReg rdi
+    x64.leaRegRegReg rdx, rax, rcx
+    x64.movRegReg rsi, rdx
+    x64.sarRegImm8 rsi, rdx, 63
+    x64.shrRegImm8 rsi, rsi, 63
+    x64.leaRegRegReg rsi, rdx, rsi
+    x64.sarRegImm8 rsi, rsi, 1
+    x64.imulRegRegImm32 rsi, rsi, 2
+    x64.subRegReg rdx, rdx, rsi
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, critsplit
   even:
-    x64.leaRegRegImm32 rax, r8, 1
+    x64.leaRegRegImm32 rdx, r8, 1
     x64.jmp ifcont
   critsplit:
-    x64.movRegReg rax, r8
+    x64.movRegReg rdx, r8
   ifcont:
-    x64.leaRegRegImm32 rsi, rsi, 1
-    x64.movRegReg r8, rax
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg r8, rdx
     x64.jmp whilehdr#4
   whileexit#6:
-    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp whilehdr#1
   whileexit#3:
     x64.cmpRegImm32 r8, 0

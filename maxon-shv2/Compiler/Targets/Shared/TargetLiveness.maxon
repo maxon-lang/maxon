@@ -1375,6 +1375,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		x64LockCmpxchg to arm64ThreadPointer gives false
 		// EC16: every scaled-index form is a body op, not a branch.
 		leaRegBaseIndexScale to arm64AddLsl gives false
+		// EC18: the high multiply is a body op, not a branch.
+		imulHighReg gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1427,6 +1429,8 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 		x64LockCmpxchg to arm64ThreadPointer gives UnconditionalBranchTarget.none
 		// EC16: every scaled-index form is a body op, not a branch.
 		leaRegBaseIndexScale to arm64AddLsl gives UnconditionalBranchTarget.none
+		// EC18: the high multiply is a body op, not a branch.
+		imulHighReg gives UnconditionalBranchTarget.none
 	end 'check'
 end 'unconditionalBranchTargetOf'
 
@@ -1493,6 +1497,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			leaRegBaseIndexScale to arm64AddLsl then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a scaled-index address or access body op as its terminator")
+			imulHighReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -3135,6 +3140,8 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 			x64LockCmpxchg to arm64ThreadPointer then break 'capture'
 			// EC16: not a `movRegReg`, so never an entry param capture.
 			leaRegBaseIndexScale to arm64AddLsl then break 'capture'
+			// EC18: not a `movRegReg`, so never an entry param capture.
+			imulHighReg then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3857,6 +3864,8 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// EC16: a scaled-index access touches no stack SLOT — it addresses the heap or global region its
 		// base register names, exactly as `loadRegBaseDisp`/`storeBaseDispReg` do.
 		leaRegBaseIndexScale to arm64AddLsl gives OpSlotRole.touchesNoSlot
+		// EC18: the high multiply touches no memory at all — its operands and its whole product are registers.
+		imulHighReg gives OpSlotRole.touchesNoSlot
 	end 'k'
 end 'deriveSlotRole'
 

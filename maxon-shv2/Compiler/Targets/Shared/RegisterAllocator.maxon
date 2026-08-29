@@ -1375,6 +1375,10 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// EC16: none of the scaled-index forms is a MOVE — each computes or accesses an address out of two
 		// independent registers, so there is no pair to coalesce.
 		leaRegBaseIndexScale to arm64AddLsl then break 'hint'
+		// EC18: the high multiply is not a MOVE — `divideReg`'s answer, one band up, for the same reason.
+		// Its RAX/RDX constraints are IMPLICIT MASKS, which `forbidOperandsFromImplicit` enforces; a hint
+		// is a preference and would be the weaker statement of a fact the masks already make absolutely.
+		imulHighReg then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -2355,6 +2359,8 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then return TargetOp.loadRegBaseIndexScale(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale, disp: disp, width: width)
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then return TargetOp.storeBaseIndexScaleReg(colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale, disp: disp, src: colorVRegWith(src, alloc: alloc), width: width)
 		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale)
+		// EC18 — one register operand to colour, exactly as `divideReg` has.
+		imulHighReg(src) then return TargetOp.imulHighReg(colorVRegWith(src, alloc: alloc))
 	end 'rewrite'
 end 'colorTargetOp'
 

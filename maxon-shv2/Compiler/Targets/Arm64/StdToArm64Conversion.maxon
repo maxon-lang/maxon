@@ -339,6 +339,7 @@ function arm64ShiftInstrOf(opcode StdBinOpcode) returns Arm64ShiftInstr
 		shrLogical gives Arm64ShiftInstr.lsr
 		add to bitXor panic("arm64ShiftInstrOf: {opcode.rawValue} is not a shift — only `shl`/`shr`/`shrLogical` name a variable-shift instruction")
 		div to max panic("arm64ShiftInstrOf: `{opcode.name}` is a FLOAT-ONLY opcode, not a shift")
+		mulHighSigned panic("arm64ShiftInstrOf: `mulHighSigned` is a multiply, not a shift")
 	end 'o'
 end 'arm64ShiftInstrOf'
 
@@ -893,6 +894,13 @@ type StdToArm64Lowering
 			// Integer `binOp(div)` is illegal — integer division traps and is `StdOp.div`; only FLOAT
 			// division (which cannot fault) rides the pure arith band. Reaching here is a lowering bug.
 			div to max then panic("lowerBinOp: `binOp({opcode.name})` with an INTEGER operand type — all three are FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`). Integer division is `StdOp.div` (it can fault); `min`/`max` have no integer form and their operands are promoted by the parser")
+			// ⚠ EC18 — `mulHighSigned` CANNOT REACH THIS LANE. `StrengthReduceDivision` asks
+		// `targetLowersMulHigh` and reduces nothing where the opcode has no lowering, and arm64 has none:
+		// AArch64 spells the high half of a signed product as `SMULH Xd, Xn, Xm`, a plain 3-address
+		// instruction that would be a `TargetOp` of its own (and a strictly nicer one than x64's
+		// fixed-register `imul r/m64`). Adding it is what turns this lane on — see the row in
+		// docs/emitted-code-roadmap.md.
+			mulHighSigned then panic("lowerBinOp: `mulHighSigned` has no arm64 lowering — AArch64 spells it `SMULH`, which this dialect does not carry, and `StrengthReduceDivision` declines the whole reduction on a target that cannot lower the opcode. Reaching here means that target gate was bypassed")
 		end 'op'
 	end 'lowerBinOp'
 
@@ -909,6 +917,7 @@ type StdToArm64Lowering
 			mul then self.emit(dstRef, op: TargetOp.arm64Fmul(dest, lhs: lhsReg, rhs: rhsReg))
 			div then self.emit(dstRef, op: TargetOp.arm64Fdiv(dest, lhs: lhsReg, rhs: rhsReg))
 			bitAnd to shrLogical then panic("lowerFloatBinOp: {opcode.rawValue} has no float form — the bitwise/shift operators are integer-only and a float operand is rejected at the Maxon tier")
+			mulHighSigned then panic("lowerFloatBinOp: `mulHighSigned` is INTEGER-ONLY — it is the high half of a 128-bit integer product and no float form of it exists")
 			// ⭐ THE FLOAT BINARY OPCODES THAT ARE NOT ONE INSTRUCTION HERE — `fmin`/`fmax` exist and are
 			// deliberately not used, because they compute DIFFERENT functions (see `TargetOp.arm64Fcsel`).
 			min to max then self.lowerFloatMinMax(dest, lhsReg: lhsReg, rhsReg: rhsReg, kind: floatMinMaxKindFor(opcode), dstRef: dstRef)
@@ -1028,6 +1037,7 @@ type StdToArm64Lowering
 			bitAnd to bitXor then self.lowerLogicalImm(dest, src: src, imm: imm, opcode: opcode, dstRef: dstRef)
 			shl to shrLogical then self.lowerShiftImm(dest, src: src, imm: imm, instr: arm64ShiftInstrOf(opcode), dstRef: dstRef)
 			div to max then panic("lowerBinOpImm: `{opcode.name}` is FLOAT-ONLY and no NEON form takes an immediate — foldConstOperands must never produce this")
+			mulHighSigned then panic("lowerBinOpImm: `mulHighSigned` has no immediate form on any target — `constFitsBinOpImmediate` refuses every constant for it, so foldConstOperands must never produce this")
 		end 'op'
 	end 'lowerBinOpImm'
 

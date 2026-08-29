@@ -461,6 +461,10 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		storeBaseIndexScaleReg(b, i, _, _, s, _) gives physRegBit(b) or physRegBit(i) or physRegBit(s)
 		// arm64-only, 0 for the reason every other arm64 arm above gives.
 		arm64AddLsl gives 0
+		// ⚠ EC18 — `divideReg`'s arm, and it counts the SAME ONE operand for the same reason: RAX and RDX
+		// are caller-saved and are not part of this scan (which is about callee-saved registers the
+		// coloring used), while `src` is an ordinary coloured register that can land in rbx/r12-r15.
+		imulHighReg(src) gives physRegBit(src)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -615,5 +619,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		x64LockCmpxchg to arm64ThreadPointer gives false
 		// EC16: every scaled-index form is a body op, never a `ret`.
 		leaRegBaseIndexScale to arm64AddLsl gives false
+		// EC18: the high multiply is a body op, never a `ret`.
+		imulHighReg gives false
 	end 'check'
 end 'blockEndsWithReturn'

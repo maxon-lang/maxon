@@ -4920,6 +4920,9 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// EC16: every scaled-index form READS registers the pass cannot reconstruct — its immediates are a
 		// scale and a displacement, not the value it produces. Not rematerializable.
 		leaRegBaseIndexScale to arm64AddLsl gives false
+		// EC18: the high multiply DEFINES NOTHING EXPLICIT — its product lands in the implicit RAX/RDX
+		// pair — and it reads a register besides. `divideReg`'s answer, for both halves of the reason.
+		imulHighReg gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -5753,6 +5756,8 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		// `opIsConstMaterialization` answers false for every scaled-index form, so none reaches here; named
 		// rather than swallowed.
 		leaRegBaseIndexScale to arm64AddLsl panic("constDefInfo: def is not a constant materialization")
+		// `opIsConstMaterialization` answers false, so this never reaches here; named rather than swallowed.
+		imulHighReg panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -6002,6 +6007,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then return TargetOp.loadRegBaseIndexScale(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale, disp: disp, width: width)
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then return TargetOp.storeBaseIndexScaleReg(substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale, disp: disp, src: substituteVReg(src, from: from, to: to), width: width)
 		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale)
+		// EC18 — one register operand to substitute, exactly as `divideReg` has.
+		imulHighReg(src) then return TargetOp.imulHighReg(substituteVReg(src, from: from, to: to))
 	end 'rewrite'
 end 'substituteValueInOp'
 

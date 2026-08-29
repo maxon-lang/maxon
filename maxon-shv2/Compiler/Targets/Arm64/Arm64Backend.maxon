@@ -1417,6 +1417,11 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// three-register emitter: the shift amount is a FIELD of the opcode word (bits 15-10), not a fourth
 		// operand, so nothing about the register encoding changes.
 		arm64AddLsl(dest, base, index, scale) then emitArm64Rrr(code, opcode: Arm64OpAdd or (memoryIndexScaleShift(scale) shl Arm64ShiftedRegAmountShift), rd: arm64GprField(dest), rn: arm64GprField(base), rm: arm64GprField(index))
+		// EC18 — x64's one-operand `imul`. arm64's equivalent is `SMULH Xd, Xn, Xm`, a THREE-operand
+		// instruction with no fixed-register pair, which is a different op of its own and does not exist
+		// in this dialect yet; `StrengthReduceDivision` asks `targetLowersMulHigh` and reduces nothing on
+		// this lane, so no arm64 program can contain one.
+		imulHighReg then panic("emitArm64TargetOp: an x64 one-operand `imul` reached the arm64 encoder — AArch64 spells the high half of a signed product as `SMULH`, which this dialect does not carry")
 	end 'emit'
 end 'emitArm64TargetOp'
 

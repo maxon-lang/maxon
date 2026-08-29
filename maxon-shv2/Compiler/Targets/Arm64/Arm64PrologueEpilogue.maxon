@@ -145,6 +145,9 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				// EC16: a scaled-index address or access names no frame fact — its base, index and value are
 				// ordinary coloured registers and its scale/displacement are immediates.
 				leaRegBaseIndexScale to arm64AddLsl then break 'o'
+				// EC18: the high multiply names no frame fact either — one coloured register operand and an
+				// implicit RAX/RDX pair. (x64-only; it cannot appear in an arm64 program at all.)
+				imulHighReg then break 'o'
 			end 'o'
 		end 'eachOp'
 
@@ -305,6 +308,9 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// forms never reach an arm64 program and answer through the same derivation rather than a second
 		// hand-written list.
 		leaRegBaseIndexScale to arm64AddLsl gives arm64MaskFromOperands(op, buf: buf)
+		// EC18: x64-only, and answered through the same shared derivation as the other x64 forms rather
+		// than a second hand-written list.
+		imulHighReg gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -377,5 +383,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		x64LockCmpxchg to arm64ThreadPointer gives false
 		// EC16: an address computation and a memory access are body ops, never an `arm64Ret`.
 		leaRegBaseIndexScale to arm64AddLsl gives false
+		// EC18: the high multiply is a body op, never an `arm64Ret`.
+		imulHighReg gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

@@ -340,6 +340,14 @@ export function maxonBinOpOfStdOpcode(opcode StdBinOpcode) returns MaxonBinOp
 		div gives MaxonBinOp.div
 		min gives MaxonBinOp.min
 		max gives MaxonBinOp.max
+		// ⭐ EC18's HIGH MULTIPLY HAS NO `MaxonBinOp` TWIN, and that is a property of the LANGUAGE
+		// rather than an omission here: no source operator spells "bits 64..127 of a 128-bit product".
+		// It is minted by `StrengthReduceDivision` at the Std tier and lowered to one instruction, so
+		// nothing ever needs to carry it BACK to an operator. Unlike the float-only three above there is
+		// no answer to name, so this arm panics instead of participating in the round trip — and
+		// `foldConstants`, this function's one caller, refuses the opcode before asking (it could not
+		// evaluate a 128-bit product into a 64-bit `ParsedInt` anyway).
+		mulHighSigned panic("maxonBinOpOfStdOpcode: `mulHighSigned` is a Std-TIER-ONLY opcode — it is minted by `StrengthReduceDivision` and has no source operator to carry back to. Its one would-be caller, `foldConstants.evaluateIntBinOp`, declines it before asking; reaching here means a new caller asked without that guard.")
 	end 'map'
 
 	let roundTrip = maxonBinOpToStdOpcode(op)

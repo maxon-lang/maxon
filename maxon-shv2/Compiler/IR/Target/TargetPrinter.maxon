@@ -669,6 +669,9 @@ function opIsArm64Band(op TargetOp) returns bool
 		// are x64's, the shifted-register `add` is arm64's.
 		leaRegBaseIndexScale to storeBaseIndexScaleReg gives false
 		arm64AddLsl gives true
+		// EC18's high multiply is x64's one-operand `imul` — no arm64 form of it exists in this dialect
+		// (AArch64 spells the same value as `SMULH`, which nothing emits yet).
+		imulHighReg gives false
 	end 'p'
 end 'opIsArm64Band'
 
@@ -908,6 +911,9 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns
 		// address: on AArch64 this is arithmetic, and the shift — not the multiplier — is what the
 		// instruction's field holds.
 		arm64AddLsl(dest, base, index, scale) gives "arm64AddLsl {arm64VregName(dest)}, {arm64VregName(base)}, {arm64VregName(index)}, lsl #{memoryIndexScaleShift(scale)}"
+		// Prints its ONE explicit operand, exactly as `divideReg` does — RAX and RDX are the op's implicit
+		// masks and a golden that spelled them would be showing the model rather than the instruction.
+		imulHighReg(src) gives "imulHighReg {vregName(src)}"
 	end 'op'
 end 'formatTargetOp'
 

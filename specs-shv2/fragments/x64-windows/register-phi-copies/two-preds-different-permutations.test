@@ -33,30 +33,34 @@ func @twoPerms {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 rsi, rcx, 1
-    x64.leaRegRegImm32 rdi, rcx, 2
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.leaRegRegImm32 rdx, rcx, 2
     x64.leaRegRegImm32 rcx, rcx, 3
-    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rsi, 0
   whilehdr:
-    x64.cmpRegImm32 r8, 4
+    x64.cmpRegImm32 rsi, 4
     x64.jcc greaterEqual, whileexit
   loop:
-    x64.movRegImm32 r9, 2
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg r9
-    x64.cmpRegImm32 rdx, 0
+    x64.movRegReg rdi, rsi
+    x64.sarRegImm8 rdi, rsi, 63
+    x64.shrRegImm8 rdi, rdi, 63
+    x64.leaRegRegReg rdi, rsi, rdi
+    x64.sarRegImm8 rdi, rdi, 1
+    x64.imulRegRegImm32 rdi, rdi, 2
+    x64.movRegReg r8, rsi
+    x64.subRegReg r8, rsi, rdi
+    x64.cmpRegImm32 r8, 0
     x64.jcc equal, ifcont
   ifelse:
-    x64.xchgRegReg rdi, rsi
-    x64.xchgRegReg rsi, rcx
+    x64.xchgRegReg rdx, rax
+    x64.xchgRegReg rax, rcx
   ifcont:
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.xchgRegReg rsi, rdi
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.xchgRegReg rax, rdx
     x64.jmp whilehdr
   whileexit:
-    x64.imulRegRegImm32 rax, rsi, 100
-    x64.imulRegRegImm32 rdx, rdi, 10
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.imulRegRegImm32 rdx, rdx, 10
     x64.leaRegRegReg rax, rax, rdx
     x64.leaRegRegReg r8, rax, rcx
     x64.popReg rbp

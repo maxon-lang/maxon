@@ -499,6 +499,10 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		loadRegBaseIndexScale(dest, base, index, _, _, _) then pushDefTwoUse(buf, dest: dest, a: base, b: index)
 		storeBaseIndexScaleReg(base, index, _, _, src, _) then pushThreeUse(buf, a: base, b: index, c: src)
 		arm64AddLsl(dest, base, index, _) then pushDefTwoUse(buf, dest: dest, a: base, b: index)
+		// EC18 — `divideReg`'s model exactly: ONE explicit use and no explicit def. The other
+		// multiplicand (RAX) and both halves of the product (RAX, RDX) are IMPLICIT, declared as masks on
+		// the op rather than as operands, so the colorer sees the same shape it already sees for a divide.
+		imulHighReg(src) then pushUse(buf, vreg: src)
 	end 'operands'
 end 'targetOpOperands'
 

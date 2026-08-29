@@ -135,44 +135,46 @@ func @grownCapacity {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rdx
-    x64.leaRegRegReg rax, rcx, rcx
-    x64.cmpRegReg r8, rax
+    x64.leaRegRegReg r8, rcx, rcx
+    x64.cmpRegReg rdx, r8
     x64.jcc lessEqual, ifcont#2
   __il_body#9:
-    x64.cmpRegImm32 r8, 4
-    x64.jcc greaterEqual, __il_cont#8
+    x64.cmpRegImm32 rdx, 4
+    x64.jcc greaterEqual, ifcont#11
   raise#10:
     x64.movRegImm32 r8, 4
+    x64.jmp __il_cont#8
+  ifcont#11:
+    x64.movRegReg r8, rdx
   __il_cont#8:
     x64.popReg rbp
     x64.ret
   ifcont#2:
     x64.cmpRegImm32 rcx, 256
-    x64.jcc greaterEqual, whilehdr
+    x64.jcc greaterEqual, ifcont#4
   __il_body#13:
-    x64.cmpRegImm32 rax, 4
-    x64.jcc greaterEqual, ifcont#15
+    x64.cmpRegImm32 r8, 4
+    x64.jcc greaterEqual, __il_cont#12
   raise#14:
     x64.movRegImm32 r8, 4
-    x64.jmp __il_cont#12
-  ifcont#15:
-    x64.movRegReg r8, rax
   __il_cont#12:
     x64.popReg rbp
     x64.ret
+  ifcont#4:
+    x64.movRegReg r8, rcx
   whilehdr:
-    x64.cmpRegReg rcx, r8
+    x64.cmpRegReg r8, rdx
     x64.jcc greaterEqual, whileexit
   ease:
-    x64.leaRegRegImm32 rax, rcx, 768
-    x64.movRegImm32 rsi, 4
-    x64.cqo
-    x64.idivReg rsi
-    x64.leaRegRegReg rcx, rcx, rax
+    x64.leaRegRegImm32 rax, r8, 768
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 62
+    x64.leaRegRegReg rax, rax, rcx
+    x64.sarRegImm8 rax, rax, 2
+    x64.leaRegRegReg r8, r8, rax
     x64.jmp whilehdr
   whileexit:
-    x64.movRegReg r8, rcx
     x64.popReg rbp
     x64.ret
 }
@@ -2864,18 +2866,23 @@ func @__decimalWidthOf {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.movRegImm32 r8, 1
-    x64.movRegImm32 rsi, 10
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
+    x64.movRegImm rax, 7378697629483820647
+    x64.imulHighReg rcx
+    x64.sarRegImm8 rdx, rdx, 2
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rcx, rdx, rax
   whilehdr:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 rcx, 0
     x64.jcc lessEqual, whileexit
   count:
     x64.leaRegRegImm32 r8, r8, 1
-    x64.movRegImm32 rcx, 10
-    x64.cqo
-    x64.idivReg rcx
+    x64.movRegImm rax, 7378697629483820647
+    x64.imulHighReg rcx
+    x64.sarRegImm8 rdx, rdx, 2
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rcx, rdx, rax
     x64.jmp whilehdr
   whileexit:
     x64.popReg rbp
@@ -2904,10 +2911,15 @@ func @__appendDecimalGroup {
     x64.cmpRegReg r15, r13
     x64.jcc greaterEqual, forexit
   eachDigit:
-    x64.movRegImm32 rcx, 10
-    x64.movRegReg rax, r12
-    x64.cqo
-    x64.idivReg rcx
+    x64.movRegImm rax, 7378697629483820647
+    x64.imulHighReg r12
+    x64.sarRegImm8 rdx, rdx, 2
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.movRegReg rdx, r12
+    x64.subRegReg rdx, r12, rax
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -2927,10 +2939,12 @@ func @__appendDecimalGroup {
   __rc_ok:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_push
-    x64.movRegImm32 rcx, 10
-    x64.movRegReg rax, r12
-    x64.cqo
-    x64.idivReg rcx
+    x64.movRegImm rax, 7378697629483820647
+    x64.imulHighReg r12
+    x64.sarRegImm8 rdx, rdx, 2
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
   forstep:
     x64.leaRegRegImm32 r15, r15, 1
     x64.movRegReg r12, rax
@@ -3087,11 +3101,8 @@ func @__bigShiftLeft {
     x64.popReg rbp
     x64.ret
   ifcont#4:
-    x64.movRegImm32 rcx, 32
-    x64.movRegReg rax, rdx
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
     x64.movRegReg r12, rdx
+    x64.andRegImm32 r12, rdx, 31
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, ifcont#13
   partialLimb:
@@ -3368,11 +3379,8 @@ func @__bigShiftLeft {
     x64.movRegReg rdx, r13
     x64.callDirect __bigPushCarry
   ifcont#13:
-    x64.movRegImm32 rcx, 32
-    x64.loadRegSlot rax, slot34
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
-    x64.movRegReg r12, rax
+    x64.loadRegSlot r12, slot34
+    x64.shrRegImm8 r12, r12, 5
     x64.cmpRegImm32 r12, 0
     x64.jcc lessEqual, ifcont#27
   wholeLimbShift:
@@ -6020,11 +6028,8 @@ func @__roundsUp {
     x64.popReg rbp
     x64.ret
   tryok#15:
-    x64.movRegImm32 rcx, 2
-    x64.movRegReg rax, r8
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
-    x64.cmpRegImm32 rdx, 1
+    x64.andRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 1
     x64.setccReg equal, r8
     x64.epilogue 232
     x64.popReg r15
@@ -6695,25 +6700,24 @@ func @__repeatedText {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
     x64.loadRegSlot rax, slot9
-    x64.movRegReg rcx, r14
-    x64.movRegReg rsi, r13
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rax
+    x64.movRegReg rax, r14
   whilehdr:
-    x64.storeSlotReg slot4, rcx
-    x64.storeSlotReg slot3, rax
-    x64.storeSlotReg slot1, rsi
-    x64.cmpRegImm32 rax, 0
+    x64.storeSlotReg slot4, rax
+    x64.storeSlotReg slot3, rdx
+    x64.storeSlotReg slot1, rcx
+    x64.cmpRegImm32 rdx, 0
     x64.jcc lessEqual, whileexit
   halve:
-    x64.movRegImm32 rdi, 2
-    x64.movRegImm32 rdx, 0
-    x64.divReg rdi
+    x64.andRegImm32 rdx, rdx, 1
     x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, critsplit#8
   takeBlock:
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r13, [rsi + 0]
-    x64.loadRegBaseDisp.word64 r14, [rsi + 8]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.loadRegBaseDisp.word64 r13, [rcx + 0]
+    x64.loadRegBaseDisp.word64 r14, [rcx + 8]
     x64.leaRegRegReg rax, r12, r14
     x64.storeSlotReg slot6, rax
     x64.leaRegRegImm32 rcx, rax, 57
@@ -6747,10 +6751,8 @@ func @__repeatedText {
     x64.loadRegSlot rax, slot4
   ifcont#5:
     x64.storeSlotReg slot0, rax
-    x64.movRegImm32 rcx, 2
     x64.loadRegSlot rax, slot3
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
+    x64.shrRegImm8 rax, rax, 1
     x64.storeSlotReg slot2, rax
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, critsplit#9
@@ -6794,8 +6796,7 @@ func @__repeatedText {
   ifcont#7:
     x64.loadRegSlot rcx, slot0
     x64.loadRegSlot rdx, slot2
-    x64.movRegReg rsi, rax
-    x64.movRegReg rax, rdx
+    x64.xchgRegReg rax, rcx
     x64.jmp whilehdr
   whileexit:
     x64.loadRegSlot rcx, slot1
@@ -7665,11 +7666,16 @@ func @graphemeBreakProperty {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#23
   hangul:
-    x64.leaRegRegImm32 rax, rcx, -44032
-    x64.movRegImm32 rcx, 28
-    x64.cqo
-    x64.idivReg rcx
-    x64.cmpRegImm32 rdx, 0
+    x64.leaRegRegImm32 rcx, rcx, -44032
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg rcx
+    x64.sarRegImm8 rdx, rdx, 3
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.imulRegRegImm32 rax, rax, 28
+    x64.subRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, ifelse
   lv:
     x64.movRegImm32 r8, 12

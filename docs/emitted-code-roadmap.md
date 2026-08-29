@@ -74,7 +74,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | **LICM** | ✅ `LoopInvariantCodeMotion` (EC14) — pure ops AND invariant loads, two stated speculation rules | ◑ refcount pairs only | ✅ `LoopInvariantCodeMotion.maxon` (596) — pure ops only |
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* | ✅ `DeadStoreEliminationPass` sub-pass 3 | ✅ `DeadCodeElimination.maxon` (728) |
 | **Block merging / branch simplification** | ◑ `X64BranchCleanup` (EC11) — elision, inversion, threading, unreachable; **no reordering** | ◑ cond-br then-edge only | ✅ `CfgAnalysis` + `Canonicalize` |
-| **Strength reduction** (`mul`→`shl`, magic div) | ❌ | ❌ | ❌ |
+| **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 | ❌ | ❌ |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half | ❌ | ❌ |
 | **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15) | ❌ n/a | ❌ n/a |
 | Store-forwarding / dead-store elim | ❌ | ✅ `StoreForwardingPass` + `DeadStoreEliminationPass` | ✅ via `Mem2Reg` |
@@ -913,10 +913,219 @@ the `ByteArray` control's loop call-free too and turn that refusal into an inlin
 #### `EC18` · Strength reduction
 
 `mul` by a power of two → `shl`/`lea`; `div`/`mod` by a constant → the magic-number multiply.
-**Neither** the bootstrap nor v1 has this, so there is no reference to read — but `idiv` is 20–40
-cycles and nbody carries 8 of them plus 41 power-of-two multiplies. ⚠ Sequence it **after** `EC16`,
-which removes most of the power-of-two multiplies by folding them into an addressing mode; measure
-what is left before building the `shl` half.
+**Neither** the bootstrap nor v1 has this, so there is no reference to read.
+
+⛔ **THE `mul` HALF WAS ALREADY GONE WHEN THIS ROW WAS TAKEN, AND THE ROW'S OWN WARNING IS WHY IT WAS
+CHECKED.** `EC16` folded the element-index scaling into an addressing mode, and `imul`-by-immediate
+fell **66 → 6 corpus-wide**; 36 of nbody's 40 had been `×8` element scaling. So this row is
+**DIVISION**, and the `shl` half is left where `EC16` left it — six multiplies in the whole corpus,
+with no site shown to pay.
+
+⚠⚠ **AND NEITHER BENCHMARK CAN SEE THE DIVISION HALF EITHER.** Every `idiv` in nbody was attributed
+before the row was designed: `grownCapacity`'s `/4` (array growth, amortized), two in
+`__bigDivModSmall` whose divisor is a REGISTER and is not reducible at all, and the rest in the float
+formatting stdlib. The `idiv`-by-constant sites a program actually pays are **`__decimalWidthOf` and
+`__appendDecimalGroup` (four per number formatted)**, **`__int_to_string` (three per integer
+printed)** and **`graphemeBreakProperty`'s `mod 28` (one per grapheme)**. `temp/codegen-probe/fmt.maxon`
+— 300,000 floats formatted — was committed as the probe for exactly that reason and is reproduced at
+the foot of this document.
+
+✅ **LANDED 2026-08-29** as `maxon-shv2/Compiler/IR/Std/StrengthReduceDivision.maxon`, scheduled in
+`buildLoweringPasses` between `foldConstants` and `foldConstOperands`, and run a SECOND time by
+`Compiler.compileToCodeResult` over the appended runtime band.
+
+⭐⭐ **IT IS A Std PASS AND NOT AN ISEL, AND THAT IS FORCED RATHER THAN CHOSEN — WHICH MAKES IT THE
+FIRST ROW OF THIS WORKSTREAM THAT COULD NOT GO WHERE `EC16` AND `EC19` WENT.** The sequence needs four
+or five intermediate values and **the x64 isel cannot mint a vreg**: every `TargetVReg.virtual(id)`
+names a Std `ValueId`, the parser owns that value space, and the register-class column is derived from
+the **Std** module — so a backend-minted vreg would be filled `gpr` by accident rather than by
+decision. `TargetDialect.absF64RegReg` and `StdToX64Conversion.materializeFloatEquality` had both
+already recorded that wall from the other side; this row is the first to be stopped by it.
+
+**WHAT WAS ADDED, AND IT IS ONE OPCODE AND ONE INSTRUCTION.** `StdBinOpcode.mulHighSigned` (the high
+64 bits of the 128-bit signed product) and `TargetOp.imulHighReg` (x64's ONE-operand group-3
+`imul r/m64`, `REX.W F7 /5`), whose register model is `divideReg`'s to the digit — implicit RAX in,
+implicit RAX+RDX out, one explicit operand — so `lowerMulHighSigned` is `lowerDivMod`'s three-op shape
+and the twenty-odd exhaustive `TargetOp` matches each gained one arm.
+
+⚠ **THE TARGET GATE IS THE ROW'S ONE PIECE OF SCOPE, AND IT IS THE HARDWARE'S ON ONE LANE AND THIS
+COMPILER'S ON THE OTHER.** `strengthReduceDivision` asks `targetLowersMulHighSigned` and rewrites
+NOTHING where the answer is `false`: **wasm32 has no `i64.mul_high_s` at all** (four 32×32 products
+and their carries, ~20 instructions against the one `i64.div_s` it would replace), and **arm64 HAS the
+instruction — `SMULH Xd, Xn, Xm`, a plain three-address form strictly nicer than x64's — and has no
+`TargetOp` for it.** So no arm64 or wasm golden moves for this row, and adding that op is what turns
+that lane on. Filed, not taken: this is the most arithmetically dangerous row of the workstream and it
+was not worth doubling on a lane this host cannot execute.
+
+**THE SEQUENCES, AND THE SIGN CORRECTION IS THE WHOLE OF WHY THEY ARE NOT ONE-LINERS.** Signed
+division TRUNCATES TOWARD ZERO and neither a shift nor a magic multiply does:
+
+```
+x / 2^k   sar sgn,x,63 ; shr bias,sgn,64-k ; lea t,[x+bias] ; sar q,t,k      (4 ops)
+x /u 2^k  shr q,x,k                                                          (1 op)
+x modu 2^k  and r,x,2^k-1                                                    (1 op)
+x / K     mov rax,M ; imul x ; [lea h,[rdx+x]] ; [sar h,s] ; shr s,h,63 ; lea q,[h+s]
+x mod K   <the quotient> ; imul p,q,|K| ; sub r,x,p
+```
+
+⇒ **THE `ops` COLUMN GOES UP AND THAT IS THE ROW WORKING.** A five-op sequence replaces a four-op
+`idiv` that costs 20–40 cycles; the instrument counts instructions and cannot see cycles. Corpus,
+before → after — and note the `idiv` column was WIDENED in the same commit, because it had only ever
+counted the SIGNED `idivReg` and missed all ten of the corpus's unsigned `divReg`s:
+
+| | ops | imul-imm | imul-pow2 | idiv | mov |
+|---|---|---|---|---|---|
+| nbody | 8,582 → **8,587** | 5 → **7** | 2 → 2 | 13 → **2** | 1,464 → **1,463** |
+| fannkuch-redux | 1,700 → **1,705** | 0 → **1** | 0 → **1** | 3 → **2** | 211 → **213** |
+| fmt (the probe) | 7,811 → **7,816** | 5 → **7** | 2 → 2 | 13 → **2** | 1,353 → **1,352** |
+| probe | 59 → **64** | 0 → **1** | 0 → 0 | 3 → **0** | 11 → **9** |
+| TOTAL | 18,390 → **18,410** | 11 → **17** | 4 → **5** | **32 → 6** | 3,085 → **3,083** |
+
+**Every divide left in the corpus has a REGISTER divisor and is not reducible at all**: two in
+`__bigDivModSmall` (nbody and fmt each) and two in fannkuch's `getPermutation`.
+
+⭐⭐ **HOW THE MAGIC NUMBERS ARE DERIVED, AND HOW A READER CHECKS THEM — because a pasted table of
+constants would be a table nobody can check.** `deriveSignedMagic` is Granlund & Montgomery's
+algorithm (PLDI 1994; Hacker's Delight fig. 10-1), widened to 64 bits. It seeds `floor(2^63/d)` and
+`floor(2^63/anc)` and then RAISES `p` one bit at a time — one doubling with a remainder correction,
+no division after the seeds — until the loop's own exit condition holds. **That condition IS the proof
+obligation**, so the first `p` that satisfies it gives the smallest exact multiplier; there is nothing
+to trust beyond the transcription.
+
+⚠⚠ **ONE VALUE IS ALLOWED TO WRAP AND EVERY OTHER ONE MUST NOT, AND THAT IS WHAT MAKES A u64
+ALGORITHM EXPRESSIBLE IN A LANGUAGE WITH NO u64 ARITHMETIC.** shv2's `ParsedInt` is signed 64-bit and
+its comparisons are signed, so a value above `2^63` would compare as negative and the loop would take
+the wrong branch. `anc`, `r1`, `r2` and `delta` are remainders below `2^63` and are exact — their
+doublings are written `r >= m - r` / `r - (m - r)` so no intermediate leaves the range. `q1` must be
+exact because the exit condition COMPARES it, and it is tested against `i64.max/2` before each
+doubling: MEASURED, it first exceeds i64 for divisors around **2^62.5** and for none below **2^61**,
+so that bound is a FIFTH refusal that costs nothing real. `q2` is the only term allowed to wrap, and
+its wrapped value IS the answer — a 64-bit multiplier whose top bit may legitimately be set, which is
+what the `+ dividend` fixup exists for.
+
+⭐ **AND THE DIVISOR IS ALWAYS TAKEN POSITIVE, WHICH IS A DELIBERATE DEPARTURE FROM THE PUBLISHED
+ALGORITHM.** It handles `d < 0` by biasing `anc` and negating `M`; working in `|K|` and negating the
+QUOTIENT is exact (truncating division is odd, and `|x / |K||` is at most `2^62` so the negation
+cannot overflow) and removes the one case where `anc` reaches `2^63` and stops fitting — a negative
+divisor whose magnitude divides `2^63 + 1`, of which `x / -3` is the smallest.
+
+**A reader checks it two ways**: against that exit condition, and by running the spec — which is a
+DIFFERENTIAL test, not a table.
+
+⭐⭐ **`specs-shv2/strength-reduction.md` USES THE HARDWARE `idiv` AS ITS ORACLE.** Each case divides
+by the LITERAL (reduced) and by a **runtime value of the same magnitude** (not reduced — its ranged
+type `int(2 to 1000000)` proves it non-zero, so `Parser.emitDivOrMod` emits a bare `idiv` with no
+guard and no `try`), and asserts the two agree. Twelve edge dividends — `i64.min`, `i64.max`, `0`,
+`±1`, `±2`, `±7`, `-2^62`, `±10^9+7` — against eleven divisors chosen so every arm of both sequences
+is taken. A wrong magic is a wrong exit code, not a moved golden.
+
+⚠ **THE REFERENCE HAD TO BE A REAL CALL, AND THAT IS THE [[green-case-proved-nothing-sabotage]]
+SHAPE.** A reference small enough for `inlineLeaves` to splice with its literal argument would have
+its divisor folded to a constant and be REDUCED TOO — the case would then compare a reduction against
+itself and pass however wrong both were. The ranged-parameter guard keeps the references out of the
+budget; the minted fragments show a `callDirect` at every one of the gate's seventeen reference sites
+and an `idivReg` inside each of its four reference bodies.
+
+⭐⭐ **THE SABOTAGES WERE RUN, NOT DESCRIBED — seven of them, and the two that stayed GREEN are the
+ones worth reading.**
+
+| sabotage | what happened |
+|---|---|
+| drop the power-of-two sign bias | **RED, exit 1** on the gate AND on the truncation case — a wrong answer for every negative dividend |
+| drop the `+ dividend` fixup for a top-bit-set magic | **RED, exit 10** — the `/15` arm, which is the arm added for it |
+| make the floor→truncate correction a `mul` instead of an `add` | **RED, exit 5**, and the range-check control flips too |
+| shift the unsigned quotient ARITHMETICALLY | **RED, exit 1** on the unsigned case only |
+| HALVE `anc` in `deriveSignedMagic` | **RED, exit 5** — but ONLY on the seventh case, which exists because of this |
+| invert the do-while sense, or set `anc` to `i64.max` | **GREEN, and correctly so**: both make the refinement stop LATER, and a later `p` is still an EXACT multiplier (the loop finds the smallest, not the only one), so either the magic merely changes or `q1` trips its bound and the site declines. Only an EARLY exit is a wrong answer. |
+
+⛔⛔ **AND THE SEVENTH CASE EXISTS BECAUSE THE FIRST SIX COULD NOT SEE A MIS-DERIVED MAGIC AT ALL.**
+With `anc` halved — a provably too-coarse reciprocal — the gate's twelve dividends against eleven
+divisors were **six cases, 0 failed**. A fixed-point reciprocal that is slightly wrong is right for
+almost every dividend and wrong only near `anc` itself, which is the value the derivation's exit
+condition is stated in terms of and which no fixed dividend list contains. The seventh case COMPUTES
+`anc` per divisor from a runtime `mod` the compiler cannot fold, and reddens at exit 5.
+⇒ **a differential test against the hardware is only as good as its dividends, and the dividend that
+matters for a magic number is not an edge of the TYPE — it is an edge of the DIVISOR.**
+
+⛔⛔ **AND REVIEW FOUND A LIVE WRONG ANSWER THAT NO GATE COULD SEE.** `magnitude` is `|K|` read as a
+SIGNED number, and for an UNSIGNED divide a `K` with its top bit set is not a small negative number
+but a value of at least `2^63`. `x /u 18446744073709551600` is `0` for every dividend below it; its
+signed magnitude is `16`, a power of two, which the first cut answered with `shrLogical 4`. MEASURED
+on a program that reaches it from source — a `let` typed `int(0 to u64.max)` whose folded value has
+wrapped past `i64.max` — **`9223372036854776807 / 18446744073709551600` printed `576460752303423550`
+where `0` is correct.** Refused now, and pinned by
+`an-unsigned-divisor-above-the-signed-range-is-refused`. ⇒ **the sign of a `ParsedInt` divisor means
+two different things to the two signednesses, and it is the ONE refusal here that prevents a wrong
+answer rather than a deleted trap.**
+
+⭐⭐ **THE TIMED A/B — AND IT IS THE SECOND NON-ZERO RESULT THIS WORKSTREAM HAS HAD, ON THE PROGRAM
+THE ROW WAS DESIGNED AROUND.** Two compilers from ONE tree differing in the one line that turns the
+pass off (`targetLowersMulHighSigned`'s x64 arm), built in one session, each compiling the same three
+programs, runs interleaved on one box. **All three print byte-identical answers and all three binaries
+genuinely differ** (60,497 / 45,837 / 10,930 bytes apart — checked, because "same size" is not "same
+code" and the PE file size is 512-byte aligned):
+
+| program | control | with the row | |
+|---|---|---|---|
+| `temp/codegen-probe/fmt.maxon` (the probe) | 3,561 / 3,557 / 3,566 ms | **3,167 / 3,194 / 3,171 ms** | **−11.0%** |
+| `examples/fannkuch-redux` | 10,042 / 10,024 / 10,040 ms | **9,787 / 9,848 / 9,797 ms** | **−2.3%** |
+| `examples/nbody` | 10,168 / 10,114 / 10,133 ms | 10,116 / 10,122 / 10,101 ms | **0** |
+
+Both non-zero arms are non-overlapping (fmt's worst run beats the control's best by 363 ms;
+fannkuch's by 176 ms). **nbody's zero was PREDICTED and is reported as measured** — its divisions are
+`grownCapacity`'s amortized `/4` and two `__bigDivModSmall` divides whose divisor is a register.
+
+⭐ **AND FANNKUCH'S −2.3% IS ATTRIBUTED RATHER THAN CREDITED.** It has no division in `getPermutation`
+that this row can touch — its two survive — and the one site that WAS reduced is `main`'s `mod 2`, the
+per-permutation parity test that decides the sign of the checksum. That is a ~30-cycle `idiv` per
+permutation replaced by four ALU ops, in the outer loop of the benchmark, which is why a program with
+"no division in its hot loop" moved at all.
+
+⚠ **THE SCALE LADDER AGREES WITH ALL THREE, WHICH IS WORTH SAYING BECAUSE `EC19`'s DID NOT.** Against
+the same kind of control, its binary swapped in and the ladder re-run: emitted **`codeBytes` is
++112 BYTES AT EVERY RUNG** — a CONSTANT, i.e. one program's worth of reduced stdlib sequences, so it
+reads +0.084% at rung 0 and **+0.004% at rung 5** as the corpus grows around it. The compile costs
+**+0.19% → +0.15% of allocations** and +0.16% of bytes (also falling), and CPU sits between −0.45% and
++0.81%, inside the noise band. `phase:strengthReduceDivision` + `phase:strengthReduceEmittedDivision`
+together are **0.148% / 0.157% / 0.162%** of the rung-5 compile and are **LINEAR** — ×1.90 allocs,
+×2.02 bytes, ×2.07 CPU across the last doubling, converging on ×2 from below as their constant term
+washes out. **No bend, in any column.** ⇒ this row does not compound with `EC19`'s open ladder
+disagreement: that one is `regalloc:splitting` reacting to a colouring change, and this row's ladder
+delta is a flat constant that never enters the allocator's pressure at all.
+
+**GATES**: x64-windows **6,834 passed, 0 failed, exit 0** (6,827 + 7 new) and wasm32-wasi **6,372
+passed, 0 failed, exit 0** (6,366 + 6 — the range-check control is `targets: x64-windows, x64-linux`);
+**zero `E5001` in either run**. **772 goldens re-minted** from ONE unfiltered run and re-verified at
+zero drift (6,834 compared, 0 differ), 7 added — and **every one of the 772 is on the x64-windows
+lane**, which is the target gate reading itself back: not one arm64 or wasm32 fragment moved.
+**Self-host fixpoint: stage-2 == stage-3, BYTE-IDENTICAL (9,033,004 bytes)** — the gate `EC17` found
+the suite structurally cannot give, and the one that matters most for a row that rewrites arithmetic:
+the compiler compiles itself with its own reduced divisions and lands on the same bytes.
+
+**Cases added** to the new `specs-shv2/strength-reduction.md`, 7, every one of them a DIFFERENTIAL
+test against the hardware `idiv` rather than a table of expected quotients:
+
+| case | what it pins |
+|---|---|
+| `a-constant-divisor-gives-the-same-answer-as-a-runtime-one` | THE GATE — 12 edge dividends × 11 divisors, each answered by the reduced literal and by a real `idiv` on a value the compiler cannot fold |
+| `the-hardest-dividend-for-a-divisor-is-the-one-the-derivation-is-ABOUT` | the DERIVATION, at `anc` and its neighbours, computed per divisor at run time |
+| `a-signed-power-of-two-truncates-toward-zero` | the bias that makes `-7 / 2` be `-3` and not `-4` |
+| `an-unsigned-power-of-two-reads-the-whole-bit-pattern` | the logical shift, over three dividends past `i64.max` |
+| `an-unsigned-divisor-above-the-signed-range-is-refused` | the live wrong answer review found |
+| `the-refused-divisors-keep-their-answers` | `i64.min mod -1`, `x / 1`, `x mod 1`, `x / i64.min` |
+| `a-reduced-division-still-meets-its-range-check` | that the rewrite keeps the division's RESULT VALUE ID, which the guard `insertRangeChecks` emitted names |
+
+**Left open**: the `mul` → `shl` half (`EC16` left six multiplies in the whole corpus and no site has
+been shown to pay); the **UNSIGNED magic sequence**, which needs a 65-bit multiplier and an
+"add-indicator" fixup — the unsigned power-of-two cases are taken and are the cheapest reductions
+here, but `x /u 10` still divides; the **arm64 `SMULH` op**, which is the whole of what that lane
+needs; a divisor at or above **2^62.5**, where the derivation leaves i64 range and declines;
+`|K| == 1`, an identity `foldConstOperands` cannot reach because `div`/`mod` have no `binOpImm` form;
+and — measured rather than assumed — **`const` UNIFICATION, which would buy this row a second time**.
+`(n / 8) + (n mod 8)` emits its four-op quotient chain ONCE because CSE merges the two; the same
+program over `10` emits it TWICE, because there is no constant interning and the two sites mint two
+`const` ops for one 64-bit magic, so no expression comparison can call the two `mulHighSigned`s equal.
+That is `EC13`'s own filed item, and this is the second row to be worth a measurement to it.
 
 #### `EC19` · Register-to-register copies — the census, and `commuteForCoalescing`
 

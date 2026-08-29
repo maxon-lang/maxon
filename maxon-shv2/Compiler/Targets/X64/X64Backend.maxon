@@ -446,6 +446,7 @@ export let Grp2ExtShr = 5  // SHR r/m, count — LOGICAL right shift (zero-filli
 // Group-3 ALU opcode-extension (ModR/M reg field) values (F7 /ext).
 let Grp3ExtNot = 2  // NOT r/m — one's complement (writes NO flags, unlike NEG)
 let Grp3ExtNeg = 3  // NEG r/m
+let Grp3ExtImul = 5  // IMUL r/m — SIGNED 128-bit multiply RAX × r/m (low→RAX, HIGH→RDX)
 let Grp3ExtDiv = 6  // DIV r/m — UNSIGNED divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
 let Grp3ExtIdiv = 7  // IDIV r/m — signed divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
 
@@ -2113,6 +2114,10 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then emitDataLoad(code, dest: resolvePhysical(dest), base: resolveGpr(base), disp: disp, width: width, index: x64SibIndex(resolveGpr(index)), indexScale: scale)
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then emitDataStore(code, base: resolveGpr(base), disp: disp, src: resolvePhysical(src), width: width, index: x64SibIndex(resolveGpr(index)), indexScale: scale)
 		arm64AddLsl then panic("emitX64TargetOp: an arm64 shifted-register `add` reached the x64 encoder — x64 spells a scaled-index address as `leaRegBaseIndexScale`")
+		// EC18 — the ONE-operand `imul r/m64` (`REX.W F7 /5`): RDX:RAX ⟸ RAX × src. The same group-3
+		// encoder the two divides use, at a different extension, which is the whole difference between
+		// the four one-operand forms this family has.
+		imulHighReg(src) then encodeGrp3Reg(code, ext: Grp3ExtImul, reg: resolveGpr(src))
 	end 'emit'
 end 'emitTargetOp'
 

@@ -16,7 +16,10 @@ It compiles a fixed corpus with --emit-ir and counts, per program:
   imul-imm        multiplies by an immediate ...
   imul-pow2       ... of which by a power of two (EC16 folds these into an
                   addressing mode; EC18 turns the rest into shifts)
-  idiv            integer divides (EC18: 20-40 cycles each)
+  idiv            integer divides - BOTH `idivReg` (signed) and `divReg` (unsigned),
+                  which are one instruction pair with one cost. 20-40 cycles each,
+                  and EC18 replaces every one whose divisor is a compile-time
+                  constant with a multiply-and-shift sequence
   call-direct     every emitted `callDirect` - the column the two inlining
                   passes are graded on, since a call they discharge is one
                   frame, one argument shuffle and one `ret` the program does
@@ -74,7 +77,11 @@ def count(ir_text):
         s = raw.strip()
         if s.startswith("x64."):
             c["ops"] += 1
-        if s.startswith("x64.idivReg"):
+        # BOTH group-3 divides, and the column name is the SIGNED one only because that is the
+        # commoner form: `idivReg` and `divReg` are one instruction pair with one cost, and counting
+        # only the signed half under-reported this corpus by 10 divides (all five of nbody's and all
+        # five of fmt.maxon's unsigned divides) for as long as the column existed. Widened at EC18.
+        if s.startswith(("x64.idivReg", "x64.divReg")):
             c["idiv"] += 1
         # Register-to-register copies. Coalescing's target: 17% of nbody's ops
         # at ff12c05666, and none of them is a self-move (those are already gone).

@@ -1,0 +1,758 @@
+// StrengthReduceDivision — a Std→Std pass that replaces `x / K` and `x mod K`, for a COMPILE-TIME
+// constant `K`, with a multiply-and-shift sequence that computes the same answer without a divide
+// (EC18, docs/emitted-code-roadmap.md).
+//
+// ⭐⭐ **WHY THIS ROW EXISTS AT ALL: `idiv` IS THE MOST EXPENSIVE INSTRUCTION SHV2 EMITS.** A 64-bit
+// x64 `idiv` is 20–40 cycles and is not pipelined; the sequence below is one `imul` (3 cycles) and
+// three or four single-cycle ALU ops. MEASURED on the committed corpus at `ee4e1bd078`: 22 divides,
+// of which the ones a program actually PAYS are in shv2's float-formatting stdlib (`__decimalWidthOf`
+// and `__appendDecimalGroup` divide by 10 four times per number) and in `graphemeBreakProperty`
+// (`mod 28` per grapheme). Neither benchmark's hot loop contains one, which is why the row's probe is
+// `temp/codegen-probe/fmt.maxon` rather than nbody or fannkuch.
+//
+// ⭐⭐ **IT IS A Std PASS AND NOT AN INSTRUCTION SELECTION, AND THAT IS FORCED RATHER THAN CHOSEN.**
+// `EC16` and `EC19` both put their transform at x64 isel because the CONSTRAINT was x64's. This one
+// cannot go there: the sequence needs four or five INTERMEDIATE VALUES, and **the isel cannot mint a
+// vreg** — every `TargetVReg.virtual(id)` names a Std `ValueId`, the parser owns that value space
+// (`IrFunction.valueTags` is dense by ValueId) and the class column is derived from the Std module
+// (`buildValueClassColumns`), so a backend-minted vreg would be filled `gpr` by accident rather than
+// by decision. `TargetDialect.absF64RegReg` and `StdToX64Conversion.materializeFloatEquality` both
+// record the same wall from the other side. At the Std tier minting is ordinary (`ValueMinter`), and
+// three later passes then read the sequence as the arithmetic it is:
+//
+//   • `foldConstOperands` turns every constant operand into an IMMEDIATE, so the shift counts and the
+//     multiply-back need no register (`sar rax, 3`, `imul rcx, rcx, 10`).
+//   • `commonSubexpressionElimination` MERGES the quotient chain of `x / K` with that of `x mod K` in
+//     the same block, which no isel-tier rewrite could ever reach: two `idiv`s can never be CSE'd,
+//     because they are `isPure: false`. ⚠ **MEASURED, AND IT HOLDS FOR ONE OF THE TWO SHAPES ONLY.**
+//     `(n / 8) + (n mod 8)` emits the four-op quotient chain ONCE and the remainder reuses it; the same
+//     program over `10` emits the chain TWICE. The reason is `EC13`'s filed one — there is no constant
+//     interning, so the two sites mint two `const` ops for one 64-bit magic, the two `mulHighSigned`s
+//     read different value ids and no expression comparison can call them equal. A power-of-two chain
+//     has no such constant left after `foldConstOperands` (every operand is an immediate), which is
+//     exactly why it merges. ⇒ `const` unification would buy this row a second time.
+//   • `loopInvariantCodeMotion` can hoist a reduced quotient out of a loop. An `idiv` never left one.
+//
+// ⚠ **THE TARGET GATE.** The general sequence needs a 64×64 → 128 multiply, of which it reads the HIGH
+// half (`StdBinOpcode.mulHighSigned`). x64 has one (`imul r/m64`); **wasm32 has NONE** — emulating it
+// costs four 32×32 products and their carries, ~20 instructions against the ONE `i64.div_s` the
+// reduction would be replacing — and arm64's `SMULH` exists but is not in the Target dialect yet. So
+// the pass asks `targetLowersMulHighSigned` and rewrites NOTHING on a target that cannot spell the
+// opcode. `PromoteStackRecords` is the precedent for a target-conditional Std pass, and the gate is
+// what keeps every arm64 and wasm golden byte-identical for this row.
+//
+// ⛔⛔ **THE DIVISORS THIS PASS REFUSES, AND EACH REFUSAL IS A CORRECTNESS ARGUMENT RATHER THAN A
+// MISSING FEATURE.** `StdOp.div`/`mod` carry `isPure: false` because x64's `idiv` FAULTS, and
+// replacing one with pure arithmetic DELETES that fault. That is sound only where the fault provably
+// cannot happen, which is what these refusals establish (the last one is about something else again —
+// it is the only one that prevents a wrong ANSWER rather than a deleted trap):
+//
+//   • **`K == 0`.** The fault IS the answer. `Parser.emitDivOrMod` refuses a provably-zero divisor in
+//     source (E3103), and a compiler-authored builder that divides by a literal zero is a bug the
+//     `#DE` reports; reducing it would silently compute a number instead.
+//   • **`|K| == 1`.** `x / 1` is `x` and `x mod 1` is `0` — an ALGEBRAIC IDENTITY, not a strength
+//     reduction, and it belongs to `foldConstOperands`' identity move (which cannot reach it today
+//     because `div`/`mod` have no `binOpImm` form). `x / -1` additionally FAULTS at `i64.min`, and
+//     `specs-shv2/division.md` pins that fault as deliberate — a reduction would answer `i64.min`.
+//     Refusing the whole magnitude keeps one rule where two would need to agree.
+//   • **`K == i64.min`.** The derivation works in `|K|`, which is not representable.
+//   • **UNSIGNED by a non-power-of-two.** The unsigned magic sequence needs a 65-BIT multiplier and an
+//     "add indicator" fixup, which this rung did not build. The unsigned POWER-of-two cases are taken
+//     and are the cheapest reductions here (one `shr`, one `and`); MEASURED on `fmt.maxon`, all five
+//     of its unsigned divides are by 2 or 32.
+//   • **UNSIGNED by a divisor at or above `2^63`** — i.e. one whose `ParsedInt` is NEGATIVE. This is
+//     the only refusal here that prevents a WRONG answer rather than an unsound trap deletion; see
+//     `classifyDivision`, which states it where the magnitude is taken.
+//
+// ⇒ For every divisor that IS reduced, `2 <= |K| <= i64.max`, so the `idiv` it replaces could not have
+// faulted on either operand — the trap is removed along with the only inputs that could raise it.
+//
+// ⚠ **THE ANSWER MUST AGREE WITH `idiv` ON EVERY EDGE, NOT APPROXIMATELY.** Signed division TRUNCATES
+// TOWARD ZERO, which neither the magic multiply nor an arithmetic shift does on its own: `x / 2` for a
+// negative `x` is **not** `x >> 1`. Both sequences below therefore carry an explicit sign correction,
+// and `specs-shv2/strength-reduction.md` is a DIFFERENTIAL test rather than a table of expected values
+// — it divides by a constant and by a runtime value of the same magnitude and asserts the two agree,
+// so the hardware `idiv` is the oracle for every case, over `i64.min`, `i64.max`, `±1`, `0`, both
+// signs of dividend against both signs of divisor, every power of two and a spread of odd divisors.
+
+// The Std type every value in the emitted sequence carries. An integer `binOp` computes at the MACHINE
+// WORD on every target shv2 emits for (`foldConstants`' header states the argument in full), so a Std
+// `operandType` is a STORAGE class here and never an arithmetic one — and the divide this replaces was
+// itself a full-width `idiv` of whatever the register held, whatever the source type's width.
+let ReducedOperandType = StdType.i64
+
+// The bit position of a 64-bit value's SIGN, used twice: to broadcast it (`x shr 63` is all-ones for a
+// negative `x`) and to isolate it (`x shrLogical 63` is 0 or 1).
+let SignBitIndex = 63
+// The number of bits in the machine word the sequence computes at.
+let ReducedWordBits = 64
+// The largest `q1` the magic refinement can hold and still DOUBLE without leaving i64 — see
+// `deriveSignedMagic`, whose one decline is this bound. It is `floor(i64.max / 2)`, spelled as a SHIFT
+// because a literal `/ 2` at file scope is folded in the FLOAT domain and the comparison against a
+// `ParsedInt` then does not type-check.
+let MaxRefinableQuotient = i64.max shr 1
+// The refinement provably converges by `p = 2 * 64 - 1` (Granlund–Montgomery), i.e. within 64 steps of
+// its `p = 63` seed. The loop is written with that bound so a derivation that did NOT converge is a
+// panic naming the divisor rather than a hang.
+let MaxMagicRefinements = 64
+// `log2OfPowerOfTwo`'s answer for a value that is not a power of two. Not a sentinel standing in for a
+// real shift: every real answer is in `0 .. 63`, so a negative one cannot be mistaken for one.
+let NotAPowerOfTwo = -1
+
+// The modulus `divideTwoToThe63` divides by. ⭐ **THE RANGE IS THE PRECONDITION, DECLARED RATHER THAN
+// CHECKED BY HAND**: `2^63 / m` needs `m` non-zero, and a `ParsedInt` parameter would make that divide
+// FALLIBLE (E3103's runtime twin — `Parser.emitDivOrMod` requires a `try` for a possibly-zero divisor).
+// Declaring the narrower type makes the divide total, and the cast at each call site is where the
+// caller's own proof is checked — at compile time where the compiler can see it, and by a range guard
+// where it cannot.
+typealias PositiveModulus = int(1 to i64.max)
+
+// Whether this CPU's instruction selection lowers `StdBinOpcode.mulHighSigned`.
+//
+// ⚠ **IT IS A QUESTION ABOUT THE LOWERING, NOT ABOUT THE HARDWARE, and the arm64 answer is the one
+// that shows why.** AArch64 HAS the instruction (`SMULH Xd, Xn, Xm`, a plain three-address form that is
+// strictly nicer than x64's fixed-register `imul r/m64`); what it does not have is a `TargetOp` for it
+// or an isel arm that emits one, so the honest answer here is `false` until that lands. wasm32's `false`
+// is the hardware's: there is no `i64.mul_high_s` and there is no cheap way to build one.
+//
+// The three isels each PANIC on the opcode they cannot lower, so a wrong answer here is a loud compiler
+// failure on the first reduced division rather than a silent miscompile.
+function targetLowersMulHighSigned(cpu CpuArch) returns bool
+	return match cpu 'c'
+		x64 gives true
+		arm64 gives false
+		wasm32 gives false
+	end 'c'
+end 'targetLowersMulHighSigned'
+
+// Which shape a division by a constant reduces to. An enum field of a record rather than a
+// payload-bearing union, for `StdArithOperands`' measured reason: a union heap-boxes every case,
+// payload-free ones included.
+enum DivisionReductionKind
+	// Keep the `div`/`mod` exactly as it is — see the four refusals in this file's header.
+	notReducible
+	// `|K|` is `2^shift`: an arithmetic shift with a bias that makes it truncate toward zero (signed),
+	// or a plain logical shift / mask (unsigned).
+	powerOfTwo
+	// The general signed case: multiply by `magic`, take the high half, shift, add the sign bit.
+	magicMultiply
+end 'DivisionReductionKind'
+
+// What one `div`/`mod` op reduces to, written into a caller-owned record refilled per site.
+//
+// ⚠ **EVERY FIELD BELOW IS MEANINGLESS UNTIL `kind` SAYS WHICH OF THEM THE LAST CLASSIFICATION FILLED**
+// — `StdArithOperands`' discipline, and for its reason: 0 is a real ValueId, a real constant and a real
+// shift, so no field here can be read as a sentinel.
+type DivisionReduction
+	export var kind as DivisionReductionKind
+	// `|K|`, always in `2 .. i64.max` when `kind` is not `notReducible`.
+	export var divisorMagnitude as ParsedInt
+	// Whether the emitted QUOTIENT must be negated. True exactly for a `/` by a NEGATIVE constant: the
+	// sequences below compute `x / |K|`, and truncating division is odd, so `x / K` is `-(x / |K|)`.
+	// A `mod` never negates — a truncating remainder takes the DIVIDEND's sign and its magnitude is
+	// `|x| mod |K|`, so the divisor's sign cannot reach it.
+	//
+	// ⚠ The negation cannot overflow, which is what makes this identity exact rather than nearly so:
+	// `|K| >= 2`, so `|x / |K||` is at most `2^62` and its negative is representable.
+	export var negateQuotient as bool
+	// `powerOfTwo`: `log2(|K|)`. `magicMultiply`: the right shift the magic's fixed-point scale needs,
+	// which may be 0 (in which case no shift op is emitted at all).
+	export var shift as ShiftCount
+	// `magicMultiply` only: the multiplier, read as a SIGNED 64-bit number.
+	export var magic as ParsedInt
+	// `magicMultiply` only: whether the magic's true (unsigned) value was at least `2^63`, i.e. whether
+	// the signed `magic` above came out negative. The sequence then adds the dividend back — see
+	// `emitMagicQuotient`.
+	export var magicIsNegative as bool
+	// Whether the division reads its operands as UNSIGNED. Only the power-of-two shapes are reduced
+	// unsigned (see the header's fourth refusal), and they need no sign correction at all.
+	export var isUnsigned as bool
+
+	static function create() returns DivisionReduction
+		return Self{kind: DivisionReductionKind.notReducible, divisorMagnitude: 0, negateQuotient: false, shift: 0, magic: 0, magicIsNegative: false, isUnsigned: false}
+	end 'create'
+
+	function recordNotReducible()
+		self.kind = DivisionReductionKind.notReducible
+	end 'recordNotReducible'
+
+	function recordPowerOfTwo(magnitude ParsedInt, log2Magnitude ShiftCount, negate bool, unsigned bool)
+		self.kind = DivisionReductionKind.powerOfTwo
+		self.divisorMagnitude = magnitude
+		self.shift = log2Magnitude
+		self.negateQuotient = negate
+		self.isUnsigned = unsigned
+		self.magic = 0
+		self.magicIsNegative = false
+	end 'recordPowerOfTwo'
+
+	function recordMagic(magnitude ParsedInt, multiplier ParsedInt, postShift ShiftCount, negate bool)
+		self.kind = DivisionReductionKind.magicMultiply
+		self.divisorMagnitude = magnitude
+		self.magic = multiplier
+		self.magicIsNegative = multiplier < 0
+		self.shift = postShift
+		self.negateQuotient = negate
+		self.isUnsigned = false
+	end 'recordMagic'
+
+	function isReducible() returns bool
+		return self.kind != DivisionReductionKind.notReducible
+	end 'isReducible'
+end 'DivisionReduction'
+
+// The `(multiplier, postShift)` pair `deriveSignedMagic` answers with, plus whether it found one at
+// all. Caller-owned and refilled, for `DivisionReduction`'s reason.
+type SignedMagic
+	export var found as bool
+	export var multiplier as ParsedInt
+	export var postShift as ShiftCount
+
+	static function create() returns SignedMagic
+		return Self{found: false, multiplier: 0, postShift: 0}
+	end 'create'
+end 'SignedMagic'
+
+// ==================================================================================================
+// The derivation
+// ==================================================================================================
+
+// ⭐⭐ **THE MAGIC NUMBER, DERIVED RATHER THAN TABULATED.** This is Granlund & Montgomery's algorithm
+// ("Division by Invariant Integers using Multiplication", PLDI 1994), in the form Hacker's Delight
+// gives as figure 10-1 `magic()`, widened from 32 to 64 bits. It answers, for a divisor `d >= 2`, a
+// pair `(M, s)` such that for EVERY 64-bit signed dividend `n`:
+//
+//     n / d  ==  (mulhi(n, M) [+ n if M < 0]) shr s  +  the sign bit of that
+//
+// **WHAT THE LOOP IS.** `q1`/`r1` track `floor(2^p / anc)` and `2^p mod anc`; `q2`/`r2` track the same
+// two for `d`. Each iteration raises `p` by one, which is one doubling with a remainder correction —
+// no division at all is performed after the two seeds. `anc` is the largest positive `n` that is
+// `-1 (mod d)`, i.e. the dividend at which the approximation is hardest, and the loop's exit condition
+// IS the proof obligation — so the FIRST `p` that satisfies it gives the smallest exact multiplier.
+// ⇒ **a reader checks this routine by checking that it transcribes that condition, and then by running
+// `specs-shv2/strength-reduction.md`, which divides by these constants and by a runtime divisor of the
+// same value and asserts the two agree.**
+//
+// ⚠⚠ **ONE VALUE IS ALLOWED TO WRAP AND EVERY OTHER ONE MUST NOT, AND THAT IS THE WHOLE OF WHAT MAKES
+// THIS EXPRESSIBLE IN A LANGUAGE WITH NO u64 ARITHMETIC.** The published algorithm computes in UNSIGNED
+// 64-bit; a `ParsedInt` is SIGNED 64-bit and shv2's comparisons are signed, so a value above `2^63`
+// would compare as negative and the loop would take the wrong branch. Term by term:
+//
+//   • `d`, `anc`, `r1`, `r2`, `delta` are remainders or magnitudes below `2^63` and are EXACT. The
+//     doublings are written `r >= m - r` / `r - (m - r)` rather than `2*r >= m` / `2*r - m` so that no
+//     intermediate leaves the range either.
+//   • `q1` must be exact, because the exit condition COMPARES it. It stays below `2^63` for every
+//     divisor the loop converges on — but not for every divisor: MEASURED, it first exceeds i64 for
+//     divisors around `2^62.5`, and for none below `2^61` at all. The routine tests the bound BEFORE
+//     each doubling and answers `found: false`, which is the fifth refusal and the only one that is
+//     about this file's arithmetic rather than about the language's.
+//   • `q2` is the ONLY term allowed to wrap, and its wrapped value is precisely the answer wanted:
+//     `M = q2 + 1` is a 64-bit multiplier whose top bit may legitimately be set (that is what
+//     `magicIsNegative` and the `+ n` fixup are for), and `+` and `*2` are exact modulo 2^64, so the
+//     signed value computed here IS the bit pattern the instruction must hold.
+//
+// ⚠ `2^63` itself is not representable, so the two seeds are computed through `i64.max` with the
+// missing `+ 1` carried by hand — see `divideTwoToThe63`.
+//
+// ⭐ **THE DIVISOR IS ALWAYS POSITIVE HERE (`|K|`), AND THAT SIMPLIFICATION IS LOAD-BEARING.** The
+// published algorithm handles a negative `d` by biasing `anc` and negating `M`; working in `|K|` and
+// negating the QUOTIENT instead is exact (truncating division is odd) and removes the one case in
+// which `anc` reaches `2^63` and stops fitting — a negative `d` whose magnitude divides `2^63 + 1`,
+// of which `x / -3` is the smallest.
+function deriveSignedMagic(divisor ParsedInt, out SignedMagic)
+	if divisor < 2 'notADerivableDivisor'
+		panic("deriveSignedMagic: divisor {divisor} — the derivation is defined for a magnitude of 2 or more, and `classifyDivision` refuses 0, 1 and i64.min before asking")
+	end 'notADerivableDivisor'
+
+	out.found = false
+
+	// `anc` = 2^63 - 1 - (2^63 mod divisor): the largest n below 2^63 that is -1 modulo the divisor.
+	var seedQuotient = 0 as ParsedInt
+	var seedRemainder = 0 as ParsedInt
+	divideTwoToThe63(divisor as PositiveModulus, quotient: seedQuotient, remainder: seedRemainder)
+	let anc = i64.max - seedRemainder
+
+	var q1 = 0 as ParsedInt
+	var r1 = 0 as ParsedInt
+	divideTwoToThe63(anc as PositiveModulus, quotient: q1, remainder: r1)
+
+	var q2 = seedQuotient
+	var r2 = seedRemainder
+
+	var p = SignBitIndex
+	for _ in 0 upto MaxMagicRefinements 'refine'
+		p = p + 1
+
+		if q1 > MaxRefinableQuotient 'wouldLeaveTheSignedRange'
+			return
+		end 'wouldLeaveTheSignedRange'
+
+		// q1 = floor(2^p / anc), r1 = 2^p mod anc — one doubling with a remainder correction.
+		if r1 >= anc - r1 'carryOutOfR1'
+			q1 = q1 * 2 + 1
+			r1 = r1 - (anc - r1)
+		end 'carryOutOfR1' else 'noCarryOutOfR1'
+			q1 = q1 * 2
+			r1 = r1 + r1
+		end 'noCarryOutOfR1'
+
+		// The same two for the divisor. ⚠ `q2` is the term that may WRAP — see the header.
+		if r2 >= divisor - r2 'carryOutOfR2'
+			q2 = q2 * 2 + 1
+			r2 = r2 - (divisor - r2)
+		end 'carryOutOfR2' else 'noCarryOutOfR2'
+			q2 = q2 * 2
+			r2 = r2 + r2
+		end 'noCarryOutOfR2'
+
+		let delta = divisor - r2
+		// ⚠ Hacker's Delight writes this as a do-WHILE, so the published expression is the CONTINUE
+		// condition and the loop stops when it stops holding. Transcribing it as an EXIT condition is
+		// the one transcription error this routine can make and the one a reader should check for:
+		// with the sense inverted, `x / 3` derives no magic at all and the refinement runs away.
+		let keepRefining = q1 < delta or (q1 == delta and r1 == 0)
+		if not keepRefining 'converged'
+			out.found = true
+			out.multiplier = q2 + 1
+			out.postShift = (p - ReducedWordBits) as ShiftCount
+			return
+		end 'converged'
+	end 'refine'
+
+	panic("deriveSignedMagic: the refinement for divisor {divisor} did not converge within {MaxMagicRefinements} steps — Granlund-Montgomery proves it converges by p = 2*64 - 1, so either the exit condition or one of the doublings has been transcribed wrongly")
+end 'deriveSignedMagic'
+
+// `floor(2^63 / m)` and `2^63 mod m`, for `1 <= m <= i64.max`, in SIGNED 64-bit arithmetic alone.
+//
+// ⚠ `2^63` is one past `i64.max` and cannot be written down here at all, so it is spelled `i64.max + 1`
+// and the `+ 1` is carried through the division by hand: `i64.max = q0*m + r0` gives
+// `2^63 = q0*m + (r0 + 1)`, which is already the answer unless the incremented remainder has reached
+// `m`, in which case one more `m` comes out of it. Both outputs are written into caller-supplied
+// variables because these two are one division and a function answers with one value.
+//
+// ⚠ `m` is a `PositiveModulus` rather than a `ParsedInt`, which is what makes the two divides below
+// TOTAL — see that typealias. Both call sites pass a magnitude the classifier has already proven to be
+// at least 2, or an `anc` derived from one.
+function divideTwoToThe63(m PositiveModulus, quotient ParsedInt, remainder ParsedInt)
+	let q0 = i64.max / m
+	let r0 = i64.max - q0 * m
+	if r0 + 1 == m 'theIncrementCompletesOneMoreDivisor'
+		quotient = q0 + 1
+		remainder = 0
+		return
+	end 'theIncrementCompletesOneMoreDivisor'
+
+	quotient = q0
+	remainder = r0 + 1
+end 'divideTwoToThe63'
+
+// `log2(v)` when `v` is a power of two, else `NotAPowerOfTwo`.
+//
+// ⚠ `v` must be POSITIVE, and the caller has already taken a magnitude: `v and (v - 1)` answers `0`
+// for `i64.min` too — which IS a power of two mathematically, and is refused one level up because its
+// magnitude is not representable.
+function log2OfPowerOfTwo(v ParsedInt) returns ParsedInt
+	if v < 1 or (v and (v - 1)) != 0 'notAPowerOfTwo'
+		return NotAPowerOfTwo
+	end 'notAPowerOfTwo'
+
+	var shift = 0 as ParsedInt
+	var rest = v
+	while rest > 1 'shiftDown'
+		rest = rest shr 1
+		shift = shift + 1
+	end 'shiftDown'
+	return shift
+end 'log2OfPowerOfTwo'
+
+// ⭐ **THE ONE ADMISSION RULE — what one `div`/`mod` site reduces to, written into `out`.** Every
+// refusal in this file's header is decided here and nowhere else, so the emitters below may assume
+// `2 <= divisorMagnitude <= i64.max` unconditionally.
+function classifyDivision(divisor ParsedInt, signedness DivideSignedness, isRemainder bool, magic SignedMagic, out DivisionReduction)
+	out.recordNotReducible()
+
+	// `0` keeps its fault; `i64.min`'s magnitude is not representable; `|K| == 1` is an identity rather
+	// than a strength reduction, and `x / -1` must keep faulting at `i64.min`. See the header.
+	if divisor == 0 or divisor == i64.min or divisor == 1 or divisor == -1 'refusedDivisor'
+		return
+	end 'refusedDivisor'
+
+	let unsigned = signedness == DivideSignedness.unsigned
+
+	// ⛔⛔ **THE ONE PLACE THE TWO SIGNEDNESSES DISAGREE ABOUT WHAT THE SAME 64 BITS MEAN, AND READING
+	// IT WRONG IS A WRONG ANSWER RATHER THAN A MISSED REDUCTION.** `magnitude` below is `|K|` read as a
+	// SIGNED number; for an UNSIGNED divide, a `K` with its top bit set is not a small negative number
+	// at all but a value of at least `2^63`. `x /u 0xFFFF_FFFF_FFFF_FFF0` is `0` for every dividend
+	// below `2^64 - 16`, while its signed magnitude is `16` — a power of two, which would have answered
+	// `x shrLogical 4`. It IS reachable from source: a `let` whose declared type is `int(0 to u64.max)`
+	// and whose folded value wraps past `i64.max` is an unsigned divisor by both operands' declared
+	// types and a negative `ParsedInt` here.
+	//
+	// ⇒ Refused outright. Every such divisor is at least `2^63`, so `x /u K` is `0` or `1` and
+	// `x modu K` is `x` or `x - K` — three shapes worth their own rung if one ever pays, and none of
+	// them is what the sequences below compute. `specs-shv2/strength-reduction.md`'s
+	// `an-unsigned-divisor-above-the-signed-range-is-refused` is the pin.
+	if unsigned and divisor < 0 'unsignedDivisorAboveTheSignedRange'
+		return
+	end 'unsignedDivisorAboveTheSignedRange'
+
+	let magnitude = divisor if divisor > 0 else 0 - divisor
+	// A `mod` never negates: a truncating remainder's magnitude is `|x| mod |K|` and its sign is the
+	// DIVIDEND's, so the divisor's sign cannot reach the answer.
+	//
+	// ⚠ There is deliberately no `and not unsigned` here, though it would read as the safer spelling:
+	// an unsigned divisor is POSITIVE by the refusal directly above, so the two conditions would be one
+	// fact stated twice — and the copy that went stale would be this one.
+	let negate = divisor < 0 and not isRemainder
+
+	let log2 = log2OfPowerOfTwo(magnitude)
+	if log2 != NotAPowerOfTwo 'shiftSequence'
+		out.recordPowerOfTwo(magnitude, log2Magnitude: log2 as ShiftCount, negate: negate, unsigned: unsigned)
+		return
+	end 'shiftSequence'
+
+	// The unsigned magic sequence is the header's fourth refusal — a 65-bit multiplier this rung did
+	// not build. ⚠ An unsigned divisor read as a SIGNED magnitude here would be a WRONG ANSWER rather
+	// than merely a missed one: `x /u 3` is not `x /s 3` for a dividend at or above `2^63`.
+	if unsigned 'noUnsignedMagic'
+		return
+	end 'noUnsignedMagic'
+
+	deriveSignedMagic(magnitude, out: magic)
+	if not magic.found 'outsideTheDerivableRange'
+		return
+	end 'outsideTheDerivableRange'
+
+	out.recordMagic(magnitude, multiplier: magic.multiplier, postShift: magic.postShift, negate: negate)
+end 'classifyDivision'
+
+// ==================================================================================================
+// The pass
+// ==================================================================================================
+
+// Replace every reducible `div`/`mod` in `module`, in place, from `firstFuncIndex` onward.
+//
+// ⭐⭐ **IT HAS TWO CALLERS AND THE SECOND ONE IS WHERE THE COLDEST-LOOKING WIN ACTUALLY IS.** The
+// pipeline runs it over the whole module (`firstFuncIndex: 0`); `Compiler.compileToCodeResult` runs it a
+// second time over the APPENDED RUNTIME BAND, which no pipeline pass sees. That band holds
+// `__int_to_string`'s digit loop (`StringRuntime`, `div`/`mod` by `DecimalRadix` once per digit of every
+// integer any program prints) and `graphemeBreakProperty`'s Hangul decomposition (`GraphemeRuntime`,
+// `mod 28` once per grapheme of every String operation) — both hand-built out of `StdOp`s, both dividing
+// by a `const` the builder emits two lines above the divide, and neither reachable from the pipeline.
+// `foldConstOperands` is the only other pass that runs over that band, for the same reason and with the
+// same shape of argument (`Compiler.compileToCodeResult`'s install block is where that rule is stated).
+export function strengthReduceDivision(project Project, module StdModule, firstFuncIndex FuncIndex)
+	if not targetLowersMulHighSigned(project.target.cpu) 'targetCannotSpellTheMultiply'
+		logDebug(LogCategory.ir, message: function() gives "strengthReduceDivision: skipped — this target has no `mulHighSigned` lowering")
+		return
+	end 'targetCannotSpellTheMultiply'
+
+	logDebug(LogCategory.ir, message: function() gives "strengthReduceDivision: function {firstFuncIndex} onward of {module.funcCount()}")
+	// ONE record of each kind for the whole module, refilled per site and never re-created — the
+	// allocation discipline `StdArithOperands` and `StdFoldableDef` both state.
+	var reduction = DivisionReduction.create()
+	var magic = SignedMagic.create()
+	var def = StdFoldableDef.create()
+
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in firstFuncIndex upto module.functions.count() 'eachFunc'
+		reduceDivisionsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("strengthReduceDivision: fnIndex {fnIndex} is below module.functions.count()"), reduction: reduction, magic: magic, def: def)
+	end 'eachFunc'
+end 'strengthReduceDivision'
+
+// ⚠ **THE PRE-SCAN IS A SECOND DESCENT AND IT IS SAFE FOR A STATED REASON**, which `EC16`'s header
+// demands of any pass that walks its ops twice: it asks a STRICTLY WEAKER question than the rewrite —
+// "is there a `div` or a `mod` here at all?" against "is this one reducible?" — so the only
+// disagreement it can have is to admit a function the rewrite then changes nothing in, which costs one
+// walk. It CANNOT skip a site the rewrite would have taken, because the reducible sites are a subset of
+// the divisions. What it buys is everything below it: most functions in a program contain no division
+// at all, and `liveOpIndices`, the const map, the value-id mint and the per-block `opRefs` rebuild are
+// all allocations they would otherwise pay for nothing.
+function reduceDivisionsInFunc(module StdModule, func IrFunction, reduction DivisionReduction, magic SignedMagic, def StdFoldableDef)
+	if not funcHoldsADivision(module, func: func) 'noDivision'
+		return
+	end 'noDivision'
+
+	let opIndices = module.liveOpIndices(func)
+	// ⚠ A `ConstValueMap` does not partition by DOMAIN (an integer `const`'s payload is a number and a
+	// float's is an IEEE bit pattern), and this pass needs no partition: `StdOp.div`/`mod` are INTEGER
+	// division — float division is `binOp(div)`, which never reaches this pass — so a divisor read out
+	// of this map is an integer by construction.
+	let constMap = collectConstValues(module, opIndices: opIndices, def: def)
+
+	var mint = ValueMinter.create(nextFreeValueId(module, func: func))
+	// The divisor `const`s of every site this pass rewrote. A rewritten division reads its divisor
+	// NOWHERE — the magic and the multiply-back are fresh constants — so such a `const` is left with
+	// one fewer reader, and is dead when it had no other. Same narrow rule `foldConstOperands` owns
+	// (retire a `const` nothing reads); membership is re-derived from the REWRITTEN function below
+	// rather than counted here, which is exact and needs no use census of its own. A LIST rather than
+	// a `StdValueUseSet` because this one is ITERATED, which that dense column has no operation for —
+	// and a repeated id costs one redundant `contains` at the end of the function, nothing more.
+	var detachedDivisors = ValueIdArray.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("reduceDivisionsInFunc: blockRef from func.blockRefs not in module.blocks")
+		var rebuilt = OpIndexArray.create()
+		for opIdx in block.opRefs 'eachRef'
+			appendReducedOp(module, opIdx: opIdx, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detachedDivisors)
+		end 'eachRef'
+		block.opRefs = rebuilt
+	end 'eachBlock'
+
+	retireDetachedDivisors(module, func: func, detached: detachedDivisors)
+end 'reduceDivisionsInFunc'
+
+// Whether `func` holds a `div` or a `mod` op at all — the pre-scan the function above states the
+// argument for. It walks `func.blockRefs` → `block.opRefs` directly rather than through
+// `liveOpIndices`, which is the point: that call ALLOCATES an array per function.
+//
+// ⚠ A TERMINATOR IS NEVER A DIVISION (`div`/`mod` are body ops), so `opRefs` reaches every site — the
+// same argument `PromoteStackRecords.applyPromotions` makes for its own rebuild.
+function funcHoldsADivision(module StdModule, func IrFunction) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("funcHoldsADivision: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachRef'
+			let op = try module.ops.get(opIdx) otherwise panic("funcHoldsADivision: opIdx {opIdx} from block.opRefs not in module.ops")
+			if opIsIntegerDivision(op) 'found'
+				return true
+			end 'found'
+		end 'eachRef'
+	end 'eachBlock'
+	return false
+end 'funcHoldsADivision'
+
+// Whether `op` is one of the two INTEGER division variants. Exhaustive over `StdOp` with no bare
+// `default`, so a variant appended at the end of the union is a compile error here rather than an op
+// this pre-scan silently cannot see.
+function opIsIntegerDivision(op StdOp) returns bool
+	return match op 'k'
+		const to cmpImm gives false
+		div to mod gives true
+		condBranch to osSetEvent gives false
+	end 'k'
+end 'opIsIntegerDivision'
+
+// Append the ops that belong at `opIdx` — the original op, or the sequence a reducible division
+// becomes.
+function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap, reduction DivisionReduction, magic SignedMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
+	let op = try module.ops.get(opIdx) otherwise panic("appendReducedOp: opIdx {opIdx} from block.opRefs not in module.ops")
+
+	match op 'site'
+		const to cmpImm then rebuilt.push(opIdx)
+		div(resultId, lhs, rhs, signedness) then reduceOneDivision(module, opIdx: opIdx, resultId: resultId, dividend: lhs, divisorId: rhs, signedness: signedness, isRemainder: false, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detached)
+		mod(resultId, lhs, rhs, signedness) then reduceOneDivision(module, opIdx: opIdx, resultId: resultId, dividend: lhs, divisorId: rhs, signedness: signedness, isRemainder: true, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detached)
+		condBranch to osSetEvent then rebuilt.push(opIdx)
+	end 'site'
+end 'appendReducedOp'
+
+// One `div`/`mod`: classify it, and either keep it or emit its sequence.
+function reduceOneDivision(module StdModule, opIdx OpIndex, resultId ValueId, dividend ValueId, divisorId ValueId, signedness DivideSignedness, isRemainder bool, constMap ConstValueMap, reduction DivisionReduction, magic SignedMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
+	if not constMap.contains(divisorId) 'divisorIsNotAConstant'
+		rebuilt.push(opIdx)
+		return
+	end 'divisorIsNotAConstant'
+
+	classifyDivision(constMap.constantOf(divisorId), signedness: signedness, isRemainder: isRemainder, magic: magic, out: reduction)
+	if not reduction.isReducible() 'keepTheDivide'
+		rebuilt.push(opIdx)
+		return
+	end 'keepTheDivide'
+
+	detached.push(divisorId)
+
+	if isRemainder 'remainder'
+		emitReducedRemainder(module, resultId: resultId, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
+		return
+	end 'remainder'
+
+	emitReducedQuotient(module, resultId: resultId, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
+end 'reduceOneDivision'
+
+// ==================================================================================================
+// The emitted sequences
+// ==================================================================================================
+
+// `resultId = dividend / K`. The chain's LAST op defines `resultId`, so every reader of the division —
+// a range-check guard among them (`insertRangeChecks` has already run, and its `cmp` names this value)
+// — goes on naming the value it named before.
+function emitReducedQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
+	// A negated quotient needs one more op after the chain, so the chain itself lands in a temporary.
+	let chainResult = mint.mint() if reduction.negateQuotient else resultId
+
+	match reduction.kind 'shape'
+		notReducible then panic("emitReducedQuotient: reached with a division `classifyDivision` refused — `reduceOneDivision` tests `isReducible` first")
+		powerOfTwo then emitPowerOfTwoQuotient(module, resultId: chainResult, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
+		magicMultiply then emitMagicQuotient(module, resultId: chainResult, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
+	end 'shape'
+
+	if reduction.negateQuotient 'negate'
+		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.unaryOp(resultId, operand: chainResult, opcode: StdUnaryOpcode.neg, operandType: ReducedOperandType)))
+	end 'negate'
+end 'emitReducedQuotient'
+
+// ⭐ `resultId = dividend mod K`, and the general form is `x - (x / |K|) * |K|` — ONE rule, derived
+// from the quotient rather than from a second sequence of its own. Two things follow from deriving it:
+// the remainder can never disagree with the quotient about a sign or an edge, and where a program
+// computes BOTH (`digit = n mod 10` beside `n = n / 10`, which is what every decimal renderer does)
+// `commonSubexpressionElimination` collapses the two quotient chains into one.
+//
+// ⚠ Neither the multiply nor the subtraction can overflow: `|q * |K||` is at most `|x|` because `q` is
+// a truncation, and `|x - q * |K||` is the remainder, which is below `|K|`.
+//
+// ⭐ **THE ONE SHAPE NOT DERIVED FROM A QUOTIENT IS AN UNSIGNED POWER OF TWO**, and it earns its own
+// arm: `x modu 2^k` IS the low `k` bits of `x`, which is ONE `and` against a mask where the derived
+// form would be a shift, a multiply and a subtract. MEASURED on `fmt.maxon`, this is the commonest
+// reduced remainder there is (`x mod 2` in a halving loop).
+function emitReducedRemainder(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
+	if reduction.isUnsigned and reduction.kind == DivisionReductionKind.powerOfTwo 'lowBitsMask'
+		let mask = emitReducedConst(module, value: reduction.divisorMagnitude - 1, mint: mint, rebuilt: rebuilt)
+		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: mask, opcode: StdBinOpcode.bitAnd, operandType: ReducedOperandType)))
+		return
+	end 'lowBitsMask'
+
+	let quotient = mint.mint()
+	emitReducedQuotient(module, resultId: quotient, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
+
+	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude, mint: mint, rebuilt: rebuilt)
+	let product = mint.mint()
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(product, lhs: quotient, rhs: divisorValue, opcode: StdBinOpcode.mul, operandType: ReducedOperandType)))
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: product, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
+end 'emitReducedRemainder'
+
+// ⭐⭐ **DIVISION BY `2^k`, AND THE BIAS IS THE WHOLE CONTENT OF IT.** An arithmetic right shift rounds
+// toward NEGATIVE INFINITY (`-7 shr 1` is `-4`) while the language's `/` truncates toward ZERO
+// (`-7 / 2` is `-3`), so a bare shift is off by one for every negative dividend the divisor does not
+// divide exactly. Adding `2^k - 1` before the shift is what corrects it, and the addend is produced
+// from the dividend's own sign so that a non-negative dividend adds nothing:
+//
+//     sgn  = x shr 63             ; arithmetic: all ones iff x < 0, else 0
+//     bias = sgn shrLogical 64-k  ; 2^k - 1 iff x < 0, else 0
+//     q    = (x + bias) shr k
+//
+// UNSIGNED needs none of it: there is no negative dividend to correct, so `x /u 2^k` is one logical
+// shift — the cheapest reduction in this file, and some thirty cycles cheaper than the `div` it
+// replaces.
+function emitPowerOfTwoQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
+	if reduction.isUnsigned 'logicalShift'
+		let count = emitReducedConst(module, value: reduction.shift, mint: mint, rebuilt: rebuilt)
+		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: count, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+		return
+	end 'logicalShift'
+
+	let signBroadcast = mint.mint()
+	let signBitCount = emitReducedConst(module, value: SignBitIndex, mint: mint, rebuilt: rebuilt)
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(signBroadcast, lhs: dividend, rhs: signBitCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
+
+	let bias = mint.mint()
+	let biasCount = emitReducedConst(module, value: ReducedWordBits - reduction.shift, mint: mint, rebuilt: rebuilt)
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(bias, lhs: signBroadcast, rhs: biasCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+
+	let biased = mint.mint()
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(biased, lhs: dividend, rhs: bias, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
+
+	let quotientCount = emitReducedConst(module, value: reduction.shift, mint: mint, rebuilt: rebuilt)
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: biased, rhs: quotientCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
+end 'emitPowerOfTwoQuotient'
+
+// ⭐⭐ **DIVISION BY A GENERAL CONSTANT: MULTIPLY BY THE RECIPROCAL, IN FIXED POINT.** `M / 2^(64+s)`
+// approximates `1 / K` closely enough that the high half of `x * M`, shifted right by `s`, is exactly
+// `floor(x / K)` for every 64-bit `x` — which `deriveSignedMagic`'s exit condition is the proof of.
+// Two corrections turn that floor into the language's truncation:
+//
+//     h = mulhi(M, x)
+//     h = h + x                    ; ONLY when M's true value was at least 2^63 (see below)
+//     h = h shr s                  ; omitted when s is 0
+//     q = h + (h shrLogical 63)    ; +1 for a negative h — floor becomes truncate
+//
+// ⚠ **THE `+ x` IS NOT AN OPTIONAL OPTIMIZATION, IT IS PART OF THE MULTIPLIER.** The magic is a 64-bit
+// UNSIGNED number and may legitimately have its top bit set; the machine's `imul` reads it as SIGNED,
+// i.e. as `M - 2^64`, so the product is short by exactly `x * 2^64` — whose high half is `x`. Adding
+// the dividend back is what restores it. `magicIsNegative` is that condition, and it is derived from
+// the sign of the stored multiplier rather than carried as a separate flag, so the two cannot disagree.
+//
+// The magic goes on the LEFT of the multiply deliberately: `StdToX64Conversion.lowerMulHighSigned`
+// moves the left operand into RAX, and a `movRegImm` whose only reader is that move is biased into RAX
+// by `collectOpHints`, so the copy self-elides. (`foldConstOperands` cannot reorder the two operands:
+// it swaps a commutative op's operands only when it is folding one into an immediate, and
+// `constFitsBinOpImmediate` refuses every constant for this opcode.)
+function emitMagicQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
+	let multiplier = emitReducedConst(module, value: reduction.magic, mint: mint, rebuilt: rebuilt)
+
+	var high = mint.mint()
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(high, lhs: multiplier, rhs: dividend, opcode: StdBinOpcode.mulHighSigned, operandType: ReducedOperandType)))
+
+	if reduction.magicIsNegative 'restoreTheWrappedMultiplier'
+		let corrected = mint.mint()
+		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(corrected, lhs: high, rhs: dividend, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
+		high = corrected
+	end 'restoreTheWrappedMultiplier'
+
+	if reduction.shift > 0 'scaleDown'
+		let shifted = mint.mint()
+		let scaleCount = emitReducedConst(module, value: reduction.shift, mint: mint, rebuilt: rebuilt)
+		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(shifted, lhs: high, rhs: scaleCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
+		high = shifted
+	end 'scaleDown'
+
+	let signBit = mint.mint()
+	let signBitCount = emitReducedConst(module, value: SignBitIndex, mint: mint, rebuilt: rebuilt)
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(signBit, lhs: high, rhs: signBitCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: high, rhs: signBit, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
+end 'emitMagicQuotient'
+
+// A fresh `const` of `value`, appended to the rebuilt op list, answering the value it defines.
+//
+// ⚠ Every constant this pass emits is FRESH rather than a reuse of the divisor's own `const`, and both
+// halves of that are deliberate: the magic and the shift counts are numbers the divisor's op does not
+// hold, and the multiply-back wants `|K|` where the op holds `K`. `foldConstOperands` then folds each
+// of them INTO the op that reads it, so none survives as an instruction unless its value is too wide
+// for the immediate field — which for the 64-bit magic is always, and for every shift count never.
+function emitReducedConst(module StdModule, value ParsedInt, mint ValueMinter, rebuilt OpIndexArray) returns ValueId
+	let id = mint.mint()
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.const(id, value: value, valueType: ReducedOperandType)))
+	return id
+end 'emitReducedConst'
+
+// Append `op` to the module's flat op array and answer its index. Blocks reference ops by index, so a
+// new op is created here and referenced from the rebuilt `opRefs` rather than appended to a block —
+// which would place it at the block's END rather than at the division's position.
+// (`PromoteStackRecords.appendModuleOp` is the same three lines for the same reason; it is a private
+// `function` there, so this file states them rather than reaching across.)
+function appendReducedSequenceOp(module StdModule, op StdOp) returns OpIndex
+	let opIdx = module.ops.count()
+	module.ops.push(op)
+	return opIdx
+end 'appendReducedSequenceOp'
+
+// Drop the divisor `const` of every rewritten site that NOTHING now reads.
+//
+// ⚠ **MEMBERSHIP IS RE-DERIVED FROM THE REWRITTEN FUNCTION, NOT COUNTED DURING THE REWRITE, AND THAT
+// IS WHAT MAKES IT EXACT.** A divisor `const` may be read by two divisions this pass reduced, by one
+// it reduced and one it refused, or by something else entirely; a per-site counter would have to model
+// all three. Asking `collectFunctionValueUses` — StdDialect's one answer to "every value this function
+// reads" — of the function as it now stands answers all three at once, and is the same walk
+// `foldConstOperands`' own prune makes.
+//
+// It retires ONLY the consts this pass detached, which is `foldConstOperands`' narrow rule verbatim: a
+// general dead-value DCE is `EC23`'s row, and that pass's header states at length why it must not grow
+// into one here.
+function retireDetachedDivisors(module StdModule, func IrFunction, detached ValueIdArray)
+	if detached.count() == 0 'nothingDetached'
+		return
+	end 'nothingDetached'
+
+	var stillRead = StdValueUseSet.create()
+	collectFunctionValueUses(module, func: func, referenced: stillRead)
+
+	var doomed = StdValueUseSet.create()
+	for valueId in detached 'eachDetached'
+		if not stillRead.contains(valueId) 'unread'
+			doomed.insert(valueId)
+		end 'unread'
+	end 'eachDetached'
+
+	removeOpsDefining(module, func: func, doomed: doomed)
+end 'retireDetachedDivisors'

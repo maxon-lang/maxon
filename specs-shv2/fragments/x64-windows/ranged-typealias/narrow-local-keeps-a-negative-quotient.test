@@ -39,18 +39,16 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 104
-    x64.movRegImm rcx, 18446744073709551551
+    x64.movRegImm rax, 18446744073709551551
   __rc_ok:
-    x64.movRegImm32 rsi, 8
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.movRegReg rbx, rax
-    x64.movRegImm32 rsi, 8
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 61
+    x64.leaRegRegImm32 rbx, rcx, -65
+    x64.sarRegImm8 rbx, rbx, 3
+    x64.imulRegRegImm32 rcx, rbx, 8
+    x64.movRegReg r12, rax
+    x64.subRegReg r12, rax, rcx
   neg:
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]

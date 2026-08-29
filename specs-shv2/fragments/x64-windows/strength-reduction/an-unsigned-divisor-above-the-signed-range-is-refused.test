@@ -1,0 +1,170 @@
+// Test: an-unsigned-divisor-above-the-signed-range-is-refused
+typealias Unsigned = int(0 to u64.max)
+typealias UPosDivisor = int(2 to u64.max)
+
+function refUDiv(n Unsigned, d UPosDivisor) returns Unsigned
+	return n / d
+end 'refUDiv'
+
+function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
+	return n mod d
+end 'refUMod'
+
+function main() returns ExitCode
+	let huge = ((9223372036854775807 as Unsigned) + (9223372036854775793 as Unsigned)) as Unsigned
+	let a = ((9223372036854775807 as Unsigned) + 1000) as Unsigned
+	if a / huge != refUDiv(a, d: huge) 'quotient'
+		return 1
+	end 'quotient'
+	if a mod huge != refUMod(a, d: huge) 'remainder'
+		return 2
+	end 'remainder'
+	if a / huge != 0 'quotientIsZero'
+		return 3
+	end 'quotientIsZero'
+	if a mod huge != a 'remainderIsTheDividend'
+		return 4
+	end 'remainderIsTheDividend'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @refUDiv {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rsi, rdx
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __rc_ok
+  __rc_chk:
+    x64.cmpRegImm32 rsi, 2
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rax, rcx
+    x64.movRegImm32 rdx, 0
+    x64.divReg rsi
+    x64.movRegReg r8, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @refUMod {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rsi, rdx
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __rc_ok
+  __rc_chk:
+    x64.cmpRegImm32 rsi, 2
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rax, rcx
+    x64.movRegImm32 rdx, 0
+    x64.divReg rsi
+    x64.movRegReg r8, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm rbx, 18446744073709551600
+    x64.movRegImm r12, 9223372036854776807
+    x64.movRegReg rax, r12
+    x64.movRegImm32 rdx, 0
+    x64.divReg rbx
+    x64.movRegReg r13, rax
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect refUDiv
+    x64.cmpRegReg r13, r8
+    x64.jcc equal, ifcont#2
+  quotient:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegReg rax, r12
+    x64.movRegImm32 rdx, 0
+    x64.divReg rbx
+    x64.movRegReg r13, rdx
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect refUMod
+    x64.cmpRegReg r13, r8
+    x64.jcc equal, ifcont#4
+  remainder:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegReg rax, r12
+    x64.movRegImm32 rdx, 0
+    x64.divReg rbx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#6
+  quotientIsZero:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegReg rax, r12
+    x64.movRegImm32 rdx, 0
+    x64.divReg rbx
+    x64.cmpRegReg rdx, r12
+    x64.jcc equal, ifcont#8
+  remainderIsTheDividend:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
