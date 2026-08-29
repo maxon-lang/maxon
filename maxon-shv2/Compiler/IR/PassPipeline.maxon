@@ -126,11 +126,20 @@ union PassKind
 	// copies of one expression are three ops over three different value ids and no expression
 	// comparison can call them equal. It also benefits from that pass's move 1, which puts a
 	// commutative op's constant on the rhs.
+	//
+	// `loopInvariantCodeMotion` (EC14) moves a computation whose answer cannot change across a loop's
+	// iterations into the block that runs once before it — the array length and buffer base the anchor
+	// loop reloaded per element. It runs AFTER CSE, which v1 also orders that way: CSE has already
+	// collapsed a repeated invariant expression to ONE op, so this pass moves one instruction and
+	// lengthens one live range instead of three. It hoists LOADS as well as arithmetic, and the two
+	// safety rules that licence that (the loop writes no memory; the load was going to execute anyway)
+	// are the whole content of its header.
 	pruneDeadBlockArgs
 	elimTrivialBlockArgs
 	foldConstants
 	foldConstOperands
 	commonSubexpressionElimination
+	loopInvariantCodeMotion
 	// Phase 3.6: Std → Std ESCAPE ANALYSIS + STACK PROMOTION (`PromoteStackRecords`).
 	//
 	// ⭐ **IT RUNS LAST OF THE Std PASSES, AND EVERY ONE OF THEM IS A PRECONDITION IT READS.** The
@@ -184,9 +193,12 @@ function classifyPass(pass PassKind) returns PassClassification
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstants gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
-		// Intra-function by construction, and intra-BLOCK inside that: an expression is compared only
-		// against ones the same block already computed (see the pass's SCOPE note on dominance).
+		// Intra-function by construction: an expression is compared only against ones computed in blocks
+		// that DOMINATE it, and dominance is a fact about one function's CFG (see the pass's SCOPE note).
 		commonSubexpressionElimination gives PassClassification.perFunction
+		// Intra-function by construction: a natural loop, its preheader and the values it defines are all
+		// inside one function, and nothing about a callee is consulted.
+		loopInvariantCodeMotion gives PassClassification.perFunction
 		// The one whole-module Std pass: the constructor table and the parameter-escape summary are facts
 		// about the CALL GRAPH, and a call site cannot be judged without the callee's row.
 		promoteStackRecords gives PassClassification.wholeModule
@@ -212,6 +224,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		foldConstants gives CompilePhase.foldConstants
 		foldConstOperands gives CompilePhase.foldConstOperands
 		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
+		loopInvariantCodeMotion gives CompilePhase.loopInvariantCodeMotion
 		promoteStackRecords gives CompilePhase.promoteStackRecords
 	end 'phase'
 end 'compilePhaseOfPass'
@@ -231,6 +244,7 @@ function passKindToString(pass PassKind) returns String
 		foldConstants gives "foldConstants"
 		foldConstOperands gives "foldConstOperands"
 		commonSubexpressionElimination gives "commonSubexpressionElimination"
+		loopInvariantCodeMotion gives "loopInvariantCodeMotion"
 		promoteStackRecords gives "promoteStackRecords"
 	end 'name'
 end 'passKindToString'
@@ -277,6 +291,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.foldConstants)
 	passes.push(PassKind.foldConstOperands)
 	passes.push(PassKind.commonSubexpressionElimination)
+	passes.push(PassKind.loopInvariantCodeMotion)
 	passes.push(PassKind.promoteStackRecords)
 	return passes
 end 'buildLoweringPasses'
@@ -444,6 +459,7 @@ export type PassPipeline
 			// The whole module, and no start index: like `foldConstants`, its other caller would be the
 			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
 			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
+			loopInvariantCodeMotion then hoistLoopInvariants(self.stdModule)
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 		end 'dispatch'
 

@@ -1,0 +1,942 @@
+// LoopInvariantCodeMotion — a Std->Std pass that moves a computation whose answer cannot change across
+// a loop's iterations OUT of the loop, into the block that runs once before it. `for v in a` over an
+// `Array with Integer` stops reloading the array's length and buffer base on every element.
+//
+// ⭐⭐ **IT IS TWO PHASES WITH TWO DIFFERENT SAFETY ARGUMENTS, AND CONFLATING THEM WOULD BE THE BUG.**
+// Over both of them sits ONE bound that is neither — **Rule 3**, which is about REGISTERS rather than
+// about correctness, and which is the single largest restriction in the pass.
+//
+//   • **PURE COMPUTATION** (`docs/emitted-code-roadmap.md`, `EC14` phase 1). An arithmetic op the
+//     dialect declares `isPure` may be "duplicated, reordered, or dropped" — those are `StdOpMeta`'s
+//     own words — so moving one to a point that DOMINATES it needs no further argument. It cannot
+//     fault (`div`/`mod` trap and are `isPure: false`, so the arithmetic roster answers `neither` for
+//     them), it cannot be observed, and the preheader dominates every block of the loop, so every use
+//     still follows its def. v1's LICM is exactly this phase, and its own comment states the same
+//     reason: *"No dominance-of-exits check needed: we only hoist pure ops."*
+//
+//   • **INVARIANT LOADS** (phase 2), which is where the anchor loop's win is and which is `isPure:
+//     false`. A load carries BOTH questions the pure case does not: may the location change under the
+//     loop, and may moving the read make it happen when it would not have? The two rules below answer
+//     them separately, and each is stated as a RULE rather than assumed.
+//
+// ══ RULE 1 — WHEN A LOAD IS INVARIANT: THE LOOP WRITES NOTHING ══
+//
+// **A load in a loop whose blocks contain no op that writes memory reads a location the loop cannot
+// change.** "Writes memory" is asked of the dialect as `isStore or isCall` — which is every op except
+// the arithmetic band, the pure ADDRESS ops, the branches, the RETURNS, `div`/`mod` and the two loads
+// (the exact census is at `scanLoopEffects`, where it is measured rather than recalled) — so a loop
+// holding a call, a store, an atomic, an OS primitive or a `memFill` is refused outright and no load in
+// it moves.
+//
+// ⭐ This is DELIBERATELY not an alias analysis, and it is not an approximation of one — it is a
+// different rule that happens to be sufficient for the shape this rung exists for. `EC15` made the
+// anchor loop CALL-FREE (it removed the stride fork and the `__managed_get_unchecked` it protected), so
+// the rule wins that loop outright. A loop that stores is left alone entirely rather than reasoned
+// about, and `loadIndirect`'s own variant comment names the program that would break under a weaker
+// rule: `specs/short-circuit-evaluation.md`'s `short-circuit-in-while-condition` reads AND WRITES one
+// global every iteration, so its store is what refuses it.
+//
+// ⚠ **WHAT THE RULE DOES NOT COVER, STATED:** another OS THREAD writing the location while this loop
+// spins. A spin-wait with no call in it would be hoisted into an infinite loop. Nothing in this
+// compiler's own sources or the stdlib spells one — the green-thread substrate yields through a CALL
+// (`Runtime.yield`), and every real-thread handshake in the runtime band goes through `osWaitHandle` or
+// an atomic — and the runtime band is not run through this pipeline at all (see `hoistLoopInvariants`).
+// This is the one premise here that is about the whole program rather than about the loop.
+//
+// ⚠ The frontend proves something adjacent and it is NOT what this rule rests on. A `for … in`
+// element is a LEXICAL BORROW of the subject, and the borrow checker refuses a call taking that subject
+// mutably while the loop is live (`Parser.maxon`, the ⚖ 2026-08-26 `EC3` ruling; round-trip cases in
+// `specs-shv2/borrow-liveness.md`). That is a real fact and it is cited here so a later reader does not
+// think it was missed — but it says nothing about a `while` loop, about a global, or about a container
+// the loop does not iterate, and Rule 1 needs none of it.
+//
+// ══ RULE 2 — WHEN A LOAD MAY BE SPECULATED: IT WAS GOING TO RUN ANYWAY ══
+//
+// **A hoisted op executes even when the loop body never runs**, and for a load that can FAULT. The
+// anchor makes the distinction concrete: the array LENGTH is loaded in the loop HEADER, which runs the
+// moment the preheader does, so hoisting it is free; the BUFFER BASE is loaded in the block the header's
+// guard branches to, which for an EMPTY array never runs at all.
+//
+// Two admissions, and a load needs one of them:
+//
+//   **2a — MUST-EXECUTE.** The load's block dominates every block through which control LEAVES the loop
+//   AND every LATCH. Any execution that either iterates or exits has therefore already run the block.
+//   `markMustExecuteBlocks` computes it. ⚠ The one residual, stated: an execution that enters the loop and
+//   NEITHER iterates nor exits — it diverges inside the first iteration — has not run the block, so a
+//   program that would have HUNG can instead FAULT. With Rule 1 in force the loop holds no call, so
+//   that requires an inner infinite loop; this is the standard imprecision of speculative LICM and it
+//   is accepted rather than unnoticed.
+//
+//   **2b — A DEREFERENCEABILITY WITNESS.** The same loop is already hoisting, under 2a, another load
+//   through the SAME address value whose `coverage` (offset + width) is at least this one's. That load
+//   runs unconditionally once hoisted, so the object at that address spans at least `coverage` bytes —
+//   and a `loadIndirect`'s `(addrId, offset)` pair names field `offset` OF THAT OBJECT, with `ByteOffset`
+//   non-negative by type. A field inside a span the program is already proving readable is readable.
+//   ⚠ **THE PREMISE, STATED: an address value is a base plus a NON-NEGATIVE displacement into one
+//   object.** That is how every address in this tier is formed (`globalAddr`, `stackRecordAddr`, an
+//   allocation's result, `base + index*stride`), and it is what makes "covers more" imply "covers less".
+//   ⚠ **HALF OF IT IS ENFORCED AND HALF IS STRUCTURAL, and which is which matters.** ENFORCED: the
+//   displacement cannot be negative (`ByteOffset` is `int(0 to u64.max)`, so the Std tier cannot spell
+//   `[addr - k]`), and both loads must name the SAME `ValueId`, which the witness table keys on — a
+//   differently-biased base is a different value and finds no witness. STRUCTURAL, and checked by nobody:
+//   that the object at that `ValueId` begins at or before it. Unlike `requireArithOpIsPure` beside it,
+//   there is no flag to re-ask; a guard would have to enumerate the address-producing shapes, which is
+//   the enumerated-roster failure this file otherwise avoids.
+//   Only the SMALLER-or-equal extent is ever admitted, which is the safe direction: this rule can shrink
+//   a proven span, never extend one.
+//   ⭐ 2b is what takes the anchor loop from 7 instructions to 6. The length load at `[a+8]` covers 16
+//   bytes under 2a; the buffer load at `[a+0]` needs 8, and `a` is the same value.
+//
+// ══ RULE 3 — A LOOP HOLDING A CALL HOISTS NOTHING, AND THIS ONE IS ABOUT REGISTERS ══
+//
+// Rules 1 and 2 are correctness. **Rule 3 is a BOUND**, it applies to BOTH phases — arithmetic as well
+// as loads — and it is the largest thing this pass declines to do. A hoisted value is live across the
+// WHOLE loop by construction, and a live range crossing a CALL is confined to the five callee-saved
+// registers x64-windows leaves. `EC13` measured one end of that: shv2 REFUSES rather than spills, and a
+// SINGLE reused expression across a call took `witness-dispatch-inside-a-pressured-loop` red with
+// `E5001`. This rung measured the other end — what happens when the allocator does NOT refuse: with the
+// bound off, 48 `map` fragments gained **+96 `loadRegSlot` and +48 `storeSlotReg`** and every one of
+// their frames grew, because the hoisted value was COLD-SPILLED and reloaded. In `Map.grow` the whole
+// trade was one `leaRegRegImm32` replaced by one `loadRegSlot`: an ALU op for a memory op, which is not
+// a win at any instruction count.
+//
+// ⇒ It is a structural rule and not a budget with a number in it. And it costs the anchor NOTHING,
+// which is what makes it affordable: `EC15` made that loop call-free, and `regalloc/many-call-crossing`
+// — where nine invariant computations DO leave a loop — holds no call either. Both were checked before
+// the rule was adopted, and the second is the committed fragment that would move if it were dropped.
+//
+// ⚠ **IT MAKES RULE 1's `isCall` TERM DEAD AT ITS ONLY READER**, and that is deliberate rather than
+// overlooked: `hoistIntoPreheader` returns on Rule 3 before Rule 1 is ever asked, so by then
+// `writesMemory` is exactly "some op is `isStore`". Rule 1 keeps its own `isCall` term because it is a
+// statement about MEMORY that must stay true if Rule 3 is ever relaxed — the two are independent
+// questions that happen to share a walk.
+//
+// ⚠ **IT SEES MEMBER BLOCKS ONLY.** A call on a loop-EXIT path is not counted, so a hoisted value read
+// after the loop can still have a range crossing one. That is a gap in the heuristic and not in the
+// safety argument; a stricter version needs a per-block call summary this rung does not have, exactly as
+// `EC13`'s own barrier note records.
+//
+// ⚠ **NO SPEC CASE GOES RED IF RULE 3 IS DELETED**, and the spec says so. Its only pin is the minted
+// `map` and `url` fragments — a fragment pin, which by this project's own standard is the weaker kind.
+// A pressure heuristic has no wrong answer to catch it with; that is stated rather than papered over.
+//
+// ══ WHAT IS DELIBERATELY NOT HOISTED ══
+//
+// - **`const`.** `classifyArithOperands` answers `neither` for it, so it never reaches the admission at
+//   all — and that is the right answer for the same reason `EC13` gives: rematerializing a constant is
+//   cheaper than a live range that spans the loop, and v1's own Stage A header records that a hoisted
+//   canonical constant "conflicts with ABI-constrained uses". A constant hoist is its own rung.
+// - **The three pure ADDRESS ops** (`globalAddr`, `rdataAddr`, `funcAddr`) and `stackRecordAddr`. They
+//   are `isPure: true` and ALWAYS invariant (they read no value at all), so they need no analysis — and
+//   hoisting them is therefore a pure register-pressure trade with no instruction-count argument behind
+//   it. `EC13` left the same three open for the same reason; this rung does not take them either.
+// - **`div`/`mod`.** They TRAP, the dialect says so with `isPure: false`, and the flag is honoured
+//   rather than reasoned around — `EC12` and `EC13` both declined them and this makes three.
+// - **A loop with no preheader**, and **a loop whose preheader can reach the header without entering
+//   it**. See `soleLoopEntry`.
+//
+// ══ MECHANISM REUSED RATHER THAN BUILT ══
+//
+// `IR/NaturalLoops.maxon` finds the back edges and the member sets — the SAME finder the Target tier's
+// loop depth and `E5001` region use, moved there by this rung rather than written a second time.
+// `StdDominatorTree` answers dominance and hands back the CFG adjacency it already built.
+// `classifyArithOperands` / `classifyLoadOperands` / `stdOpDefinedValue` are the dialect's three
+// answers to what an op computes, reads and defines. Nothing here matches `StdOp` itself.
+
+// Hoist every loop-invariant computation throughout `module`, in place.
+//
+// Where the pass is scheduled and why: `PassPipeline.buildLoweringPasses`, between
+// `commonSubexpressionElimination` and `promoteStackRecords`.
+//
+// ⭐ **AFTER CSE, NOT BEFORE, and v1 orders its own pipeline the same way** (`canonicalize -> cse ->
+// licm -> dce`). Two reasons, and both are about this compiler rather than about the textbook: CSE has
+// already collapsed a repeated invariant expression to ONE op, so this pass moves one instruction
+// instead of three and lengthens one live range instead of three; and CSE's inputs are canonicalized by
+// `foldConstOperands`, which is what turns `x * 31` into a single `binOpImm` whose literal is not a
+// value at all — an invariant expression whose constant were still a separate `const` op would be
+// refused here, because a `const` is never hoisted and would read as a variant operand.
+//
+// It runs before `promoteStackRecords` because that pass is deliberately last: its header says it
+// decides the FINAL shape of the code, and its escape scan should see the addresses where they will
+// actually be computed.
+//
+// Like `foldConstants` and CSE it takes no start index: its other caller would be the appended runtime
+// band, and those hand-built bodies (`MmRuntime`, `GtRuntime`, the synthesized cascades) are written as
+// straight-line Std IR with their loops already hand-hoisted — a second run there would walk every
+// appended function to find nothing, and it is also what keeps Rule 1's thread premise narrow, because
+// the runtime's own handshakes never pass through here.
+export function hoistLoopInvariants(module StdModule)
+	logDebug(LogCategory.ir, message: function() gives "hoistLoopInvariants: {module.funcCount()} function(s)")
+
+	// ONE set of scratch for the whole module. Every column in it is cleared per loop and reused at the
+	// size the largest loop so far needed, rather than reallocated — the shape `CseScratch` states and
+	// `foldConstants.evaluateOps` gives the reason for.
+	var scratch = LicmScratch.create()
+
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		hoistInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("hoistLoopInvariants: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
+	end 'eachFunc'
+end 'hoistLoopInvariants'
+
+// Hoist out of every natural loop of one function.
+//
+// ⭐ **INNERMOST LOOP FIRST, AND EACH LOOP'S HOISTS ARE APPLIED BEFORE THE NEXT IS ANALYSED**, which is
+// what lets a value escape a whole NEST in one run of the pass. An op moved to an inner loop's preheader
+// is still inside the outer loop, so the outer loop's analysis sees it in a member block and can move it
+// again. `distinctLoopHeaders` returns headers in back-edge discovery order, which is innermost-first
+// for a nest (its header says why); a different order would hoist less, never wrongly.
+//
+// ⚠ Applying a hoist moves op REFERENCES between blocks and creates and deletes no block, so the
+// dominator tree, the CFG adjacency, the back edges and every member set stay valid across it. That is
+// why they are built ONCE per function here rather than per loop.
+function hoistInFunc(module StdModule, func IrFunction, scratch LicmScratch)
+	let blockCount = func.blockRefs.count()
+
+	// Fewer than two blocks cannot hold a loop this pass can serve: the only loop a one-block function
+	// can have is a self-edge on the ENTRY, and the entry has no predecessor outside the loop to hoist
+	// into. Declarations (no blocks at all) fall out here too.
+	if blockCount < 2 'noLoopWithAPreheader'
+		return
+	end 'noLoopWithAPreheader'
+
+	// ⭐ **THE BACK-EDGE QUESTION COMES FIRST, AND IT NEEDS ONLY THE SUCCESSORS.** NO BACK EDGE, NO LOOP —
+	// and that is MOST functions, which is why the dominator tree is built AFTER this test rather than
+	// before it: a loopless function would otherwise pay for a predecessor graph, a reverse postorder, the
+	// dominator solve and a child adjacency, all to be told there was no loop to use them on.
+	let succ = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
+
+	var backEdges = LoopBackEdges.create()
+	findLoopBackEdges(succ, nodeCount: blockCount, edges: backEdges)
+
+	if backEdges.count() == 0 'loopless'
+		return
+	end 'loopless'
+
+	let tree = StdDominatorTree.buildFromSuccessors(succ, blockCount: blockCount)
+
+	for header in distinctLoopHeaders(backEdges, nodeCount: blockCount) 'eachLoop'
+		hoistFromLoop(module, func: func, tree: tree, backEdges: backEdges, header: header, scratch: scratch)
+	end 'eachLoop'
+end 'hoistInFunc'
+
+// Analyse ONE natural loop and move what it admits into that loop's preheader.
+function hoistFromLoop(module StdModule, func IrFunction, tree StdDominatorTree, backEdges LoopBackEdges, header BlockRefIndex, scratch LicmScratch)
+	scratch.beginLoop(tree.blockCount)
+	collectNaturalLoop(tree.pred, header: header, edges: backEdges, nodeCount: tree.blockCount, into: scratch.members)
+
+	match soleLoopEntry(tree, members: scratch.members, header: header) 'preheader'
+		none then return
+		position(preheader) then hoistIntoPreheader(module, func: func, tree: tree, backEdges: backEdges, header: header, preheader: preheader, scratch: scratch)
+	end 'preheader'
+end 'hoistFromLoop'
+
+// The half of `hoistFromLoop` that runs once a preheader is known — split out so the `match` above has
+// nothing but the two answers in it.
+function hoistIntoPreheader(module StdModule, func IrFunction, tree StdDominatorTree, backEdges LoopBackEdges, header BlockRefIndex, preheader BlockRefIndex, scratch LicmScratch)
+	scanLoopEffects(module, func: func, scratch: scratch)
+	if not scratch.effects.admitsAnyHoist() 'aCallCrossesEveryHoistedRange'
+		return
+	end 'aCallCrossesEveryHoistedRange'
+
+	markMustExecuteBlocks(tree, backEdges: backEdges, header: header, scratch: scratch)
+	collectLoopDefs(module, func: func, scratch: scratch)
+	analyzeLoopBlocks(module, func: func, tree: tree, header: header, memoryIsStable: scratch.effects.memoryIsStable(), scratch: scratch)
+
+	if scratch.hoisted.count() == 0 'nothingInvariant'
+		return
+	end 'nothingInvariant'
+
+	logDebug(LogCategory.ir, message: function() gives "hoistLoopInvariants: '{String.from(func.name)}' loop at block position {header} — {scratch.hoisted.count()} op(s) to preheader {preheader}")
+	appendToPreheader(module, func: func, preheader: preheader, ops: scratch.hoisted)
+end 'hoistIntoPreheader'
+
+// ══════════════════════════════════════════════════════════════════════════
+// The preheader
+// ══════════════════════════════════════════════════════════════════════════
+
+// How many predecessors of a loop header lie outside the loop — the number `soleLoopEntry` needs to be
+// exactly one. A COUNT, not a block position, which is why it is not a `BlockRefIndex`.
+typealias PredecessorCount = int(0 to u64.max)
+
+// Which block a loop is entered THROUGH, when there is exactly one and it goes nowhere else.
+union LoopPreheader
+	none
+	position(preheader BlockRefIndex)
+end 'LoopPreheader'
+
+// The loop's preheader: the unique predecessor of `header` outside the loop, whose ONLY successor is
+// the header.
+//
+// ⭐⭐ **THE SINGLE-SUCCESSOR CONDITION IS NOT TIDINESS — IT IS HALF OF RULE 2.** An op placed in the
+// preheader runs when the preheader runs. If the preheader's branch could go somewhere OTHER than the
+// header, that is a path on which the loop is never entered and the hoisted op runs anyway — which for
+// a pure op is merely wasteful but for a LOAD is speculation with no argument behind it at all, because
+// the "it was going to execute" reasoning of 2a is about executions that ENTER the loop. The parser
+// emits exactly such a preheader for `for v in <an empty Iterable>` (`EmptyIterableExit`), so this is a
+// live shape and not a hypothetical one.
+//
+// ⚠ **NO PREHEADER IS CREATED WHEN THERE IS NONE.** Splitting an edge to manufacture one means minting a
+// block and re-pointing branch-edge argument lists — a CFG change this rung does not make, and one whose
+// interaction with `branchEdges` (the phi model the register allocator still consumes) is a rung of its
+// own. A loop entered from two places, or through a conditional branch, is skipped whole.
+function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header BlockRefIndex) returns LoopPreheader
+	var found = LoopPreheader.none
+	var entries = 0 as PredecessorCount
+
+	for k in 0 upto tree.pred.degree(header) 'eachPredecessor'
+		let predecessor = tree.pred.neighbour(header, k: k)
+		if members.contains(predecessor) 'aLatch'
+			continue
+		end 'aLatch'
+
+		entries = entries + 1
+		found = LoopPreheader.position(predecessor)
+	end 'eachPredecessor'
+
+	if entries != 1 'notAUniqueEntry'
+		return LoopPreheader.none
+	end 'notAUniqueEntry'
+
+	return soleEntryLeadsOnlyToTheHeader(tree, entry: found, header: header)
+end 'soleLoopEntry'
+
+// Whether the ONE entry predecessor found above goes nowhere but the loop header — the second half of
+// `soleLoopEntry`'s condition, applied to the candidate the first half produced.
+function soleEntryLeadsOnlyToTheHeader(tree StdDominatorTree, entry LoopPreheader, header BlockRefIndex) returns LoopPreheader
+	match entry 'candidate'
+		none then panic("soleEntryLeadsOnlyToTheHeader: asked of no candidate — the caller counted exactly one entry predecessor before calling")
+		position(preheader) then return entry if tree.succ.degree(preheader) == 1 and tree.succ.neighbour(preheader, k: 0) == header else LoopPreheader.none
+	end 'candidate'
+end 'soleEntryLeadsOnlyToTheHeader'
+
+// ══════════════════════════════════════════════════════════════════════════
+// Rule 2a — the blocks an execution of the loop must have run
+// ══════════════════════════════════════════════════════════════════════════
+
+// Mark, in `scratch`, the blocks that dominate EVERY block through which control leaves the loop AND
+// every LATCH — i.e. the blocks an execution that either iterates or exits has certainly run.
+//
+// ⭐ **ONE CLIMB PER NAMED BLOCK, NOT A DOMINANCE QUERY PER PAIR.** Each exit and latch walks its own
+// immediate-dominator chain up to the header, incrementing a counter on every block it passes; a block
+// whose counter equals the number of climbs is on all of them, which is exactly "dominates all of them".
+// That is O(named × depth) where asking a `dominates(a, b)` predicate of every loop block against every
+// named block would have been O(members × named × depth). The header is on every chain by construction
+// (it dominates every member), so it always qualifies — which is the common case and the anchor's.
+//
+// ⚠ A duplicate in the named set (a latch that is also an exit) is harmless: its chain is climbed twice
+// and the required count is two higher, so the equality still selects exactly the blocks on all chains.
+function markMustExecuteBlocks(tree StdDominatorTree, backEdges LoopBackEdges, header BlockRefIndex, scratch LicmScratch)
+	for position in scratch.members.blocks 'eachExit'
+		if not blockLeavesTheLoop(tree, position: position, members: scratch.members) 'notAnExit'
+			continue
+		end 'notAnExit'
+
+		scratch.mustExecute.climbChainFrom(position, header: header, tree: tree)
+	end 'eachExit'
+
+	for k in 0 upto backEdges.count() 'eachLatch'
+		let h = try backEdges.heads.get(k) otherwise panic("markMustExecuteBlocks: heads.get OOB at {k}")
+		if h != header 'anotherLoop'
+			continue
+		end 'anotherLoop'
+
+		scratch.mustExecute.climbChainFrom(try backEdges.tails.get(k) otherwise panic("markMustExecuteBlocks: tails.get OOB at {k}"), header: header, tree: tree)
+	end 'eachLatch'
+end 'markMustExecuteBlocks'
+
+// Whether control can leave the loop from `position` — it has a successor outside the member set.
+function blockLeavesTheLoop(tree StdDominatorTree, position BlockRefIndex, members LoopMembership) returns bool
+	for k in 0 upto tree.succ.degree(position) 'eachSuccessor'
+		if not members.contains(tree.succ.neighbour(position, k: k)) 'anExitEdge'
+			return true
+		end 'anExitEdge'
+	end 'eachSuccessor'
+
+	return false
+end 'blockLeavesTheLoop'
+
+// ══════════════════════════════════════════════════════════════════════════
+// Rule 1 — does the loop write memory at all
+// ══════════════════════════════════════════════════════════════════════════
+
+// What one loop's ops say about the two questions this pass asks of them, filled by ONE walk because
+// they are answered from the same two metadata flags and a second walk would read the same ops twice.
+type LoopEffects
+	// Any op declaring `isStore` or `isCall` — i.e. anything that can change a location. Rule 1.
+	var writesMemory as bool
+	// Any op declaring `isCall`. Rule 3.
+	var holdsACall as bool
+
+	static function create() returns LoopEffects
+		return Self{writesMemory: false, holdsACall: false}
+	end 'create'
+
+	function reset()
+		self.writesMemory = false
+		self.holdsACall = false
+	end 'reset'
+
+	// Rule 1: a loop that changes no location cannot change what a load in it reads.
+	function memoryIsStable() returns bool
+		return not self.writesMemory
+	end 'memoryIsStable'
+
+	// Rule 3: a loop holding a call hoists NOTHING, loads or arithmetic. See `scanLoopEffects`.
+	function admitsAnyHoist() returns bool
+		return not self.holdsACall
+	end 'admitsAnyHoist'
+
+	function note(op StdOp)
+		self.writesMemory = self.writesMemory or op.rawValue.isStore or op.rawValue.isCall
+		self.holdsACall = self.holdsACall or op.rawValue.isCall
+	end 'note'
+end 'LoopEffects'
+
+// Fill `scratch.effects` from every op of the loop, asking the DIALECT's own metadata rather than a list
+// of op names inside this pass.
+//
+// ⭐ **RULE 1 — `isStore or isCall` IS EXACTLY "CAN CHANGE A LOCATION".** MEASURED against the union
+// 2026-08-28: **20 of the 99 variants declare neither flag**, and every one of them is either pure
+// arithmetic (`const`, `binOp`, `unaryOp`, `cmp`, the two `Imm` forms), a pure ADDRESS (`globalAddr`,
+// `rdataAddr`, `funcAddr`, `stackRecordAddr`), a branch (`branch`, `condBranch`, `switch`), a RETURN
+// (`ret`, `retVoid`, `errorReturn`), a trapping division (`div`, `mod`) or a READ (`loadIndirect`,
+// `tlsSlotLoad`). None writes anything, so the test admits precisely the loops in which no location can
+// change.
+//
+// ⛔ **AN EARLIER SPELLING OF THIS CENSUS NAMED SEVEN AND WAS WRONG** — it listed the IMPURE seven and
+// called them "the only variants", which omitted the thirteen pure ones and, worse, told a reader that a
+// loop containing a `return` was refused here. It is not, and the reason it is still safe is the
+// paragraph below. The same wrong census had a second copy in `docs/emitted-code-roadmap.md`; both were
+// corrected together, because one fact written down twice is this project's signature bug.
+//
+// ⭐⭐ **A `return` INSIDE THE LOOP IS SAFE, AND NOT BECAUSE THIS SCAN REFUSES IT.** A block ending in
+// `ret`/`retVoid`/`errorReturn` has NO CFG successors, so it cannot be on a path to a latch, so
+// `collectNaturalLoop` never admits it — it is a NON-MEMBER successor of the block that branches to it,
+// which makes that predecessor an EXIT under `blockLeavesTheLoop` and forces `markMustExecuteBlocks` to
+// climb from it. A block that does not run on the return path therefore cannot dominate all exits, and
+// Rule 2a refuses it. The return path is covered by the speculation rule, not by the effects scan.
+//
+// ⭐⭐ **RULE 3 — A LOOP HOLDING A CALL HOISTS NOTHING AT ALL, AND THAT BOUND IS MEASURED RATHER THAN
+// CAUTIOUS.** `EC13` established the mechanism: a live range crossing a call is confined to the five
+// callee-saved registers x64-windows leaves, and shv2 REFUSES rather than spills — one reused expression
+// took `witness-dispatch-inside-a-pressured-loop` red with `E5001`. LICM's ranges span the WHOLE loop,
+// which is strictly worse. What this rung MEASURED is the other half, in the case where the allocator
+// does not refuse: with the barrier off, 48 `map` fragments gained **+96 `loadRegSlot` and +48
+// `storeSlotReg`** and every one of their frames grew, because the hoisted value was COLD-SPILLED and
+// reloaded. In `Map.grow` that trade is a `leaRegRegImm32` replaced by a `loadRegSlot` — an ALU op for a
+// memory op, which is not a win at any count. ⇒ the bound is not a budget with a number in it; it is the
+// structural rule that the ranges which cost most are the ones crossing a call.
+//
+// ⚠ It costs the anchor NOTHING, which is what makes it affordable: `EC15` made that loop call-free, and
+// `regalloc/many-call-crossing`'s own loop — where nine invariant computations DO leave — holds no call
+// either. Both were checked before the rule was adopted.
+//
+// The TERMINATOR is scanned too, not only the body, and ⚠ **that arm is currently DEAD — kept anyway,
+// with the reason written down rather than the arm deleted.** The only terminator declaring either flag
+// is `osExit`, which has no successors and therefore can never be in a natural loop's member set. What
+// the scan defends against is a FUTURE terminator that both has successors and writes memory; asking is
+// one field read per block, and a scan that read only `opRefs` would be answering the question about
+// part of the loop.
+function scanLoopEffects(module StdModule, func IrFunction, scratch LicmScratch)
+	scratch.effects.reset()
+
+	for position in scratch.members.blocks 'eachBlock'
+		let block = blockAtPosition(module, func: func, position: position)
+
+		for opIdx in block.opRefs 'eachOp'
+			scratch.effects.note(try module.ops.get(opIdx) otherwise panic("scanLoopEffects: op index {opIdx} from block.opRefs not in module.ops"))
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			scratch.effects.note(try module.ops.get(block.terminatorIndex()) otherwise panic("scanLoopEffects: terminator index not in module.ops"))
+		end 'hasTerm'
+	end 'eachBlock'
+end 'scanLoopEffects'
+
+// ══════════════════════════════════════════════════════════════════════════
+// Invariance
+// ══════════════════════════════════════════════════════════════════════════
+
+// Record every value the loop DEFINES — the ones an operand test has to ask about. A value defined
+// outside is invariant by construction and needs no entry.
+//
+// ⚠ **A BLOCK ARG IS A DEF, AND SO IS THE SECOND HALF OF A TWO-DEF OP.** The header's phis are how the
+// index and every carried `var` come round the back edge, so they are the definition of "changes across
+// iterations"; and `tryCall`/`witnessTryCall` write a result AND an error flag, which v1's LICM missed —
+// its own comment records that consumers of the flag then "appear to read a value defined outside the
+// loop and get hoisted, breaking the loop's exit condition". `stdOpDefinedValue` reports both halves,
+// so there is nothing here to forget.
+function collectLoopDefs(module StdModule, func IrFunction, scratch LicmScratch)
+	for position in scratch.members.blocks 'eachBlock'
+		let block = blockAtPosition(module, func: func, position: position)
+
+		for blockArg in block.blockArgs 'eachPhi'
+			scratch.definedInLoop.insert(blockArg.valueId)
+		end 'eachPhi'
+
+		for opIdx in block.opRefs 'eachOp'
+			recordDefsOf(module, opIdx: opIdx, definedInLoop: scratch.definedInLoop)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			recordDefsOf(module, opIdx: block.terminatorIndex(), definedInLoop: scratch.definedInLoop)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'collectLoopDefs'
+
+function recordDefsOf(module StdModule, opIdx OpIndex, definedInLoop LoopValueStamps)
+	match stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("recordDefsOf: op index {opIdx} not in module.ops")) 'defines'
+		none then break 'defines'
+		defines(definedId) then definedInLoop.insert(definedId)
+		definesPair(first, second) then insertBothDefs(definedInLoop, first: first, second: second)
+	end 'defines'
+end 'recordDefsOf'
+
+function insertBothDefs(definedInLoop LoopValueStamps, first ValueId, second ValueId)
+	definedInLoop.insert(first)
+	definedInLoop.insert(second)
+end 'insertBothDefs'
+
+// Whether one operand is loop-invariant: either the loop does not define it at all, or this pass has
+// already decided to hoist the op that does.
+function operandIsInvariant(valueId ValueId, scratch LicmScratch) returns bool
+	return not scratch.definedInLoop.contains(valueId) or scratch.invariant.contains(valueId)
+end 'operandIsInvariant'
+
+// ══════════════════════════════════════════════════════════════════════════
+// The analysis walk
+// ══════════════════════════════════════════════════════════════════════════
+
+// Walk the loop's blocks in DOMINATOR-TREE PREORDER from the header, deciding op by op, and rebuild
+// each block's `opRefs` without the ops it gives up.
+//
+// ⭐⭐ **ONE PASS, NOT A FIXPOINT, AND SSA IS WHY.** A value's def DOMINATES its uses, so the defining
+// block is an ANCESTOR of the reading block in the dominator tree and a preorder therefore visits every
+// operand's def before the op that reads it. The one exception is a value carried round the BACK EDGE,
+// which arrives as a header block-arg and is recorded variant before the walk starts. v1's LICM runs a
+// `while changed` fixpoint over the loop's blocks for this; it does not need to, and the difference is a
+// re-walk of every loop per round.
+//
+// ⭐ **THE HEADER'S DOMINATOR SUBTREE IS EXACTLY THE LOOP, PLUS SUBTREES THAT CAN BE PRUNED WHOLE.**
+// Every member is dominated by the header, so all of them are in it; and a member's immediate dominator
+// is itself a member (it lies on every path from the header to that member, and such a path stays inside
+// the loop), so no member hangs below a non-member. That is what makes the prune below sound and the
+// walk O(the loop) instead of O(the function) — the reverse-postorder sweep it replaces read every block
+// of the function once per loop, which is the Θ(loops × blocks) `LoopMembership`'s header measures.
+function analyzeLoopBlocks(module StdModule, func IrFunction, tree StdDominatorTree, header BlockRefIndex, memoryIsStable bool, scratch LicmScratch)
+	var stack = BlockPositionColumn.create()
+	stack.push(header)
+
+	while stack.count() > 0 'preorder'
+		let position = try stack.pop() otherwise panic("analyzeLoopBlocks: stack.pop on a non-empty stack failed")
+
+		if not scratch.members.contains(position) 'notInThisLoop'
+			continue
+		end 'notInThisLoop'
+
+		analyzeLoopBlock(module, block: blockAtPosition(module, func: func, position: position), position: position, memoryIsStable: memoryIsStable, scratch: scratch)
+
+		for k in 0 upto tree.children.degree(position) 'eachChild'
+			stack.push(tree.children.neighbour(position, k: k))
+		end 'eachChild'
+	end 'preorder'
+end 'analyzeLoopBlocks'
+
+// Classify every body op of one loop block, moving the admitted ones onto the hoist list and keeping the
+// rest.
+//
+// The block's column is rebuilt ONLY when something left it, for `removeOpsDefining`'s measured reason:
+// a fresh `OpIndexArray` per block per loop is one allocation each for a column that mostly comes out
+// identical. The terminator is not considered at all — it computes no value (`classifyArithOperands`
+// answers `neither` for every control op) and moving one would leave the block with no exit.
+function analyzeLoopBlock(module StdModule, block IrBlock, position BlockRefIndex, memoryIsStable bool, scratch LicmScratch)
+	let mustExecute = scratch.mustExecute.holds(position)
+	scratch.leaving.clear()
+
+	for slot in 0 upto block.opRefs.count() 'eachOp'
+		let opIdx = try block.opRefs.get(slot) otherwise panic("analyzeLoopBlock: opRefs.get OOB at {slot}")
+		if not admitsOp(module, opIdx: opIdx, mustExecute: mustExecute, memoryIsStable: memoryIsStable, scratch: scratch) 'staysInTheLoop'
+			continue
+		end 'staysInTheLoop'
+
+		scratch.leaving.push(slot)
+		scratch.hoisted.push(opIdx)
+	end 'eachOp'
+
+	if scratch.leaving.count() == 0 'nothingLeft'
+		return
+	end 'nothingLeft'
+
+	block.opRefs = keepingAllBut(block.opRefs, leaving: scratch.leaving)
+end 'analyzeLoopBlock'
+
+// `refs` without the entries at the ASCENDING positions in `leaving` — one pass, using the fact that the
+// classification walk records positions in order.
+//
+// ⭐ A BLOCK THAT LOSES NOTHING KEEPS THE COLUMN IT ALREADY HAS, and its caller returns before reaching
+// here. `removeOpsDefining` states the measurement behind that rule: an unconditional rebuild is one
+// allocation per block per pass for a column that mostly comes out identical, and here it would be one
+// per block per LOOP.
+//
+// ⚠ **IT IS NOT `removeOpsDefining` WITH A DIFFERENT ARGUMENT, and the difference is asymptotic rather
+// than stylistic.** That function keys on a doomed-VALUE predicate and walks every block of the whole
+// FUNCTION to find them, which is right for a pass that removes once per function and is exactly the
+// Θ(loops × blocks) this pass spent a measurement removing. This keys on POSITIONS the classification
+// walk has already recorded in order, so it touches only the one block it was handed.
+//
+// ⚠ One asymmetry with that function, stated because it is safe only for a reason: `removeOpsDefining`
+// guards the TWO-DEF ops (`requireNeitherHalfIsDoomed` — removing one would delete the other's def), and
+// this does not. It does not need to, because `tryCall`/`witnessTryCall` are `neither` in the arithmetic
+// roster and are not loads, so no admission in this pass can ever name one.
+
+// How far through the `leaving` batch the rebuild has read. It indexes the BATCH, never the block — the
+// same split `SpliceBatchIndex` makes for the insert direction, and named apart from it because there is
+// no splice here.
+typealias LeavingIndex = int(0 to u64.max)
+function keepingAllBut(refs OpIndexArray, leaving BlockOpPosArray) returns OpIndexArray
+	var kept = OpIndexArray.create()
+	var next = 0 as LeavingIndex
+
+	for slot in 0 upto refs.count() 'eachRef'
+		if next < leaving.count() and slot == (try leaving.get(next) otherwise panic("keepingAllBut: leaving.get OOB at {next}")) 'hoisted'
+			next = next + 1
+			continue
+		end 'hoisted'
+
+		kept.push(try refs.get(slot) otherwise panic("keepingAllBut: refs.get OOB at {slot}"))
+	end 'eachRef'
+
+	return kept
+end 'keepingAllBut'
+
+// Decide ONE op, recording its result as invariant when the answer is yes — the two phases' single
+// admission point.
+function admitsOp(module StdModule, opIdx OpIndex, mustExecute bool, memoryIsStable bool, scratch LicmScratch) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("admitsOp: op index {opIdx} from block.opRefs not in module.ops")
+
+	classifyArithOperands(op, operands: scratch.arith)
+	if scratch.arith.isArithmetic() 'phase1'
+		return admitsPureComputation(op, scratch: scratch)
+	end 'phase1'
+
+	classifyLoadOperands(op, load: scratch.load)
+	if scratch.load.isLoad() and memoryIsStable 'phase2'
+		return admitsInvariantLoad(mustExecute, scratch: scratch)
+	end 'phase2'
+
+	return false
+end 'admitsOp'
+
+// Phase 1. A pure arithmetic op whose operands are all invariant, hoisted with no speculation question
+// asked — `isPure` is the dialect's own licence to move it, and `requireArithOpIsPure` is what keeps the
+// roster and the flag from drifting apart.
+function admitsPureComputation(op StdOp, scratch LicmScratch) returns bool
+	requireArithOpIsPure(op, reader: "hoistLoopInvariants")
+
+	if not operandIsInvariant(scratch.arith.lhs, scratch: scratch) 'firstOperandVaries'
+		return false
+	end 'firstOperandVaries'
+
+	if scratch.arith.hasSecondValueOperand() and not operandIsInvariant(scratch.arith.rhs, scratch: scratch) 'secondOperandVaries'
+		return false
+	end 'secondOperandVaries'
+
+	scratch.invariant.insert(scratch.arith.resultId)
+	return true
+end 'admitsPureComputation'
+
+// Phase 2. An invariant load, admitted under Rule 2a (its block must execute) or Rule 2b (a wider load
+// through the same address is already being hoisted under 2a). Rule 1 has been checked by the caller.
+//
+// A load admitted under 2a is what makes 2b available to the loads after it, so the witness is recorded
+// only on that path — a load riding on a witness proves nothing further about the object, because the
+// span it proves is one the witness already proved.
+function admitsInvariantLoad(mustExecute bool, scratch LicmScratch) returns bool
+	if not operandIsInvariant(scratch.load.addrId, scratch: scratch) 'theAddressVaries'
+		return false
+	end 'theAddressVaries'
+
+	if mustExecute 'ruleTwoA'
+		scratch.witness.record(scratch.load.addrId, bytes: scratch.load.coverage())
+		scratch.invariant.insert(scratch.load.resultId)
+		return true
+	end 'ruleTwoA'
+
+	if not scratch.witness.coversAtLeast(scratch.load.addrId, need: scratch.load.coverage()) 'noWitness'
+		return false
+	end 'noWitness'
+
+	scratch.invariant.insert(scratch.load.resultId)
+	return true
+end 'admitsInvariantLoad'
+
+// ══════════════════════════════════════════════════════════════════════════
+// Applying the hoist
+// ══════════════════════════════════════════════════════════════════════════
+
+// Move the collected ops into the preheader, in the order they were collected.
+//
+// ⭐ APPENDED TO `opRefs`, which places them AFTER everything the preheader already computes and BEFORE
+// its terminator — the only position that is right for both halves. An operand defined in the preheader
+// itself is therefore already available, and the branch that enters the loop still comes last.
+//
+// The collection order is `analyzeLoopBlocks`' DOMINATOR-TREE PREORDER, so a hoisted op that feeds
+// another hoisted op was collected first and lands first: an operand's defining block is an ancestor of
+// its reader's, and a preorder visits an ancestor first. The def-before-use order the ops had inside the
+// loop is the order they arrive in.
+function appendToPreheader(module StdModule, func IrFunction, preheader BlockRefIndex, ops OpIndexArray)
+	var block = blockAtPosition(module, func: func, position: preheader)
+
+	for opIdx in ops 'eachHoisted'
+		block.opRefs.push(opIdx)
+	end 'eachHoisted'
+end 'appendToPreheader'
+
+// The block at one position in `func.blockRefs` — the descent every walk above makes, written once.
+function blockAtPosition(module StdModule, func IrFunction, position BlockRefIndex) returns IrBlock
+	let blockRef = try func.blockRefs.get(position) otherwise panic("hoistLoopInvariants: blockRefs.get OOB at {position}")
+	return try module.blocks.get(blockRef) otherwise panic("hoistLoopInvariants: blockRef from func.blockRefs not in module.blocks")
+end 'blockAtPosition'
+
+// ══════════════════════════════════════════════════════════════════════════
+// Scratch
+// ══════════════════════════════════════════════════════════════════════════
+
+// Rule 2a's answer for the CURRENT loop: how many of the loop's named blocks (its exits and its
+// latches) each block lies on the dominator chain of, and how many chains were climbed. A block on all
+// of them dominates all of them.
+//
+// ⚠ **DENSE OVER BLOCK POSITIONS, CLEARED BY THE POSITIONS IT TOUCHED — never by the block space.** A
+// `growFilled(blockCount)` per loop is the Θ(loops × blocks) `LoopMembership`'s header measures, and it
+// is the same defect one column over: this record is created once per module run and each loop pays only
+// for the chains it actually climbed.
+type MustExecuteCounter
+	// Block position -> how many of the climbs below passed through it. A COUNT keyed by a position, so
+	// it is a `DominatorChainCount` column and not a column of positions, whatever the two aliases have
+	// in common underneath.
+	var onChains as DominatorChainCountColumn
+	// Every position `onChains` is non-zero at — what `reset` has to clear, and nothing more.
+	var touched as BlockPositionColumn
+	// How many chains were climbed for the current loop — one per exit and one per latch.
+	var climbs as DominatorChainCount
+
+	static function create() returns MustExecuteCounter
+		return Self{onChains: DominatorChainCountColumn.create(), touched: BlockPositionColumn.create(), climbs: 0}
+	end 'create'
+
+	function reset(blockCount BlockRefIndex)
+		for position in self.touched 'eachTouched'
+			try self.onChains.set(position, value: 0) otherwise panic("MustExecuteCounter.reset: onChains.set OOB at {position}")
+		end 'eachTouched'
+
+		self.touched.clear()
+		self.climbs = 0
+		self.onChains.growFilled(blockCount, value: 0)
+	end 'reset'
+
+	// Walk one block's immediate-dominator chain up to the loop header, counting every block on it. The
+	// header terminates the walk because it dominates every member, so it is on the chain of each.
+	function climbChainFrom(from BlockRefIndex, header BlockRefIndex, tree StdDominatorTree)
+		self.climbs = self.climbs + 1
+
+		var walk = from
+		var moreToClimb = true
+
+		while moreToClimb 'climb'
+			let seen = try self.onChains.get(walk) otherwise panic("MustExecuteCounter.climbChainFrom: onChains.get OOB at {walk}")
+			if seen == 0 'firstChainThroughIt'
+				self.touched.push(walk)
+			end 'firstChainThroughIt'
+			try self.onChains.set(walk, value: seen + 1) otherwise panic("MustExecuteCounter.climbChainFrom: onChains.set OOB at {walk}")
+
+			moreToClimb = walk != header
+			if moreToClimb 'notTheHeaderYet'
+				walk = tree.immediateDominatorOf(walk)
+			end 'notTheHeaderYet'
+		end 'climb'
+	end 'climbChainFrom'
+
+	// Whether `position` is on EVERY chain climbed — Rule 2a's test. A loop with no chains at all cannot
+	// occur (a natural loop is found from a back edge, so it always has at least one latch), and the
+	// equality would then be vacuously true for every block, which is why it is refused rather than
+	// answered.
+	function holds(position BlockRefIndex) returns bool
+		if self.climbs == 0 'noChains'
+			panic("MustExecuteCounter.holds: no dominator chain was climbed for this loop — a natural loop is discovered from a back edge and therefore always has a latch to climb from")
+		end 'noChains'
+
+		return (try self.onChains.get(position) otherwise panic("MustExecuteCounter.holds: onChains.get OOB at {position}")) == self.climbs
+	end 'holds'
+end 'MustExecuteCounter'
+
+// How many of a loop's dominator chains pass through one block, and the column of those counts. Named
+// apart from `BlockPositionColumn` for the reason `.claude/CLAUDE.md` gives — a typealias names a
+// PURPOSE, not a representation, and these two happen to share one.
+typealias DominatorChainCount = int(0 to u64.max)
+typealias DominatorChainCountColumn = Array with DominatorChainCount
+
+// Rule 2b's evidence: for each ADDRESS value, how far past it a load already hoisted under Rule 2a
+// reads. TWO COLUMNS for one map, exactly as `ConstValueMap` and `CseExpressionTable` are — "is there an
+// entry here" and "what it is" — because every `LoadCoverage` including 0 would be a legitimate value if
+// one column had to carry both answers.
+//
+// A DENSE COLUMN keyed by `ValueId`, not a `Map`: a ValueId already IS a dense function-local index, so
+// a hash set would spend a hash and a probe on something that is an array subscript
+// (ARCHITECTURE.md §"Data representation"; `StdValueUseSet`'s header measures what breaking that costs).
+// That is also what makes the witness test O(1) rather than a scan of the loads hoisted so far, which
+// would have been quadratic in a loop that reads many fields of one record.
+type LoadWitnessTable
+	// WHICH addresses have a witness in the CURRENT loop — the presence half, and it IS `LoopValueStamps`
+	// rather than a second copy of the stamp discipline. ⛔ Reviewed 2026-08-28 as this rung's one real
+	// duplication: this record used to carry its own `stampOf`/`current` pair with a byte-identical
+	// `beginLoop`, insert and staleness test, and the failure that invites is not a missed hoist — an edit
+	// to the discipline in one copy and not the other lets a witness from a PREVIOUS loop read as present,
+	// which is a load hoisted under Rule 2b on evidence that does not exist.
+	var proven as LoopValueStamps
+	// WHAT each of them proves. Two columns for one map, exactly as `ConstValueMap` is — "is there an
+	// entry" and "what it is" — because every `LoadCoverage` including 0 is a legitimate value and a
+	// single column would need one of them to mean "absent".
+	var covers as LoadCoverageColumn
+
+	static function create() returns LoadWitnessTable
+		return Self{proven: LoopValueStamps.create(), covers: LoadCoverageColumn.create()}
+	end 'create'
+
+	// Forget every witness. A witness from one loop says nothing about another (its address value may not
+	// even be invariant there), and the stamp makes that forgetting O(1).
+	function beginLoop()
+		self.proven.beginLoop()
+	end 'beginLoop'
+
+	// Record that a load through `addrId` reaching `proven` bytes is being hoisted unconditionally. The
+	// WIDEST such load wins, because coverage is a lower bound on the object's size and the largest one
+	// proven is the most that can be handed to Rule 2b.
+	function record(addrId ValueId, bytes LoadCoverage)
+		if bytes <= self.coverageOf(addrId) 'anotherLoadProvesMore'
+			return
+		end 'anotherLoadProvesMore'
+
+		self.proven.insert(addrId)
+		self.covers.growFilled(addrId + 1, value: 0)
+		try self.covers.set(addrId, value: bytes) otherwise panic("LoadWitnessTable.record: covers.set OOB at {addrId}")
+	end 'record'
+
+	// Whether an unconditionally-hoisted load through `addrId` already proves at least `need` bytes
+	// readable — Rule 2b's test.
+	function coversAtLeast(addrId ValueId, need LoadCoverage) returns bool
+		return self.coverageOf(addrId) >= need
+	end 'coversAtLeast'
+
+	// How much THIS loop proves about `addrId`, with nothing proven answering 0 — which is sound in the
+	// one direction it is read: `coversAtLeast` then answers false for every real load, because a load
+	// transfers at least one byte.
+	function coverageOf(addrId ValueId) returns LoadCoverage
+		if not self.proven.contains(addrId) 'noWitnessInThisLoop'
+			return 0
+		end 'noWitnessInThisLoop'
+
+		return try self.covers.get(addrId) otherwise panic("LoadWitnessTable.coverageOf: `proven` holds {addrId} but `covers` is only {self.covers.count()} long — the two columns are extended together by `record`")
+	end 'coverageOf'
+end 'LoadWitnessTable'
+
+// ⭐⭐ **A DENSE PER-VALUE SET WHOSE RESET IS O(1), AND THE RESET IS THE WHOLE REASON IT IS NOT
+// `StdValueUseSet`.** That type is the Std tier's one answer to "which values does this walk touch?" and
+// it is right for its callers, every one of which builds a set once per FUNCTION: its `clear` keeps the
+// column's capacity and the next `insert` re-extends it, which costs one pass over the value space per
+// set built. This pass builds a set once per LOOP, and one pass over the function's value space per loop
+// is Θ(loops × values) — the same shape `LoopMembership`'s header measures one column over, and MEASURED
+// here as `phase:loopInvariantCodeMotion` still growing ×2.21 in bytes and ×2.42 in CPU per doubling
+// after the block columns had been fixed.
+//
+// A GENERATION STAMP costs nothing to reset: entering a loop bumps one counter, and an entry stamped
+// with an older generation reads as absent. `NoLoopStamp` is what the column grows filled with, and the
+// first loop stamps 1, so an untouched slot can never match.
+//
+// THREE users, and they share this one implementation rather than three copies of it: the loop's defs,
+// the subset of those proved invariant, and `LoadWitnessTable`'s presence half.
+type LoopValueStamps
+	var stampOf as LoopStampColumn
+	var current as LoopStamp
+
+	static function create() returns LoopValueStamps
+		return Self{stampOf: LoopStampColumn.create(), current: NoLoopStamp}
+	end 'create'
+
+	function beginLoop()
+		self.current = self.current + 1
+	end 'beginLoop'
+
+	function insert(valueId ValueId)
+		self.stampOf.growFilled(valueId + 1, value: NoLoopStamp)
+		try self.stampOf.set(valueId, value: self.current) otherwise panic("LoopValueStamps.insert: stampOf.set OOB at {valueId}")
+	end 'insert'
+
+	function contains(valueId ValueId) returns bool
+		if valueId >= self.stampOf.count() 'neverStamped'
+			return false
+		end 'neverStamped'
+
+		return (try self.stampOf.get(valueId) otherwise panic("LoopValueStamps.contains: stampOf.get OOB at {valueId}")) == self.current
+	end 'contains'
+end 'LoopValueStamps'
+
+// Which analysed loop an entry belongs to. `NoLoopStamp` is the value a freshly grown column holds and
+// the one `beginLoop` counts up from, so it never collides with a real loop's stamp.
+typealias LoopStamp = int(0 to u64.max)
+typealias LoopStampColumn = Array with LoopStamp
+let NoLoopStamp = 0 as LoopStamp
+
+typealias LoadCoverageColumn = Array with LoadCoverage
+
+// The mutable state one run of the pass carries. ONE object threaded through the walk rather than seven
+// parameters at every level — they are created together, cleared together and reset together, and a walk
+// that took them separately would have to name all seven at each of six call sites (`CseScratch`'s
+// reason, and the same shape).
+type LicmScratch
+	// Every value the CURRENT loop defines, and the subset of those this pass has decided to hoist. Two
+	// sets rather than one mutable "variant" set: a removal would need a second column anyway, and a
+	// value moving from one set to the other is exactly what the analysis records.
+	export var definedInLoop as LoopValueStamps
+	export var invariant as LoopValueStamps
+	// The loop currently being analysed, in both the forms the walks need — membership and a member list.
+	export var members as LoopMembership
+	// What that loop's ops do — Rules 1 and 3.
+	export var effects as LoopEffects
+	// Rule 2a's answer for that loop.
+	export var mustExecute as MustExecuteCounter
+	export var witness as LoadWitnessTable
+	// The op indices to move, in the order they were collected.
+	export var hoisted as OpIndexArray
+	// The positions within the CURRENT block's `opRefs` that are leaving it — ascending, and reused per
+	// block rather than allocated per block.
+	export var leaving as BlockOpPosArray
+	// The op being classified, in each of the two shapes it might have. Refilled per op and never
+	// re-created — the shape `StdArithOperands` states.
+	export var arith as StdArithOperands
+	export var load as StdLoadOperands
+
+	static function create() returns LicmScratch
+		return Self{definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), hoisted: OpIndexArray.create(), leaving: BlockOpPosArray.create(), arith: StdArithOperands.create(), load: StdLoadOperands.create()}
+	end 'create'
+
+	// Empty every per-loop column, keeping capacity. ⛔ **A LEAKED ENTRY IS A MISCOMPILE, NOT A MISSED
+	// HOIST** — the same shape `eliminateCommonSubexpressions` measured: a `ValueId` is FUNCTION-local, so
+	// an `invariant` bit left over from the previous function names a value in a different value space,
+	// and the op reading it would be hoisted out of a loop that computes it. Clearing per LOOP is
+	// stricter than per function and makes both cases correct at one site.
+	// ⚠ THREE columns are NOT reset here, each because its own owner resets it before its first read:
+	// `members` (`collectNaturalLoop` clears it as it fills it), `effects` (`scanLoopEffects`) and
+	// `leaving` (`analyzeLoopBlock`, per BLOCK rather than per loop). Clearing them twice would cost a
+	// second walk and buy nothing. Every column that IS reset here is reset by the positions or ids the
+	// last loop touched, never by the space it is dense over.
+	function beginLoop(blockCount BlockRefIndex)
+		self.definedInLoop.beginLoop()
+		self.invariant.beginLoop()
+		self.mustExecute.reset(blockCount)
+		self.witness.beginLoop()
+		self.hoisted.clear()
+	end 'beginLoop'
+end 'LicmScratch'

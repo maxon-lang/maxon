@@ -355,6 +355,18 @@ export enum CompilePhase
 	// be paid back by the phases after it — `regalloc` in particular sees a narrower live set — and
 	// billed into a neighbour the cost and the saving would net off inside one number.
 	commonSubexpressionElimination
+	// Loop-invariant code motion (`hoistLoopInvariants`, EC14). APPENDED HERE rather than beside the Std
+	// passes it runs among, for this enum's own reason — the ordinals are the `.metrics.tsv` wire format
+	// every trend row ever written is indexed by, so a member slotted into the middle would re-attribute
+	// every historical measurement to the wrong phase.
+	//
+	// Its OWN row rather than a slice of `commonSubexpressionElimination`, which it runs immediately
+	// after, because the two scale with different things: CSE's cost tracks the number of ARITHMETIC ops
+	// per dominator path, and this one's tracks the number of LOOPS and the size of their bodies — a
+	// program of straight-line code pays this phase almost nothing whatever its arithmetic looks like. It
+	// is also one of the passes whose cost is expected to be paid back by the phases after it, and billed
+	// into a neighbour the cost and the saving would net off inside one number.
+	loopInvariantCodeMotion
 end 'CompilePhase'
 
 // Per-compile timing state, owned by `Project` (which is already threaded through

@@ -2564,6 +2564,92 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 	end 'b'
 end 'classifyArithOperands'
 
+// ⛔⛔ **THE CHECK BETWEEN THE ARITHMETIC ROSTER ABOVE AND THE PURITY FLAG, because the two statements
+// would otherwise be free to disagree.** `classifyArithOperands` decides which variants are ARITHMETIC;
+// `StdOpMeta.isPure` decides which may be dropped, duplicated or reordered. Every variant the roster
+// admits declares `isPure: true` today, and nothing enforces it: a future op appended to the arith band
+// with `isPure: false` (another trapping form, say) would be given an arm in the roster by a reader
+// thinking about SHAPE, and a code-motion pass would move it without ever asking. Asking here costs one
+// field read per arithmetic op and turns that into a panic on the first program that compiles it.
+//
+// ⚠ **IT IS NOT THE MEMORY GATE.** A load never reaches here — it is `StdArithShape.neither` — so
+// flipping `loadIndirect` to `isPure: true` (the sabotage `StdOpMeta.isPure`'s own comment records)
+// still would not make a pass treat one as arithmetic. The roster refuses it first.
+//
+// `reader` names the pass, because the panic is about a disagreement between the dialect and whoever
+// asked, and a message that could not say which pass tripped it would send the reader to this file
+// rather than to the roster arm that admitted the op.
+module function requireArithOpIsPure(op StdOp, reader String)
+	if not op.rawValue.isPure 'impure'
+		panic("{reader}: `classifyArithOperands` admitted an op in category {op.rawValue.category.name} that the dialect declares `isPure: false` — an op that may trap or have effects must never be dropped, duplicated or moved")
+	end 'impure'
+end 'requireArithOpIsPure'
+
+// The operands of a `loadIndirect`, written into a caller-owned record — what `StdArithOperands` is for
+// the arithmetic band, for the ONE memory op a pass may want to move.
+//
+// ⭐ **IT LIVES HERE AND NOT IN THE PASS, for the reason the arithmetic roster does.** A `match` over
+// `StdOp` inside a pass is a roster that can drift from the union; here the range arms are pinned to the
+// union's current FIRST and LAST variants, so a variant APPENDED at the end (the rule `StdOp`'s header
+// states) keeps being classified as "not a load" and a variant INSERTED mid-band fails to compile.
+//
+// ⚠ **THE FIELDS ARE MEANINGLESS UNTIL `isLoad` SAYS THE RECORD WAS FILLED**, and none may be read as a
+// sentinel — ValueId 0, offset 0 and `StdType.i64` are all real. Same discipline as `StdArithOperands`.
+module type StdLoadOperands
+	var load as bool
+	export var resultId as ValueId
+	// The ADDRESS the load reads through. `offset` is a field displacement from it, never a separate
+	// value — which is what lets a reader compare two loads through one address by offset alone.
+	export var addrId as ValueId
+	export var offset as ByteOffset
+	export var valueType as StdType
+
+	module static function create() returns StdLoadOperands
+		return Self{load: false, resultId: 0, addrId: 0, offset: 0, valueType: StdType.i64}
+	end 'create'
+
+	export function isLoad() returns bool
+		return self.load
+	end 'isLoad'
+
+	// How far past `addrId` this load reads — `offset` plus the width it transfers. The number a
+	// dereferenceability argument is made in: a load the program performs proves the object at `addrId`
+	// spans at least this many bytes.
+	export function coverage() returns LoadCoverage
+		if not self.load 'notALoad'
+			panic("StdLoadOperands.coverage: this record does not describe a load — ask `isLoad` first")
+		end 'notALoad'
+
+		return self.offset + stdTypeStorageBytes(self.valueType)
+	end 'coverage'
+
+	function recordNotALoad()
+		self.load = false
+	end 'recordNotALoad'
+
+	function recordLoad(defined ValueId, address ValueId, displacement ByteOffset, readType StdType)
+		self.load = true
+		self.resultId = defined
+		self.addrId = address
+		self.offset = displacement
+		self.valueType = readType
+	end 'recordLoad'
+end 'StdLoadOperands'
+
+// How many bytes past its address a load reads — an ordinary non-negative byte count, named because
+// `ByteOffset` is where the read STARTS and this is where it ENDS.
+module typealias LoadCoverage = int(0 to u64.max)
+
+// Fill `load` with the memory operands `op` carries, or with "not a load". Exhaustive over StdOp, no
+// bare `default` — see `StdLoadOperands` for why the two range arms are pinned where they are.
+module function classifyLoadOperands(op StdOp, load StdLoadOperands)
+	match op 'l'
+		const to globalAddr then load.recordNotALoad()
+		loadIndirect(resultId, addrId, offset, valueType) then load.recordLoad(resultId, address: addrId, displacement: offset, readType: valueType)
+		storeIndirect to osSetEvent then load.recordNotALoad()
+	end 'l'
+end 'classifyLoadOperands'
+
 // The set of value ids a function's ops READ. Every Std-tier pass that asks "does anything
 // still read this value?" — the const DCE, the dead-block-arg prune, the trivial-block-arg
 // elimination — reads it from `collectStdOpUses` below rather than re-matching the union, so a
@@ -2945,7 +3031,7 @@ end 'maxValueId'
 // zero-user-parameter generic method's layout-descriptor slot legitimately holds it, which is why
 // `MaxonToStdLowering` carries a separate `hasImplicitLayout` bit rather than testing for 0). The
 // union says "no value" in a way no ValueId can spell.
-union DefinedValueLookup
+module union DefinedValueLookup
 	none
 	defines(valueId ValueId)
 	// ⭐⭐ **TWO DEFS, AND THE SECOND ONE IS WHY THIS ARM EXISTS — IT CLOSED A LATENT MISCOMPILE.**
@@ -2966,7 +3052,7 @@ end 'DefinedValueLookup'
 // The `none` set is the terminators / stores / effect ops that define nothing. Exhaustive over StdOp,
 // matching `collectStdOpUses`'s discipline — a new variant is a compile error here rather than a
 // silently-missed def.
-function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
+module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 	return match op 'r'
 		const(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		binOp(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)

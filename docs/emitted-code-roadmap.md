@@ -39,7 +39,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | Algebraic identity (`x+0`, `x*1`) | ✅ `FoldConstOperands` move 3 | ✅ `TryAlgebraicIdentity` | ✅ `Canonicalize` |
 | **Constant folding (`const ⊕ const`)** | ✅ `FoldConstants` (EC12) | ❌ | ✅ `Canonicalize` |
 | **CSE / GVN** | ✅ `CommonSubexpressionElimination` (EC13) — dominator-scoped, arith band, call-barriered | ❌ | ✅ `CommonSubexpressionElimination.maxon` (494) |
-| **LICM** | ❌ | ◑ refcount pairs only | ✅ `LoopInvariantCodeMotion.maxon` (596) |
+| **LICM** | ✅ `LoopInvariantCodeMotion` (EC14) — pure ops AND invariant loads, two stated speculation rules | ◑ refcount pairs only | ✅ `LoopInvariantCodeMotion.maxon` (596) — pure ops only |
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* | ✅ `DeadStoreEliminationPass` sub-pass 3 | ✅ `DeadCodeElimination.maxon` (728) |
 | **Block merging / branch simplification** | ◑ `X64BranchCleanup` (EC11) — elision, inversion, threading, unreachable; **no reordering** | ◑ cond-br then-edge only | ✅ `CfgAnalysis` + `Canonicalize` |
 | **Strength reduction** (`mul`→`shl`, magic div) | ❌ | ❌ | ❌ |
@@ -93,22 +93,32 @@ to argue anything.
 ## THE ANCHOR — one 3-line loop, and every missing pass visible at once
 
 `for v in a` over `Array with Integer`, summing (`temp/codegen-probe/arr.maxon`). **Re-measured after
-`EC11`, `EC12`, `EC13`, `EC16` and `EC15`**: the executed hot path is **8 instructions per element**,
-down from 15 — and what remains is a list of the rows still open.
+`EC11`, `EC12`, `EC13`, `EC16`, `EC15` and `EC14`**: the executed hot path is **6 instructions per
+element**, down from 15.
 
 ```
-  forhdr:     load rdx,[rcx+8]      ← length, RELOADED every trip          (EC14 LICM)
-              cmp rax,rdx ; jcc greaterEqual,forexit
-  loop:       load rdx,[rcx+0]      ← buffer base, RELOADED every trip     (EC14 LICM)
-              load rdx,[rdx+rax*8]  ← EC16 folded the `imul` AND the `lea` into this operand
-  __im_cont:  lea  r8,r8,rdx        ← EC11 elided this block's `jmp forstep`
+  entry:      load rdx,[rcx+8]      ← length      — EC14 hoisted it OUT of the loop
+              load rcx,[rcx+0]      ← buffer base — EC14 hoisted it too (its Rule 2b)
+  forhdr:     cmp rax,rdx ; jcc greaterEqual,forexit
+  loop:       load rsi,[rcx+rax*8]  ← EC16 folded the `imul` AND the `lea` into this operand
+  __im_cont:  lea  r8,r8,rsi        ← EC11 elided this block's `jmp forstep`
   forstep:    lea  rax,rax,1
               jmp  forhdr           ← the real back edge
 ```
 
 An ideal x64 body is **5**: `mov rax,[rbx+r13*8]` · `add r12,rax` · `inc r13` · `cmp r13,len` · `jl`.
-**8 → 5**, and every one of the three that remain is a row still open: **two** are `EC14`'s reloads,
-and the last is the back edge's `jmp`, which loop ROTATION (not `EC11`'s elision) would remove.
+**15 → 6**, and the ONE that remains is the back edge's `jmp`, which loop ROTATION (not `EC11`'s
+elision) would remove — the ideal's `jl` IS the rotated form's single branch.
+
+⛔⛔ **AND THE 8 → 6 BOUGHT NO MEASURABLE TIME. READ `EC14`'s ROW BEFORE RANKING ANYTHING BY THIS
+SECTION.** A microbenchmark of this exact loop over 4.1×10⁸ elements runs in **294 ms whether the
+compiler hoists the two loads or not**, and `nbody` is 10.02 s either way — the loop is bound by its
+taken branch and its loop-carried dependency at ~2.3 cycles/iteration, and an out-of-order core absorbs
+two L1-hitting loads for free. **This section counts INSTRUCTIONS, which is a proxy for the quality of
+the emitted code and not a measurement of time**, and `EC14` is where that proxy was first measured
+against the thing it stands for and found not to track it. Instruction count is still the right axis
+for a codegen inventory — it is exact, reproducible and attributable, where a benchmark is none of the
+three — but a row that claims a SPEEDUP owes its own measurement.
 
 ⭐⭐ **`EC15` TOOK FOUR OF THE TWELVE AND THE FUNCTION'S WHOLE FRAME WITH THEM.** What stood between
 `loop:` and `__im_word:` was a `loadIndirect` of `element_size@24`, a `cmp`/`jcc` against 8, a second
@@ -368,6 +378,156 @@ register-pressure diagnostic and the spill count, not only the op count. `EC13` 
 costs on this compiler: one reused expression across a call took a knife-edge pressure spec red with
 `E5001`, which is why its own reuse rule stops at a call. LICM's hoists cross the loop, which is
 strictly worse for pressure, so the trade has to be made explicitly rather than discovered.
+
+✅ **LANDED 2026-08-28** as `maxon-shv2/Compiler/IR/Std/LoopInvariantCodeMotion.maxon`, scheduled in
+`buildLoweringPasses` between `commonSubexpressionElimination` and `promoteStackRecords` — v1's own
+order (`canonicalize → cse → licm → dce`), and for a reason of this compiler's: CSE has already
+collapsed a repeated invariant expression to ONE op, so this pass moves one instruction and lengthens
+one live range instead of three.
+
+⭐⭐ **THE ANCHOR LOOP IS 6, WHICH IS THE ROW'S STATED TARGET AND THE END OF THE 15 → 6 SEQUENCE.**
+
+```
+  entry:      load rdx,[rcx+8]      ← length      — HOISTED
+              load rcx,[rcx+0]      ← buffer base — HOISTED
+  forhdr:     cmp rax,rdx ; jcc greaterEqual,forexit
+  loop:       load rsi,[rcx+rax*8]
+  __im_cont:  lea r8,r8,rsi
+  forstep:    lea rax,rax,1 ; jmp forhdr
+```
+
+Both of `EC14`'s reloads are gone. What is left against the roadmap's "ideal 5" is the back edge's
+`jmp`, which loop ROTATION would remove and this rung does not attempt.
+
+**TWO PHASES, TWO SAFETY ARGUMENTS, and the whole content of the row is the second.**
+
+- **PURE COMPUTATION** needs no argument beyond `StdOpMeta.isPure` ("can be duplicated, reordered, or
+  dropped"), and is hoisted from ANY block of the loop — out of a whole NEST in one run, because loops
+  are processed innermost-first and each loop's hoists are applied before the next is analysed. v1's
+  LICM is exactly this phase and states the same reason. `div`/`mod` never reach it (they trap, and the
+  arithmetic roster answers `neither` for them); `const` and the pure ADDRESS ops are deliberately left
+  alone, for `EC13`'s recorded reason — rematerializing beats a live range spanning the loop.
+- **INVARIANT LOADS** are `isPure: false` and get **two rules, each stated as a rule**:
+  - **Rule 1 — invariance.** A loop none of whose ops is `isStore` or `isCall` cannot change any
+    location. That is a conservative rule, not an alias analysis, and it is exactly sufficient because
+    `EC15` made the anchor loop call-free. MEASURED against the union: **20 of the 99 variants declare
+    neither flag**, and every one is pure arithmetic, a pure address, a branch, a RETURN, a trapping
+    division or a read. ⛔ An earlier spelling of this census named only the seven IMPURE ones and
+    called them "the only variants" — wrong, and wrong in the direction that matters, because it told a
+    reader that a loop containing a `return` was refused here. It is not: a block ending in `ret` has no
+    successors, so `collectNaturalLoop` never admits it, so its predecessor is an EXIT and Rule 2a is
+    what covers the return path. The pass's own header now carries that argument; this was one fact
+    written down twice and wrong in both.
+  - **Rule 2 — speculation.** A hoisted load executes even when the loop body never runs, and the
+    anchor makes that concrete: the length is read in the HEADER (runs whenever the preheader does) and
+    the buffer base in the block the guard branches to, which **for an empty array never runs**. So:
+    **2a** the block dominates every exit AND every latch, or **2b** the loop is already hoisting,
+    under 2a, a load through the SAME address value with an equal-or-greater `offset + width`. A
+    `loadIndirect`'s `(addrId, offset)` names field `offset` of the object at `addrId` and `ByteOffset`
+    is non-negative by type, so a load the program performs unconditionally at a further offset proves
+    the nearer field is inside the same object — **2b is what takes the anchor from 7 to 6.**
+
+⚠⚠ **THE `ops` COLUMN CANNOT SEE THIS ROW, AND THE FINAL READING IS `TOTAL 10,558 → 10,558` — EVERY
+COLUMN BYTE-IDENTICAL, INCLUDING `arr.maxon`'s OWN 100.** LICM MOVES ops rather than deleting them, so a
+static count of a whole program is flat by construction even where the pass fires: `arr.maxon`'s two
+loads left its loop and stayed in its function. Before Rule 3 this column read **+6**, which was
+register-pressure churn where a hoisted value in a call-heavy loop lengthened a range; Rule 3 removed
+the churn along with the hoists that caused it. ⇒ **This instrument reports nothing at all for this row,
+in either direction.** The reading that matters is the anchor's executed body, 8 → 6 per element, which
+only a look at ONE function shows.
+
+⛔⛔ **AND THE TIME DID NOT FOLLOW THE INSTRUCTION COUNT. MEASURED, AND IT IS THE MOST IMPORTANT NUMBER
+IN THIS ROW.** A microbenchmark of *exactly* the anchor loop — 4.1×10⁸ element iterations, one program
+compiled by the two binaries — runs in **294 ms either way** (min of 7 alternating runs; 871 vs 874 ms
+at 3× the work; an L2-resident 160 KB array and an L1-resident 32 KB array agree). `nbody` is likewise
+**10.02 s either way**. ⇒ The loop is bound by its taken branch and its loop-carried dependency at
+~2.3 cycles/iteration, and an out-of-order core absorbs the two L1-hitting header loads for free.
+**The "ideal 5 instructions" axis this document ranks by is a PROXY, and on this shape it is measurably
+not tracking time.** That does not make the row wrong — fewer instructions is less I-cache and fewer
+load-port µops in a loop that is not alone, and the Std-tier loop machinery is what later rows need —
+but no row below may be justified by "instructions are time" without measuring it.
+
+⚠ **`scale-test` CANNOT SIZE THIS ROW EITHER, AND THE REASON IS THE CORPUS, NOT THE ROW.** With a
+control taken the same session (the same binary with the one `passes.push` line removed), emitted
+`codeBytes` is **BYTE-IDENTICAL at every rung — a delta of exactly 0**. `ScaleCorpus`'s array knob emits
+`create`/`push`/`get`/`count`/`slice` straight-line with **no loop over an array at all**, and every loop
+the ladder does generate holds a call, which Rule 3 refuses. So the ladder cannot express the construct
+this row optimizes and can see none of the win. That is the instrument's blind spot, exactly as
+`.claude/CLAUDE.md` warns; it is a corpus gap, and it is filed rather than fixed. (Before Rule 3 the
+same control read **+64 bytes at every rung** — a constant, i.e. one stdlib function, and one that Rule 3
+then declined.)
+
+**What the control DOES size is the COST**, and that column is real: **+0.14% of compile allocations,
++0.70% of bytes and +0.60% of CPU at rung 5**, falling with rung size from +0.40% / +0.55% at rung 0.
+`phase:loopInvariantCodeMotion` is 0.14% / 0.70% / 0.58% of the rung-5 compile. A trend row is logged.
+
+⛔⛔ **THE FIRST CUT WAS SUPERLINEAR IN BOTH COLUMNS, AND THE LADDER CAUGHT IT: bytes ×2.49 and CPU
+×2.69 per DOUBLING.** Three causes, all one shape — **a per-LOOP cost proportional to the FUNCTION**,
+on a corpus whose pressure knob is one function with N loops where N grows with the rung:
+
+| | rung-5 allocs | rung-5 bytes | rung-5 CPU | bytes ×/doubling | CPU ×/doubling |
+|---|---|---|---|---|---|
+| first cut | 158,106 | 81,919,720 | 1.182×10⁹ | ×2.49 | ×2.69 |
+| landed | **62,980** | **30,896,818** | **0.540×10⁹** | ×2.30 | ×2.55 |
+
+1. `naturalLoopMembers` returned membership as a `BoolArray` over ALL blocks, so **all three** of its
+   consumers answered "which blocks are in this loop?" with `for b in 0 upto numBlocks`, once per loop
+   — and each loop also allocated its own block-wide column. It now fills a caller-owned
+   `LoopMembership` carrying a member LIST, which fixes the Target tier's `computeLoopDepth` and
+   `enclosingLoopBlocks` at the same time.
+2. `StdValueUseSet.clear()` keeps capacity and the next `insert` re-extends it — one pass over the
+   function's value space **per loop**. Replaced by a GENERATION STAMP, whose reset is one increment.
+3. The dominator tree was built for **every** function before asking whether it had a back edge at all.
+   `StdDominatorTree.buildFromSuccessors` splits the successor graph (all the back-edge DFS needs) from
+   the predecessor graph, the reverse postorder, the solve and the child adjacency, which only a
+   function with a loop ever uses.
+
+⚠ **A RESIDUAL BEND REMAINS AND IS NOT EXPLAINED AWAY: ×2.30 bytes / ×2.55 CPU.** It sits beside
+`regalloc`'s own ×2.33 on the same ladder, on a phase that is 0.6% of the compile. Open.
+
+⭐⭐ **A BOUND WAS IMPOSED, AND IT WAS MEASURED INTO EXISTENCE RATHER THAN ASSUMED — `RULE 3`: A LOOP
+HOLDING A CALL HOISTS NOTHING, ARITHMETIC INCLUDED.** The first cut bounded only LOADS that way (Rule 1
+already refuses them), and the minted goldens are what caught the rest: **48 `map` fragments gained +96
+`loadRegSlot` and +48 `storeSlotReg`**, and every one of their frames grew, because a hoisted value in a
+call-heavy loop is COLD-SPILLED rather than kept. In `Map.grow` the entire trade was one
+`leaRegRegImm32` replaced by one `loadRegSlot` — an ALU op for a memory op, which is a loss at equal
+instruction count. `EC13` had measured the other end of the same fact (shv2 REFUSES rather than spills,
+so one reused expression across a call was an `E5001`); this is what the same hazard looks like when the
+allocator does not refuse.
+
+⇒ It is a structural rule, not a budget with a number to justify. It costs the anchor nothing (`EC15`
+made that loop call-free) and `regalloc/many-call-crossing` nothing (nine invariant computations still
+leave its loop — that loop holds no call), and both were checked before it was adopted. **419 of the 466
+moved goldens went back** when it landed, and the `scripts/emitted-code-count.py` corpus returned to
+byte-identical.
+
+**PRESSURE**: zero `E5001` in a 6,818-case run, and `EC13`'s red case
+`witness-dispatch-inside-a-pressured-loop` stays green. It is not free even so —
+`regalloc/many-call-crossing`'s fragment gained one `pushReg r13`, the price of nine values hoisted out
+of a call-free loop. ⚠ Rule 3 sees MEMBER blocks only, so a call on a loop-EXIT path is not counted: a
+gap in the heuristic, not in the safety argument, and the same one `EC13`'s barrier note records.
+
+**GATES**: x64-windows **6,818 passed, 0 failed, exit 0** (6,812 + 6 new) and wasm32-wasi **6,358
+passed, 0 failed, exit 0** (6,352 + 6); **47** goldens re-minted from ONE unfiltered run and re-verified
+at zero drift, 6 added. ⭐ That number was **466 before Rule 3**, which gave 419 of them back — the
+clearest single statement of what the bound is worth: nine tenths of this pass's effect on the committed
+corpus was spill churn in call-heavy loops. New `specs-shv2/loop-invariant-code-motion.md`, 6 cases including **two
+sabotage-verified controls**: disabling Rule 1 turns `a-loop-that-writes-keeps-its-loads-inside` red
+with a WRONG ANSWER (exit 1), and disabling Rule 2a moves exactly the two fragments whose pins it is.
+
+⚠⚠ **TWO EARLIER SPELLINGS OF THE RULE-1 CONTROL PASSED UNDER ITS OWN SABOTAGE**, and the reason is
+worth carrying: a load through a module-level `var` is refused for having a loop-defined ADDRESS
+(`globalAddr` is minted inside the loop), and a field load in the loop's BODY is refused by Rule 2a —
+so neither ever reached Rule 1. **In shv2's loop shapes Rule 2a admits essentially only the loop
+HEADER's own loads**, plus whatever 2b carries with them, so a Rule-1 control has to put the load in the
+loop's CONDITION through an address computed before the loop.
+
+**Left open**: `const` and the three pure ADDRESS ops (a hoist with no instruction-count argument —
+`EC13` filed the same three); CREATING a preheader where none exists (a loop entered from two places, or
+through a conditional branch, is skipped whole); hoisting a load out of a NEST past one level, which
+Rule 2a refuses at the outer loop's exit; the residual bend above; and the corpus gap — `ScaleCorpus`
+has no loop over an array, so no future row touching element access can be sized on that ladder either.
+
 
 #### `EC15` · Static stride specialization for the inlined managed primitives
 

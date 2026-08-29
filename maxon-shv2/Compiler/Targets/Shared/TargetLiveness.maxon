@@ -943,16 +943,6 @@ export type PhiEdgeView
 	end 'incomingAt'
 end 'PhiEdgeView'
 
-// DFS coloring for back-edge detection: WHITE = not yet reached, GRAY = still on the current DFS
-// path (an edge to one is a retreating edge, i.e. a back edge in a reducible CFG), BLACK = closed.
-// Three states and no more, which is the whole bound.
-typealias DfsColor = int(0 to 2)
-typealias DfsColorArray = Array with DfsColor
-
-let DfsWhite = 0 as DfsColor
-let DfsGray = 1 as DfsColor
-let DfsBlack = 2 as DfsColor
-
 // Compute liveness on a CFG the CALLER owns, and whose `valueCount` the caller keeps current.
 //
 // This is what lets the cold-spill splitter recompute liveness after every split without
@@ -1577,10 +1567,10 @@ end 'scanFunctionValueCount'
 // Loop structure (back edges -> natural loops -> per-block depth)
 // ==========================================================================
 
-// Per-block loop nesting depth. The CFG the structured parser emits is reducible,
-// so every DFS retreating edge is a genuine back edge; each back edge's natural
-// loop is the header plus every block that reaches the tail without leaving through
-// the header. Back edges sharing a header (a loop with `continue`) form ONE loop.
+// Per-block loop nesting depth. The loop structure itself is `IR/NaturalLoops.maxon`'s — the back-edge
+// DFS and the member walk are shared with the Std tier's LICM rather than written twice, and that file's
+// header states the reducibility premise both rest on. What is this function's own is the DEPTH: one
+// increment per natural loop a block belongs to.
 function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks CfgIndex) returns LoopDepthArray
 	var depth = LoopDepthArray.create()
 	depth.resize(numBlocks)
@@ -1588,24 +1578,24 @@ function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks CfgIndex) retu
 		return depth
 	end 'empty'
 
-	var backTails = CfgIndexArray.create()
-	var backHeads = CfgIndexArray.create()
-	dfsBackEdges(succ, numBlocks: numBlocks, backTails: backTails, backHeads: backHeads)
+	var backEdges = LoopBackEdges.create()
+	findLoopBackEdges(succ, nodeCount: numBlocks, edges: backEdges)
 
-	// NO BACK EDGE, NO LOOP — and that is MOST functions, so the header sweep's two columns are not
+	// NO BACK EDGE, NO LOOP — and that is MOST functions, so the header sweep's columns are not
 	// allocated for them. This is asked once per function on every build.
-	if backHeads.count() == 0 'loopless'
+	if backEdges.count() == 0 'loopless'
 		return depth
 	end 'loopless'
 
-	for h in distinctLoopHeaders(backHeads, numBlocks: numBlocks) 'eachLoop'
-		let member = naturalLoopMembers(pred, header: h, backTails: backTails, backHeads: backHeads, numBlocks: numBlocks)
-		for b in 0 upto numBlocks 'bump'
-			let isMember = try member.get(b) otherwise panic("computeLoopDepth: member.get OOB")
-			if isMember 'inLoop'
-				let d = try depth.get(b) otherwise panic("computeLoopDepth: depth.get OOB")
-				try depth.set(b, value: d + 1) otherwise panic("computeLoopDepth: depth.set OOB")
-			end 'inLoop'
+	// ⭐ ONE membership record for every loop of the function, and the bump walks the MEMBER LIST rather
+	// than the whole node space — see `LoopMembership` for the Θ(loops × blocks) that shape cost when it
+	// was written the other way.
+	var member = LoopMembership.create()
+	for h in distinctLoopHeaders(backEdges, nodeCount: numBlocks) 'eachLoop'
+		collectNaturalLoop(pred, header: h, edges: backEdges, nodeCount: numBlocks, into: member)
+		for b in member.blocks 'bump'
+			let d = try depth.get(b) otherwise panic("computeLoopDepth: depth.get OOB")
+			try depth.set(b, value: d + 1) otherwise panic("computeLoopDepth: depth.set OOB")
 		end 'bump'
 	end 'eachLoop'
 
@@ -1634,26 +1624,22 @@ end 'computeLoopDepth'
 // costs the same shape as `computeLoopDepth` itself — one DFS plus one BFS per distinct header — and
 // runs at most once per compile.
 export function enclosingLoopBlocks(topo FuncTopology, blockLocal CfgIndex) returns BoolArray
-	var backTails = CfgIndexArray.create()
-	var backHeads = CfgIndexArray.create()
-	dfsBackEdges(topo.succ, numBlocks: topo.numBlocks, backTails: backTails, backHeads: backHeads)
+	var backEdges = LoopBackEdges.create()
+	findLoopBackEdges(topo.succ, nodeCount: topo.numBlocks, edges: backEdges)
 
 	var nest = BoolArray.create()
 	nest.resize(topo.numBlocks)
 	var found = false
-	for h in distinctLoopHeaders(backHeads, numBlocks: topo.numBlocks) 'eachLoop'
-		let member = naturalLoopMembers(topo.pred, header: h, backTails: backTails, backHeads: backHeads, numBlocks: topo.numBlocks)
-		let holdsBlock = try member.get(blockLocal) otherwise panic("enclosingLoopBlocks: member.get OOB for block {blockLocal}")
-		if not holdsBlock 'otherLoop'
+	var member = LoopMembership.create()
+	for h in distinctLoopHeaders(backEdges, nodeCount: topo.numBlocks) 'eachLoop'
+		collectNaturalLoop(topo.pred, header: h, edges: backEdges, nodeCount: topo.numBlocks, into: member)
+		if not member.contains(blockLocal) 'otherLoop'
 			continue
 		end 'otherLoop'
 
 		found = true
-		for b in 0 upto topo.numBlocks 'union'
-			let isMember = try member.get(b) otherwise panic("enclosingLoopBlocks: member.get OOB")
-			if isMember 'inLoop'
-				try nest.set(b, value: true) otherwise panic("enclosingLoopBlocks: nest.set OOB")
-			end 'inLoop'
+		for b in member.blocks 'union'
+			try nest.set(b, value: true) otherwise panic("enclosingLoopBlocks: nest.set OOB")
 		end 'union'
 	end 'eachLoop'
 
@@ -1663,118 +1649,6 @@ export function enclosingLoopBlocks(topo FuncTopology, blockLocal CfgIndex) retu
 
 	return nest
 end 'enclosingLoopBlocks'
-
-// The distinct natural-loop HEADERS, in back-edge discovery order. Back edges sharing a header (a loop
-// with `continue`, whose every `continue` is one) name ONE loop, so a header must be answered once:
-// `computeLoopDepth` would otherwise count that loop's nesting twice, and `enclosingLoopBlocks` would
-// re-walk its member set once per back edge.
-function distinctLoopHeaders(backHeads CfgIndexArray, numBlocks CfgIndex) returns CfgIndexArray
-	var headers = CfgIndexArray.create()
-	var seen = BoolArray.create()
-	seen.resize(numBlocks)
-	for k in 0 upto backHeads.count() 'eachBackEdge'
-		let h = try backHeads.get(k) otherwise panic("distinctLoopHeaders: backHeads.get OOB")
-		let already = try seen.get(h) otherwise panic("distinctLoopHeaders: seen.get OOB")
-		if already 'sameLoop'
-			continue
-		end 'sameLoop'
-		try seen.set(h, value: true) otherwise panic("distinctLoopHeaders: seen.set OOB")
-		headers.push(h)
-	end 'eachBackEdge'
-	return headers
-end 'distinctLoopHeaders'
-
-// Depth-first search from the ENTRY block, recording every RETREATING edge (an edge to a GRAY — still-
-// open — node), which in a reducible CFG is exactly a back edge. The root is block 0 by construction
-// (`FuncTopology` is built in RPO from the entry), and the visit colours are scratch nothing outside
-// this walk reads, so neither is a parameter.
-//
-// ITERATIVE, with an explicit stack, because the recursive form recursed once per block and
-// SEGFAULTED the compiler on a large function: a 19,200-block function overflowed the native stack
-// before it could be allocated. Depth here is bounded by the block count, and a generated or
-// heavily-branching function reaches thousands of blocks easily, so recursion is simply not
-// available. (`naturalLoopMembers`, `blocksReachableFromPeak` and the SSA liveness walk are all
-// worklist-driven for the same reason.)
-//
-// The stack holds a (node, next-successor-index) pair per open node — the explicit form of a
-// recursive call's resume point — so a node turns BLACK only once every successor has been visited,
-// which is what makes the GRAY test mean "still on the current DFS path".
-function dfsBackEdges(succ CsrGraph, numBlocks CfgIndex, backTails CfgIndexArray, backHeads CfgIndexArray)
-	var colors = DfsColorArray.create()
-	colors.resize(numBlocks)
-	var stackNode = CfgIndexArray.create()
-	var stackNextSucc = CfgIndexArray.create()
-
-	let root = 0 as CfgIndex
-	try colors.set(root, value: DfsGray) otherwise panic("dfsBackEdges: colors.set(root) OOB")
-	stackNode.push(root)
-	stackNextSucc.push(0)
-
-	while stackNode.count() > 0 'dfs'
-		let top = stackNode.count() - 1
-		let u = try stackNode.get(top) otherwise panic("dfsBackEdges: stackNode.get OOB")
-		let k = try stackNextSucc.get(top) otherwise panic("dfsBackEdges: stackNextSucc.get OOB")
-
-		if k >= succ.degree(u) 'exhausted'
-			// Every successor visited — close the node and resume its parent.
-			try colors.set(u, value: DfsBlack) otherwise panic("dfsBackEdges: colors.set black OOB")
-			_ = try stackNode.pop() otherwise panic("dfsBackEdges: stackNode.pop on non-empty failed")
-			_ = try stackNextSucc.pop() otherwise panic("dfsBackEdges: stackNextSucc.pop on non-empty failed")
-			continue
-		end 'exhausted'
-
-		try stackNextSucc.set(top, value: k + 1) otherwise panic("dfsBackEdges: stackNextSucc.set OOB")
-
-		let v = succ.neighbour(u, k: k)
-		let c = try colors.get(v) otherwise panic("dfsBackEdges: colors.get OOB")
-		if c == DfsWhite 'unvisited'
-			try colors.set(v, value: DfsGray) otherwise panic("dfsBackEdges: colors.set gray OOB")
-			stackNode.push(v)
-			stackNextSucc.push(0)
-		end 'unvisited' else if c == DfsGray 'retreating'
-			backTails.push(u)
-			backHeads.push(v)
-		end 'retreating'
-	end 'dfs'
-end 'dfsBackEdges'
-
-// Membership of the natural loop of `header` (the union over all back edges targeting `header`): the
-// header, plus everything reaching a tail through predecessors without passing back through the
-// header. One entry per block, so a caller reads it as a set of blocks.
-function naturalLoopMembers(pred CsrGraph, header CfgIndex, backTails CfgIndexArray, backHeads CfgIndexArray, numBlocks CfgIndex) returns BoolArray
-	var member = BoolArray.create()
-	member.resize(numBlocks)
-	try member.set(header, value: true) otherwise panic("naturalLoopMembers: member.set(header) OOB")
-
-	var worklist = CfgIndexArray.create()
-	for k in 0 upto backHeads.count() 'seedTails'
-		let h = try backHeads.get(k) otherwise panic("naturalLoopMembers: backHeads.get OOB")
-		if h != header 'otherLoop'
-			continue
-		end 'otherLoop'
-		let t = try backTails.get(k) otherwise panic("naturalLoopMembers: backTails.get OOB")
-		let isMember = try member.get(t) otherwise panic("naturalLoopMembers: member.get(t) OOB")
-		if not isMember 'newTail'
-			try member.set(t, value: true) otherwise panic("naturalLoopMembers: member.set(t) OOB")
-			worklist.push(t)
-		end 'newTail'
-	end 'seedTails'
-
-	while worklist.count() > 0 'bfs'
-		let n = try worklist.pop() otherwise panic("naturalLoopMembers: worklist.pop on non-empty failed")
-		let deg = pred.degree(n)
-		for k in 0 upto deg 'eachPred'
-			let p = pred.neighbour(n, k: k)
-			let isMember = try member.get(p) otherwise panic("naturalLoopMembers: member.get(p) OOB")
-			if not isMember 'newMember'
-				try member.set(p, value: true) otherwise panic("naturalLoopMembers: member.set(p) OOB")
-				worklist.push(p)
-			end 'newMember'
-		end 'eachPred'
-	end 'bfs'
-
-	return member
-end 'naturalLoopMembers'
 
 // ==========================================================================
 // Liveness by SSA PATH EXPLORATION — no fixpoint, no local sets

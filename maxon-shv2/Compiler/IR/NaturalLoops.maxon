@@ -1,0 +1,236 @@
+// NaturalLoops — back-edge detection and natural-loop membership over a `CsrGraph`, for ANY tier.
+//
+// ⭐⭐ **IT IS ONE FINDER, NOT TWO, AND THAT IS THE WHOLE REASON THIS FILE EXISTS.** These three walks
+// were written for the Target tier (`TargetLiveness.computeLoopDepth` needs the loop nest to weight a
+// spill; `enclosingLoopBlocks` needs it to name the region an `E5001` overflowed in), and `EC14`'s Std
+// LICM needs exactly the same three answers about the Std CFG. A second copy would have been this
+// project's signature bug — one fact written down twice — in the one place where a disagreement is
+// invisible: two finders that classify a back edge differently do not fail to compile, they optimize
+// different loops.
+//
+// ⚠ **NOTHING HERE KNOWS WHAT A BLOCK IS.** The input is a `CsrGraph` over a dense 0-based key space
+// and its reverse; the output is a `BoolArray` over that same space. That is what makes it tier-free:
+// the Target tier keys on `FuncTopology`'s block LOCALS and the Std tier on a block's position in
+// `func.blockRefs`, and both are `CsrIndex` — the same non-negative integer `buildCsr` is built over.
+//
+// ⚠ **THE DFS ROOT IS NODE 0, and both tiers owe that invariant** rather than passing it: `FuncTopology`
+// is built in reverse postorder from the entry, and `StdEntryBlockPosition` is `func.blockRefs`'s first
+// entry. A root that were not the entry would report a back edge for every edge into an unvisited
+// region, which is not a wrong classification so much as a meaningless one.
+//
+// ⚠ **REDUCIBILITY IS THE PREMISE.** The CFG a structured parser emits is reducible, so every DFS
+// RETREATING edge is a genuine back edge (its head dominates its tail) and "natural loop" is the whole
+// truth about the loop structure. An irreducible CFG — which nothing in this language can spell, there
+// being no `goto` — would have retreating edges whose heads do not dominate their tails, and the member
+// sets below would be neither wrong nor complete. `StdDominatorTree` is what a consumer needing the
+// dominance half asks; this file does not re-derive it.
+
+// The RETREATING edges of one DFS, as two parallel columns: `tails[k] -> heads[k]` is the k-th back
+// edge found. ONE record rather than two out-parameters threaded through four call sites — they are
+// filled together, read together, and every consumer needs both halves of the same edge.
+export type LoopBackEdges
+	// The edge's SOURCE — the latch, the block whose branch closes the loop.
+	export var tails as CsrColumn
+	// The edge's TARGET — the loop header, which dominates the tail in a reducible CFG.
+	export var heads as CsrColumn
+
+	export static function create() returns LoopBackEdges
+		return Self{tails: CsrColumn.create(), heads: CsrColumn.create()}
+	end 'create'
+
+	// How many back edges were found. Zero is MOST functions, and TWO of the three consumers
+	// short-circuit on it rather than walking a header list that is empty anyway. ⚠ The third,
+	// `TargetLiveness.enclosingLoopBlocks`, does not — it is reached only from a compile that is already
+	// failing (the `E5001` message), where the walk it saves is not worth a branch.
+	export function count() returns CsrIndex
+		return self.tails.count()
+	end 'count'
+end 'LoopBackEdges'
+
+// Depth-first search from node 0, recording every RETREATING edge (an edge to a GRAY — still-open —
+// node), which in a reducible CFG is exactly a back edge.
+//
+// ITERATIVE, with an explicit stack, because the recursive form recursed once per block and SEGFAULTED
+// the compiler on a large function: a 19,200-block function overflowed the native stack before it could
+// be allocated. Depth here is bounded by the node count, and a generated or heavily-branching function
+// reaches thousands of blocks easily, so recursion is simply not available. (`naturalLoopMembers`,
+// `blocksReachableFromPeak`, `StdDominatorTree.buildReversePostorder` and the SSA liveness walk are all
+// worklist-driven for the same reason.)
+//
+// The stack holds a (node, next-successor-index) pair per open node — the explicit form of a recursive
+// call's resume point — so a node turns BLACK only once every successor has been visited, which is what
+// makes the GRAY test mean "still on the current DFS path".
+export function findLoopBackEdges(succ CsrGraph, nodeCount CsrIndex, edges LoopBackEdges)
+	// A graph with no nodes has no root to start from. Answered rather than refused: a Std function
+	// with no blocks is a declaration, and every consumer below is then vacuous.
+	if nodeCount == 0 'noNodes'
+		return
+	end 'noNodes'
+
+	var colors = DfsColorArray.create()
+	colors.resize(nodeCount)
+	var stackNode = CsrColumn.create()
+	var stackNextSucc = CsrColumn.create()
+
+	let root = 0 as CsrIndex
+	try colors.set(root, value: DfsGray) otherwise panic("findLoopBackEdges: colors.set(root) OOB")
+	stackNode.push(root)
+	stackNextSucc.push(0)
+
+	while stackNode.count() > 0 'dfs'
+		let top = stackNode.count() - 1
+		let u = try stackNode.get(top) otherwise panic("findLoopBackEdges: stackNode.get OOB")
+		let k = try stackNextSucc.get(top) otherwise panic("findLoopBackEdges: stackNextSucc.get OOB")
+
+		if k >= succ.degree(u) 'exhausted'
+			// Every successor visited — close the node and resume its parent.
+			try colors.set(u, value: DfsBlack) otherwise panic("findLoopBackEdges: colors.set black OOB")
+			_ = try stackNode.pop() otherwise panic("findLoopBackEdges: stackNode.pop on non-empty failed")
+			_ = try stackNextSucc.pop() otherwise panic("findLoopBackEdges: stackNextSucc.pop on non-empty failed")
+			continue
+		end 'exhausted'
+
+		try stackNextSucc.set(top, value: k + 1) otherwise panic("findLoopBackEdges: stackNextSucc.set OOB")
+
+		let v = succ.neighbour(u, k: k)
+		let c = try colors.get(v) otherwise panic("findLoopBackEdges: colors.get OOB")
+		if c == DfsWhite 'unvisited'
+			try colors.set(v, value: DfsGray) otherwise panic("findLoopBackEdges: colors.set gray OOB")
+			stackNode.push(v)
+			stackNextSucc.push(0)
+		end 'unvisited' else if c == DfsGray 'retreating'
+			edges.tails.push(u)
+			edges.heads.push(v)
+		end 'retreating'
+	end 'dfs'
+end 'findLoopBackEdges'
+
+// The distinct natural-loop HEADERS, in back-edge discovery order. Back edges sharing a header (a loop
+// with `continue`, whose every `continue` is one) name ONE loop, so a header must be answered once:
+// `computeLoopDepth` would otherwise count that loop's nesting twice, `enclosingLoopBlocks` would
+// re-walk its member set once per back edge, and LICM would analyse one loop several times over.
+//
+// ⭐ **THE ORDER IS INNERMOST-FIRST FOR A NEST TODAY, and `hoistLoopInvariants` reads it that way — but
+// it is a property of the DFS PLUS THE SUCCESSOR ORDER, not of the DFS alone.** The walk reaches the
+// inner latch on its way down and the outer latch only on the way back, which puts the inner retreating
+// edge first; that holds because the Std tier's `pushBothTargets` emits a `condBranch`'s THEN target
+// first, so a loop's body is explored before its exit. Reverse that and a nest yields outermost-first.
+// ⚠ Nothing's CORRECTNESS depends on it — its own next sentence is the guarantee: a consumer that walked
+// the other order would hoist less, never wrongly.
+export function distinctLoopHeaders(edges LoopBackEdges, nodeCount CsrIndex) returns CsrColumn
+	var headers = CsrColumn.create()
+	var seen = BoolArray.create()
+	seen.resize(nodeCount)
+
+	for k in 0 upto edges.heads.count() 'eachBackEdge'
+		let h = try edges.heads.get(k) otherwise panic("distinctLoopHeaders: heads.get OOB")
+		let already = try seen.get(h) otherwise panic("distinctLoopHeaders: seen.get OOB")
+		if already 'sameLoop'
+			continue
+		end 'sameLoop'
+		try seen.set(h, value: true) otherwise panic("distinctLoopHeaders: seen.set OOB")
+		headers.push(h)
+	end 'eachBackEdge'
+
+	return headers
+end 'distinctLoopHeaders'
+
+// ONE natural loop's block set, in BOTH the forms its consumers need: a dense membership test and a
+// LIST of the members.
+//
+// ⭐⭐ **THE LIST IS WHY THIS IS A RECORD AND NOT A `BoolArray`, AND IT WAS A MEASURED QUADRATIC.** The
+// first form of this returned membership alone, so every consumer answered "which blocks are in the
+// loop?" by sweeping ALL of them — `for b in 0 upto numBlocks`, once per loop, in all three consumers.
+// That is Θ(loops × blocks) per function, and the corpus contains exactly the function that makes it
+// bite (`ScaleCorpus`'s pressure-loop knob is ONE function with N loops, and N grows with the rung).
+// MEASURED on the doubling ladder before the fix: `phase:loopInvariantCodeMotion` grew **×2.49 in BYTES
+// and ×2.69 in CPU per doubling** — superlinear in both columns, because each loop also ALLOCATED its
+// own `numBlocks`-wide membership column. Reusing one caller-owned record and iterating `blocks` makes
+// every per-loop cost proportional to the LOOP rather than to the function.
+//
+// The reset clears only the entries the previous loop set, which is what keeps that promise: a
+// `resize`/`growFilled` of the whole node space per loop would put the Θ(loops × blocks) straight back.
+export type LoopMembership
+	// Dense over the node space, and only ever true for a member of the CURRENT loop.
+	var inLoop as BoolArray
+	// The members, in the order the walk below discovers them: the header first, then the latches, then
+	// their predecessors. ⚠ NOT an order any dataflow may rely on — a consumer that needs defs before
+	// uses walks the DOMINATOR TREE (see `LoopInvariantCodeMotion.analyzeLoopBlocks`).
+	export var blocks as CsrColumn
+
+	export static function create() returns LoopMembership
+		return Self{inLoop: BoolArray.create(), blocks: CsrColumn.create()}
+	end 'create'
+
+	export function contains(node CsrIndex) returns bool
+		if node >= self.inLoop.count() 'beyondTheColumn'
+			return false
+		end 'beyondTheColumn'
+
+		return try self.inLoop.get(node) otherwise panic("LoopMembership.contains: inLoop.get OOB at {node}")
+	end 'contains'
+
+	// Empty the set for the next loop, in time proportional to what the LAST loop held rather than to
+	// the node space. `growFilled` only zeroes the tail it ADDS, which is sound here precisely because
+	// every entry below that tail was cleared by the walk above it.
+	function reset(nodeCount CsrIndex)
+		for node in self.blocks 'eachMember'
+			try self.inLoop.set(node, value: false) otherwise panic("LoopMembership.reset: inLoop.set OOB at {node}")
+		end 'eachMember'
+
+		self.blocks.clear()
+		self.inLoop.growFilled(nodeCount, value: false)
+	end 'reset'
+
+	// Add one member, answering whether it was NEW — which is the whole of what the walk's worklist test
+	// needs, and keeps membership and the list from ever disagreeing.
+	function admit(node CsrIndex) returns bool
+		if self.contains(node) 'alreadyAMember'
+			return false
+		end 'alreadyAMember'
+
+		try self.inLoop.set(node, value: true) otherwise panic("LoopMembership.admit: inLoop.set OOB at {node}")
+		self.blocks.push(node)
+		return true
+	end 'admit'
+end 'LoopMembership'
+
+// Fill `into` with the natural loop of `header` (the union over all back edges targeting `header`): the
+// header, plus everything reaching a tail through predecessors without passing back through the header.
+export function collectNaturalLoop(pred CsrGraph, header CsrIndex, edges LoopBackEdges, nodeCount CsrIndex, into LoopMembership)
+	into.reset(nodeCount)
+	_ = into.admit(header)
+
+	var worklist = CsrColumn.create()
+	for k in 0 upto edges.heads.count() 'seedTails'
+		let h = try edges.heads.get(k) otherwise panic("collectNaturalLoop: heads.get OOB at {k}")
+		if h != header 'otherLoop'
+			continue
+		end 'otherLoop'
+
+		let t = try edges.tails.get(k) otherwise panic("collectNaturalLoop: tails.get OOB at {k}")
+		if into.admit(t) 'newTail'
+			worklist.push(t)
+		end 'newTail'
+	end 'seedTails'
+
+	while worklist.count() > 0 'bfs'
+		let n = try worklist.pop() otherwise panic("collectNaturalLoop: worklist.pop on non-empty failed")
+		for k in 0 upto pred.degree(n) 'eachPred'
+			let p = pred.neighbour(n, k: k)
+			if into.admit(p) 'newMember'
+				worklist.push(p)
+			end 'newMember'
+		end 'eachPred'
+	end 'bfs'
+end 'collectNaturalLoop'
+
+// DFS coloring for back-edge detection: WHITE = not yet reached, GRAY = still on the current DFS
+// path (an edge to one is a retreating edge, i.e. a back edge in a reducible CFG), BLACK = closed.
+// Three states and no more, which is the whole bound.
+typealias DfsColor = int(0 to 2)
+typealias DfsColorArray = Array with DfsColor
+
+let DfsWhite = 0 as DfsColor
+let DfsGray = 1 as DfsColor
+let DfsBlack = 2 as DfsColor

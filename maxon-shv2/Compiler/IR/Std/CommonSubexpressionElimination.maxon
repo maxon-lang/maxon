@@ -301,7 +301,7 @@ function analyzeOp(module StdModule, opIdx OpIndex, subst ValueIdArray, scratch 
 		return
 	end 'notAnExpression'
 
-	requireAdmittedOpIsPure(op)
+	requireArithOpIsPure(op, reader: "eliminateCommonSubexpressions")
 
 	// ONE bucket computation for both halves of the probe-then-record: they ask it of the same
 	// expression, and `record` may only ever use the bucket `findEqual` searched.
@@ -397,24 +397,6 @@ end 'bucketCountFor'
 // than a `max` is what makes the count's TYPE non-zero without a narrowing cast, which `mod` requires
 // of its divisor.
 let SmallestUsefulBucketCount = 16 as CseBucketCount
-
-// ⛔⛔ **THE CHECK BETWEEN THE ARITHMETIC ROSTER AND THE PURITY FLAG, because this pass is the first
-// reader `StdOpMeta.isPure` has ever had and the two statements would otherwise be free to disagree.**
-// `classifyArithOperands` decides which variants are arithmetic; `isPure` decides which ops may be
-// dropped. Every variant the roster admits declares `isPure: true` today, and nothing enforces it: a
-// future op appended to the arith band with `isPure: false` (another trapping form, say) would be given
-// an arm in the roster by a reader thinking about SHAPE, and this pass would delete the second of two
-// without ever asking. Asking here costs one field read per arithmetic op and turns that into a panic
-// on the first program that compiles it.
-//
-// ⚠ It is NOT the memory gate. A load never reaches here — it is `StdArithShape.neither` — so flipping
-// `loadIndirect` to `isPure: true` (the sabotage `StdOpMeta.isPure`'s own comment records) still would
-// not make this pass CSE one. The roster refuses it first.
-function requireAdmittedOpIsPure(op StdOp)
-	if not op.rawValue.isPure 'impure'
-		panic("eliminateCommonSubexpressions: `classifyArithOperands` admitted an op in category {op.rawValue.category.name} that the dialect declares `isPure: false` — an op that may trap or have effects must never be replaced by an earlier equal one")
-	end 'impure'
-end 'requireAdmittedOpIsPure'
 
 // Every value id whose defining op this pass made redundant — the exact input `removeOpsDefining`
 // takes, derived from the substitution column rather than from a second bookkeeping set.

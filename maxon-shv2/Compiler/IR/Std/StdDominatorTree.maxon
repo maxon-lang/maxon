@@ -30,7 +30,7 @@ export typealias BlockPositionColumn = Array with BlockRefIndex
 
 export type StdDominatorTree
 	// `func.blockRefs.count()` — the node count every column below spans.
-	var blockCount as BlockRefIndex
+	export var blockCount as BlockRefIndex
 	// Whether the ENTRY can reach this block. An unreachable block has no dominator (nothing on the way
 	// to it is on a path from the entry, because there is no such path), so `idom` is meaningless for it
 	// and `children` never names it. The parser mints unreachable blocks routinely (`Terminator.dead`
@@ -44,31 +44,78 @@ export type StdDominatorTree
 	// dominator is `p`. The entry's self-edge is deliberately NOT in it — a tree walk that re-entered
 	// the entry would not terminate.
 	//
-	// ⭐ THE ONLY EXPORTED MEMBER, and deliberately: a consumer walks the tree from
-	// `StdEntryBlockPosition` down this adjacency, which visits exactly the reachable blocks in
-	// dominator order. `idom` and `reachable` are what BUILDS it and answer nothing a walk needs, so
-	// they stay private rather than becoming a second way to ask the same question.
+	// The member `EC13`'s dominator WALK reads: a consumer walks the tree from `StdEntryBlockPosition`
+	// down this adjacency, which visits exactly the reachable blocks in dominator order.
 	export var children as CsrGraph
+	// ⭐ **THE CFG ITSELF, KEPT RATHER THAN REBUILT — the two adjacencies the dominator solve already
+	// needed.** `EC14`'s LICM asks the SAME function three more graph questions (where the back edges
+	// are, which blocks a natural loop holds, which of a header's predecessors is the preheader), and
+	// every one of them is a walk of these. Handing them back costs nothing — they are built above
+	// either way, and this record is per-function scratch that dies with the pass — where rebuilding
+	// them would have been a second `buildStdSuccessorGraph` per function, which is a second walk of
+	// every op of every block.
+	export var succ as CsrGraph
+	export var pred as CsrGraph
+	// The reachable blocks in reverse postorder. Kept for the same reason: `EC14` analyses a loop's
+	// blocks in an order where every value's DEF is visited before its uses, which is exactly this one
+	// (dominance implies reverse-postorder precedence), and the solve above has already computed it.
+	export var reverseOrder as BlockPositionColumn
 
 	// Build the tree for one function. `blockCount` 0 is answered with an empty tree rather than
 	// refused: a function with no blocks is a declaration, and every accessor below is then vacuous.
 	export static function build(module StdModule, func IrFunction) returns StdDominatorTree
 		let blockCount = func.blockRefs.count()
-		let succ = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
+		return Self.buildFromSuccessors(buildStdSuccessorGraph(module, func: func, blockCount: blockCount), blockCount: blockCount)
+	end 'build'
+
+	// The same tree, from a successor graph the CALLER already has.
+	//
+	// ⭐ **IT EXISTS BECAUSE THE SUCCESSOR GRAPH ANSWERS A QUESTION THAT COMES FIRST.** `EC14` asks "does
+	// this function contain a back edge at all?", which is a DFS of the successors and nothing else, and
+	// the answer is NO for most functions. Building the tree first would pay for the predecessor graph,
+	// the reverse postorder, the Cooper–Harvey–Kennedy solve and the child adjacency of every loopless
+	// function in the module before discovering there was nothing to do with them.
+	export static function buildFromSuccessors(succ CsrGraph, blockCount BlockRefIndex) returns StdDominatorTree
 		// The PREDECESSOR graph is the same edge list with its two columns swapped — `buildCsr`'s
 		// counting sort does not care which way round the relation is read.
 		let pred = buildCsr(succ.list, to: startsRepeatedPerNode(succ), nodeCount: blockCount)
 
-		var tree = Self{blockCount: blockCount, reachable: BoolArray.create(), idom: BlockPositionColumn.create(), children: CsrGraph.create(BlockPositionColumn.create(), list: BlockPositionColumn.create())}
+		var tree = Self{blockCount: blockCount, reachable: BoolArray.create(), idom: BlockPositionColumn.create(), children: CsrGraph.create(BlockPositionColumn.create(), list: BlockPositionColumn.create()), succ: succ, pred: pred, reverseOrder: BlockPositionColumn.create()}
 		tree.reachable.growFilled(blockCount, value: false)
 		tree.idom.resize(blockCount)
 
 		let rpo = tree.buildReversePostorder(succ)
 		tree.solveImmediateDominators(pred, rpo: rpo)
 		tree.children = buildCsr(tree.idomOfEachNonEntryReachableBlock(rpo), to: rpo.copyOfReachableNonEntryBlocks(), nodeCount: blockCount)
+		tree.reverseOrder = rpo.order
 
 		return tree
-	end 'build'
+	end 'buildFromSuccessors'
+
+	// Whether the ENTRY can reach `position` — the one question `reachable` answers for a consumer, and
+	// the guard every walk over `func.blockRefs` owes. An unreachable block has no dominator, so every
+	// other query below is meaningless for one.
+	export function canReach(position BlockRefIndex) returns bool
+		return try self.reachable.get(position) otherwise panic("StdDominatorTree.canReach: reachable.get OOB at {position}")
+	end 'canReach'
+
+	// The block that immediately dominates `position` — the one step of the dominator chain, which is
+	// what a consumer WALKING that chain needs. The entry is its own, which is the standard encoding and
+	// what terminates such a walk.
+	//
+	// ⭐ **THE PRIMITIVE, NOT A `dominates(a, b)` PREDICATE, and the difference is asymptotic.** A
+	// predicate answers ONE pair in O(the dominator depth), so a caller asking it of every block of a
+	// loop against every exit of that loop is cubic in the worst case. `EC14`'s question is not one pair:
+	// it is "which blocks dominate ALL of these", which one climb per named block answers in
+	// O(named × depth) by counting how many climbs visited each block. Handing back the step is what lets
+	// the caller phrase it that way; a predicate would have hidden the shape and cost more.
+	export function immediateDominatorOf(position BlockRefIndex) returns BlockRefIndex
+		if not self.canReach(position) 'unreachable'
+			panic("StdDominatorTree.immediateDominatorOf: block position {position} is not reachable from the entry, so it has no dominator — ask `canReach` first")
+		end 'unreachable'
+
+		return try self.idom.get(position) otherwise panic("StdDominatorTree.immediateDominatorOf: idom.get OOB at {position}")
+	end 'immediateDominatorOf'
 
 	// The DFS postorder of the blocks the entry reaches, REVERSED — the order the dominator solve
 	// iterates in, which is what makes it converge in a couple of rounds instead of in tree-depth ones.
@@ -76,7 +123,7 @@ export type StdDominatorTree
 	// An EXPLICIT STACK, not recursion: a function's block chain can be tens of thousands long (the
 	// register allocator's own liveness note measures a 19,200-block function), and a recursive DFS over
 	// one is a host stack overflow rather than a compiler diagnostic.
-	function buildReversePostorder(succ CsrGraph) returns RpoOrder
+	function buildReversePostorder(graph CsrGraph) returns RpoOrder
 		var postorder = BlockPositionColumn.create()
 
 		if self.blockCount == 0 'noBlocks'
@@ -95,7 +142,7 @@ export type StdDominatorTree
 			let position = try stackNode.get(top) otherwise panic("StdDominatorTree.buildReversePostorder: stackNode.get OOB at {top}")
 			let nextChild = try stackNextChild.get(top) otherwise panic("StdDominatorTree.buildReversePostorder: stackNextChild.get OOB at {top}")
 
-			if nextChild >= succ.degree(position) 'everySuccessorVisited'
+			if nextChild >= graph.degree(position) 'everySuccessorVisited'
 				postorder.push(position)
 				_ = try stackNode.pop() otherwise panic("StdDominatorTree.buildReversePostorder: stackNode.pop on a non-empty stack failed")
 				_ = try stackNextChild.pop() otherwise panic("StdDominatorTree.buildReversePostorder: stackNextChild.pop on a non-empty stack failed")
@@ -104,7 +151,7 @@ export type StdDominatorTree
 
 			try stackNextChild.set(top, value: nextChild + 1) otherwise panic("StdDominatorTree.buildReversePostorder: stackNextChild.set OOB at {top}")
 
-			let successor = succ.neighbour(position, k: nextChild)
+			let successor = graph.neighbour(position, k: nextChild)
 			let seenBefore = try self.reachable.get(successor) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.get OOB at {successor}")
 			if not seenBefore 'firstVisit'
 				try self.reachable.set(successor, value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at {successor}")
@@ -127,7 +174,7 @@ export type StdDominatorTree
 	// genuinely exist here (the parser's `dead` blocks still carry their branch edges). A reachable
 	// block always has at least one solved predecessor by the time reverse postorder gets to it, which
 	// is what makes the "no candidate" case impossible rather than merely unlikely.
-	function solveImmediateDominators(pred CsrGraph, rpo RpoOrder)
+	function solveImmediateDominators(predecessors CsrGraph, rpo RpoOrder)
 		if self.blockCount == 0 'noBlocks'
 			return
 		end 'noBlocks'
@@ -148,7 +195,7 @@ export type StdDominatorTree
 					continue
 				end 'theEntryDominatesItself'
 
-				if self.meetSolvedPredecessorsOf(position, pred: pred, rpo: rpo, solved: solved) 'moved'
+				if self.meetSolvedPredecessorsOf(position, predecessors: predecessors, rpo: rpo, solved: solved) 'moved'
 					changed = true
 				end 'moved'
 			end 'eachBlockInRpo'
@@ -157,12 +204,12 @@ export type StdDominatorTree
 
 	// Recompute one block's immediate dominator from its solved predecessors, answering whether it
 	// MOVED — which is the whole of what the fixpoint loop above needs to know.
-	function meetSolvedPredecessorsOf(position BlockRefIndex, pred CsrGraph, rpo RpoOrder, solved BoolArray) returns bool
+	function meetSolvedPredecessorsOf(position BlockRefIndex, predecessors CsrGraph, rpo RpoOrder, solved BoolArray) returns bool
 		var candidate = StdEntryBlockPosition
 		var haveCandidate = false
 
-		for k in 0 upto pred.degree(position) 'eachPredecessor'
-			let predecessor = pred.neighbour(position, k: k)
+		for k in 0 upto predecessors.degree(position) 'eachPredecessor'
+			let predecessor = predecessors.neighbour(position, k: k)
 
 			if not (try solved.get(predecessor) otherwise panic("StdDominatorTree.meetSolvedPredecessorsOf: solved.get OOB at {predecessor}")) 'notSolvedYet'
 				continue
@@ -290,7 +337,7 @@ end 'RpoOrder'
 // does not carry it. An edge added that does not exist only makes dominance weaker, which costs a missed
 // optimization and nothing else — so the fall-through is added unconditionally where a block has no
 // terminator op and a physical successor.
-function buildStdSuccessorGraph(module StdModule, func IrFunction, blockCount BlockRefIndex) returns CsrGraph
+module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockCount BlockRefIndex) returns CsrGraph
 	var edgeFrom = BlockPositionColumn.create()
 	var edgeTo = BlockPositionColumn.create()
 	let byId = module.blockIndexById(func)
