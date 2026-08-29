@@ -80,11 +80,9 @@ func @fill {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-    x64.jmp forhdr#1
   forhdr#1:
     x64.cmpRegImm32 r12, 16000
-    x64.jcc less, alloc
-    x64.jmp forexit#4
+    x64.jcc greaterEqual, forexit#4
   alloc:
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
@@ -94,11 +92,9 @@ func @fill {
     x64.movRegReg rcx, r13
     x64.callDirect Array.reserve
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr#5
   forhdr#5:
     x64.cmpRegImm32 r14, 96
-    x64.jcc less, bytes
-    x64.jmp forexit#8
+    x64.jcc greaterEqual, forexit#8
   bytes:
     x64.leaRegRegReg rsi, r12, r14
     x64.movRegImm rax, 2351776136887273513
@@ -112,11 +108,9 @@ func @fill {
     x64.subRegReg rdx, rsi, rax
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -131,7 +125,6 @@ func @fill {
   __rc_ok:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_push
-    x64.jmp forstep#7
   forstep#7:
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr#5
@@ -143,7 +136,6 @@ func @fill {
     x64.callDirect __managed_push
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.jmp forstep#3
   forstep#3:
     x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr#1
@@ -181,8 +173,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_await
     x64.cmpRegImm32 r8, 16000
-    x64.jcc notEqual, lost
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   lost:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
@@ -192,8 +183,7 @@ func @main {
   ifcont#2:
     x64.callDirect __slab_scavenge
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, graceSkipped
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   graceSkipped:
     x64.movRegImm32 r8, 2
     x64.epilogue 40
@@ -203,8 +193,7 @@ func @main {
   ifcont#4:
     x64.callDirect __slab_scavenge
     x64.cmpRegImm32 r8, 0
-    x64.jcc lessEqual, nothingReleased
-    x64.jmp ifcont#6
+    x64.jcc greater, ifcont#6
   nothingReleased:
     x64.movRegImm32 r8, 3
     x64.epilogue 40

@@ -69,8 +69,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set_length
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -85,8 +84,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Array.last
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp tryok#3
+    x64.jcc equal, tryok#3
   tryerr#4:
     x64.movRegImm32 rcx, 55
     x64.callDirect Slot.create
@@ -94,7 +92,6 @@ func @main {
     x64.jmp trycont
   tryok#3:
     x64.movRegReg rcx, r8
-    x64.jmp trycont
   trycont:
     x64.loadRegBaseDisp.word64 r12, [rcx + 0]
     x64.callDirect __mm_decref
@@ -102,12 +99,10 @@ func @main {
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

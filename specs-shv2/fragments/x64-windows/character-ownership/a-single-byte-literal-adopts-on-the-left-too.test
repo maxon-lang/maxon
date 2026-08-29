@@ -38,12 +38,10 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.leaRegRdata r12, [rip + __str_rec_4]
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr#1
   forhdr#1:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, scan
-    x64.jmp forexit#4
+    x64.jcc greaterEqual, forexit#4
   scan:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
@@ -58,17 +56,12 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, hit
-    x64.jmp critsplit#13
+    x64.jcc equal, ifcont#6
   hit:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#6
-  critsplit#13:
-    x64.jmp ifcont#6
   ifcont#6:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp forstep#3
   forstep#3:
     x64.movRegReg r13, r14
     x64.jmp forhdr#1
@@ -76,12 +69,10 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.leaRegRdata r13, [rip + __str_rec_4]
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr#7
   forhdr#7:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegReg r14, rax
-    x64.jcc less, scan2
-    x64.jmp forexit#10
+    x64.jcc greaterEqual, forexit#10
   scan2:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
@@ -97,17 +88,12 @@ func @main {
     x64.callDirect __str_eq
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, miss
-    x64.jmp critsplit#14
+    x64.jcc equal, ifcont#12
   miss:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp ifcont#12
-  critsplit#14:
-    x64.jmp ifcont#12
   ifcont#12:
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
-    x64.jmp forstep#9
   forstep#9:
     x64.movRegReg r14, r15
     x64.jmp forhdr#7

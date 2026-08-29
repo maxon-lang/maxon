@@ -62,8 +62,7 @@ func @main {
     x64.callDirect Directory.list
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
@@ -81,39 +80,14 @@ func @main {
     x64.callDirect __destruct_FilePath
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, loop
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   loop:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.imulRegRegImm32 rcx, r13, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.leaRegRegReg rax, rax, r13
-    x64.loadRegBaseDisp.byte rcx, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont
-  __il_cont:
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r13*8 + 0]
+  __im_cont:
     x64.callDirect FilePath.filename
     x64.movRegReg r14, r8
     x64.leaRegRdata rdx, [rip + __str_rec_21]
@@ -121,36 +95,26 @@ func @main {
     x64.callDirect __str_eq
     x64.movRegImm32 rax, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, critsplit#19
-    x64.jmp orrhs
-  critsplit#19:
-    x64.jmp scmerge
+    x64.jcc notEqual, scmerge
   orrhs:
     x64.leaRegRdata rdx, [rip + __str_rec_22]
     x64.movRegReg rcx, r14
     x64.callDirect __str_eq
     x64.movRegReg rax, r8
-    x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, check
-    x64.jmp critsplit#18
+    x64.jcc equal, ifcont#10
   check:
     x64.movRegImm32 rbx, 1
-    x64.jmp ifcont#10
-  critsplit#18:
-    x64.jmp ifcont#10
   ifcont#10:
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp forhdr
   forexit:
     x64.cmpRegImm32 rbx, 0
-    x64.jcc notEqual, result
-    x64.jmp ifcont#12
+    x64.jcc equal, ifcont#12
   result:
     x64.movRegImm32 rbx, 42
     x64.movRegReg rcx, r12

@@ -40,15 +40,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @bufLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -72,38 +63,34 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect bufLength
-    x64.cmpRegImm32 r8, 1
-    x64.setccReg greater, r14
-    x64.movRegReg rcx, r13
+  __il_body#16:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+  __il_cont#15:
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg greater, r13
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, big
-    x64.jmp critsplit
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, critsplit
   big:
     x64.movRegImm32 rax, 1
     x64.jmp ifcont
   critsplit:
     x64.movRegReg rax, r12
-    x64.jmp ifcont
   ifcont:
     x64.movRegReg r12, rax
-    x64.jmp whilehdr
   whilehdr:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect bufLength
-    x64.cmpRegReg r8, r12
-    x64.setccReg greater, r14
-    x64.movRegReg rcx, r13
+  __il_body#18:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+  __il_cont#17:
+    x64.cmpRegReg rax, r12
+    x64.setccReg greater, r13
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, spin
-    x64.jmp whileexit
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, whileexit
   spin:
     x64.leaRegRegImm32 r12, r12, 1
     x64.jmp whilehdr
@@ -112,39 +99,33 @@ func @main {
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegReg r14, rax
-    x64.jcc less, each
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   each:
     x64.loadRegBaseDisp.word64 rax, [r13 + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r14*8 + 0]
-    x64.jmp __il_cont
+    x64.jmp __im_cont
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __im_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.leaRegRegReg rax, rax, r14
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
+    x64.jmp __im_cont
+  __im_slow:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get_unchecked
     x64.movRegReg rax, r8
-    x64.jmp __il_cont
-  __il_cont:
+  __im_cont:
     x64.leaRegRegReg r12, r12, rax
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr
@@ -158,39 +139,39 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r13
     x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect bufLength
-    x64.leaRegRegReg rax, r12, r8
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+  __il_cont#19:
+    x64.leaRegRegReg rax, r12, rax
     x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
-    x64.leaRegRegReg r12, rax, rcx
-    x64.movRegReg rcx, rbx
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
-    x64.callDirect __int_to_string
     x64.movRegReg r12, r8
-    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRegImm32 rcx, rbx, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
-    x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r12
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r15, r12
+    x64.leaRegRegReg rax, r15, rbx
     x64.storeBaseDispReg.word64 [r14 + 0], r15
-    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
     x64.movRegImm rax, 18446744073709551613
     x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r14
     x64.callDirect print

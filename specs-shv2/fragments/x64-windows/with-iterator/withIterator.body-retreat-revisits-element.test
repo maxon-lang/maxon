@@ -55,16 +55,13 @@ func @main {
     x64.movRegReg r13, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#15
-    x64.jmp forempty
+    x64.jcc notEqual, forjoin
   critsplit#15:
     x64.movRegReg rcx, r12
-    x64.jmp forhdr
   forhdr:
     x64.storeSlotReg slot3, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, loop
-    x64.jmp critsplit#16
+    x64.jcc notEqual, forexit
   loop:
     x64.leaRegRdata rdx, [rip + __layout_WithIterIterator_ArrayIterator_int_int]
     x64.leaRegRdata rax, [rip + __witness_ArrayIterator_int.Iterator]
@@ -77,8 +74,7 @@ func @main {
     x64.leaRegRegImm32 rax, rbx, 1
     x64.storeSlotReg slot1, rax
     x64.cmpRegImm32 rax, 5
-    x64.jcc greaterEqual, stop
-    x64.jmp ifcont#7
+    x64.jcc less, ifcont#7
   stop:
     x64.movRegReg rcx, r8
     x64.callDirect __destruct___Tuple2.ArrayIterator_int.int
@@ -165,38 +161,28 @@ func @main {
     x64.callDirect ArrayIterator.index
     x64.cmpRegImm32 r8, 1
     x64.movRegImm32 rax, 0
-    x64.jcc equal, andrhs
-    x64.jmp critsplit#17
+    x64.jcc notEqual, scmerge
   andrhs:
     x64.loadRegSlot rax, slot3
     x64.xorRegImm32 rax, rax, 1
-    x64.jmp scmerge
-  critsplit#17:
-    x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, once
-    x64.jmp critsplit#18
+    x64.jcc equal, critsplit#18
   once:
     x64.movRegImm32 rbx, 1
     x64.loadRegSlot rcx, slot4
     x64.callDirect ArrayIterator.retreat
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, ifcont#13
   tryerr:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __destruct___Tuple2.ArrayIterator_int.int
     x64.jmp forexit
-  tryok:
-    x64.jmp ifcont#13
   critsplit#18:
     x64.loadRegSlot rbx, slot3
-    x64.jmp ifcont#13
   ifcont#13:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __destruct___Tuple2.ArrayIterator_int.int
-    x64.jmp forstep
   forstep:
     x64.leaRegRdata rdx, [rip + __witness_ArrayIterator_int.Iterator]
     x64.movRegReg rcx, r13
@@ -206,14 +192,9 @@ func @main {
     x64.movRegReg rbx, rax
     x64.movRegReg rax, r10
     x64.jmp forhdr
-  critsplit#16:
-    x64.jmp forexit
   forexit:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_WithIterIterator_ArrayIterator_int_int
-    x64.jmp forjoin
-  forempty:
-    x64.jmp forjoin
   forjoin:
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0

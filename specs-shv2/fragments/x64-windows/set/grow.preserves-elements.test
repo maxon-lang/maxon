@@ -127,11 +127,9 @@ func @main {
     x64.callDirect Set.insert
     x64.movRegImm32 rbx, 1
     x64.movRegImm32 r13, 1
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r13, 15
-    x64.jcc lessEqual, check
-    x64.jmp whileexit
+    x64.jcc greater, whileexit
   check:
     x64.leaRegRdata rax, [rip + __layout_Set_int]
     x64.leaRegRdata r9, [rip + __witness_int.Hashable]
@@ -141,14 +139,12 @@ func @main {
     x64.callDirect Set.contains
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, missing
-    x64.jmp critsplit
+    x64.jcc equal, critsplit
   missing:
     x64.movRegImm32 rax, 0
     x64.jmp ifcont
   critsplit:
     x64.movRegReg rax, rbx
-    x64.jmp ifcont
   ifcont:
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg rbx, rax
@@ -158,12 +154,10 @@ func @main {
     x64.callDirect __destruct_Set_int
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_19]
     x64.callDirect mrt_panic

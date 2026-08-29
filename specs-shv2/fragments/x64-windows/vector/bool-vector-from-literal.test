@@ -45,28 +45,18 @@ func @main {
     x64.movRegReg r13, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#12
-    x64.jmp forempty
-  critsplit#12:
-    x64.jmp forhdr
+    x64.jcc notEqual, forjoin
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, each
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   each:
     x64.leaRegRdata rdx, [rip + __layout_ArrayIterator_bool]
     x64.movRegReg rcx, r13
     x64.callDirect ArrayIterator.current
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, isSet
-    x64.jmp critsplit#13
+    x64.jcc equal, forstep
   isSet:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp ifcont
-  critsplit#13:
-    x64.jmp ifcont
-  ifcont:
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r13
     x64.callDirect ArrayIterator.advance
@@ -75,20 +65,15 @@ func @main {
   forexit:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_bool
-    x64.jmp forjoin
-  forempty:
-    x64.jmp forjoin
   forjoin:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

@@ -77,8 +77,7 @@ func @main {
     x64.movRegReg r12, r8
     x64.storeSlotReg slot1, r12
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -91,15 +90,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
+  tryok:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 1
-    x64.jmp whilehdr
   whilehdr:
     x64.storeSlotReg slot2, r13
     x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, walk
-    x64.jmp whileexit
+    x64.jcc equal, whileexit
   walk:
     x64.leaRegRdata rdx, [rip + __layout_MapIterator_Val_Val]
     x64.leaRegRdata rax, [rip + __witness_int.Hashable]
@@ -116,13 +113,9 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect MapIterator.advance
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#7
-    x64.jmp tryok#6
+    x64.jcc equal, trycont
   tryerr#7:
     x64.movRegImm32 r14, 0
-    x64.jmp trycont
-  tryok#6:
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
@@ -146,10 +139,8 @@ func @main {
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRdata rax, [rip + __witness_int.Hashable]
     x64.leaRegRdata rax, [rip + __witness_int.Equatable]
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rbx, [rbx + 32]
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
@@ -208,13 +199,11 @@ func @main {
     x64.loadRegSlot rax, slot2
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.loadRegSlot rcx, slot2
     x64.cmpRegReg rcx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_23]
     x64.callDirect mrt_panic

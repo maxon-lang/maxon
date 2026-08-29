@@ -77,11 +77,9 @@ func @drainThunk {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_FilePath
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, bad
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   bad:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
@@ -153,43 +151,17 @@ func @main {
     x64.callDirect __managed_push
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, each
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   each:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.imulRegRegImm32 rcx, r13, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, r13
-    x64.loadRegBaseDisp.byte rcx, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont
-  __il_cont:
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r13*8 + 0]
+  __im_cont:
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRegImm32 rax, r10, -1
     x64.movRegReg rax, r12
@@ -200,7 +172,6 @@ func @main {
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg rax, r12
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg r12, rax

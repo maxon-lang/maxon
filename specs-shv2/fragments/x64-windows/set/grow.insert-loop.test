@@ -47,11 +47,9 @@ func @main {
     x64.callDirect Set.create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-    x64.jmp whilehdr#1
   whilehdr#1:
     x64.cmpRegImm32 r12, 20
-    x64.jcc less, fill
-    x64.jmp whileexit#3
+    x64.jcc greaterEqual, whileexit#3
   fill:
     x64.leaRegRdata rax, [rip + __layout_Set_Int]
     x64.leaRegRdata r9, [rip + __witness_int.Hashable]
@@ -64,14 +62,11 @@ func @main {
   whileexit#3:
     x64.leaRegRdata rax, [rip + __witness_int.Hashable]
     x64.leaRegRdata rax, [rip + __witness_int.Equatable]
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rax, 20
-    x64.jcc notEqual, count
-    x64.jmp ifcont#5
+    x64.jcc equal, ifcont#5
   count:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -84,11 +79,9 @@ func @main {
     x64.ret
   ifcont#5:
     x64.movRegImm32 r12, 0
-    x64.jmp whilehdr#6
   whilehdr#6:
     x64.cmpRegImm32 r12, 20
-    x64.jcc less, check
-    x64.jmp whileexit#8
+    x64.jcc greaterEqual, whileexit#8
   check:
     x64.leaRegRdata rax, [rip + __layout_Set_Int]
     x64.leaRegRdata r9, [rip + __witness_int.Hashable]
@@ -98,8 +91,7 @@ func @main {
     x64.callDirect Set.contains
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, missing
-    x64.jmp ifcont#10
+    x64.jcc equal, ifcont#10
   missing:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -121,8 +113,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Set.contains
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, phantom
-    x64.jmp ifcont#12
+    x64.jcc equal, ifcont#12
   phantom:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx

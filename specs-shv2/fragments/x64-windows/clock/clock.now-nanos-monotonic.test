@@ -59,23 +59,17 @@ func @main {
     x64.callDirect Clock.nowNanos
     x64.movRegImm32 rax, 0
     x64.cmpRegReg r12, rbx
-    x64.jcc aboveEqual, nondecreasing1
-    x64.jmp critsplit#5
+    x64.jcc below, ifcont#2
   nondecreasing1:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp ifcont#2
-  critsplit#5:
-    x64.jmp ifcont#2
+    x64.movRegImm32 rax, 1
   ifcont#2:
     x64.cmpRegReg r8, r12
-    x64.jcc aboveEqual, nondecreasing2
-    x64.jmp critsplit#6
+    x64.jcc below, critsplit
   nondecreasing2:
     x64.leaRegRegImm32 rbx, rax, 1
     x64.jmp ifcont#4
-  critsplit#6:
+  critsplit:
     x64.movRegReg rbx, rax
-    x64.jmp ifcont#4
   ifcont#4:
     x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]

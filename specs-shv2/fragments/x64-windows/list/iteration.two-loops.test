@@ -55,20 +55,15 @@ func @main {
     x64.movRegReg r13, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#15
-    x64.jmp forempty#2
-  critsplit#15:
-    x64.jmp forhdr#1
+    x64.jcc notEqual, forjoin#6
   forhdr#1:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, loop1
-    x64.jmp forexit#5
+    x64.jcc notEqual, forexit#5
   loop1:
     x64.leaRegRdata rdx, [rip + __layout_ListIterator_int]
     x64.movRegReg rcx, r13
     x64.callDirect ListIterator.current
     x64.leaRegRegReg rbx, rbx, r8
-    x64.jmp forstep#4
   forstep#4:
     x64.movRegReg rcx, r13
     x64.callDirect ListIterator.advance
@@ -77,9 +72,6 @@ func @main {
   forexit#5:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_ListIterator_int
-    x64.jmp forjoin#6
-  forempty#2:
-    x64.jmp forjoin#6
   forjoin#6:
     x64.movRegImm32 r13, 0
     x64.movRegReg rcx, r12
@@ -87,20 +79,15 @@ func @main {
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#16
-    x64.jmp forempty#8
-  critsplit#16:
-    x64.jmp forhdr#7
+    x64.jcc notEqual, forempty
   forhdr#7:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, loop2
-    x64.jmp forexit#11
+    x64.jcc notEqual, forexit#11
   loop2:
     x64.leaRegRdata rdx, [rip + __layout_ListIterator_int]
     x64.movRegReg rcx, r14
     x64.callDirect ListIterator.current
     x64.leaRegRegReg r13, r13, r8
-    x64.jmp forstep#10
   forstep#10:
     x64.movRegReg rcx, r14
     x64.callDirect ListIterator.advance
@@ -111,13 +98,11 @@ func @main {
     x64.callDirect __destruct_ListIterator_int
     x64.movRegReg rax, r13
     x64.jmp forjoin#12
-  forempty#8:
+  forempty:
     x64.movRegReg rax, r13
-    x64.jmp forjoin#12
   forjoin#12:
     x64.cmpRegReg rbx, rax
-    x64.jcc equal, check
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12

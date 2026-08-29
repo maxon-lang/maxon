@@ -72,12 +72,7 @@ func @setCategoryLevel {
     x64.movRegReg rdi, r8
     x64.callDirect Map.insert
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
+    x64.jcc notEqual, trycont
   trycont:
     x64.epilogue 32
     x64.popReg rbp
@@ -100,13 +95,9 @@ func @getCategoryLevel {
     x64.movRegReg rsi, rdi
     x64.callDirect Map.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, trycont
   tryerr:
     x64.movRegImm32 r8, 0
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
   trycont:
     x64.epilogue 32
     x64.popReg rbp
@@ -131,60 +122,47 @@ func @main {
     x64.movRegImm32 rcx, 1
     x64.callDirect getCategoryLevel
     x64.cmpRegImm32 rbx, 0
-    x64.jcc equal, matcharm#2
-    x64.jmp matchnext#5
+    x64.jcc notEqual, matchnext#5
   matcharm#2:
     x64.movRegImm32 rax, 0
     x64.jmp matchcont#7
   matchnext#5:
     x64.cmpRegImm32 rbx, 1
-    x64.jcc equal, matcharm#3
-    x64.jmp matchnext#6
+    x64.jcc notEqual, matchnext#6
   matcharm#3:
     x64.movRegImm32 rax, 0
     x64.jmp matchcont#7
   matchnext#6:
     x64.cmpRegImm32 rbx, 2
-    x64.jcc equal, matcharm#1
-    x64.jmp matchdead#4
+    x64.jcc notEqual, matchdead#4
   matcharm#1:
     x64.movRegImm32 rax, 1
-    x64.jmp matchcont#7
   matchcont#7:
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, matcharm#9
-    x64.jmp matchnext#12
+    x64.jcc notEqual, matchnext#12
   matcharm#9:
     x64.movRegImm32 rcx, 0
     x64.jmp matchcont#14
   matchnext#12:
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, matcharm#8
-    x64.jmp matchnext#13
+    x64.jcc notEqual, matchnext#13
   matcharm#8:
     x64.movRegImm32 rcx, 1
     x64.jmp matchcont#14
   matchnext#13:
     x64.cmpRegImm32 r8, 2
-    x64.jcc equal, matcharm#10
-    x64.jmp matchdead#11
+    x64.jcc notEqual, matchdead#11
   matcharm#10:
     x64.movRegImm32 rcx, 0
-    x64.jmp matchcont#14
   matchcont#14:
     x64.movRegImm32 rdx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, andrhs
-    x64.jmp critsplit
-  andrhs:
-    x64.jmp scmerge
+    x64.jcc notEqual, scmerge
   critsplit:
     x64.movRegReg rcx, rdx
-    x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, both
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   both:
     x64.movRegImm32 r8, 1
     x64.epilogue 40

@@ -31,18 +31,14 @@ func @envSize {
     x64.prologue 32
     x64.leaRegRdata rax, [rip + __witness_String.Hashable]
     x64.leaRegRdata rax, [rip + __witness_String.Equatable]
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 r8, [rcx + 32]
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_32]
     x64.callDirect mrt_panic
@@ -218,8 +214,7 @@ func @main {
     x64.loadRegSlot rdx, slot6
     x64.callDirect Map.insert
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r14, 9
     x64.movRegReg rcx, r13
@@ -300,12 +295,10 @@ func @main {
     x64.leaRegRegReg rbx, rbx, r8
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_33]
     x64.callDirect mrt_panic

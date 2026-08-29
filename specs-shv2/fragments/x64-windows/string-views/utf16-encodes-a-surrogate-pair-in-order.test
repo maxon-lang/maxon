@@ -37,14 +37,10 @@ func @main {
     x64.callDirect __destruct_UTF16View
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r13, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr
+    x64.jcc notEqual, forjoin
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, each
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   each:
     x64.movRegReg rcx, r12
     x64.callDirect UTF16Iterator.current
@@ -94,7 +90,6 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r12
     x64.callDirect UTF16Iterator.advance
@@ -103,9 +98,6 @@ func @main {
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_UTF16Iterator
-    x64.jmp forjoin
-  forempty:
-    x64.jmp forjoin
   forjoin:
     x64.movRegImm32 r8, 0
     x64.epilogue 72

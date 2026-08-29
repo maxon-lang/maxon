@@ -83,16 +83,6 @@ func @Container.push {
     x64.ret
 }
 
-func @Container.count {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Container.duplicate {
   entry:
     x64.pushReg rbp
@@ -174,26 +164,25 @@ func @main {
     x64.leaRegRdata rdx, [rip + __layout_Container_String]
     x64.movRegReg rcx, rbx
     x64.callDirect Container.duplicate
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect Container.count
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect Container.count
-    x64.cmpRegImm32 r13, 2
-    x64.jcc equal, aok
-    x64.jmp ifcont#4
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_body#8:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+  __il_cont:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, ifcont
   aok:
-    x64.cmpRegImm32 r8, 2
-    x64.jcc equal, bok
-    x64.jmp ifcont#3
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc notEqual, ifcont
   bok:
-    x64.movRegImm32 r13, 0
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Container_String
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Container_String
-    x64.movRegReg r8, r13
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -202,15 +191,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#3:
-    x64.jmp ifcont#4
-  ifcont#4:
-    x64.movRegImm32 r13, 1
-    x64.movRegReg rcx, r12
+  ifcont:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Container_String
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Container_String
-    x64.movRegReg r8, r13
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

@@ -112,17 +112,14 @@ func @main {
     x64.movRegImm32 rdx, 71
     x64.movRegReg rcx, r13
     x64.callDirect __managed_push
-    x64.jmp __il_body#19
   __il_body#19:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#18
   __il_cont#18:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect File.writeBinary
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_rec_29]
     x64.callDirect print
@@ -147,8 +144,7 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect File.rename
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp tryok#3
+    x64.jcc equal, tryok#3
   tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_rec_30]
     x64.callDirect print
@@ -172,8 +168,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect File.exists
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, src_remains
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont
   src_remains:
     x64.leaRegRdata rcx, [rip + __str_rec_31]
     x64.callDirect print
@@ -193,13 +188,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#6:
+  ifcont:
     x64.movRegReg rcx, r12
     x64.callDirect File.readBinary
     x64.storeSlotReg slot3, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#8
-    x64.jmp tryok#7
+    x64.jcc equal, tryok#7
   tryerr#8:
     x64.leaRegRdata rcx, [rip + __str_rec_32]
     x64.callDirect print
@@ -222,8 +216,7 @@ func @main {
   tryok#7:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.cmpRegImm32 rax, 2
-    x64.jcc notEqual, count_check
-    x64.jmp ifcont#10
+    x64.jcc equal, __il_body#21
   count_check:
     x64.leaRegRdata rax, [rip + __str_rec_33]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
@@ -286,18 +279,14 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#10:
-    x64.jmp __il_body#21
   __il_body#21:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#20
   __il_cont#20:
     x64.loadRegSlot rcx, slot0
     x64.loadRegSlot rdx, slot2
     x64.callDirect File.writeBinary
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#12
-    x64.jmp tryok#11
+    x64.jcc equal, tryok#11
   tryerr#12:
     x64.leaRegRdata rcx, [rip + __str_rec_34]
     x64.callDirect print
@@ -324,8 +313,7 @@ func @main {
     x64.loadRegSlot rdx, slot1
     x64.callDirect File.rename
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#14
-    x64.jmp tryok#13
+    x64.jcc equal, tryok#13
   tryerr#14:
     x64.leaRegRdata rcx, [rip + __str_rec_35]
     x64.callDirect print
@@ -351,14 +339,10 @@ func @main {
     x64.loadRegSlot rcx, slot1
     x64.callDirect File.delete
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#16
-    x64.jmp tryok#15
+    x64.jcc equal, trycont
   tryerr#16:
     x64.leaRegRdata rcx, [rip + __str_rec_36]
     x64.callDirect print
-    x64.jmp trycont
-  tryok#15:
-    x64.jmp trycont
   trycont:
     x64.leaRegRdata rcx, [rip + __str_rec_37]
     x64.callDirect print

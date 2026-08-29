@@ -31,13 +31,9 @@ func @first {
     x64.leaRegRdata rax, [rip + __layout_Vector_N3_Int]
     x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, trycont
   tryerr:
     x64.movRegImm32 r8, 0
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
   trycont:
     x64.epilogue 32
     x64.popReg rbp
@@ -62,8 +58,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -76,21 +71,16 @@ func @main {
   tryok:
     x64.movRegReg rcx, rbx
     x64.callDirect first
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
   __il_cont:
     x64.leaRegRegImm32 r12, r8, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

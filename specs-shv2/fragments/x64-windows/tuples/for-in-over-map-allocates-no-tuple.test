@@ -44,14 +44,10 @@ func @sum {
     x64.movRegReg r12, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr
+    x64.jcc notEqual, forempty
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, loop
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   loop:
     x64.leaRegRdata rdx, [rip + __layout_MapIterator_Integer_Integer]
     x64.leaRegRdata rax, [rip + __witness_int.Hashable]
@@ -63,7 +59,6 @@ func @sum {
     x64.leaRegRegReg rbx, rbx, rax
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.jmp forstep
   forstep:
     x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
     x64.leaRegRdata rax, [rip + __witness_int.Equatable]
@@ -78,7 +73,6 @@ func @sum {
     x64.jmp forjoin
   forempty:
     x64.movRegReg r8, rbx
-    x64.jmp forjoin
   forjoin:
     x64.epilogue 32
     x64.popReg r12
@@ -130,12 +124,10 @@ func @main {
     x64.callDirect __destruct_Map_int_int
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_18]
     x64.callDirect mrt_panic

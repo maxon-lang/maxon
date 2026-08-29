@@ -188,8 +188,7 @@ func @firstFailing {
     x64.loadRegSlot rdx, slot5
     x64.callDirect Map.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __destruct_Clause]
@@ -198,22 +197,14 @@ func @firstFailing {
     x64.jmp trycont
   tryok#1:
     x64.movRegReg rbx, r8
-    x64.jmp trycont
   trycont:
     x64.storeSlotReg slot0, rbx
     x64.movRegImm32 r12, 0
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegReg r12, r13
-    x64.jcc less, each
-    x64.jmp critsplit#24
+    x64.jcc greaterEqual, critsplit#19
   each:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 r12, 0
     x64.setccReg less, rcx
@@ -221,60 +212,31 @@ func @firstFailing {
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#21
-  __im_load#21:
+    x64.jcc notEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.imulRegRegImm32 rcx, r12, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __im_loaded
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
+    x64.loadRegBaseIndexScale.word64 r14, [rax + r12*8 + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#22
-  __im_load#22:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, r12
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __im_loaded
-  __im_loaded:
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#25
+    x64.jcc equal, critsplit#20
   __im_empty:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_slow
-    x64.jmp critsplit#26
-  critsplit#26:
-    x64.movRegReg r14, rax
-    x64.jmp __il_cont
-  critsplit#25:
-    x64.movRegReg r14, rax
-    x64.jmp __il_cont
-  __il_slow:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, critsplit#21
+  __im_slow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.movRegReg r14, r8
-    x64.movRegReg rcx, r10
-    x64.jmp __il_cont
-  __il_cont:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr#9
-    x64.jmp tryok#8
+    x64.jmp __im_cont
+  critsplit#21:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#20:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#8
   tryerr#9:
     x64.leaRegRdata rcx, [rip + __str_blob_8]
     x64.callDirect mrt_panic
@@ -292,8 +254,7 @@ func @firstFailing {
     x64.callDirect satisfied
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, fail
-    x64.jmp ifcont
+    x64.jcc equal, forstep
   fail:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
@@ -361,19 +322,16 @@ func @firstFailing {
     x64.callDirect __str_decref
     x64.loadRegSlot rbx, slot4
     x64.jmp forexit
-  ifcont:
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr
-  critsplit#24:
+  critsplit#19:
     x64.loadRegSlot rbx, slot1
     x64.loadRegSlot r12, slot2
     x64.loadRegSlot r13, slot3
     x64.movRegReg r14, rbx
     x64.movRegReg rbx, r13
     x64.movRegReg r13, r12
-    x64.jmp forexit
   forexit:
     x64.movRegReg rcx, rbx
     x64.callDirect String.count
@@ -394,11 +352,9 @@ func @firstFailing {
     x64.callDirect __str_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_42]
     x64.callDirect mrt_panic
@@ -539,8 +495,7 @@ func @main {
     x64.movRegReg rax, rbx
     x64.callDirect Map.insert
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rbx, 1
     x64.loadRegSlot rcx, slot1

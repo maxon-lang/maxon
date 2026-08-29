@@ -44,8 +44,7 @@ func @Money.create {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc greaterEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_47]
     x64.callDirect mrt_panic
@@ -143,14 +142,12 @@ func @main {
     x64.movRegImm32 rcx, 99
     x64.callDirect Money.create
     x64.storeSlotReg slot1, r8
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.cmpRegReg rax, rcx
     x64.setccReg equal, rax
     x64.storeSlotReg slot4, rax
-    x64.jmp __il_cont
   __il_cont:
     x64.leaRegRdata rax, [rip + __str_rec_19]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -215,12 +212,7 @@ func @main {
     x64.loadRegSlot rcx, slot4
     x64.callDirect Expect.isTrue
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
+    x64.jcc notEqual, trycont
   trycont:
     x64.loadRegSlot rcx, slot6
     x64.callDirect __str_decref

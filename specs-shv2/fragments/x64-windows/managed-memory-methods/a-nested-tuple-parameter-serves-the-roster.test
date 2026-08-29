@@ -18,17 +18,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @shownNested {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -51,20 +40,19 @@ func @main {
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], r13
-    x64.storeBaseDispReg.word64 [r12 + 8], rbx
-    x64.movRegReg rcx, r12
-    x64.callDirect shownNested
-    x64.movRegReg rbx, r8
+    x64.storeBaseDispReg.word64 [r8 + 0], r13
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+  __il_cont:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
@@ -76,7 +64,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct___Tuple2.__Tuple2#34ddfa177b5098c5.int
     x64.movRegReg r8, rbx
     x64.epilogue 40

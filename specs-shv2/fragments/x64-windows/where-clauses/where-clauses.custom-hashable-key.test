@@ -44,12 +44,10 @@ func @MyKey.hash {
     x64.imulRegRegImm32 r8, rax, 31
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_18]
     x64.callDirect mrt_panic
@@ -119,19 +117,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect Map.insert
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
+    x64.jcc notEqual, trycont
   trycont:
     x64.leaRegRdata rax, [rip + __witness_MyKey.Hashable]
     x64.leaRegRdata rax, [rip + __witness_MyKey.Equatable]
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 r13, [rbx + 32]
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
@@ -139,12 +130,10 @@ func @main {
     x64.callDirect __destruct_Map_MyKey_Integer
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r13, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_19]
     x64.callDirect mrt_panic

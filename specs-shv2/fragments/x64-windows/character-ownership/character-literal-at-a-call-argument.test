@@ -47,12 +47,10 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.leaRegRdata r12, [rip + __str_rec_3]
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, each
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   each:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
@@ -67,17 +65,12 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect isTarget
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, match
-    x64.jmp critsplit
+    x64.jcc equal, ifcont
   match:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
   ifcont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg r13, r14
     x64.jmp forhdr

@@ -82,20 +82,15 @@ func @rewrap {
     x64.movRegReg r13, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr
+    x64.jcc notEqual, forjoin
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, each
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   each:
     x64.leaRegRdata rdx, [rip + __layout_ListIterator_Integer]
     x64.movRegReg rcx, r13
     x64.callDirect ListIterator.current
     x64.leaRegRegReg rbx, rbx, r8
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r13
     x64.callDirect ListIterator.advance
@@ -104,9 +99,6 @@ func @rewrap {
   forexit:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_ListIterator_Integer
-    x64.jmp forjoin
-  forempty:
-    x64.jmp forjoin
   forjoin:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_List_Integer

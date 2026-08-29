@@ -97,44 +97,18 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.movRegImm32 rdx, 0
-    x64.jmp forhdr
+    x64.movRegImm32 rax, 0
   forhdr:
-    x64.storeSlotReg slot1, rdx
-    x64.loadRegSlot rax, slot2
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc less, loop
-    x64.jmp forexit
-  loop:
-    x64.loadRegSlot rax, slot2
-    x64.loadRegBaseDisp.word64 rax, [rax + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
-    x64.loadRegSlot rax, slot2
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.imulRegRegImm32 rcx, rdx, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegSlot rax, slot2
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
+    x64.storeSlotReg slot1, rax
     x64.loadRegSlot rcx, slot2
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rax, r8
-    x64.jmp __il_cont
-  __il_cont:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc greaterEqual, forexit
+  loop:
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rcx + rax*8 + 0]
+  __im_cont:
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.leaRegRdata rax, [rip + __str_rec_5]
@@ -169,10 +143,9 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.loadRegSlot rax, slot1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp forhdr
   forexit:
     x64.movRegImm32 rbx, 0

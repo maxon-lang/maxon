@@ -84,16 +84,13 @@ func @appendToken {
     x64.movRegReg r12, r8
     x64.loadRegBaseDisp.word64 r13, [r12 + 8]
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegReg r14, r13
-    x64.jcc less, byteLoop
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   byteLoop:
     x64.loadRegBaseDisp.word64 rax, [r12 + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 r14, 0
@@ -102,16 +99,14 @@ func @appendToken {
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#13
+    x64.jcc notEqual, __im_slow
   __im_load#13:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r14*8 + 0]
     x64.jmp __im_loaded
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __im_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 r14, 0
@@ -120,40 +115,34 @@ func @appendToken {
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#14
+    x64.jcc notEqual, __im_slow
   __im_load#14:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg rax, rax, r14
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __im_loaded
   __im_loaded:
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rdx, [r12 + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#16
+    x64.jcc equal, critsplit#16
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_slow
-    x64.jmp critsplit#17
+    x64.jcc equal, __im_slow
   critsplit#17:
     x64.movRegReg rdx, rax
-    x64.jmp __il_cont
+    x64.jmp __im_cont
   critsplit#16:
     x64.movRegReg rdx, rax
-    x64.jmp __il_cont
-  __il_slow:
+    x64.jmp __im_cont
+  __im_slow:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get
     x64.movRegReg rdx, r8
     x64.movRegReg rcx, r10
-    x64.jmp __il_cont
-  __il_cont:
+  __im_cont:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_8]
     x64.callDirect mrt_panic
@@ -167,7 +156,6 @@ func @appendToken {
   tryok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr
@@ -217,8 +205,7 @@ func @runEcho {
     x64.callDirect __managed_mem_create
     x64.storeSlotReg slot0, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_12]
     x64.callDirect mrt_panic
@@ -258,35 +245,33 @@ func @runEcho {
     x64.movRegReg rcx, r13
     x64.movRegImm32 rdx, 3
     x64.loadRegSlot rax, slot1
-    x64.loadRegSlot rbx, slot0
-    x64.movRegReg r9, rbx
+    x64.loadRegSlot r9, slot0
     x64.movRegImm32 rsi, 1
     x64.movRegImm32 rdi, 0
     x64.callDirect __gt_subp_attached_spawn
-    x64.movRegReg r12, r8
+    x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __gt_subp_wait_collect
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r14
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
     x64.callDirect __gt_subp_result_stdout
     x64.movRegReg rcx, r8
     x64.callDirect String.init
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r15
-    x64.callDirect String.byteLength
-    x64.storeSlotReg slot2, r8
-    x64.movRegReg rcx, r15
+  __il_body:
+    x64.loadRegBaseDisp.word64 r14, [r8 + 8]
+  __il_cont:
+    x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-    x64.movRegReg rcx, r14
-    x64.callDirect __gt_subp_result_release
     x64.movRegReg rcx, r12
-    x64.callDirect __gt_subp_release
+    x64.callDirect __gt_subp_result_release
     x64.movRegReg rcx, rbx
+    x64.callDirect __gt_subp_release
+    x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.loadRegSlot r8, slot2
+    x64.movRegReg r8, r14
     x64.epilogue 120
     x64.popReg r15
     x64.popReg r14

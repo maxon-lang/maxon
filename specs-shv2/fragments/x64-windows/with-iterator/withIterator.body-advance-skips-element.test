@@ -44,14 +44,10 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr
+    x64.jcc notEqual, forjoin
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, loop
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   loop:
     x64.leaRegRdata rdx, [rip + __layout_WithIterIterator_ArrayIterator_int_int]
     x64.leaRegRdata rax, [rip + __witness_ArrayIterator_int.Iterator]
@@ -109,8 +105,7 @@ func @main {
     x64.loadRegSlot rcx, slot2
     x64.callDirect ArrayIterator.advance
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __destruct___Tuple2.ArrayIterator_int.int
@@ -118,7 +113,6 @@ func @main {
   tryok:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __destruct___Tuple2.ArrayIterator_int.int
-    x64.jmp forstep
   forstep:
     x64.leaRegRdata rdx, [rip + __witness_ArrayIterator_int.Iterator]
     x64.movRegReg rcx, rbx
@@ -128,9 +122,6 @@ func @main {
   forexit:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_WithIterIterator_ArrayIterator_int_int
-    x64.jmp forjoin
-  forempty:
-    x64.jmp forjoin
   forjoin:
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0

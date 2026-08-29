@@ -49,12 +49,10 @@ func @build {
     x64.movRegReg r12, r8
     x64.storeSlotReg slot3, r12
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr#1
   forhdr#1:
     x64.storeSlotReg slot2, r13
     x64.cmpRegReg r13, rbx
-    x64.jcc less, fill
-    x64.jmp forexit#4
+    x64.jcc greaterEqual, forexit#4
   fill:
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -116,7 +114,6 @@ func @build {
     x64.movRegReg rdx, r14
     x64.loadRegSlot rax, slot2
     x64.callDirect Map.upsert
-    x64.jmp forstep#3
   forstep#3:
     x64.loadRegSlot rax, slot2
     x64.leaRegRegImm32 rax, rax, 1
@@ -125,13 +122,11 @@ func @build {
   forexit#4:
     x64.movRegImm32 rax, 0
     x64.movRegImm32 r12, 0
-    x64.jmp forhdr#5
   forhdr#5:
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot0, r12
     x64.cmpRegReg r12, rbx
-    x64.jcc less, read
-    x64.jmp forexit#8
+    x64.jcc greaterEqual, forexit#8
   read:
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
@@ -191,20 +186,17 @@ func @build {
     x64.movRegReg rdx, r13
     x64.callDirect Map.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rax, 0
     x64.jmp trycont
   tryok:
     x64.movRegReg rax, r8
-    x64.jmp trycont
   trycont:
     x64.loadRegSlot rcx, slot1
     x64.leaRegRegReg r12, rcx, rax
     x64.loadRegSlot rcx, slot7
     x64.callDirect __str_decref
-    x64.jmp forstep#7
   forstep#7:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 rax, rax, 1
@@ -212,15 +204,15 @@ func @build {
     x64.jmp forhdr#5
   forexit#8:
     x64.leaRegRegImm32 rax, rbx, -1
-    x64.imulRegReg rbx, rbx, rax
-    x64.movRegImm32 rcx, 2
-    x64.movRegReg rax, rbx
-    x64.cqo
-    x64.idivReg rcx
+    x64.imulRegReg rax, rax, rbx
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 63
+    x64.leaRegRegReg rax, rax, rcx
+    x64.sarRegImm8 rax, rax, 1
     x64.loadRegSlot rcx, slot1
     x64.cmpRegReg rcx, rax
-    x64.jcc notEqual, sum
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   sum:
     x64.movRegImm rbx, 18446744073709551615
     x64.loadRegSlot rcx, slot3
@@ -237,11 +229,9 @@ func @build {
   ifcont:
     x64.leaRegRdata rax, [rip + __witness_String.Hashable]
     x64.leaRegRdata rax, [rip + __witness_String.Equatable]
-    x64.jmp __il_body
   __il_body:
     x64.loadRegSlot rax, slot3
     x64.loadRegBaseDisp.word64 rbx, [rax + 32]
-    x64.jmp __il_cont
   __il_cont:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __destruct_Map_String_Count

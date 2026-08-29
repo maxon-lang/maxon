@@ -82,22 +82,18 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r14, 16
-    x64.jcc less, sweep
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   sweep:
     x64.callDirect Clock.nowNanos
     x64.movRegReg r15, r8
-    x64.jmp whilehdr
   whilehdr:
     x64.movRegReg rcx, r15
     x64.callDirect Clock.elapsedNanos
     x64.imulRegRegImm32 rax, r14, 1000000
     x64.cmpRegReg r8, rax
-    x64.jcc less, burn
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   burn:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp whilehdr
@@ -109,25 +105,17 @@ func @main {
     x64.movRegReg rcx, r15
     x64.callDirect Clock.elapsedNanos
     x64.cmpRegImm32 r8, 30000000
-    x64.jcc less, tooSoon
-    x64.jmp critsplit#19
+    x64.jcc greaterEqual, critsplit#19
   tooSoon:
     x64.leaRegRegImm32 rax, rbx, 1
     x64.jmp ifcont#9
   critsplit#19:
     x64.movRegReg rax, rbx
-    x64.jmp ifcont#9
   ifcont#9:
     x64.cmpRegReg r8, r12
-    x64.jcc greater, newSlowest
-    x64.jmp critsplit#20
-  newSlowest:
-    x64.jmp ifcont#11
+    x64.jcc greater, forstep
   critsplit#20:
     x64.movRegReg r8, r12
-    x64.jmp ifcont#11
-  ifcont#11:
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r14, r14, 1
     x64.movRegReg rbx, rax
@@ -136,33 +124,23 @@ func @main {
   forexit:
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 rbx, 0
-    x64.jcc equal, neverEarly
-    x64.jmp critsplit#18
+    x64.jcc notEqual, ifcont#13
   neverEarly:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp ifcont#13
-  critsplit#18:
-    x64.jmp ifcont#13
+    x64.movRegImm32 rax, 1
   ifcont#13:
     x64.movRegImm rcx, 10000000000
     x64.cmpRegReg r12, rcx
-    x64.jcc less, bounded
-    x64.jmp critsplit#21
+    x64.jcc greaterEqual, ifcont#15
   bounded:
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp ifcont#15
-  critsplit#21:
-    x64.jmp ifcont#15
   ifcont#15:
     x64.cmpRegImm32 r13, 0
-    x64.jcc greater, sweptTheTick
-    x64.jmp critsplit#22
+    x64.jcc lessEqual, critsplit#22
   sweptTheTick:
     x64.leaRegRegImm32 rbx, rax, 1
     x64.jmp ifcont#17
   critsplit#22:
     x64.movRegReg rbx, rax
-    x64.jmp ifcont#17
   ifcont#17:
     x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]

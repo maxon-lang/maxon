@@ -50,25 +50,21 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect Map.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rbx, 0
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Map_int_int
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_18]
     x64.callDirect mrt_panic

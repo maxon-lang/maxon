@@ -88,8 +88,7 @@ func @main {
     x64.movRegImm32 rdx, 9
     x64.callDirect List.insert
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, trycont#3
   tryerr#2:
     x64.leaRegRdata rax, [rip + __str_rec_10]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
@@ -139,9 +138,6 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp trycont#3
-  tryok#1:
-    x64.jmp trycont#3
   trycont#3:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -168,8 +164,7 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect List.insert
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#5
-    x64.jmp tryok#4
+    x64.jcc equal, tryok
   tryerr#5:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -183,20 +178,16 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#4:
+  tryok:
     x64.movRegImm32 rdx, 1
     x64.leaRegRdata rax, [rip + __layout_List_String]
     x64.movRegReg rcx, rbx
     x64.callDirect List.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#7
-    x64.jmp tryok#6
+    x64.jcc equal, trycont#8
   tryerr#7:
     x64.leaRegRdata rcx, [rip + __str_rec_12]
     x64.callDirect __str_retain
-    x64.jmp trycont#8
-  tryok#6:
-    x64.jmp trycont#8
   trycont#8:
     x64.storeSlotReg slot1, r8
     x64.leaRegRdata rax, [rip + __str_rec_13]

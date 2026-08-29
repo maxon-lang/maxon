@@ -53,11 +53,9 @@ func @Vector.counted {
     x64.prologue 32
     x64.movRegReg rbx, rdx
     x64.movRegImm32 rax, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegReg rax, rbx
-    x64.jcc less, each
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   each:
     x64.leaRegGlobal rdx, __data_trips
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
@@ -105,14 +103,10 @@ func @Vector.rebuild {
     x64.movRegReg r15, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr
+    x64.jcc notEqual, forempty
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, countTheRecordsSlots
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   countTheRecordsSlots:
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
@@ -121,7 +115,6 @@ func @Vector.rebuild {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __drop_type_param
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r15
     x64.callDirect ArrayIterator.advance
@@ -134,11 +127,9 @@ func @Vector.rebuild {
     x64.jmp forjoin
   forempty:
     x64.movRegReg rax, r14
-    x64.jmp forjoin
   forjoin:
     x64.cmpRegReg rax, r12
-    x64.jcc equal, theStaticsResultStatesTheReceiversCount
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   theStaticsResultStatesTheReceiversCount:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r13
@@ -201,12 +192,10 @@ func @main {
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r13, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

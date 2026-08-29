@@ -36,8 +36,7 @@ func @main {
     x64.movRegReg rdx, rbx
     x64.callDirect Map.contains
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, has
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   has:
     x64.leaRegGlobal rax, __data_m
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -47,8 +46,7 @@ func @main {
     x64.movRegReg rdx, rbx
     x64.callDirect Map.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_rec_3]
     x64.callDirect __str_retain
@@ -56,13 +54,11 @@ func @main {
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, rbx
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.jmp ifcont
   ifcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 40

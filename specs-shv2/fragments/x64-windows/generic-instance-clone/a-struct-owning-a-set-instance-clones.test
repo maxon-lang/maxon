@@ -161,14 +161,11 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRdata rcx, [rip + __witness_String.Hashable]
     x64.leaRegRdata rcx, [rip + __witness_String.Equatable]
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rax, 2
-    x64.jcc notEqual, badCount
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   badCount:
     x64.movRegImm32 r12, 91
     x64.movRegReg rcx, rbx
@@ -188,8 +185,7 @@ func @main {
     x64.callDirect Set.contains
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, lostAMember
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   lostAMember:
     x64.movRegImm32 r12, 92
     x64.movRegReg rcx, rbx
@@ -206,12 +202,10 @@ func @main {
     x64.callDirect __destruct_Bucket
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_23]
     x64.callDirect mrt_panic

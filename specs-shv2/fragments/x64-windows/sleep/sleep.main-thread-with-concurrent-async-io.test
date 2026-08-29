@@ -62,11 +62,9 @@ func @probe {
     x64.pushReg r12
     x64.prologue 32
     x64.movRegImm32 rbx, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rbx, 20
-    x64.jcc less, each
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   each:
     x64.leaRegRdata rcx, [rip + __str_rec_19]
     x64.callDirect FilePath.init
@@ -75,7 +73,6 @@ func @probe {
     x64.callDirect File.exists
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_FilePath
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp forhdr
@@ -115,23 +112,17 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r12, 250
-    x64.jcc greaterEqual, slept
-    x64.jmp critsplit#5
+    x64.jcc less, ifcont#2
   slept:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp ifcont#2
-  critsplit#5:
-    x64.jmp ifcont#2
+    x64.movRegImm32 rax, 1
   ifcont#2:
     x64.cmpRegImm32 r12, 10000
-    x64.jcc less, bounded
-    x64.jmp critsplit#6
+    x64.jcc greaterEqual, critsplit
   bounded:
     x64.leaRegRegImm32 r12, rax, 1
     x64.jmp ifcont#4
-  critsplit#6:
+  critsplit:
     x64.movRegReg r12, rax
-    x64.jmp ifcont#4
   ifcont#4:
     x64.leaRegRdata rax, [rip + __str_rec_20]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]

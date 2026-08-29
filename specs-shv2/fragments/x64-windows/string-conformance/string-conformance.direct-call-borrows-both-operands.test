@@ -40,13 +40,11 @@ func @main {
     x64.prologue 136
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rcx, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot0, rax
     x64.cmpRegImm32 rax, 100
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.storeSlotReg slot3, rax
@@ -108,15 +106,13 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, eq
-    x64.jmp critsplit
+    x64.jcc equal, critsplit
   eq:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 1
     x64.jmp ifcont#5
   critsplit:
     x64.loadRegSlot rax, slot1
-    x64.jmp ifcont#5
   ifcont#5:
     x64.storeSlotReg slot2, rax
     x64.leaRegRdata rax, [rip + __str_rec_4]
@@ -177,8 +173,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, neverTrue
-    x64.jmp ifcont#7
+    x64.jcc equal, ifcont#7
   neverTrue:
     x64.movRegImm32 r8, 1
     x64.epilogue 136
@@ -197,8 +192,7 @@ func @main {
   whileexit:
     x64.loadRegSlot rax, slot1
     x64.cmpRegImm32 rax, 100
-    x64.jcc equal, all
-    x64.jmp ifcont#9
+    x64.jcc notEqual, ifcont#9
   all:
     x64.movRegImm32 r8, 0
     x64.epilogue 136

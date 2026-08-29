@@ -74,8 +74,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __md_create
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, trycont
   tryerr#2:
     x64.movRegReg rcx, rbx
     x64.callDirect String.toByteArray
@@ -87,8 +86,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, noScratchRoot
-    x64.jmp ifcont#4
+    x64.jcc equal, trycont
   noScratchRoot:
     x64.movRegImm32 rbx, 1
     x64.movRegReg rcx, r12
@@ -102,10 +100,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#4:
-    x64.jmp trycont
-  tryok#1:
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -120,8 +114,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, needCreate
-    x64.jmp ifcont#9
+    x64.jcc equal, ifcont#9
   needCreate:
     x64.movRegReg rcx, rbx
     x64.callDirect String.toByteArray
@@ -129,8 +122,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __md_create
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#8
-    x64.jmp tryok#7
+    x64.jcc equal, tryok#7
   tryerr#8:
     x64.movRegImm32 rbx, 1
     x64.movRegReg rcx, r12
@@ -147,7 +139,6 @@ func @main {
   tryok#7:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.jmp ifcont#9
   ifcont#9:
     x64.loadRegBaseDisp.word64 r12, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
@@ -185,8 +176,7 @@ func @main {
     x64.callDirect __md_open_search
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#11
-    x64.jmp tryok#10
+    x64.jcc equal, tryok#10
   tryerr#11:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -210,8 +200,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __md_next
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#13
-    x64.jmp tryok#12
+    x64.jcc equal, tryok#12
   tryerr#13:
     x64.movRegImm32 rbx, 3
     x64.movRegReg rcx, r12
@@ -227,8 +216,7 @@ func @main {
     x64.ret
   tryok#12:
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, emptyDirectoryHasNoRealEntry
-    x64.jmp ifcont#15
+    x64.jcc equal, ifcont#15
   emptyDirectoryHasNoRealEntry:
     x64.movRegImm32 rbx, 4
     x64.movRegReg rcx, r12
@@ -246,8 +234,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __md_next
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#17
-    x64.jmp tryok#16
+    x64.jcc equal, tryok#16
   tryerr#17:
     x64.movRegImm32 rbx, 5
     x64.movRegReg rcx, r12
@@ -263,8 +250,7 @@ func @main {
     x64.ret
   tryok#16:
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, eofStaysEof
-    x64.jmp ifcont#19
+    x64.jcc equal, ifcont#19
   eofStaysEof:
     x64.movRegImm32 rbx, 6
     x64.movRegReg rcx, r12

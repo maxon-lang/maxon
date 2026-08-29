@@ -158,8 +158,7 @@ func @main {
     x64.setccReg equal, rax
     x64.divsdRegReg xmm7, xmm7, xmm0
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_94]
     x64.callDirect mrt_panic
@@ -179,20 +178,17 @@ func @main {
     x64.subsdRegReg xmm8, xmm8, xmm7
     x64.movsdRegRip xmm0, [rip + __str_blob_24]
     x64.ucomisdRegReg xmm0, xmm8
-    x64.jcc above, abs
-    x64.jmp critsplit
+    x64.jcc belowEqual, critsplit
   abs:
     x64.movsdRegRip xmm0, [rip + __str_blob_24]
     x64.subsdRegReg xmm0, xmm0, xmm8
     x64.jmp ifcont#4
   critsplit:
     x64.movRegReg xmm0, xmm8
-    x64.jmp ifcont#4
   ifcont#4:
     x64.movsdRegRip xmm1, [rip + __fconst_230]
     x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc above, pass
-    x64.jmp ifcont#6
+    x64.jcc belowEqual, ifcont#6
   pass:
     x64.movRegReg xmm0, xmm6
     x64.callDirect __float_toString
@@ -233,7 +229,6 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
-    x64.jmp ifcont#6
   ifcont#6:
     x64.movsdRegRip xmm1, [rip + __fconst_231]
     x64.movsdRegRip xmm0, [rip + __fconst_229]

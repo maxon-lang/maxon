@@ -124,18 +124,15 @@ func @Lex.create {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r12, 200
-    x64.jcc less, fill
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   fill:
     x64.movRegReg rcx, r12
     x64.callDirect Tok.make
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr
@@ -144,13 +141,11 @@ func @Lex.create {
     x64.callDirect Array.cursor
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
-    x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.leaRegRegImm32 r10, r12, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r14
@@ -232,13 +227,11 @@ func @Lex.consume {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.callDirect ArrayIterator.advance
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
-    x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
@@ -286,8 +279,7 @@ func @Lex.consumeExpecting {
     x64.storeBaseDispReg.word64 [rcx + 16], rax
     x64.callDirect Lex.consume
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -313,8 +305,7 @@ func @run {
     x64.callDirect Lex.create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -328,19 +319,16 @@ func @run {
   tryok#1:
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r13, 40
-    x64.jcc less, loop
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   loop:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect Lex.consumeExpecting
     x64.movRegReg r14, r10
     x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, tryerr#8
-    x64.jmp tryok#7
+    x64.jcc equal, tryok#7
   tryerr#8:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Lex
@@ -359,7 +347,6 @@ func @run {
     x64.leaRegRegReg r12, r12, rax
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp forhdr
@@ -370,8 +357,7 @@ func @run {
     x64.movRegReg r13, r8
     x64.movRegReg r14, r10
     x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, tryerr#10
-    x64.jmp tryok#9
+    x64.jcc equal, tryok#9
   tryerr#10:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Lex
@@ -392,8 +378,7 @@ func @run {
     x64.movRegReg r14, r8
     x64.movRegReg r15, r10
     x64.cmpRegImm32 r15, 0
-    x64.jcc notEqual, tryerr#12
-    x64.jmp tryok#11
+    x64.jcc equal, tryok#11
   tryerr#12:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
@@ -415,8 +400,7 @@ func @run {
     x64.callDirect Lex.consumeExpecting
     x64.movRegReg r15, r10
     x64.cmpRegImm32 r15, 0
-    x64.jcc notEqual, tryerr#14
-    x64.jmp tryok#13
+    x64.jcc equal, tryok#13
   tryerr#14:
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
@@ -468,26 +452,27 @@ func @main {
     x64.prologue 32
     x64.callDirect run
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rax, 0
     x64.jmp trycont
   tryok:
     x64.movRegReg rax, r8
-    x64.jmp trycont
   trycont:
-    x64.movRegImm32 rcx, 256
-    x64.cqo
-    x64.idivReg rcx
-    x64.cmpRegImm32 rdx, 0
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 56
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.sarRegImm8 rcx, rcx, 8
+    x64.imulRegRegImm32 rcx, rcx, 256
+    x64.movRegReg r8, rax
+    x64.subRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rdx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -496,7 +481,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, rdx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

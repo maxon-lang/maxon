@@ -47,19 +47,16 @@ func @walkSum {
     x64.movRegReg r12, rdx
     x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegReg r14, r12
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.leaRegRdata rax, [rip + __layout_List_N]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect List.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -101,11 +98,9 @@ func @main {
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.movRegImm32 r12, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r12, 12
-    x64.jcc less, build
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   build:
     x64.imulRegRegImm32 rdx, r12, 10
     x64.leaRegRdata rax, [rip + __layout_List_N]

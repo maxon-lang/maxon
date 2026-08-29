@@ -28,8 +28,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.callDirect StringBuilder.create
     x64.movRegReg rbx, r8
     x64.leaRegRdata rdx, [rip + __str_rec_2]
@@ -40,36 +39,31 @@ func @main {
     x64.callDirect StringBuilder.append
     x64.movRegReg rcx, rbx
     x64.callDirect StringBuilder.build
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect String.byteLength
-    x64.movRegReg r13, r8
-    x64.cmpRegImm32 r13, 0
+  __il_body:
+    x64.loadRegBaseDisp.word64 r12, [r8 + 8]
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r13, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r8
     x64.callDirect __str_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_StringBuilder
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
+    x64.movRegReg r8, r12
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

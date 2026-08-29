@@ -30,8 +30,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -41,57 +40,29 @@ func @main {
     x64.leaRegRdata r9, [rip + __layout_Array_Integer]
     x64.movRegReg rcx, rbx
     x64.callDirect Array.refill
-    x64.movRegImm32 r12, 0
-    x64.movRegImm32 r13, 0
-    x64.jmp forhdr
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
   forhdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r13, rax
-    x64.jcc less, sum
-    x64.jmp forexit
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, forexit
   sum:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.imulRegRegImm32 rcx, r13, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, r13
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rax, r8
-    x64.jmp __il_cont
-  __il_cont:
-    x64.leaRegRegReg r12, r12, rax
-    x64.jmp forstep
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont:
+    x64.leaRegRegReg rax, rax, rdi
   forstep:
-    x64.leaRegRegImm32 r13, r13, 1
+    x64.leaRegRegImm32 rcx, rcx, 1
     x64.jmp forhdr
   forexit:
-    x64.cmpRegImm32 r12, 50727180
-    x64.jcc equal, everyByteSurvived
-    x64.jmp ifcont
+    x64.cmpRegImm32 rax, 50727180
+    x64.jcc notEqual, ifcont
   everyByteSurvived:
     x64.movRegImm32 r12, 7
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -101,8 +72,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

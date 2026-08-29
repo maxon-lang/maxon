@@ -155,62 +155,16 @@ func @showWide {
     x64.ret
 }
 
-func @narrow {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rcx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_208]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rax, 42
-    x64.jmp __il_body#3
-  __il_body#3:
-    x64.jmp __il_cont#2
   __il_cont#2:
     x64.cvtsi2sdRegReg xmm0, rax
     x64.callDirect showRatio
     x64.movRegImm32 rcx, 7
-    x64.jmp __il_body#4
-  __il_body#4:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegImm32 rax, 7
-    x64.jcc less, __il_slow
-    x64.jmp __rc_ok
-  __il_slow:
-    x64.callDirect narrow
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont#1
-  __rc_ok:
-    x64.jmp __il_cont#1
   __il_cont#1:
     x64.callDirect showWide
     x64.movRegImm32 r8, 0

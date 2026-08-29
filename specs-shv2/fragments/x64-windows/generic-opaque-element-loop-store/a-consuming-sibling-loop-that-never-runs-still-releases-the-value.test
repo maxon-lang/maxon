@@ -93,11 +93,9 @@ func @Bag.fill {
     x64.movRegReg r13, rax
     x64.movRegReg r14, r9
     x64.movRegImm32 r15, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegReg r15, r12
-    x64.jcc below, fill
-    x64.jmp whileexit
+    x64.jcc aboveEqual, whileexit
   fill:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r13
@@ -203,12 +201,10 @@ func @main {
   __il_cont:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic

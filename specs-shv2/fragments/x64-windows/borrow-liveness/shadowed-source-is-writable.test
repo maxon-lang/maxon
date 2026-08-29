@@ -53,33 +53,35 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#10
+    x64.jcc equal, critsplit#12
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#11
+    x64.jcc notEqual, critsplit#13
   __im_slow:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.jmp __im_cont
-  critsplit#11:
+  critsplit#13:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont
-  critsplit#10:
+  critsplit#12:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_rec_7]
+    x64.leaRegRdata rax, [rip + __str_rec_7]
     x64.jmp trycont
   tryok:
-    x64.movRegReg rcx, r8
+    x64.movRegReg rax, r8
   trycont:
-    x64.storeSlotReg slot1, rcx
-    x64.callDirect String.byteLength
-    x64.cmpRegImm32 r8, 0
+    x64.storeSlotReg slot1, rax
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, ifcont
   inner:
     x64.movRegImm32 rcx, 8

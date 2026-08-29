@@ -75,8 +75,7 @@ func @work {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_FilePath
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, neg
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   neg:
     x64.leaRegRdata rbx, [rip + __str_rec_21]
     x64.movRegImm32 rcx, 16
@@ -133,71 +132,32 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __managed_push
     x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegImm32 rax, 0
-    x64.setccReg lessEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#19
-  __im_load#19:
+    x64.jcc lessEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.imulRegRegImm32 rcx, rdx, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __im_loaded
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg lessEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#20
-  __im_load#20:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __im_loaded
-  __im_loaded:
-    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#22
+    x64.jcc equal, critsplit#17
   __im_empty:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_slow
-    x64.jmp critsplit#23
-  critsplit#23:
-    x64.xchgRegReg rcx, rax
-    x64.jmp __il_cont
-  critsplit#22:
-    x64.xchgRegReg rcx, rax
-    x64.jmp __il_cont
-  __il_slow:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#18
+  __im_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg rcx, r8
-    x64.movRegReg rax, r10
-    x64.jmp __il_cont
-  __il_cont:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jmp __im_cont
+  critsplit#18:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#17:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_22]
     x64.callDirect mrt_panic
@@ -215,13 +175,11 @@ func @main {
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot1, r10
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp tryok#3
+    x64.jcc equal, tryok#3
   tryerr#4:
     x64.loadRegBaseDisp.word64 rax, [r10 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#5
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#5:
     x64.loadRegBaseDisp.word64 rbx, [r10 + 8]
     x64.storeSlotReg slot2, rbx
@@ -278,8 +236,7 @@ func @main {
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#6
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#6:
     x64.loadRegSlot rax, slot1
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
@@ -337,7 +294,6 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.jmp matchcont
   matchcont:
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot1
@@ -359,12 +315,10 @@ func @main {
     x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_96]
     x64.callDirect mrt_panic

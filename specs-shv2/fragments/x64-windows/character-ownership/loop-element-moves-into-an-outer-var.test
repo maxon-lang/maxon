@@ -74,12 +74,10 @@ func @reassignInLoop {
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.movRegImm32 r12, 0
     x64.loadRegSlot r13, slot1
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc less, each
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   each:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
@@ -98,7 +96,6 @@ func @reassignInLoop {
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.loadRegSlot rax, slot0
     x64.movRegReg r12, rax
@@ -109,14 +106,12 @@ func @reassignInLoop {
     x64.movRegReg rdx, r14
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc equal, ternaryfalse
   ternarytrue:
     x64.leaRegRegImm32 rbx, r13, 1
     x64.jmp matchcont
   ternaryfalse:
     x64.movRegReg rbx, r13
-    x64.jmp matchcont
   matchcont:
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
@@ -162,12 +157,10 @@ func @lastOf {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.movRegImm32 r12, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc less, each
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   each:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
@@ -185,7 +178,6 @@ func @lastOf {
     x64.callDirect __str_decref
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg r12, r13
     x64.movRegReg r14, r15
@@ -215,12 +207,10 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rbx, 0
     x64.leaRegRdata r12, [rip + __str_rec_5]
-    x64.jmp whilehdr
   whilehdr:
     x64.storeSlotReg slot4, rax
     x64.cmpRegImm32 rax, 50
-    x64.jcc less, rep
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   rep:
     x64.movRegReg rcx, r12
     x64.callDirect reassignInLoop

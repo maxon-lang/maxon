@@ -102,17 +102,14 @@ func @main {
     x64.movRegImm32 rdx, 67
     x64.movRegReg rcx, r12
     x64.callDirect __managed_push
-    x64.jmp __il_body
   __il_body:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#14
-  __il_cont#14:
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect File.writeBinary
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_rec_24]
     x64.callDirect print
@@ -136,8 +133,7 @@ func @main {
     x64.movRegReg r13, r8
     x64.storeSlotReg slot2, r13
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp tryok#3
+    x64.jcc equal, tryok#3
   tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_rec_25]
     x64.callDirect print
@@ -159,19 +155,14 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect File.delete
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#6
-    x64.jmp tryok#5
+    x64.jcc equal, trycont
   tryerr#6:
     x64.leaRegRdata rcx, [rip + __str_rec_26]
     x64.callDirect print
-    x64.jmp trycont
-  tryok#5:
-    x64.jmp trycont
   trycont:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegImm32 rax, 3
-    x64.jcc notEqual, count_check
-    x64.jmp ifcont#9
+    x64.jcc equal, ifcont#9
   count_check:
     x64.leaRegRdata rax, [rip + __str_rec_27]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
@@ -237,72 +228,46 @@ func @main {
     x64.loadRegSlot rax, slot2
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegSlot rax, slot2
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegImm32 rax, 0
-    x64.setccReg lessEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#22
-  __im_load#22:
+    x64.jcc lessEqual, __im_slow
+  __im_load#20:
     x64.loadRegSlot rax, slot2
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.imulRegRegImm32 rcx, rdx, 8
-    x64.leaRegRegReg rax, rax, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp __im_loaded
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __im_slow
   __im_byte:
     x64.loadRegSlot rax, slot2
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegImm32 rax, 0
-    x64.setccReg lessEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#23
-  __im_load#23:
+    x64.jcc lessEqual, __im_slow
+  __im_load#21:
     x64.loadRegSlot rax, slot2
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __im_loaded
   __im_loaded:
     x64.movRegImm32 rcx, 0
     x64.loadRegSlot rsi, slot2
     x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#25
+    x64.jcc equal, __im_cont
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_slow
-    x64.jmp critsplit#26
-  critsplit#26:
-    x64.jmp __il_cont#16
-  critsplit#25:
-    x64.jmp __il_cont#16
-  __il_slow:
+    x64.jcc notEqual, __im_cont
+  __im_slow:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __managed_get
     x64.movRegReg rax, r8
     x64.movRegReg rcx, r10
-    x64.jmp __il_cont#16
-  __il_cont#16:
+  __im_cont:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr#11
-    x64.jmp tryok#10
+    x64.jcc equal, tryok#10
   tryerr#11:
     x64.movRegImm32 rbx, 10
     x64.loadRegSlot rcx, slot2
@@ -322,8 +287,7 @@ func @main {
     x64.ret
   tryok#10:
     x64.cmpRegImm32 rax, 65
-    x64.jcc notEqual, check0
-    x64.jmp ifcont#13
+    x64.jcc equal, ifcont#13
   check0:
     x64.leaRegRdata rcx, [rip + __str_rec_28]
     x64.callDirect print

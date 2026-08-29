@@ -54,14 +54,10 @@ func @main {
     x64.movRegReg r12, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr
+    x64.jcc notEqual, forjoin
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, each
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   each:
     x64.leaRegRdata rdx, [rip + __layout_MapIterator_int_int]
     x64.leaRegRdata rax, [rip + __witness_int.Hashable]
@@ -73,7 +69,6 @@ func @main {
     x64.leaRegRegReg rbx, rbx, rax
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.jmp forstep
   forstep:
     x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
     x64.leaRegRdata rax, [rip + __witness_int.Equatable]
@@ -84,20 +79,15 @@ func @main {
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_MapIterator_int_int
-    x64.jmp forjoin
-  forempty:
-    x64.jmp forjoin
   forjoin:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Map_int_int
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_18]
     x64.callDirect mrt_panic

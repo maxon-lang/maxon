@@ -37,12 +37,10 @@ func @main {
     x64.leaRegRdata rbx, [rip + __str_rec_1]
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr#1
   forhdr#1:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, loop1
-    x64.jmp forexit#4
+    x64.jcc greaterEqual, forexit#4
   loop1:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -55,19 +53,16 @@ func @main {
     x64.leaRegRegImm32 r12, r12, 1
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-    x64.jmp forstep#3
   forstep#3:
     x64.movRegReg r13, r14
     x64.jmp forhdr#1
   forexit#4:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr#5
   forhdr#5:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r14, rax
-    x64.jcc less, loop2
-    x64.jmp forexit#8
+    x64.jcc greaterEqual, forexit#8
   loop2:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
@@ -80,25 +75,19 @@ func @main {
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-    x64.jmp forstep#7
   forstep#7:
     x64.movRegReg r14, r15
     x64.jmp forhdr#5
   forexit#8:
     x64.cmpRegImm32 r12, 5
     x64.movRegImm32 rax, 0
-    x64.jcc equal, andrhs
-    x64.jmp critsplit
+    x64.jcc notEqual, scmerge
   andrhs:
     x64.cmpRegImm32 r13, 5
     x64.setccReg equal, rax
-    x64.jmp scmerge
-  critsplit:
-    x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, ok
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 40

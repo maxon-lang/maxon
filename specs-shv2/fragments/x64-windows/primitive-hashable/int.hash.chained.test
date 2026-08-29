@@ -23,151 +23,88 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegImm32 rbx, 42
-    x64.jmp __il_body#15
+    x64.prologue 40
   __il_body#15:
-    x64.movRegImm32 rax, 4294967295
-    x64.andRegImm32 rax, rax, 42
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __il_slow#18
-    x64.jmp __rc_chk#17
-  __rc_chk#17:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg rax, rcx
-    x64.jcc greater, __il_slow#18
-    x64.jmp __rc_ok#16
-  __il_slow#18:
-    x64.movRegReg rcx, rbx
-    x64.callDirect int.hash
-    x64.movRegReg r12, r8
-    x64.jmp __il_cont#14
-  __rc_ok#16:
-    x64.movRegReg r12, rax
-    x64.jmp __il_cont#14
-  __il_cont#14:
-    x64.jmp __il_body#19
+    x64.movRegImm32 rbx, 42
   __il_body#19:
-    x64.movRegImm32 rax, 4294967295
-    x64.andRegImm32 rax, rax, 42
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __il_slow#22
-    x64.jmp __rc_chk#21
-  __rc_chk#21:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg rax, rcx
-    x64.jcc greater, __il_slow#22
-    x64.jmp __rc_ok#20
-  __il_slow#22:
-    x64.movRegReg rcx, rbx
-    x64.callDirect int.hash
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont#13
-  __rc_ok#20:
-    x64.movRegReg rcx, rax
-    x64.jmp __il_cont#13
-  __il_cont#13:
-    x64.jmp __il_body#23
+    x64.movRegImm32 rcx, 42
   __il_body#23:
     x64.movRegImm32 rax, 4294967295
     x64.movRegReg rdx, rcx
     x64.andRegReg rdx, rcx, rax
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __il_slow#26
-    x64.jmp __rc_chk#25
-  __rc_chk#25:
+    x64.jcc less, __il_slow
+  __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rdx, rax
-    x64.jcc greater, __il_slow#26
-    x64.jmp __rc_ok#24
-  __il_slow#26:
+    x64.jcc lessEqual, __rc_ok
+  __il_slow:
     x64.callDirect int.hash
     x64.jmp __il_cont#12
-  __rc_ok#24:
+  __rc_ok:
     x64.movRegReg r8, rdx
-    x64.jmp __il_cont#12
   __il_cont#12:
-    x64.cmpRegReg r12, r8
-    x64.jcc notEqual, chainDiffers
-    x64.jmp ifcont#2
+    x64.cmpRegReg rbx, r8
+    x64.jcc equal, __il_body#28
   chainDiffers:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#2:
-    x64.jmp __il_body#28
   __il_body#28:
-    x64.cmpRegImm32 r12, 42
+    x64.cmpRegImm32 rbx, 42
     x64.setccReg equal, rax
-    x64.jmp __il_cont#27
   __il_cont#27:
     x64.xorRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, hashValueEquals
-    x64.jmp ifcont#4
+    x64.jcc equal, __il_body#30
   hashValueEquals:
     x64.movRegImm32 r8, 2
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#4:
-    x64.jmp __il_body#30
   __il_body#30:
-    x64.cmpRegImm32 r12, 41
-    x64.jcc less, lt
-    x64.jmp ifcont#32
+    x64.cmpRegImm32 rbx, 41
+    x64.jcc greaterEqual, ifcont#32
   lt:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#29
   ifcont#32:
-    x64.cmpRegImm32 r12, 41
-    x64.jcc greater, gt
-    x64.jmp ifcont#34
+    x64.cmpRegImm32 rbx, 41
+    x64.jcc lessEqual, ifcont#34
   gt:
     x64.movRegImm32 rax, 2
     x64.jmp __il_cont#29
   ifcont#34:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#29
   __il_cont#29:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#5
-    x64.jmp matchnext#9
+    x64.jcc notEqual, matchnext#9
   matcharm#5:
     x64.movRegImm32 r8, 3
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   matchnext#9:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#6
-    x64.jmp matchnext#10
+    x64.jcc notEqual, matchnext#10
   matcharm#6:
     x64.movRegImm32 r8, 4
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   matchnext#10:
     x64.cmpRegImm32 rax, 2
-    x64.jcc equal, matcharm#7
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#7:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   matchdead:
-  matchcont:
 }

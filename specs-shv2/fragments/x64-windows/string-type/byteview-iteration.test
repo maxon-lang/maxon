@@ -37,19 +37,12 @@ func @main {
     x64.callDirect __destruct_ByteView
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r13, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr
+    x64.jcc notEqual, forjoin
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, loop
-    x64.jmp forexit
-  loop:
-    x64.jmp __il_body
+    x64.jcc notEqual, forexit
   __il_body:
     x64.loadRegBaseDisp.word64 rbx, [r12 + 16]
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
@@ -96,7 +89,6 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, r12
     x64.callDirect ByteIterator.advance
@@ -105,9 +97,6 @@ func @main {
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_ByteIterator
-    x64.jmp forjoin
-  forempty:
-    x64.jmp forjoin
   forjoin:
     x64.movRegImm32 r8, 0
     x64.epilogue 72

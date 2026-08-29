@@ -47,8 +47,7 @@ func @connect {
     x64.movRegImm32 rdx, 1
     x64.callDirect TcpClient.connect
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -78,13 +77,9 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, trycont
   tryerr:
     x64.movRegImm32 r8, 99
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
   trycont:
     x64.epilogue 40
     x64.popReg rbx

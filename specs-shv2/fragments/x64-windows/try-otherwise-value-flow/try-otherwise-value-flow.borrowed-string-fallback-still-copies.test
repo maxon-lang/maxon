@@ -37,8 +37,7 @@ func @risky {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, good
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   good:
     x64.leaRegRdata rcx, [rip + __str_rec_2]
     x64.callDirect __str_retain
@@ -47,8 +46,7 @@ func @risky {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
@@ -66,8 +64,7 @@ func @choose {
     x64.movRegReg rcx, rdx
     x64.callDirect risky
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegReg rcx, rbx
     x64.callDirect __str_retain
@@ -75,7 +72,6 @@ func @choose {
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, rbx
     x64.callDirect String.count
@@ -84,11 +80,9 @@ func @choose {
     x64.callDirect __str_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_15]
     x64.callDirect mrt_panic
@@ -125,12 +119,10 @@ func @main {
     x64.leaRegRegReg r8, r12, r8
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_16]
     x64.callDirect mrt_panic

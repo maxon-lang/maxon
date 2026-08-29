@@ -51,14 +51,10 @@ func @Vector.walkedTwoWays {
     x64.movRegReg r15, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr#1
+    x64.jcc notEqual, forjoin
   forhdr#1:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, eachOwn
-    x64.jmp forexit#5
+    x64.jcc notEqual, forexit#5
   eachOwn:
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
@@ -70,7 +66,6 @@ func @Vector.walkedTwoWays {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __drop_type_param
-    x64.jmp forstep#4
   forstep#4:
     x64.movRegReg rcx, r15
     x64.callDirect ArrayIterator.advance
@@ -79,9 +74,6 @@ func @Vector.walkedTwoWays {
   forexit#5:
     x64.movRegReg rcx, r15
     x64.callDirect __destruct_ArrayIterator_T4b39db24a89d29c9
-    x64.jmp forjoin
-  forempty:
-    x64.jmp forjoin
   forjoin:
     x64.movRegImm32 r15, 0
     x64.movRegReg rcx, rbx
@@ -94,8 +86,7 @@ func @Vector.walkedTwoWays {
     x64.callDirect __managed_slice_opaque
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -112,41 +103,35 @@ func @Vector.walkedTwoWays {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegImm32 rbx, 0
-    x64.jmp forhdr#9
   forhdr#9:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg rbx, rax
-    x64.jcc less, eachSliced
-    x64.jmp forexit#12
+    x64.jcc greaterEqual, forexit#12
   eachSliced:
     x64.loadRegBaseDisp.word64 rax, [r12 + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rbx*8 + 0]
-    x64.jmp __il_cont
+    x64.jmp __im_cont
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __im_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg rax, rax, rbx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
+    x64.jmp __im_cont
+  __im_slow:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_get_unchecked
     x64.movRegReg rax, r8
-    x64.jmp __il_cont
-  __il_cont:
+  __im_cont:
     x64.subRegReg rax, rax, rax
     x64.leaRegRegReg rax, r15, rax
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forstep#11
   forstep#11:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.movRegReg r15, rax
@@ -184,12 +169,10 @@ func @main {
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

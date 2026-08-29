@@ -96,18 +96,15 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect Map.get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rax, 1
     x64.jmp trycont
   tryok:
     x64.movRegReg rax, r8
-    x64.jmp trycont
   trycont:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#4
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#4:
     x64.movRegImm32 rbx, 1
     x64.movRegReg rcx, r12
@@ -123,8 +120,7 @@ func @main {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#5
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#5:
     x64.movRegImm32 rbx, 2
     x64.movRegReg rcx, r12

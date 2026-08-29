@@ -108,8 +108,7 @@ func @storeAndCheck {
     x64.movRegReg rdx, rbx
     x64.callDirect Map.contains
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, exists
-    x64.jmp ifelse
+    x64.jcc equal, ifelse
   exists:
     x64.leaRegGlobal rax, __data_db
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -121,8 +120,7 @@ func @storeAndCheck {
     x64.callDirect Map.get
     x64.storeSlotReg slot1, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.epilogue 104
     x64.popReg r15
@@ -195,7 +193,6 @@ func @storeAndCheck {
   ifelse:
     x64.leaRegRdata rcx, [rip + __str_rec_6]
     x64.callDirect print
-    x64.jmp ifcont
   ifcont:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]

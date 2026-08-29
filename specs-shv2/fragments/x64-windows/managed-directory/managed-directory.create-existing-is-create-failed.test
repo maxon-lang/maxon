@@ -66,8 +66,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __md_create
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, trycont
   tryerr#2:
     x64.movRegReg rcx, rbx
     x64.callDirect String.toByteArray
@@ -79,8 +78,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, noScratchRoot
-    x64.jmp ifcont#4
+    x64.jcc equal, trycont
   noScratchRoot:
     x64.movRegImm32 rbx, 1
     x64.movRegReg rcx, r12
@@ -92,10 +90,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#4:
-    x64.jmp trycont
-  tryok#1:
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -110,8 +104,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, needCreate
-    x64.jmp ifcont#9
+    x64.jcc equal, ifcont
   needCreate:
     x64.movRegReg rcx, rbx
     x64.callDirect String.toByteArray
@@ -119,8 +112,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __md_create
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#8
-    x64.jmp tryok#7
+    x64.jcc equal, tryok#7
   tryerr#8:
     x64.movRegImm32 rbx, 1
     x64.movRegReg rcx, r12
@@ -135,21 +127,18 @@ func @main {
   tryok#7:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.jmp ifcont#9
-  ifcont#9:
+  ifcont:
     x64.movRegReg rcx, rbx
     x64.callDirect String.toByteArray
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __md_create
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#11
-    x64.jmp tryok#10
+    x64.jcc equal, tryok#10
   tryerr#11:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 5
-    x64.jcc equal, matcharm
-    x64.jmp matchdefault
+    x64.jcc notEqual, matchdefault
   matcharm:
     x64.movRegImm32 r12, 42
     x64.movRegReg rcx, rbx
@@ -181,5 +170,4 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchcont:
 }

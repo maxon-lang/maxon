@@ -31,20 +31,17 @@ func @main {
     x64.callDirect String.findLast
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, found
-    x64.jmp ifelse
+    x64.jcc notEqual, ifelse
   found:
     x64.leaRegRdata rcx, [rip + __str_rec_6]
     x64.callDirect print
     x64.loadRegBaseDisp.word64 r12, [rbx + 0]
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_23]
     x64.callDirect mrt_panic
@@ -66,7 +63,6 @@ func @main {
   ifelse:
     x64.leaRegRdata rcx, [rip + __str_rec_7]
     x64.callDirect print
-    x64.jmp ifcont
   ifcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

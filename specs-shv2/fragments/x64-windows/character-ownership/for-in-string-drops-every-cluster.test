@@ -83,12 +83,10 @@ func @fallthroughTrips {
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, a
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   a:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -103,17 +101,12 @@ func @fallthroughTrips {
     x64.movRegReg rdx, r13
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc equal, matchcont
   ternarytrue:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp matchcont
-  ternaryfalse:
-    x64.jmp matchcont
   matchcont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg r13, r14
     x64.jmp forhdr
@@ -140,12 +133,10 @@ func @continueTrips {
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, b
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   b:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -160,17 +151,12 @@ func @continueTrips {
     x64.movRegReg rdx, r13
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc equal, matchcont
   ternarytrue:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp matchcont
-  ternaryfalse:
-    x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r12, 0
-    x64.jcc greater, always
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   always:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
@@ -178,7 +164,6 @@ func @continueTrips {
   ifcont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg r13, r14
     x64.jmp forhdr
@@ -205,12 +190,10 @@ func @breakTrips {
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, d
-    x64.jmp critsplit
+    x64.jcc greaterEqual, critsplit
   d:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -225,17 +208,12 @@ func @breakTrips {
     x64.movRegReg rdx, r13
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc equal, matchcont
   ternarytrue:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp matchcont
-  ternaryfalse:
-    x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r12, 2
-    x64.jcc equal, stop
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   stop:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
@@ -244,13 +222,11 @@ func @breakTrips {
   ifcont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg r13, r14
     x64.jmp forhdr
   critsplit:
     x64.movRegReg r8, r12
-    x64.jmp forexit
   forexit:
     x64.epilogue 32
     x64.popReg r14
@@ -273,12 +249,10 @@ func @returnFromLoop {
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, e
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   e:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -293,17 +267,12 @@ func @returnFromLoop {
     x64.movRegReg rdx, r13
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc equal, matchcont
   ternarytrue:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp matchcont
-  ternaryfalse:
-    x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r12, 3
-    x64.jcc equal, out
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   out:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
@@ -318,7 +287,6 @@ func @returnFromLoop {
   ifcont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg r13, r14
     x64.jmp forhdr
@@ -345,12 +313,10 @@ func @discardTrips {
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, f
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   f:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -363,7 +329,6 @@ func @discardTrips {
     x64.leaRegRegImm32 r12, r12, 1
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.movRegReg r13, r14
     x64.jmp forhdr
@@ -389,11 +354,9 @@ func @main {
     x64.leaRegRdata rbx, [rip + __str_rec_1]
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r13, 200
-    x64.jcc less, rep
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   rep:
     x64.movRegReg rcx, rbx
     x64.callDirect fallthroughTrips
@@ -414,8 +377,7 @@ func @main {
     x64.jmp whilehdr
   whileexit:
     x64.cmpRegImm32 r12, 5200
-    x64.jcc notEqual, wrongTotal
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   wrongTotal:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
