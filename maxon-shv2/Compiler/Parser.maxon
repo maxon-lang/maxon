@@ -72536,6 +72536,29 @@ export type Parser
 			throw ParseError.builtinOperandType(String.from(BuiltinsAwaitAnyName), required: PromiseArrayRequirement, got: self.valueDisplayTypeName(promises), line: calleeTok.line, column: calleeTok.column)
 		end 'notAPromiseArray'
 
+		// ⭐⭐ **THE CHECK BETWEEN THE TWO PLACES THE PROMISE SLOT'S WIDTH IS STATED, AND THE PREDICATE ABOVE
+		// USED TO CLAIM IT WITHOUT MAKING IT.** `__gt_any_completed` strides the buffer by a CONSTANT
+		// (`GtRuntime.PromiseSlotBytes`) — it must, because one compiled scan serves every array in every
+		// program and the element type is gone by then — while the stride the record is really stamped with
+		// comes from `ProgramSignatures.arrayElementSize`. Nothing makes those two agree. A divergence would
+		// not be a diagnostic: the scan would read every slot past the first at the wrong address, answering
+		// a WRONG INDEX or dereferencing a misaligned word as a green thread.
+		//
+		// ⚠ **IT COMPARES THE STAMP AGAINST `PromiseSlotBytes` ITSELF, NOT AGAINST `arrayElementIsMachineWord`.**
+		// That predicate would tie the stamp to a THIRD constant (`ManagedArrayElementBytes`) and so would stay
+		// silent for a change to the scan's own width — which is one of the two drifts this exists to catch.
+		// Naming the scan's constant here is not the transcription `arrayElementIsMachineWord`'s header warns
+		// about: the number is never written down again, only the one home of it is read.
+		//
+		// ⚠ **A PANIC AND NOT A DIAGNOSTIC.** No program can reach it today: a `Promise with …` handle IS the
+		// green-thread pointer (`PromiseType.maxon`'s first fact), so its slot is one word and
+		// `valueIsPromiseArray` has already established the element is one. It fires only if that fact and
+		// this scan's constant come apart, which is a compiler defect and has no cure an author could apply.
+		let stamped = self.signatures.arrayElementSize(self.valueNameId(promises))
+		if stamped != PromiseSlotBytes 'strideDisagreesWithTheScan'
+			panic("emitAwaitAny: '__gt_any_completed' strides a promise array by {PromiseSlotBytes} bytes per slot, but `arrayElementSize` stamps this instance at {stamped} — `PromiseType.maxon`'s one-word promise handle and `GtRuntime.PromiseSlotBytes` have drifted apart")
+		end 'strideDisagreesWithTheScan'
+
 		return self.emitRuntimeCall(GtAwaitAnyName, args: singletonArgs(promises), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitAwaitAny'
 
@@ -72545,6 +72568,11 @@ export type Parser
 	// numbers dereferenced; and it strides the buffer by one machine word, which is what a `Promise with …`
 	// slot is (`PromiseType.maxon`'s first fact) and what nothing else is guaranteed to be. Both properties
 	// come from the ELEMENT TYPE, which is known here and gone by the time the call is lowered.
+	//
+	// ⚠ **THIS PREDICATE ESTABLISHES THE FIRST PROPERTY ONLY, AND USED TO BE READ AS ESTABLISHING BOTH.** The
+	// STRIDE half is ASSERTED by the caller — `emitAwaitAny` compares `arrayElementSize` of this same instance
+	// against the constant the scan really strides by, and panics if they have come apart. Stated here in prose
+	// alone it was a claim nothing checked.
 	//
 	// ⚠ **THE BASE TEST IS `isArrayBaseName` AND NOT A COMPARE AGAINST `b"Array"`.** A user program may
 	// declare its own `type Array` — the corpus declaration is then renamed into the reserved space — and it

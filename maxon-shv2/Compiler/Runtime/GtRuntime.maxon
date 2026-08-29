@@ -3142,7 +3142,14 @@ let NoCompletedPromise = -1
 // pointer — so a `Promise` instance is a trivial one-word slot whatever its type arguments are, and the
 // parser's argument rule for `__Builtins.awaitAny` is what guarantees the element type is one.
 // MEASURED on `Array with Promise with Integer`: `__managed_create(elementSize: 8, elementDestroy: 0)`.
-let PromiseSlotBytes = PointerFieldBytes
+//
+// ⚠⚠ **IT IS THE SAME WIDTH `ProgramSignatures.arrayElementSize` STAMPS INTO THE RECORD, AND THE TWO ARE
+// COMPARED RATHER THAN TRUSTED.** One compiled scan serves every array in every program, so the stride here
+// HAS to be a constant while the stamp is per-instance — two statements of one fact, whose divergence would
+// address every slot past the first wrongly and answer a wrong INDEX, never a diagnostic. `Parser.emitAwaitAny`
+// compares `arrayElementSize` of the argument instance against THIS constant and panics if the two have come
+// apart; that assertion is what keeps this constant honest.
+export let PromiseSlotBytes = PointerFieldBytes
 
 // ⭐⭐⭐ **`__gt_any_completed(record) -> index | NoCompletedPromise` — THE `awaitAny` EXIT TEST, AND THE WHOLE
 // OF ITS SYNCHRONISATION (SV3).** It walks `[0, length)` of the caller's `__ManagedMemory` record and answers
@@ -3198,9 +3205,13 @@ function buildGtAnyCompleted(module StdModule)
 	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: notFound.id, elseBlockId: scanBody.id))
 
 	// scanBody: gt = buffer[i]. An empty slot holds 0 and is skipped — see this function's header.
+	//
+	// ⚠ **THE ADDRESS IS `emitSlotAddr`'S AND NOT A SECOND `mul`/`add`.** That function is the runtime's one
+	// home of *"where does element `index` start"* — sixteen call sites across the managed-memory runtime and
+	// the inline element primitives read a buffer through it — and a private copy here would be that
+	// arithmetic written down in the file least likely to hear about a change to it.
 	let slotBytes = emitConst(module, block: scanBody, value: PromiseSlotBytes, ids: ids)
-	let slotOffset = emitBin(module, block: scanBody, a: i, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
-	let slotAddr = emitBin(module, block: scanBody, a: buffer, b: slotOffset, opcode: StdBinOpcode.add, ids: ids)
+	let slotAddr = emitSlotAddr(module, block: scanBody, buffer: buffer, index: i, elementSize: slotBytes, ids: ids)
 	let gt = emitLoadField(module, block: scanBody, record: slotAddr, offset: 0 as ByteOffset, ids: ids)
 	let emptySlot = emitCmp(module, block: scanBody, a: gt, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(scanBody, op: StdOp.condBranch(emptySlot, thenBlockId: advance.id, elseBlockId: checkStatus.id))
