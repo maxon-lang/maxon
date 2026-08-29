@@ -3723,6 +3723,10 @@ end 'recordCallGraphEdge'
 //   • `__gt_await_any` — the SELECT (SV3): it runs the shared cooperative drive loop, so it switches into
 //     other green threads and blocks this M on the netpoll exactly as an `await` does. `__mbox_send` and
 //     `__mbox_close` are the counter-example and are deliberately absent — both complete INLINE.
+//     ⚠ **RE-MEASURED FOR THIS MEMBER, and the block below's finding holds one name later (SV3):** with
+//     `__gt_await_any` struck from the predicate and rebuilt, `async` over a function whose ONLY yield is
+//     `__Builtins.awaitAny` still COMPILES, and the control — `async` over a pure function — still answers
+//     E3073. The unknown-callee fallback decides it, exactly as it decides every other name here.
 //   • the `__mf_*` / `__md_*` FILESYSTEM bands — every one that makes a kernel call opens with `__gt_io_park`
 //     (see `GtIoParkName`), which is what makes `async` over `File.exists` mean something.
 //
@@ -4058,8 +4062,13 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// deliberate x64-windows gate that knows it is one (`StdToWasm: the P1.5 IOCP ops are x64-windows only`;
 	// `StdToX64Conversion: lowerTlsAlloc: TlsAlloc is x64-windows only`) rather than at its own span. That is
 	// exactly the shape `W223` records for the `async`/`await` band, whose entry points are NOT here and
-	// which is that row's to close; this rung refuses to open an ELEVENTH such door while it stands, so the
-	// new intrinsic is named and the E3104 lands at the call.
+	// which is that row's to close; this rung refuses to open ANOTHER such door while it stands, so the new
+	// intrinsic is named and the E3104 lands at the call.
+	// MEASURED on `--target=wasm32-wasi`: `error E3104: … it lowers to the runtime entry '__gt_await_any',
+	// which has no wasm32-wasi implementation`, at the call's own span
+	// (`specs-shv2/await-any.md`'s `error.rejected-on-wasm`, which reaches its subject through
+	// `__Builtins.parallelBoundary()` rather than `Runtime.yield()` — the latter is on THIS roster and would
+	// have masked it four lines earlier).
 	//
 	// ⚠ **THE DOOR IS THIS PREDICATE AND NOT `requireTargetSupportsServiceEntry`, which SV1 built for the
 	// same class one construct over.** That twin exists for an op whose callee is MINTED AT LOWERING and

@@ -75,8 +75,17 @@ find no work, no timer and no child, and abort as a scheduler deadlock.
 
 Everything else in that loop is shared and must stay shared: the coroutine drain, the
 `__sched_find_runnable` fallback (this P's ring, the global queue, four rounds of stealing), the netpoll's
-timer and child waits, the `awaitOtherM` poll, and the deadlock abort. `over-a-mixed-array-of-sleeps` is
-the case that reaches the netpoll — three sleepers, no busy loop, and the **earliest deadline** wins.
+timer and child waits, the `awaitOtherM` poll, and the deadlock abort.
+
+⭐ **WHICH CASE COVERS WHICH TIER, MEASURED RATHER THAN ASSUMED** — each reading is one line of the shared
+body sabotaged and the file re-run:
+
+| the shared arm | the case that needs it |
+|---|---|
+| `__gt_coro_next`, this green thread's own coroutine queue | every `async` case here — all abort **92** without it, and so does a plain `async`+`await` program, which is what says the body is SHARED and not copied |
+| `__sched_find_runnable`, the scheduler's three tiers | **`over-service-replies` ALONE** (92 without it). `async` produces a COROUTINE of the calling green thread, never a green thread of its own, so only a real `spawn` — a service — reaches this arm |
+| the netpoll's timer wait | `over-a-mixed-array-of-sleeps` — three sleepers, no busy loop, and the **earliest deadline** wins |
+| `nothingLeft`'s deadlock abort | `an-empty-array-is-a-scheduler-deadlock` |
 
 ### No K-way registration, and above all NO K LOCKS
 
@@ -365,6 +374,48 @@ function main() returns ExitCode
 		score = score + 4
 	end 'bothrepliessurvivedtheselect'
 	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: await-any.selects-from-inside-an-async-body -->
+<!-- targets: x64-windows -->
+⭐ **A SELECT INSIDE A COROUTINE — the NESTED driver, which is where a drive loop's own identity goes
+wrong.** `selfGt` is the running driver and `owner` is the green thread whose coroutines it may run, and
+both are read once in `entry`; for a top-level `awaitAny` they are GT0, and here the driver is itself an
+`async` frame two links down. The queue this loop drains is still ONE queue, because every link of a driver
+chain has the same owner.
+
+Nothing about it is `awaitAny`'s own code — it is the shared body — which is exactly why the case is worth
+having: a select that only ever ran at the top would leave the whole nesting road untested for this entry
+point.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function inner(v Integer) returns Integer
+	Runtime.yield()
+	return v
+end 'inner'
+
+function selectOver() returns Integer
+	var ps = IntPromiseArray.create()
+	ps.push(async inner(3))
+	ps.push(async inner(4))
+	let ready = __Builtins.awaitAny(ps)
+	var sum = 0
+	for p in ps 'all'
+		sum = sum + await p
+	end 'all'
+	return sum + ready
+end 'selectOver'
+
+function main() returns ExitCode
+	let outer = async selectOver()
+	return await outer as ExitCode
 end 'main'
 ```
 ```exitcode
