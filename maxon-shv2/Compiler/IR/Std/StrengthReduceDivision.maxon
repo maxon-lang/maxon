@@ -368,7 +368,7 @@ end 'log2OfPowerOfTwo'
 // ⭐ **THE ONE ADMISSION RULE — what one `div`/`mod` site reduces to, written into `out`.** Every
 // refusal in this file's header is decided here and nowhere else, so the emitters below may assume
 // `2 <= divisorMagnitude <= i64.max` unconditionally.
-function classifyDivision(divisor ParsedInt, signedness DivideSignedness, isRemainder bool, magic SignedMagic, out DivisionReduction)
+function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRemainder bool, magic SignedMagic, out DivisionReduction)
 	out.recordNotReducible()
 
 	// `0` keeps its fault; `i64.min`'s magnitude is not representable; `|K| == 1` is an identity rather
@@ -377,7 +377,7 @@ function classifyDivision(divisor ParsedInt, signedness DivideSignedness, isRema
 		return
 	end 'refusedDivisor'
 
-	let unsigned = signedness == DivideSignedness.unsigned
+	let unsigned = signedness == IntegerSignedness.unsigned
 
 	// ⛔⛔ **THE ONE PLACE THE TWO SIGNEDNESSES DISAGREE ABOUT WHAT THE SAME 64 BITS MEAN, AND READING
 	// IT WRONG IS A WRONG ANSWER RATHER THAN A MISSED REDUCTION.** `magnitude` below is `|K|` read as a
@@ -548,7 +548,7 @@ function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap
 end 'appendReducedOp'
 
 // One `div`/`mod`: classify it, and either keep it or emit its sequence.
-function reduceOneDivision(module StdModule, opIdx OpIndex, resultId ValueId, dividend ValueId, divisorId ValueId, signedness DivideSignedness, isRemainder bool, constMap ConstValueMap, reduction DivisionReduction, magic SignedMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
+function reduceOneDivision(module StdModule, opIdx OpIndex, resultId ValueId, dividend ValueId, divisorId ValueId, signedness IntegerSignedness, isRemainder bool, constMap ConstValueMap, reduction DivisionReduction, magic SignedMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
 	if not constMap.contains(divisorId) 'divisorIsNotAConstant'
 		rebuilt.push(opIdx)
 		return

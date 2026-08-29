@@ -27,10 +27,16 @@
 // the X-register forms, and wasm computes at `wasmMachineValTypeOf`, which is `i64` for every integer
 // type. A Std `operandType` is therefore a STORAGE class here and never an arithmetic one, and the host
 // arithmetic the folder runs is bit-for-bit the arithmetic the instruction would have run — WRAPPING
-// included: `i64.max + 1` folds to `i64.min`, which is what `add` produces. Comparisons are SIGNED at 64
-// bits on all three targets (`signedCondCodeForPred`, `emitCmpPred`), which is what `foldIntCompare` is.
+// included: `i64.max + 1` folds to `i64.min`, which is what `add` produces. That argument covers
+// ARITHMETIC completely, because add/sub/mul/and/or/xor are bit-identical under both readings.
 //
-// FOUR THINGS ARE DELIBERATELY NOT FOLDED, each for its own reason:
+// ⛔ **IT DOES NOT COVER COMPARISONS, AND THIS HEADER ONCE CLAIMED IT DID.** It used to say every
+// integer comparison is SIGNED at 64 bits on all three targets, so `foldIntCompare` was the whole
+// answer. X11 made signedness a real distinction carried on the op (`stdTypeIsUnsigned`), and the two
+// readings of one bit pattern disagree: `u64.max` rides as the wrapped `-1`. An unsigned comparison is
+// therefore DECLINED — see `evaluateCmp`, which carries the measurement.
+//
+// FIVE THINGS ARE DELIBERATELY NOT FOLDED, each for its own reason:
 //
 //   • **`div`/`mod` — they TRAP.** They are not even `binOp`s: integer division has its own `StdOp.div`/
 //     `StdOp.mod` variants carrying `isPure: false`, because x64 `idiv` faults on a zero divisor and on
@@ -48,6 +54,9 @@
 //     be a wrong ANSWER here. A float fold is a rung of its own.
 //   • **SHIFT COUNTS OUTSIDE THE UNGUARDED WINDOW** (`TypeRules.shiftCountIsUnguarded`, 0..63). See
 //     `evaluateIntBinOp` — the window is asked, not restated.
+//   • **AN UNSIGNED COMPARISON** — `stdTypeIsUnsigned(operandType)`. See `evaluateCmp`: one bit
+//     pattern, two honest readings, and this compiler's only integer-comparison folder speaks the
+//     signed one.
 //   • **UNARY ops.** `neg`/`bitNot` over a constant are foldable and are not folded here: this pass's
 //     two evaluators are `evaluateBinOp` and `evaluateCmp`, and neither has a one-operand form.
 //     ⚠ The shared roster DOES classify a `unaryOp` since `EC13` (`StdArithShape.unary`), so the arm a
@@ -222,6 +231,21 @@ function evaluateCmp(op StdOp, resultId ValueId, lhs ValueId, rhs ValueId, pred 
 	if not operandsAreFoldableIntegers(constMap, lhs: lhs, rhs: rhs, operandType: operandType) 'notFoldable'
 		return op
 	end 'notFoldable'
+
+	// ⛔⛔ **AN UNSIGNED ORDERING COMPARISON IS NOT THIS FOLDER'S TO ANSWER, AND THE PREMISE THAT SAID
+	// OTHERWISE WAS FALSIFIED BY A CHANGE IN ANOTHER FILE.** This file's header used to argue that every
+	// integer comparison in the language is SIGNED at 64 bits on all three targets, so the parser's
+	// `foldIntCompare` — which is signed — was the whole answer. X11 made signedness a real distinction
+	// carried on the op's `operandType` (`stdTypeIsUnsigned`, `LowerMaxonToStd.lowerCompare`), and one
+	// bit pattern now has two honest readings: `u64.max` rides as the wrapped `-1`, so folding
+	// `3 > u64.max` signed answers TRUE where the program's answer is FALSE.
+	// MEASURED: `comparison-operators/compared-against-the-unsigned-extreme` returned 1 where it pins 42.
+	// ⇒ Decline, rather than reach for a second comparison evaluator. That is the same rule this pass
+	// already applies to `div`/`mod` and to floats: where one folder cannot speak for the operation, the
+	// operation keeps its instruction.
+	if stdTypeIsUnsigned(operandType) 'unsignedReading'
+		return op
+	end 'unsignedReading'
 
 	let verdict = foldIntCompare(maxonCmpOpOfStdPred(pred), lhs: constMap.constantOf(lhs), rhs: constMap.constantOf(rhs))
 	return StdOp.const(resultId, value: verdict, valueType: FoldedComparisonType)
