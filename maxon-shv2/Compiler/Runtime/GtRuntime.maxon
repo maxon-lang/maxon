@@ -831,10 +831,35 @@ export let GtSleepName = b"__gt_sleep"
 let GtDriveUntilName = b"__gt_drive_until"
 
 // ⭐⭐ **`__gt_drive_exit()` — THE SAME COOPERATIVE DRIVE, RUN TO A DIFFERENT END (SV1).** `buildGtDriveLoop`
-// builds both from one body; they differ only in the `DriveExit` that decides when to stop. This one runs
-// until `__gt_live_count` reaches zero, which is *"every green thread anybody still owns has finished"* —
-// the question a teardown asks, where an await asks about one named thread.
+// builds all THREE from one body; they differ only in the `DriveExit` that decides when to stop. This one
+// runs until `__gt_live_count` reaches zero, which is *"every green thread anybody still owns has finished"*
+// — the question a teardown asks, where an await asks about one named thread.
 let GtDriveExitName = b"__gt_drive_exit"
+
+// ⭐⭐⭐ **`__gt_await_any(record) -> index` — THE THIRD END THE SHARED DRIVE CAN BE RUN TO (SV3), and the
+// front-end target for `__Builtins.awaitAny(promises)`.** `record` is the argument array's
+// `__ManagedMemory` record (an `Array with Promise with …` IS its record — the type has one field and it is
+// the fused inline managed one); the answer is the INDEX of the first element found `completed`.
+//
+// ⭐ **IT RETIRES NOTHING, WHICH IS THE WHOLE REASON IT IS A FUNCTION AND NOT A `select` STATEMENT.** No
+// promise is consumed, no green-thread struct is reclaimed and `__gt_live_count` does not move — the caller
+// then `await`s exactly one promise under the ordinary rules. An `any` ARM of a statement would consume an
+// array SLOT, and slot-level linearity is the documented gap in `await`'s ownership rule, so the statement
+// form would replace a hand-rolled poll with a construct whose misuse is a runtime double free.
+//
+// ⭐⭐ **NOTHING IS REGISTERED ON THE K PROMISES, AND ABOVE ALL NO K LOCKS ARE TAKEN.** The exit test SCANS
+// their status words from the driver (`__gt_any_completed`), which needs no lock at all and leaves nothing
+// for `__gt_promise_drop` to deregister. Go orders channel locks by address so a K-way wait can hold them
+// all; that is wrong here, because both platform locks are RECURSIVE ON THE WRONG IDENTITY — a Win32
+// `CRITICAL_SECTION` (this runtime's `__sched_lock`) is recursive per OS THREAD while green threads
+// multiplex over one — so a green thread parking while holding one lets a DIFFERENT green thread on the same
+// M take the recursive path straight into the critical section. Not a deadlock: silent FIFO corruption.
+export let GtAwaitAnyName = b"__gt_await_any"
+
+// `__gt_any_completed(record) -> index` — the any-completed exit test, called from the shared loop's header.
+// See `buildGtAnyCompleted` for what it reads and for why it answers `NoCompletedPromise` rather than 0 when
+// nothing has finished.
+let GtAnyCompletedName = b"__gt_any_completed"
 
 // ⭐⭐ **`__gt_drain_at_exit(code) -> code` — RUN THE SCHEDULER OUT AND JOIN THE WORKER Ms, ON THE WAY TO
 // `ExitProcess` (SV1).** The entry stub calls it between the global cleanup and the leak gate, in the same
@@ -1916,9 +1941,12 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtTimerAdd(module, rawFree: rawFree)
 	buildGtTimerEarliest(module)
 	buildGtTimerCheck(module)
-	// The two drive loops, from one body — an await's *"until this thread completes"* and the teardown's
-	// *"until nobody owns a green thread"*. See `buildGtDriveLoop`.
+	// The THREE drive loops, from one body — an await's *"until this thread completes"*, a select's *"until
+	// ANY of these has"* and the teardown's *"until nobody owns a green thread"*. See `buildGtDriveLoop`.
+	// The select's exit test is installed first because the loop calls it.
+	buildGtAnyCompleted(module)
 	buildGtDriveLoop(module, name: GtDriveUntilName, exit: DriveExit.statusEquals, usesIocp: usesIocp)
+	buildGtDriveLoop(module, name: GtAwaitAnyName, exit: DriveExit.anyCompleted, usesIocp: usesIocp)
 	buildGtDriveLoop(module, name: GtDriveExitName, exit: DriveExit.liveCountZero, usesIocp: usesIocp)
 	buildGtDrainAtExit(module)
 	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags)
@@ -3102,15 +3130,126 @@ function emitProcWait(module StdModule, block IrBlock, ids ValueMinter, pc Value
 	module.appendOp(block, op: StdOp.call(checkResult, callee: GtProcCheckName, args: ValueIdArray.create()))
 end 'emitProcWait'
 
-// ⭐⭐ **WHEN A DRIVE LOOP STOPS — the ONE thing `__gt_drive_until` and `__gt_drain_exit` differ in (SV1).**
-// Everything else about the two is identical: the deferred-park drain, the coroutine queue, the green-thread
-// fallback, the netpoll and its four blocking waits. Building them from two bodies would be one scheduler
-// written twice, with nothing making the copies agree — which is what `GtQueueEnds` already records one
-// queue over.
+// ⭐⭐ **THE ANSWER `__gt_any_completed` GIVES WHEN NOTHING HAS FINISHED.** It cannot be the `0` every other
+// "or nothing" answerer in this runtime uses (`__gt_coro_next`, `__sched_find_runnable`,
+// `__gt_timer_earliest`), because 0 is a perfectly good ARRAY INDEX — and a select over an array whose slot 0
+// has completed is the commonest shape there is. A negative index is unrepresentable, so it is the one value
+// the answer cannot collide with.
+let NoCompletedPromise = -1
+
+// ⭐ **THE WIDTH OF ONE `Promise with …` SLOT, WHICH IS WHY THE SCAN BELOW NEEDS NO ELEMENT-SIZE LOAD.**
+// `PromiseType.maxon`'s first fact: a promise handle owns no `__mm_alloc` box — the value IS the green-thread
+// pointer — so a `Promise` instance is a trivial one-word slot whatever its type arguments are, and the
+// parser's argument rule for `__Builtins.awaitAny` is what guarantees the element type is one.
+// MEASURED on `Array with Promise with Integer`: `__managed_create(elementSize: 8, elementDestroy: 0)`.
+let PromiseSlotBytes = PointerFieldBytes
+
+// ⭐⭐⭐ **`__gt_any_completed(record) -> index | NoCompletedPromise` — THE `awaitAny` EXIT TEST, AND THE WHOLE
+// OF ITS SYNCHRONISATION (SV3).** It walks `[0, length)` of the caller's `__ManagedMemory` record and answers
+// the FIRST slot whose green thread has reached `completed`.
+//
+// ⭐⭐ **THERE IS NO LOCK HERE AND NOTHING TO DEREGISTER, WHICH IS THE DESIGN AND NOT AN OMISSION.** A K-way
+// wait built the other way — a waiter record registered on each of the K promises, Go's `sudog` — would have
+// to take K locks and then unregister K times from `__gt_promise_drop`; see `GtAwaitAnyName` for why holding
+// a scheduler lock across a park is silent FIFO corruption in a green-threaded runtime rather than a
+// deadlock. A status word is written by exactly one party (the completing thread's trampoline, or
+// `__gt_cell_complete` for a reply) and read here, and a read that misses a status published a microsecond
+// ago simply drives once more and reads it on the next pass.
+//
+// ⚠ **A `0` SLOT IS SKIPPED RATHER THAN DEREFERENCED.** `Array.resize` publishes length over slots nobody
+// filled and the gap past the old length is always ZERO, so a zero inside `[0, length)` is a slot with no
+// promise in it — reading `status` through it would fault on the null page.
+//
+// ⚠ **WHAT IT DOES NOT CHECK, AND CANNOT: A SLOT WHOSE PROMISE WAS ALREADY AWAITED.** `__gt_await` recycles
+// the green-thread struct and nothing writes the slot back, so the handle left behind is stale. That is the
+// same contract `__gt_is_complete` has carried since G17 (*"the intrinsic asks nothing else of it — not that
+// it came from a promise, not that the promise is live"*) and the same slot-level linearity gap that makes
+// `awaitAny` a function returning an index rather than a `select` statement consuming a slot. A caller that
+// selects repeatedly must overwrite a consumed slot, exactly as `Testing/SpecWorkerPool.sendAndDrain` re-arms
+// a drain with `set`.
+function buildGtAnyCompleted(module StdModule)
+	var func = IrFunction.createFromStd(GtAnyCompletedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var scanHdr = module.addBlock(func, label: b"scanhdr")
+	var scanBody = module.addBlock(func, label: b"scanbody")
+	var checkStatus = module.addBlock(func, label: b"checkstatus")
+	var advance = module.addBlock(func, label: b"advance")
+	var found = module.addBlock(func, label: b"found")
+	var notFound = module.addBlock(func, label: b"notfound")
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	// The buffer and the live length are read ONCE per scan, in a block that dominates the walk. The caller's
+	// array can only change BETWEEN scans — nothing this function calls runs a green thread — and the drive
+	// loop re-calls it every iteration, which is where a `push` by a driven thread is picked up.
+	let buffer = emitLoadField(module, block: entry, record: record, offset: ManagedRecordBufferOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: record, offset: ManagedRecordLengthOffset, ids: ids)
+	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(scanHdr.id))
+	entry.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroConst)))
+
+	// scanHdr(i): past the last live slot → nothing has completed; else inspect slot i.
+	let i = ids.mint()
+	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let atEnd = emitCmp(module, block: scanHdr, a: i, b: length, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: notFound.id, elseBlockId: scanBody.id))
+
+	// scanBody: gt = buffer[i]. An empty slot holds 0 and is skipped — see this function's header.
+	let slotBytes = emitConst(module, block: scanBody, value: PromiseSlotBytes, ids: ids)
+	let slotOffset = emitBin(module, block: scanBody, a: i, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
+	let slotAddr = emitBin(module, block: scanBody, a: buffer, b: slotOffset, opcode: StdBinOpcode.add, ids: ids)
+	let gt = emitLoadField(module, block: scanBody, record: slotAddr, offset: 0 as ByteOffset, ids: ids)
+	let emptySlot = emitCmp(module, block: scanBody, a: gt, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanBody, op: StdOp.condBranch(emptySlot, thenBlockId: advance.id, elseBlockId: checkStatus.id))
+
+	// checkStatus: the one word this whole primitive turns on.
+	let status = emitLoadField(module, block: checkStatus, record: gt, offset: GtOffStatus, ids: ids)
+	let completedConst = emitConst(module, block: checkStatus, value: GtStatusCompleted, ids: ids)
+	let isDone = emitCmp(module, block: checkStatus, a: status, b: completedConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkStatus, op: StdOp.condBranch(isDone, thenBlockId: found.id, elseBlockId: advance.id))
+
+	// advance: i + 1 → scanHdr.
+	let one = emitConst(module, block: advance, value: 1, ids: ids)
+	let next = emitBin(module, block: advance, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(advance, op: StdOp.branch(scanHdr.id))
+	advance.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(next)))
+
+	// `i` is scanHdr's block argument and scanHdr dominates this block, so the index needs no second carrier.
+	module.setTerminator(found, op: StdOp.ret(i))
+	emitConstReturn(module, block: notFound, value: NoCompletedPromise, ids: ids)
+
+	module.functions.push(func)
+end 'buildGtAnyCompleted'
+
+// Ask the scan which slot has completed, into a fresh value — `emitSchedFindRunnable`'s shape, and here for
+// the same reason: the drive loop's exit test is an EXPRESSION and this is the one call inside it.
+function emitAnyCompletedIndex(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	let index = ids.mint()
+	module.appendOp(block, op: StdOp.call(index, callee: GtAnyCompletedName, args: argsOf(record)))
+	return index
+end 'emitAnyCompletedIndex'
+
+// ⭐⭐ **WHEN A DRIVE LOOP STOPS — the ONE thing `__gt_drive_until`, `__gt_await_any` and `__gt_drain_exit`
+// differ in (SV1, third member SV3).** Everything else about the three is identical: the deferred-park
+// drain, the coroutine queue, the green-thread fallback, the netpoll and its four blocking waits. Building
+// them from three bodies would be one scheduler written three times, with nothing making the copies agree —
+// which is what `GtQueueEnds` already records one queue over.
+//
+// ⚠ **THE THREE DO NOT PARTITION THE SAME WAY TWICE, which is why `buildGtDriveLoop` groups them with `or`
+// ALTERNATIVES rather than with ranges.** At `nothingLeft` the two THREAD waits agree (`statusEquals or
+// anyCompleted` — a green thread that can now never run is a deadlock) and the COUNT wait differs; for the
+// return type the SELECT is alone (only it has an answer) and the other two agree. No declaration order
+// makes both contiguous, and an alternative list needs none.
 enum DriveExit
 	// `__gt_drive_until(targetGt, targetStatus)` — an AWAIT, a top-level `sleep`, a `runProcess` or a
 	// yielding read: run until ONE named thread reaches one named status.
 	statusEquals
+	// `__gt_await_any(record)` — a SELECT: run until ANY element of the argument array has completed, and
+	// answer WHICH. See `GtAwaitAnyName`; the test itself is `__gt_any_completed`.
+	anyCompleted
 	// `__gt_drain_exit()` — the TEARDOWN: run until `__gt_live_count` reaches zero, i.e. until every green
 	// thread anybody still owns has finished. It takes no argument because the question names nobody.
 	liveCountZero
@@ -3130,15 +3269,25 @@ end 'DriveExit'
 // nobody owns a green thread. The loop state lives entirely in memory (the current GT, the queues, the timer
 // + process stores), so this is phi-free — each iteration reloads it.
 function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, usesIocp bool)
-	let paramCount = match exit 'paramCountOf'
-		statusEquals gives 2 as ParamCount
-		liveCountZero gives 0
-	end 'paramCountOf'
+	// ⭐ **THE PARAMETER LIST IS STATED ONCE AND THE COUNT IS ITS LENGTH.** It used to be two `match`es on
+	// this enum — one signature written twice, whose drift a mismatched call would show only as a wrong
+	// register.
 	let paramTypes = match exit 'paramTypesOf'
 		statusEquals gives twoI64Params()
+		anyCompleted gives oneI64Param()
 		liveCountZero gives StdTypeArray.create()
 	end 'paramTypesOf'
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	let paramCount = paramTypes.count()
+
+	// ⭐ **WHAT EACH DRIVE ANSWERS WHEN IT STOPS.** Only the SELECT has something to say: the INDEX its exit
+	// test found, which exists nowhere else once the loop has ended. The other two answer nothing, for two
+	// different reasons that arrive at one type — an AWAIT extracts the awaited scalar itself, off the
+	// promise, after this returns; the TEARDOWN asks a question whose whole answer is that it finished.
+	let returnType = match exit 'returnTypeOf'
+		anyCompleted gives StdReturnType.value(StdType.i64)
+		statusEquals or liveCountZero gives StdReturnType.void
+	end 'returnTypeOf'
+	var func = IrFunction.createFromStd(name, returnType: returnType, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -3162,9 +3311,42 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	var doneBlock = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: paramCount)
+	// ⚠ **PARAMETER 0 IS NAMED TWICE BECAUSE THE THREE EXITS ASK DIFFERENT QUESTIONS OF IT** — a GT pointer
+	// for `statusEquals`, an `Array with Promise …` record for `anyCompleted` — and each name is read only by
+	// its own arm below. (`liveCountZero` takes no parameters at all and reads neither.)
 	let targetGt = 0 as ValueId
 	let targetStatus = 1 as ValueId
+	let promiseArray = 0 as ValueId
 
+	// ⭐ **`done` CARRIES THE SELECT'S ANSWER AS A BLOCK ARGUMENT.** Only the exit that returns a value has
+	// one, and no id is minted on the other two arms — so the code the two SV1 loops emit is byte-identical to
+	// what it was before this variant existed, which an id minted outside the guard would silently break
+	// (`buildGtAwaitDriver`'s trace guard records the same trap, measured).
+	//
+	// ⚠ The guard is `stdReturnTypeIsVoid` and not a fourth `match exit`: the signature is where "does this
+	// drive answer anything?" was already decided, and asking the enum again is where the two could disagree.
+	var doneIndex = 0 as ValueId
+	if not stdReturnTypeIsVoid(returnType) 'doneCarriesTheAnswer'
+		doneIndex = ids.mint()
+		doneBlock.blockArgs.push(IrBlockArg.create(doneIndex, argType: StdType.i64))
+	end 'doneCarriesTheAnswer'
+
+
+	// ⭐⭐ **LAZY ONE-TIME SCHEDULER INIT, ON THE ONE EXIT THAT CAN BE A PROGRAM'S FIRST SCHEDULER CALL
+	// (SV3).** `__gt_drive_until` is only ever entered from an await or a park, and `__gt_drive_exit` only
+	// from behind `buildGtDrainAtExit`'s `__gt_init_done` test — but `__Builtins.awaitAny` is a CALL, and a
+	// program can make it having spawned nothing at all. An EMPTY array is exactly that shape, and the very
+	// next op reads `currentP` through a TLS slot `__sched_init_procs` has not allocated yet.
+	//
+	// ⛔ **MEASURED WITHOUT THIS CALL: `awaitAny` over an empty array SEGFAULTS (exit 139)** instead of
+	// reaching the deadlock abort `nothingLeft` promises it — the failure `SchedRuntime.emitLoadCurrentGt`
+	// and `buildGtDrainAtExit` both record for a scheduler word read before `__gt_init`. This is
+	// `__gt_sleep`'s own opening line for `__gt_sleep`'s own reason (*"a sleep-only `main` never spawned"*),
+	// and `__gt_init` is idempotent.
+	match exit 'initBeforeTheFirstSchedulerRead'
+		anyCompleted then module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtInitName, args: ValueIdArray.create()))
+		statusEquals or liveCountZero then break 'initBeforeTheFirstSchedulerRead'
+	end 'initBeforeTheFirstSchedulerRead'
 	// The P this driver runs on, read ONCE in `entry` — which dominates every block below, so the run/park
 	// arms address `currentGt` through the same pointer rather than re-reading TLS at each of them.
 	let driverProc = emitLoadCurrentP(module, block: entry, ids: ids)
@@ -3187,11 +3369,35 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// timer on another M to fire. The bootstrap's worker loop places it identically and says so.
 	let drainResult = ids.mint()
 	module.appendOp(loopHdr, op: StdOp.call(drainResult, callee: SchedDrainPendingName, args: ValueIdArray.create()))
+
+	// ⭐⭐ **THE SELECT'S SCAN IS PART OF THE EXIT TEST, SO IT RUNS BEFORE ANYTHING IS DRIVEN.** An array that
+	// already holds a completed promise therefore returns without a single context switch —
+	// `specs-shv2/await-any.md`'s `no-park-when-one-is-already-complete` is that case, and it is sharp
+	// because with nothing else runnable a test placed after the drive would reach `nothingLeft` and abort.
+	//
+	// ⚠ **AND IT RE-READS THE ARRAY EVERY ITERATION, WHICH IS NOT A MISSED HOIST.** The record belongs to the
+	// caller and a green thread driven by the loop below may `push` to it, so length and buffer are live
+	// state exactly as the queues and the timer store are — this loop is phi-free because each iteration
+	// reloads what it reads.
+	var foundIndex = 0 as ValueId
+	match exit 'scanBeforeTheExitTest'
+		anyCompleted then foundIndex = emitAnyCompletedIndex(module, block: loopHdr, record: promiseArray, ids: ids)
+		statusEquals or liveCountZero then break 'scanBeforeTheExitTest'
+	end 'scanBeforeTheExitTest'
+
 	let reached = match exit 'reachedBy'
 		statusEquals gives emitCmp(module, block: loopHdr, a: emitLoadField(module, block: loopHdr, record: targetGt, offset: GtOffStatus, ids: ids), b: targetStatus, pred: StdCmpPred.eq, ids: ids)
+		anyCompleted gives emitCmp(module, block: loopHdr, a: foundIndex, b: emitConst(module, block: loopHdr, value: NoCompletedPromise, ids: ids), pred: StdCmpPred.ne, ids: ids)
 		liveCountZero gives emitCmp(module, block: loopHdr, a: emitLoadGlobalWord(module, block: loopHdr, label: GtLiveCountLabel, ids: ids), b: zeroConst, pred: StdCmpPred.eq, ids: ids)
 	end 'reachedBy'
 	module.setTerminator(loopHdr, op: StdOp.condBranch(reached, thenBlockId: doneBlock.id, elseBlockId: drive.id))
+	// ⭐ **THE ANSWER TRAVELS TO `done` AS A BLOCK ARGUMENT, on the one edge that can carry it.** Nothing has
+	// to re-run the scan there, and nothing has to park the index in a `.data` word — which a NESTED
+	// `awaitAny` (one green thread selecting while another drives it) would clobber.
+	match exit 'handTheAnswerToDone'
+		anyCompleted then loopHdr.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(foundIndex)))
+		statusEquals or liveCountZero then break 'handTheAnswerToDone'
+	end 'handTheAnswerToDone'
 
 	// ⭐⭐ **WHAT THIS DRIVER RUNS NEXT IS TWO QUESTIONS, AND THE ORDER BETWEEN THEM IS THE POLICY (SV1).**
 	// FIRST this green thread's own coroutine queue (`__gt_coro_next`), because a coroutine can be run by
@@ -3302,6 +3508,12 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	//     this arm did until this rung (*"the awaiting caller reads its result and the program makes what
 	//     progress it can"*). A scheduler deadlock is a defect in the program or in the runtime, and the honest
 	//     answer to one is to say so and stop.
+	//   • **`anyCompleted` — an `awaitAny`. It ABORTS, on the same argument (SV3).** Its exit condition names
+	//     K threads instead of one, and *"none of the K will ever be run by anybody"* is the same wrong answer
+	//     one thread over — returning would hand the caller an INDEX naming a promise that never completed.
+	//     ⚠ It is also the arm an **EMPTY array** reaches, and reaching it is correct: awaiting any of zero
+	//     promises can never complete, which is precisely the condition this abort names. Go's `select {}`
+	//     answers its own deadlock detector for the same reason.
 	//   • **`liveCountZero` — the EXIT DRAIN. It RETURNS.** Its exit condition is a COUNT, and a count that has
 	//     not reached zero with nothing left to run means a green thread was never awaited or dropped — which
 	//     is the leak gate's question, answered a few instructions later as exit 75 with the count in it. An
@@ -3324,7 +3536,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	let aloneHere = emitCmp(module, block: otherMs, a: liveMs, b: oneM, pred: StdCmpPred.le, ids: ids)
 	module.setTerminator(otherMs, op: StdOp.condBranch(aloneHere, thenBlockId: nothingLeft.id, elseBlockId: awaitOtherM.id))
 	match exit 'nothingLeftMeans'
-		statusEquals then emitRuntimeAbort(module, func: func, block: nothingLeft, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
+		statusEquals or anyCompleted then emitRuntimeAbort(module, func: func, block: nothingLeft, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
 		liveCountZero then module.setTerminator(nothingLeft, op: StdOp.branch(doneBlock.id))
 	end 'nothingLeftMeans'
 	let pollMs = emitConst(module, block: awaitOtherM, value: OtherWorkerPollMs, ids: ids)
@@ -3378,7 +3590,9 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	module.appendOp(procWaitBounded, op: StdOp.call(timerCheckResult, callee: GtTimerCheckName, args: argsOf(nowAfter)))
 	module.setTerminator(procWaitBounded, op: StdOp.branch(loopHdr.id))
 
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	// `done` RETURNS WHAT THE SIGNATURE PROMISED, read off the signature — a loop declared to answer a value
+	// and `ret`ting void is a shape no diagnostic catches.
+	module.setTerminator(doneBlock, op: StdOp.retVoid if stdReturnTypeIsVoid(returnType) else StdOp.ret(doneIndex))
 	module.functions.push(func)
 end 'buildGtDriveLoop'
 

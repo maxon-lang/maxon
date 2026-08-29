@@ -3720,6 +3720,9 @@ end 'recordCallGraphEdge'
 //   • `__gt_resched` — the cooperative yield behind `Runtime.yield()`: hands the CPU to the next runnable
 //     green thread, or drives one from GT0.
 //   • `__gt_process_run` — parks on a child process until it exits.
+//   • `__gt_await_any` — the SELECT (SV3): it runs the shared cooperative drive loop, so it switches into
+//     other green threads and blocks this M on the netpoll exactly as an `await` does. `__mbox_send` and
+//     `__mbox_close` are the counter-example and are deliberately absent — both complete INLINE.
 //   • the `__mf_*` / `__md_*` FILESYSTEM bands — every one that makes a kernel call opens with `__gt_io_park`
 //     (see `GtIoParkName`), which is what makes `async` over `File.exists` mean something.
 //
@@ -3755,7 +3758,7 @@ end 'recordCallGraphEdge'
 // the roster is the fact that was already written down. What may not be said again is that a program's verdict
 // depends on it today.
 function ioYieldingRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee)
+	return callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(GtAwaitAnyName) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee)
 end 'ioYieldingRuntimeCallee'
 
 // The plain caller-calls-callee relation, stored so that a CSR over it lists, for each CALLEE, the functions
@@ -4049,7 +4052,21 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// shv2 emits, and the counters they read are maintained by an allocator that runs on all of them.
 	// `specs-shv2/builtins-mm-counters.md` pins that acceptance, which is what makes the refusal below a
 	// NARROW gate rather than a family-wide one.
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(IoReadName) or isSubprocessRuntimeCallee(callee) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isManagedSocketRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee) or isCpuCountRuntimeCallee(callee) or isThreadCpuRuntimeCallee(callee)
+	// ⭐⭐ **THE SELECT (`__Builtins.awaitAny` ⇒ `__gt_await_any`) JOINS INDIVIDUALLY, LIKE ITS THREE
+	// SCHEDULER BAND-MATES ABOVE (SV3).** It is the whole green-thread substrate — a `TlsAlloc`'d current-P
+	// slot, a context switch, `WaitForMultipleObjects` — so on any other backend the program dies in a
+	// deliberate x64-windows gate that knows it is one (`StdToWasm: the P1.5 IOCP ops are x64-windows only`;
+	// `StdToX64Conversion: lowerTlsAlloc: TlsAlloc is x64-windows only`) rather than at its own span. That is
+	// exactly the shape `W223` records for the `async`/`await` band, whose entry points are NOT here and
+	// which is that row's to close; this rung refuses to open an ELEVENTH such door while it stands, so the
+	// new intrinsic is named and the E3104 lands at the call.
+	//
+	// ⚠ **THE DOOR IS THIS PREDICATE AND NOT `requireTargetSupportsServiceEntry`, which SV1 built for the
+	// same class one construct over.** That twin exists for an op whose callee is MINTED AT LOWERING and
+	// which therefore reaches `checkCalls` with no name to key on; `awaitAny` is an ordinary named `call` op
+	// by the time this walk runs, so it is met by NAME here. Both end at `reportTargetUnsupportedCallee`, so
+	// there is still exactly one E3104 wire format.
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(GtAwaitAnyName) or callee.equals(IoReadName) or isSubprocessRuntimeCallee(callee) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isManagedSocketRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee) or isCpuCountRuntimeCallee(callee) or isThreadCpuRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote

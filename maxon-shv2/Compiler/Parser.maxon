@@ -5149,6 +5149,26 @@ let BuiltinsCurrentProcessIdName = b"__Builtins.currentProcessId"
 // the operand rule here is the ordinary machine-word one every handle-taking intrinsic uses.
 let BuiltinsGtIsCompleteName = b"__Builtins.gtIsComplete"
 
+// ⭐⭐ **`__Builtins.awaitAny(promises)` — THE SELECT (SV3), AND THE PEEK ABOVE IS WHAT IT REPLACES.**
+// `__Builtins.gtIsComplete` answers *"has this one finished?"* and leaves the WAITING to a caller that has
+// nothing to wait with except a spin; this drives the shared scheduler loop until SOME element of an
+// `Array with Promise with …` has completed and answers WHICH — one waiting primitive over service replies,
+// file IO and subprocess drains alike, because a reply is an ordinary `Promise`.
+//
+// ⭐ **IT RETURNS AN INDEX AND CONSUMES NOTHING**, which is why it is a function and not a `select`
+// statement: an `any` arm would consume an array SLOT, and slot-level linearity is the documented gap in
+// `await`'s ownership rule, so the statement form would replace a hand-rolled poll with a construct whose
+// misuse is a runtime double free. The caller then `await`s exactly one promise, under the ordinary rules.
+// See `GtRuntime.GtAwaitAnyName` for the runtime side and `specs-shv2/await-any.md` for the cases.
+//
+// ⚠ **THE SURFACE IS THE `__Builtins.` SPELLING AND NOT A BARE `awaitAny`.** The nicer spelling is
+// `stdlib`'s own declaration over this intrinsic, exactly as `sleep(ms)` is — but its parameter would be
+// `Array with Promise with T` for a type PARAMETER `T`, and this intrinsic's argument rule is *"the element
+// type is a `Promise with …`"*, which no type parameter can be shown to be. That is a stdlib-generics
+// question rather than this primitive's; a BARE-name builtin instead would be the wart `print`, `sleep` and
+// `runProcess` were moved into this reserved space to remove (G17).
+let BuiltinsAwaitAnyName = b"__Builtins.awaitAny"
+
 // ⭐ **THE TWO STREAM-WRITE INTRINSICS (W35)**, `stdlib/Print.maxon`'s and `stdlib/PrintError.maxon`'s only
 // floors, and the pair that let the bare-name `print` builtin be retired. `/specs/builtins-type.md:24-25`
 // declares exactly these two names with exactly this shape — one `__ManagedMemory` in, the byte count
@@ -5386,6 +5406,15 @@ let CurrentProcessIdArity = 0 as ParamCount
 // `gtIsComplete(gt)` takes exactly one machine word — the green-thread handle. Stated here for
 // `CommandLineArgArity`'s reason, and as its own constant for `CurrentProcessIdArity`'s.
 let GtIsCompleteArity = 1 as ParamCount
+
+// `awaitAny(promises)` takes exactly one array of promises. Its own constant beside its sibling's for
+// `CurrentProcessIdArity`'s reason: the number is a fact about THIS intrinsic's contract.
+let AwaitAnyArity = 1 as ParamCount
+
+// What `__Builtins.awaitAny` will accept, as the `builtinOperandType` sentence renders it — *"'…' requires
+// a {required}, but its argument is {got}"*. Named rather than written at the throw for
+// `StringLiteralRequirement`'s reason: it is a phrase a spec pins, not an incidental string.
+let PromiseArrayRequirement = "promise array — an `Array` whose element type is a `Promise with …`"
 
 // `writeStdout(mm)`/`writeStderr(mm)` each take exactly one `__ManagedMemory`. ONE constant for both, not
 // two: it is a single fact about a single shape, and the two names are the same intrinsic on two streams.
@@ -71321,6 +71350,15 @@ export type Parser
 				return self.emitRuntimeCall(GtIsCompleteName, args: singletonArgs(gt), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
 			end 'gtIsComplete'
 
+			// ⭐ **THE SCHEDULER'S FOURTH ARM THAT HANDS OVER THE PROCESSOR, and the only one that asks a
+			// question while it does.** `sleep`, `yield` and `runProcess` park and come back with nothing to
+			// say; this drives until ANY of K promises has completed and answers WHICH. See
+			// `BuiltinsAwaitAnyName`; the argument rule is `emitAwaitAny`'s, because the element TYPE is what
+			// makes reading a slot as a green-thread handle sound.
+			if callee.equals(BuiltinsAwaitAnyName) 'awaitAny'
+				return try self.emitAwaitAny(args, calleeTok: anchor)
+			end 'awaitAny'
+
 			if callee.equals(BuiltinsCommandLineCountName) 'commandLineCount'
 				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsCommandLineCountName, runtimeName: CommandLineCountName, arity: CommandLineCountArity, calleeTok: anchor)
 			end 'commandLineCount'
@@ -72406,6 +72444,61 @@ export type Parser
 			throw ParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 		end 'notAMachineWord'
 	end 'requireIntrinsicMachineWordArg'
+
+	// ⭐⭐ **`__Builtins.awaitAny(promises)` — DRIVE THE SCHEDULER UNTIL ANY OF THEM HAS COMPLETED, AND ANSWER
+	// WHICH (SV3).** It emits no `MaxonOp.call` to a user function: it routes to `__gt_await_any`, the shared
+	// cooperative drive loop run to a third end. The result is an INTEGER — an index into the argument array —
+	// so unlike `sleep`'s void it is usable in value position and needs no `resultUsed` gate.
+	//
+	// ⚠ **NOTHING IS CONSUMED HERE AND NO DROP IS ENROLLED.** The array is BORROWED (the entry reads its
+	// `buffer`/`length` off the record and never takes ownership, exactly as the command-line entries borrow
+	// their String), and no promise is retired — the caller then `await`s one of them under the ordinary
+	// rules, which is what keeps this primitive neutral on `await`'s slot-level linearity gap rather than
+	// widening it.
+	function emitAwaitAny(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != AwaitAnyArity 'arity'
+			throw ParseError.builtinArity(String.from(BuiltinsAwaitAnyName), expected: AwaitAnyArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let promises = try args.get(0) otherwise panic("emitAwaitAny: args.count() == AwaitAnyArity just checked but get(0) failed")
+		if not self.valueIsPromiseArray(promises) 'notAPromiseArray'
+			throw ParseError.builtinOperandType(String.from(BuiltinsAwaitAnyName), required: PromiseArrayRequirement, got: self.valueDisplayTypeName(promises), line: calleeTok.line, column: calleeTok.column)
+		end 'notAPromiseArray'
+
+		return self.emitRuntimeCall(GtAwaitAnyName, args: singletonArgs(promises), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitAwaitAny'
+
+	// ⭐⭐ **IS THIS VALUE AN ARRAY WHOSE ELEMENTS ARE PROMISE HANDLES?** — `awaitAny`'s whole argument rule,
+	// and the thing that makes the runtime's scan sound. `__gt_any_completed` reads each slot as a
+	// green-thread pointer and loads a status word THROUGH it, so an `Array with Integer` would have its
+	// numbers dereferenced; and it strides the buffer by one machine word, which is what a `Promise with …`
+	// slot is (`PromiseType.maxon`'s first fact) and what nothing else is guaranteed to be. Both properties
+	// come from the ELEMENT TYPE, which is known here and gone by the time the call is lowered.
+	//
+	// ⚠ **THE BASE TEST IS `isArrayBaseName` AND NOT A COMPARE AGAINST `b"Array"`.** A user program may
+	// declare its own `type Array` — the corpus declaration is then renamed into the reserved space — and it
+	// may declare a conformer of `BuiltinArrayLiteral` under any name at all; that predicate is the one home
+	// of "which declarations ARE the array record", and a literal here would answer differently from it the
+	// first time either happened.
+	//
+	// ⚠ **THE ELEMENT COMES THROUGH `resolvedSlotType(containerElementType(…))`, WHICH IS `push`'s OWN LINE
+	// (`requireContainerElementType`) AND NOT AN APPROXIMATION OF IT.** Both halves are load-bearing and the
+	// second was MEASURED: `containerElementType` alone hands back the argument as the instance recorded it,
+	// which for `Array with IntPromise` is the ALIAS — a `named` leaf, tag `int` — so `typeIsPromiseStorage`
+	// answered FALSE and every case in `specs-shv2/await-any.md` was refused as *"not a promise array"*.
+	// `resolvedSlotType` is what crosses the index's interner and resolves the alias to the instance.
+	function valueIsPromiseArray(value ValueId) returns bool
+		if self.tagOf(value) != ValueTypeTag.genericInstance 'notAnInstance'
+			return false
+		end 'notAnInstance'
+
+		let giid = self.valueNameId(value)
+		if not self.signatures.isArrayBaseName(self.signatures.genericInstanceBaseName(giid)) 'notAnArray'
+			return false
+		end 'notAnArray'
+
+		return typeIsPromiseStorage(self.signatures, t: self.resolvedSlotType(self.signatures.containerElementType(giid)))
+	end 'valueIsPromiseArray'
 
 	// ⭐ **A SUBPROCESS INTRINSIC WHOSE RESULT IS A MACHINE WORD OR NOTHING AT ALL** — fourteen of the twenty.
 	// The arguments are BORROWED (the runtime entry reads the argv blob's `buffer`/`length` through the

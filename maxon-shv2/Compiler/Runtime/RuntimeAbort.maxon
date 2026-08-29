@@ -229,9 +229,16 @@ export enum RuntimeAbort
 	// `checkArenaReservationSlack` asserts that premise at compile time from the grow unit; this asks the
 	// same thing of the address a future lane really returns.
 	slabArenaBaseNotGranuleAligned = 91
-	// ⛔⛔ `__gt_drive_until`: a SCHEDULER DEADLOCK. This driver's green thread has no runnable coroutine, the
-	// scheduler's three tiers hold nothing, no child is parked, no timer is pending, no overlapped read is in
-	// flight and no other M is live — so the thread this drive is waiting for can never become runnable.
+	// ⛔⛔ `__gt_drive_until` AND `__gt_await_any`: a SCHEDULER DEADLOCK. This driver's green thread has no
+	// runnable coroutine, the scheduler's three tiers hold nothing, no child is parked, no timer is pending,
+	// no overlapped read is in flight and no other M is live — so the thread this drive is waiting for can
+	// never become runnable.
+	//
+	// ⭐ **THE SELECT REACHES IT ON THE SAME ARGUMENT, K THREADS INSTEAD OF ONE (SV3).** `__gt_await_any`
+	// runs the identical loop to a *"has ANY of these completed?"* end, and *"none of the K will ever be run
+	// by anybody"* is the same wrong answer — returning would hand the caller an INDEX naming a promise that
+	// never completed. ⚠ An **EMPTY** array reaches it too, and correctly: awaiting any of zero promises can
+	// never complete. MEASURED at exit 92, promptly rather than as a hang.
 	//
 	// ⭐ **IT REPLACES A SILENT WRONG ANSWER, WHICH IS WHY IT IS AN ABORT AND NOT A HANG-BY-POLLING.** The arm
 	// used to RETURN, under a note saying *"the awaiting caller reads its result and the program makes what
