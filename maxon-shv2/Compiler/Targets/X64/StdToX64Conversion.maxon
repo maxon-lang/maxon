@@ -1671,6 +1671,105 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movsdRegRip(TargetVReg.virtual(resultId), label: label.toByteArray()))
 	end 'lowerFloatConst'
 
+	// ⭐⭐ EC19 — **SWAP A COMMUTATIVE OP'S OPERANDS WHEN THE LEFT ONE SURVIVES THE OP AND THE RIGHT
+	// ONE DIES AT IT**, so the destination can take the dying operand's register and the allocator's
+	// reuse copy is never recorded.
+	//
+	// x64's `imul`/`and`/`or`/`xor` are DESTRUCTIVE: the operand model declares `dest` a REUSE of
+	// `lhs` (`pushReuseBinOperands`), and `RegisterAllocator.allocateReuseDef` materialises
+	// `mov dest, lhs` when — and only when — `lhs` OUTLIVES the op (the def may then reuse no
+	// operand's register, because the copy runs BEFORE the op and would clobber a value it still
+	// reads). So an order with a surviving `lhs` and a dying `rhs` costs one instruction that the
+	// other order does not, and for a commutative op the other order computes the same value.
+	//
+	// ⭐ **THE LIVENESS FACTS COME OFF A CENSUS THE ISEL ALREADY WALKS, NOT A SECOND ANALYSIS** —
+	// `collectFunctionValueUses` counted with multiplicity, plus the def block of every arithmetic
+	// result, both filled by the ONE descent `ScaledIndexFolds` makes for `EC16`.
+	//
+	// ⚠⚠ **THE TWO HALVES ARE NOT THE SAME KIND OF ANSWER, AND THE ASYMMETRY IS WHAT MAKES THIS SAFE.**
+	//   • `rhs` — **EXACT**, and it has to be. `valueDiesAtItsOnlyReader` asks BOTH "read exactly once"
+	//     AND "defined in this same block", because one reader alone does NOT mean the value dies at it:
+	//     a value defined OUTSIDE a loop and read ONCE inside is live across the back edge. Answering
+	//     that wrongly would swap a copy INTO existence, and shv2 REFUSES rather than spills — an
+	//     `E5001` on a program that compiled before. This half carries the whole safety argument.
+	//   • `lhs` — **NECESSARY, NOT SUFFICIENT.** A second reader is required for a copy to exist, but a
+	//     second reader that comes BEFORE this op leaves `lhs` dying here anyway; the swap then removes
+	//     nothing. Answering that exactly needs a use POSITION, a dense per-function column on the
+	//     isel's hot path, and it is not bought here.
+	// ⇒ Because the `rhs` half is exact, the imprecision on `lhs` costs a golden that MOVED FOR NOTHING
+	// and can never cost an instruction AT THE OP: the swapped order's reuse input provably dies, so no
+	// copy is recorded for it whatever `lhs` was doing.
+	//
+	// ⚠⚠ **DOWNSTREAM IS A DIFFERENT QUESTION AND IT IS NOT UNIFORMLY A WIN — MEASURED 2026-08-29 against
+	// a real control.** A different colour for one value moves others. On the SELF-COMPILE that is
+	// favourable (`movRegReg` 248,286 → 248,111, and the only other op kinds that moved at all are
+	// `loadRegSlot` −2 and `storeSlotReg` −1 — nothing was added anywhere) and `fannkuch-redux` runs 4.7%
+	// faster. On `scale-test`'s GENERATED corpus it is the other way: emitted `codeBytes` **+1.45%** at
+	// rung 5, all of it `regalloc:splitting` (+7.59% allocations, +12.20% CPU) — that corpus's pressure
+	// knob is sized to sit AT the register pool, so any colouring perturbation tips it into splitting.
+	// `phase:isel` allocations are IDENTICAL to the digit either way, so the columns below cost nothing;
+	// the whole effect is the allocator's. **Which reading generalises is OPEN**; a change here owes both.
+	//
+	// ⚠ It is also the `x ⊕ x` guard for free: such an op inserts its one operand twice, so the operand
+	// reads as repeated and the exact test refuses it.
+	//
+	// ⛔ **FLOATS ARE EXCLUDED, AND NOT BY OMISSION.** x64 `addsd`/`mulsd` propagate the
+	// DESTINATION's NaN payload, so `a ⊕ b` and `b ⊕ a` are not bit-identical when both operands are
+	// NaN — the same reason `foldConstOperands`' operand reordering is integer-only (EC13). This
+	// function is reached only from the integer path, and `lowerFloatBinOp` states its own refusal.
+	// `minsd`/`maxsd` are not commutative at all, and `binOpcodeIsCommutative` already answers `false`
+	// for `min`/`max` and says why.
+	//
+	// ⚠ **THE DESTRUCTIVENESS ROSTER IS A SECOND STATEMENT OF A FACT `lowerBinOp`'s OWN MATCH OWNS, AND
+	// SAYING SO IS THE POINT.** It names which arms below emit a two-address instruction, and nothing
+	// holds the two in step: change an arm's instruction and this roster stays green and stale.
+	// Today that is cheap — a wrong answer costs a MISSED commute (a copy that stays) or a USELESS one
+	// (a swap that moves a golden and nothing else), because every commutative integer opcode currently
+	// selects a SYMMETRIC instruction and the swap is legal whether or not the instruction is
+	// destructive. **That is a property of the present arms, not an invariant**: an arm that selected an
+	// ASYMMETRIC instruction for a commutative opcode (BMI's `andn`, a scaled `lea` for `mul`) would
+	// make this roster's `true` a real miscompile. The structural cure is a `TargetOpMeta` bit read off
+	// the operand model — the one roster that already states two-addressness for real
+	// (`pushReuseBinOperands`) — which would also let `allocateReuseDef` decide this with EXACT liveness
+	// and no census at all. That is a bigger row than this one and is filed, not taken.
+	function commutesForCoalescing(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode) returns bool
+		if not binOpcodeIsCommutative(opcode) 'orderIsTheAnswer'
+			return false
+		end 'orderIsTheAnswer'
+		if not integerBinOpIsTwoAddress(opcode) 'nothingToCoalesceWith'
+			return false
+		end 'nothingToCoalesceWith'
+		// Both halves are required, and in this order: a second reader on the left is what a copy needs
+		// to exist at all, and a right operand that PROVABLY dies here is the register the destination
+		// takes instead. Without the second test a swap could MOVE the copy rather than remove it — or,
+		// with a merely-single-reader test, create one that was not there.
+		if not self.scaledIndexFolds.valueHasASecondReader(lhs) 'leftDiesHereToo'
+			return false
+		end 'leftDiesHereToo'
+		return self.scaledIndexFolds.valueDiesAtItsOnlyReader(rhs, readerId: resultId)
+	end 'commutesForCoalescing'
+
+	// Whether the x64 instruction `lowerBinOp`'s INTEGER path picks for `opcode` is two-address
+	// (`dest ⟸ lhs`) — the only shape whose operand order can cost a copy. Read against the arms
+	// below, one by one:
+	//   • `add`  — `leaRegRegReg`, a THREE-operand address computation with an independent
+	//              destination. Commuting it would move a golden and save nothing.
+	//   • `sub`/`mul`/`bitAnd`/`bitOr`/`bitXor` — `sub`/`imul`/`and`/`or`/`xor`, all destructive.
+	//   • the shifts — `shl`/`sar`/`shr` are destructive in `lhs`, but their COUNT is pinned to CL
+	//                  and is not interchangeable with the value being shifted at all.
+	//   • `div`/`min`/`max` — float-only; the integer path panics on them.
+	//
+	// ⚠ Only `add`, `mul`, `bitAnd`, `bitOr` and `bitXor` can REACH this — `commutesForCoalescing` asks
+	// commutativity first — so the `sub`, shift and `div` answers state the Std→x64 mapping for a reader
+	// rather than deciding anything. The live content is "`add` is not two-address."
+	function integerBinOpIsTwoAddress(opcode StdBinOpcode) returns bool
+		return match opcode 'o'
+			add gives false
+			sub to shrLogical gives true
+			div to max gives false
+		end 'o'
+	end 'integerBinOpIsTwoAddress'
+
 	// Lower a Std binary op (both operands registers) to x64. NO seed `mov` is emitted
 	// (M5.2 deleted the two-address seed): `+` uses the 3-operand `lea dest, [lhs +
 	// rhs]` (independent dest, no copy, no flags); `-`/`*` use the genuinely two-address
@@ -1694,9 +1793,16 @@ type StdToX64Lowering
 			return
 		end 'scaledIndexAddress'
 
+		// EC19 — the operand ORDER of a destructive instruction decides whether the allocator has to
+		// materialise a copy. See `commutesForCoalescing`. The swap is applied to the VALUE IDS and
+		// every arm below reads the swapped pair, so widening the commutable roster cannot leave one
+		// arm (the shift's `countId`, which is a value id rather than a vreg) on the unswapped operand.
+		let swap = self.commutesForCoalescing(resultId, lhs: lhs, rhs: rhs, opcode: opcode)
+		let leftId = rhs if swap else lhs
+		let rightId = lhs if swap else rhs
 		let dest = TargetVReg.virtual(resultId)
-		let lhsReg = TargetVReg.virtual(lhs)
-		let rhsReg = TargetVReg.virtual(rhs)
+		let lhsReg = TargetVReg.virtual(leftId)
+		let rhsReg = TargetVReg.virtual(rightId)
 		match opcode 'op'
 			add then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegReg(dest, base: lhsReg, index: rhsReg))
 			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(dest, lhs: lhsReg, rhs: rhsReg))
@@ -1708,7 +1814,7 @@ type StdToX64Lowering
 			bitXor then self.targetModule.appendOp(dstBlock, op: TargetOp.xorRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			// One arm for all three shifts: they differ only in WHICH group-2 instruction they
 			// name, and `shiftInstructionOf` is the one place that is decided.
-			shl to shrLogical then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rhs, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
+			shl to shrLogical then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rightId, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
 			// ⚠ INTEGER `binOp(div)` IS ILLEGAL, and the Std dialect's validator says so before this
 			// can fire: `binOp` is the PURE arithmetic band, and integer division is not pure —
 			// `idiv` faults on a zero divisor and on `i64.min / -1`, so it must not be reordered or

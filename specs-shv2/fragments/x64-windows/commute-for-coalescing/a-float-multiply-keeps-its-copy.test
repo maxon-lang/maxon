@@ -1,0 +1,60 @@
+// Test: a-float-multiply-keeps-its-copy
+typealias Wide = float(f64.min to f64.max)
+
+function scale(x Wide, k Wide) returns Wide
+	let p = x * k
+	return p + x
+end 'scale'
+
+function main() returns ExitCode
+	var seen = 0.0
+	for i in 0 upto 4 'feed'
+		seen = seen + scale(i + 1.0, k: 2.0)
+	end 'feed'
+	// p = 2,4,6,8; p+x = 3,6,9,12 -> 30
+	if seen != 30.0 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movRegImm32 rax, 0
+  forhdr:
+    x64.cmpRegImm32 rax, 4
+    x64.jcc greaterEqual, forexit
+  feed:
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.cvtsi2sdRegReg xmm2, rax
+    x64.addsdRegReg xmm2, xmm2, xmm1
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+  __il_body:
+    x64.movRegReg xmm3, xmm2
+    x64.mulsdRegReg xmm3, xmm2, xmm1
+    x64.addsdRegReg xmm3, xmm3, xmm2
+  __il_cont:
+    x64.addsdRegReg xmm0, xmm0, xmm3
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, sum
+  fordered:
+    x64.jcc equal, ifcont
+  sum:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

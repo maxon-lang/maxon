@@ -1253,9 +1253,8 @@ func @__bigAddSmall {
     x64.setccReg less, r14
     x64.cmpRegReg r13, rax
     x64.setccReg greaterEqual, rax
-    x64.movRegReg rcx, r14
-    x64.orRegReg rcx, r14, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.orRegReg rax, rax, r14
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#11
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
@@ -1378,8 +1377,8 @@ func @__bigAddSmall {
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
     x64.setccReg greaterEqual, rax
-    x64.orRegReg r14, r14, rax
-    x64.cmpRegImm32 r14, 0
+    x64.orRegReg rax, rax, r14
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#15
   __im_owned:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -1533,9 +1532,8 @@ func @__bigMulSmall {
     x64.setccReg less, r15
     x64.cmpRegReg r14, rax
     x64.setccReg greaterEqual, rax
-    x64.movRegReg rcx, r15
-    x64.orRegReg rcx, r15, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.orRegReg rax, rax, r15
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#9
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
@@ -1659,8 +1657,8 @@ func @__bigMulSmall {
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r14, rax
     x64.setccReg greaterEqual, rax
-    x64.orRegReg r15, r15, rax
-    x64.cmpRegImm32 r15, 0
+    x64.orRegReg rax, rax, r15
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#13
   __im_owned:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -1866,9 +1864,8 @@ func @__bigDivModSmall {
     x64.setccReg less, r15
     x64.cmpRegReg r14, rax
     x64.setccReg greaterEqual, rax
-    x64.movRegReg rcx, r15
-    x64.orRegReg rcx, r15, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.orRegReg rax, rax, r15
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#13
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
@@ -2014,8 +2011,8 @@ func @__bigDivModSmall {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg r14, rcx
     x64.setccReg greaterEqual, rcx
-    x64.orRegReg r15, r15, rcx
-    x64.cmpRegImm32 r15, 0
+    x64.orRegReg rcx, rcx, r15
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#17
   __im_owned:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
@@ -2132,8 +2129,7 @@ func @__bigDivModSmall {
     x64.setccReg equal, rax
     x64.leaRegRegImm32 rax, rax, -1
     x64.loadRegSlot rcx, slot15
-    x64.andRegReg rcx, rcx, rax
-    x64.movRegReg rax, rcx
+    x64.andRegReg rax, rax, rcx
     x64.cqo
     x64.idivReg r13
     x64.loadRegSlot rax, slot13
@@ -3112,8 +3108,8 @@ func @__bigShiftLeft {
     x64.storeSlotReg slot40, rcx
     x64.cmpRegReg r14, rax
     x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.orRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#29
   __im_load#30:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
@@ -3229,8 +3225,9 @@ func @__bigShiftLeft {
     x64.andRegImm32 rax, r12, -64
     x64.movRegReg rcx, rax
     x64.negReg rcx, rax
-    x64.orRegReg rax, rax, rcx
-    x64.sarRegImm8 rax, rax, 63
+    x64.orRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.sarRegImm8 rax, rcx, 63
     x64.movRegReg rcx, r12
     x64.shlRegCl r8, r8
     x64.notReg rax, rax
@@ -3248,8 +3245,8 @@ func @__bigShiftLeft {
     x64.cmpRegReg r14, rax
     x64.setccReg greaterEqual, rax
     x64.loadRegSlot rcx, slot40
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.orRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#33
   __im_owned#35:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -4011,9 +4008,8 @@ func @__bigCompare {
     x64.setccReg less, r14
     x64.cmpRegReg r13, rax
     x64.setccReg greaterEqual, rax
-    x64.movRegReg rcx, r14
-    x64.orRegReg rcx, r14, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.orRegReg rax, rax, r14
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#25
   __im_load#26:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
@@ -4128,8 +4124,8 @@ func @__bigCompare {
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r13, rax
     x64.setccReg greaterEqual, rax
-    x64.orRegReg r14, r14, rax
-    x64.cmpRegImm32 r14, 0
+    x64.orRegReg rax, rax, r14
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#29
   __im_load#30:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
@@ -4319,8 +4315,8 @@ func @__bigSubtract {
     x64.storeSlotReg slot23, rcx
     x64.cmpRegReg r14, rax
     x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.orRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#16
   __im_load#17:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
@@ -4442,8 +4438,8 @@ func @__bigSubtract {
     x64.cmpRegReg r14, rax
     x64.setccReg greaterEqual, rax
     x64.loadRegSlot rcx, slot23
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.orRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#20
   __im_load#21:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
@@ -4580,8 +4576,8 @@ func @__bigSubtract {
     x64.cmpRegReg r14, rcx
     x64.setccReg greaterEqual, rcx
     x64.loadRegSlot rdx, slot23
-    x64.orRegReg rdx, rdx, rcx
-    x64.cmpRegImm32 rdx, 0
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#24
   __im_owned:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]

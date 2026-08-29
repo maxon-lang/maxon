@@ -2515,11 +2515,17 @@ end 'StdArithOperands'
 
 // ⭐⭐ **WHETHER SWAPPING A `binOp`'s TWO OPERANDS CHANGES ITS ANSWER — THE one place that is stated.**
 // It lives beside `StdBinOpcode` rather than inside a pass for `stdBinOpcodeIsFloatOnly`'s reason: it
-// is a property OF THE OPCODE and of no one target or pass. Two readers today —
-// `foldConstOperands.tryFoldBinOp` (may it move a const lhs onto the rhs?) and
-// `StdArithOperands.canonicalizeCommutativeOperands` (may CSE order the two operands?) — and they must
-// not answer it separately.
-module function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
+// is a property OF THE OPCODE and of no one target or pass. Three readers today —
+// `foldConstOperands.tryFoldBinOp` (may it move a const lhs onto the rhs?),
+// `StdArithOperands.canonicalizeCommutativeOperands` (may CSE order the two operands?) and
+// `StdToX64Conversion.commutesForCoalescing` (may the ISEL put the dying operand on the left?) — and
+// they must not answer it separately.
+//
+// ⚠ `export`, NOT `module`, SINCE EC19: the third reader is in `Compiler/Targets/X64/`, and `module`
+// visibility is a DIRECTORY SUBTREE. The alternative was a second commutativity roster at the target
+// tier, which is the one thing this function exists to prevent — and it would have had to re-derive
+// the `min`/`max` answer below, which is exactly the one a second copy gets wrong.
+export function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 	return match opcode 'o'
 		add gives true
 		mul gives true

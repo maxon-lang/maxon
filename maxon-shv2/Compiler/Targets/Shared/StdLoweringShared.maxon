@@ -810,6 +810,18 @@ export type ScaledIndexFolds
 	var defBlockColumn as BlockRefArray
 	// Every value the function reads, WITH MULTIPLICITY — condition 1 above.
 	var valueUses as StdValueUseSet
+	// ⭐ EC19 — WHICH BLOCK EACH ARITHMETIC RESULT IS DEFINED IN, and the set that says an entry was
+	// written at all (the `growFilled` zero is a real BlockRef, so the column alone can never read as
+	// absent — the rule every other column here states for itself).
+	//
+	// It exists because "read exactly once" is NOT "dies at that reader": a value defined OUTSIDE a
+	// loop and read ONCE inside it is live across the back edge and dies nowhere near its one reader.
+	// Same block PLUS one reader IS exact — the def precedes the use, no other use exists, so the live
+	// range is closed inside the block. Only ARITHMETIC results are recorded (`isArithmetic`, which
+	// covers every compare and every ALU op and no load, call or block argument); anything else has no
+	// entry and is REFUSED, which is conservative in the only direction that costs a missed swap.
+	var arithDefBlock as BlockRefArray
+	var arithDefs as StdValueUseSet
 	// The two scratch records the walk refills per op. Fields rather than locals for
 	// `StdToX64Conversion.fuseIfDefines`' measured reason: a fresh heap object per op of every function
 	// the backend lowers cost ~3,500 allocations on the SMALLEST scale rung.
@@ -820,7 +832,7 @@ export type ScaledIndexFolds
 	// capacity, so the second function's records reuse the first's buffers and the whole analysis
 	// allocates once per compilation.
 	export static function create() returns ScaledIndexFolds
-		return Self{scaleCandidates: StdValueUseSet.create(), retiredScaleDefs: StdValueUseSet.create(), indexedAddrDefs: StdValueUseSet.create(), fusedAddrDefs: StdValueUseSet.create(), baseColumn: ValueIdArray.create(), indexColumn: ValueIdArray.create(), scaleColumn: MemoryIndexScaleArray.create(), defBlockColumn: BlockRefArray.create(), valueUses: StdValueUseSet.createTrackingRepeats(), operands: StdArithOperands.create(), scaleMatch: MemoryIndexScaleMatch.create()}
+		return Self{scaleCandidates: StdValueUseSet.create(), retiredScaleDefs: StdValueUseSet.create(), indexedAddrDefs: StdValueUseSet.create(), fusedAddrDefs: StdValueUseSet.create(), baseColumn: ValueIdArray.create(), indexColumn: ValueIdArray.create(), scaleColumn: MemoryIndexScaleArray.create(), defBlockColumn: BlockRefArray.create(), valueUses: StdValueUseSet.createTrackingRepeats(), arithDefBlock: BlockRefArray.create(), arithDefs: StdValueUseSet.create(), operands: StdArithOperands.create(), scaleMatch: MemoryIndexScaleMatch.create()}
 	end 'create'
 
 	// ⭐ THE ENTRY POINT. Re-decide every fold for `func`, discarding the previous function's (ValueIds
@@ -866,6 +878,58 @@ export type ScaledIndexFolds
 		return self.fusedAddrDefs.contains(valueId)
 	end 'fusesIntoMemoryOp'
 
+	// ⭐ THE USE CENSUS THIS TYPE ALREADY WALKS, ANSWERED FOR A SECOND READER (EC19). `valueUses` is
+	// "every value this function reads, WITH MULTIPLICITY" — a fact about the Std function and not
+	// about addressing at all, which is why it is exported rather than kept private: the alternative
+	// is a SECOND `blockRefs` → `opRefs` descent over the same ops, which is exactly what
+	// `computeForFunction`'s header refuses.
+	//
+	// ⚠ **THIS IS "IS THERE ANOTHER READER", NOT "DOES IT SURVIVE THIS OP".** The other reader may
+	// come BEFORE the op asking, in which case the value dies at the asker anyway. For the exact
+	// question ask `valueDiesAtItsOnlyReader` below.
+	//
+	// ⚠ Valid only for the function `computeForFunction` was last called with — the same scope as
+	// every other answer here, and for the same reason (ValueIds are function-local).
+	export function valueHasASecondReader(valueId ValueId) returns bool
+		return self.valueUses.containsRepeat(valueId)
+	end 'valueHasASecondReader'
+
+	// ⭐⭐ EXACT (EC19): `valueId`'s live range ENDS at the op that defines `readerId`. Three facts, and
+	// the middle one is the whole of it:
+	//   1. `valueId` is read exactly ONCE in the entire function (`containsRepeat` counts every operand
+	//      of every op, every terminator and every branch-edge argument), so `readerId`'s op is its
+	//      only reader.
+	//   2. `valueId` and `readerId` are defined in the SAME BLOCK. A def dominates its use, so within
+	//      one block the def precedes the use; with no other use anywhere the range is closed inside
+	//      that block and the value is dead after it.
+	//   3. Both are ARITHMETIC results, so both have a recorded def block. A load, a call result, a
+	//      parameter or a block argument has none and is refused — conservative, never wrong.
+	//
+	// ⛔ **FACT 2 IS NOT DECORATION AND "ONE READER" ALONE IS A WRONG ANSWER.** A value defined OUTSIDE
+	// a loop and read ONCE inside it has exactly one reader and is live across the back edge — it dies
+	// nowhere near that reader. Answering `true` there would let `commutesForCoalescing` swap a copy
+	// INTO existence, and shv2 REFUSES rather than spills, so the cost of that is an `E5001` on a
+	// program that compiled before.
+	export function valueDiesAtItsOnlyReader(valueId ValueId, readerId ValueId) returns bool
+		if self.valueUses.containsRepeat(valueId) 'anotherReaderExists'
+			return false
+		end 'anotherReaderExists'
+		if not self.arithDefs.contains(valueId) or not self.arithDefs.contains(readerId) 'noRecordedDefBlock'
+			return false
+		end 'noRecordedDefBlock'
+		return self.blockOfArithDef(valueId) == self.blockOfArithDef(readerId)
+	end 'valueDiesAtItsOnlyReader'
+
+	// The block an ARITHMETIC result was defined in. Guarded by `arithDefs` for the reason every other
+	// column here is: `growFilled` seeds the column with 0, which is a real BlockRef and never reads as
+	// absent.
+	function blockOfArithDef(valueId ValueId) returns BlockRef
+		if not self.arithDefs.contains(valueId) 'noEntry'
+			panic("ScaledIndexFolds.blockOfArithDef: value {valueId} defines no arithmetic result — ask through `valueDiesAtItsOnlyReader`, which tests `arithDefs` first; the column holds a `growFilled` zero for every other id, which is a real BlockRef rather than a sentinel")
+		end 'noEntry'
+		return try self.arithDefBlock.get(valueId) otherwise panic("ScaledIndexFolds.blockOfArithDef: arithDefBlock.get OOB at {valueId}")
+	end 'blockOfArithDef'
+
 	// ⚠ `base` IS THE ADDRESS ROLE'S FIELD ALONE, which is why this guard is stronger than the two
 	// below: a scale candidate is `index * scale` and has no base at all, so its `baseColumn` entry is
 	// the `growFilled` zero and would silently name value 0.
@@ -909,10 +973,20 @@ export type ScaledIndexFolds
 		self.scaleColumn.clear()
 		self.defBlockColumn.clear()
 		self.valueUses.clear()
+		self.arithDefBlock.clear()
+		self.arithDefs.clear()
 	end 'reset'
 
 	function recordOp(op StdOp, blockRef BlockRef, foldsIntoMemoryOps bool)
 		classifyArithOperands(op, operands: self.operands)
+
+		// EC19 — recorded BEFORE the early returns below, so the column covers every arithmetic result
+		// of the function and not only the ones an addressing mode consumed.
+		if self.operands.isArithmetic() 'definesArithResult'
+			self.arithDefBlock.growFilled(self.operands.resultId + 1, value: blockRef)
+			try self.arithDefBlock.set(self.operands.resultId, value: blockRef) otherwise panic("ScaledIndexFolds.recordOp: arithDefBlock.set OOB at {self.operands.resultId}")
+			self.arithDefs.insert(self.operands.resultId)
+		end 'definesArithResult'
 
 		if self.operandsAreAScaleMultiply() 'scaleDef'
 			// `base: 0` is the field this role does not have — see the columns' declaration. It is never

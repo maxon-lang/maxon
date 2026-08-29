@@ -918,12 +918,210 @@ cycles and nbody carries 8 of them plus 41 power-of-two multiplies. ⚠ Sequence
 which removes most of the power-of-two multiplies by folding them into an addressing mode; measure
 what is left before building the `shl` half.
 
-#### `EC19` · `commuteForCoalescing`
+#### `EC19` · Register-to-register copies — the census, and `commuteForCoalescing`
 
 v1's `Mir/CommuteForCoalescing.maxon` (355 lines) commutes a commutative op's operands so the
 register coalescer can eliminate the copy. shv2's allocator already coalesces (biased colouring,
-`RegisterAllocator.maxon:1830-1853`) — this makes it succeed more often, for 355 lines and no new
-analysis. Small, well-understood, low risk.
+`RegisterAllocator.maxon:1830-1853`); the row was filed to make it succeed more often. Its SUBJECT,
+though, is the wider question — **why are 17% of nbody's emitted ops copies, and which of them need
+not be** — and that is what it answers.
+
+⭐⭐ **THE CENSUS IS THIS ROW'S PRODUCT, AND IT SAYS THE COPIES ARE NOT A COALESCING PROBLEM.** None
+is a self-move (the biased colouring already deletes those, `SsaDestruction.maxon:481`), so every one
+is a real copy between two different registers. Measured 2026-08-29 on **the self-compile**, the
+realest program in the tree — 8,554 functions, **1,275,734 emitted x64 ops, 248,215 `movRegReg`
+(19.5%)** — each attributed by structural rules over the `--emit-ir` dump:
+
+| bucket | count | share | who emits it |
+|---|---|---|---|
+| **ABI: call argument setup** | 169,037 | **68.1%** | `emitArgMovesByFloatMask` |
+| **ABI: call result capture** | 28,955 | 11.7% | `lowerCall`, out of R8 / XMM0 / R10 |
+| **ABI: parameter capture at entry** | 15,564 | 6.3% | `lowerParam` |
+| **ABI: a result straight into the next call's argument register** | 9,192 | 3.7% | both of the above at once |
+| SSA-destruction edge copies | 11,379 | 4.6% | `SsaDestruction` (5,752 in `critsplit` blocks) |
+| frame `mov rbp, rsp` | 8,554 | 3.4% | one per function, `X64PrologueEpilogue` |
+| **ABI: return-value move** | 4,368 | 1.8% | `emitPrimaryReturnMove` |
+| **two-address reuse copies** | **969** | **0.39%** | `RegisterAllocator.allocateReuseDef` |
+| fixed-register (`idiv` operands, a shift count in CL) | 57 | 0.02% | `lowerDivMod` / `lowerShiftCl` |
+| unclassified | 132 | 0.05% | — |
+
+**91.6% of the copies are the ABI, and they are FORCED rather than missed.** Every argument register
+in shv2's custom convention — `rcx, rdx, rax, r9, rsi, rdi` and `xmm0–5` — is CALLER-saved, so a value
+that has to survive the call cannot live in the register the call wants it in. Measured: **93.0% of
+the 178,339 argument-setup copies read a CALLEE-SAVED register**, and **95.7% of those provably cross
+a call** (the source is read again after this call, or a call lies between its definition and here).
+Two readings say the same thing from the other side: **a call-free function is 5.5% copies against
+19.5% for a function that calls** (121 vs 8,433 functions), and the self-compile emits **1.67
+`movRegReg` per emitted call**.
+
+⇒ **THE LEVER ON THIS COLUMN IS FEWER CALLS, NOT BETTER COALESCING — and specifically `EC2`.**
+**21.2% of the self-compile's 148,623 calls are refcount primitives** (`__mm_incref` / `__mm_decref` /
+`__managed_decref` / …) and **9.7% of all copies feed one directly**. The INDUCED cost is larger than
+the direct one: a managed field read bracketed by `incref`/`decref` is a value LIVE ACROSS A CALL,
+therefore callee-saved, therefore copied again at every later use as an argument. `targetOpOperands`
+in shv2's own source is 46% copies for exactly that reason:
+
+```
+loadRegBaseDisp r13, [rbx + 8]   ; the union payload
+mov  rcx, r13                    ; ─┐ the retain's argument
+call __mm_incref                 ;  │
+mov  rcx, r12                    ;  │ r13 must now be CALLEE-saved, so the REAL call
+mov  rdx, r13                    ;  │ has to copy it again
+call pushCopyOperands            ;  │
+mov  rcx, r13                    ;  │
+call __mm_decref                 ; ─┘
+```
+
+**AND TWO THIRDS OF THE REUSE COPIES COULD NEVER HAVE BEEN COMMUTED AT ALL:**
+
+| shape | count | why |
+|---|---|---|
+| an IMMEDIATE or CL-count form (`andRegImm32`, `xorRegImm32`, `sarRegImm8`, `shrRegCl`, …) | 514 | ONE register operand — nothing to swap |
+| **a commutative binary — the row's target** | **314** | `imul` / `and` / `or` / `xor` |
+| non-commutative binary (`sub`, `divsd`) | 71 | the order IS the answer |
+| unary (`neg`, `not`) | 70 | one operand |
+
+✅ **`commuteForCoalescing` LANDED 2026-08-29 ANYWAY, AND IT IS NOT A PASS.** The two-address
+constraint is x64's, so the decision is x64's: `StdToX64Conversion.commutesForCoalescing`, at
+instruction selection. Swapping two USE operands of ONE op is free of every ordering question — both
+are read at the same point, so no live range moves and nothing downstream is invalidated — and **no
+descent was added**: both liveness facts come off the ONE `blockRefs` → `opRefs` walk the isel already
+makes for `EC16` (`ScaledIndexFolds`).
+
+**The rule**: the opcode is commutative (`binOpcodeIsCommutative`, the dialect's one answer — already
+right that `min`/`max` are NOT), the x64 instruction is destructive (`imul`/`and`/`or`/`xor`; integer
+`+` is the three-operand `lea` and is excluded), the RIGHT operand PROVABLY DIES at the op, and the
+LEFT one has a second reader.
+
+⭐ **THE DEPARTURE FROM v1 IS THE WHOLE OF THE DESIGN, AND v1's RULES WOULD HAVE MISSED THE ONE SHAPE
+THAT PAYS.** v1 classifies each operand by its DEFINING OP — fixed-register-bound, immediate-foldable,
+or flexible — and swaps only to move a fixed-bound operand off the left; it never asks liveness. The
+shape that actually costs shv2 a copy is `EC1`'s inlined bounds guard,
+`bitOr(setcc(i < 0), setcc(i >= len))`, whose operands are BOTH "flexible" — v1's rules answer *no
+swap*. shv2 asks the question that decides the copy instead. v1's immediate-foldable rule has no shv2
+analogue either: `foldConstOperands` has already turned a constant operand into an `imm` FORM
+(`andRegImm32`), which is not a two-operand op at all.
+
+⚠⚠ **"READ EXACTLY ONCE" IS NOT "DIES HERE", AND THE FIRST CUT GOT THAT WRONG.** It tested only
+`valueHasASecondReader(rhs)`, on the argument that a use is dominated by its def. Dominance does not
+carry it: **a value defined OUTSIDE a loop and read ONCE inside it has one reader and is live across
+the back edge.** Combined with the LEFT half's acknowledged imprecision (a second reader that comes
+BEFORE the op leaves `lhs` dying here anyway) that is not merely a missed win — it swaps a copy INTO
+existence, 0 becomes 1 per iteration, and shv2 REFUSES rather than spills, so the price is an `E5001`
+on a program that compiled before. **Found by the independent review, not by any gate**: the suite was
+6,827 green with zero `E5001` either way. `valueDiesAtItsOnlyReader` now asks "read exactly once" AND
+"defined in the same block", which closes the range inside one block and is exact; the LEFT half stays
+necessary-but-not-sufficient, and with the RIGHT half exact its imprecision can only cost **a golden
+that moved for nothing**.
+
+`scripts/emitted-code-count.py`, committed corpus, before → after. Every other column is
+byte-identical, as it must be — this row selects no instruction differently:
+
+| | ops | mov |
+|---|---|---|
+| nbody | 8,586 → **8,582** | 1,468 → **1,464** |
+| fannkuch-redux | 1,708 → **1,700** | 219 → **211** |
+| TOTAL | 10,591 → **10,579** | 1,744 → **1,732** |
+
+**AGAINST A REAL CONTROL** — the same tree with the one `let swap = …` line replaced by
+`let swap = false`, both compilers built in one session and the SAME source compiled by both:
+
+| | control | with the row | |
+|---|---|---|---|
+| emitted x64 ops | 1,276,158 | **1,275,980** | **−178** |
+| `movRegReg` | 248,286 | **248,111** | **−175** |
+| two-address reuse copies | 969 | **800** | |
+| … of which commutable | 314 | **156** | |
+| emitted binary | 9,007,487 B | **9,006,975** B | **−512 B** |
+
+⭐⭐ **AND THE TIMED A/B IS NOT ZERO — fannkuch is −4.7%, WHICH IS THE FIRST NON-ZERO TIMED RESULT
+THIS WORKSTREAM HAS HAD FROM REMOVING A COPY.** Two compilers from one tree differing only in that
+line, each compiling `examples/`, runs interleaved A B A B A B on one box, both printing identical
+answers:
+
+| program | control | with the row | |
+|---|---|---|---|
+| `fannkuch-redux` | 10,707 / 10,589 / 10,605 ms | **10,095 / 10,144 / 10,143 ms** | **−4.7%** |
+| `nbody` | 10,340 / 10,226 / 10,256 ms | 10,220 / 10,220 / 10,249 ms | **0** |
+
+**Eight instructions, and all eight are in fannkuch's innermost loops**: every one is `EC1`'s bounds
+guard, which the program pays on every element access — the same reason `EC16` bought ×1.78 there and
+`EC14` bought nothing. nbody's four are in its float-printing stdlib, which runs a handful of times.
+⚠ The two binaries differ in 16 KB, not 8 instructions — a different colour for one value moves others
+— so the honest attribution is *to the change*, not to the eight `mov`s alone. ⭐ What that churn came
+to is worth stating, because it could have gone either way: across the whole self-compile the ONLY op
+kinds whose count moved at all are **`movRegReg` −175, `loadRegSlot` −2 and `storeSlotReg` −1**.
+Nothing was ADDED anywhere — the change removed 175 copies and, incidentally, three spill/reload ops.
+
+⚠ **A FALSE READING THAT ONLY THE CONTROL CAUGHT, worth carrying because it is the shape of the
+mistake.** Comparing the self-compile BEFORE the change against the self-compile AFTER it read the
+binary **114 bytes BIGGER** while emitting 116 fewer instructions — which invites a story about REX
+prefixes, since a register above `r7` costs one byte the low eight do not. It is an ARTEFACT: the two
+runs compiled DIFFERENT SOURCE, this row's own added lines included, so the delta held the new code as
+well as its effect. **A before/after across a source change is not an A/B.** The same trap ate the
+first fixpoint check, where stage-2 and stage-3 differed in 175 bytes that turned out to be the LINE
+NUMBERS inside `panic at StdToX64Conversion.maxon:1747` — exactly the 12 lines of comment added
+between the two stages.
+
+⚠⚠ **AND THE SCALE LADDER DISAGREES WITH ALL THREE REAL PROGRAMS — THE ROW'S ONE UNEXPLAINED READING.**
+Against the same control, its binary swapped in and the ladder re-run: emitted **`codeBytes` +0.75% at
+rung 0 rising to +1.45% at rung 5** — the LADDER's emitted code gets BIGGER — for **+1.20% of compile
+allocations, +3.81% of bytes and +5.8% of CPU**. ATTRIBUTED, and the attribution is the useful half:
+**`phase:isel` allocations are IDENTICAL TO THE DIGIT (2,855,745 both ways)**, so the two dense columns
+this row adds cost nothing at all — they are reset per function and reuse their capacity — and the
+entire effect is **`regalloc:splitting` +7.59% allocations / +12.20% CPU**. The swapped operand order
+changes a colour, this corpus then SPLITS more, and the extra code bytes are spill/reload.
+
+⚠ **The three real programs say the opposite** — nbody's and fannkuch's binaries are the same size to
+the byte, the self-compile is 512 bytes SMALLER with `loadRegSlot`/`storeSlotReg` DOWN, and fannkuch
+runs 4.7% faster — and there is a standing reason to distrust the ladder on exactly this axis:
+`ScaleCorpus`'s pressure knob is sized to sit AT the register pool (`calleeSavedMask` is what
+`floatsLivePerSpillLoop` reads), so ANY colouring perturbation tips it into splitting. That is the
+corpus being a knife-edge, not necessarily the change being bad — but it is a reading, not an excuse,
+and **which of the two generalises is OPEN.** A row that later touches the allocator should re-measure
+it. The trend row in `docs/optimization-log.md` carries the same numbers.
+
+**GATES**: x64-windows **6,827 passed, 0 failed, exit 0** (6,822 + 5 new) and wasm32-wasi **6,366 passed, 0 failed, exit 0** (6,361 + 5);
+**zero `E5001` in either run**, and `EC13`'s knife-edge case
+`generic-hash-table-regalloc/…witness-dispatch-inside-a-pressured-loop` stays green. **497
+goldens re-minted** from ONE unfiltered run and re-verified at zero drift, 5 added. **Self-host
+fixpoint: stage-2 == stage-3, BYTE-IDENTICAL (9,006,975 bytes).**
+
+**Cases added** to the new `specs-shv2/commute-for-coalescing.md`, 5, four of them CONTROLS and every
+one sabotage-verified against the committed fragments:
+
+| case | sabotage | what moved |
+|---|---|---|
+| `a-commutative-op-with-a-dying-right-operand-needs-no-copy` (the gate) | `let swap = false` | EXACTLY this one; the four controls byte-identical |
+| `a-commutative-op-whose-both-operands-survive-keeps-its-copy` | invert the dying-`rhs` test | this one and the gate; the other three byte-identical |
+| `a-non-commutative-op-keeps-its-copy` | drop `binOpcodeIsCommutative` | **RED, exit 1** — a wrong answer, not a golden |
+| `a-float-multiply-keeps-its-copy` | call the rule from `lowerFloatBinOp` | EXACTLY this one |
+| `an-integer-add-is-not-commuted` | `add gives true` in the roster | EXACTLY this one |
+
+⚠⚠ **TWO OF THOSE FOUR CONTROLS FIRST PASSED FOR THE WRONG REASON, AND BOTH WERE CAUGHT BY RUNNING
+THE SABOTAGE RATHER THAN BY READING THE CASE.** The subtraction's first spelling was `a - b`, and the
+`add`'s was `total + step` — in both, after inlining, the right operand IS the loop counter, which has
+half a dozen readers, so the dying-`rhs` condition refused first and the guard under test was never
+reached: the sabotage left every fragment byte-identical and every case green. Giving each a right
+operand of its own (`b * 3`, `step * 5`) fixed it — and the `add`'s SECOND spelling failed differently
+again, because `step * 3` against a `total` of `i * 3` is the SAME VALUE after CSE and the `x ⊕ x`
+guard refused it. **A control is not a control until its sabotage has been run.**
+
+**Left open**: the whole ABI column above, which is `EC2`'s and the calling convention's, not this
+row's; the **frame pointer** (8,554 copies, one per function, plus `push`/`pop` — omitting it frees a
+register and ~25,000 ops, and breaks backtraces, the GT runtime and stack-parameter addressing, so it
+is its own row); the **`critsplit` edge copies** (5,752), where a phi is biased toward the register
+its SLOW arm's call returns in and the two FAST arms then each pay a copy — a phi-colouring heuristic
+with no profile to read, and rematerializing a CONSTANT phi input on the edge instead of copying it is
+the bounded half of it; the LEFT-operand imprecision, whose cure is a use-POSITION column; and
+`integerBinOpIsTwoAddress`, which is a SECOND statement of a fact `lowerBinOp`'s own match owns — the
+structural cure is a commutativity bit on `TargetOpMeta` read off the operand model, which would let
+`allocateReuseDef` make this decision with EXACT liveness and no census at all.
+
+⚠ **AND ONE THING THE CENSUS FOUND THAT IS NOT ABOUT COPIES AT ALL**: `EC1`'s bounds guard emits
+`cmp`/`setcc` twice, `or`, `cmp $0`, `jcc` — SIX instructions in the hottest loop of every
+array-indexing program — where x64's idiom is TWO: `cmp idx, len` / `jae slow`, because an UNSIGNED
+compare catches `idx < 0` and `idx >= len` at once. Filed here rather than taken.
 
 ### Tier 3 — measure before committing
 
