@@ -1,0 +1,33 @@
+// Test: error.a-throwing-message-reply-cannot-be-stored
+enum MathError implements Error
+	divideByZero
+end 'MathError'
+
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n int, by int) returns Integer throws MathError
+		if by == 0 'zero'
+			throw MathError.divideByZero
+		end 'zero'
+		return try (n / by) otherwise 0
+	end 'divide'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	var ps = ReplyPromiseArray.create()
+	ps.push(h.divide(10, by: 2))
+	return 0
+end 'main'
+---
+CompilerError:
+error E3098: <fragment>:28:5: a reply from 'Calc.divide' throws 'Calc.divide.errors' — two members with no declaration between them — so no 'Promise with (T, E)' can name it; catch it at a 'try await' instead of storing it

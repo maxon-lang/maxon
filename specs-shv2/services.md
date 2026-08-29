@@ -2716,10 +2716,25 @@ end 'main'
 31
 ```
 
-<!-- disabled-test: awaitany-returns-the-completed-index -->
-<!-- SV3: awaitAny over an Array with Promise; gated on W217 -->
-One waiting primitive covers service replies, file I/O and subprocess drains.
+<!-- test: awaitany-returns-the-completed-index -->
+<!-- targets: x64-windows -->
+⭐ **ONE WAITING PRIMITIVE COVERS SERVICE REPLIES, FILE IO AND SUBPROCESS DRAINS, AND THIS IS THE HALF THAT
+MAKES IT TRUE (SV3).** A reply is an ordinary `Promise`, so it goes into an `Array with Promise with …` and
+`__Builtins.awaitAny` selects over it exactly as it does over `async` spawns — no separate "channel select"
+and no second waiting mechanism.
+
+⚠ **THE STORAGE MUST NAME `ServiceError` AND THE MESSAGE MUST THROW NOTHING.** A reply ALWAYS carries
+`ServiceError` (the service can be gone, whatever the message declares), so `Promise with Integer` alone
+would erase it; and a message that DOES throw has a two-member reply error type no `throws` clause can
+spell, which is `error.a-throwing-message-reply-cannot-be-stored` below.
+
+⚠ The reply is awaited afterwards. `awaitAny` retires nothing, so the array would otherwise die holding a
+live reply cell — `W217`, exit 75; see `specs-shv2/await-any.md`.
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
 type Slow
 	var n as int
 
@@ -2727,23 +2742,145 @@ type Slow
 		return Self{n: 0}
 	end 'create'
 
-	export function value() returns int
+	export function value() returns Integer
 		return 5
 	end 'value'
 end 'Slow'
 
-typealias IntPromiseArray = Array with Promise with int
-
 function main() returns ExitCode
 	let h = spawn Slow.create()
-	var ps = IntPromiseArray.create()
+	var ps = ReplyPromiseArray.create()
 	ps.push(h.value())
-	let i = try awaitAny(ps) otherwise 9
-	return i as ExitCode
+	let ready = __Builtins.awaitAny(ps)
+	let p = try ps.get(ready) otherwise panic("awaitAny named a slot that is in range")
+	let v = try await p otherwise 0
+	return (ready + v) as ExitCode
 end 'main'
 ```
 ```exitcode
-0
+5
+```
+
+<!-- test: error.a-throwing-message-reply-cannot-be-stored -->
+⭐ **THE ONE REPLY THAT MAY NOT BE STORED, AND THE REASON IS THE SAME ONE `error.bare-try-propagation-of-a-two-member-reply-is-refused` GIVES.** A message that throws has a reply error type of
+`{ServiceError, <what the message throws>}` — two members with no declaration between them and no spelling
+a `Promise with (T, E)` could put in its second argument. Storing it would erase one of the two, and the
+awaiter would then decode a fused two-member flag as a single enum: a silent wrong `match` arm rather than
+a diagnostic. So the refusal is at the STORE, where both halves are still known.
+```maxon
+enum MathError implements Error
+	divideByZero
+end 'MathError'
+
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n int, by int) returns Integer throws MathError
+		if by == 0 'zero'
+			throw MathError.divideByZero
+		end 'zero'
+		return try (n / by) otherwise 0
+	end 'divide'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	var ps = ReplyPromiseArray.create()
+	ps.push(h.divide(10, by: 2))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3098: <fragment>:28:5: a reply from 'Calc.divide' throws 'Calc.divide.errors' — two members with no declaration between them — so no 'Promise with (T, E)' can name it; catch it at a 'try await' instead of storing it
+```
+
+<!-- test: a-stored-reply-decodes-serviceerror-through-the-storage-road -->
+<!-- targets: x64-windows -->
+⭐⭐ **THE CASE THAT SAYS THE TWO ROADS DECODE THE SAME WORD.** A reply awaited DIRECTLY is described by its
+message (`TryTarget.serviceReply`); one awaited out of an array is described by its STORAGE TYPE
+(`TryTarget.promise`) — two different roads through `caughtErrorFormFor`, reading one error word that the
+service wrote already fused. If they disagreed the failure would be silent: a `match e` arm selected by a
+table the writer did not build, never a diagnostic.
+
+They agree because a message that throws NOTHING has exactly one reply error member, so both roads answer
+`CaughtErrorForm.singleCall` and `e` binds a plain `ServiceError`. This shuts the service down first, so the
+send is abandoned at the send and the reply really does carry `stopped`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+type Slow
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function value() returns Integer
+		return self.n
+	end 'value'
+end 'Slow'
+
+function main() returns ExitCode
+	var stops = 0
+	let h = spawn Slow.create()
+	h.shutdown()
+	var ps = ReplyPromiseArray.create()
+	ps.push(h.value())
+	let ready = __Builtins.awaitAny(ps)
+	let p = try ps.get(ready) otherwise panic("awaitAny named a slot that is in range")
+	try await p otherwise (e) 'gone'
+		match e 'w'
+			stopped then stops = stops + 1
+		end 'w'
+	end 'gone'
+	return stops as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.a-reply-stored-without-its-error-type-is-refused -->
+A reply ALWAYS carries `ServiceError` — the service can be gone, whatever the message declares — so a
+`Promise with T` storage would erase it and leave a `try await` with nothing to bind `e` at. The refusal
+names the MESSAGE rather than *"this promise's function"*: `Slow.value` throws nothing, its REPLY does, and
+a sentence blaming the handler would send the author to add a `throws` clause that changes none of this.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BarePromise = Promise with Integer
+typealias BarePromiseArray = Array with BarePromise
+
+type Slow
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function value() returns Integer
+		return self.n
+	end 'value'
+end 'Slow'
+
+function main() returns ExitCode
+	let h = spawn Slow.create()
+	var ps = BarePromiseArray.create()
+	ps.push(h.value())
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3098: <fragment>:21:5: a reply from 'Slow.value' always carries 'ServiceError' — the service can be gone, whatever the message declares — so 'BarePromise' would erase it; declare the storage as 'Promise with (T, ServiceError)' so 'try await' can bind it
 ```
 
 <!-- disabled-test: error.a-generic-service-is-supported -->

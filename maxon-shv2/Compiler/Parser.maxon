@@ -5411,6 +5411,13 @@ let GtIsCompleteArity = 1 as ParamCount
 // `CurrentProcessIdArity`'s reason: the number is a fact about THIS intrinsic's contract.
 let AwaitAnyArity = 1 as ParamCount
 
+// ⭐ **WHAT A PROMISE-STORAGE MISMATCH SENTENCE CALLS THE PROMISE, ON THE SPAWN ROAD.** It is a constant
+// rather than a literal at three throw sites because `specs-shv2/async-await.md`'s two `E3098` goldens pin
+// this exact phrase. The REPLY road names the message instead (`requirePromiseStorageDescribesReply`),
+// because *"this promise's function"* would be the handler, whose own `throws` clause says nothing about
+// the `ServiceError` a reply always carries.
+let PromiseStorageSubjectIsTheCallee = "this promise's function"
+
 // What `__Builtins.awaitAny` will accept, as the `builtinOperandType` sentence renders it — *"'…' requires
 // a {required}, but its argument is {got}"*. Named rather than written at the throw for
 // `StringLiteralRequirement`'s reason: it is a phrase a spec pins, not an incidental string.
@@ -64025,81 +64032,134 @@ export type Parser
 			return value
 		end 'alreadyStored'
 
-		let callee = try self.spawnCalleeStoredHere(func, value: value, storage: storage, anchor: anchor)
-		try self.requirePromiseStorageDescribesCallee(callee, storage: storage, anchor: anchor)
+		let source = try self.promiseSourceStoredHere(func, value: value, storage: storage, anchor: anchor)
+		try self.requirePromiseStorageDescribesSource(source, storage: storage, anchor: anchor)
 		self.consumePromiseThread(value)
 		self.retypeValue(value, valueType: MaxonType.genericInstance(storage))
 		return value
 	end 'storedPromiseValue'
 
-	// The callee whose spawn `value` is — the one thing a storage claim can be checked against. Anything that
-	// is not an `async` spawn's handle is refused here rather than by the tag doors below, whose sentence
-	// would compare a `Promise with …` against an `int` and tell the author nothing about why.
-	function spawnCalleeStoredHere(func IrFunction, value ValueId, storage GenericInstanceId, anchor Token) returns ByteArray throws ParseError
-		if self.valueOwnsGreenThread(value) 'aSpawn'
-			match self.asyncCallCalleeOf(func, promise: value) 'callee'
-				found(callee) then return callee
-				// ⚠ A SERVICE REPLY may not be stored in a `Promise with …` and falls to the refusal below.
-				// Its error type is the reply's synthesized union, which the storage type's `ErrorType`
-				// argument cannot spell — so admitting it would let a container claim a `throws` it cannot
-				// name. `awaitAny` over an array of replies is SV3's, and needs that question answered first.
-				serviceReply then break 'callee'
-				none then break 'callee'
-			end 'callee'
-		end 'aSpawn'
+	// What `value` IS — the one thing a storage claim can be checked against. Anything that is neither an
+	// `async` spawn's handle nor a service reply is refused here rather than by the tag doors below, whose
+	// sentence would compare a `Promise with …` against an `int` and tell the author nothing about why.
+	//
+	// ⭐⭐ **A SERVICE REPLY IS ADMITTED SINCE SV3, AND THIS COMMENT USED TO SAY IT COULD NOT BE.** It read
+	// *"its error type is the reply's synthesized union, which the storage type's `ErrorType` argument cannot
+	// spell"* — true of a message that THROWS and only of that one. A message that throws NOTHING has a reply
+	// whose only error member is `ServiceError`, a declared enum a storage type names like any other, and
+	// `ServiceCompanions.serviceReplyTransportPlacement`'s own header says what follows: *"its fused ordinal IS
+	// the ordinary `ordinal + bias` flag, and the awaiter binds a plain `ServiceError` with no union machinery
+	// anywhere."* So the STORAGE road and the DIRECT road decode identically — `caughtErrorFormFor` answers
+	// `singleCall` for both — and the two-member case is refused on its own terms in
+	// `requirePromiseStorageDescribesReply`, where the reason can be stated.
+	function promiseSourceStoredHere(func IrFunction, value ValueId, storage GenericInstanceId, anchor Token) returns AsyncCalleeLookup throws ParseError
+		if self.valueOwnsGreenThread(value) 'aSpawnOrAReply'
+			let source = self.asyncCallCalleeOf(func, promise: value)
+			match source 'known'
+				found to serviceReply then return source
+				none then break 'known'
+			end 'known'
+		end 'aSpawnOrAReply'
 
-		throw ParseError.promiseStorageMismatch("only an `async` spawn can be stored in '{String.from(self.signatures.instanceDisplayName(storage))}' — the value here is {self.valueDisplayTypeName(value)}", line: anchor.line, column: anchor.column)
-	end 'spawnCalleeStoredHere'
+		throw ParseError.promiseStorageMismatch("only an `async` spawn or a service reply can be stored in '{String.from(self.signatures.instanceDisplayName(storage))}' — the value here is {self.valueDisplayTypeName(value)}", line: anchor.line, column: anchor.column)
+	end 'promiseSourceStoredHere'
 
-	// The three comparisons `storedPromiseValue`'s header sets out, in the order an author most wants to hear
-	// them: what it returns, then whether it throws at all, then what it throws.
-	function requirePromiseStorageDescribesCallee(callee ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
-		try self.requirePromiseStorageResult(callee, storage: storage, anchor: anchor)
-		try self.requirePromiseStorageError(callee, storage: storage, anchor: anchor)
-	end 'requirePromiseStorageDescribesCallee'
+	// ⭐⭐ **WHERE THE TWO ROADS' FACTS COME FROM, AND THE ONLY PLACE THEY DIFFER (SV3).** An `async` spawn is
+	// described by its CALLEE's own signature; a service reply by the MESSAGE's return type plus
+	// `ServiceError`, which that signature does not mention and never will — which is exactly why
+	// `AsyncCalleeLookup` keeps them as two arms. Everything after this point is one comparison over a
+	// `(returns, throws)` pair, so the storage rule cannot come to mean two different things by road.
+	function requirePromiseStorageDescribesSource(source AsyncCalleeLookup, storage GenericInstanceId, anchor Token) throws ParseError
+		match source 'road'
+			found(callee) then try self.requirePromiseStorageDescribes(self.calleeReturnType(callee), throwsClause: self.signatures.throwsOf(callee), subject: PromiseStorageSubjectIsTheCallee, storage: storage, anchor: anchor)
+			serviceReply(messageName) then try self.requirePromiseStorageDescribesReply(messageName, storage: storage, anchor: anchor)
+			none then panic("requirePromiseStorageDescribesSource: `promiseSourceStoredHere` throws on `none` and is this function's only caller")
+		end 'road'
+	end 'requirePromiseStorageDescribesSource'
+
+	// ⛔⛔ **THE ONE REPLY THAT MAY NOT BE STORED: ONE FROM A MESSAGE THAT THROWS (SV3).** Such a reply's
+	// error type is `{ServiceError, <what the message throws>}` — two members with no declaration between
+	// them, which is why the diagnostic elsewhere quotes the DERIVED spelling `<message>.errors` and why
+	// `serviceReplyCaughtForm` builds a synthesized union for it. A `Promise with (T, E)` has one name to
+	// give, so storing it would erase one member and leave the awaiter decoding a fused two-member flag as a
+	// single enum — a silent wrong `match` arm rather than a diagnostic. It is refused at the STORE, where
+	// both halves are still known, and its own sentence says which cure to take.
+	//
+	// ⭐ The rest is the ordinary comparison: the result is what the MESSAGE declares
+	// (`serviceReplyResultType`, the same door the await reads it through) and the error is
+	// `serviceReplyErrorTypeName`'s — never `throwsOf(<message>)`, which is the HANDLER's clause and says
+	// nothing about the transport a reply always carries.
+	function requirePromiseStorageDescribesReply(messageName ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
+		match self.signatures.throwsOf(messageName) 'handlerThrows'
+			none then break 'handlerThrows'
+			throwing then throw ParseError.promiseStorageMismatch("a reply from '{String.from(messageName)}' throws '{self.serviceReplyErrorTypeName(messageName)}' — two members with no declaration between them — so no 'Promise with (T, E)' can name it; catch it at a 'try await' instead of storing it", line: anchor.line, column: anchor.column)
+		end 'handlerThrows'
+
+		// ⚠ **AND THE STORAGE MUST NAME AN ERROR TYPE AT ALL, REFUSED HERE RATHER THAN BY THE SHARED
+		// COMPARISON.** A reply ALWAYS carries `ServiceError` — the service can be gone, whatever the message
+		// declares — so `Promise with T` would erase it and leave a `try await` with nothing to bind `e` at.
+		// The shared `requirePromiseStorageErrorless` says the same thing in the SPAWN's vocabulary (*"a
+		// promise from a function that throws"*), which is a wrong noun here: `Slow.value` throws nothing,
+		// its REPLY does.
+		match promiseStorageThrows(self.signatures, gid: storage) 'storageNamesAnError'
+			throwing then break 'storageNamesAnError'
+			none then throw ParseError.promiseStorageMismatch("a reply from '{String.from(messageName)}' always carries '{self.serviceReplyErrorTypeName(messageName)}' — the service can be gone, whatever the message declares — so '{String.from(self.signatures.instanceDisplayName(storage))}' would erase it; declare the storage as 'Promise with (T, {self.serviceReplyErrorTypeName(messageName)})' so 'try await' can bind it", line: anchor.line, column: anchor.column)
+		end 'storageNamesAnError'
+
+		try self.requirePromiseStorageDescribes(self.serviceReplyResultType(messageName), throwsClause: ThrowsClause.throwing(self.serviceReplyErrorTypeName(messageName)), subject: "a reply from '{String.from(messageName)}'", storage: storage, anchor: anchor)
+	end 'requirePromiseStorageDescribesReply'
+
+	// The two comparisons `storedPromiseValue`'s header sets out, in the order an author most wants to hear
+	// them: what it returns, then what it throws.
+	function requirePromiseStorageDescribes(returnType MaxonReturnType, throwsClause ThrowsClause, subject String, storage GenericInstanceId, anchor Token) throws ParseError
+		try self.requirePromiseStorageResult(returnType, subject: subject, storage: storage, anchor: anchor)
+		try self.requirePromiseStorageError(throwsClause, subject: subject, storage: storage, anchor: anchor)
+	end 'requirePromiseStorageDescribes'
 
 	// The RESULT half. Both sides are adopted into THIS file's interner before they are compared — the
 	// storage's argument through `resolvedSlotType` (which is what `requireContainerElementType` resolves the
-	// element itself through) and the callee's return type through `calleeReturnType` (`returnTypeOf(…, into:
-	// self.artifact.typeNames)`) — so the `(tag, nameId)` pair is a comparison of two types and not of two
-	// tables' numbering. A VOID callee cannot arrive: `Promise with <nothing>` is unspellable, so a void
-	// spawn has no storage type to be stored in and reaches the sentence below naming its own absence.
-	function requirePromiseStorageResult(callee ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
+	// element itself through) and the promise's return type through `calleeReturnType` /
+	// `serviceReplyResultType` (both `returnTypeOf(…, into: self.artifact.typeNames)`) — so the
+	// `(tag, nameId)` pair is a comparison of two types and not of two tables' numbering. A VOID promise
+	// cannot arrive: `Promise with <nothing>` is unspellable, so a void spawn has no storage type to be
+	// stored in and reaches the sentence below naming its own absence. ⚠ A message that returns nothing AND
+	// throws nothing carries no reply slot at all and is not a promise (E2015 at the send), so the void arm
+	// is the spawn road's alone.
+	function requirePromiseStorageResult(returnType MaxonReturnType, subject String, storage GenericInstanceId, anchor Token) throws ParseError
 		let claimed = self.resolvedSlotType(self.signatures.substitutedInstanceArg(storage, position: PromiseResultArgPosition))
-		match self.calleeReturnType(callee) 'r'
-			void then throw ParseError.promiseStorageMismatch(self.promiseStorageResultDetail(storage, claimed: claimed, actual: "nothing (it returns no value)"), line: anchor.line, column: anchor.column)
-			value(returned) then try self.requirePromiseStorageResultAgrees(returned, claimed: claimed, storage: storage, anchor: anchor)
+		match returnType 'r'
+			void then throw ParseError.promiseStorageMismatch(self.promiseStorageResultDetail(storage, claimed: claimed, subject: subject, actual: "nothing (it returns no value)"), line: anchor.line, column: anchor.column)
+			value(returned) then try self.requirePromiseStorageResultAgrees(returned, claimed: claimed, subject: subject, storage: storage, anchor: anchor)
 		end 'r'
 	end 'requirePromiseStorageResult'
 
 	// The comparison itself, split out because the arm above is a `match` arm and this needs a labelled `if`.
-	function requirePromiseStorageResultAgrees(returned MaxonType, claimed MaxonType, storage GenericInstanceId, anchor Token) throws ParseError
+	function requirePromiseStorageResultAgrees(returned MaxonType, claimed MaxonType, subject String, storage GenericInstanceId, anchor Token) throws ParseError
 		if maxonTypeTag(returned) == maxonTypeTag(claimed) and typeNameIdOf(returned) == typeNameIdOf(claimed) 'agrees'
 			return
 		end 'agrees'
 
-		throw ParseError.promiseStorageMismatch(self.promiseStorageResultDetail(storage, claimed: claimed, actual: "'{self.displayTypeNameOf(maxonTypeTag(returned), nameId: typeNameIdOf(returned))}'"), line: anchor.line, column: anchor.column)
+		throw ParseError.promiseStorageMismatch(self.promiseStorageResultDetail(storage, claimed: claimed, subject: subject, actual: "'{self.displayTypeNameOf(maxonTypeTag(returned), nameId: typeNameIdOf(returned))}'"), line: anchor.line, column: anchor.column)
 	end 'requirePromiseStorageResultAgrees'
 
-	function promiseStorageResultDetail(storage GenericInstanceId, claimed MaxonType, actual String) returns String
-		return "'{String.from(self.signatures.instanceDisplayName(storage))}' names the result type '{self.displayTypeNameOf(maxonTypeTag(claimed), nameId: typeNameIdOf(claimed))}', but this promise's function returns {actual}"
+	function promiseStorageResultDetail(storage GenericInstanceId, claimed MaxonType, subject String, actual String) returns String
+		return "'{String.from(self.signatures.instanceDisplayName(storage))}' names the result type '{self.displayTypeNameOf(maxonTypeTag(claimed), nameId: typeNameIdOf(claimed))}', but {subject} returns {actual}"
 	end 'promiseStorageResultDetail'
 
 	// The THROWS half — three outcomes, and the two mismatched ones are different mistakes with different
 	// cures, which is why they are two sentences on one code.
-	function requirePromiseStorageError(callee ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
+	function requirePromiseStorageError(clause ThrowsClause, subject String, storage GenericInstanceId, anchor Token) throws ParseError
 		let storageName = String.from(self.signatures.instanceDisplayName(storage))
 		match promiseStorageThrows(self.signatures, gid: storage) 'claimed'
 			// `Promise with T` — the storage names no error, so the thunk must throw none. A throwing one
 			// stored here is THE erasure: `try await` would have no type to bind `e` at, no static payload
 			// type to release, and nothing to check the enclosing `throws` against.
-			none then try self.requirePromiseStorageErrorless(callee, storageName: storageName, anchor: anchor)
-			throwing(claimedError) then try self.requirePromiseStorageErrorMatches(callee, claimedError: claimedError, storageName: storageName, anchor: anchor)
+			none then try self.requirePromiseStorageErrorless(clause, storageName: storageName, anchor: anchor)
+			throwing(claimedError) then try self.requirePromiseStorageErrorMatches(clause, claimedError: claimedError, subject: subject, storageName: storageName, anchor: anchor)
 		end 'claimed'
 	end 'requirePromiseStorageError'
 
-	function requirePromiseStorageErrorless(callee ByteArray, storageName String, anchor Token) throws ParseError
-		let clause = self.signatures.throwsOf(callee)
+	function requirePromiseStorageErrorless(clause ThrowsClause, storageName String, anchor Token) throws ParseError
 		if not throwsClauseIsThrowing(clause) 'agrees'
 			return
 		end 'agrees'
@@ -64113,10 +64173,13 @@ export type Parser
 	// ⚠ **THE NON-THROWING ARM IS NOT A COURTESY.** `gt.threw` is written unconditionally by the trampoline
 	// and is GARBAGE for a non-throwing callee (`Runtime/AsyncReleaser.maxon`'s header), so a `try await`
 	// admitted on this claim would branch on that garbage and hand its `otherwise (e)` a fabricated error.
-	function requirePromiseStorageErrorMatches(callee ByteArray, claimedError String, storageName String, anchor Token) throws ParseError
-		let clause = self.signatures.throwsOf(callee)
+	//
+	// ⚠ **A REPLY NEVER REACHES THAT ARM AND MUST NOT BE READ AS IF IT COULD.** Its clause is always
+	// `throwing` — a reply carries `ServiceError` whatever the message declares — and the word it decodes is
+	// written by `__gt_cell_complete`, deliberately, rather than left as the trampoline's garbage.
+	function requirePromiseStorageErrorMatches(clause ThrowsClause, claimedError String, subject String, storageName String, anchor Token) throws ParseError
 		if not throwsClauseIsThrowing(clause) 'calleeThrowsNothing'
-			throw ParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but this promise's function does not throw — store it in a 'Promise with T' instead", line: anchor.line, column: anchor.column)
+			throw ParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but {subject} does not throw — store it in a 'Promise with T' instead", line: anchor.line, column: anchor.column)
 		end 'calleeThrowsNothing'
 
 		let thrown = try throwsClauseName(clause) otherwise panic("requirePromiseStorageErrorMatches: a clause `throwsClauseIsThrowing` accepted has a name")
@@ -64124,7 +64187,7 @@ export type Parser
 			return
 		end 'agrees'
 
-		throw ParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but this promise's function throws '{thrown}'", line: anchor.line, column: anchor.column)
+		throw ParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but {subject} throws '{thrown}'", line: anchor.line, column: anchor.column)
 	end 'requirePromiseStorageErrorMatches'
 
 	// ⛔⛔ **`elementAccessCallee` STOOD HERE, AND THE BOUNDS-CHECK ELISION WENT WITH THE MEMBERS IT SERVED
