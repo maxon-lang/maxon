@@ -1510,7 +1510,7 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 		panicAbortValue then break 'term'
 		// The error-flag encode is a BODY op — the routed edge's `branch` is what terminates its block.
 		errorFlagEncode then break 'term'
-		// Both service ops are BODY ops — a spawn defines a value the next statement stores, and a send is a
+		// Every service op is a BODY op — a spawn and a reply cell each define a value, and a send is a
 		// statement of its own.
 		serviceSpawn to serviceReplyCell then break 'term'
 	end 'term'
@@ -2098,7 +2098,10 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				panicAbortValue then break 'op'
 				// The error-flag encode is not an await site: it reads an enum value, never a promise handle.
 				errorFlagEncode then break 'op'
-				// Neither service op awaits or cancels: SV1's send is fire-and-forget and has no reply to wait on.
+				// ⚠ **NO service op awaits or cancels, AND SV2 DID NOT CHANGE THAT — the REASON changed.** SV1's
+				// comment here said a send has no reply to wait on, which stopped being true: an awaitable send
+				// mints a reply CELL beside itself. What is still true is that the cell op only DEFINES the
+				// promise; the `await`/`tryAwait` op above is the site, exactly as it is for an `async` spawn.
 				serviceSpawn to serviceReplyCell then break 'op'
 			end 'op'
 		end 'eachOp'
@@ -2313,8 +2316,9 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		panicAbortValue then break 'op'
 		// The error-flag encode reads an enum tag or a box pointer, never a promise handle.
 		errorFlagEncode then break 'op'
-		// Neither service op re-awaits: a spawn DEFINES a mailbox pointer (so it falls through to the re-arm
-		// test below, exactly as a `call` does) and a send reads a mailbox and a box, never a promise handle.
+		// No service op re-awaits: a spawn DEFINES a mailbox pointer and a reply cell DEFINES a promise (so
+		// both fall through to the re-arm test below, exactly as a `call` does), and a send reads a mailbox
+		// and a box, never a promise handle.
 		serviceSpawn to serviceReplyCell then break 'op'
 	end 'op'
 	return rearmRoleIfDefines(op, promise: promise)
@@ -2392,7 +2396,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		panicAbortValue then break 'term'
 		// The error-flag encode is a BODY op, so it is never the terminator whose successors this walks.
 		errorFlagEncode then break 'term'
-		// Both service ops are BODY ops, so neither is the terminator whose successors this walks.
+		// Every service op is a BODY op, so none is the terminator whose successors this walks.
 		serviceSpawn to serviceReplyCell then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
@@ -5750,7 +5754,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 			retVoid to panicAbortValue then break 'op'
 			// The error-flag encode hands nothing back through the return registers — its result is a routed edge's.
 			errorFlagEncode then break 'op'
-			// Neither service op is a `ret`, so neither hands anything back through the return registers.
+			// No service op is a `ret`, so none hands anything back through the return registers.
 			serviceSpawn to serviceReplyCell then break 'op'
 		end 'op'
 	end 'eachOp'

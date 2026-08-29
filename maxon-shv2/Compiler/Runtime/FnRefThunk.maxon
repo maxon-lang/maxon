@@ -142,9 +142,10 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 		panicAbortValue then break 'op'
 		// The error-flag encode names no function value — its operand is an enum tag or a box pointer.
 		errorFlagEncode then break 'op'
-		// Neither service op names a function VALUE. The two addresses a `serviceSpawn` lowers to
-		// (`<T>.__loop`, the request union's drop cascade) are `StdOp.funcAddr`s the LOWERING mints, and both
-		// are called through the uniform runtime ABI rather than through a function value's `(args, env)` one.
+		// No service op names a function VALUE. The two addresses a `serviceSpawn` lowers to (`<T>.__loop`,
+		// `<T>.__abandon`) and the one a `serviceReplyCell` lowers to (`__gt_reply_release_<message>`) are
+		// `StdOp.funcAddr`s the LOWERING mints, and every one is called through the uniform runtime ABI rather
+		// than through a function value's `(args, env)` one.
 		serviceSpawn to serviceReplyCell then break 'op'
 	end 'op'
 end 'noteIfFunctionRef'

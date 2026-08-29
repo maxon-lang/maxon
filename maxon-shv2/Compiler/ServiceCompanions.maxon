@@ -538,11 +538,17 @@ module function serviceSendCannotBeTriedRefusal(callee ByteArray) returns String
 	return "`try` on the message `{String.from(callee)}` — a SEND is not the reply. It enqueues and returns, so it can fail at nothing; what carries an error is the reply, and awaiting it is what makes that error this frame's. Write `try await <handle>.<message>(…)`, or drop the `try` on a message that returns nothing and throws nothing"
 end 'serviceSendCannotBeTriedRefusal'
 
-// ⭐⭐ **THE WORDS FOR A REPLY THAT WOULD ALIAS SERVICE STATE (SV2).** See
+// ⭐⭐ **THE WORDS FOR A REPLY THAT WOULD ALIAS SOMETHING THIS FRAME DOES NOT SOLELY OWN (SV2).** See
 // `Parser.requireServiceReplyDoesNotAliasState` for the rule and for why `.clone()` is the right answer
 // rather than a workaround.
+//
+// ⛔ **IT SAID "reachable from `self`" AND THAT IS ONLY ONE OF THE TWO POPULATIONS IT REFUSES (SV2 review).**
+// The predicate is `valueIsSolelyOwnedHere`, and a message PARAMETER fails it too — MEASURED: `export
+// function echo(s String) returns String; return s` is refused, and `s` is reachable from nothing at all.
+// The old sentence told that author a falsehood about their own program while giving them a cure that works.
+// A refusal's NOUN is the authority a reader takes away, so it names both.
 module function serviceReplyAliasesStateRefusal(typeName ByteArray, methodName ByteArray) returns String
-	return "`{String.from(typeName)}.{String.from(methodName)}` returns a value reachable from `self`, and this `spawn` makes `{String.from(typeName)}` a service — so the caller would hold a second reference to the service's own state, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs"
+	return "`{String.from(typeName)}.{String.from(methodName)}` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, whose one reference the request box still holds — and this `spawn` makes `{String.from(typeName)}` a service. The caller would then hold a second reference to that box, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs"
 end 'serviceReplyAliasesStateRefusal'
 
 // ⭐ **WHAT THE NOTE ON A WHOLE-PROGRAM SERVICE DIAGNOSTIC SAYS, written once for every rule that carries

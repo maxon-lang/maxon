@@ -104,10 +104,23 @@ restricted for the reason `specs-shv2/async-scheduler.md`'s own Targets section 
 them carries the marker.
 
 ⚠ **Almost every REFUSAL in this file is unmarked, and that is the same rule read from the other end.** A
-verdict reached before a backend — a token shape, a declaration, a transferability rule, a move — is
+verdict the PARSE reaches — a token shape, a declaration, a transferability rule, a move, E3137, E3140 — is
 target-neutral by construction, so a marker on one would hide a green lane rather than describe a red one.
 `spawn-is-not-a-keyword` and `service-error-is-declared-and-nameable` are unmarked for the neighbouring
 reason: they RUN, but they start no service and reach no scheduler at all.
+
+⛔⛔ **THE DISCRIMINATOR IS *WHO REACHES THE VERDICT FIRST*, NOT *IS THE RULE TARGET-NEUTRAL* — AND FOUR
+CASES WERE MARKED WRONG BY READING IT THE SECOND WAY (SV2 review).** A parse refusal THROWS and the compile
+stops, so the fragment's only diagnostic is the one the case pins. A verdict from a whole-program
+`SemanticCheck` pass — **E3139**'s cycle graph and **E3100**'s await linearity — does not: `checkCalls` has
+already recorded an **E3104** for every `spawn`, every send and every reply cell in the program, and the
+case's own program contains all three. MEASURED at review on `--target=wasm32-wasi`:
+`error.two-services-that-await-each-other-are-refused`, `error.double-await-of-a-reply`,
+`cycle-through-a-free-function-is-refused` and `cycle-same-type-self-edge-is-refused` printed five E3104
+lines ahead of the diagnostic they pin and the lane went **RED, 4 failed**. They carry the marker now — the
+rule they pin is target-neutral and the x64 lane pins it; what is not target-neutral is the SCAFFOLDING they
+need to reach it, which is the shape `project_w96_e3104_masks_the_case_subject` records. ⇒ **a case whose
+refusal is not a parse throw needs the marker, however target-neutral the rule.**
 
 ⚠ **THE TWO E3104 CASES ARE THE EXCEPTION, AND THEY ARE MARKED WITH THE TARGET THEY REFUSE.** A refusal
 whose whole subject is *"this target has no substrate for it"* is the one verdict in this file that is not
@@ -1998,10 +2011,11 @@ end 'main'
 ```
 
 <!-- test: error.a-reply-may-not-alias-service-state -->
-A handler must not return a value reachable from `self`, or the caller ends up aliasing service state — two
-green threads naming one box, with a plain refcount between them. `return self` is the shortest way to say it
-and the only one a service state can currently spell: a state record may hold nothing but scalars
-(`error.a-record-with-a-managed-field-may-not-cross`), so a FIELD read has nothing managed to hand back yet.
+A handler must not return a value this frame does not solely own, or the caller ends up aliasing a box the
+service still names — two green threads naming one box, with a plain refcount between them. `return self` is
+the shortest way to say it and the only one a service STATE can currently spell: a state record may hold
+nothing but scalars (`error.a-record-with-a-managed-field-may-not-cross`), so a FIELD read has nothing managed
+to hand back yet. The other population is a message PARAMETER — see the case below it.
 
 ⚠ The blame names the RETURN, and the note names the **`spawn`** that made the type a service — whether a
 type is a service is a whole-program property, and the `spawn` deciding it may be in another file entirely
@@ -2025,11 +2039,46 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:10:3: `Store.itself` returns a value reachable from `self`, and this `spawn` makes `Store` a service — so the caller would hold a second reference to the service's own state, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
+error E3137: <fragment>:10:3: `Store.itself` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, whose one reference the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:15:10: the `spawn` that makes `Store` a service
+```
+
+<!-- test: error.a-reply-may-not-return-a-message-parameter -->
+⭐⭐ **THE SECOND POPULATION E3137 REFUSES, AND THE SENTENCE SAID NOTHING ABOUT IT UNTIL SV2's REVIEW.** `s`
+is reachable from nothing — it is a message PARAMETER, which arrives BORROWED out of the request box the loop
+still owns and releases (`ServiceLoop.dropUnconsumedPayloads`). Handing it back would give the awaiter a
+second reference to that box, which is the same two-green-threads-one-refcount picture `return self` draws.
+
+⚠ **THE CURE IS THE SAME `.clone()`**, which is why the old wording still helped the author who hit this —
+but it told them their value was reachable from `self` when it was not, and a refusal's noun is what a reader
+takes away.
+```maxon
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function echo(s String) returns String
+		return s
+	end 'echo'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let r = try await h.echo("hi") otherwise ""
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:10:3: `Store.echo` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, whose one reference the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:15:10: the `spawn` that makes `Store` a service
 ```
 
 <!-- test: error.two-services-that-await-each-other-are-refused -->
+<!-- targets: x64-windows -->
 Mutual reentrancy is made unrepresentable rather than diagnosed at run time.
 ```maxon
 type A
@@ -2359,6 +2408,7 @@ end 'main'
 ```
 
 <!-- test: error.double-await-of-a-reply -->
+<!-- targets: x64-windows -->
 Per-await linearity composes for free, because it keys on the promise's own identity rather than on what
 produced it — a reply cell is a `Promise` like any other.
 ```maxon
@@ -2450,6 +2500,7 @@ error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that th
 ```
 
 <!-- test: cycle-through-a-free-function-is-refused -->
+<!-- targets: x64-windows -->
 An edge is transitive through ordinary functions: `A.ping` calls `relay`, which awaits a `B.handle`, so the
 edge `A → B` exists even though `A`'s own body names no `B` message.
 
@@ -2502,6 +2553,7 @@ error E3139: <fragment>:3:13: service call cycle — these messages can deadlock
 ```
 
 <!-- test: cycle-same-type-self-edge-is-refused -->
+<!-- targets: x64-windows -->
 ⚠ **A SELF-EDGE IS A CYCLE, AND THIS IS THE ONE USERS WILL HIT.** Two instances of the same service could not
 actually deadlock, but edges are by TYPE — which is what makes them statically knowable at all — so the
 analysis cannot tell the instances apart and must be conservative. The message says the workaround.
@@ -2532,6 +2584,77 @@ end 'main'
 error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
     `Worker.ask` (<fragment>:10:14) awaits a reply from `Worker`
     Two distinct instances of `Worker` would not deadlock — but edges are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the instances apart and must be conservative. Make the peer call fire-and-forget (send it as a statement and have the peer reply with a separate message), or split the role into two types
+```
+
+<!-- test: cycle-behind-a-second-await-is-still-refused -->
+<!-- targets: x64-windows -->
+⛔⛔ **ONE MESSAGE OWES AN EDGE PER SERVICE IT AWAITS, NOT ONE EDGE.** `A.ping` awaits `B` and then `C`; the
+`A → B` half is what closes the ring `A.ping → B.pong → A.ack`, and the `A → C` half is innocent. This case
+is `error.two-services-that-await-each-other-are-refused` with **one extra, unrelated `await` appended**, and
+it COMPILED CLEAN — exit 0 — while the graph carried one site per FUNCTION and kept whichever the op walk saw
+LAST (SV2 review; see `ServiceCallCycleCheck.ServiceAwaitRoster`). A dropped edge is a MISSED refusal, which
+is the deadlock this rule exists to make unrepresentable. **Delete the `C` await and the case still refuses —
+which is the point: it must refuse WITH it.**
+```maxon
+type A
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping(b B.handle, c C.handle) returns int
+		let x = try await b.pong() otherwise 0
+		let y = try await c.tick() otherwise 0
+		return x + y
+	end 'ping'
+
+	export function ack() returns int
+		return 1
+	end 'ack'
+end 'A'
+
+type B
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function pong() returns int
+		return try await spawnA().ack() otherwise 0
+	end 'pong'
+end 'B'
+
+type C
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function tick() returns int
+		return 2
+	end 'tick'
+end 'C'
+
+function spawnA() returns A.handle
+	return spawn A.create()
+end 'spawnA'
+
+function main() returns ExitCode
+	let a = spawn A.create()
+	let b = spawn B.create()
+	let c = spawn C.create()
+	a.ping(b, c: c)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3139: <fragment>:10:15: service call cycle — these messages can deadlock waiting on each other:
+    `A.ping` (<fragment>:10:15) awaits a reply from `B`
+    `B.pong` (<fragment>:28:14) awaits a reply from `A`
+    A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph
 ```
 
 <!-- test: deep-acyclic-chain-runs -->

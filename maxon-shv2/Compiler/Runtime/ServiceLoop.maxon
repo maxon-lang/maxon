@@ -185,6 +185,15 @@ end 'buildServiceDrain'
 // frees what the box owns; the reply slot is a raw integer the cascade skips, but reading it after the box
 // has been released would be a use-after-free the day a request union grows a payload the cascade rewrites.
 //
+// ⚠⚠ **AND IT IS THE OPPOSITE ORDER TO `buildServiceArm`'s, WHICH RELEASES BEFORE IT PUBLISHES — SAID HERE
+// SO NEITHER GETS "FIXED" INTO THE OTHER (SV2 review).** The rule both obey is *nothing this green thread
+// still owns may be touched after the publish*. The arm has to WORK for it: a handler may return a record
+// whose managed field it built over a message parameter, so the reply and the request box can name one string
+// and the box's release has to come first. **This function cannot reach that shape at all** — the value word
+// it writes is a literal `0`, so a message dying here hands its awaiter nothing, and the payloads the cascade
+// frees are the box's alone. The rule is satisfied vacuously, which is what lets the slot-before-cascade
+// constraint above decide the order instead.
+//
 // ⭐ **THE ERROR WORD IS ALREADY FUSED.** `ServiceError` is the transport member, pinned at
 // `ErrorFlagOrdinalBias`, so `stopped`'s fused ordinal IS the ordinary scalar flag — no shift, and the same
 // number an awaiter's `match e ... stopped` arm dispatches on whether the message throws or not.
@@ -286,17 +295,41 @@ function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, t
 		args.push(loaded)
 	end 'eachParam'
 
-	emitServiceHandlerCall(fn, signatures: signatures, callee: callee, args: args, reply: serviceArmReply(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: req, range: range), range: range)
+	let reply = serviceArmReply(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: req, range: range)
+	let outcome = emitServiceHandlerCall(fn, signatures: signatures, callee: callee, args: args, range: range)
+
+	// ⛔⛔⛔ **EVERY RELEASE THIS GREEN THREAD OWES HAPPENS BEFORE THE PUBLISH, AND THAT ORDER IS THE WHOLE
+	// REASON THE CALL AND THE COMPLETION ARE TWO FUNCTIONS (SV2 review).** `__gt_cell_complete` stores
+	// `completed`, which is the instant the AWAITER may resume — on another M. Anything this loop touches
+	// after that line it touches while a second green thread is running, and a reference count in shv2 is a
+	// plain load/add/store (`MmRuntime.emitAdjustRefcount`, EC10) precisely because the language guarantees
+	// ONE green thread per box.
+	//
+	// ⚠ **AND THE TWO REALLY CAN NAME ONE BOX.** A message may return a record with a managed FIELD, and a
+	// handler may build that record over a message PARAMETER — `Wrapper.of(s)` co-owns `s`, so the string is
+	// named by the reply the awaiter now holds AND by this request box, whose reference
+	// `dropUnconsumedPayloads` is about to give back. Published first, those two decrements are two green
+	// threads stepping one count with no atomic between them. **NOT MEASURED as a failure** — the window is
+	// three instructions wide and 6,000 awaited replies at `MAXON_MAX_PROCS` 1/2/4/8/12 stayed green — but it
+	// is a race by construction, and the ordering that removes it costs nothing. It is the same rule
+	// `GtRuntime.emitGtTeardownArrive` states for the teardown word: **every read or release of shared state
+	// precedes the arrival that hands it over.**
 	dropUnconsumedPayloads(fn, signatures: signatures, callee: callee, request: request, caseIndex: caseIndex, classes: payloadClasses, args: args, range: range)
 
 	// ⭐ **THE SHELL, AND ONLY THE SHELL.** The payloads were consumed by the handler or dropped by the loop
 	// one line up, so the box's own record is all that is left to release — and the box was allocated with
 	// the trivial destructor (`Parser.emitBoxAlloc`), which is what makes the plain decref the right entry
 	// rather than the cascade the abandon path takes.
+	//
+	// ⚠ It is safe here rather than after the completion for the reason above, and safe this early because
+	// nothing below reads `req`: the cell pointer was loaded into `reply` before the call, and the payloads
+	// the drops release are the values `args` already holds.
 	fn.emitPositionalCallDiscarding(MmDecrefName, args: argsOf(req), range: range)
+
+	emitServiceReplyCompletion(fn, signatures: signatures, callee: callee, outcome: outcome, reply: reply, range: range)
 	// ⛔⛔ **THE CURRENT BLOCK, NOT `arm` — AND THE TWO ARE NOT THE SAME BLOCK FOR EVERY MESSAGE.** A THROWING
-	// handler is a `tryCall` whose error edge is a diamond (`emitServiceHandlerCall`), so by this line the ops
-	// above have landed in that diamond's MERGE and `arm` was terminated by its `condBranch` several lines
+	// handler is a `tryCall` whose error edge is a diamond (`emitServiceReplyCompletion`), so by this line the
+	// ops above have landed in that diamond's MERGE and `arm` was terminated by its `condBranch` several lines
 	// ago. Terminating `arm` a second time OVERWROTE that branch: the handler still ran (its op precedes the
 	// terminator) and control went straight back to `receive`, skipping the payload drops and the shell decref
 	// this line and the two above it are.
@@ -338,6 +371,17 @@ union ServiceReplyTarget
 	cell(value ValueId)
 end 'ServiceReplyTarget'
 
+// ⭐⭐ **WHAT THE HANDLER PRODUCED, BEFORE ANY OF IT IS PUBLISHED (SV2 review).** The two shapes a message
+// can have, carried from the call to the completion across the releases that must sit between them — see
+// `buildServiceArm` for why that gap exists and what closing it would cost.
+union ServiceHandlerOutcome
+	// A non-throwing handler: one result register, which is `void` for a message that returns nothing.
+	answered(result ValueId)
+	// A throwing handler: the result register and the RAW error flag its `tryCall` set — raw, because the
+	// shift onto the reply's fused line belongs with the completion that writes the word.
+	routed(result ValueId, errorFlag ValueId)
+end 'ServiceHandlerOutcome'
+
 // ⭐⭐ **THE HANDLER CALL, AND WHAT BECOMES OF ITS TWO OUTCOMES (SV2).** A message with a reply hands both
 // to the CELL and drops neither: the awaiter takes the value's reference (`__gt_try_await` releases the
 // arguments with the result CONSUMED) and reads the error word. A message WITHOUT a reply returns nothing
@@ -359,7 +403,7 @@ end 'ServiceReplyTarget'
 //
 // A plain `call` to a throwing callee is **E3057** at `SemanticCheck.validatePlainCall` (which walks this
 // synthesized body like any other), so the `tryCall` is FORCED.
-function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, args ValueIdArray, reply ServiceReplyTarget, range SourceRange)
+function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, args ValueIdArray, range SourceRange) returns ServiceHandlerOutcome
 	let returned = serviceHandlerReturnType(signatures, callee: callee, typeNames: signatures.indexTypeNames())
 	let resultTag = match returned 'r'
 		void gives ValueTypeTag.void
@@ -371,15 +415,30 @@ function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignat
 	end 'n'
 
 	if not throwsClauseIsThrowing(signatures.throwsOf(callee)) 'nonThrowing'
-		let result = fn.emitPositionalCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range)
-		completeServiceReply(fn, reply: reply, result: serviceReplyResultWord(fn, returned: returned, result: result, range: range), threw: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), range: range)
-		return
+		return ServiceHandlerOutcome.answered(fn.emitPositionalCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range))
 	end 'nonThrowing'
 
 	let result = fn.mint(resultTag, nameId: resultNameId)
 	let errorFlag = fn.mintOfType(MaxonType.integer)
 	fn.emit(MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
+	return ServiceHandlerOutcome.routed(result, errorFlag: errorFlag)
+end 'emitServiceHandlerCall'
 
+// ⭐⭐⭐ **PUBLISH THE ANSWER — THE LAST THING THIS ARM DOES TO A STRUCTURE ANYBODY ELSE CAN SEE (SV2
+// review).** `__gt_cell_complete` publishes `completed`, which is the instant the awaiter may resume on
+// another M; `buildServiceArm` states what that costs when a release comes after it, and why every one of
+// them is emitted above this call.
+function emitServiceReplyCompletion(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, outcome ServiceHandlerOutcome, reply ServiceReplyTarget, range SourceRange)
+	let returned = serviceHandlerReturnType(signatures, callee: callee, typeNames: signatures.indexTypeNames())
+	match outcome 'o'
+		answered(result) then completeServiceReply(fn, reply: reply, result: serviceReplyResultWord(fn, returned: returned, result: result, range: range), threw: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), range: range)
+		routed(result, errorFlag) then emitRoutedReplyCompletion(fn, signatures: signatures, callee: callee, returned: returned, result: result, errorFlag: errorFlag, reply: reply, range: range)
+	end 'o'
+end 'emitServiceReplyCompletion'
+
+// The THROWING handler's two edges. Split from the arm above because a `match` arm is one statement and this
+// is a diamond.
+function emitRoutedReplyCompletion(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, result ValueId, errorFlag ValueId, reply ServiceReplyTarget, range SourceRange)
 	let threw = fn.emitCompare(errorFlag, rhs: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.ne, range: range)
 	let caught = fn.currentBlock()
 
@@ -401,7 +460,7 @@ function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignat
 	fn.terminateBlock(thrown, op: MaxonOp.branch(handled.id), range: range)
 	fn.terminateBlock(answered, op: MaxonOp.branch(handled.id), range: range)
 	fn.resumeBlock(handled)
-end 'emitServiceHandlerCall'
+end 'emitRoutedReplyCompletion'
 
 // One reply answered, or nothing at all for a fire-and-forget message. Written once because both edges of a
 // throwing call and the whole of a non-throwing one reach it, and the ORDER of the three words

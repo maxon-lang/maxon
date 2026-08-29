@@ -1,0 +1,23 @@
+// Test: error.a-reply-may-not-return-a-message-parameter
+type Store
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function echo(s String) returns String
+		return s
+	end 'echo'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let r = try await h.echo("hi") otherwise ""
+	print("{r}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3137: <fragment>:10:3: `Store.echo` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, whose one reference the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:15:10: the `spawn` that makes `Store` a service
