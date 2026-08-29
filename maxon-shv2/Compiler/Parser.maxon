@@ -5411,13 +5411,6 @@ let GtIsCompleteArity = 1 as ParamCount
 // `CurrentProcessIdArity`'s reason: the number is a fact about THIS intrinsic's contract.
 let AwaitAnyArity = 1 as ParamCount
 
-// ⭐ **WHAT A PROMISE-STORAGE MISMATCH SENTENCE CALLS THE PROMISE, ON THE SPAWN ROAD.** It is a constant
-// rather than a literal at three throw sites because `specs-shv2/async-await.md`'s two `E3098` goldens pin
-// this exact phrase. The REPLY road names the message instead (`requirePromiseStorageDescribesReply`),
-// because *"this promise's function"* would be the handler, whose own `throws` clause says nothing about
-// the `ServiceError` a reply always carries.
-let PromiseStorageSubjectIsTheCallee = "this promise's function"
-
 // What `__Builtins.awaitAny` will accept, as the `builtinOperandType` sentence renders it — *"'…' requires
 // a {required}, but its argument is {got}"*. Named rather than written at the throw for
 // `StringLiteralRequirement`'s reason: it is a phrase a spec pins, not an incidental string.
@@ -8081,6 +8074,15 @@ end 'literalEscapeKindPhrase'
 // (`parseDebugStreamNameId`). It was `PanicMessageRequirement` while there was one asker; a second copy of
 // the wording would be a second thing that can come to describe the rule differently.
 let StringLiteralRequirement = "string literal"
+
+// ⭐ **WHAT A PROMISE-STORAGE MISMATCH SENTENCE CALLS THE PROMISE, ON THE SPAWN ROAD** — beside the phrase
+// above for the same reason: it is a wording a GOLDEN pins, so it is a constant rather than a literal at
+// the one call site that supplies it. `specs-shv2/async-await.md`'s two `E3098` cases quote it exactly.
+//
+// ⚠ The REPLY road names the MESSAGE instead (`requirePromiseStorageDescribesReply`), because *"this
+// promise's function"* would be the handler — whose own `throws` clause says nothing about the
+// `ServiceError` a reply always carries, so it would send the author to fix the wrong declaration.
+let PromiseStorageSubjectIsTheCallee = "this promise's function"
 
 // ⭐ **THE `panic at <file>:<line>: <text>\n` LINE A `panic(…)` HANDS THE RUNTIME, IN THE ONE OF TWO FORMS
 // ITS ARGUMENT ADMITS.** `mrt_panic` reads a NUL-terminated cstr and does not care which; what differs is
@@ -64090,9 +64092,15 @@ export type Parser
 	// `serviceReplyErrorTypeName`'s — never `throwsOf(<message>)`, which is the HANDLER's clause and says
 	// nothing about the transport a reply always carries.
 	function requirePromiseStorageDescribesReply(messageName ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
+		// The subject and the reply's error type are each spelled ONCE and read by all three sentences below:
+		// three copies of *"a reply from 'X'"* is three places for one phrase to drift, and
+		// `serviceReplyErrorTypeName` is the one home of *what a reply throws* either way.
+		let subject = "a reply from '{String.from(messageName)}'"
+		let replyThrows = self.serviceReplyErrorTypeName(messageName)
+
 		match self.signatures.throwsOf(messageName) 'handlerThrows'
 			none then break 'handlerThrows'
-			throwing then throw ParseError.promiseStorageMismatch("a reply from '{String.from(messageName)}' throws '{self.serviceReplyErrorTypeName(messageName)}' — two members with no declaration between them — so no 'Promise with (T, E)' can name it; catch it at a 'try await' instead of storing it", line: anchor.line, column: anchor.column)
+			throwing then throw ParseError.promiseStorageMismatch("{subject} throws '{replyThrows}' — two members with no declaration between them — so no 'Promise with (T, E)' can name it; catch it at a 'try await' instead of storing it", line: anchor.line, column: anchor.column)
 		end 'handlerThrows'
 
 		// ⚠ **AND THE STORAGE MUST NAME AN ERROR TYPE AT ALL, REFUSED HERE RATHER THAN BY THE SHARED
@@ -64103,10 +64111,10 @@ export type Parser
 		// its REPLY does.
 		match promiseStorageThrows(self.signatures, gid: storage) 'storageNamesAnError'
 			throwing then break 'storageNamesAnError'
-			none then throw ParseError.promiseStorageMismatch("a reply from '{String.from(messageName)}' always carries '{self.serviceReplyErrorTypeName(messageName)}' — the service can be gone, whatever the message declares — so '{String.from(self.signatures.instanceDisplayName(storage))}' would erase it; declare the storage as 'Promise with (T, {self.serviceReplyErrorTypeName(messageName)})' so 'try await' can bind it", line: anchor.line, column: anchor.column)
+			none then throw ParseError.promiseStorageMismatch("{subject} always carries '{replyThrows}' — the service can be gone, whatever the message declares — so '{String.from(self.signatures.instanceDisplayName(storage))}' would erase it; declare the storage as 'Promise with (T, {replyThrows})' so 'try await' can bind it", line: anchor.line, column: anchor.column)
 		end 'storageNamesAnError'
 
-		try self.requirePromiseStorageDescribes(self.serviceReplyResultType(messageName), throwsClause: ThrowsClause.throwing(self.serviceReplyErrorTypeName(messageName)), subject: "a reply from '{String.from(messageName)}'", storage: storage, anchor: anchor)
+		try self.requirePromiseStorageDescribes(self.serviceReplyResultType(messageName), throwsClause: ThrowsClause.throwing(replyThrows), subject: subject, storage: storage, anchor: anchor)
 	end 'requirePromiseStorageDescribesReply'
 
 	// The two comparisons `storedPromiseValue`'s header sets out, in the order an author most wants to hear

@@ -371,6 +371,39 @@ end 'main'
 7
 ```
 
+<!-- test: await-any.a-slot-nobody-filled-is-skipped -->
+<!-- targets: x64-windows -->
+⭐ **THE NULL-SLOT GUARD, AND IT IS REACHABLE RATHER THAN DEFENSIVE.** `Array.resize` refuses a MANAGED
+element type at compile time (E3106) — but a `Promise with …` is not managed (its value IS the green-thread
+pointer, `PromiseType.maxon`'s first fact), so `resize` is legal here and publishes length over slots nobody
+filled. Those slots are zero, and a zero in a promise column is an ABSENCE, not a handle: reading a status
+word through it faults on the null page.
+
+The scan therefore skips a `0` slot and keeps going, so the answer is `2` — the only slot with a promise in
+it — and `2 * 10 + 42` says both halves in one number.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	var arr = IntPromiseArray.create()
+	arr.resize(2)
+	arr.push(async makeValue())
+	let ready = __Builtins.awaitAny(arr)
+	let p = try arr.get(ready) otherwise panic("awaitAny named a slot that is in range")
+	return (ready * 10 + await p) as ExitCode
+end 'main'
+```
+```exitcode
+62
+```
+
 <!-- test: await-any.an-empty-array-is-a-scheduler-deadlock -->
 <!-- targets: x64-windows -->
 ⭐ **THE ONE SHAPE IN WHICH `awaitAny` IS A PROGRAM'S FIRST SCHEDULER CALL**, because an array with a
