@@ -1468,6 +1468,79 @@ structural cure is a commutativity bit on `TargetOpMeta` read off the operand mo
 array-indexing program — where x64's idiom is TWO: `cmp idx, len` / `jae slow`, because an UNSIGNED
 compare catches `idx < 0` and `idx >= len` at once. Filed here rather than taken.
 
+### ⭐⭐ RE-PRIORITIZED 2026-08-29, AFTER ALL TEN ROWS LANDED
+
+The original Tier 2/3 ordering is superseded. Three things re-ranked it, all measured:
+`EC2`'s profile of the stage-2 self-compile, `EC19`'s copy census, and two probes taken today.
+
+**`A1` · `EC7` — a proven-ranged counter still pays its callee's guard. THE TOP ROW, and it is the
+one that fell off the end.** `EC7` has sat ⬜ FREE since 2026-08-26. Its own text claims
+`regMaskContains`'s four hottest call sites are in `augmentValue`/`tightRegisterSet` at **37% of the
+shv2-emitted profile** — and `EC2`'s profile, taken two rows later for an unrelated purpose,
+independently measures those two functions at **35.6%** (`augmentValue` 25.7% + `tightRegisterSet`
+9.9%). ⇒ **the largest measured concentration in the compiler's own emitted code, confirmed twice.**
+Probe (`temp/codegen-probe/ec7.maxon`, a `RegNum`-parameter callee reached from `for r in 0 upto 64`):
+
+```
+  forhdr:    cmp r13,64 ; jcc ge,forexit
+  __il_body: cmp r13,0  ; jcc less,__il_slow   ← DEAD: the counter is provably 0..63
+  __rc_chk:  cmp r13,63 ; jcc le,__rc_ok       ← DEAD
+  __il_slow: … callDirect weigh                ← and the slow arm RE-ISSUES THE CALL,
+  __rc_ok:   lea rax,rbx,r13 ; mov r8,rax        so EC5's inlining is defeated on this shape
+```
+**4 of the loop's 11 instructions are a provably-dead guard**, and the fast arm it guards is 2.
+
+**`A2` · The bounds guard is 7 instructions where x64's idiom is 2.** `EC19`'s census named this and
+under-counted it. Measured today (`temp/codegen-probe/guard.maxon`): `cmp`/`setcc`/`cmp`/`setcc`/
+`or`/`cmp`/`jcc`, where `cmp idx,len` + `jae` does it in two — an UNSIGNED compare catches `idx < 0`
+and `idx >= len` together, because a negative index wraps above any length. 24 sites in
+`fannkuch-redux` ≈ **7% of its user-code ops**; 6 in nbody. Every checked array access in every
+program, and the `or` it produces is what feeds two of the `critsplit` blocks below.
+
+**`A3` · `retainBorrowedPayload` — the rest of `EC2`, and a different rule.** `EC2`'s census finds
+**825 remaining refcount brackets; 801 acquire through `__mm_incref` from
+`Parser.retainBorrowedPayload`** — a managed payload bound out of a *borrowed union in a `match`
+arm*, retained unconditionally and dropped at the arm's exit. **197 in `targetOpOperands` alone**,
+the function `EC19` independently measures at 46% copies. A payload-binding rule, not a field-read
+rule.
+
+**`B1` · Block reordering.** `EC11` collected the fall-throughs that already existed and explicitly
+did not create new ones. `EC15` then showed what reordering is worth by accident — deleting one block
+made a continuation physically next and `EC11`'s elision took its jump for free.
+
+**`B2` · `critsplit` edge copies** — 5,752 in the self-compile, 72 in fannkuch, 108 in nbody. `EC19`:
+the phi is biased to the register the *slow* arm's call returns in, so both *fast* arms pay.
+Rematerializing a constant phi input on the edge is the bounded half.
+
+**`B3` · `const` unification** — filed by `EC13`, then measured by `EC18` to *"buy this row a second
+time"*: two sites mint two `const` ops for one 64-bit magic, so `(n/10)+(n mod 10)` emits its
+quotient chain twice where `/8` emits it once.
+
+**`B4` · The frame pointer** — 8,554 copies plus `push`/`pop`, ~25,000 ops and a whole register. Big,
+and risky: it breaks backtraces, the GT runtime and stack-param addressing.
+
+**`C` · `EC20` instruction scheduling** — better motivated than when it was filed (the 35.6% above),
+but `A1` targets the same functions far more cheaply. Do `A1` first and re-measure.
+
+**⛔ MEASURED AND NOT WORTH BUILDING**, unless something changes: `EC22` (rel8 relaxation — code size
+only, ~1.8 KB after `EC11` deleted 40% of the jumps); `EC23` (general DCE — the frontend refuses dead
+source, so its producers are only the passes); `EC21` (interval match dispatch — its premise cites
+`JumpTableFormationPass.cs`, **which does not exist**; re-measure before quoting it).
+
+### ⚠ OWED, AND NOT OPTIMIZATION WORK
+
+- **A latent correctness bug, filed by `EC11`**: a block with no terminator op falls through
+  PHYSICALLY, but `collectBlockSuccessorIds` / `buildFuncTopology` model it as having **no
+  successors**. `X64BranchCleanup` closes the hole locally; liveness, loop depth and critical-edge
+  classification would all be wrong if such a block ever became reachable. **Rank this by risk, not
+  by win.**
+- **arm64** owes a golden mint and carries real `EC16`/`EC18` codegen **never executed on that lane**.
+  `EC18`'s `SMULH` is all that lane needs for its half of strength reduction.
+- **`EC19`'s ladder disagreement is still OPEN** — +1.45% emitted bytes at rung 5, attributed to
+  `regalloc:splitting`, unexplained.
+- `W219` (a file-private `let` unified across files), and `E3092` cannot see a default argument's
+  names — both reproduced by rows here, neither theirs to fix.
+
 ### Tier 3 — measure before committing
 
 #### `EC20` · Instruction scheduling
