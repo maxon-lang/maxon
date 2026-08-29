@@ -25,6 +25,32 @@ the **allocation column** — which still grows with program size, the signature
 — and the **absolute instruction quality** measured directly below, which is a deficit against good
 codegen rather than against either reference compiler.
 
+## ⭐⭐ END-TO-END: WHAT THE WORKSTREAM ACTUALLY BOUGHT — MEASURED 2026-08-29
+
+Six rows in (`EC11` `EC12` `EC13` `EC16` `EC15` `EC14`), A/B'd by the coordinator against a compiler
+built from `01eaf6ea4e` — the commit before the first row — **both compilers built in one session,
+runs interleaved, same box**. Both binaries print byte-identical answers.
+
+| program | pre | post | time | code size |
+|---|---|---|---|---|
+| `examples/fannkuch-redux.maxon` | 18,732 / 18,661 / 18,715 ms | **10,528 / 10,539 / 10,518 ms** | **−43.7% (×1.78 faster)** | 37,073 → 28,881 B (**−22.1%**) |
+| `examples/nbody.maxon` | 11,306 / 10,981 / 10,895 ms | **10,419 / 10,294 / 10,227 ms** | **−6.2%** | 87,402 → 76,650 B (**−12.3%**) |
+
+Three runs each, interleaved; every `post` run beat every `pre` run on both programs, and
+fannkuch's spread is under 0.4%.
+
+⚠⚠ **AND THIS IS WHY `EC14`'s FINDING MUST NOT BE OVER-READ.** `EC14` measured its OWN row at
+*"nbody 10.02 s either way"* and concluded the instruction count is a proxy that does not track
+time — **true for that row on that shape, and false as a statement about the workstream.** The two
+readings are consistent: LICM moved two L1 loads out of a loop an out-of-order core was already
+absorbing them in, while `EC16` + `EC15` deleted a *runtime branch and a multiply per array access*,
+which fannkuch — an array-indexing benchmark — pays on every element.
+
+⇒ **The honest rule: an instruction count is a hypothesis, and only a timed A/B on a program that
+exercises the shape can settle it.** Neither the static counter nor `scale-test`'s `codeBytes` could
+see fannkuch's 1.78×; `scale-test` read a delta of exactly **0** for `EC14` because `ScaleCorpus`'s
+array knob emits no loop over an array at all (filed).
+
 ## The three-way inventory — the answer to "what do the other two have that shv2 lacks?"
 
 Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
