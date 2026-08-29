@@ -69,13 +69,17 @@ def count(ir_text):
     lines = ir_text.splitlines()
     c = {k: 0 for k in ("ops", "jmp", "jmp->next", "jmponly-blocks",
                         "imul-imm", "imul-pow2", "idiv", "call-direct",
-                        "mgd-call", "im-blocks")}
+                        "mgd-call", "im-blocks", "mov")}
     for i, raw in enumerate(lines):
         s = raw.strip()
         if s.startswith("x64."):
             c["ops"] += 1
         if s.startswith("x64.idivReg"):
             c["idiv"] += 1
+        # Register-to-register copies. Coalescing's target: 17% of nbody's ops
+        # at ff12c05666, and none of them is a self-move (those are already gone).
+        if s.startswith("x64.movRegReg"):
+            c["mov"] += 1
         m = CALL_DIRECT.match(s)
         if m:
             c["call-direct"] += 1
@@ -151,7 +155,7 @@ def main():
 
     cols = ["ops", "jmp", "jmp->next", "jmponly-blocks",
             "imul-imm", "imul-pow2", "idiv", "call-direct", "mgd-call",
-            "im-blocks"]
+            "im-blocks", "mov"]
     rows, totals = [], {k: 0 for k in cols}
     for src in corpus:
         c = count(emit_ir(src, workdir))
