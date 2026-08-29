@@ -33,29 +33,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @total {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-  forhdr:
-    x64.cmpRegReg rax, rdx
-    x64.jcc greaterEqual, forexit
-  loop:
-    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rax*8 + 0]
-  __im_cont:
-    x64.leaRegRegReg r8, r8, rsi
-  forstep:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forhdr
-  forexit:
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -68,21 +45,34 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-  forhdr:
+  forhdr#1:
     x64.cmpRegImm32 r12, 6
-    x64.jcc greaterEqual, forexit
+    x64.jcc greaterEqual, __il_body
   seed:
     x64.movRegReg rdx, r12
     x64.imulRegReg rdx, r12, r12
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-  forstep:
+  forstep#3:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr
-  forexit:
-    x64.movRegReg rcx, rbx
-    x64.callDirect total
-    x64.cmpRegImm32 r8, 55
+    x64.jmp forhdr#1
+  __il_body:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+  forhdr#11:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, __il_cont
+  loop:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont:
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#13:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr#11
+  __il_cont:
+    x64.cmpRegImm32 rax, 55
     x64.jcc equal, ifcont#6
   sum:
     x64.movRegImm32 r12, 1

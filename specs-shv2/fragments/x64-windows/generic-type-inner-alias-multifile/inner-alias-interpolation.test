@@ -103,26 +103,6 @@ func @GenericModule.pushOp {
     x64.ret
 }
 
-func @GenericModule.opCount {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
-func @GenericModule.itemCount {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -149,9 +129,10 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot8, rcx
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.movRegReg rcx, rbx
-    x64.callDirect GenericModule.opCount
-    x64.movRegReg r13, r8
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+  __il_cont#5:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -164,9 +145,10 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
-    x64.movRegReg rcx, rbx
-    x64.callDirect GenericModule.itemCount
-    x64.movRegReg rbx, r8
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+  __il_cont#4:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -233,9 +215,12 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect GenericModule.opCount
-    x64.cmpRegImm32 r8, 2
+  __il_body#8:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#3:
+    x64.cmpRegImm32 rax, 2
     x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 rbx, 0

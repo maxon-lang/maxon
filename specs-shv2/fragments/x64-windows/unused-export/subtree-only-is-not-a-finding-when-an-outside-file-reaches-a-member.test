@@ -135,64 +135,50 @@ func @makeHolder {
     x64.ret
 }
 
-func @total {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 0
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rdx, [rax + 8]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-  forhdr:
-    x64.cmpRegReg rcx, rdx
-    x64.jcc greaterEqual, forexit
-  each:
-    x64.loadRegBaseIndexScale.word64 rsi, [rax + rcx*8 + 0]
-  __im_cont:
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.leaRegRegReg r8, r8, rsi
-  forstep:
-    x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp forhdr
-  forexit:
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 40
     x64.callDirect makeHolder
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect total
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
+  __il_body:
+    x64.movRegImm32 rbx, 0
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  forhdr:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, __il_cont
+  each:
+    x64.loadRegBaseIndexScale.word64 rsi, [rax + rcx*8 + 0]
+  __im_cont:
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
+    x64.leaRegRegReg rbx, rbx, rsi
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  __il_cont:
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Holder
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
+    x64.cmpRegReg rbx, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

@@ -305,7 +305,7 @@ function foldConstantBranches(module StdModule, func IrFunction, constMap ConstV
 		end 'noTerminator'
 
 		let termIdx = block.terminatorIndex()
-		let term = try module.ops.get(termIdx) otherwise panic("foldConstants: terminator index {termIdx} not in module.ops")
+		let term = terminatorOpAt(module, termIdx: termIdx)
 		if foldConstantBranchIn(module, block: block, termIdx: termIdx, term: term, constMap: constMap) 'folded'
 			foldedAny = true
 		end 'folded'
@@ -313,6 +313,15 @@ function foldConstantBranches(module StdModule, func IrFunction, constMap ConstV
 
 	return foldedAny
 end 'foldConstantBranches'
+
+// ⚠ **READ THROUGH A FUNCTION, NOT INLINE, AND THAT IS E3070 RATHER THAN TIDINESS.** A
+// `module.ops.get(...)` written inline borrows `module` for as long as the value lives, and the fold in
+// the very next breath MUTATES it (`setTerminator`) — which the SELF-COMPILE refuses and the bootstrap
+// does not. Reading through a function ends the borrow at the return, the same discipline
+// `LeafInliner.opAtIndex` and `PrimitiveInliner.opAt` state for themselves.
+function terminatorOpAt(module StdModule, termIdx OpIndex) returns StdOp
+	return try module.ops.get(termIdx) otherwise panic("foldConstants: terminator index {termIdx} not in module.ops")
+end 'terminatorOpAt'
 
 // Fold ONE block's terminator, when it is a `condBranch` on a value this pass knows.
 function foldConstantBranchIn(module StdModule, block IrBlock, termIdx OpIndex, term StdOp, constMap ConstValueMap) returns bool

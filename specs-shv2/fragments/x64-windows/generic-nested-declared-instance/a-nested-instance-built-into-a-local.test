@@ -65,16 +65,6 @@ func @Inner.create {
     x64.ret
 }
 
-func @Inner.count {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Bag.make {
   entry:
     x64.pushReg rbp
@@ -85,9 +75,11 @@ func @Bag.make {
     x64.prologue 40
     x64.callDirect Inner.create
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect Inner.count
-    x64.leaRegRegImm32 r12, r8, 5
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont:
+    x64.leaRegRegImm32 r12, rax, 5
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc

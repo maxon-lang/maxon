@@ -1,52 +1,29 @@
-// Test: read-on-var-self-field-array-ok
+// Test: a-whole-loop-over-an-array-becomes-a-leaf
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-type Bag
-	export var items as IntArray
-
-	static function create() returns Bag
-		return Self{items: IntArray.create()}
-	end 'create'
-
-	export function size() returns Integer
-		return items.count()
-	end 'size'
-end 'Bag'
+function total(a IntArray) returns Integer
+	var t = 0
+	for v in a 'each'
+		t = t + v
+	end 'each'
+	return t
+end 'total'
 
 function main() returns ExitCode
-	var b = Bag.create()
-	b.items.push(1)
-	return b.size() as ExitCode
+	var a = IntArray.create()
+	a.push(20)
+	a.push(22)
+	return total(a) as ExitCode
 end 'main'
 ---
-ExitCode: 1
+ExitCode: 42
 ---
 data {
   __mm_alloc_count@0 = i64 0
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @Bag.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
 }
 
 func @main {
@@ -56,14 +33,31 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.callDirect Bag.create
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 22
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
   __il_body:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+  forhdr:
+    x64.cmpRegReg rax, rcx
+    x64.jcc greaterEqual, __il_cont
+  each:
+    x64.loadRegBaseIndexScale.word64 rsi, [rdx + rax*8 + 0]
+  __im_cont:
+    x64.leaRegRegReg r12, r12, rsi
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
   __il_cont:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
@@ -82,7 +76,7 @@ func @main {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Bag
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12

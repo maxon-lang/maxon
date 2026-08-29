@@ -17,6 +17,10 @@ It compiles a fixed corpus with --emit-ir and counts, per program:
   imul-pow2       ... of which by a power of two (EC16 folds these into an
                   addressing mode; EC18 turns the rest into shifts)
   idiv            integer divides (EC18: 20-40 cycles each)
+  call-direct     every emitted `callDirect` - the column the two inlining
+                  passes are graded on, since a call they discharge is one
+                  frame, one argument shuffle and one `ret` the program does
+                  not run (EC5, EC17)
   mgd-call        calls to a `__managed_*` runtime element primitive - the slow
                   arms `inlineManagedPrimitives` could not discharge, plus every
                   site it does not expand (EC15)
@@ -31,7 +35,8 @@ and nothing to pass; read the numbers.
 
 Usage:  python scripts/emitted-code-count.py [--json] [corpus.maxon ...]
 Default corpus: examples/nbody.maxon, examples/fannkuch-redux.maxon, and the
-probe programs under temp/codegen-probe/ when they exist.
+probe programs under temp/codegen-probe/ when they exist (their sources are
+reproduced in docs/emitted-code-roadmap.md, since temp/ is scratch).
 """
 import json
 import os
@@ -46,7 +51,10 @@ SHV2 = os.path.join(REPO, "maxon-shv2", ".maxon",
 JMP = re.compile(r"x64\.jmp\s+(\S+)$")
 LABEL = re.compile(r"(\S+):$")
 IMUL_IMM = re.compile(r"x64\.imulRegRegImm32 [^,]+, [^,]+, (-?\d+)")
-MGD_CALL = re.compile(r"x64\.callDirect (__managed_\S+)$")
+# ONE pattern for both call columns: `mgd-call` is a SUBSET of `call-direct`, so a
+# second regex over the same instruction would be the same fact matched twice.
+CALL_DIRECT = re.compile(r"x64\.callDirect (\S+)$")
+MANAGED_CALLEE_PREFIX = "__managed_"
 
 
 def next_code_line(lines, i):
@@ -60,16 +68,19 @@ def next_code_line(lines, i):
 def count(ir_text):
     lines = ir_text.splitlines()
     c = {k: 0 for k in ("ops", "jmp", "jmp->next", "jmponly-blocks",
-                        "imul-imm", "imul-pow2", "idiv", "mgd-call",
-                        "im-blocks")}
+                        "imul-imm", "imul-pow2", "idiv", "call-direct",
+                        "mgd-call", "im-blocks")}
     for i, raw in enumerate(lines):
         s = raw.strip()
         if s.startswith("x64."):
             c["ops"] += 1
         if s.startswith("x64.idivReg"):
             c["idiv"] += 1
-        if MGD_CALL.match(s):
-            c["mgd-call"] += 1
+        m = CALL_DIRECT.match(s)
+        if m:
+            c["call-direct"] += 1
+            if m.group(1).startswith(MANAGED_CALLEE_PREFIX):
+                c["mgd-call"] += 1
 
         m = IMUL_IMM.match(s)
         if m:
@@ -129,6 +140,7 @@ def main():
         os.path.join(REPO, "temp", "codegen-probe", "cse2.maxon"),
         os.path.join(REPO, "temp", "codegen-probe", "cse3.maxon"),
         os.path.join(REPO, "temp", "codegen-probe", "probe.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "leaf.maxon"),
     ) if os.path.exists(p)]
 
     if not os.path.exists(SHV2):
@@ -138,7 +150,8 @@ def main():
     os.makedirs(workdir, exist_ok=True)
 
     cols = ["ops", "jmp", "jmp->next", "jmponly-blocks",
-            "imul-imm", "imul-pow2", "idiv", "mgd-call", "im-blocks"]
+            "imul-imm", "imul-pow2", "idiv", "call-direct", "mgd-call",
+            "im-blocks"]
     rows, totals = [], {k: 0 for k in cols}
     for src in corpus:
         c = count(emit_ir(src, workdir))

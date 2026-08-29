@@ -64,16 +64,6 @@ func @Container.create {
     x64.ret
 }
 
-func @Container.count {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Container.push {
   entry:
     x64.pushReg rbp
@@ -103,7 +93,7 @@ func @main {
   forhdr:
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 rbx, 3
-    x64.jcc greaterEqual, forexit
+    x64.jcc greaterEqual, __il_body
   fill:
     x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -164,10 +154,12 @@ func @main {
     x64.leaRegRegImm32 rax, rax, 1
     x64.movRegReg rbx, rax
     x64.jmp forhdr
-  forexit:
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect Container.count
-    x64.cmpRegImm32 r8, 3
+  __il_body:
+    x64.loadRegSlot rax, slot1
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont:
+    x64.cmpRegImm32 rax, 3
     x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 rbx, 0

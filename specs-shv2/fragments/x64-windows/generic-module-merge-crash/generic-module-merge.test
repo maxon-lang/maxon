@@ -123,14 +123,13 @@ func @Container.merge {
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
     x64.callDirect Container.appendOps
-    x64.movRegImm32 r14, 0
-    x64.movRegReg rcx, r12
-    x64.callDirect Container.itemCount
-    x64.movRegReg r15, r8
-    x64.movRegReg rdx, r14
+    x64.movRegImm32 rdx, 0
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
   forhdr:
     x64.storeSlotReg slot0, rdx
-    x64.cmpRegReg rdx, r15
+    x64.cmpRegReg rdx, r14
     x64.jcc greaterEqual, forexit
   eachItem:
     x64.movRegReg rcx, r12
@@ -140,12 +139,12 @@ func @Container.merge {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect Container.cloneItem
-    x64.movRegReg r14, r8
+    x64.movRegReg r15, r8
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
+    x64.movRegReg rdx, r15
     x64.movRegReg rax, r13
     x64.callDirect Container.pushItem
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
@@ -209,16 +208,6 @@ func @Container.create {
     x64.ret
 }
 
-func @Container.opsCount {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Container.appendOps {
   entry:
     x64.pushReg rbp
@@ -228,16 +217,6 @@ func @Container.appendOps {
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
     x64.callDirect __managed_append_opaque
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Container.itemCount {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
     x64.popReg rbp
     x64.ret
 }
@@ -374,15 +353,18 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect Container.merge
-    x64.movRegReg rcx, r12
-    x64.callDirect Container.opsCount
-    x64.cmpRegImm32 r8, 2
+  __il_body#8:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#7:
+    x64.cmpRegImm32 rax, 2
     x64.movRegImm32 rax, 0
     x64.jcc notEqual, scmerge
-  andrhs:
-    x64.movRegReg rcx, r12
-    x64.callDirect Container.itemCount
-    x64.cmpRegImm32 r8, 1
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#9:
+    x64.cmpRegImm32 rax, 1
     x64.setccReg equal, rax
   scmerge:
     x64.cmpRegImm32 rax, 0

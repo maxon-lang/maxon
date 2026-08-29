@@ -6875,11 +6875,18 @@ export type Project
 	// `__managed_*` call reaches Std through `appendRuntimeCall` / `appendThrowingCall`, so recording it there
 	// is one complete door rather than an enumeration of the parser's several element-access sites.
 	//
-	// ⚠⚠ **THE KEY IS DURABLE BECAUSE `IrModule.ops` ALLOCATES INDICES BY `push` AND THE TWO PASSES IN
-	// BETWEEN NEITHER CLONE NOR REPLACE A CALL.** `insertRangeChecks` appends guard ops and splits blocks
-	// (which moves `opRefs`, never ops); `inlineLeaves` clones a callee body, and **a leaf holds no call by
-	// rule** (`LeafOpRole.calling` refuses the callee outright), so it can neither copy nor re-issue a managed
-	// primitive. ⇒ every op index recorded here still names the very call the lowering appended.
+	// ⚠⚠ **THE KEY IS DURABLE BECAUSE `IrModule.ops` ALLOCATES INDICES BY `push` AND THE ONE PASS IN
+	// BETWEEN NEITHER CLONES NOR REPLACES A CALL.** `insertRangeChecks` appends guard ops and splits blocks
+	// (which moves `opRefs`, never ops). ⇒ every op index recorded here still names the very call the
+	// lowering appended.
+	//
+	// ⭐ **EC17 SHORTENED THAT LIST RATHER THAN LENGTHENING IT.** `inlineLeaves` used to sit between the
+	// write and the read as well, and what covered it was that **a leaf holds no call BY RULE**
+	// (`LeafOpRole.calling` refuses the callee outright), so it could neither clone nor re-issue a managed
+	// primitive. EC17 moved it to run AFTER `inlineManagedPrimitives` — i.e. after this table has been read
+	// and spent — so a splice cannot reach a live key at all. The leaf rule still holds and is still what
+	// makes the reorder safe in the OTHER direction (see `PassPipeline`'s `inlineManagedPrimitives` entry);
+	// it is simply no longer this key's argument.
 	//
 	// ⚠⚠ **A STAMP IS RECORDED, NOT A VERDICT — AND THE STAMP IS NOT ALWAYS THE RECORD'S.** What may be
 	// concluded from it is `strideDispatchPlanForStamp`'s to say, and the answer is not simply "this width":

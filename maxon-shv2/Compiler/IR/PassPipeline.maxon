@@ -48,7 +48,38 @@ union PassKind
 	// the existing `pruneDeadBlockArgs to foldConstOperands` union range still names the three
 	// block-arg/const passes exactly.
 	insertRangeChecks
-	// Phase 3.44: Std → Std splicing of TINY LEAF callees into their direct call sites (EC5), leaving the
+	// Phase 3.44: Std → Std expansion of the `__ManagedMemory` element primitives' FAST PATHS at their
+	// call sites (EC1), leaving the call itself — verbatim — as the slow arm every other case takes.
+	//
+	// ⚠ **IT RUNS AFTER `insertRangeChecks`, AND THAT IS FORCED RATHER THAN CHOSEN.** A range-check site is
+	// recorded as `(blockId, stdOpPos)` in the coordinate space `lowerMaxonToStd` left the block in
+	// (`RangeCheckSite.stdOpPos`), and this pass SPLITS blocks and removes an op from one — so a site
+	// recorded past a split point would land in a block that no longer holds it, or trip `guardSiteAt`'s
+	// own `pastTheBlock` panic. Running after leaves that coordinate space untouched and costs nothing:
+	// the guards this pass emits are ordinary loads and compares, of no interest to a narrowing check.
+	//
+	// ⭐⭐ **AND SINCE EC17 IT RUNS BEFORE `inlineLeaves`, WHICH IS THE WHOLE OF THAT ROW.** `__managed_count`
+	// is the one primitive this pass rewrites IN PLACE — into a single `loadIndirect` — and every accessor
+	// whose body is that one call (`Array.isEmpty`, `Parser.advance`, `String.byteLength`) is therefore NOT
+	// a leaf until it has run. Ordered the other way the leaf inliner met a body holding a call and refused
+	// it, one pass before the call stopped existing: MEASURED on the self-compile at `2cdfab05d5`,
+	// `Array.isEmpty` kept **209** call sites, `Parser.advance` **106** and `String.byteLength` **92**.
+	//
+	// ⭐ **THE REORDER CANNOT COST `inlineLeaves` A SINGLE CALLEE, AND THAT IS A PROOF RATHER THAN A
+	// MEASUREMENT.** This pass rewrites only bodies holding a `__managed_*` CALL, and a leaf holds no call
+	// BY RULE (`InlineLeaves.LeafOpRole.calling` refuses the callee outright) — so no body this pass can
+	// touch is one the leaf inliner would have accepted, and the eligible set can only grow. MEASURED
+	// anyway, because a proof about two passes is worth checking: on the self-compile the leaf inliner's
+	// eligible callees go **469 → 530** and its sites **4,138 → 4,921**, while THIS pass's own expansion
+	// count is unchanged to the digit at **6,032 across 9,494 functions** — leaf splicing never duplicated
+	// a managed primitive, in either order, and nothing the leaf inliner used to reach became unreachable.
+	//
+	// It runs BEFORE `foldConstOperands`, which IS chosen: every bound and stride it emits is a `const`,
+	// and the fold is what turns them into `cmpImm`/`binOpImm` operands so they never occupy a register in
+	// the loops this pass makes hotter. It also runs before `pruneDeadBlockArgs`, which then drops the
+	// continuation result arg of a void `set` nothing reads.
+	inlineManagedPrimitives
+	// Phase 3.45: Std → Std splicing of TINY LEAF callees into their direct call sites (EC5), leaving the
 	// callee where it is — and, for a leaf whose ranged-parameter guard can panic, leaving one slow arm
 	// per site that re-issues the original call so the panic still comes out of the callee's own frame.
 	//
@@ -59,34 +90,22 @@ union PassKind
 	// `insertRangeChecks` no callee has one, so every ranged-parameter leaf would look store-free and
 	// panic-free and be copied WITH its guard emitted later into the callee alone.
 	//
-	// It runs BEFORE `inlineManagedPrimitives`, and ⚠ **THAT ORDER IS A CHOICE WITH A MEASURED PRICE, not
-	// a forced one.** Running first means a body the carve would have turned into a guard chain plus a
-	// slow arm holding the call is still small and call-free here. But `__managed_count` is the primitive
-	// that pass rewrites IN PLACE — into a single `loadIndirect` — and the accessors built on it are
-	// therefore NOT leaves at this point and are refused: MEASURED on the self-compile, `Array.isEmpty`
-	// keeps 209 call sites, `Parser.advance` 106 and `String.byteLength` 92, all three because their one
-	// call is a `__managed_count` the very next pass would have deleted. Whether to run a second round
-	// after that pass — or to move this one — is a rung of its own, and the number above is what it costs
-	// today.
+	// ⭐⭐ **AND SINCE EC17 IT RUNS AFTER `inlineManagedPrimitives`, WHICH IS WHAT MAKES THE
+	// COUNT-BACKED ACCESSORS LEAVES AT ALL** — see that pass's entry above for the measurement, and for
+	// why the move cannot cost this one a callee.
+	//
+	// ⛔ **A SECOND ROUND WAS THE OTHER SHAPE EC17 WEIGHED, AND IT IS NOT WHAT LANDED.** Running this pass
+	// again after the managed rewrite buys the same callees AND two things the row did not ask for. The
+	// `__il_slow` arms this pass mints hold *the very call the splice moved*, so a second round re-expands
+	// them — a fresh copy of a panicking leaf's body at every such site, for no call removed. And
+	// eligibility recomputed on an already-spliced module admits a caller that became call-free BY being
+	// inlined into, which is the cascade `LeafPlan`'s header refuses on purpose and which
+	// `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins. Both would need suppressing
+	// machinery; the reorder needs none, and one round stays one round.
 	//
 	// `promoteStackRecords` runs last, so no `stackRecordAddr` exists here (which is what its
 	// `isUnsupportedInInlineBody` would otherwise refuse a callee for).
 	inlineLeaves
-	// Phase 3.45: Std → Std expansion of the `__ManagedMemory` element primitives' FAST PATHS at their
-	// call sites (EC1), leaving the call itself — verbatim — as the slow arm every other case takes.
-	//
-	// ⚠ **IT RUNS AFTER `insertRangeChecks`, AND THAT IS FORCED RATHER THAN CHOSEN.** A range-check site is
-	// recorded as `(blockId, stdOpPos)` in the coordinate space `lowerMaxonToStd` left the block in
-	// (`RangeCheckSite.stdOpPos`), and this pass SPLITS blocks and removes an op from one — so a site
-	// recorded past a split point would land in a block that no longer holds it, or trip `guardSiteAt`'s
-	// own `pastTheBlock` panic. Running after leaves that coordinate space untouched and costs nothing:
-	// the guards this pass emits are ordinary loads and compares, of no interest to a narrowing check.
-	//
-	// It runs BEFORE `foldConstOperands`, which IS chosen: every bound and stride it emits is a `const`,
-	// and the fold is what turns them into `cmpImm`/`binOpImm` operands so they never occupy a register in
-	// the loops this pass makes hotter. It also runs before `pruneDeadBlockArgs`, which then drops the
-	// continuation result arg of a void `set` nothing reads.
-	inlineManagedPrimitives
 	// Phase 3.5: Std → Std machine-form rewrites.
 	//
 	// `pruneDeadBlockArgs` deletes the loop-header phis nothing ever reads — a var the loop
@@ -183,12 +202,12 @@ function classifyPass(pass PassKind) returns PassClassification
 		checkUnusedExports gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
 		insertRangeChecks gives PassClassification.perFunction
-		// WHOLE-MODULE by nature, like `promoteStackRecords`: the whole question is what the CALLEE's body
-		// contains, and a caller cannot be judged without every callee it names in view.
-		inlineLeaves gives PassClassification.wholeModule
 		// Intra-function by construction: a site is expanded entirely inside the block that holds it, and
 		// nothing about the callee's body is consulted — the body is not even in the module yet.
 		inlineManagedPrimitives gives PassClassification.perFunction
+		// WHOLE-MODULE by nature, like `promoteStackRecords`: the whole question is what the CALLEE's body
+		// contains, and a caller cannot be judged without every callee it names in view.
+		inlineLeaves gives PassClassification.wholeModule
 		pruneDeadBlockArgs gives PassClassification.perFunction
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstants gives PassClassification.perFunction
@@ -217,8 +236,8 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		checkUnusedExports gives CompilePhase.checkUnusedExports
 		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
 		insertRangeChecks gives CompilePhase.insertRangeChecks
-		inlineLeaves gives CompilePhase.inlineLeaves
 		inlineManagedPrimitives gives CompilePhase.inlineManagedPrimitives
+		inlineLeaves gives CompilePhase.inlineLeaves
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstants gives CompilePhase.foldConstants
@@ -237,8 +256,8 @@ function passKindToString(pass PassKind) returns String
 		checkUnusedExports gives "checkUnusedExports"
 		lowerMaxonToStd gives "lowerMaxonToStd"
 		insertRangeChecks gives "insertRangeChecks"
-		inlineLeaves gives "inlineLeaves"
 		inlineManagedPrimitives gives "inlineManagedPrimitives"
+		inlineLeaves gives "inlineLeaves"
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstants gives "foldConstants"
@@ -284,8 +303,8 @@ export function buildLoweringPasses() returns PassKindArray
 	var passes = PassKindArray.create()
 	passes.push(PassKind.lowerMaxonToStd)
 	passes.push(PassKind.insertRangeChecks)
-	passes.push(PassKind.inlineLeaves)
 	passes.push(PassKind.inlineManagedPrimitives)
+	passes.push(PassKind.inlineLeaves)
 	passes.push(PassKind.pruneDeadBlockArgs)
 	passes.push(PassKind.elimTrivialBlockArgs)
 	passes.push(PassKind.foldConstants)
@@ -445,8 +464,8 @@ export type PassPipeline
 			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
-			inlineLeaves then inlineLeaves(self.project, module: self.stdModule)
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
+			inlineLeaves then inlineLeaves(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
 			// The whole module, and no start index: see `foldConstants`' own header for why the appended

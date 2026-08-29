@@ -7344,9 +7344,9 @@ func @findGraphemeEnd {
     x64.prologue 56
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.byteLength
-    x64.movRegReg r13, r8
+  __il_body#35:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  __il_cont#34:
     x64.cmpRegReg r12, r13
     x64.jcc less, ifcont#2
   atEnd:
@@ -7508,9 +7508,9 @@ func @findGraphemeEnd {
     x64.movRegReg rcx, r14
     x64.callDirect graphemeBreakProperty
     x64.movRegReg r15, r8
-  __il_body:
+  __il_body#37:
     x64.movRegImm32 rcx, 0
-  __il_cont:
+  __il_cont#36:
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r14
     x64.callDirect graphemeStateUpdate
@@ -7579,10 +7579,9 @@ func @countGraphemes {
     x64.pushReg r13
     x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.byteLength
-    x64.movRegReg r12, r8
-  __il_body:
+  __il_body#8:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+  __il_body#9:
     x64.loadRegBaseDisp.byte rax, [rbx + 48]
   __il_cont:
     x64.cmpRegImm32 rax, 0
@@ -8418,8 +8417,7 @@ func @utf8WidthFits {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
+    x64.prologue 32
     x64.cmpRegImm32 rax, 1
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -8429,17 +8427,17 @@ func @utf8WidthFits {
     x64.leaRegRdata rcx, [rip + __str_blob_131]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegReg rbx, rdx, rax
-    x64.callDirect String.byteLength
-    x64.cmpRegReg rbx, r8
+    x64.leaRegRegReg rax, rdx, rax
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+  __il_cont:
+    x64.cmpRegReg rax, rcx
     x64.setccReg lessEqual, r8
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -8900,15 +8898,6 @@ func @print {
     x64.prologue 32
     x64.callDirect __write_stdout
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

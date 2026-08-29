@@ -34,29 +34,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @total {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-  forhdr:
-    x64.cmpRegReg rax, rdx
-    x64.jcc greaterEqual, forexit
-  loop:
-    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rax*8 + 0]
-  __im_cont:
-    x64.leaRegRegReg r8, r8, rsi
-  forstep:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forhdr
-  forexit:
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -69,9 +46,23 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect total
-    x64.cmpRegImm32 r8, 0
+  __il_body#6:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+  forhdr#7:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, __il_cont#5
+  loop#8:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont#11:
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#9:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr#7
+  __il_cont#5:
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#2
   emptyIsZero:
     x64.movRegImm32 r12, 1
@@ -92,9 +83,23 @@ func @main {
     x64.movRegImm32 rdx, 7
     x64.movRegReg rcx, r12
     x64.callDirect __managed_push
-    x64.movRegReg rcx, r12
-    x64.callDirect total
-    x64.cmpRegImm32 r8, 7
+  __il_body#13:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 8]
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 0]
+  forhdr#14:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, __il_cont#12
+  loop#15:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont#18:
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#16:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr#14
+  __il_cont#12:
+    x64.cmpRegImm32 rax, 7
     x64.jcc equal, ifcont#4
   oneElement:
     x64.movRegImm32 r13, 2

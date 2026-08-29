@@ -136,18 +136,6 @@ func @HoldConcrete.adopt {
     x64.ret
 }
 
-func @HoldConcrete.isSingle {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rax, 1
-    x64.setccReg equal, r8
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -165,9 +153,13 @@ func @main {
     x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.movRegReg rcx, r12
     x64.callDirect HoldConcrete.adopt
-    x64.movRegReg rcx, r12
-    x64.callDirect HoldConcrete.isSingle
-    x64.cmpRegImm32 r8, 0
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg equal, rax
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont
   ok:
     x64.leaRegRdata rcx, [rip + __str_rec_2]

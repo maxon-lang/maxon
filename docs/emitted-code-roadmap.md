@@ -39,6 +39,12 @@ runs interleaved, same box**. Both binaries print byte-identical answers.
 Three runs each, interleaved; every `post` run beat every `pre` run on both programs, and
 fannkuch's spread is under 0.4%.
 
+⭐ **THE SELF-COMPILE RATIO, the one program that is not a benchmark.** Measured by the coordinator
+at `EC17` (2026-08-29), same source both sides: **stage-1 (bootstrap-emitted) self-compiles in 157 s;
+stage-2 (shv2-emitted) in 78 s — ×0.50.** `W222` read that ratio at **×0.62** on 2026-08-27, before
+any of these rows. Same logic in both binaries, so the whole difference is codegen. The fixpoint
+holds byte-identically (9,004,190 B), which is what says the two are the same compiler.
+
 ⚠⚠ **AND THIS IS WHY `EC14`'s FINDING MUST NOT BE OVER-READ.** `EC14` measured its OWN row at
 *"nbody 10.02 s either way"* and concluded the instruction count is a proxy that does not track
 time — **true for that row on that shape, and false as a statement about the workstream.** The two
@@ -59,7 +65,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | Optimization | shv2 | bootstrap | v1 self-hosted |
 |---|---|---|---|
 | Whole-program dead-function elim | ✅ `DeadFunctionElimination.maxon` | ✅ `DeadFunctionElimination.cs` | ✅ ×2 (Maxon + Std tier) |
-| Inlining | ◑ `InlineLeaves` — leaf-only, one round, ≤24 ops | ❌ none | ✅ `Passes/Inliner.maxon` (3,067 lines) |
+| Inlining | ◑ `InlineLeaves` — leaf-only, one round, ≤24 ops, scheduled AFTER the managed rewrite (EC17) | ❌ none | ✅ `Passes/Inliner.maxon` (3,067 lines) |
 | Managed-primitive inlining | ✅ `InlineManagedPrimitives` (EC1) | ❌ n/a | ❌ n/a |
 | Const **operand** → immediate | ✅ `FoldConstOperands` | ◑ imm8/imm32 encodings only | ✅ `Canonicalize` |
 | Algebraic identity (`x+0`, `x*1`) | ✅ `FoldConstOperands` move 3 | ✅ `TryAlgebraicIdentity` | ✅ `Canonicalize` |
@@ -156,6 +162,12 @@ across that call are gone.
 ⚠ Note what this is NOT: the `__im_*` arms were `EC1`'s inlined fast path, and `EC1` was a large
 measured win (a checked read went 176 → 26 instructions). The defect `EC15` closed is that the inlined
 arm was **not specialized by an element type the compiler already knows** — not that it was inlined.
+
+⭐ **AND SINCE `EC17` THERE IS NO `@sum` LEFT TO LOOK AT — THE WHOLE FUNCTION IS A LEAF.** `EC15` made a
+known-stride `for v in a` call-free, and `EC17` runs `inlineLeaves` after the pass that does it, so `sum`
+now holds no call, fits the 24-op budget, and is spliced into `@main` — its frame, its `call`, its
+argument move and its `ret` all gone with it (`arr.maxon`: 100 → 93 ops). The six-instruction body above is
+unchanged; it is simply inside `main` now, between an `__il_body` and an `__il_cont`.
 
 ⭐ **THE JUMP THAT WAS THE ARGUMENT FOR BLOCK REORDERING IS GONE, AND NOT BY REORDERING.** This
 section used to read *"the one jump left in the loop is the clearest argument for block reordering"* —
@@ -744,6 +756,160 @@ Filed by `EC5` and never taken: `Array.isEmpty` (209 sites), `Parser.advance` (1
 `inlineManagedPrimitives` rewrites **one pass later**. **407 sites**, for either a second round or a
 reorder. Cheapest row on this list.
 
+✅ **LANDED 2026-08-29 AS THE REORDER.** `buildLoweringPasses` now pushes `inlineManagedPrimitives`
+before `inlineLeaves`, and **that is the entire change**: no pass added, no rule weakened, no budget
+moved, one round still one round. The 407 sites are **0**.
+
+⭐⭐ **WHY THE REORDER AND NOT A SECOND ROUND — THEY ARE NOT ALTERNATIVES OF EQUAL REACH.** One round
+*after* the managed rewrite sees everything a second round would see **except the cascade**, and the
+cascade is the part this row did not ask for. What a second round would additionally do, each needing
+its own suppression machinery:
+
+- **It re-expands its own slow arms.** `inlineLeaves`' `__il_slow` block holds *the very call the splice
+  moved* — that is how the panic rule keeps a callee's frame — so a later round inlines it again: one
+  more copy of a panicking leaf's body at every such site, and the innermost arm still calls. Pure growth,
+  no call removed. (`InlineLeaves.run`'s header already names this: *"the SLOW arm holds the very call
+  this splice moved, which re-inlining would loop on"*; within one round the snapshot bound prevents it,
+  across two rounds nothing does.)
+- **It opens a cascade level.** Eligibility recomputed on an already-spliced module admits a caller that
+  became call-free BY being inlined into — exactly what `LeafPlan`'s *"ONE ROUND, NO CASCADE"* rule
+  refuses on purpose, and what `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins.
+
+⭐ **AND THE REORDER CANNOT COST `inlineLeaves` A SINGLE CALLEE — A PROOF, NOT A MEASUREMENT.**
+`inlineManagedPrimitives` rewrites only bodies that hold a `__managed_*` CALL; a leaf holds **no call by
+rule** (`LeafOpRole.calling` refuses the callee outright). So no body it can reach is one the leaf inliner
+would have accepted, and the eligible set can only grow. MEASURED anyway, because a proof about two
+passes is worth checking: eligible callees **469 → 530**, sites inlined **4,138 → 4,921**, panic-rule
+refusals unchanged at **7 sites / 6 callees**, self-calls unchanged at **14** — and
+`inlineManagedPrimitives`' own count is unchanged **to the digit at 6,032 sites across 9,494 functions**,
+which is the other half of the same proof (leaf splicing never duplicated a managed primitive, in either
+order).
+
+⚠⚠ **`EC15`'s DURABILITY ARGUMENT WAS CHECKED AND IT GOT SHORTER, NOT LONGER.**
+`Project.stdOpElementStrides` keys on the append-only `module.ops` INDEX, justified by *"a leaf holds no
+call BY RULE, so `inlineLeaves` can neither clone nor re-issue a managed primitive."* The reorder removes
+`inlineLeaves` from between the WRITE (`LowerMaxonToStd`) and the READ (`inlineManagedPrimitives`)
+altogether — `insertRangeChecks` is now the ONLY pass in between, and it appends ops and moves `opRefs`,
+never ops. The leaf rule is therefore no longer that key's argument at all; it is now the argument for the
+REORDER, in the other direction. Both comments were rewritten to say which.
+
+⚠ And the second half of the question checks out too: `EC1`/`EC15`'s expansion **does** leave the original
+call on a slow arm, so a body carrying one is a body holding a CALL — which is exactly why `inlineLeaves`
+still refuses it, and why nothing had to be added to make it. That is pinned by a control that is the SAME
+SOURCE with one type changed: `a-loop-whose-element-access-keeps-a-slow-arm-is-not-a-leaf` iterates an
+`Array with Byte` (stamp 1 ⇒ `runtimeFork` ⇒ both width arms AND a slow arm holding
+`__managed_get_unchecked`), and `totalBytes` is **still called**, where the `Array with Integer` twin is
+spliced whole.
+
+**THE CENSUS — the self-compile, every `x64.callDirect` in 10,517 functions:**
+
+| callee | before | after |
+|---|---|---|
+| `Array.isEmpty` | 209 | **0** |
+| `Parser.advance` | 106 | **0** |
+| `String.byteLength` | 92 | **0** |
+| `IrModule.funcCount` | 38 | **0** |
+| `StructLayout.sizeBytes` | 14 | **0** |
+| `projectHasErrors` | 13 | **0** |
+| `IrModule.opCount` | 12 | **0** |
+| ~100 further `count` / `size` / predicate accessors | 157 | **0** |
+| **TOTAL `callDirect`** | **149,271** | **148,630 (−641)** |
+
+`EC5`'s three are 407 of it; the other **234** are the same shape it never enumerated — a body whose one
+call is `__managed_count`. **Every mover goes to ZERO and not one callee gained a site**, which is what a
+reorder should look like.
+
+**`scripts/emitted-code-count.py`**, committed corpus, before → after. ⭐ **A `call-direct` COLUMN WAS ADDED
+FOR THIS ROW** — the two inlining passes are graded on calls discharged and no column counted them — and
+`temp/codegen-probe/leaf.maxon` joined the corpus as the probe that exhibits the defect, so the totals
+below are re-baselined against both:
+
+| | ops | call-direct |
+|---|---|---|
+| nbody | 8,602 → **8,586** | 785 → **777** |
+| fannkuch-redux | 1,708 → 1,708 | 111 → 111 |
+| arr | 100 → **93** | 15 → **14** |
+| cse2 / cse3 / probe | unchanged | unchanged |
+| leaf | 69 → **56** | 6 → **5** |
+| TOTAL | 10,627 → **10,591** | 931 → **921** |
+
+`jmp`, `jmp→next`, `jmponly-blocks`, `imul-imm`, `imul-pow2`, `idiv`, `mgd-call` and `im-blocks` are
+byte-identical, as they must be: this row selects no instruction differently and expands no element
+access. Which calls went: nbody −5 `Array.isEmpty` and −3 `String.byteLength`; `leaf` −1 `Array.isEmpty`;
+`arr` −1 **`sum`** — the whole loop function, per the anchor note above; fannkuch **nothing at all**, and
+its compiled binary is BYTE-IDENTICAL under both compilers.
+
+⚠ **`ops` FELL ON THIS CORPUS AND THAT IS NOT THE GENERAL CASE.** Splicing a two-op leaf and deleting a
+call, a frame, an argument move and a `ret` is a net LOSS of instructions wherever the callee then dies
+entirely. Where it does not — the self-compile, where most inlined callees keep other callers — the same
+change reads **+1,190 static x64 ops (+0.09%)** and **+5,606 binary bytes (+0.06%)**. Inlining ADDS static
+ops while removing calls, exactly as the row's brief warned; the corpus simply happens to be on the other
+side of it.
+
+⭐⭐ **THE TIMED A/B — SMALL, CONSISTENT, AND EXACTLY ZERO ON BOTH BENCHMARK PROGRAMS.** Two stage-2
+compilers built from IDENTICAL sources by the pre-swap and post-swap compilers (so the LOGIC is the same
+in both binaries and only the emitted code differs), each self-compiling `maxon-shv2`, interleaved
+A B A B A B on one box:
+
+| | run 1 | run 2 | run 3 | min |
+|---|---|---|---|---|
+| pre | 77.88 s | 77.83 s | 77.78 s | 77.78 |
+| post | **77.46 s** | **77.70 s** | **77.15 s** | **77.15** |
+
+**−0.5%**, and the two arms' ranges do not overlap — post's SLOWEST run (77.70) beats pre's FASTEST
+(77.78). It is about the size the static census predicts: 641 of 149,271 emitted calls is 0.43%.
+
+⛔ **On the workstream's two benchmark programs it is ZERO, and that is the honest reading.**
+`fannkuch-redux`'s binary is **BYTE-IDENTICAL** under both compilers — it holds none of these accessors,
+so there is nothing to time. `nbody` runs **10.30 / 10.13 / 10.12 s** before and **10.33 / 10.15 / 10.13 s**
+after, printing the same answer: no difference, because its 8 removed calls are in setup and printing and
+not in its integration loop. ⇒ **this row's win lives in programs that call small accessors inside hot
+code, and the compiler is the one such program in the tree.** `EC14` reported the first zero of this
+workstream; this is the second, and the END-TO-END section's rule holds — an instruction count is a
+hypothesis, and only a program that exercises the shape can settle it.
+
+⭐ **WHAT IT COSTS THE COMPILER, ATTRIBUTED — AND IT IS NEGATIVE.** `--metrics` on both compilers
+self-compiling `maxon-shv2` (the allocation columns are exact and depend only on the LOGIC, so they read
+the reorder cleanly; the CPU column mixes in the emitted-code win and is not used here):
+`phase:inlineLeaves` allocations **+21.6%** (677,058 → 823,371 — proportional to the 19% more splices),
+`elimTrivialBlockArgs` +11.0%, `pruneDeadBlockArgs` +3.7%, `ssaDestruction` +3.0%; paid back by
+`regalloc` **−0.65%** and `regalloc:splitting` **−0.84%** (the calls that bounded live ranges are gone)
+and `inlineManagedPrimitives` **−1.0%** (it now walks unspliced blocks). **Whole-compile allocations
+−0.30%**: the compiler allocates LESS overall while its inliner does a fifth more work.
+
+⚠ **NO STASHED `scale-test` CONTROL WAS TAKEN AND THE LOGGED ROW SAYS SO.** The stale-binary guard
+refuses to run `scale-test` on a deliberately-old control binary — correctly, and it is not a guard to
+work around — so `docs/optimization-log.md`'s EC17 row is a TREND STEP against EC14's and not an
+attributed A/B. The `--metrics` reading above is the attribution, on a far realer input than the ladder.
+
+**GATES**: x64-windows **6,822 passed, 0 failed, exit 0** (6,818 + 4 new) and wasm32-wasi **6,361
+passed, 0 failed, exit 0** (6,358 + 3 — the panic-trace case is x64-only by its own `targets:` marker);
+**zero `E5001` in either run**, and `EC13`'s knife-edge case
+`generic-hash-table-regalloc/…witness-dispatch-inside-a-pressured-loop` is not merely green: **its
+golden is BYTE-IDENTICAL** — this row put no extra pressure on the case built to sit exactly at the
+register pool. (Its sibling `…rehash-loop-forwards-hidden-parameters` did move, and is one of the
+1,008.) **1,008 goldens re-minted** from ONE unfiltered run and
+re-verified at zero drift, 4 added. **Self-host fixpoint: stage-2 == stage-3, BYTE-IDENTICAL**
+(9,004,190 bytes). The **89 `Stack trace:` blocks across 19 spec files are byte-identical**:
+the panic rule is untouched by the reorder, and a moved trace would have been a FAILURE rather than a
+golden note.
+
+**Cases added** to `specs-shv2/inline-leaves.md`, 4:
+`an-accessor-that-becomes-a-leaf-after-the-managed-rewrite-is-inlined` (the gate — `Array.isEmpty` is
+spliced, and the fragment holds no `callDirect Array.isEmpty`);
+`a-whole-loop-over-an-array-becomes-a-leaf` (`total` is spliced into `main` and does not survive
+dead-function elimination at all);
+`the-panic-rule-holds-when-the-argument-is-an-inlined-element` (the guard tests a value
+`inlineManagedPrimitives` produced, and the trace still reads `in clampPct / in main / in mrt_start`);
+and the byte-array control above.
+
+**Left open**: the CASCADE a second round would buy (a caller that becomes call-free by being inlined
+into) — unbought, and now the only thing a second round would add; the **24-op budget**, unchanged per this
+row's scope and now refusing **529 sites / 60 callees** where it refused 520 / 53, of which 378 sites /
+30 callees a budget of 32 would admit (the population it is applied to grew, so the budget's price grew
+with it — lowering or raising it still owes its own CPU A/B); and `EC15`'s **byte arm**, which would make
+the `ByteArray` control's loop call-free too and turn that refusal into an inline.
+
 #### `EC18` · Strength reduction
 
 `mul` by a power of two → `shl`/`lea`; `div`/`mod` by a constant → the magic-number multiply.
@@ -812,7 +978,26 @@ range checks. **Measure the corpus first**; this may be a row with nothing behin
 3. `/rung EC<n>`.
 
 **The instrument is `scripts/self-host-ab.sh`** (~15 min; `--profile` adds function-level
-attribution, `--suite` runs the whole suite under stage-2). ⛔ `git status specs-shv2/fragments/`
+attribution, `--suite` runs the whole suite under stage-2).
+
+⛔⛔ **AND IT WAS BROKEN AT `2cdfab05d5` — THE COMPILER COULD NOT COMPILE ITSELF, WHICH MEANS THIS
+WORKSTREAM'S ONE INSTRUMENT COULD NOT RUN AT ALL.** Found 2026-08-29 while re-measuring `EC17`; three
+defects, all landed by rows in this document, none of them visible to the spec suite (the bootstrap
+builds shv2, and the bootstrap has neither the borrow checker's E3070 nor `checkUnusedExports`):
+
+- `EC12` left an **E3070** in `FoldConstants.foldConstantBranches` — a `module.ops.get(...)` read inline
+  borrows `module` while the fold in the next breath mutates it. Read through a function, which is the
+  discipline `LeafInliner.opAtIndex` and `PrimitiveInliner.opAt` already state for themselves.
+- `EC16` left **three E3092s**: `MemoryIndexScaleShift` and `MemoryIndexScaleFactor` are named nowhere
+  outside `TargetDialect.maxon` and simply lost their `export`; `X64SibNoIndex` is a **false positive**
+  and is now `public`. ⚠ **That third one is a hole in E3092 worth its own row**: a DEFAULT ARGUMENT is
+  evaluated in the CALLER's scope, so `X64GtRuntime`/`X64Runtime` resolve that name in their own files
+  while writing nothing — drop the visibility and the build stops with 20 × `E2004 Undefined variable`.
+  `checkUnusedExports` counts the names a file WRITES, so it cannot see such a use.
+
+⇒ **A row that changes a pass owes a self-compile, not only a suite run.** All three are repaired and
+the fixpoint holds byte-identically; this is filed here rather than in a row because it is about the
+instrument. ⛔ `git status specs-shv2/fragments/`
 measures nothing, and since 2026-08-27 neither does golden drift. To show what a rung did to emitted
 code, **disassemble or use `--emit-ir` / `--emit-ir-runtime`** and count.
 
@@ -858,6 +1043,35 @@ function main() returns ExitCode
 	a.push(2)
 	a.push(3)
 	print("s={sum(a)}")
+	return 0
+end 'main'
+```
+
+**`leaf.maxon`** — the `EC17` probe. `Array.isEmpty`'s body is one `__managed_count` call, so before the
+reorder `main` held a `callDirect Array.isEmpty` and `inlineLeaves` reported *"0 site(s) inlined"* on this
+program. It now reports 1, and `total`'s loop goes with it:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function total(a IntArray) returns Integer
+	if a.isEmpty() 'empty'
+		return 0
+	end 'empty'
+	var t = 0
+	for v in a 'loop'
+		t = t + v
+	end 'loop'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(5)
+	if total(a) != 5 'bad'
+		return 1
+	end 'bad'
 	return 0
 end 'main'
 ```

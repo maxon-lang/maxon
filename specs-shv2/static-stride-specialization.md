@@ -30,10 +30,15 @@ types at all. The tier that still HAS the type is `LowerMaxonToStd`, so it write
 against the **Std op index** of the call it is appending (`Project.stdOpElementStrides`) and
 `InlineManagedPrimitives` reads it back two passes later.
 
-The key survives because `IrModule.ops` allocates indices by `push` and the two passes in between
-neither clone nor replace a call: `insertRangeChecks` appends guards and splits blocks, and
-`inlineLeaves` copies only LEAF bodies — and a leaf holds no call by rule, so it can neither copy nor
-re-issue a managed primitive.
+The key survives because `IrModule.ops` allocates indices by `push` and the one pass in between neither
+clones nor replaces a call: `insertRangeChecks` appends guards and splits blocks, which moves `opRefs`
+and never ops.
+
+⭐ **EC17 SHORTENED THAT LIST.** `inlineLeaves` used to sit between the write and the read as well, and
+what covered it was that a leaf holds no call BY RULE, so it could neither clone nor re-issue a managed
+primitive. It now runs AFTER `inlineManagedPrimitives` — after this table has been read and spent — so a
+splice cannot reach a live key at all. The leaf rule still holds; it is now the argument for the REORDER
+rather than for this key.
 
 ### THE STATIC STAMP IS NOT ALWAYS THE RECORD'S STAMP
 

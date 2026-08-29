@@ -166,15 +166,6 @@ func @alwaysFails {
     x64.ret
 }
 
-func @sizeOf {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -266,7 +257,7 @@ func @main {
     x64.storeSlotReg slot6, r14
     x64.callDirect __md_current_path
     x64.movRegReg r15, r8
-    x64.storeSlotReg slot3, r15
+    x64.storeSlotReg slot4, r15
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, matchdefault
   tryerr#11:
@@ -296,7 +287,7 @@ func @main {
     x64.callDirect Holder.create
     x64.movRegReg r14, r8
     x64.callDirect __md_current_path
-    x64.storeSlotReg slot4, r8
+    x64.storeSlotReg slot3, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#15
   tryerr#16:
@@ -324,57 +315,61 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok#15:
-    x64.loadRegSlot r12, slot4
+    x64.loadRegSlot r12, slot3
     x64.movRegReg rcx, r12
     x64.callDirect __mm_incref
     x64.movRegReg rcx, r12
     x64.callDirect Box.create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect sizeOf
-    x64.cmpRegImm32 r8, 0
+  __il_body#32:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+  __il_cont#31:
+    x64.cmpRegImm32 rax, 0
     x64.movRegImm32 rax, 0
     x64.jcc lessEqual, scmerge#18
-  andrhs#17:
-    x64.loadRegSlot rcx, slot5
-    x64.callDirect sizeOf
-    x64.cmpRegImm32 r8, 0
+  __il_body#34:
+    x64.loadRegSlot rax, slot5
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#33:
+    x64.cmpRegImm32 rax, 0
     x64.setccReg greater, rax
   scmerge#18:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#32
-  andrhs#19:
-    x64.loadRegSlot rcx, slot6
-    x64.callDirect sizeOf
-    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, critsplit#41
+  __il_body#36:
+    x64.loadRegSlot rax, slot6
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#35:
+    x64.cmpRegImm32 rax, 0
     x64.setccReg greater, rax
     x64.jmp scmerge#20
-  critsplit#32:
+  critsplit#41:
     x64.movRegReg rax, rcx
   scmerge#20:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#33
-  andrhs#21:
-    x64.movRegReg rcx, r13
-    x64.callDirect sizeOf
-    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, critsplit#42
+  __il_body#38:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+  __il_cont#37:
+    x64.cmpRegImm32 rax, 0
     x64.setccReg greater, rax
     x64.jmp scmerge#22
-  critsplit#33:
+  critsplit#42:
     x64.movRegReg rax, rcx
   scmerge#22:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#34
-  andrhs#23:
-    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
-    x64.callDirect sizeOf
-    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, critsplit#43
+  andrhs:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+  __il_body#40:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#39:
+    x64.cmpRegImm32 rax, 0
     x64.setccReg greater, rax
     x64.jmp scmerge#24
-  critsplit#34:
+  critsplit#43:
     x64.movRegReg rax, rcx
   scmerge#24:
     x64.cmpRegImm32 rax, 0
@@ -386,15 +381,15 @@ func @main {
     x64.movRegImm32 rax, 2
   matchcont#27:
     x64.storeSlotReg slot0, rax
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Box_Bytes
-    x64.loadRegSlot rcx, slot4
+    x64.loadRegSlot rcx, slot3
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r14
     x64.callDirect __destruct_Holder
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.loadRegSlot rcx, slot3
+    x64.loadRegSlot rcx, slot4
     x64.callDirect __managed_decref
     x64.loadRegSlot rcx, slot6
     x64.callDirect __managed_decref

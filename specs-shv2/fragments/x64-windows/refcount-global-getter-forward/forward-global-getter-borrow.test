@@ -416,9 +416,19 @@ func @augment {
     x64.prologue 32
     x64.callDirect buildFor
     x64.movRegReg rbx, r8
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect Box.size
     x64.movRegReg r12, r8
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Box_Item
     x64.movRegReg r8, r12

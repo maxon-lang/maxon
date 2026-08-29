@@ -70,9 +70,30 @@ func @main {
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 9
+    x64.jcc notEqual, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 rax, 1
+  matchcont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc lessEqual, __rc_ok
+  __il_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect takes
     x64.movRegReg r12, r8
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r12, rax
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12

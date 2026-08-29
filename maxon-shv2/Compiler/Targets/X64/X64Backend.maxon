@@ -124,9 +124,17 @@ let RbpR13Low3 = 5
 // the first cut of EC16 did exactly that and `scale-test` charged `phase:encode` **+47% allocations**
 // (372,734 → 548,168 at rung 5) for it, against a control taken the same session. `StdArithOperands`'
 // header records the same trap one tier up, for the same reason.
-// EXPORTED because a DEFAULT ARGUMENT is evaluated in the CALLER's scope: the hand-assembled runtimes
-// call these encoders without naming an index, and the default they get has to be a name they can see.
-export let X64SibNoIndex = X64Register.rsp
+// ⛔⛔ **`public`, NOT `export`, AND THAT IS A HOLE IN E3092 RATHER THAN AN API-SURFACE CLAIM.** A
+// DEFAULT ARGUMENT is evaluated in the CALLER's scope, so `X64GtRuntime` and `X64Runtime` — which call
+// the exported encoders above without naming an index — resolve THIS NAME in their own files. MEASURED:
+// drop the visibility and the build stops with 20 x `E2004 Undefined variable 'X64SibNoIndex'` at
+// `X64GtRuntime.maxon:1089` and `X64Runtime.maxon:1098`, which is the compiler agreeing that the use is
+// real and cross-file. `checkUnusedExports` cannot see it — it counts the names a file WRITES — so an
+// `export` here is reported as E3092 and the SELF-COMPILE refuses the compiler's own source (it did, at
+// `2cdfab05d5`). `public` is the one spelling that survives, and its documented meaning is exactly the
+// statement needed: *"nobody here names it" is not a finding*. ⚠ The checker gap is real and is NOT
+// fixed here — a default argument's names are cross-file uses E3092 structurally misses.
+public let X64SibNoIndex = X64Register.rsp
 
 // The colored register an INDEXED operand names, asserted to be a real index.
 //

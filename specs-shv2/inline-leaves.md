@@ -9,7 +9,8 @@ category: codegen
 ## Documentation
 
 `inlineLeaves` is the Std→Std pass that replaces a direct call to a TINY LEAF function with a copy of
-that function's body. It runs between `insertRangeChecks` and `inlineManagedPrimitives`.
+that function's body. It runs after `insertRangeChecks` and after `inlineManagedPrimitives` — last of
+the three Std→Std splicing passes, for the reason below.
 
 A callee is eligible when ALL of the following hold — computed ONCE per callee, on the body as it
 stands BEFORE any splice, and memoised:
@@ -39,6 +40,26 @@ stands BEFORE any splice, and memoised:
 
 Only a direct `StdOp.call` site is ever rewritten. A `tryCall` is never touched: it is the throwing
 call's spelling AND the existential-returning call's, and neither is what a tiny leaf is.
+
+### ⭐ WHY IT RUNS AFTER `inlineManagedPrimitives` (EC17)
+
+`__managed_count(a)` is the one managed primitive `inlineManagedPrimitives` rewrites IN PLACE — into a
+single `loadIndirect` of the record's `length@8`. Every accessor whose whole body is that one call is
+therefore a body **holding a call** until that pass has run, and the leaf rule refuses one outright. Run
+the other way round, this pass refused them one pass before the call stopped existing: MEASURED on the
+compiler's own self-compile, `Array.isEmpty` kept **209** call sites, `Parser.advance` **106** and
+`String.byteLength` **92**, plus about a hundred more `count`/`size` accessors of the same shape — **641
+direct calls in one program.**
+
+⭐ **THE REORDER CANNOT COST THIS PASS A CALLEE, AND THAT IS A PROOF RATHER THAN A MEASUREMENT.**
+`inlineManagedPrimitives` rewrites only bodies that hold a `__managed_*` CALL, and a leaf holds no call
+by rule — so no body it can reach is one this pass would have accepted. (Measured anyway: eligible
+callees 469 → 530, sites 4,138 → 4,921, and that pass's own expansion count unchanged at 6,032.)
+
+⚠ **IT IS A REORDER AND NOT A SECOND ROUND**, which was the other shape considered. A second round
+would also re-expand the `__il_slow` arms this pass mints — they hold *the very call the splice moved*,
+so re-inlining one copies a panicking leaf's body again for no call removed — and it would admit the
+cascade the next paragraph refuses on purpose.
 
 **ONE ROUND, NO CASCADE.** Eligibility is decided on the pre-splice body, so a caller that becomes
 call-free BY being inlined into does not become eligible in the same compile. That is what bounds the
@@ -414,6 +435,128 @@ end 'outer'
 
 function main() returns ExitCode
 	return outer(20) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: an-accessor-that-becomes-a-leaf-after-the-managed-rewrite-is-inlined -->
+⭐ **EC17's GATE.** `Array.isEmpty`'s whole body is one call to `__managed_count`, which
+`inlineManagedPrimitives` rewrites in place into a single `loadIndirect`. Ordered before that pass this
+one saw a body holding a call and refused it; ordered after, the accessor is a two-op leaf and both call
+sites are spliced. The fragment is the pin: `main` holds no `callDirect Array.isEmpty`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	if not a.isEmpty() 'startsEmpty'
+		return 1
+	end 'startsEmpty'
+	a.push(42)
+	if a.isEmpty() 'nowHoldsOne'
+		return 2
+	end 'nowHoldsOne'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-whole-loop-over-an-array-becomes-a-leaf -->
+⭐ The reorder reaches further than the `count` accessors: EC15 made a `for v in a` over a concrete
+`Array with Integer` CALL-FREE (a known stride needs no fork and no slow arm), so a function whose only
+calls were the loop's own element access is a leaf too. `total` is spliced into `main`, frame and all.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function total(a IntArray) returns Integer
+	var t = 0
+	for v in a 'each'
+		t = t + v
+	end 'each'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(20)
+	a.push(22)
+	return total(a) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: the-panic-rule-holds-when-the-argument-is-an-inlined-element -->
+<!-- targets: x64-windows, x64-linux -->
+⭐ **THE PANIC RULE, UNDER THE NEW ORDER.** The value the inlined guard tests is an ELEMENT, produced by
+the access `inlineManagedPrimitives` has already expanded into this loop — so the splice reads a value
+that pass wrote, in a block it shaped, which is the arrangement the old order could never produce. The
+guard still refuses it, control still leaves for `__il_slow`, the ORIGINAL call still runs, and the
+panic still comes out of `clampPct`'s own frame.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Percent = int(0 to 100)
+typealias IntArray = Array with Integer
+
+function clampPct(x Percent) returns Percent
+	return x
+end 'clampPct'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(101)
+	var last = 0
+	for v in a 'each'
+		last = clampPct(v)
+	end 'each'
+	return last as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:6: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in clampPct
+  in main
+  in mrt_start
+```
+
+<!-- test: a-loop-whose-element-access-keeps-a-slow-arm-is-not-a-leaf -->
+⛔ **THE CONTROL, AND IT IS THE SAME SOURCE AS `a-whole-loop-over-an-array-becomes-a-leaf` WITH ONE
+TYPE CHANGED.** A `Byte` element is stamped 1, and EC15's plan for a byte stamp is `runtimeFork` — both
+width arms AND the slow arm holding `__managed_get_unchecked`. So this loop still holds a call after the
+managed rewrite, `totalBytes` is still not a leaf, and `main` still calls it. What the reorder changes
+is which bodies stop holding a call, not what a leaf is.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Bytes = Array with Byte
+
+function totalBytes(b Bytes) returns Integer
+	var t = 0
+	for v in b 'each'
+		t = t + v
+	end 'each'
+	return t
+end 'totalBytes'
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(20 as Byte)
+	b.push(22 as Byte)
+	return totalBytes(b) as ExitCode
 end 'main'
 ```
 ```exitcode

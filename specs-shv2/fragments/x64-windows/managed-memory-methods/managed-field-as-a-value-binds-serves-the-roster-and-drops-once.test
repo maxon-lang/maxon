@@ -34,15 +34,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @bufLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @bufferOf {
   entry:
     x64.pushReg rbp
@@ -82,9 +73,10 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
     x64.movRegReg r14, r8
-    x64.movRegReg rcx, r14
-    x64.callDirect bufLength
-    x64.leaRegRegReg r13, r13, r8
+  __il_body#5:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+  __il_cont#4:
+    x64.leaRegRegReg r13, r13, rax
     x64.movRegReg rcx, rbx
     x64.callDirect bufferOf
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
@@ -102,11 +94,11 @@ func @main {
   round:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r15
-    x64.callDirect bufLength
-    x64.leaRegRegReg r13, r13, r8
-    x64.movRegReg rcx, r15
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+  __il_cont#6:
+    x64.leaRegRegReg r13, r13, rax
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp whilehdr

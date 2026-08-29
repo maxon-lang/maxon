@@ -136,8 +136,7 @@ func @Lookup.nameLen {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 40
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#5
   __rc_chk#6:
@@ -147,8 +146,7 @@ func @Lookup.nameLen {
     x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -158,31 +156,27 @@ func @Lookup.nameLen {
   matcharm:
     x64.movRegImm32 rdx, 0
     x64.callDirect Lookup.getName
-    x64.movRegReg rbx, r8
-  matchcont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.byteLength
-    x64.movRegReg r12, r8
-    x64.cmpRegImm32 r12, 0
+  __il_body:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+  __il_cont:
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#8
   __rc_chk#9:
-    x64.cmpRegImm32 r12, 100
+    x64.cmpRegImm32 rbx, 100
     x64.jcc lessEqual, __rc_ok#7
   __rc_panic#8:
     x64.leaRegRdata rcx, [rip + __str_blob_7]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok#7:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -190,8 +184,7 @@ func @Lookup.nameLen {
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
