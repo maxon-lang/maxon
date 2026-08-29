@@ -51,26 +51,9 @@ func @main {
     x64.cmpRegReg rdx, rax
     x64.jcc greaterEqual, forexit
   loop:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 r12, [rax + rdx*8 + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegBaseDisp.byte r12, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get_unchecked
     x64.movRegReg r12, r8
-  __il_cont:
     x64.cmpRegImm32 r12, 200
     x64.setccReg equal, rax
     x64.leaRegRdata rcx, [rip + __str_rec_5]

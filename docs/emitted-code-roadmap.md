@@ -44,6 +44,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | **Block merging / branch simplification** | ◑ `X64BranchCleanup` (EC11) — elision, inversion, threading, unreachable; **no reordering** | ◑ cond-br then-edge only | ✅ `CfgAnalysis` + `Canonicalize` |
 | **Strength reduction** (`mul`→`shl`, magic div) | ❌ | ❌ | ❌ |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half | ❌ | ❌ |
+| **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15) | ❌ n/a | ❌ n/a |
 | Store-forwarding / dead-store elim | ❌ | ✅ `StoreForwardingPass` + `DeadStoreEliminationPass` | ✅ via `Mem2Reg` |
 | mem2reg / SROA | **n/a — see below** | ❌ | ✅ `Mem2Reg.maxon` (2,331) |
 | Escape analysis → stack | ✅ `PromoteStackRecords` | ✅ `StackPromotionAnalysisPass` | ◑ |
@@ -92,35 +93,39 @@ to argue anything.
 ## THE ANCHOR — one 3-line loop, and every missing pass visible at once
 
 `for v in a` over `Array with Integer`, summing (`temp/codegen-probe/arr.maxon`). **Re-measured after
-`EC11`, `EC12`, `EC13` and `EC16`**: the executed hot path is **12 instructions per element**, down
-from 15 — and what remains is a list of the rows still open.
+`EC11`, `EC12`, `EC13`, `EC16` and `EC15`**: the executed hot path is **8 instructions per element**,
+down from 15 — and what remains is a list of the rows still open.
 
 ```
-  forhdr:     load rax,[rbx+8]      ← length, RELOADED every trip          (EC14 LICM)
-              cmp r13,rax ; jcc greaterEqual,forexit
-  loop:       load rax,[rbx+24]     ← element_size, RELOADED every trip    (EC14 LICM)
-              cmp rax,8 ; jcc notEqual,__im_stride   ← a RUNTIME stride dispatch on a
-                                                       type whose stride is 8 at COMPILE TIME (EC15)
-  __im_word:  load rax,[rbx+0]      ← buffer base, RELOADED every trip     (EC14 LICM)
-              load rax,[rax+r13*8]  ← EC16 folded the `imul` AND the `lea` into this operand
-              jmp  __il_cont        ← __im_stride is physically next, so EC11 cannot elide this.
-                                      BLOCK REORDERING would (filed, not taken)
-  __il_cont:  lea  r12,r12,rax      ← EC11 elided this block's `jmp forstep`
-  forstep:    lea  r13,r13,1
+  forhdr:     load rdx,[rcx+8]      ← length, RELOADED every trip          (EC14 LICM)
+              cmp rax,rdx ; jcc greaterEqual,forexit
+  loop:       load rdx,[rcx+0]      ← buffer base, RELOADED every trip     (EC14 LICM)
+              load rdx,[rdx+rax*8]  ← EC16 folded the `imul` AND the `lea` into this operand
+  __im_cont:  lea  r8,r8,rdx        ← EC11 elided this block's `jmp forstep`
+  forstep:    lea  rax,rax,1
               jmp  forhdr           ← the real back edge
 ```
 
 An ideal x64 body is **5**: `mov rax,[rbx+r13*8]` · `add r12,rax` · `inc r13` · `cmp r13,len` · `jl`.
-**12 → 5**, and the element read itself is now the ideal instruction — every one of the seven that
-remain is a row still open. They are independent of each other.
+**8 → 5**, and every one of the three that remain is a row still open: **two** are `EC14`'s reloads,
+and the last is the back edge's `jmp`, which loop ROTATION (not `EC11`'s elision) would remove.
 
-⚠ Note what this is NOT: the `__im_*` arms are `EC1`'s inlined fast path, and `EC1` was a large
-measured win (a checked read went 176 → 26 instructions). The defect is that the inlined arm is
-**not specialized by an element type the compiler already knows** — not that it was inlined.
+⭐⭐ **`EC15` TOOK FOUR OF THE TWELVE AND THE FUNCTION'S WHOLE FRAME WITH THEM.** What stood between
+`loop:` and `__im_word:` was a `loadIndirect` of `element_size@24`, a `cmp`/`jcc` against 8, a second
+`cmp`/`jcc` against 1 and a `__il_slow` arm that CALLED `__managed_get_unchecked` — a runtime dispatch
+on a type whose stride is 8 at compile time, plus the call it protected. `@sum` is now **call-free**
+and no longer saves `rbx`/`r12`/`r13` or opens a frame at all, because the values that needed to live
+across that call are gone.
 
-⭐ The one jump left in the loop is the clearest argument for **block reordering**, which `EC11`
-deliberately did not do: `EC11` collects the fall-throughs that already exist, it does not create
-new ones. Laying `__il_cont` after `__im_word` would remove it and cost nothing.
+⚠ Note what this is NOT: the `__im_*` arms were `EC1`'s inlined fast path, and `EC1` was a large
+measured win (a checked read went 176 → 26 instructions). The defect `EC15` closed is that the inlined
+arm was **not specialized by an element type the compiler already knows** — not that it was inlined.
+
+⭐ **THE JUMP THAT WAS THE ARGUMENT FOR BLOCK REORDERING IS GONE, AND NOT BY REORDERING.** This
+section used to read *"the one jump left in the loop is the clearest argument for block reordering"* —
+it was `__im_word`'s `jmp __il_cont`, unelidable because `__im_stride` was laid between them. `EC15`
+deleted `__im_stride`, so the continuation IS physically next and `EC11`'s existing elision took the
+jump. The reordering row stands on its own merits elsewhere; this loop is no longer its exhibit.
 
 ## The ranking
 
@@ -344,7 +349,10 @@ let the barrier see a call on a side path.
 
 #### `EC14` · Loop-invariant code motion
 
-The anchor loop reloads **three** invariants per element (length, element_size, buffer base).
+The anchor loop reloads **two** invariants per element (length and buffer base — `EC15` removed the
+third, `element_size`, along with the fork that read it, and made the loop body CALL-FREE, which is what
+makes this row tractable at all: `EC13` measured that a live range crossing a call is confined to the
+callee-saved registers and that shv2 REFUSES rather than spills).
 ⭐ **The safety fact shv2 needs is already proven by its own frontend**: the loop element is a
 BORROW of the subject and the borrow is *lexical*, so a call that takes the subject mutably while the
 loop is live is refused by the borrow checker (`Parser.maxon:37545-37560` — the ⚖ 2026-08-26 ruling
@@ -369,6 +377,76 @@ emitted in every array access, including where the element type fixes the stride
 emits its guards ordered by discrimination; this rung makes it **skip** the ones a known
 `GenericInstanceId` already answers. Closes the largest per-element residue the anchor shows, and
 shrinks what `EC11` then has to lay out.
+
+✅ **LANDED 2026-08-28.** `scripts/emitted-code-count.py`, committed corpus, before → after — **the
+largest single row of this workstream so far, by a factor of four**:
+
+| | ops | im-blocks | mgd-call |
+|---|---|---|---|
+| nbody | 9,407 → **8,602** | 302 → **140** | 96 → 96 |
+| fannkuch-redux | 2,408 → **1,708** (−29%) | 327 → **180** | 48 → 48 |
+| arr | 124 → **100** | 3 → **1** | 6 → **5** |
+| TOTAL | 12,087 → **10,558** (−12.7%) | 632 → **321** (−49%) | 150 → **149** |
+
+`jmp` 207 → 181; `jmp→next`, `jmponly-blocks`, `imul-imm`, `imul-pow2` and `idiv` are byte-identical,
+as they must be — this row deletes blocks and their guards, it selects no instruction differently.
+
+⭐ **TWO COLUMNS WERE ADDED TO THE INSTRUMENT, because the defect this row removes had none.** `mgd-call`
+counts `callDirect __managed_*` (the slow arms plus every site the pass declines) and `im-blocks` counts
+blocks labelled `__im_*` (the scaffolding one inlined element access costs). The baselines above are
+measured on `3b519b230a` with the new columns, not carried forward. ⚠ **`mgd-call` moved by ONE and that
+is not a weak result, it is the wrong corpus for it**: nbody and fannkuch's `__managed_*` calls are
+`push`/`create`/`decref` and the slow arms of `get`/`set`, which keep their other guards. Its −1 is
+`arr`'s `__managed_get_unchecked`, and that one call is the whole "is the anchor loop call-free" question.
+
+**WHERE THE FACT COMES FROM, AND WHY IT IS NOT ON THE OP.** `StdOp.call` carries `callee` and `args` and
+NO type — the Std tier is deliberately type-free — so the tier that still HAS the container's type is
+`LowerMaxonToStd`, which writes the stamp against the **Std op index** of the call it is appending
+(`Project.stdOpElementStrides`). A `(blockId, stdOpPos)` table like `RangeCheckSite`'s could not survive:
+`insertRangeChecks` and `inlineLeaves` both split blocks. The op index does, and for a stated reason —
+`IrModule.ops` allocates indices by `push`, and **a leaf holds no call by rule** (`LeafOpRole.calling`
+refuses the callee outright), so `inlineLeaves` can neither clone nor re-issue a managed primitive.
+⇒ every recorded index still names the very call the lowering appended.
+
+⭐ The recorder is **callee-agnostic** — it asks about the ARGUMENT (`isArrayInstanceAt`, the one home of
+that two-part test) and not about a roster of primitive names, so it cannot drift from
+`InlineManagedPrimitives`' own dispatch. An entry recorded for a call the pass never expands is never read.
+
+⛔⛔ **THE STATIC STAMP IS NOT ALWAYS THE RECORD'S, AND THE FIRST CUT WAS A WRONG ANSWER.** MEASURED: a
+`Bag with Byte` whose `Array with Element` field is read from OUTSIDE the shared body printed
+`stamp=8 v=0` where 7 is correct. `Parser.emitOpaqueArrayCreateOp` stamps `LAYOUT_TYPE_PARAM_SLOT_BYTES`
+— one machine word, because the ONE compiled body moves elements as words whatever the instantiation —
+while `Parser.slotTypeThroughReceiver` hands the same record back typed `Array with Byte`, stride 1.
+What is provable is `actual ∈ {static stamp, MachineWordBytes}`, and that leaves exactly three answers:
+**word** is safe (both possibilities are the word); **byte** is NOT (1 and 8 are two different arms, so
+the fork is exactly the question that has to be asked); **anything else** keeps the CALL, which reads the
+real stamp and is right for both. The sabotage is recorded: restore the byte arm and
+`static-stride-specialization/a-substituted-container-field-is-word-strided-however-it-is-typed` goes red
+with exit 3 while the whole rest of the suite stays green.
+
+⚠ **THE BYTE ARM IS THEREFORE LEFT ON THE TABLE.** A byte-stamped site could keep BOTH single-op arms and
+route `emitStrideDispatch`'s third edge to the WORD arm rather than to the call — sound by the same
+reading, and enough to make a `for v in b` over a `ByteArray` call-free the way the word case now is. It
+is a third emission shape and this row did not take it. The corpus above cannot see the loss (it holds no
+byte arrays in a hot path); `Map.findSlot`'s `__managed_get` can, and EC3 measured that at 2% of a
+stage-2 self-compile.
+
+⭐ **WHAT WAS REUSED RATHER THAN ADDED**: `isArrayInstanceAt` (the tag+id gate, unchanged),
+`containerElementIsOpaque` (the W57 refusal), `arrayElementSize` (the stamp's sole producer),
+`Project`'s three existing `OpIndex`-keyed side tables as the precedent, and `SingleOpStride` —
+`emitStrideDispatch`'s two constants now come out of `singleOpStrideBytes` too, so the two stamps are
+written ONCE and the compile-time answer cannot disagree with the runtime compares it replaces.
+
+⛔ **A LABEL COLLISION WAS FOUND AND THE UNDERLYING DEFECT IS NOT FIXED.** `InlineManagedPrimitives` and
+`InlineLeaves` each declared a file-level `let InlineContLabel` / `InlineSlowLabel`, and shv2 resolved
+both files to ONE of them: this pass had been emitting `__il_cont` / `__il_slow` — measured on a program
+whose log reads `inlineLeaves: 0 site(s) inlined`. Renamed here; **the compiler silently unifying two
+same-named non-`export` file-level `let`s in different files is a separate rung.**
+
+**Left open**: the byte arm above; block REORDERING, whose clearest exhibit this loop was and no longer is;
+and the type/layout incoherence itself — a container declared over a type parameter genuinely has a
+different layout from its substituted type's, and every compile-time reader of `arrayElementSize` on such
+a value shares the hazard this row's byte arm ran into.
 
 #### `EC16` · Scaled-index addressing
 

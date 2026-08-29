@@ -91,11 +91,50 @@
 // derived from `MachineWordBytes`, a second derivation of a width the runtime already derives, paired by
 // hand with `StdType.i64` at each of three call sites and with `StdType.u8` at three more.
 
+// ⭐⭐ **AND SINCE EC15 THE FORK IS NOT EMITTED WHERE THE COMPILER ALREADY KNOWS THE ANSWER.** `Array with
+// Integer` stamps `element_size@24` with 8 in every program that ever runs, and this pass was emitting a
+// `loadIndirect` of that field, two compares and two branches AT EVERY ELEMENT ACCESS IN EVERY PROGRAM —
+// a runtime dispatch on a compile-time constant. `LowerMaxonToStd.recordStaticElementStride` writes the
+// stamp down against the Std op index of the call it is appending (`Project.stdOpElementStrides`), and
+// `stridePlanAt` reads it back here. What follows from the answer:
+//
+//   • **`singleArm`** — ONE arm is emitted, INTO THE SITE'S OWN BLOCK. No fork, no `element_size@24` load,
+//     no second arm, and no branch into the arm either, because with one successor the arm IS the block.
+//   • **`noFastArm`** — a 2- or 4-byte element, an unset stride, or a sub-byte PACKED one. Every fast arm
+//     is dead, so nothing is expanded at all and the runtime call stands exactly as the lowering wrote it.
+//     That is strictly better than expanding: such a site used to pay the load and both compares to reach
+//     the very call it was always going to make.
+//   • **`runtimeFork`** — an opaque `T` element in a shared generic body (W57: `Array with T` and
+//     `__ManagedMemory with T` are ONE `GenericInstanceId`, and one body serves every width), an array
+//     reached through an interface or an existential, AND every BYTE-stamped site. Unchanged:
+//     `emitStrideDispatch` as before.
+//
+// ⛔⛔ **THAT LAST CLAUSE IS THE ROW'S ONE MEASURED WRONG ANSWER, AND IT IS NOT THIS FILE'S TO DECIDE.**
+// A byte-stamped record may still be word-strided — a container declared over a type parameter is created
+// at the machine-word slot inside a shared body and handed back under a SUBSTITUTED concrete type — so a
+// byte stamp does not fix the width. `strideDispatchPlanForStamp` is where that reading lives, with the
+// program that measured it; this file acts on the plan and asks no stride question of its own.
+//
+// ⭐ **AND FOR `__managed_get_unchecked` A KNOWN STRIDE REMOVES THE SLOW ARM WITH THE FORK**, because the
+// fork was that expansion's ONLY precondition — see `expandUncheckedGetUnguarded`. The loop body of a
+// `for v in a` over a concrete array is then genuinely CALL-FREE, which is what a later hoisting pass needs
+// (a live range crossing a call is confined to the callee-saved registers, and this compiler refuses rather
+// than spills).
+
 // The block labels this pass mints. They reach the committed goldens, so they are short, prefixed
 // `__im_` (inline-managed, disjoint from `InsertRangeChecks`' `__rc_`), and each names WHAT THE BLOCK IT
 // LABELS DOES rather than which guard sent control there.
-let InlineContLabel = b"__im_cont"
-let InlineSlowLabel = b"__im_slow"
+//
+// ⛔⛔ **THE FIRST TWO WERE NAMED `InlineContLabel` / `InlineSlowLabel` AND `InlineLeaves` DECLARES FILE-LEVEL
+// `let`s OF THE SAME TWO NAMES — SO THIS PASS WAS EMITTING `__il_cont` AND `__il_slow` (EC15).** MEASURED on
+// `temp/codegen-probe/arr.maxon`, whose log reads `inlineLeaves: 0 site(s) inlined` while its `@sum` carries
+// an `__il_cont` and an `__il_slow` around blocks only this pass mints. Every other label here is uniquely
+// named and came out right, which is exactly why nothing noticed: the two that collided are the two both
+// inliners happen to need. The prefix now says which pass wrote the block, as this comment always claimed.
+// ⚠ The underlying defect is the compiler's, not this file's, and is NOT fixed here: shv2 resolves two
+// same-named non-`export` file-level `let`s in different files to ONE of them, silently.
+let ManagedContLabel = b"__im_cont"
+let ManagedSlowLabel = b"__im_slow"
 let InlineBoundsLabel = b"__im_bounds"
 let InlineLoadLabel = b"__im_load"
 let InlineEmptyLabel = b"__im_empty"
@@ -121,8 +160,12 @@ typealias InlinedSiteCount = int(0 to u64.max)
 // the same reason — the one operation that would write to it is the one that replaces it.
 let sharedUnseededMinter = ValueMinter.create(0)
 
-// The two blocks every carved site has, held together because every expander wires both.
-type InlineFrame
+// What a carve leaves behind: the block holding everything that followed the call, and the ref naming it.
+//
+// ⭐ **IT IS ITS OWN TYPE BECAUSE ONE EXPANSION HAS NO SLOW ARM (EC15).** A `__managed_get_unchecked` whose
+// stride the compiler knows has no precondition left to fail, so there is nothing for a slow arm to serve
+// and minting one would leave a dead block holding a live call. Every other expansion pairs this with one.
+type InlineCarve
 	// Takes the ORIGINAL result ids as its block args and holds every op that followed the call.
 	export var cont as IrBlock
 	// The `BlockRef` naming that continuation, CAPTURED at the split rather than searched for afterwards.
@@ -131,13 +174,53 @@ type InlineFrame
 	// search for it later would be O(blocks) per site, i.e. Θ(sites × blocks) over a function that
 	// accesses many elements — which is precisely the function this pass exists for.
 	export var contRef as BlockRef
+
+	export static function create(cont IrBlock, contRef BlockRef) returns InlineCarve
+		return Self{cont: cont, contRef: contRef}
+	end 'create'
+end 'InlineCarve'
+
+// The two blocks every GUARDED carved site has, held together because every expander wires both.
+type InlineFrame
+	export var carve as InlineCarve
 	// Holds the original call, verbatim, defining FRESH result ids.
 	export var slow as IrBlock
 
-	export static function create(cont IrBlock, contRef BlockRef, slow IrBlock) returns InlineFrame
-		return Self{cont: cont, contRef: contRef, slow: slow}
+	export static function create(carve InlineCarve, slow IrBlock) returns InlineFrame
+		return Self{carve: carve, slow: slow}
 	end 'create'
 end 'InlineFrame'
+
+// One accepted arm of a site's stride dispatch: the block its access is emitted into, and the width that
+// access uses. The two travel together for `SingleOpStride`'s own reason — a stride and the memory type an
+// access at that stride names are one statement, and a site able to spell them apart can spell them wrongly.
+//
+// ⚠ **IT NAMES THE BLOCK BY `BlockRef` AND NOT BY `IrBlock`.** An `IrBlock` reached through a `let` binding —
+// which is what a `for … in` element is — cannot be handed to the emitters, all of which MUTATE the block
+// they are given (E3019). The ref is an `int`, so it carries out of the loop and `blockAt` hands back a block
+// the emitter may write: the same discipline the expanders already had, one indirection wider.
+type StrideArm
+	export let blockRef as BlockRef
+	export let stride as SingleOpStride
+
+	export static function create(blockRef BlockRef, stride SingleOpStride) returns StrideArm
+		return Self{blockRef: blockRef, stride: stride}
+	end 'create'
+end 'StrideArm'
+
+typealias StrideArmArray = Array with StrideArm
+
+// What `emitBoundedLoad` leaves behind: the block the load landed in (its BOUND branched away, so it is
+// not the block the arm started in) and the element it read. A record because the two are one answer and
+// the caller needs both — the tail reads the value and writes into the block.
+type BoundedLoad
+	export let blockRef as BlockRef
+	export let value as ValueId
+
+	export static function create(blockRef BlockRef, value ValueId) returns BoundedLoad
+		return Self{blockRef: blockRef, value: value}
+	end 'create'
+end 'BoundedLoad'
 
 // Expand every inlinable `__ManagedMemory` primitive call in the module.
 export function inlineManagedPrimitives(project Project, module StdModule)
@@ -152,7 +235,7 @@ export function inlineManagedPrimitives(project Project, module StdModule)
 			continue
 		end 'notInTheProgram'
 
-		var inliner = PrimitiveInliner.create(module, func: func)
+		var inliner = PrimitiveInliner.create(module, func: func, strides: project.stdOpElementStrides)
 		inliner.run()
 		expanded = expanded + inliner.expanded
 	end 'eachFunc'
@@ -166,6 +249,11 @@ end 'inlineManagedPrimitives'
 type PrimitiveInliner
 	var module as StdModule
 	var func as IrFunction
+	// ⭐ **THE COMPILE-TIME `element_size@24` STAMP OF EVERY CALL SITE THAT HAS ONE (EC15)**, keyed by the
+	// call's own index in `module.ops` and written by `LowerMaxonToStd` — the tier that still holds the
+	// container's TYPE, which this one deliberately does not. Read through `stridePlanAt` and nowhere else;
+	// see `Project.stdOpElementStrides` for why the key survives the two passes in between.
+	let strides as StdOpElementStrideMap
 	// ⚠ **SEEDED LAZILY, AND THAT IS A COST DECISION.** `nextFreeValueId` walks every block-arg and every
 	// live op of the function and MATERIALIZES the live-op index array to do it — and this pass visits
 	// EVERY function in the module, the overwhelming majority of which hold no managed primitive at all.
@@ -177,8 +265,8 @@ type PrimitiveInliner
 	var seeded as bool
 	export var expanded as InlinedSiteCount
 
-	static function create(module StdModule, func IrFunction) returns PrimitiveInliner
-		return Self{module: module, func: func, ids: sharedUnseededMinter, seeded: false, expanded: 0}
+	static function create(module StdModule, func IrFunction, strides StdOpElementStrideMap) returns PrimitiveInliner
+		return Self{module: module, func: func, strides: strides, ids: sharedUnseededMinter, seeded: false, expanded: 0}
 	end 'create'
 
 	// The function's fresh-ValueId counter, seeded past every id it already uses on first use.
@@ -343,16 +431,47 @@ type PrimitiveInliner
 	function expandUncheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
+
+		// ⭐⭐ **THE STRIDE FORK IS THIS EXPANSION'S ONLY PRECONDITION, SO THE PLAN DECIDES MORE HERE THAN IT
+		// DOES ANYWHERE ELSE (EC15)** — not merely which arm to emit, but whether a SLOW ARM exists at all and
+		// whether to expand. The other two expanders keep the bound and the ownership gates under every plan,
+		// so they always carve a frame and always have somewhere for a refusal to go.
+		let plan = self.stridePlanAt(blockRef, pos: pos)
+		match plan 'plan'
+			runtimeFork then break 'plan'
+			singleArm(stride) then return self.expandUncheckedGetUnguarded(blockRef, pos: pos, arr: arr, index: index, resultId: resultId, stride: stride)
+			noFastArm then return blockRef
+		end 'plan'
+
 		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
+			self.emitLoadArmToCont(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, cont: frame.carve.cont)
+		end 'eachArm'
 
-		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
-		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
-		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: frame.slow.id)
-		self.emitLoadArmToCont(wordArm, arr: arr, index: index, stride: SingleOpStride.word, cont: frame.cont)
-		self.emitLoadArmToCont(byteArm, arr: arr, index: index, stride: SingleOpStride.byte, cont: frame.cont)
-
-		return self.finish(frame)
+		return self.finish(frame.carve)
 	end 'expandUncheckedGet'
+
+	// ⭐⭐ **`__managed_get_unchecked` AT A STRIDE THE COMPILER KNOWS: A SLOT ADDRESS AND ONE LOAD, IN THE
+	// SITE'S OWN BLOCK, WITH NO GUARD, NO FORK, NO SECOND ARM AND NO CALL (EC15).** Everything the guarded
+	// expansion carries is here to serve a precondition that can fail, and this site has none — the stride
+	// fork was the whole of it, and the stamp has already answered it.
+	//
+	// ⭐ **THE SLOW ARM IS NOT MINTED, WHICH IS THE POINT AND NOT A TIDY-UP.** Minted and left unreachable it
+	// would be a dead block holding a live `__managed_get_unchecked`: on x64 `X64BranchCleanup` collects it,
+	// on wasm nothing does, and either way it keeps the runtime entry alive for `eliminateDeadFunctions`. The
+	// carve still happens, because the expansion is several ops where the call was one and `block.opRefs` has
+	// no insert — the continuation takes the ORIGINAL result id as its block arg exactly as `closeFrame` does,
+	// so no op after the site changes, and `elimTrivialBlockArgs` folds the single-predecessor arg away.
+	function expandUncheckedGetUnguarded(blockRef BlockRef, pos BlockOpPos, arr ValueId, index ValueId, resultId ValueId, stride SingleOpStride) returns BlockRef
+		let carve = self.carveContinuation(blockRef, pos: pos)
+		var head = self.blockAt(blockRef)
+		let value = self.emitElementLoad(head, arr: arr, index: index, stride: stride)
+		attachBlockArgs(carve.cont, valueIds: argsOf(resultId), argType: StdType.i64)
+		self.module.setTerminator(head, op: StdOp.branch(carve.cont.id))
+		attachEdge(head, targetId: carve.cont.id, argIds: argsOf(value))
+
+		return self.finish(carve)
+	end 'expandUncheckedGetUnguarded'
 
 	// One width's whole answer for the unchecked get: the slot load, then the continuation edge carrying it.
 	function emitLoadArmToCont(cur IrBlock, arr ValueId, index ValueId, stride SingleOpStride, cont IrBlock)
@@ -379,11 +498,24 @@ type PrimitiveInliner
 	function expandCheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
-		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+		let plan = self.stridePlanAt(blockRef, pos: pos)
+		if everyArmIsDead(plan) 'noSingleOpArmSurvives'
+			return blockRef
+		end 'noSingleOpArmSurvives'
 
-		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
-		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
-		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: frame.slow.id)
+		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+		let arms = self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan)
+
+		// ⭐ **ONE ARM NEEDS NO JOIN, AND THE JOIN IS THE ONLY REASON THE TAIL IS NOT WRITTEN IN PLACE (EC15).**
+		// With two widths the tail reads a value TWO blocks produced, so the arms rejoin at `loaded` and carry
+		// it as a block arg; with one there is exactly one producer and the tail simply follows it — one block
+		// and one branch fewer, on every element read whose stride the compiler knows.
+		if arms.count() == 1 'oneKnownWidth'
+			let only = try arms.get(0) otherwise panic("expandCheckedGet: a one-arm plan produced an empty arm list")
+			let bounded = self.emitBoundedLoad(self.blockAt(only.blockRef), arr: arr, index: index, stride: only.stride, slow: frame.slow)
+			self.emitCheckedGetTail(self.blockAt(bounded.blockRef), arr: arr, value: bounded.value, frame: frame)
+			return self.finish(frame.carve)
+		end 'oneKnownWidth'
 
 		var loaded = self.module.addBlock(self.func, label: InlineLoadedLabel)
 		let value = self.valueIds().mint()
@@ -395,41 +527,61 @@ type PrimitiveInliner
 		// what the runtime's own `emitLoadElemAt` has relied on for its byte arm since EC1.
 		attachBlockArgs(loaded, valueIds: argsOf(value), argType: StdType.i64)
 
-		self.emitBoundedLoadArm(wordArm, arr: arr, index: index, stride: SingleOpStride.word, slow: frame.slow, loaded: loaded)
-		self.emitBoundedLoadArm(byteArm, arr: arr, index: index, stride: SingleOpStride.byte, slow: frame.slow, loaded: loaded)
+		for arm in arms 'eachArm'
+			self.emitBoundedLoadArm(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, slow: frame.slow, loaded: loaded)
+		end 'eachArm'
+		self.emitCheckedGetTail(loaded, arr: arr, value: value, frame: frame)
 
-		// ⚠ THREE CONSTANTS THAT ARE ALL ZERO TODAY, AND THEY STAY THREE. "no error in flight", "no
-		// per-element destructor" (inside `emitElementIsManaged`, which owns that one) and "an empty managed
-		// slot" are three different facts that happen to share a value; folding them into one `const 0` would
-		// make a change to any one of them silently rewrite the other two — the argument
-		// `MemoryIndexOutOfBoundsOrdinal` makes about not aliasing itself to `ArrayErrorIndexOutOfBoundsFlag`.
-		// It costs nothing: `foldConstOperands` folds both compares into immediates and DCEs their consts,
-		// leaving only the flag, whose reader is the edge below.
-		let noError = emitConst(self.module, block: loaded, value: NoErrorFlag, ids: self.valueIds())
-		let destroy = emitLoadField(self.module, block: loaded, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-		let managed = emitElementIsManaged(self.module, block: loaded, destroy: destroy, ids: self.valueIds())
-
-		var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel)
-		self.module.setTerminator(loaded, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.cont.id))
-		attachEdge(loaded, targetId: frame.cont.id, argIds: twoArgs(value, second: noError))
-
-		// `value` is `loaded`'s own block arg and `noError` is defined there, and `loaded` dominates this
-		// block, so both are readable here and on this block's own edge to the continuation.
-		let emptySlot = emitConst(self.module, block: checkEmpty, value: EmptyManagedSlot, ids: self.valueIds())
-		let isEmpty = emitCmp(self.module, block: checkEmpty, a: value, b: emptySlot, pred: StdCmpPred.eq, ids: self.valueIds())
-		self.module.setTerminator(checkEmpty, op: StdOp.condBranch(isEmpty, thenBlockId: frame.slow.id, elseBlockId: frame.cont.id))
-		attachEdge(checkEmpty, targetId: frame.cont.id, argIds: twoArgs(value, second: noError))
-
-		return self.finish(frame)
+		return self.finish(frame.carve)
 	end 'expandCheckedGet'
 
-	// One width's half of the checked get: the `length@8` bound, then the slot load, then the edge into the
-	// shared tail carrying what it read.
-	function emitBoundedLoadArm(cur IrBlock, arr ValueId, index ValueId, stride SingleOpStride, slow IrBlock, loaded IrBlock)
+	// The shared tail of a checked `get`: an empty MANAGED slot throws and everything else is the answer.
+	// `cur` holds the loaded element — as its own block arg when the two widths rejoined there, and as the
+	// value the one arm's load defined otherwise.
+	//
+	// ⚠ THREE CONSTANTS THAT ARE ALL ZERO TODAY, AND THEY STAY THREE. "no error in flight", "no
+	// per-element destructor" (inside `emitElementIsManaged`, which owns that one) and "an empty managed
+	// slot" are three different facts that happen to share a value; folding them into one `const 0` would
+	// make a change to any one of them silently rewrite the other two — the argument
+	// `MemoryIndexOutOfBoundsOrdinal` makes about not aliasing itself to `ArrayErrorIndexOutOfBoundsFlag`.
+	// It costs nothing: `foldConstOperands` folds both compares into immediates and DCEs their consts,
+	// leaving only the flag, whose reader is the edge below.
+	function emitCheckedGetTail(cur IrBlock, arr ValueId, value ValueId, frame InlineFrame)
+		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
+		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
+		let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
+
+		var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel)
+		self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.carve.cont.id))
+		attachEdge(cur, targetId: frame.carve.cont.id, argIds: twoArgs(value, second: noError))
+
+		// `value` and `noError` are both readable here: `cur` defines `noError` and either defines `value` or
+		// takes it as its own block arg, and `cur` dominates this block — so both reach this block's own edge
+		// to the continuation too.
+		let emptySlot = emitConst(self.module, block: checkEmpty, value: EmptyManagedSlot, ids: self.valueIds())
+		let isEmpty = emitCmp(self.module, block: checkEmpty, a: value, b: emptySlot, pred: StdCmpPred.eq, ids: self.valueIds())
+		self.module.setTerminator(checkEmpty, op: StdOp.condBranch(isEmpty, thenBlockId: frame.slow.id, elseBlockId: frame.carve.cont.id))
+		attachEdge(checkEmpty, targetId: frame.carve.cont.id, argIds: twoArgs(value, second: noError))
+	end 'emitCheckedGetTail'
+
+	// ⭐ One width's half of the checked get: the `length@8` bound, then the slot load — and NOT the edge
+	// out of it, because where the value goes is the arity's business and not this function's. With two
+	// widths the caller branches to the `loaded` join; with one it writes the tail here. That split is the
+	// whole difference between the two shapes, and this is the half they share.
+	function emitBoundedLoad(cur IrBlock, arr ValueId, index ValueId, stride SingleOpStride, slow IrBlock) returns BoundedLoad
 		var at = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: slow, next: InlineLoadLabel)
-		let value = self.emitElementLoad(at, arr: arr, index: index, stride: stride)
-		self.module.setTerminator(at, op: StdOp.branch(loaded.id))
-		attachEdge(at, targetId: loaded.id, argIds: argsOf(value))
+		// Read before the load, which mints values and no blocks — `guardIndexInRange`'s own `addBlock` is
+		// still the last one, which is the only condition `registeredBlockRef` has.
+		let atRef = registeredBlockRef(self.module, func: self.func, block: at)
+		return BoundedLoad.create(atRef, value: self.emitElementLoad(at, arr: arr, index: index, stride: stride))
+	end 'emitBoundedLoad'
+
+	// One width's whole arm when there are TWO of them: the bounded load, then the edge into the shared tail
+	// carrying what it read.
+	function emitBoundedLoadArm(cur IrBlock, arr ValueId, index ValueId, stride SingleOpStride, slow IrBlock, loaded IrBlock)
+		let bounded = self.emitBoundedLoad(cur, arr: arr, index: index, stride: stride, slow: slow)
+		self.module.setTerminator(self.blockAt(bounded.blockRef), op: StdOp.branch(loaded.id))
+		attachEdge(self.blockAt(bounded.blockRef), targetId: loaded.id, argIds: argsOf(bounded.value))
 	end 'emitBoundedLoadArm'
 
 	// `__managed_set` / `__managed_mem_set`. ⭐⭐ **THE COW ARMS ARE `__managed_cow_detach`'s OWN THREE
@@ -454,15 +606,17 @@ type PrimitiveInliner
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 		let value = argAt(args, index: 2, callee: callee)
+		let plan = self.stridePlanAt(blockRef, pos: pos)
+		if everyArmIsDead(plan) 'noSingleOpArmSurvives'
+			return blockRef
+		end 'noSingleOpArmSurvives'
+
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
+			self.emitStoreArm(self.blockAt(arm.blockRef), arr: arr, index: index, value: value, limitOffset: limitOffset, stride: arm.stride, frame: frame)
+		end 'eachArm'
 
-		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
-		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
-		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: frame.slow.id)
-		self.emitStoreArm(wordArm, arr: arr, index: index, value: value, limitOffset: limitOffset, stride: SingleOpStride.word, frame: frame)
-		self.emitStoreArm(byteArm, arr: arr, index: index, value: value, limitOffset: limitOffset, stride: SingleOpStride.byte, frame: frame)
-
-		return self.finish(frame)
+		return self.finish(frame.carve)
 	end 'expandElementStore'
 
 	// ⭐ **ONE WIDTH'S WHOLE FAST ARM, AND THE STORE'S FIVE GUARDS LIVE HERE RATHER THAN ABOVE THE STRIDE
@@ -500,11 +654,56 @@ type PrimitiveInliner
 		// The ok exit of a throwing VOID entry: the placeholder value the ABI never moves, and the flag,
 		// are both `NoErrorFlag` — one `const`, exactly as `emitVoidOkReturn` spells it in the runtime.
 		let noError = emitConst(self.module, block: at, value: NoErrorFlag, ids: self.valueIds())
-		self.module.setTerminator(at, op: StdOp.branch(frame.cont.id))
-		attachEdge(at, targetId: frame.cont.id, argIds: twoArgs(noError, second: noError))
+		self.module.setTerminator(at, op: StdOp.branch(frame.carve.cont.id))
+		attachEdge(at, targetId: frame.carve.cont.id, argIds: twoArgs(noError, second: noError))
 	end 'emitStoreArm'
 
 	// --- the shared pieces every carved expansion is built from ---
+
+	// ⭐⭐ **WHAT THIS SITE KNOWS ABOUT ITS ELEMENT STRIDE (EC15)** — the recorded `element_size@24` stamp, read
+	// back through `strideDispatchPlanForStamp` so that *which arm a stamp selects* is answered in ONE place,
+	// beside the runtime compares it is the compile-time twin of.
+	//
+	// ⚠ **AN ABSENT ENTRY IS "NOT KNOWN", WHICH IS THE ONLY SAFE DIRECTION AND THE COMMON ONE.** Nothing is
+	// recorded for an opaque `T` element in a shared generic body (W57 — one body serves every width), for an
+	// array reached through an interface or an existential, or for any call the lowering could not type. Those
+	// sites keep `emitStrideDispatch` exactly as they had it.
+	function stridePlanAt(blockRef BlockRef, pos BlockOpPos) returns StrideDispatchPlan
+		let stamp = try self.strides.get(self.opIndexAt(blockRef, pos: pos)) otherwise 'nothingRecorded'
+			return StrideDispatchPlan.runtimeFork
+		end 'nothingRecorded'
+
+		return strideDispatchPlanForStamp(stamp)
+	end 'stridePlanAt'
+
+	// ⭐⭐ **THE ARMS THIS SITE'S FAST PATH NEEDS, WITH THE HEAD ALREADY WIRED TO THEM (EC15).** One list,
+	// walked by all three expanders, so "how many widths does this site serve" is asked once rather than at
+	// each of them.
+	//
+	// ⭐ **A `singleArm` PLAN'S ARM IS THE SITE'S OWN BLOCK.** With one successor there is no fork to branch
+	// from, so the access is emitted where the call was, the head is not terminated here at all, and the arm
+	// costs neither a block nor a jump. It is `blockRef` and not the head's `IrBlock` for the reason
+	// `StrideArm` gives: the emitters MUTATE the block they are handed, and a `for … in` element is a `let`.
+	function openStrideArms(blockRef BlockRef, arr ValueId, slow BlockId, plan StrideDispatchPlan) returns StrideArmArray
+		match plan 'plan'
+			runtimeFork then break 'plan'
+			singleArm(stride) then return singleStrideArm(blockRef, stride: stride)
+			noFastArm then panic("openStrideArms: a `noFastArm` plan reached the arm builder — every expander must answer it and return BEFORE its carve, because there is no arm to emit and nothing left for a frame to serve")
+		end 'plan'
+
+		// ⚠ Each ref is read the instant its block is minted: `registeredBlockRef` is O(1) exactly because it
+		// asks for the LAST-registered block, and the second `addBlock` is what ends that for the first.
+		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
+		let wordRef = registeredBlockRef(self.module, func: self.func, block: wordArm)
+		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
+		let byteRef = registeredBlockRef(self.module, func: self.func, block: byteArm)
+		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: slow)
+
+		var arms = StrideArmArray.create()
+		arms.push(StrideArm.create(wordRef, stride: SingleOpStride.word))
+		arms.push(StrideArm.create(byteRef, stride: SingleOpStride.byte))
+		return arms
+	end 'openStrideArms'
 
 	// ⭐ THE ONE PRECONDITION EVERY FAST ARM SHARES — the element is one whole machine word or one byte, so
 	// the access is a single `loadIndirect`/`storeIndirect` at that width. Every other stride leaves for the
@@ -518,9 +717,9 @@ type PrimitiveInliner
 	// (`emitElementIsManaged`). If the tier ever moves a 2- or 4-byte element in one op, that fact changes
 	// in one place and both tiers learn it.
 	//
-	// The caller MINTS the two arm blocks and hands their ids in, rather than taking them back from here:
-	// it goes on emitting into both, and a block a caller emits into is a `var` binding of the caller's
-	// under this compiler's own ownership rules.
+	// `openStrideArms` MINTS the two arm blocks and hands their ids in, rather than taking them back from
+	// here: it hands them on to an expander that emits into both, and a block emitted into is a `var`
+	// binding under this compiler's own ownership rules.
 	function dispatchOnStride(cur IrBlock, arr ValueId, wordArm BlockId, byteArm BlockId, slow BlockId)
 		let elementSize = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: self.valueIds())
 		emitStrideDispatch(self.module, func: self.func, cur: cur, es: elementSize, wordArm: wordArm, byteArm: byteArm, otherArm: slow, ids: self.valueIds(), checkByteLabel: InlineStrideLabel)
@@ -614,7 +813,18 @@ type PrimitiveInliner
 	// block the moved call will live in. The returned frame's `slow` is EMPTY and un-terminated — the
 	// caller's next act is to append the call into it, which is the one thing the two openers do
 	// differently.
+	//
+	// ⚠ **THE TWO STEPS ARE SEQUENCED AND NOT WRITTEN AS ONE EXPRESSION.** `carveContinuation`'s ref read is
+	// valid only while the continuation is the function's LAST-registered block, and the `addBlock` below is
+	// precisely what ends that — so the order between them may not be left to argument evaluation.
 	function carveFrame(blockRef BlockRef, pos BlockOpPos) returns InlineFrame
+		let carve = self.carveContinuation(blockRef, pos: pos)
+		return InlineFrame.create(carve, slow: self.module.addBlock(self.func, label: ManagedSlowLabel))
+	end 'carveFrame'
+
+	// `carveFrame` without the slow arm — the whole carve for an expansion that has no precondition left to
+	// fail (`expandUncheckedGetUnguarded`), and the first half of it for every other.
+	function carveContinuation(blockRef BlockRef, pos BlockOpPos) returns InlineCarve
 		// ⛔⛔ **THE MINTER IS SEEDED HERE, BEFORE THE CARVE, AND THAT ORDER IS LOAD-BEARING (EC1 review).**
 		// `nextFreeValueId` derives its floor from the function's LIVE ops (`IrModule.liveOpIndices`) and its
 		// block args — and the carve on the next line makes the call an ORPHAN, out of every `opRefs`, while
@@ -645,15 +855,15 @@ type PrimitiveInliner
 		// expanded, and would be rediscovered forever. See `registeredBlockRef` for the rule itself.
 		let contRef = registeredBlockRef(self.module, func: self.func, block: cont)
 
-		return InlineFrame.create(cont, contRef: contRef, slow: self.module.addBlock(self.func, label: InlineSlowLabel))
-	end 'carveFrame'
+		return InlineCarve.create(cont, contRef: contRef)
+	end 'carveContinuation'
 
 	// The half that runs AFTER it: the slow arm branches to the continuation carrying its own fresh
 	// results, and the continuation takes the ORIGINAL ones as its block args. That pairing is the whole
 	// reason no op after the site has to change — every one of them still names the value it always did.
 	function closeFrame(frame InlineFrame, carried ValueIdArray, slowCarried ValueIdArray)
 		var slow = frame.slow
-		var cont = frame.cont
+		var cont = frame.carve.cont
 		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
 		attachEdge(slow, targetId: cont.id, argIds: slowCarried)
 		// Every value these five primitives carry is a MACHINE WORD, and that is exact rather than a
@@ -671,15 +881,16 @@ type PrimitiveInliner
 	// continuation while leaving the head un-terminated, and that is one rule with one home.
 	function carve(blockRef BlockRef, pos BlockOpPos) returns IrBlock
 		var head = self.blockAt(blockRef)
-		let cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: InlineContLabel)
+		let cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: ManagedContLabel)
 		head.opRefs.truncate(pos)
 		return cont
 	end 'carve'
 
-	// The outcome every carved expansion returns, plus the one counter bump they share.
-	function finish(frame InlineFrame) returns BlockRef
+	// The outcome every carved expansion returns, plus the one counter bump they share. It takes the CARVE
+	// rather than the frame because one expansion has no frame at all — see `expandUncheckedGetUnguarded`.
+	function finish(carve InlineCarve) returns BlockRef
 		self.expanded = self.expanded + 1
-		return frame.contRef
+		return carve.contRef
 	end 'finish'
 
 	// --- block/op access ---
@@ -699,6 +910,24 @@ type PrimitiveInliner
 
 end 'PrimitiveInliner'
 
+
+// ⭐ **DOES THIS SITE'S STAMP LEAVE EVERY FAST ARM DEAD?** — then nothing is expanded: the runtime call
+// stands exactly as the lowering wrote it, and the site pays neither the `element_size@24` load nor a compare
+// to reach the very call it was always going to make. Asked BEFORE the carve, which is not free to undo.
+function everyArmIsDead(plan StrideDispatchPlan) returns bool
+	return match plan 'plan'
+		runtimeFork to singleArm gives false
+		noFastArm gives true
+	end 'plan'
+end 'everyArmIsDead'
+
+// `openStrideArms`' one-arm answer. A free function so that the `match` arm above it stays the single
+// statement a `match` arm is.
+function singleStrideArm(blockRef BlockRef, stride SingleOpStride) returns StrideArmArray
+	var arms = StrideArmArray.create()
+	arms.push(StrideArm.create(blockRef, stride: stride))
+	return arms
+end 'singleStrideArm'
 
 // The argument at `index`, with the callee named in the failure — a runtime entry's arity is fixed by the
 // builder that emitted it, so a mismatch here is a compiler bug and not a program error.

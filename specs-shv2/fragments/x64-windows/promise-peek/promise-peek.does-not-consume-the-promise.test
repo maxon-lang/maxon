@@ -88,48 +88,31 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect __managed_push
     x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, __il_slow
-  __im_load#18:
+    x64.jcc lessEqual, __im_slow
+  __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __im_loaded
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, __il_slow
-  __im_load#19:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-  __im_loaded:
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#24
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#19
   __im_empty:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_slow
-  critsplit#25:
-    x64.movRegReg r12, rax
-    x64.jmp __il_cont
-  critsplit#24:
-    x64.movRegReg r12, rax
-    x64.jmp __il_cont
-  __il_slow:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, critsplit#20
+  __im_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, r10
-  __il_cont:
-    x64.cmpRegImm32 rcx, 0
+    x64.jmp __im_cont
+  critsplit#20:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#19:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
@@ -161,21 +144,21 @@ func @main {
     x64.setccReg equal, rax
   scmerge:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#22
+    x64.jcc equal, critsplit#17
   threePeeksAgree:
     x64.movRegImm32 r13, 3
     x64.jmp ifcont#6
-  critsplit#22:
+  critsplit#17:
     x64.movRegReg r13, r15
   ifcont#6:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_await
     x64.cmpRegImm32 r8, 42
-    x64.jcc notEqual, critsplit#23
+    x64.jcc notEqual, critsplit#18
   theResultSurvived:
     x64.leaRegRegImm32 r12, r13, 4
     x64.jmp ifcont#8
-  critsplit#23:
+  critsplit#18:
     x64.movRegReg r12, r13
   ifcont#8:
     x64.cmpRegImm32 r12, 0

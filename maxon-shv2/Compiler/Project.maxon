@@ -839,6 +839,12 @@ export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
 // `Project.debugStreamNameSites`.
 export typealias DebugStreamNameSiteMap = Map with (OpIndex, ByteArray)
 
+// ⭐⭐ **STD** op index ⇒ the compile-time `element_size@24` stamp of the container that call operates on.
+// ⚠ The three maps above are keyed by **MAXON** op indices and are folded by `mergeArtifact`; this one is
+// keyed by an index into the **Std** module's `ops` and is never merged. The name says `stdOp` for that
+// reason. See `Project.stdOpElementStrides`.
+export typealias StdOpElementStrideMap = Map with (OpIndex, ElementStride)
+
 // A list of BINDINGS, held by reference (VarInfo is a heap `type`). Scope keeps the
 // bindings a frame displaced in one; the parser keeps its mutable bindings in one.
 // Both need the binding OBJECT rather than its name — see Scope's header for why a
@@ -6851,6 +6857,40 @@ export type Project
 	// ⚠ **RECORDED UNCONDITIONALLY, never under `--debugstream`**, for the exact reason stated above it: a
 	// parser artifact is CACHED across builds and keyed on the file's content, not the build's flags.
 	export var debugStreamNameSites as DebugStreamNameSiteMap
+	// ⭐⭐ **THE COMPILE-TIME `element_size@24` STAMP OF A MANAGED-PRIMITIVE CALL'S CONTAINER (EC15)** —
+	// what lets `inlineManagedPrimitives` emit ONE of `emitStrideDispatch`'s arms instead of forking on a
+	// stride the compiler already knows. `Array with Integer` is 8 at compile time and the pass was emitting a
+	// `loadIndirect` of the field, two compares and two branches at every element access in every program.
+	//
+	// ⚠⚠ **IT IS KEYED BY AN INDEX INTO THE *STD* MODULE'S `ops`, WHICH THE THREE MAPS ABOVE ARE NOT.**
+	// `asyncSpawnSites` / `allocTagSites` / `debugStreamNameSites` are written by the PARSER against MAXON op
+	// indices and folded per file by `mergeArtifact`; this one is written by `LowerMaxonToStd` against the Std
+	// op it has just appended, and is never merged — there is one Std module per compile. The field name
+	// carries that difference rather than leaving it to this comment.
+	//
+	// ⭐⭐ **WHY A SIDE TABLE AND NOT A FIELD ON THE OP: `StdOp.call` CARRIES `callee` AND `args` AND NO
+	// TYPE.** The Std tier is deliberately type-free — a stride slot on `call` would be a container fact on
+	// every call in every program — and the tier that still HAS the type is the lowering, which is where this
+	// is written. The parser is one tier further up and knows it too, but it is NOT the producer: every
+	// `__managed_*` call reaches Std through `appendRuntimeCall` / `appendThrowingCall`, so recording it there
+	// is one complete door rather than an enumeration of the parser's several element-access sites.
+	//
+	// ⚠⚠ **THE KEY IS DURABLE BECAUSE `IrModule.ops` ALLOCATES INDICES BY `push` AND THE TWO PASSES IN
+	// BETWEEN NEITHER CLONE NOR REPLACE A CALL.** `insertRangeChecks` appends guard ops and splits blocks
+	// (which moves `opRefs`, never ops); `inlineLeaves` clones a callee body, and **a leaf holds no call by
+	// rule** (`LeafOpRole.calling` refuses the callee outright), so it can neither copy nor re-issue a managed
+	// primitive. ⇒ every op index recorded here still names the very call the lowering appended.
+	//
+	// ⚠⚠ **A STAMP IS RECORDED, NOT A VERDICT — AND THE STAMP IS NOT ALWAYS THE RECORD'S.** What may be
+	// concluded from it is `strideDispatchPlanForStamp`'s to say, and the answer is not simply "this width":
+	// a container declared over a TYPE PARAMETER is created at the machine-word slot inside a shared generic
+	// body and read back under a SUBSTITUTED concrete type, so what is provable is
+	// `actual ∈ {stamp, MachineWordBytes}`. That function carries the measurement (a byte-typed field
+	// answering 0 where 7 is correct) and the three answers that survive it. The sign is part of the value
+	// too (`LayoutDescriptor.elementStrideOf`: negative is `-(bits per element)`, a SUB-BYTE PACKED element
+	// that must still go to the runtime) — a reader treating a negative stamp as an error rather than as a
+	// width would specialize a packed array onto a byte access.
+	export var stdOpElementStrides as StdOpElementStrideMap
 	// (funcIndex, ValueId) -> Maxon OpIndex for every op-defined value in the
 	// whole-program Maxon module (see ValueOrigin). Folded from the per-file artifact
 	// tables by `mergeArtifact`, in the same source-path order the module merges. A
@@ -6941,6 +6981,7 @@ export type Project
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
+			stdOpElementStrides: StdOpElementStrideMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			rootPath: rootPath,
 			target: target,

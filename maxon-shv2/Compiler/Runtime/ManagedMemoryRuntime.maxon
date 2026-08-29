@@ -1897,7 +1897,14 @@ export union SingleOpStride
 	byte
 end 'SingleOpStride'
 
-// The `element_size@24` stamp this arm is reached on.
+// ⭐ **THE `element_size@24` STAMP THIS ARM IS REACHED ON — and since EC15 the ONLY spelling of either
+// number.** `emitStrideDispatch`'s two runtime compares and `strideDispatchPlanForStamp`'s two compile-time
+// ones both read them from here, so a stamp cannot mean one thing to the fork and another to the answer that
+// replaces it.
+//
+// `ByteStringElementSize` is the checked 1 — the stride `ProgramSignatures.arrayElementSize` gives an
+// `Array with Byte` and the one every String producer stamps — so the byte arm is spelled out of the same
+// constant the producers are, never out of a second literal that could come to mean something else.
 export function singleOpStrideBytes(stride SingleOpStride) returns ParsedInt
 	return match stride 's'
 		word gives MachineWordBytes as ParsedInt
@@ -1916,17 +1923,85 @@ end 'singleOpStrideAccessType'
 export function emitStrideDispatch(module StdModule, func IrFunction, cur IrBlock, es ValueId, wordArm BlockId, byteArm BlockId, otherArm BlockId, ids ValueMinter, checkByteLabel ByteArray = b"esbyte")
 	var checkByte = module.addBlock(func, label: checkByteLabel)
 
-	let wordStride = emitConst(module, block: cur, value: MachineWordBytes as ParsedInt, ids: ids)
+	// ⭐ **BOTH STAMPS COME OUT OF `singleOpStrideBytes` AND NEITHER IS WRITTEN HERE (EC15).** They used to be
+	// `MachineWordBytes` and `ByteStringElementSize` spelled at this site, which was a second derivation of the
+	// two numbers the union above already carries — and it is the same pair `strideDispatchPlanForStamp`
+	// answers a STATICALLY-KNOWN stamp against. A compile-time answer that disagreed with these two compares
+	// would skip an arm the runtime would have taken, which is a wrong answer and not a missed optimization.
+	let wordStride = emitConst(module, block: cur, value: singleOpStrideBytes(SingleOpStride.word), ids: ids)
 	let isWord = emitCmp(module, block: cur, a: es, b: wordStride, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(isWord, thenBlockId: wordArm, elseBlockId: checkByte.id))
 
-	// `ByteStringElementSize` is the checked 1 — the stride `ProgramSignatures.arrayElementSize` gives an
-	// `Array with Byte` and the one every String producer stamps — so this arm is spelled out of the same
-	// constant the producers are, never out of a second literal that could come to mean something else.
-	let byteStride = emitConst(module, block: checkByte, value: ByteStringElementSize, ids: ids)
+	let byteStride = emitConst(module, block: checkByte, value: singleOpStrideBytes(SingleOpStride.byte), ids: ids)
 	let isByte = emitCmp(module, block: checkByte, a: es, b: byteStride, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(checkByte, op: StdOp.condBranch(isByte, thenBlockId: byteArm, elseBlockId: otherArm))
 end 'emitStrideDispatch'
+
+// ⭐⭐ **WHAT `emitStrideDispatch` WOULD DO IF IT COULD SEE `element_size@24` — THE COMPILE-TIME ANSWER TO ITS
+// TWO RUNTIME COMPARES (EC15).** `InlineManagedPrimitives` asks it once per call site and emits the arm it
+// names; the fork itself is emitted only for `runtimeFork`.
+export union StrideDispatchPlan
+	// The stride is not known at compile time — an opaque element in a shared generic body, an array reached
+	// through an interface or an existential, a receiver this tier could not type. The runtime fork stands.
+	runtimeFork
+	// The stamp is known and selects this single-op arm. The other arm, the fork and the `element_size@24`
+	// load are all dead and none of them is emitted.
+	singleArm(stride SingleOpStride)
+	// The stamp is known and selects NEITHER arm: a 2- or 4-byte element, an unset stride, and every
+	// SUB-BYTE PACKED width (a NEGATIVE stamp — `LayoutDescriptor.elementStrideOf` owns that encoding).
+	// Every fast arm is dead, so the site keeps the runtime call and nothing is expanded around it.
+	noFastArm
+end 'StrideDispatchPlan'
+
+// ⭐⭐ **WHAT MAY BE CONCLUDED FROM A STATICALLY-KNOWN STAMP** — the compile-time twin of the two compares
+// above, asked of `singleOpStrideBytes` (the union's OWN stamp) so neither number is written twice.
+//
+// ⛔⛔ **THE STATIC STAMP IS NOT ALWAYS THE RECORD'S, AND THAT IS WHY THIS IS NOT SIMPLY THE TWO COMPARES
+// AGAIN. MEASURED, EC15.** A container declared over a TYPE PARAMETER is created inside a SHARED GENERIC
+// BODY, where every `T` occupies one machine word — `Parser.emitOpaqueArrayCreateOp` stamps
+// `LAYOUT_TYPE_PARAM_SLOT_BYTES` and not the concrete element's width, because the one compiled body moves
+// elements as words whatever the instantiation. Read back through a concrete receiver, that same record
+// wears a SUBSTITUTED type (`Parser.slotTypeThroughReceiver`): a `Bag with Byte`'s `Array with Element`
+// field is typed `Array with Byte`, stride 1, while its record stamps 8.
+//
+// MEASURED before this arm existed: `b.items.get(1)` over such a field printed **0** where 7 is the answer
+// and where `b.items.managed.elementSize()` printed **8** — the byte arm reading one byte out of an
+// eight-byte slot. `specs-shv2/static-stride-specialization.md`'s
+// `a-substituted-container-field-is-word-strided-however-it-is-typed` is that program, and the arm below is
+// what keeps it right.
+//
+// ⇒ **WHAT IS ACTUALLY PROVABLE is `actual ∈ {static stamp, MachineWordBytes}`** — every producer of
+// `element_size@24` stamps `ProgramSignatures.arrayElementSize` of the value's own instance
+// (`emitArrayCreateOp`; `__ManagedMemory.create` is CHECKED against its instance by
+// `requireManagedMemoryElementSize`; clone/slice copy their source), and the ONE that does not stamps the
+// machine word. So:
+//
+//   • **word** — both possibilities ARE the word, so the word arm is right either way. Specialized.
+//   • **byte** — the record is 1 or 8, which are two DIFFERENT single-op arms, so the site has to ask.
+//     Answers `runtimeFork`: the fork is exactly the question that distinguishes them.
+//   • **anything else** — the record is that stride (runtime's) or the word. `noFastArm` keeps the CALL,
+//     which reads the real stamp and is right for both. Sound, and cheaper than the fork it replaces.
+//
+// ⚠ **THE BYTE ARM IS LEFT ON THE TABLE, NOT FORGOTTEN.** A byte-stamped site could keep BOTH single-op
+// arms and route `emitStrideDispatch`'s `otherArm` to the WORD arm instead of the slow one — sound by the
+// same `actual ∈ {1, 8}` reading, and enough to make a `for v in b` over a `ByteArray` call-free the way the
+// word case now is. It is a third emission shape and this row did not take it.
+//
+// ⚠ **A THIRD `SingleOpStride` ARM WOULD HAVE TO BE PLACED HERE TOO, AND THE PRICE OF FORGETTING IS A
+// MISSED SPECIALIZATION AND NEVER A WRONG ANSWER** — an unlisted stamp falls to `noFastArm`, which keeps the
+// call. That is the opposite polarity from `emitStrideDispatch` above, where a wrong stamp would take an arm
+// the runtime would not.
+export function strideDispatchPlanForStamp(stamp ElementStride) returns StrideDispatchPlan
+	if stamp == singleOpStrideBytes(SingleOpStride.word) 'oneMachineWord'
+		return StrideDispatchPlan.singleArm(SingleOpStride.word)
+	end 'oneMachineWord'
+
+	if stamp == singleOpStrideBytes(SingleOpStride.byte) 'oneByteOrTheWordSlotOfASharedBody'
+		return StrideDispatchPlan.runtimeFork
+	end 'oneByteOrTheWordSlotOfASharedBody'
+
+	return StrideDispatchPlan.noFastArm
+end 'strideDispatchPlanForStamp'
 
 // One `loadIndirect` of the whole element at its slot, branching to `joinId` with what it read — the body
 // of both of `emitLoadElemAt`'s fast arms, which differ in nothing but the access WIDTH.

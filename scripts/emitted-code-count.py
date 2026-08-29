@@ -17,6 +17,13 @@ It compiles a fixed corpus with --emit-ir and counts, per program:
   imul-pow2       ... of which by a power of two (EC16 folds these into an
                   addressing mode; EC18 turns the rest into shifts)
   idiv            integer divides (EC18: 20-40 cycles each)
+  mgd-call        calls to a `__managed_*` runtime element primitive - the slow
+                  arms `inlineManagedPrimitives` could not discharge, plus every
+                  site it does not expand (EC15)
+  im-blocks       blocks labelled `__im_*`: the scaffolding one inlined element
+                  access costs, in blocks. EC15 removes the stride fork and one
+                  of the two width arms wherever the element type fixes the
+                  stride, so this falls where `mgd-call` does (EC1, EC15)
 
 Every column is EXACT and reproducible - it counts instructions in a text dump,
 not time - so ANY movement is real and owes an explanation. There is no verdict
@@ -39,6 +46,7 @@ SHV2 = os.path.join(REPO, "maxon-shv2", ".maxon",
 JMP = re.compile(r"x64\.jmp\s+(\S+)$")
 LABEL = re.compile(r"(\S+):$")
 IMUL_IMM = re.compile(r"x64\.imulRegRegImm32 [^,]+, [^,]+, (-?\d+)")
+MGD_CALL = re.compile(r"x64\.callDirect (__managed_\S+)$")
 
 
 def next_code_line(lines, i):
@@ -52,13 +60,16 @@ def next_code_line(lines, i):
 def count(ir_text):
     lines = ir_text.splitlines()
     c = {k: 0 for k in ("ops", "jmp", "jmp->next", "jmponly-blocks",
-                        "imul-imm", "imul-pow2", "idiv")}
+                        "imul-imm", "imul-pow2", "idiv", "mgd-call",
+                        "im-blocks")}
     for i, raw in enumerate(lines):
         s = raw.strip()
         if s.startswith("x64."):
             c["ops"] += 1
         if s.startswith("x64.idivReg"):
             c["idiv"] += 1
+        if MGD_CALL.match(s):
+            c["mgd-call"] += 1
 
         m = IMUL_IMM.match(s)
         if m:
@@ -79,6 +90,8 @@ def count(ir_text):
         # A block whose only op is an unconditional jump: a label line whose
         # next code line is a jmp. Label lines are indented and end in ':'.
         if raw.startswith((" ", "\t")) and LABEL.match(s) and not s.startswith("x64."):
+            if s.startswith("__im_"):
+                c["im-blocks"] += 1
             j = next_code_line(lines, i)
             if j is not None and JMP.match(lines[j].strip()):
                 c["jmponly-blocks"] += 1
@@ -125,7 +138,7 @@ def main():
     os.makedirs(workdir, exist_ok=True)
 
     cols = ["ops", "jmp", "jmp->next", "jmponly-blocks",
-            "imul-imm", "imul-pow2", "idiv"]
+            "imul-imm", "imul-pow2", "idiv", "mgd-call", "im-blocks"]
     rows, totals = [], {k: 0 for k in cols}
     for src in corpus:
         c = count(emit_ir(src, workdir))

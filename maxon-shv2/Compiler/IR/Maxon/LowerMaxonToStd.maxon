@@ -991,6 +991,15 @@ type MaxonToStdLowering
 	// first tier that can NUMBER them: the interner is whole-program and this walk is the one pass that sees
 	// the whole merged module — see `Project.debugStreamNameSites`.
 	let debugStreamNameSites as DebugStreamNameSiteMap
+	// ⭐⭐ **WHERE THIS TIER WRITES DOWN WHAT IT KNOWS ABOUT AN ELEMENT STRIDE (EC15)** — the container stamp
+	// of every runtime call whose first argument is a CONCRETE `Array with T`, keyed by the Std op index the
+	// call is about to occupy (`project.stdOpElementStrides`). Written by `recordStaticElementStride` and read
+	// only by `inlineManagedPrimitives`, two passes later.
+	//
+	// ⚠ It is a `let` like its two neighbours and is nonetheless WRITTEN through: a `Map` is a heap object, so
+	// the word governs the binding and not the table. The neighbours are read-only because the parser filled
+	// them; this one is filled here.
+	let stdOpElementStrides as StdOpElementStrideMap
 	// The whole-program Maxon op index of the op being lowered. Published by the block walk, exactly as
 	// `rangeSites` is and for the same reason: an op's SIDE TABLES are keyed by its index, and the walk is
 	// the only thing that knows it.
@@ -1081,7 +1090,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, stdOpElementStrides: project.stdOpElementStrides, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -3337,8 +3346,76 @@ type MaxonToStdLowering
 		// ordinary dictionary PARAMETERS filled by `appendWitnessArgs`.
 		// ⇒ **No compiler-owned runtime callee threads a witness table today**, and a new one would rebuild the
 		// arm here — see `materializeWitnessTableAddr`, which holds what such an arm must not get wrong.
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
+		// ⚠ The descriptor append runs FIRST and may itself emit ops into `dstBlock`, so the index the call is
+		// about to occupy is read AFTER it and immediately before the append — the same discipline
+		// `Parser.emitRuntimeCallInto` states for its own op index.
+		let callArgs = self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)
+		self.recordStaticElementStride(args, opIndex: self.stdModule.opCount())
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: callArgs))
 	end 'appendRuntimeCall'
+
+	// ⭐⭐ **WRITE DOWN THE COMPILE-TIME `element_size@24` STAMP OF THIS CALL'S CONTAINER (EC15)** — the one
+	// fact `inlineManagedPrimitives` needs to emit ONE of `emitStrideDispatch`'s arms instead of forking on a
+	// stride that is fixed by the element type. `Array with Integer` is 8 in every program that ever runs, and
+	// the pass was loading `element_size@24` and comparing it twice at EVERY element access.
+	//
+	// ⭐ **IT IS CALLEE-AGNOSTIC, AND THAT IS WHAT MAKES IT COMPLETE.** It asks about the ARGUMENT, not about
+	// a roster of primitive names: a roster here would be a second copy of the one
+	// `InlineManagedPrimitives.expandPlainCall` / `expandThrowingCall` dispatch on, free to drift from it, and
+	// this project's signature bug is one fact written down twice. An entry recorded for a call the pass never
+	// expands (`__managed_count`, `__managed_push`) is simply never read; a missing one costs a specialization,
+	// never an answer.
+	//
+	// ⚠ **`isArrayInstanceAt` IS THE GATE, TAG AND ALL, AND IT IS NOT SPELLED OUT HERE.** It is the ONE home of
+	// the two-part test — a bare `TypeNameId` shares the numeric space with a `GenericInstanceId`, so an
+	// instance-registry walk keyed on an unchecked id answers TRUE about an instance the caller never had. It
+	// also settles the `__ManagedMemory` half for free: `Array with T` and `__ManagedMemory with T` are ONE
+	// `GenericInstanceId` (`isArrayBaseName`), so `arr.memory.set(…)` records the same stamp `arr.get(…)` does.
+	//
+	// ⚠⚠ **AN OPAQUE ELEMENT IS REFUSED, AND THAT IS THE W57 TRAP RATHER THAN A CONSERVATISM.** A shared
+	// generic body over `Array with T` is compiled ONCE for every instantiation, so it has no single stride —
+	// and `arrayElementSize` would answer for it anyway, off `trivialElementSlot` of a type parameter. Recording
+	// that answer would specialize `Array with Byte`'s body onto an 8-byte access.
+	//
+	// ⚠ **IT RECORDS A STAMP AND NOT A VERDICT, and the difference is load-bearing.** The stamp is the one
+	// `ProgramSignatures.arrayElementSize` gives this INSTANCE; whether the record reaching the call actually
+	// carries it is `strideDispatchPlanForStamp`'s question, and its answer is not "yes" for every width —
+	// see there for the shape that made a byte-typed field answer 0 where 7 is correct.
+	//
+	// ⚠ Both type columns are read PERMISSIVELY. They are dense over the values the PARSER minted, and this
+	// tier mints its own (`mintStdValueId` — a layout descriptor, a destructor slot); such a value can never be
+	// argument 0 of an element access today, and a `return` rather than a panic is what keeps that from being a
+	// premise this function rests on.
+	function recordStaticElementStride(args ValueIdArray, opIndex OpIndex)
+		let container = try args.get(0) otherwise 'noArguments'
+			return
+		end 'noArguments'
+
+		let tag = try self.valueTags.get(container) otherwise 'notAParserMintedValue'
+			return
+		end 'notAParserMintedValue'
+
+		let instance = try self.valueNameIds.get(container) otherwise 'noNameId'
+			return
+		end 'noNameId'
+
+		if not self.signatures.isArrayInstanceAt(tag, nameId: instance) 'notAnArrayRecord'
+			return
+		end 'notAnArrayRecord'
+
+		if self.signatures.containerElementIsOpaque(instance) 'sharedGenericBody'
+			return
+		end 'sharedGenericBody'
+
+		// ⚠ The index was read from `ops.count()` one statement above the append it belongs to, so it cannot
+		// already be occupied. A second entry under one key would mean this table's key space is not the one
+		// its header claims it is, which is exactly the failure a stale-coordinate side table dies of.
+		if self.stdOpElementStrides.contains(opIndex) 'keyAlreadyTaken'
+			panic("recordStaticElementStride: Std op index {opIndex} already carries an element stride — the key space is meant to be one entry per appended call, so `ops.count()` and the append it names have come apart")
+		end 'keyAlreadyTaken'
+
+		self.stdOpElementStrides.upsert(opIndex, value: self.signatures.arrayElementSize(instance))
+	end 'recordStaticElementStride'
 
 	// The `rdataAddr` of the `__witness_<conformerType>.<interface>` table (P1.7b slice A) — the address of one
 	// of a conformer's protocol witnesses. `ensureWitnessTable` registers the blob and its `funcAbs64` slot
@@ -4735,7 +4812,12 @@ type MaxonToStdLowering
 			// appender once and reaches it from here as well as from `lowerRuntimeCall`.
 			// The throwing OPAQUE-`T` `slice` (`__managed_slice_opaque`) takes the enclosing instance's descriptor as
 			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.
-			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
+			// The stride record is `appendRuntimeCall`'s, asked here for the THREE throwing element primitives
+			// (`__managed_get`, `__managed_set`, `__managed_mem_set`) — the same fact about the same argument,
+			// so the two doors share the one recorder rather than each testing the argument for itself.
+			let tryCallArgs = self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)
+			self.recordStaticElementStride(args, opIndex: self.stdModule.opCount())
+			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: tryCallArgs))
 			return
 		end 'compilerOwnTryCall'
 

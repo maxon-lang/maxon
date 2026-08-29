@@ -37,51 +37,23 @@ func @Counter.addAll {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rax, 0
   forhdr:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegReg r13, rax
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.cmpRegReg rax, rsi
     x64.jcc greaterEqual, forexit
   each:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.leaRegRegReg rax, rax, r13
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rax, r8
-  __il_cont:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.leaRegRegReg rax, rcx, rax
-    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
+    x64.loadRegBaseIndexScale.word64 rsi, [rsi + rax*8 + 0]
+  __im_cont:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
+    x64.leaRegRegReg rsi, rdi, rsi
+    x64.storeBaseDispReg.word64 [rcx + 0], rsi
   forstep:
-    x64.leaRegRegImm32 r13, r13, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp forhdr
   forexit:
-    x64.loadRegBaseDisp.word64 r8, [rbx + 0]
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
     x64.popReg rbp
     x64.ret
 }

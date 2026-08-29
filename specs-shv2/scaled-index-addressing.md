@@ -198,10 +198,13 @@ stays a `loadRegBaseDisp.byte`. A fold that rewrote this would be changing code 
 instruction shorter than the scaled form.
 
 ⚠ The fragment shows BOTH arms, and that is the point of reading it here rather than in the integer
-case: `element_size` is a RUNTIME field of the array record, so `emitStrideDispatch` emits the word arm
-(now one `loadRegBaseIndexScale`) and the byte arm (still `leaRegRegReg` + `loadRegBaseDisp.byte`) side
-by side even for a ByteArray whose stride the compiler could have known. Removing the arm this program
-never takes is EC15's row, not this one.
+case: `emitStrideDispatch` emits the word arm (now one `loadRegBaseIndexScale`) and the byte arm (still
+`leaRegRegReg` + `loadRegBaseDisp.byte`) side by side even for a ByteArray. ⚠ **EC15 landed and did NOT
+remove the arm this program never takes, deliberately** — a byte-stamped container's record is stride 1
+or the machine word (a shared generic body creates its `Array with Element` at the word slot and hands
+it back under a substituted concrete type), so the fork is exactly the question that distinguishes them.
+`specs-shv2/static-stride-specialization.md` carries the measurement and the case that fails without it.
+The INTEGER cases above are where EC15 does fire, and their fragments no longer show a fork at all.
 ```maxon
 typealias Byte = int(0 to 255)
 typealias Total = int(0 to u64.max)

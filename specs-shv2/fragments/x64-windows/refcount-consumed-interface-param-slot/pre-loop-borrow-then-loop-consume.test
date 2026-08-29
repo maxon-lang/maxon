@@ -256,27 +256,9 @@ func @withTarget {
     x64.cmpRegReg r15, rax
     x64.jcc greaterEqual, forexit
   each:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rcx, [rax + r15*8 + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, r15
-    x64.loadRegBaseDisp.byte rcx, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r15
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rcx, r8
-  __il_cont:
+  __im_cont:
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
     x64.callDirect forFunc
