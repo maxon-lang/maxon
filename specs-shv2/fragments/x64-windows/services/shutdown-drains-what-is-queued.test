@@ -153,7 +153,7 @@ func @main {
     x64.prologue 32
     x64.callDirect Log.create
     x64.leaRegFunc rcx, [rip + Log.__loop]
-    x64.leaRegFunc rax, [rip + __mm_decref]
+    x64.leaRegFunc rax, [rip + Log.__abandon]
     x64.movRegReg rdx, r8
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
@@ -192,7 +192,9 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __gt_cell_alloc
+    x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -202,6 +204,8 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_promise_drop
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
@@ -246,6 +250,8 @@ func @Log.__loop {
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=push, [2]=read] @__jumptable_4
   __shutdown:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.jmp stopping
@@ -271,8 +277,9 @@ func @Log.__loop {
     x64.popReg rbp
     x64.ret
   abandon:
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_abandon
     x64.jmp drain
   push:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
@@ -292,4 +299,32 @@ func @Log.__loop {
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.jmp serve
+}
+
+func @Log.__abandon {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=push, [2]=read] @__jumptable_5
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  push:
+    x64.jmp abandondrop
+  read:
+    x64.jmp abandondrop
+  abandondrop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }

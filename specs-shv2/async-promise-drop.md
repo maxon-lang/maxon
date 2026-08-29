@@ -164,6 +164,46 @@ end 'main'
 42
 ```
 
+<!-- test: async-promise-drop.parked-timer-drop-through-a-rearm -->
+<!-- targets: x64-windows -->
+⛔⛔ **THE CASE ABOVE DOES NOT REACH THE `waiting` ARM, AND ITS OWN DESCRIPTION SAYS IT DOES.** It reads *"`return
+r` drops `slow` — the `waiting` arm removes it from the timer store"*, and `_ = async sleeper()` DISCARDS the
+promise at its own statement, before `await q` has driven anything: `sleeper` has never run, its status is the
+slab's `ready`, and the drop takes the QUEUED arm. So the timer-store deregistration had no committed case at
+all. **MEASURED at SV2, by a sabotage that should have turned that case red and did not.**
+
+This one really does drop a TIMER-PARKED promise, and the RE-ARM is what makes it so: `await q` drives, which
+runs `sleeper` up to its `sleep(200)` and parks it on the timer; only THEN does `p = async fast()` renounce it.
+The `waiting` arm removes it from the store, frees the stack a parked coroutine is suspended on and reclaims
+the struct — with no hang (the 200 ms deadline is never waited on) and no use-after-free.
+
+⭐ Its own RED reading: point `__gt_promise_drop`'s park-kind refusal at `GtParkKindTimer` instead of
+`GtParkKindMailbox` and this exits **94** where it exits 42.
+```maxon
+
+function sleeper() returns int
+	sleep(200)
+	return 99
+end 'sleeper'
+
+function fast() returns int
+	Runtime.yield()
+	return 42
+end 'fast'
+
+function main() returns ExitCode
+	var p = async sleeper()
+	let q = async fast()
+	let r = await q
+	p = async fast()
+	let s = await p
+	return (r + s - 42) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: async-promise-drop.branch-await-one-drop-other -->
 <!-- targets: x64-windows -->
 The path-sensitive case: a promise `await`ed on ONE branch and DROPPED on the other, reconciled at the merge.

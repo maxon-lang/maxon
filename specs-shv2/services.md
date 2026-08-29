@@ -1350,6 +1350,68 @@ end 'main'
 0
 ```
 
+<!-- test: a-fire-and-forget-send-is-not-a-blocking-edge -->
+<!-- targets: x64-windows -->
+⭐⭐ **THE CASE THAT CAN ACTUALLY SEE "only blocking edges count", AND `fire-and-forget-cycle-is-legal` ABOVE
+CANNOT.** That one has no `await` anywhere, so `checkServiceCallCycles` short-circuits on an empty seed set
+before it ever consults the rule — it pins the SV1 property (a type-graph ring compiles and runs) and is
+silent about the SV2 one. MEASURED: with a `serviceSend` treated as a call-graph edge, it stayed GREEN.
+
+This program is the shape that fails under that sabotage. `B.work` really does await a reply from `A`, so the
+blocking graph holds `B → A` — and `A.kick` merely POSTS to `B` and returns, which is what keeps the graph
+acyclic. Count the send as an edge and `A.kick` inherits `B.work`'s blocking, giving `A → A`: a self-edge, and
+a refusal of a program that cannot deadlock. It cannot deadlock because `A.kick` never waits — it answers
+immediately, so `A` is free to serve `B`'s `ack` when it arrives.
+```maxon
+type A
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function kick(peer B.handle, mine A.handle) returns int
+		peer.work(mine.clone())
+		return 1
+	end 'kick'
+
+	export function ack() returns int
+		return 7
+	end 'ack'
+end 'A'
+
+type B
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function work(back A.handle)
+		let v = try await back.ack() otherwise 0
+		print("acked {v}\n")
+	end 'work'
+
+	export function drain() returns int
+		return 5
+	end 'drain'
+end 'B'
+
+function main() returns ExitCode
+	let a = spawn A.create()
+	let b = spawn B.create()
+	let v = try await a.kick(b.clone(), mine: a.clone()) otherwise 0
+	let done = try await b.drain() otherwise 0
+	return (v + done) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+acked 7
+```
+
 <!-- test: an-export-reached-only-by-message-is-not-unused -->
 <!-- targets: x64-windows -->
 An export method reachable only as a MESSAGE must count as used, or the unused-export check would refuse
@@ -1778,6 +1840,34 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:29:8: argument type mismatch for 'peer': expected 'Calc.handle', got 'Logger.handle'
+```
+
+<!-- test: error.a-message-that-returns-nothing-and-throws-nothing-has-no-value -->
+⭐ **A FIRE-AND-FORGET SEND IS STILL A STATEMENT, AND THE REFUSAL NOW POINTS AT THE DECLARATION.** A message
+that returns nothing and throws nothing carries no `__reply` slot at all, so the send mints no cell and there
+is no promise to bind — and the cure is on `bump` rather than at the call. Every OTHER message is awaitable,
+which is why this sentence names what would give this one a reply rather than naming a rung.
+```maxon
+type Calc
+	var count as int
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump()
+		self.count = self.count + 1
+	end 'bump'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let n = h.bump()
+	return n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:12: Unsupported: the value of `Calc.bump` sent as a MESSAGE — it returns nothing and throws nothing, so it carries no reply slot and a send of it delivers no value. Give it a `returns` clause or a `throws` clause and `try await <handle>.bump(…)` resolves through a reply cell; otherwise send it as a statement
 ```
 
 <!-- test: error.a-send-may-not-be-tried -->

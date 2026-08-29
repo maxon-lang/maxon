@@ -69,7 +69,7 @@ func @main {
     x64.prologue 40
     x64.callDirect Idler.create
     x64.leaRegFunc rcx, [rip + Idler.__loop]
-    x64.leaRegFunc rax, [rip + __mm_decref]
+    x64.leaRegFunc rax, [rip + Idler.__abandon]
     x64.movRegReg rdx, r8
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
@@ -106,6 +106,8 @@ func @Idler.__loop {
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=tick] @__jumptable_0
   __shutdown:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.jmp stopping
@@ -130,8 +132,9 @@ func @Idler.__loop {
     x64.popReg rbp
     x64.ret
   abandon:
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_abandon
     x64.jmp drain
   tick:
     x64.jmp __il_body
@@ -144,4 +147,30 @@ func @Idler.__loop {
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.jmp serve
+}
+
+func @Idler.__abandon {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=tick] @__jumptable_1
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  tick:
+    x64.jmp abandondrop
+  abandondrop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }

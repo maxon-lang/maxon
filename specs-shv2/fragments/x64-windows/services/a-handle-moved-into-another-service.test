@@ -217,7 +217,7 @@ func @main {
     x64.prologue 40
     x64.callDirect Logger.create
     x64.leaRegFunc rcx, [rip + Logger.__loop]
-    x64.leaRegFunc rax, [rip + __destruct_Logger.request]
+    x64.leaRegFunc rax, [rip + Logger.__abandon]
     x64.movRegReg rdx, r8
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
@@ -228,7 +228,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
     x64.callDirect Worker.create
     x64.leaRegFunc rcx, [rip + Worker.__loop]
-    x64.leaRegFunc rax, [rip + __destruct_Worker.request]
+    x64.leaRegFunc rax, [rip + Worker.__abandon]
     x64.movRegReg rdx, r8
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
@@ -292,8 +292,10 @@ func @Logger.__loop {
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=say] @__jumptable_6
   __shutdown:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r13
-    x64.callDirect __destruct_Logger.request
+    x64.callDirect __mm_decref
     x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
@@ -318,8 +320,9 @@ func @Logger.__loop {
     x64.popReg rbp
     x64.ret
   abandon:
-    x64.movRegReg rcx, r8
-    x64.callDirect __destruct_Logger.request
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_abandon
     x64.jmp drain
   say:
     x64.loadRegBaseDisp.word64 r14, [r13 + 8]
@@ -331,6 +334,32 @@ func @Logger.__loop {
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.jmp serve
+}
+
+func @Logger.__abandon {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=say] @__jumptable_7
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  say:
+    x64.jmp abandondrop
+  abandondrop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Logger.request
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Worker.__loop {
@@ -354,10 +383,12 @@ func @Worker.__loop {
     x64.jmp dispatch
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=run] @__jumptable_7
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=run] @__jumptable_8
   __shutdown:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r13
-    x64.callDirect __destruct_Worker.request
+    x64.callDirect __mm_decref
     x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
@@ -382,8 +413,9 @@ func @Worker.__loop {
     x64.popReg rbp
     x64.ret
   abandon:
-    x64.movRegReg rcx, r8
-    x64.callDirect __destruct_Worker.request
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_abandon
     x64.jmp drain
   run:
     x64.loadRegBaseDisp.word64 r14, [r13 + 8]
@@ -395,4 +427,30 @@ func @Worker.__loop {
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.jmp serve
+}
+
+func @Worker.__abandon {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=run] @__jumptable_9
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  run:
+    x64.jmp abandondrop
+  abandondrop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Worker.request
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }

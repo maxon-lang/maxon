@@ -177,22 +177,38 @@ function buildServiceBlockingGraph(project Project, module MaxonModule, signatur
 	var edges = CallGraphEdges.create()
 	var awaitedPerFunc = ServiceAwaitSiteArray.create()
 	var awaitsSomething = BoolArray.create()
+	// ⚡ **THE MESSAGE ROSTER IS ASKED ONCE PER FUNCTION, NOT ONCE PER (FUNCTION, SERVICE).**
+	// `serviceMessageOwnerOf` walks every service's every variant, and the closure below runs once per
+	// SERVICE — so asking it inside that loop would make the whole check quadratic in the service count for
+	// no gain: whether a function is a message does not depend on which service is being closed over.
+	var ownerPerFunc = ByteArrayArray.create()
 	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = try funcNames.functions.get(funcIndex) otherwise panic("buildServiceBlockingGraph: functions.get OOB at {funcIndex}")
 		let site = noteServiceCallEdges(project, module: module, func: func, funcIndexByName: funcNames.byName, callerIndex: funcIndex, edges: edges)
 		awaitsSomething.push(serviceAwaitSiteIsReal(site))
 		awaitedPerFunc.push(site)
+		ownerPerFunc.push(messageOwnerNameOf(signatures, callee: func.name))
 	end 'eachFunc'
 
 	for awaited in 0 upto graph.nodeCount() 'eachAwaitedService'
-		addBlockingEdgesTo(graph, awaited: awaited, signatures: signatures, funcNames: funcNames, edges: edges, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething)
+		addBlockingEdgesTo(graph, awaited: awaited, funcNames: funcNames, edges: edges, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething, ownerPerFunc: ownerPerFunc)
 	end 'eachAwaitedService'
 	return graph
 end 'buildServiceBlockingGraph'
 
+// The service a function is a message of, or EMPTY. The empty name is safe as the absence here — unlike a
+// node index, which has a real 0 — because no declaration is named by the empty string and the only reader
+// tests it with `isEmpty`.
+function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArray) returns ByteArray
+	return match serviceMessageOwnerOf(signatures, callee: callee) 'owner'
+		notAMessage gives EmptySourceText
+		ofService(typeName, _) gives typeName
+	end 'owner'
+end 'messageOwnerNameOf'
+
 // One awaited service's closure and the edges it produces. Split from the walk above so each half is one
 // statement of one idea, and because the seed column has to be rebuilt per service anyway.
-function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, signatures ProgramSignatures, funcNames FunctionNameIndex, edges CallGraphEdges, awaitedPerFunc ServiceAwaitSiteArray, awaitsSomething BoolArray)
+function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, funcNames FunctionNameIndex, edges CallGraphEdges, awaitedPerFunc ServiceAwaitSiteArray, awaitsSomething BoolArray, ownerPerFunc ByteArrayArray)
 	let awaitedName = graph.serviceNameOf(awaited)
 	var seeds = BoolArray.create()
 	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
@@ -205,11 +221,13 @@ function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, signat
 			continue
 		end 'blocksOnNothing'
 
+		let ownerName = try ownerPerFunc.get(funcIndex) otherwise panic("addBlockingEdgesTo: ownerPerFunc.get OOB at {funcIndex}")
+		if ownerName.isEmpty() 'notAMessage'
+			continue
+		end 'notAMessage'
+
 		let func = try funcNames.functions.get(funcIndex) otherwise panic("addBlockingEdgesTo: functions.get OOB at {funcIndex}")
-		match serviceMessageOwnerOf(signatures, callee: func.name) 'owner'
-			notAMessage then continue
-			ofService(ownerName, _) then noteBlockingEdge(graph, owner: ownerName, awaited: awaited, message: func.name, site: blockingSiteFor(funcIndex, awaitedName: awaitedName, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething))
-		end 'owner'
+		noteBlockingEdge(graph, owner: ownerName, awaited: awaited, message: func.name, site: blockingSiteFor(funcIndex, awaitedName: awaitedName, awaitedPerFunc: awaitedPerFunc, awaitsSomething: awaitsSomething))
 	end 'eachBlockedFunc'
 end 'addBlockingEdgesTo'
 
