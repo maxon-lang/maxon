@@ -190,10 +190,11 @@ end 'main'
 <!-- test: await-any.no-park-when-one-is-already-complete -->
 <!-- targets: x64-windows -->
 ⭐ **THE EXIT TEST IS AT THE TOP OF THE LOOP, AND THIS IS WHAT SAYS SO.** The promise is driven to
-completion by `Runtime.yield()` before `awaitAny` is called, and it is the ONLY green thread in the
-program — so at the moment of the call there is nothing runnable, no timer pending and no child parked.
-A drive loop that tested its exit condition only after driving would find all three empty and abort as a
-scheduler deadlock; this returns `0` without switching into anything.
+completion by `Runtime.yield()` before `awaitAny` is called, and it is the only one in the program — so at
+the moment of the call nothing is runnable, no timer is pending and no child is parked. A drive loop that
+tested its exit condition only after driving would find all three empty and reach the same `nothingLeft`
+arm `an-empty-array-is-a-scheduler-deadlock` measures at exit 92; this returns `0` without switching into
+anything.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
