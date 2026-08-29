@@ -6,6 +6,17 @@ self-host-ab.sh asks "how fast is the code shv2 emits" and takes ~15 minutes;
 this asks "how much of what it emits is known debris" and takes ~10 seconds, so
 it can be run after every edit rather than once per rung.
 
+⚠⚠ THE UNIT CHANGED ON 2026-08-29 AND NUMBERS DO NOT COMPARE ACROSS IT.
+Upstream's "a fragment renders the PROGRAM, and the LIBRARY is not the program"
+made --emit-ir write only the USER's functions; before it, the stdlib and runtime
+bodies came too. Same tree, same compiler, nbody read 8,587 ops before and 837
+after -- that is the instrument's unit changing, not codegen improving. Every
+figure in docs/emitted-code-roadmap.md dated before 2026-08-29, and every one in
+the EC11..EC18 commit messages, is on the OLD unit. Library bodies are opt-in by
+name now (--emit-ir-runtime=<a>,<b>), so a row whose subject lives in the stdlib
+-- refcount traffic in container methods, for one -- cannot be sized from this
+corpus at all and belongs on the self-compile.
+
 It compiles a fixed corpus with --emit-ir and counts, per program:
 
   ops             total x64.* ops emitted

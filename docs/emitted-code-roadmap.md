@@ -25,6 +25,39 @@ the **allocation column** — which still grows with program size, the signature
 — and the **absolute instruction quality** measured directly below, which is a deficit against good
 codegen rather than against either reference compiler.
 
+## ⚠⚠ THE COUNTER'S UNIT CHANGED ON 2026-08-29 — NUMBERS DO NOT COMPARE ACROSS IT
+
+Upstream's *"a fragment renders the PROGRAM, and the LIBRARY is not the program"* (X11) made
+`--emit-ir` write only the **user's** functions. Before it, the stdlib and runtime bodies came too.
+
+**Same tree, same compiler, nbody reads 8,587 ops before and 837 after.** That is the instrument's
+unit changing, not codegen improving. ⇒ **Every `emitted-code-count.py` figure in this file dated
+before 2026-08-29, and every one quoted in the `EC11`–`EC18` commit messages, is on the OLD unit.**
+They remain valid *against each other*; they are not comparable to anything measured after.
+
+Post-change baseline at `3231f15162`, all eight rows in:
+
+```
+program                ops  jmp  jmp->next  jmponly  imul-imm  imul-pow2  idiv  call-direct  mgd-call  im-blocks  mov
+nbody.maxon            837   20          0        0         0          0     0           66        14         28  120
+fannkuch-redux.maxon  1698   64          0        0         1          1     2          110        48        180  212
+arr.maxon               86    1          0        0         0          0     0           13         5          1   19
+cse2.maxon              60    0          0        0         0          0     0            8         0          0   14
+cse3.maxon              22    1          0        0         1          0     0            0         0          0    2
+probe.maxon             57    0          0        0         1          0     0            4         0          0    8
+leaf.maxon              56    1          0        0         0          0     0            5         4          1    9
+fmt.maxon               73    1          0        0         0          0     0            5         0          0   10
+TOTAL                 2889   88          0        0         3          1     2          211        71        210  394
+```
+
+⚠ **AND THE CORPUS CAN NO LONGER SEE A ROW WHOSE SUBJECT IS IN THE STDLIB.** Library bodies are
+opt-in by name (`--emit-ir-runtime=<a>,<b>`), so `EC2` — refcount traffic inside container methods —
+must be sized on the **self-compile**, not here. This is the fourth time in this workstream that a
+corpus could not express a row's shape; the other three are recorded in the END-TO-END section.
+
+⭐ **THE TIMED A/B RESULTS BELOW ARE UNAFFECTED.** They measure wall time on compiled programs and
+never went through `--emit-ir`.
+
 ## ⭐⭐ END-TO-END: WHAT THE WORKSTREAM ACTUALLY BOUGHT — FINAL, MEASURED 2026-08-29
 
 All eight rows in (`EC11` `EC12` `EC13` `EC16` `EC15` `EC14` `EC17` `EC19` `EC18`), A/B'd against a
