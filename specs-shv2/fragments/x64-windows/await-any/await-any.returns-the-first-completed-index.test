@@ -130,73 +130,37 @@ func @main {
     x64.callDirect __gt_await_any
     x64.movRegImm32 r12, 0
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, themiddleonefinishedfirst
-    x64.jmp critsplit#17
+    x64.jcc notEqual, ifcont#2
   themiddleonefinishedfirst:
-    x64.leaRegRegImm32 r12, r12, 3
-    x64.jmp ifcont#2
-  critsplit#17:
-    x64.jmp ifcont#2
+    x64.movRegImm32 r12, 3
   ifcont#2:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r14, rax
-    x64.jcc less, drainthemall
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   drainthemall:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.imulRegRegImm32 rcx, r14, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, r14
-    x64.loadRegBaseDisp.byte rcx, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont
-  __il_cont:
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r14*8 + 0]
+  __im_cont:
     x64.callDirect __gt_await
     x64.leaRegRegReg r13, r13, r8
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr
   forexit:
     x64.cmpRegImm32 r13, 4
-    x64.jcc equal, everypromisewasstillawaitable
-    x64.jmp critsplit#18
+    x64.jcc notEqual, ifcont#8
   everypromisewasstillawaitable:
     x64.leaRegRegImm32 r12, r12, 4
-    x64.jmp ifcont#8
-  critsplit#18:
-    x64.jmp ifcont#8
   ifcont#8:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

@@ -116,14 +116,12 @@ func @Outer.doubled {
     x64.movRegReg rcx, r12
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rax, 0
     x64.jmp trycont
   tryok:
     x64.movRegReg rax, r8
-    x64.jmp trycont
   trycont:
     x64.imulRegRegImm32 r8, rax, 2
     x64.epilogue 32
@@ -179,23 +177,19 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rbx, 0
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
-    x64.jmp trycont
   trycont:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -229,13 +223,11 @@ func @Inner.__loop {
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.jmp serve
   serve:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, stopping
-    x64.jmp dispatch
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=value] @__jumptable_1
@@ -244,17 +236,14 @@ func @Inner.__loop {
     x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
-    x64.jmp drain
   drain:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, finished
-    x64.jmp abandon
+    x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -274,10 +263,8 @@ func @Inner.__loop {
     x64.jmp drain
   value:
     x64.loadRegBaseDisp.word64 r13, [r8 + 8]
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 r14, [rbx + 0]
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
@@ -308,7 +295,6 @@ func @Inner.__abandon {
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -330,14 +316,12 @@ func @Outer.__loop {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.jmp serve
   serve:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, stopping
-    x64.jmp dispatch
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=doubled] @__jumptable_3
@@ -346,17 +330,14 @@ func @Outer.__loop {
     x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
-    x64.jmp drain
   drain:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, finished
-    x64.jmp abandon
+    x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -413,7 +394,6 @@ func @Outer.__abandon {
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Outer.request

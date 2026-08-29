@@ -115,13 +115,11 @@ func @main {
     x64.callDirect __gt_try_await
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm:
     x64.movRegImm32 rbx, 9
     x64.movRegReg rcx, r12
@@ -136,12 +134,10 @@ func @main {
   tryok:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -160,7 +156,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchcont:
 }
 
 func @Calc.__loop {
@@ -174,13 +169,11 @@ func @Calc.__loop {
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.jmp serve
   serve:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, stopping
-    x64.jmp dispatch
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=total] @__jumptable_1
@@ -189,17 +182,14 @@ func @Calc.__loop {
     x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
-    x64.jmp drain
   drain:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, finished
-    x64.jmp abandon
+    x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -219,10 +209,8 @@ func @Calc.__loop {
     x64.jmp drain
   total:
     x64.loadRegBaseDisp.word64 r13, [r8 + 8]
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 r14, [rbx + 0]
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
@@ -253,7 +241,6 @@ func @Calc.__abandon {
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref

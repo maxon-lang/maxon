@@ -255,24 +255,18 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
     x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.leaRegGlobal rax, __data_order
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 2
     x64.movRegImm32 rax, 0
-    x64.jcc less, andrhs
-    x64.jmp critsplit
+    x64.jcc greaterEqual, scmerge
   andrhs:
     x64.cmpRegImm32 rbx, 200000
     x64.setccReg less, rax
-    x64.jmp scmerge
-  critsplit:
-    x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, drain
-    x64.jmp whileexit
+    x64.jcc equal, whileexit
   drain:
     x64.callDirect Runtime.yield
     x64.leaRegRegImm32 rbx, rbx, 1
@@ -377,32 +371,27 @@ func @Spawnee.__loop {
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.jmp serve
   serve:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, stopping
-    x64.jmp dispatch
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=go] @__jumptable_4
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=__il_body] @__jumptable_4
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
-    x64.jmp drain
   drain:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, finished
-    x64.jmp abandon
+    x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -418,8 +407,6 @@ func @Spawnee.__loop {
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_abandon
     x64.jmp drain
-  go:
-    x64.jmp __il_body
   __il_body:
     x64.leaRegGlobal rax, __data_order
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -430,7 +417,6 @@ func @Spawnee.__loop {
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __data_sPos
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
@@ -445,15 +431,12 @@ func @Spawnee.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=go] @__jumptable_5
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_5
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
-  go:
-    x64.jmp abandondrop
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -473,14 +456,12 @@ func @Yielder.__loop {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.jmp serve
   serve:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, stopping
-    x64.jmp dispatch
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=go] @__jumptable_6
@@ -489,17 +470,14 @@ func @Yielder.__loop {
     x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
-    x64.jmp drain
   drain:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, finished
-    x64.jmp abandon
+    x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -532,15 +510,12 @@ func @Yielder.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=go] @__jumptable_7
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_7
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
-  go:
-    x64.jmp abandondrop
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -560,14 +535,12 @@ func @Spawner.__loop {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.jmp serve
   serve:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, stopping
-    x64.jmp dispatch
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=go] @__jumptable_8
@@ -576,17 +549,14 @@ func @Spawner.__loop {
     x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
-    x64.jmp drain
   drain:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, finished
-    x64.jmp abandon
+    x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -619,15 +589,12 @@ func @Spawner.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=go] @__jumptable_9
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_9
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
-  go:
-    x64.jmp abandondrop
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref

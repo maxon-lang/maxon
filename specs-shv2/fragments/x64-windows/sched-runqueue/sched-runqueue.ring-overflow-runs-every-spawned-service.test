@@ -108,11 +108,9 @@ func @main {
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot4, rbx
     x64.movRegImm32 r12, 0
-    x64.jmp whilehdr#1
   whilehdr#1:
     x64.cmpRegImm32 r12, 300
-    x64.jcc less, spawnEach
-    x64.jmp whileexit#3
+    x64.jcc greaterEqual, whileexit#3
   spawnEach:
     x64.callDirect Sink.create
     x64.leaRegFunc rcx, [rip + Sink.__loop]
@@ -187,19 +185,11 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr#4
   whilehdr#4:
     x64.cmpRegImm32 rbx, 300
-    x64.jcc less, sendEach
-    x64.jmp whileexit#6
+    x64.jcc greaterEqual, whileexit#6
   sendEach:
     x64.loadRegSlot rax, slot4
-    x64.loadRegBaseDisp.word64 rax, [rax + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
-    x64.loadRegSlot rax, slot4
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rbx, 0
     x64.setccReg less, rcx
@@ -207,64 +197,32 @@ func @main {
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#20
-  __im_load#20:
+    x64.jcc notEqual, __im_slow
+  __im_load:
     x64.loadRegSlot rax, slot4
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.imulRegRegImm32 rcx, rbx, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __im_loaded
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegSlot rax, slot4
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg rbx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#21
-  __im_load#21:
-    x64.loadRegSlot rax, slot4
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegReg rax, rax, rbx
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __im_loaded
-  __im_loaded:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 r12, [rcx + rbx*8 + 0]
     x64.movRegImm32 rcx, 0
-    x64.loadRegSlot rdx, slot4
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 40]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#24
-  __im_empty:
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_slow
-    x64.jmp critsplit#25
-  critsplit#25:
-    x64.movRegReg r12, rax
-    x64.jmp __il_cont
-  critsplit#24:
-    x64.movRegReg r12, rax
-    x64.jmp __il_cont
-  __il_slow:
+    x64.jcc equal, critsplit#19
+  __im_empty:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, critsplit#20
+  __im_slow:
     x64.loadRegSlot rcx, slot4
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_get
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, r10
-    x64.jmp __il_cont
-  __il_cont:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jmp __im_cont
+  critsplit#20:
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#19:
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rax, [rip + __str_rec_8]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -365,24 +323,18 @@ func @main {
     x64.jmp whilehdr#4
   whileexit#6:
     x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr#9
   whilehdr#9:
     x64.leaRegGlobal rax, __data_ran
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 300
     x64.movRegImm32 rax, 0
-    x64.jcc less, andrhs
-    x64.jmp critsplit#23
+    x64.jcc greaterEqual, scmerge
   andrhs:
     x64.cmpRegImm32 rbx, 200000
     x64.setccReg less, rax
-    x64.jmp scmerge
-  critsplit#23:
-    x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, drain
-    x64.jmp whileexit#13
+    x64.jcc equal, whileexit#13
   drain:
     x64.callDirect Runtime.yield
     x64.leaRegRegImm32 rbx, rbx, 1
@@ -455,32 +407,27 @@ func @Sink.__loop {
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.jmp serve
   serve:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, stopping
-    x64.jmp dispatch
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=bump] @__jumptable_12
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=__il_body] @__jumptable_12
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
-    x64.jmp drain
   drain:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, finished
-    x64.jmp abandon
+    x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -496,15 +443,12 @@ func @Sink.__loop {
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_abandon
     x64.jmp drain
-  bump:
-    x64.jmp __il_body
   __il_body:
     x64.leaRegGlobal rax, __data_ran
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegRegImm32 rax, rax, 1
     x64.leaRegGlobal rcx, __data_ran
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
@@ -519,15 +463,12 @@ func @Sink.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=bump] @__jumptable_13
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_13
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
-  bump:
-    x64.jmp abandondrop
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref

@@ -83,11 +83,9 @@ func @Store.keep {
     x64.prologue 72
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc greater, alreadyHoldsOne
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   alreadyHoldsOne:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15
@@ -316,14 +314,12 @@ func @Store.__loop {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.jmp serve
   serve:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, stopping
-    x64.jmp dispatch
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=keep] @__jumptable_8
@@ -332,17 +328,14 @@ func @Store.__loop {
     x64.storeBaseDispReg.word64 [r12 + 56], rax
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.jmp stopping
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
-    x64.jmp drain
   drain:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, finished
-    x64.jmp abandon
+    x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -374,21 +367,18 @@ func @Store.__loop {
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r15, 0
-    x64.jcc notEqual, replythrew
-    x64.jmp replyok
+    x64.jcc equal, replyok
   replythrew:
     x64.movRegImm32 rdx, 0
     x64.leaRegRegImm32 rax, r15, 1
     x64.loadRegSlot rcx, slot0
     x64.callDirect __gt_cell_complete
-    x64.jmp handled
+    x64.jmp serve
   replyok:
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 0
     x64.loadRegSlot rcx, slot0
     x64.callDirect __gt_cell_complete
-    x64.jmp handled
-  handled:
     x64.jmp serve
 }
 
@@ -412,7 +402,6 @@ func @Store.__abandon {
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Store.request
