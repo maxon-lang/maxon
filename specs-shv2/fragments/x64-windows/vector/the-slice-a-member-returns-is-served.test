@@ -28,18 +28,12 @@ func @Vector.part {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rdx
-    x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
+    x64.movRegReg rsi, rdx
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 2
-    x64.movRegReg rcx, r12
-    x64.movRegReg r9, rbx
+    x64.movRegReg r9, rsi
     x64.callDirect __managed_slice_opaque
-    x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
@@ -47,17 +41,10 @@ func @Vector.part {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

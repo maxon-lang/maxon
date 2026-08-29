@@ -42,38 +42,34 @@ func @Array.copyFirst {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
-    x64.movRegReg r13, r8
     x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [r13 + 24]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, __im_slow
   __im_load#9:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp __im_loaded
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, __im_slow
   __im_load#10:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded:
     x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [r13 + 40]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, critsplit#12
   __im_empty:
@@ -86,7 +82,7 @@ func @Array.copyFirst {
     x64.movRegReg rdx, rax
     x64.jmp __im_cont
   __im_slow:
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg rdx, r8
     x64.movRegReg rcx, r10
@@ -96,8 +92,7 @@ func @Array.copyFirst {
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -108,10 +103,7 @@ func @Array.copyFirst {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

@@ -47,39 +47,35 @@ func @Array.moveFirstInto {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
-    x64.movRegReg r14, r8
     x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [r14 + 24]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#11
   __im_word#9:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, __im_slow#8
   __im_load#13:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp __im_loaded
   __im_stride#11:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#8
   __im_byte#10:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, __im_slow#8
   __im_load#14:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded:
     x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [r14 + 40]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, critsplit#31
   __im_empty:
@@ -92,7 +88,7 @@ func @Array.moveFirstInto {
     x64.movRegReg rdx, rax
     x64.jmp __im_cont#7
   __im_slow#8:
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg rdx, r8
     x64.movRegReg rcx, r10
@@ -102,8 +98,7 @@ func @Array.moveFirstInto {
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_5]
     x64.callDirect mrt_panic
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -111,7 +106,7 @@ func @Array.moveFirstInto {
     x64.popReg rbp
     x64.ret
   tryok#1:
-    x64.movRegImm32 r15, 0
+    x64.movRegImm32 r14, 0
     x64.movRegReg rcx, r13
     x64.callDirect __retain_type_param
     x64.loadRegBaseDisp.word64 rax, [r12 + 24]
@@ -172,7 +167,7 @@ func @Array.moveFirstInto {
     x64.jmp __im_cont#16
   __im_slow#17:
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r15
+    x64.movRegReg rdx, r14
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
     x64.movRegReg rax, r10
@@ -182,8 +177,7 @@ func @Array.moveFirstInto {
   tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -191,9 +185,6 @@ func @Array.moveFirstInto {
     x64.popReg rbp
     x64.ret
   tryok#3:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set_length
@@ -202,8 +193,7 @@ func @Array.moveFirstInto {
   tryerr#6:
     x64.leaRegRdata rcx, [rip + __str_blob_7]
     x64.callDirect mrt_panic
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -211,12 +201,7 @@ func @Array.moveFirstInto {
     x64.popReg rbp
     x64.ret
   tryok#5:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, r14
-    x64.callDirect __managed_decref
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

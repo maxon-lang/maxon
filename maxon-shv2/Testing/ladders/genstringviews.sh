@@ -52,9 +52,10 @@
 #
 #   **THE CURE**: a `managed` read that is immediately CALLED hands the receiver's OWN record to the buffer
 #   entry and mints nothing. A String record and an `Array` record agree on the five slots those entries
-#   read — the argument W49 wave 2 already used on the WRITE side for `setByte`. The `@40` census naming
-#   WHICH members may take it is `Parser.fusedManagedMemberTakesTheRecord`; the door is
-#   `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord`. ⇒ `--emit-ir` one `s.byteLength()` and read
+#   read — the argument W49 wave 2 already used on the WRITE side for `setByte`. The door is
+#   `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord`, and since `EC2` it admits EVERY member
+#   rather than the six `Parser.fusedManagedMemberTakesTheRecord` used to list — that function is deleted
+#   and its slot census now lives in the door's own header. ⇒ `--emit-ir` one `s.byteLength()` and read
 #   the body rather than trusting this note: it is a single `callDirect __arr_count` now.
 #
 #   ⚠ **`clone()` IS THE ONE MEMBER THE CURE CANNOT REACH, AND IT IMPROVED ANYWAY.** `slice` is the single

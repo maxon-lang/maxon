@@ -76,15 +76,12 @@ func @Vector.walkedTwoWays {
     x64.callDirect __destruct_ArrayIterator_T4b39db24a89d29c9
   forjoin:
     x64.movRegImm32 r15, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.movRegReg rax, r13
     x64.movRegReg r9, r12
     x64.callDirect __managed_slice_opaque
-    x64.movRegReg r12, r8
+    x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
@@ -100,32 +97,30 @@ func @Vector.walkedTwoWays {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
   forhdr#9:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegReg rbx, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
     x64.jcc greaterEqual, forexit#12
   eachSliced:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rbx*8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
     x64.jmp __im_cont
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.leaRegRegReg rax, rax, rbx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rax, rax, r12
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp __im_cont
   __im_slow:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
     x64.callDirect __managed_get_unchecked
     x64.movRegReg rax, r8
   __im_cont:
@@ -133,11 +128,11 @@ func @Vector.walkedTwoWays {
     x64.leaRegRegReg rax, r15, rax
     x64.leaRegRegImm32 rax, rax, 1
   forstep#11:
-    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.leaRegRegImm32 r12, r12, 1
     x64.movRegReg r15, rax
     x64.jmp forhdr#9
   forexit#12:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.imulRegRegImm32 rax, r14, 10
     x64.leaRegRegReg r8, rax, r15

@@ -154,16 +154,9 @@ func @Array.clear {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
+    x64.prologue 32
     x64.callDirect __managed_clear
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -177,20 +170,19 @@ func @Array.stablePartition {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 248
-    x64.storeSlotReg slot24, rcx
+    x64.prologue 184
+    x64.storeSlotReg slot17, rcx
     x64.movRegReg rbx, rdx
-    x64.storeSlotReg slot5, rbx
-    x64.storeSlotReg slot25, rax
-    x64.movRegReg r12, r9
-    x64.storeSlotReg slot12, rsi
+    x64.storeSlotReg slot4, rbx
+    x64.movRegReg r12, rax
+    x64.storeSlotReg slot9, rsi
     x64.movRegReg r13, rdi
-    x64.loadRegBaseDisp.word64 r14, [rbp + 48]
-    x64.storeSlotReg slot19, r14
-    x64.loadRegBaseDisp.word64 rdx, [rbp + 56]
-    x64.storeSlotReg slot22, rdx
-    x64.loadRegBaseDisp.word64 r15, [rbp + 64]
-    x64.storeSlotReg slot13, r15
+    x64.loadRegBaseDisp.word64 rax, [rbp + 48]
+    x64.storeSlotReg slot13, rax
+    x64.loadRegBaseDisp.word64 rax, [rbp + 56]
+    x64.storeSlotReg slot15, rax
+    x64.loadRegBaseDisp.word64 r14, [rbp + 64]
+    x64.storeSlotReg slot11, r14
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#61
   __rc_chk#62:
@@ -200,7 +192,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_29]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -209,16 +201,16 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   __rc_ok#60:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic#64
   __rc_chk#65:
-    x64.cmpRegImm32 rax, 1000
+    x64.cmpRegImm32 r12, 1000
     x64.jcc lessEqual, __rc_ok#63
   __rc_panic#64:
     x64.leaRegRdata rcx, [rip + __str_blob_29]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -227,16 +219,17 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   __rc_ok#63:
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 r9, 0
+    x64.setccReg less, rax
     x64.jcc less, __rc_panic#67
   __rc_chk#68:
-    x64.cmpRegImm32 r12, 1000
+    x64.cmpRegImm32 r9, 1000
     x64.jcc lessEqual, __rc_ok#66
   __rc_panic#67:
     x64.leaRegRdata rcx, [rip + __str_blob_29]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -245,68 +238,61 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   __rc_ok#66:
-    x64.callDirect __mm_retain
-    x64.storeSlotReg slot0, r8
-    x64.loadRegBaseDisp.word64 rax, [r8 + 24]
-    x64.cmpRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
+    x64.cmpRegImm32 rdx, 8
     x64.jcc notEqual, __im_stride#247
   __im_word#245:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.cmpRegReg r9, rdx
+    x64.setccReg greaterEqual, rdx
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __im_slow#244
   __im_load#249:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r9*8 + 0]
     x64.jmp __im_loaded#248
   __im_stride#247:
-    x64.cmpRegImm32 rax, 1
+    x64.cmpRegImm32 rdx, 1
     x64.jcc notEqual, __im_slow#244
   __im_byte#246:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.cmpRegReg r9, rdx
+    x64.setccReg greaterEqual, rdx
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __im_slow#244
   __im_load#250:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.leaRegRegReg rax, rax, r12
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, r9
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded#248:
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rdx, [r8 + 40]
-    x64.cmpRegImm32 rdx, 0
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, critsplit#267
   __im_empty#251:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#244
   critsplit#268:
-    x64.movRegReg r12, rax
+    x64.movRegReg r15, rax
     x64.jmp __im_cont#243
   critsplit#267:
-    x64.movRegReg r12, rax
+    x64.movRegReg r15, rax
     x64.jmp __im_cont#243
   __im_slow#244:
-    x64.movRegReg rcx, r8
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, r9
     x64.callDirect __managed_get
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r10
+    x64.movRegReg r15, r8
+    x64.movRegReg rdx, r10
   __im_cont#243:
-    x64.cmpRegImm32 rcx, 0
+    x64.cmpRegImm32 rdx, 0
     x64.jcc equal, tryok#1
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_7]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -317,8 +303,8 @@ func @Array.stablePartition {
   tryok#1:
     x64.movRegReg rcx, r13
     x64.callDirect Array.clear
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r12
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
     x64.callDirect __retain_type_param
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r8
@@ -359,14 +345,14 @@ func @Array.stablePartition {
     x64.movRegReg rax, r8
     x64.movRegReg rcx, r10
   __im_cont#75:
-    x64.storeSlotReg slot23, rax
+    x64.storeSlotReg slot16, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, tryok#3
   tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_blob_8]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -375,54 +361,56 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#3:
-    x64.movRegImm32 r12, 0
-    x64.movRegReg r13, rbx
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rdx, rbx
   whilehdr#5:
-    x64.storeSlotReg slot21, r13
-    x64.storeSlotReg slot3, r12
-    x64.loadRegSlot rax, slot25
-    x64.cmpRegReg r13, rax
+    x64.storeSlotReg slot12, rdx
+    x64.storeSlotReg slot1, r13
+    x64.cmpRegReg rdx, r12
     x64.jcc greaterEqual, whileexit#7
   count:
-    x64.loadRegSlot rcx, slot24
-    x64.callDirect __mm_retain
-    x64.storeSlotReg slot14, r8
-    x64.loadRegBaseDisp.word64 rax, [r8 + 24]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#88
   __im_word#86:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.cmpRegImm32 r13, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rdx, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg r13, rax
+    x64.cmpRegReg rdx, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#85
   __im_load#90:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.jmp __im_loaded#89
   __im_stride#88:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#85
   __im_byte#87:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.cmpRegImm32 r13, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rdx, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg r13, rax
+    x64.cmpRegReg rdx, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#85
   __im_load#91:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.leaRegRegReg rax, rax, r13
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded#89:
     x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rdx, [r8 + 40]
-    x64.cmpRegImm32 rdx, 0
+    x64.loadRegSlot rsi, slot17
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, critsplit#255
   __im_empty#92:
     x64.cmpRegImm32 rax, 0
@@ -434,8 +422,7 @@ func @Array.stablePartition {
     x64.xchgRegReg rcx, rax
     x64.jmp __im_cont#84
   __im_slow#85:
-    x64.movRegReg rcx, r8
-    x64.movRegReg rdx, r13
+    x64.loadRegSlot rcx, slot17
     x64.callDirect __managed_get
     x64.movRegReg rcx, r8
     x64.movRegReg rax, r10
@@ -446,7 +433,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_9]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -455,82 +442,82 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#8:
-    x64.loadRegSlot rdx, slot23
-    x64.loadRegSlot rax, slot22
+    x64.loadRegSlot rdx, slot16
+    x64.loadRegSlot rax, slot15
+    x64.loadRegSlot r14, slot13
     x64.callReg r14
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, critsplit#252
   isLess:
-    x64.leaRegRegImm32 rax, r12, 1
+    x64.leaRegRegImm32 rax, r13, 1
     x64.jmp ifcont#11
   critsplit#252:
-    x64.movRegReg rax, r12
+    x64.movRegReg rax, r13
   ifcont#11:
-    x64.storeSlotReg slot20, rax
-    x64.loadRegSlot rax, slot21
-    x64.leaRegRegImm32 r13, rax, 1
-    x64.loadRegSlot rcx, slot14
-    x64.callDirect __managed_decref
-    x64.loadRegSlot rax, slot20
-    x64.movRegReg r12, rax
+    x64.loadRegSlot rcx, slot12
+    x64.leaRegRegImm32 rdx, rcx, 1
+    x64.movRegReg r13, rax
     x64.jmp whilehdr#5
   whileexit#7:
-    x64.loadRegSlot rax, slot25
-    x64.subRegReg rax, rax, rbx
-    x64.subRegReg rax, rax, r12
-    x64.storeSlotReg slot4, rax
-    x64.cmpRegReg rax, r12
+    x64.movRegReg rax, r12
+    x64.subRegReg rax, r12, rbx
+    x64.subRegReg rax, rax, r13
+    x64.storeSlotReg slot3, rax
+    x64.cmpRegReg rax, r13
     x64.jcc greater, ifelse#32
   bufferGe:
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
     x64.movRegReg rax, rbx
+    x64.movRegReg rdx, rbx
   whilehdr#13:
-    x64.storeSlotReg slot11, rbx
     x64.storeSlotReg slot7, rax
-    x64.storeSlotReg slot2, r13
-    x64.loadRegSlot rax, slot25
-    x64.cmpRegReg rbx, rax
+    x64.storeSlotReg slot5, rdx
+    x64.storeSlotReg slot2, r14
+    x64.cmpRegReg rdx, r12
     x64.jcc greaterEqual, whileexit#15
   splitGe:
-    x64.loadRegSlot rcx, slot24
-    x64.callDirect __mm_retain
-    x64.storeSlotReg slot6, r8
-    x64.loadRegBaseDisp.word64 rax, [r8 + 24]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#97
   __im_word#95:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.cmpRegImm32 rbx, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rdx, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegReg rdx, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#94
   __im_load#99:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rbx*8 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.jmp __im_loaded#98
   __im_stride#97:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#94
   __im_byte#96:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.cmpRegImm32 rbx, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rdx, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegReg rdx, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#94
   __im_load#100:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.leaRegRegReg rax, rax, rbx
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded#98:
     x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rdx, [r8 + 40]
-    x64.cmpRegImm32 rdx, 0
+    x64.loadRegSlot rsi, slot17
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, critsplit#257
   __im_empty#101:
     x64.cmpRegImm32 rax, 0
@@ -542,20 +529,19 @@ func @Array.stablePartition {
     x64.xchgRegReg rcx, rax
     x64.jmp __im_cont#93
   __im_slow#94:
-    x64.movRegReg rcx, r8
-    x64.movRegReg rdx, rbx
+    x64.loadRegSlot rcx, slot17
     x64.callDirect __managed_get
     x64.movRegReg rcx, r8
     x64.movRegReg rax, r10
   __im_cont#93:
-    x64.storeSlotReg slot18, rcx
+    x64.storeSlotReg slot10, rcx
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, tryok#16
   tryerr#17:
     x64.leaRegRdata rcx, [rip + __str_blob_10]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -564,42 +550,42 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#16:
-    x64.loadRegSlot rdx, slot23
-    x64.loadRegSlot rax, slot22
-    x64.loadRegSlot rbx, slot19
+    x64.loadRegSlot rdx, slot16
+    x64.loadRegSlot rax, slot15
+    x64.loadRegSlot rbx, slot13
     x64.callReg rbx
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, ifelse#21
   toScratch:
-    x64.loadRegSlot rcx, slot13
-    x64.loadRegSlot rdx, slot18
+    x64.loadRegSlot rcx, slot11
+    x64.loadRegSlot rdx, slot10
     x64.callDirect __retain_type_param
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#106
   __im_word#104:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#103
   __im_bounds#107:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 r13, 0
+    x64.cmpRegImm32 r14, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg r13, rax
+    x64.cmpRegReg r14, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#103
   __im_owned#108:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#103
   __im_buffer#109:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#103
@@ -609,34 +595,34 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#103
   __im_store#111:
-    x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], r8
+    x64.storeBaseIndexScaleReg.word64 [rax + r14*8 + 0], r8
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#102
   __im_stride#106:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#103
   __im_byte#105:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#103
   __im_bounds#112:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 r13, 0
+    x64.cmpRegImm32 r14, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg r13, rax
+    x64.cmpRegReg r14, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#103
   __im_owned#113:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#103
   __im_buffer#114:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#103
@@ -646,13 +632,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#103
   __im_store#116:
-    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
     x64.storeBaseDispReg.byte [rax + 0], r8
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#102
   __im_slow#103:
-    x64.loadRegSlot rcx, slot12
-    x64.movRegReg rdx, r13
+    x64.loadRegSlot rcx, slot9
+    x64.movRegReg rdx, r14
     x64.movRegReg rax, r8
     x64.callDirect __managed_set
     x64.movRegReg rax, r10
@@ -663,7 +649,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_11]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -672,25 +658,25 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#19:
-    x64.leaRegRegImm32 rax, r13, 1
+    x64.leaRegRegImm32 rax, r14, 1
     x64.loadRegSlot rcx, slot7
     x64.jmp ifcont#24
   ifelse#21:
-    x64.loadRegSlot rcx, slot24
-    x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
-    x64.loadRegSlot rcx, slot13
-    x64.loadRegSlot rdx, slot18
+    x64.loadRegSlot rcx, slot11
+    x64.loadRegSlot rdx, slot10
     x64.callDirect __retain_type_param
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#121
   __im_word#119:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#118
   __im_bounds#122:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.loadRegSlot rcx, slot7
     x64.cmpRegImm32 rcx, 0
     x64.setccReg less, rdx
@@ -700,11 +686,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __im_slow#118
   __im_owned#123:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#118
   __im_buffer#124:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#118
   __im_viewed#125:
@@ -721,11 +709,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#118
   __im_byte#120:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#118
   __im_bounds#127:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.loadRegSlot rcx, slot7
     x64.cmpRegImm32 rcx, 0
     x64.setccReg less, rdx
@@ -735,11 +725,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __im_slow#118
   __im_owned#128:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#118
   __im_buffer#129:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#118
   __im_viewed#130:
@@ -754,7 +746,7 @@ func @Array.stablePartition {
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#117
   __im_slow#118:
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rcx, slot17
     x64.loadRegSlot rdx, slot7
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
@@ -766,7 +758,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_12]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -775,40 +767,33 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#22:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
     x64.loadRegSlot rax, slot7
     x64.leaRegRegImm32 rax, rax, 1
     x64.loadRegSlot rcx, slot2
     x64.xchgRegReg rcx, rax
   ifcont#24:
-    x64.storeSlotReg slot17, rax
-    x64.storeSlotReg slot10, rcx
-    x64.loadRegSlot rax, slot11
-    x64.leaRegRegImm32 rbx, rax, 1
-    x64.loadRegSlot rcx, slot6
-    x64.callDirect __managed_decref
-    x64.loadRegSlot rax, slot10
-    x64.loadRegSlot rcx, slot17
-    x64.movRegReg r13, rcx
+    x64.loadRegSlot rdx, slot5
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.movRegReg r14, rax
+    x64.movRegReg rax, rcx
     x64.jmp whilehdr#13
   whileexit#15:
-    x64.loadRegSlot rax, slot5
-    x64.leaRegRegReg rbx, rax, r12
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rbx, rax, r13
     x64.movRegImm32 r12, 0
     x64.movRegReg r13, r12
     x64.movRegReg r12, rbx
   whilehdr#25:
-    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rax, slot3
     x64.cmpRegReg r13, rax
     x64.jcc greaterEqual, whileexit#27
   writeGe:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#136
   __im_word#134:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 r13, 0
     x64.setccReg less, rcx
@@ -818,7 +803,7 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#133
   __im_load#138:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
     x64.jmp __im_loaded#137
@@ -826,7 +811,7 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#133
   __im_byte#135:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 r13, 0
     x64.setccReg less, rcx
@@ -836,13 +821,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#133
   __im_load#139:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegRegReg rax, rax, r13
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded#137:
     x64.movRegImm32 rcx, 0
-    x64.loadRegSlot rdx, slot12
+    x64.loadRegSlot rdx, slot9
     x64.loadRegBaseDisp.word64 rdx, [rdx + 40]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, critsplit#259
@@ -850,16 +835,16 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#133
   critsplit#260:
-    x64.movRegReg r14, rax
+    x64.movRegReg rdx, rax
     x64.jmp __im_cont#132
   critsplit#259:
-    x64.movRegReg r14, rax
+    x64.movRegReg rdx, rax
     x64.jmp __im_cont#132
   __im_slow#133:
-    x64.loadRegSlot rcx, slot12
+    x64.loadRegSlot rcx, slot9
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
-    x64.movRegReg r14, r8
+    x64.movRegReg rdx, r8
     x64.movRegReg rcx, r10
   __im_cont#132:
     x64.cmpRegImm32 rcx, 0
@@ -868,7 +853,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_13]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -877,21 +862,20 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#28:
-    x64.loadRegSlot rcx, slot24
-    x64.callDirect __mm_retain
-    x64.movRegReg r15, r8
-    x64.loadRegSlot rcx, slot13
-    x64.movRegReg rdx, r14
+    x64.loadRegSlot rcx, slot11
     x64.callDirect __retain_type_param
-    x64.loadRegBaseDisp.word64 rax, [r15 + 24]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#145
   __im_word#143:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#142
   __im_bounds#146:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 r12, 0
     x64.setccReg less, rcx
     x64.cmpRegReg r12, rax
@@ -900,11 +884,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#142
   __im_owned#147:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#142
   __im_buffer#148:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#142
   __im_viewed#149:
@@ -920,11 +906,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#142
   __im_byte#144:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#142
   __im_bounds#151:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 r12, 0
     x64.setccReg less, rcx
     x64.cmpRegReg r12, rax
@@ -933,11 +921,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#142
   __im_owned#152:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#142
   __im_buffer#153:
-    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#142
   __im_viewed#154:
@@ -951,7 +941,7 @@ func @Array.stablePartition {
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#141
   __im_slow#142:
-    x64.movRegReg rcx, r15
+    x64.loadRegSlot rcx, slot17
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
@@ -963,7 +953,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_14]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -972,14 +962,10 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#30:
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_decref
     x64.leaRegRegImm32 r12, r12, 1
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp whilehdr#25
   whileexit#27:
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#70
   __rc_chk#71:
@@ -989,7 +975,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_30]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -999,7 +985,7 @@ func @Array.stablePartition {
     x64.ret
   __rc_ok#69:
     x64.movRegReg r8, rbx
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1009,79 +995,81 @@ func @Array.stablePartition {
     x64.ret
   ifelse#32:
     x64.movRegImm32 rbx, 0
-    x64.loadRegSlot rax, slot5
-    x64.movRegReg r12, rax
+    x64.loadRegSlot rax, slot4
+    x64.movRegReg rdx, rax
   whilehdr#33:
-    x64.storeSlotReg slot16, rax
-    x64.storeSlotReg slot9, r12
-    x64.storeSlotReg slot1, rbx
-    x64.loadRegSlot rax, slot25
-    x64.cmpRegReg r12, rax
+    x64.storeSlotReg slot8, rax
+    x64.storeSlotReg slot6, rdx
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegReg rdx, r12
     x64.jcc greaterEqual, whileexit#35
   splitLess:
-    x64.loadRegSlot rcx, slot24
-    x64.callDirect __mm_retain
-    x64.storeSlotReg slot8, r8
-    x64.loadRegBaseDisp.word64 rax, [r8 + 24]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#160
   __im_word#158:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.cmpRegImm32 r12, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rdx, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
+    x64.cmpRegReg rdx, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#157
   __im_load#162:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.jmp __im_loaded#161
   __im_stride#160:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#157
   __im_byte#159:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.cmpRegImm32 r12, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rdx, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
+    x64.cmpRegReg rdx, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#157
   __im_load#163:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.leaRegRegReg rax, rax, r12
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded#161:
     x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rdx, [r8 + 40]
-    x64.cmpRegImm32 rdx, 0
+    x64.loadRegSlot rsi, slot17
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 40]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, critsplit#261
   __im_empty#164:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#157
   critsplit#262:
-    x64.movRegReg r12, rax
+    x64.xchgRegReg rcx, rax
     x64.jmp __im_cont#156
   critsplit#261:
-    x64.movRegReg r12, rax
+    x64.xchgRegReg rcx, rax
     x64.jmp __im_cont#156
   __im_slow#157:
-    x64.movRegReg rcx, r8
-    x64.movRegReg rdx, r12
+    x64.loadRegSlot rcx, slot17
     x64.callDirect __managed_get
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r10
+    x64.movRegReg rcx, r8
+    x64.movRegReg rax, r10
   __im_cont#156:
-    x64.cmpRegImm32 rcx, 0
+    x64.storeSlotReg slot14, rcx
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, tryok#36
   tryerr#37:
     x64.leaRegRdata rcx, [rip + __str_blob_15]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1090,28 +1078,27 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#36:
-    x64.movRegReg rcx, r12
-    x64.loadRegSlot rdx, slot23
-    x64.loadRegSlot rax, slot22
-    x64.loadRegSlot r13, slot19
+    x64.loadRegSlot rdx, slot16
+    x64.loadRegSlot rax, slot15
+    x64.loadRegSlot r13, slot13
     x64.callReg r13
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, ifelse#41
   toScratch2:
-    x64.loadRegSlot rcx, slot13
-    x64.movRegReg rdx, r12
+    x64.loadRegSlot rcx, slot11
+    x64.loadRegSlot rdx, slot14
     x64.callDirect __retain_type_param
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#169
   __im_word#167:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#166
   __im_bounds#170:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rbx, 0
     x64.setccReg less, rcx
@@ -1121,12 +1108,12 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#166
   __im_owned#171:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#166
   __im_buffer#172:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#166
@@ -1143,12 +1130,12 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#166
   __im_byte#168:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#166
   __im_bounds#175:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rbx, 0
     x64.setccReg less, rcx
@@ -1158,12 +1145,12 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#166
   __im_owned#176:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#166
   __im_buffer#177:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#166
@@ -1178,7 +1165,7 @@ func @Array.stablePartition {
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#165
   __im_slow#166:
-    x64.loadRegSlot rcx, slot12
+    x64.loadRegSlot rcx, slot9
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r8
     x64.callDirect __managed_set
@@ -1190,7 +1177,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_16]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1199,26 +1186,26 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#39:
-    x64.leaRegRegImm32 rbx, rbx, 1
-    x64.loadRegSlot rax, slot16
+    x64.leaRegRegImm32 rax, rbx, 1
+    x64.loadRegSlot rcx, slot8
     x64.jmp ifcont#44
   ifelse#41:
-    x64.loadRegSlot rcx, slot24
-    x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
-    x64.loadRegSlot rcx, slot13
-    x64.movRegReg rdx, r12
+    x64.loadRegSlot rcx, slot11
+    x64.loadRegSlot rdx, slot14
     x64.callDirect __retain_type_param
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#184
   __im_word#182:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#181
   __im_bounds#185:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.loadRegSlot rcx, slot16
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.loadRegSlot rcx, slot8
     x64.cmpRegImm32 rcx, 0
     x64.setccReg less, rdx
     x64.cmpRegReg rcx, rax
@@ -1227,11 +1214,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __im_slow#181
   __im_owned#186:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#181
   __im_buffer#187:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#181
   __im_viewed#188:
@@ -1240,7 +1229,7 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#181
   __im_store#189:
-    x64.loadRegSlot rcx, slot16
+    x64.loadRegSlot rcx, slot8
     x64.storeBaseIndexScaleReg.word64 [rax + rcx*8 + 0], r8
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#180
@@ -1248,12 +1237,14 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#181
   __im_byte#183:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#181
   __im_bounds#190:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
-    x64.loadRegSlot rcx, slot16
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.loadRegSlot rcx, slot8
     x64.cmpRegImm32 rcx, 0
     x64.setccReg less, rdx
     x64.cmpRegReg rcx, rax
@@ -1262,11 +1253,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __im_slow#181
   __im_owned#191:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#181
   __im_buffer#192:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#181
   __im_viewed#193:
@@ -1275,14 +1268,14 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#181
   __im_store#194:
-    x64.loadRegSlot rcx, slot16
+    x64.loadRegSlot rcx, slot8
     x64.leaRegRegReg rax, rax, rcx
     x64.storeBaseDispReg.byte [rax + 0], r8
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#180
   __im_slow#181:
-    x64.movRegReg rcx, rbx
-    x64.loadRegSlot rdx, slot16
+    x64.loadRegSlot rcx, slot17
+    x64.loadRegSlot rdx, slot8
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
     x64.movRegReg rax, r10
@@ -1293,7 +1286,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_17]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1302,82 +1295,83 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#42:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.loadRegSlot rax, slot16
+    x64.loadRegSlot rax, slot8
     x64.leaRegRegImm32 rax, rax, 1
-    x64.loadRegSlot rbx, slot1
+    x64.loadRegSlot rcx, slot0
+    x64.xchgRegReg rcx, rax
   ifcont#44:
-    x64.storeSlotReg slot15, rax
-    x64.loadRegSlot rax, slot9
-    x64.leaRegRegImm32 r12, rax, 1
-    x64.loadRegSlot rcx, slot8
-    x64.callDirect __managed_decref
-    x64.loadRegSlot rax, slot15
+    x64.loadRegSlot rdx, slot6
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.movRegReg rbx, rax
+    x64.movRegReg rax, rcx
     x64.jmp whilehdr#33
   whileexit#35:
-    x64.loadRegSlot rax, slot4
-    x64.loadRegSlot rcx, slot5
+    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rcx, slot4
     x64.leaRegRegReg rbx, rcx, rax
   whilehdr#45:
-    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rax, slot4
     x64.cmpRegReg rbx, rax
     x64.jcc lessEqual, whileexit#47
   shiftGe:
-    x64.loadRegSlot rcx, slot24
-    x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
-    x64.leaRegRegImm32 rdx, rbx, -1
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.leaRegRegImm32 r12, rbx, -1
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#199
   __im_word#197:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegImm32 rdx, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 r12, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg rdx, rax
+    x64.cmpRegReg r12, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#196
   __im_load#201:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
     x64.jmp __im_loaded#200
   __im_stride#199:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#196
   __im_byte#198:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegImm32 rdx, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 r12, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg rdx, rax
+    x64.cmpRegReg r12, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#196
   __im_load#202:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegReg rax, rax, r12
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded#200:
     x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
-    x64.cmpRegImm32 rsi, 0
+    x64.loadRegSlot rdx, slot17
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 40]
+    x64.cmpRegImm32 rdx, 0
     x64.jcc equal, critsplit#263
   __im_empty#203:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#196
   critsplit#264:
-    x64.movRegReg r13, rax
+    x64.movRegReg rdx, rax
     x64.jmp __im_cont#195
   critsplit#263:
-    x64.movRegReg r13, rax
+    x64.movRegReg rdx, rax
     x64.jmp __im_cont#195
   __im_slow#196:
-    x64.movRegReg rcx, r12
+    x64.loadRegSlot rcx, slot17
+    x64.movRegReg rdx, r12
     x64.callDirect __managed_get
-    x64.movRegReg r13, r8
+    x64.movRegReg rdx, r8
     x64.movRegReg rcx, r10
   __im_cont#195:
     x64.cmpRegImm32 rcx, 0
@@ -1386,7 +1380,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_18]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1395,37 +1389,37 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#48:
-    x64.loadRegSlot rcx, slot24
-    x64.callDirect __mm_retain
-    x64.movRegReg r14, r8
-    x64.leaRegRegImm32 rax, rbx, -1
-    x64.loadRegSlot rcx, slot3
-    x64.leaRegRegReg r15, rax, rcx
-    x64.loadRegSlot rcx, slot13
-    x64.movRegReg rdx, r13
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rcx, slot11
     x64.callDirect __retain_type_param
-    x64.loadRegBaseDisp.word64 rax, [r14 + 24]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#208
   __im_word#206:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#205
   __im_bounds#209:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
-    x64.cmpRegImm32 r15, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegImm32 r12, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg r15, rax
+    x64.cmpRegReg r12, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#205
   __im_owned#210:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#205
   __im_buffer#211:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#205
   __im_viewed#212:
@@ -1434,31 +1428,35 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#205
   __im_store#213:
-    x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], r8
+    x64.storeBaseIndexScaleReg.word64 [rax + r12*8 + 0], r8
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#204
   __im_stride#208:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#205
   __im_byte#207:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#205
   __im_bounds#214:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
-    x64.cmpRegImm32 r15, 0
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegImm32 r12, 0
     x64.setccReg less, rcx
-    x64.cmpRegReg r15, rax
+    x64.cmpRegReg r12, rax
     x64.setccReg greaterEqual, rax
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#205
   __im_owned#215:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#205
   __im_buffer#216:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#205
   __im_viewed#217:
@@ -1467,13 +1465,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#205
   __im_store#218:
-    x64.leaRegRegReg rax, rax, r15
+    x64.leaRegRegReg rax, rax, r12
     x64.storeBaseDispReg.byte [rax + 0], r8
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#204
   __im_slow#205:
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r15
+    x64.loadRegSlot rcx, slot17
+    x64.movRegReg rdx, r12
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
     x64.movRegReg rax, r10
@@ -1484,7 +1482,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_19]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1493,26 +1491,22 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#50:
-    x64.movRegReg rcx, r14
-    x64.callDirect __managed_decref
     x64.leaRegRegImm32 rbx, rbx, -1
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
     x64.jmp whilehdr#45
   whileexit#47:
     x64.movRegImm32 rbx, 0
-    x64.loadRegSlot r12, slot5
+    x64.loadRegSlot r12, slot4
   whilehdr#52:
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot1
     x64.cmpRegReg rbx, rax
     x64.jcc greaterEqual, whileexit#54
   writeLess:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#223
   __im_word#221:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rbx, 0
     x64.setccReg less, rcx
@@ -1522,7 +1516,7 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#220
   __im_load#225:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rbx*8 + 0]
     x64.jmp __im_loaded#224
@@ -1530,7 +1524,7 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#220
   __im_byte#222:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rbx, 0
     x64.setccReg less, rcx
@@ -1540,13 +1534,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#220
   __im_load#226:
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegRegReg rax, rax, rbx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded#224:
     x64.movRegImm32 rcx, 0
-    x64.loadRegSlot rdx, slot12
+    x64.loadRegSlot rdx, slot9
     x64.loadRegBaseDisp.word64 rdx, [rdx + 40]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, critsplit#265
@@ -1554,16 +1548,16 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#220
   critsplit#266:
-    x64.movRegReg r13, rax
+    x64.movRegReg rdx, rax
     x64.jmp __im_cont#219
   critsplit#265:
-    x64.movRegReg r13, rax
+    x64.movRegReg rdx, rax
     x64.jmp __im_cont#219
   __im_slow#220:
-    x64.loadRegSlot rcx, slot12
+    x64.loadRegSlot rcx, slot9
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_get
-    x64.movRegReg r13, r8
+    x64.movRegReg rdx, r8
     x64.movRegReg rcx, r10
   __im_cont#219:
     x64.cmpRegImm32 rcx, 0
@@ -1572,7 +1566,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_20]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1581,21 +1575,20 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#55:
-    x64.loadRegSlot rcx, slot24
-    x64.callDirect __mm_retain
-    x64.movRegReg r14, r8
-    x64.loadRegSlot rcx, slot13
-    x64.movRegReg rdx, r13
+    x64.loadRegSlot rcx, slot11
     x64.callDirect __retain_type_param
-    x64.loadRegBaseDisp.word64 rax, [r14 + 24]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#232
   __im_word#230:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#229
   __im_bounds#233:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 r12, 0
     x64.setccReg less, rcx
     x64.cmpRegReg r12, rax
@@ -1604,11 +1597,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#229
   __im_owned#234:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#229
   __im_buffer#235:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#229
   __im_viewed#236:
@@ -1624,11 +1619,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#229
   __im_byte#231:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 40]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#229
   __im_bounds#238:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 r12, 0
     x64.setccReg less, rcx
     x64.cmpRegReg r12, rax
@@ -1637,11 +1634,13 @@ func @Array.stablePartition {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#229
   __im_owned#239:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#229
   __im_buffer#240:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#229
   __im_viewed#241:
@@ -1655,7 +1654,7 @@ func @Array.stablePartition {
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont#228
   __im_slow#229:
-    x64.movRegReg rcx, r14
+    x64.loadRegSlot rcx, slot17
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
@@ -1667,7 +1666,7 @@ func @Array.stablePartition {
     x64.leaRegRdata rcx, [rip + __str_blob_21]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1676,27 +1675,23 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   tryok#57:
-    x64.movRegReg rcx, r14
-    x64.callDirect __managed_decref
     x64.leaRegRegImm32 r12, r12, 1
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp whilehdr#52
   whileexit#54:
-    x64.loadRegSlot rax, slot3
-    x64.loadRegSlot rcx, slot5
-    x64.leaRegRegReg rbx, rcx, rax
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect __managed_decref
-    x64.cmpRegImm32 rbx, 0
+    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rcx, slot4
+    x64.leaRegRegReg r8, rcx, rax
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#73
   __rc_chk#74:
-    x64.cmpRegImm32 rbx, 1000
+    x64.cmpRegImm32 r8, 1000
     x64.jcc lessEqual, __rc_ok#72
   __rc_panic#73:
     x64.leaRegRdata rcx, [rip + __str_blob_31]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -1705,8 +1700,7 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   __rc_ok#72:
-    x64.movRegReg r8, rbx
-    x64.epilogue 248
+    x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

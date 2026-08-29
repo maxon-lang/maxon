@@ -53845,8 +53845,66 @@ export type Parser
 		// returned, passed, or stored in a `String{…}` literal) still mints, because the caller may drop it
 		// and dropping the receiver's own record is the double free `bufferSurfaceOf`'s header measures.
 		//
-		// ⚠ The member is asked through `fusedManagedMemberTakesTheRecord`, which carries the `@40` census:
-		// `slice` is NOT on it, so `clone()`/`toByteArray()` keep the view they genuinely need.
+		// ⭐⭐⭐ **AND IT IS NOW EVERY MEMBER, NOT A SIX-NAME WHITELIST — WHICH IS THE WHOLE OF `EC2`.**
+		// `fusedManagedMemberTakesTheRecord` used to gate this door on the six members whose runtime entries
+		// had been traced (`length`, `byteAt`, `setByte`, `append`, `toCString`, `makeCharFromBytes`). The
+		// ELEVEN others a container body spells — `set`, `get`, `setLength`, `capacity`, `grow`, `slice`,
+		// `remove`, `clear`, `fill`, `shiftRight`, `elementSize`, **39 call sites across `stdlib/`** — fell
+		// through to the `managed`-as-a-VALUE door instead, which since W157 pays an
+		// `__mm_retain`/`__managed_decref` pair around the call. **That pair protects nothing on this route**,
+		// and each of the three arguments the list still carried is closed somewhere else:
+		//
+		//   • **THE ENTRY RECEIVES THE SAME POINTER EITHER WAY, so the list never decided which record an
+		//     entry got — only whether a refcount pair was paid on the way to it.** An `Array`'s buffer IS the
+		//     `Array` (W57), and W157 made `__str_bytes_view` an `__mm_incref` that hands the RECEIVER's own
+		//     record straight back (MEASURED: its whole body is a `capacity@16 == -4` test, an incref and
+		//     `mov r8, rcx`).
+		//   • **THE INSTANCE** — `append`'s and `setByte`'s parse-time admission read the receiver's giid, and
+		//     this door used to hand every receiver `internSynthesizedByteInstance()`. W194 replaced that with
+		//     `bufferSurfaceInstanceOf`, which is the value door's OWN answer, so the two cannot disagree
+		//     about the element.
+		//   • **THE SEVENTH SLOT** — `makeCharFromBytes` reads `@48` and must never be handed a plain 48-byte
+		//     buffer record. `dispatchArrayMethod` refuses that on the RECEIVER's TAG rather than on the route
+		//     it came by (`tagIsByteRecord`), which W194 measured in three states; the list was already
+		//     recorded as not carrying it.
+		//
+		// ⇒ **THE PAIR IS EXACTLY WHAT `EC2` NAMES — a managed value read out of storage whose only consumer
+		// is a call in the same statement — AND HERE THE RECEIVER IS `self`**, a parameter the CALLER owns for
+		// the whole frame, so nothing a buffer entry does can free it. The `memberCallFollows` gate above IS
+		// "the only consumer is a call in the same statement"; `managed` used as a VALUE still mints and still
+		// pays, because it may outlive the statement — the double free `bufferSurfaceOf`'s header measures.
+		//
+		// **MEASURED**, control and experiment built in ONE session and the SAME source compiled by both, so
+		// the only difference is the codegen: the compiler's stage-2 self-compile **79.7/79.7 s → 78.0/78.0 s
+		// (−2.0%)** interleaved; emitted binary **9,281,678 → 9,281,166 B**; on a stage-2 sample profile
+		// `__mm_retain` **1.39% → 1.02%** and `__managed_decref` **2.54% → 1.96%**. `Array.clear`, whose whole
+		// body is `managed.clear()`, was the row's own exhibit and is **14 emitted ops → 7** — it no longer
+		// opens a frame or saves a register. ⚠ The row's `<2%` acceptance is NOT met and cannot be by this
+		// change: what remains under those two symbols is real array DESTRUCTION (11,070 `__managed_decref`
+		// sites are scope-exit drops) and the real co-ownership `handleEscapingBorrowFeed` owes.
+		//
+		// ⭐ **THE CENSUS THE DELETED LIST CARRIED IS KEPT, BECAUSE IT IS A RECORD OF WHICH SLOTS EACH ENTRY
+		// READS AND THAT OUTLIVES THE LIST.** Every fused record agrees on the SIX buffer slots — `buffer@0`,
+		// `length@8`, `capacity@16`, `element_size@24`, `parent@32`, `element_destroy@40`, all spelled from the
+		// same `BufferOwnership.ManagedRecord*Offset` constants — and a BYTE record carries a SEVENTH,
+		// `singleByteGraphemes@48`, that no buffer entry knows about. Traced W49 wave 7, re-read at W157:
+		//   • `length()` -> `__managed_count`, reads `@8`.
+		//   • `byteAt(i)` -> `__managed_byte_at`, reads `@0` plus `@8`/`@16`/`@24` through `emitBufferAccessGuard`.
+		//   • `setByte(i, v)` -> `__managed_set_byte` + `__managed_cow_detach`, reads `@8`/`@24`/`@0` and writes
+		//     `@0`/`@16`/`@32`. Its parse-time admission (`requireBufferBytesAreNotAPointer` E3110,
+		//     `requireRawByteWriteFitsItsSlot` E3118) reads the GIID, which is why the synthesized byte instance
+		//     this door used to hand over made an `Array with String`'s byte write **COMPILE CLEAN AND EXIT 101**.
+		//   • `append(other)` -> `__managed_append`, reads both records' `@24` and aborts on a mismatch; its
+		//     admission (`ProgramSignatures.arrayAppendArgAdmits`) reads the giid too, and under the same lie
+		//     took `primitiveTypeByteSize` down on an opaque element.
+		//   • `toCString()` -> `__mm_to_cstring`, reads `@8` and `@0`. Not even `@24`.
+		//   • `makeCharFromBytes(p, n)` -> `__char_at`, **reads `@48`** — the one entry written for a byte record,
+		//     and the one `dispatchArrayMethod`'s `tagIsByteRecord` guard exists for. That guard carries the
+		//     measurement in full and is what closes this, on the record rather than on the route.
+		//   • `slice(s, e)` -> `__managed_slice` -> `emitRecordView`, which LOADS `@40` into the fresh view. It
+		//     was the ONE member the list could not admit until W157 gave a String record a real
+		//     `element_destroy@40`; before that a String's flag became a view's destructor and the first
+		//     `__managed_decref` `callIndirect`ed address 1.
 		//
 		// ⛔⛔⛔ **IT PRESENTED `internSynthesizedByteInstance()` TO EVERY RECEIVER, AND THAT LIE IS THE WHOLE
 		// OF W194.** The instance is what `emitFieldLoad` stamps on the VIEW it mints, and for a `String` or a
@@ -53895,7 +53953,7 @@ export type Parser
 		//
 		// The SYNTACTIC half is asked first because it is total and cheap; only then is the layout resolved,
 		// which needs a `try` and so cannot join a condition chain.
-		if binding.isSelfField and self.memberCallFollows(self.pos + 1) and fusedManagedMemberTakesTheRecord(self.tokenAt(self.pos + 2).value) 'aCalledManagedFieldMember'
+		if binding.isSelfField and self.memberCallFollows(self.pos + 1) 'aCalledManagedFieldMember'
 			// ⚠ The layout is bound here rather than asked through `selfFieldIsInlineManaged` because this
 			// door needs it TWICE — once to admit the field, once to say which instance the record's buffer
 			// surface wears. `StructLayout.fieldIsTheInlineManagedRecord` is that admission's one home, so
@@ -61523,10 +61581,11 @@ export type Parser
 	// comes from — an `Array`'s record, a `Vector`'s type — and `sizedContainersBufferRefusal` carries the
 	// argument in full.
 	//
-	// ⭐⭐ **IT IS CALLED FROM TWO SITES BECAUSE THE `append` ROUTE REACHES NO VALUE, AND ONE OF THEM PASSES
-	// THE ANSWER OFF THE ENCLOSING DECLARATION INSTEAD OF OFF A MARK.** `fusedManagedMemberTakesTheRecord`
-	// lists `append`, so a bare `managed.append(x)` inside an `extension Vector` never reaches this
-	// dispatcher's value at all — `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` hands over the
+	// ⭐⭐ **IT IS CALLED FROM TWO SITES BECAUSE THE BARE-`managed` ROUTE REACHES NO VALUE, AND ONE OF THEM
+	// PASSES THE ANSWER OFF THE ENCLOSING DECLARATION INSTEAD OF OFF A MARK.** A bare `managed.<member>(…)`
+	// inside an `extension Vector` never reaches this dispatcher's value at all — since `EC2` that is true of
+	// EVERY member, where it used to be true of the six `fusedManagedMemberTakesTheRecord` listed —
+	// `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` hands over the
 	// RECEIVER's own record, minting nothing, so there is no value to mark; and the `giid` it hands over is
 	// the buffer's, which W189's load-bearing retype spells `Array with Element` for a vector too, so no
 	// `giid` test can tell a vector's record from a growable array's either. That site therefore asks
@@ -61986,138 +62045,6 @@ export type Parser
 		self.markBufferSurface(buffer)
 		return buffer
 	end 'bufferSurfaceOf'
-
-	// ⭐⭐⭐ **MAY A FUSED WRAPPER'S OWN RECORD BE HANDED STRAIGHT TO THIS BUFFER MEMBER'S RUNTIME ENTRY?
-	// (W49 wave 7 cure.)** A `String` record and an `Array` record agree on all SIX buffer slots —
-	// `buffer@0`, `length@8`, `capacity@16`, `element_size@24`, `parent@32`, `element_destroy@40`, every one
-	// spelled from the SAME `BufferOwnership.ManagedRecord*Offset` constants — and a String record carries a
-	// SEVENTH slot behind them, `singleByteGraphemes@48`, which no buffer entry knows about.
-	//
-	// ⚠⚠ **THE LIST'S ORIGINAL QUESTION WAS "does this member's entry touch `@40`", AND W157 ANSWERED IT OUT
-	// OF EXISTENCE.** `@40` was `element_destroy` in one record and `singleByteGraphemesFlag` (0/1) in the
-	// other, so a member reading it would `callIndirect` address 0 or 1 given a String. A String record now
-	// holds a REAL `element_destroy@40` (always `TrivialElementDestroy`), so no buffer entry can be wrong
-	// about that slot. **The question this list still answers is the OTHER direction**: an entry that reads
-	// `@48` is written for a BYTE record and must never be handed a plain 48-byte buffer record, where that
-	// offset is off the end.
-	//
-	// ⛔⛔ **EVERY LINE OF THE CENSUS BELOW IS AN ARGUMENT ABOUT A *BYTE* RECORD, AND FOR TWO WAVES NOTHING
-	// SAID SO (W194).** The list is keyed on the MEMBER; the door that consults it is keyed on
-	// `StructLayout.fieldIsTheInlineManagedRecord`, which admits `Array` and `Vector` as well — whose `@24`
-	// is the element's stride rather than 1, whose element may be an opaque type parameter, and which have no
-	// `@48` at all. THREE of the six entries below were wrong on such a record — `append`'s `1 == 1`,
-	// `setByte`'s two giid-keyed admission checks (found at this rung's REVIEW, measured as a LEAK), and
-	// `makeCharFromBytes`'s seventh slot — and the whitelist could not know, because the record was somebody
-	// else's question.
-	//
-	// ⭐⭐ **AND THE CURE IS NOT TO NARROW THE DOOR BUT TO STOP IT LYING ABOUT THE RECEIVER.** Two of those
-	// three read the receiver's INSTANCE, not the record, and the door was handing every receiver the same
-	// constant — `internSynthesizedByteInstance()`. It now hands each wrapper its own
-	// (`bufferSurfaceInstanceOf`, one home shared with the value door's retype), which makes `append`'s and
-	// `setByte`'s admission checks ask about the element the receiver actually has; the third,
-	// `makeCharFromBytes`, is closed independently by `dispatchArrayMethod`'s tag test, which asks what the
-	// record IS rather than how it was reached. ⛔ W194's FIRST cure narrowed the door to the two byte
-	// records instead. It was correct and it cost **1.65–1.9x on `Array.hash`** — a corpus body, not a
-	// compiler-served member, looping `byteAt` once per byte — so all four conformers keep the fast path and
-	// the entries stay member-shaped, which is the only shape a name can be tested in at the token before
-	// the `(`.
-	//
-	// ⚠⚠ **IT IS A WHITELIST AND MUST STAY ONE, BECAUSE THE DEFAULT HAS TO BE THE CONSERVATIVE ANSWER.**
-	// A member absent from this list reaches its entry through `emitFieldLoad`'s `managed`-as-a-value door
-	// instead, which since W157 hands over the same record with an `__mm_incref`/`__managed_decref` pair
-	// around it: correct, and one refcount pair dearer. So the two directions are still not comparable, and
-	// a name joins only with its entry's call graph traced.
-	//
-	// **The census, traced through every helper each entry calls (W49 wave 7; re-read at W157):**
-	//   • `length()` -> `__managed_count` (`buildManagedCount`) — reads `@8`. Nothing else.
-	//   • `byteAt(i)` -> `__managed_byte_at` — reads `@0`, and `emitBufferAccessGuard` reads `@8`/`@16` and
-	//     `@24`. A String's `@24` is `ByteStringElementSize = 1` on EVERY producer, so `length·es` is the byte
-	//     length, which is the bound that member means.
-	//   • `setByte(i, v)` -> `__managed_set_byte` — the guard plus `__managed_cow_detach` -> `__mm_cow_detach`,
-	//     which reads `@8`/`@24`/`@0` and writes `@0`/`@16`/`@32`. **W49 wave 2 already established this
-	//     one and already passes the String's record for it** (`dispatchStringMethod`'s `setByte` arm); it
-	//     is listed so the two doors read one list.
-	//     ⛔⛔ **AND IT IS A *SECOND* ENTRY WHOSE PARSE-TIME ADMISSION CONSULTS THE RECEIVER'S INSTANCE —
-	//     FOUND AT THE W194 REVIEW, WHICH IS WHY THE `append` BULLET BELOW NO LONGER SAYS "the only one".**
-	//     Its arm asks `requireBufferBytesAreNotAPointer(giid, …)` (E3110) and `requireRawByteWriteFitsItsSlot`
-	//     (E3118), and BOTH read the giid rather than the record. Under the synthesized BYTE instance those
-	//     answer about a `Byte` — trivial, one byte wide — whatever the receiver's real element is.
-	//     **MEASURED on this rung's own RED baseline**: an `extension Array` whose body is
-	//     `try managed.setByte(0, 65) otherwise ignore`, instantiated at `Array with String`, **COMPILED
-	//     CLEAN and the program EXITED 101 — a memory leak**, because the byte write landed in a String
-	//     POINTER slot that E3110 exists to refuse. The identical body written `self.managed.setByte(…)` —
-	//     the value path, carrying the real instance — did not compile at all. One member, two spellings, a
-	//     leak and a stop.
-	//     ✅ **THE REAL INSTANCE CLOSES THE LEAK, AND THE TWO CHECKS THEN ANSWER ABOUT THE ELEMENT THE
-	//     RECEIVER HAS.** Measured on the reworked tip, all three spellings of the same write:
-	//       • CONCRETE element, `a.managed.setByte(0, 65)` on an `Array with String` — **`E3110` at 6:16**,
-	//         *"a managed element is stored as a POINTER … writing them corrupts it"*. The diagnostic that
-	//         was always meant to fire, firing.
-	//       • OPAQUE element, bare `managed.setByte(…)` inside an `extension Array` — `panic at
-	//         LayoutDescriptor.maxon:571: primitiveTypeByteSize`, through E3118's stride test.
-	//       • OPAQUE element, `self.managed.setByte(…)` — the SAME panic, differing only in the frames
-	//         above it. That spelling did this on the base too; the bare one compiled clean and leaked.
-	//     ⚠ **A BARE FUSED `setByte` OVER A RECORD THIS COMPILER OWNS IS *ALWAYS* THE OPAQUE CASE**, because
-	//     the only bodies that can spell it are that declaration's own and its extensions — and the two
-	//     declarations whose record the compiler owns, `Array` and `Vector`, are both GENERIC, so the element
-	//     there IS the type parameter. E3110 is therefore unreachable from this door for them, and the panic
-	//     is what a generic body meets. That panic is PRE-EXISTING on the value path, present identically on
-	//     the merge base, and replacing it with a positioned refusal (or a deferral of the stride question to
-	//     instantiation) is a row of its own: it needs a spec to choose between them. W194 changed which
-	//     ELEMENT the door on the other side is asked about, never what it asks.
-	//     ⛔ **THE SENTENCE ABOVE SAID "ON A NON-BYTE RECORD" AND THAT IS WIDER THAN THE ARGUMENT SUPPORTS
-	//     (W194 second review).** A user file may declare its own marked conformer over a CONCRETE element
-	//     — `type Bag implements BuiltinArrayLiteral` holding a `__ManagedMemory with String` — and spell
-	//     `managed.setByte(0, 65)` in its own body, which is a bare fused `setByte` on a non-byte record
-	//     that is NOT the opaque case. MEASURED on this tip: it COMPILES, and the write is admitted, because
-	//     `bufferSurfaceInstanceOf`'s first arm hands such a wrapper the compiler's BYTE buffer — the same
-	//     lie, one shape further out. It cannot leak only because no such value can be constructed
-	//     (`requireFusedWrapperTag` refuses the `Self{…}` literal); see that function's header for the
-	//     borrowing, and this door's own for why the arm is left as it is.
-	//   • `append(other)` -> `__managed_append` — reads both records' `@24` and ABORTS on a mismatch, which two
-	//     String records pass (1 == 1); `__managed_move_elems` takes raw buffers and a stride as ARGUMENTS.
-	//     ⛔ **THIS IS THE ENTRY THE MISSING RECORD TEST BIT (W194).** Its PARSE-TIME admission consults the
-	//     receiver's instance (`ProgramSignatures.arrayAppendArgAdmits`), so on an `Array` record the
-	//     synthesized byte instance made `containerElementIsOpaque` answer false about an opaque element and
-	//     `primitiveTypeByteSize` took the compiler down.
-	//     ⚠ **IT IS NOT THE ONLY SUCH ENTRY, AND THIS BULLET SAID IT WAS UNTIL THE W194 REVIEW** — see
-	//     `setByte` above, whose two admission checks read the giid the same way and whose mis-service was a
-	//     LEAK rather than a stop. Of the six, THREE consult something other than the record — `append` and
-	//     `setByte` consult the INSTANCE, `makeCharFromBytes` consults the RECORD's seventh slot — and the
-	//     remaining three (`length`, `byteAt`, `toCString`) emit a bare runtime call over slots both records
-	//     share, which is why the defect surfaced as one panicking member and one leaking one rather than
-	//     six wrong answers.
-	//   • `toCString()` -> `__mm_to_cstring` — reads `@8` and `@0`. Not even `@24`.
-	//   • `makeCharFromBytes(pos, len)` -> `__char_at` — reads `@48`, the flag, and stores it into the
-	//     Character it builds (`GraphemeRuntime.buildCharAt`). ⛔⛔ **IT IS THE ONE ENTRY THAT READS THE
-	//     SEVENTH SLOT, SO IT IS THE ONE THAT MUST BE GIVEN A BYTE RECORD — and this membership is what
-	//     supplies one.** Handed a plain 48-byte buffer record it would read eight bytes PAST the record's
-	//     end; before W157 the same mis-service merely read `TrivialDestructor` as the flag, a conservative
-	//     wrong answer. Its single `stdlib/` caller is `String.makeCharFromBytes`'s
-	//     `managed.makeCharFromBytes(…)` — an implicit-`self` fused read that arrives HERE. ⭐ **AND SINCE
-	//     W194 THAT IS A STRUCTURAL FACT RATHER THAN A REACHABILITY ONE, RESTING ON THE TAG TEST AND NOT ON
-	//     THIS LIST**: `dispatchArrayMethod`'s own guard asks the RECEIVER's tag (`tagIsByteRecord`) rather
-	//     than the route it came by, so no spelling can supply it a 48-byte record — not this door, and not
-	//     the `.managed` re-entry that also sets `viaManagedField`. **MEASURED at the W194 review**: a
-	//     `stdlib/`-located `a.managed.makeCharFromBytes(0, 1)` over an `Array with Int` COMPILED CLEAN and
-	//     RAN on the base, `__char_at` reading eight bytes past a 48-byte record. **RE-MEASURED on the
-	//     reworked tip with the location gate temporarily opened, because withdrawing the routing left this
-	//     guard as the ONLY thing closing that door**: BOTH `Array` spellings — the bare fused
-	//     `managed.makeCharFromBytes(0, 1)` and the `.managed` one — stop at the panic below, while the
-	//     positive control (`extension String`'s bare spelling, a genuine byte record) compiles, runs and
-	//     prints `h`. The probe discriminates; it does not merely report a zero.
-	//
-	// ⭐ **`slice(start, end)` MAY NOW, AND IS DELIBERATELY STILL ABSENT.** Its exclusion was `@40`:
-	// `__managed_slice` -> `emitRecordView` LOADS that slot and STORES it into the fresh view, so a String's
-	// flag became the view's `element_destroy` and the first `__managed_decref` `callIndirect`ed address 1.
-	// W157 removed the disagreement, so nothing is unsafe about it any more — and it removed the ALLOCATION
-	// too, from the other side: `clone()`, `sliceBytes()` and `toByteArray()` reach `managed` as a VALUE, and
-	// that door hands back the receiver's record rather than minting a view. What listing `slice` here would
-	// still save is one `__mm_incref`/`__managed_decref` pair per call, which is a measurement, not a
-	// correctness argument, and belongs to whoever takes it.
-	function fusedManagedMemberTakesTheRecord(member ByteArray) returns bool
-		return member.equals(ManagedMemoryLengthMethod) or member.equals(ByteAtMethod) or member.equals(ManagedMemorySetByteMethod) or member.equals(AppendMethod) or member.equals(ManagedMemoryToCStringMethod) or member.equals(ManagedMemoryMakeCharFromBytesMethod)
-	end 'fusedManagedMemberTakesTheRecord'
 
 	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
 	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`). An OPAQUE-`T` array
@@ -66570,9 +66497,10 @@ export type Parser
 		// `bufferSurfaceOf`'s header measures; what this door hands back is counted.
 		//
 		// ⭐⭐⭐ **THIS USED TO BE A HEAP ALLOCATION, AND WHAT KEPT IT OFF THE HOT PATH WAS THE DOOR ABOVE
-		// IT.** A BYTE RECORD's `managed` read that is immediately CALLED never arrives here at all —
+		// IT.** A `managed` read that is immediately CALLED never arrives here at all —
 		// `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` hands the receiver's own record to the
-		// buffer entry (W49 wave 7 cure). What still reaches this line is `managed` used as a VALUE: bound,
+		// buffer entry (W49 wave 7 cure, widened from six members to all of them at `EC2`). What still
+		// reaches this line is `managed` used as a VALUE: bound,
 		// returned (`addressableBytes()`'s whole body), passed as an argument, or stored into a `String{…}`
 		// literal — every one of which may outlive the statement, and for which handing back the receiver's
 		// own `ValueId` uncounted is the double free `bufferSurfaceOf`'s header measures. ⭐ **W157 MADE THE
@@ -66620,8 +66548,11 @@ export type Parser
 		// `__managed_decref` `callIndirect`ed address 1. The view mint was not overhead there — it was what
 		// supplied a correct `TrivialDestructor`. It improved anyway at wave 7 (5.5x -> 3.35x) because
 		// `sliceBytes` asks `byteLength()`, which the cure made cheap; W157 then removed the mint itself,
-		// because a String record's `@40` IS `TrivialElementDestroy` and this line no longer allocates. See
-		// `fusedManagedMemberTakesTheRecord` for the census as it now reads.
+		// because a String record's `@40` IS `TrivialElementDestroy` and this line no longer allocates.
+		// ⭐ **AND SINCE `EC2` `slice` DOES NOT REACH THIS LINE AT ALL WHEN IT IS CALLED**: the fused record
+		// door admits every member, not six, so what is left here is `managed` used as a VALUE. See that
+		// door's header (`dispatchMethodOnBinding`'s `aCalledManagedFieldMember`) for the census the deleted
+		// whitelist carried and for the three arguments that closed it.
 		if layout.fieldIsTheInlineManagedRecord(index) 'inlineManagedIsTheReceiver'
 			// ⭐⭐⭐ **AN `Array`'s BUFFER IS THE `Array`, SO THERE IS NO VIEW TO MINT (W57)** — the same
 			// answer `bufferSurfaceOf` gives for the SPELLED `arr.managed`, reached here by the implicit-`self`

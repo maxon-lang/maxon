@@ -791,6 +791,119 @@ alpha beta 2
 0
 ```
 
+<!-- test: a-buffer-member-off-the-old-six-takes-the-record -->
+⭐⭐ **`EC2`: A BARE `managed.<member>(…)` HANDS OVER THE RECEIVER'S OWN RECORD FOR *EVERY* MEMBER, NOT
+FOR SIX.** `Parser.fusedManagedMemberTakesTheRecord` used to admit `length`, `byteAt`, `setByte`, `append`,
+`toCString` and `makeCharFromBytes` and nothing else, so `clear`, `get`, `set`, `setLength`, `capacity`,
+`grow`, `slice`, `remove`, `fill`, `shiftRight` and `elementSize` — **39 call sites across `stdlib/`** —
+fell through to the `managed`-as-a-VALUE door instead, which pays an `__mm_retain`/`__managed_decref` pair
+around the call. **The entry receives the SAME POINTER either way** — an `Array`'s buffer IS the `Array`
+(W57), and `__str_bytes_view` is an `__mm_incref` that hands the receiver's own record straight back (W157)
+— so the pair decided nothing but whether it was paid, and the receiver here is `self`, a parameter the
+CALLER owns for the whole frame, which nothing a buffer entry does can free. MEASURED: the compiler's own
+stage-2 self-compile **79.7 s → 78.0 s**, and `stdlib/Array.maxon`'s `clear()` — whose whole body is
+`managed.clear()` — **14 emitted ops → 7**, opening no frame and saving no register.
+
+⚠ **THE ELEMENT IS A `String` AND THE EXIT CODE IS PINNED, WHICH IS WHAT MAKES THIS A GATE RATHER THAN A
+GOLDEN.** `clear()` runs the element-destroy walk over the two `String`s: a reference LOST here is a double
+free, a reference GAINED is a leak and **exit 101**, and neither is visible to a stdout-only case. The array
+is refilled after the clear and read back, so the walk must have destroyed exactly the two it was given.
+
+⚠ **SABOTAGE-VERIFIED.** Restore the six-name whitelist on the door's condition and **10 of this spec's 37
+fragments move**, this one among them — its frame grows a callee-saved register back, which is where the
+`__mm_retain`'s result had to live across `__managed_clear`. `the-value-spelling-of-the-same-field-keeps-its-reference`
+below is **byte-identical** under the same sabotage, which is what says the two doors were separated and not
+merged. Nothing in the suite goes red either way: this is a cost, not a semantics.
+```maxon
+typealias Slot = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function wipe()
+		managed.clear()
+	end 'wipe'
+
+	export function at(i Slot) returns Element
+		return try managed.get(i) otherwise panic("at: the caller checked the bound")
+	end 'at'
+end 'Array'
+
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("alpha")
+	a.push("beta")
+	print("{a.at(0)} {a.at(1)} {a.count()}\n")
+	a.wipe()
+	a.push("gamma")
+	print("{a.at(0)} {a.count()}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+alpha beta 2
+gamma 1
+```
+```exitcode
+0
+```
+
+<!-- test: the-value-spelling-of-the-same-field-keeps-its-reference -->
+⭐ **THE CONTROL FOR THE CASE ABOVE — `managed` USED AS A VALUE STILL MINTS ITS REFERENCE.** The door
+`EC2` widened is gated on a member call FOLLOWING the field (`Parser.memberCallFollows`), which is exactly
+*"the only consumer is a call in the same statement"*. A `return managed` has no such consumer: the buffer
+outlives the statement, so `Parser.bufferSurfaceOf` co-owns it and the two names release one box each.
+Handing back the receiver's own `ValueId` uncounted here is the double free that function's header measures,
+and this case is what says `EC2` did not widen into it.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function buffer() returns ElementMemory
+		return managed
+	end 'buffer'
+end 'Array'
+
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("alpha")
+	a.push("beta")
+	let b = a.buffer()
+	print("{b.length()} {a.count()}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+2 2
+```
+```exitcode
+0
+```
+
 <!-- test: error.a-member-no-declaration-carries-is-still-refused -->
 ⛔ **THE FALL-THROUGH MAY NOT BECOME A SILENT NO-OP.** The corpus door admits only a name the declaration
 actually carries; anything else meets the roster sentence unchanged, which is the answer for a member that

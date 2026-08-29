@@ -775,11 +775,110 @@ access loads at `+0`); and the BYTE-width indexed forms, which the shared width 
 free and which no lowering can currently reach — a one-byte element has stride 1, so `index * 1` is
 folded to `index` by `foldConstOperands`' identity rule and there is no multiply left to absorb.
 
-#### `EC2` *(already on the board, ⬜ FREE)*
+#### `EC2` · The managed field read retained and released across a call in the same statement
 
-The managed field read retained and released across a call in the same statement. Front half of the
-surviving allocation gap. ⚠ Re-measure first: `EC1`'s `__managed_fill` removed the per-element
-instance the row was sized on, and `W222` falsified its stated CPU motivation.
+⛔⛔ **THE ROW'S STATED CAUSE WAS FALSIFIED BEFORE ANY CODE WAS WRITTEN, AND RE-MEASURING IS WHAT FOUND
+THE REAL ONE.** The row named W41's mark — *"`markRebindableSlotRead` marks every managed field read, and
+`declareInitializedBinding` / **the argument door** then PROMOTE it"*. **MEASURED 2026-08-29: there is no
+argument door.** `rebindableSlotReads` has exactly ONE reader in the whole compiler
+(`Parser.declareInitializedBinding`), and `emitFieldLoad`'s own header already states the rule the row was
+asking for — *"a receiver load, an argument, a chain hop are all transient and owe nothing"*. A program's
+`items.push(v)` / `items.clear()` on a struct's own managed field emits **one `loadRegBaseDisp` and the
+call**, with no retain and no release. The row's optimisation, at the door the row named, was already the
+behaviour.
+
+⚠ **AND ITS ACCEPTANCE MEASURES SOMETHING ELSE.** *"`__mm_retain` + `__managed_decref` < 2% of stage-2's
+samples"* reads **1.39% + 2.54% = 3.93%** today (the row cited 3.2% + 4.0%), and neither symbol is this
+row's subject: `__managed_decref` is the array DESTRUCTOR, **11,070 static sites**, one per scope-exit drop,
+and the 886 `__mm_retain` sites are `handleEscapingBorrowFeed`'s and `promoteBorrowedToOwned`'s real
+co-ownership. **The threshold is unreachable by any correct change** and was not adopted as the gate.
+
+⭐⭐ **BUT THE ROW'S OWN EXHIBIT WAS ALIVE, EXACTLY AS WRITTEN — `Array.clear` UNDER shv2 REALLY IS
+`__mm_retain → __managed_clear → __managed_decref`** — and the cause is a different door:
+`Parser.fusedManagedMemberTakesTheRecord`, a **six-name whitelist** deciding whether a bare
+`managed.<member>(…)` inside a fused wrapper's own body (`String`, `Character`, `Array`, `Vector`) hands the
+member's runtime entry the RECEIVER'S OWN RECORD, or goes through the `managed`-as-a-VALUE door, which since
+W157 pays an `__mm_retain`/`__managed_decref` pair around the call. It listed `length`, `byteAt`, `setByte`,
+`append`, `toCString`, `makeCharFromBytes`. The **eleven** others a container body spells — `set`, `get`,
+`setLength`, `capacity`, `grow`, `slice`, `remove`, `clear`, `fill`, `shiftRight`, `elementSize`, **39 call
+sites across `stdlib/`** — paid the pair. The whitelist's own header had already filed the fix and priced
+it: *"What listing `slice` here would still save is one `__mm_incref`/`__managed_decref` pair per call, which
+is a measurement, not a correctness argument, and belongs to whoever takes it."*
+
+✅ **LANDED 2026-08-29 AS A DELETION.** `fusedManagedMemberTakesTheRecord` is gone and the door's condition
+is `binding.isSelfField and self.memberCallFollows(self.pos + 1)` — **which is EC2's rule, stated at the door
+that actually has it**: the only consumer is a call in the same statement, and the receiver is `self`, a
+parameter the CALLER owns for the whole frame, so nothing a buffer entry does can free it.
+
+**The three arguments the list still carried are each closed somewhere else, and the first is decisive:**
+
+- **THE ENTRY RECEIVES THE SAME POINTER EITHER WAY**, so the list never decided which record an entry got —
+  only whether a refcount pair was paid on the way to it. An `Array`'s buffer IS the `Array` (W57), and W157
+  made `__str_bytes_view` an `__mm_incref` that hands the receiver's own record straight back (MEASURED on
+  this tree: its whole body is a `capacity@16 == -4` test, an incref, and `mov r8, rcx`).
+- **THE INSTANCE** — `append`'s and `setByte`'s parse-time admission read the receiver's `giid`, and the door
+  used to hand every receiver `internSynthesizedByteInstance()`. W194 replaced that with
+  `bufferSurfaceInstanceOf`, which is the value door's OWN answer, so the two cannot disagree.
+- **THE SEVENTH SLOT** — `makeCharFromBytes` reads `@48` and must never be handed a plain 48-byte buffer
+  record. `dispatchArrayMethod` refuses that on the RECEIVER's TAG rather than on the route it came by
+  (`tagIsByteRecord`); the deleted header already recorded that as structural rather than reachability.
+
+**MEASURED — A REAL CONTROL, both compilers built in ONE session and the SAME source compiled by both, so
+the only difference is the codegen (`EC19`'s trap: a before/after across a source change is not an A/B):**
+
+| | control | with the row | |
+|---|---|---|---|
+| stage-2 self-compile, 4 runs interleaved A B A B | 79,625 / 79,738 / 79,512 / 79,648 ms | **78,050 / 78,007 / 77,912 / 77,688 ms** | **−2.16%** |
+| emitted compiler binary | 9,281,678 B | **9,281,166 B** | −512 B |
+| `__mm_retain`, stage-2 sample profile | 1.39% | **1.02%** | |
+| `__managed_decref`, same profile | 2.54% | **1.96%** | |
+| `Array.clear` — the row's exhibit | 14 emitted ops | **7** | no frame, no saved register |
+
+Every experiment run beats every control run by ≥ 1,462 ms, and the two arms are separated by about 4× their
+own spread. **And the third stage settles the correctness question harder than a fixpoint does**: the
+experiment-emitted compiler compiles the whole compiler to a file BYTE-IDENTICAL to the control-emitted
+one's output — 9.28 MB, `cmp` clean.
+
+⚠⚠ **`scripts/emitted-code-count.py` AND THE `--emit-ir` CENSUS CAN SEE ALMOST NONE OF THIS, AND THAT IS
+THE FOURTH TIME THIS WORKSTREAM'S INSTRUMENTS COULD NOT EXPRESS A ROW.** The subject is 39 call sites in
+`stdlib/`, and since X11 `--emit-ir` writes only the user's functions: the self-compile dump moves by
+**−6 `__managed_decref` and −41 `movRegReg` out of 1,287,634 ops**, because the compiler's own source spells
+only six of them. The binary size and the timed A/B are the instruments that can see it.
+
+**GATES**: x64-windows **6,931 passed, 0 failed, exit 0** (6,929 + 2 new) and wasm32-wasi **6,415 passed, 0
+failed, exit 0** (6,413 + 2); **21 goldens re-minted** from ONE unfiltered run and re-verified at zero drift,
+2 added. **Self-host fixpoint: stage-2 == stage-3, BYTE-IDENTICAL (9,280,084 bytes).** E3070 was re-probed
+on the changed route (an element borrowed out of the buffer, then `managed.clear()` under it) and gives the
+identical diagnostic at the identical line and column before and after.
+
+**Cases added** to `specs-shv2/array-declared-record.md`, 2, both sabotage-verified against the committed
+fragments — the sabotage is **restoring the six-name whitelist**:
+
+| case | what the sabotage does |
+|---|---|
+| `a-buffer-member-off-the-old-six-takes-the-record` (the gate) | **10 of the spec's 37 fragments move, this one among them** — its frame grows back the callee-saved register the `__mm_retain`'s result had to live in across `__managed_clear`. A `String` element and a pinned exit code, so a lost reference is a double free and a gained one is 101. |
+| `the-value-spelling-of-the-same-field-keeps-its-reference` (the control) | **byte-identical** — `return managed` has no consumer in its own statement, so `bufferSurfaceOf` still co-owns it. This is what says the two doors were separated, not merged. |
+
+⭐⭐ **WHAT THE RE-MEASUREMENT FOUND AND THIS ROW DID *NOT* TAKE — THE BIGGER SHAPE, AND IT IS A DIFFERENT
+DOOR AGAIN.** A census of the self-compile's emitted x64 (1,287,634 ops, 150,851 `callDirect`, **32,725 of
+them refcount = 21.7%**, independently confirming `EC19`'s 21.2%) finds **825 exact EC2-shaped brackets** —
+an acquire, exactly ONE other call, then a release of the SAME register:
+
+```
+loadRegBaseDisp rbx, [rbx + 8]   ; a union PAYLOAD, bound by a match arm
+mov  rcx, rbx ; call __mm_incref
+mov  rcx, r12 ; mov rdx, rbx ; call pushDef
+mov  rcx, rbx ; call __mm_decref
+```
+
+**801 of the 825 acquire with `__mm_incref`, and the producer is `Parser.retainBorrowedPayload` (D1b)** — a
+managed payload bound out of a BORROWED union in a `match` arm, retained unconditionally and dropped at the
+arm's own exit. **197 of them are in `targetOpOperands` alone**, the function `EC19` names as 46% copies.
+That function's header states the design outright and gives its reason: shv2's release is STRUCTURAL, so
+*"an unconditional acquire is unconditionally balanced and needs no analysis at all"*, where v1 pays a
+whole-function dataflow pass for the same question. ⇒ **The remaining EC2 shape is a PAYLOAD-BINDING rule,
+not a field-read rule**, worth 4 ops × 825 sites plus whatever `EC19`'s induced-copy argument adds on top.
+Filed here, not taken.
 
 #### `EC7` *(already on the board, ⬜ FREE)*
 

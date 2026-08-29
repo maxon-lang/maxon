@@ -4436,7 +4436,8 @@ THE SAME OPERATION ON THE SAME RECEIVER — RUNS.** Measured on `W194`'s base:
     self.managed.append(self.managed)    exit 4
     a.managed.append(b.managed)          exit 3   (concrete, from outside)
 
-⭐ **THE DIFFERENCE IS THE ROUTE, NOT THE ELEMENT.** `fusedManagedMemberTakesTheRecord` lists `append`, so
+⭐ **THE DIFFERENCE IS THE ROUTE, NOT THE ELEMENT.** `fusedManagedMemberTakesTheRecord` listed `append`
+(that whitelist is deleted at `EC2` — the door now admits every member), so
 the bare spelling takes `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` fast path, which hands
 `dispatchArrayMethod` the receiver's own record **under the synthesized BYTE instance**. The other two
 spellings carry the receiver's real instance. `arrayAppendArgAdmits` then asks
