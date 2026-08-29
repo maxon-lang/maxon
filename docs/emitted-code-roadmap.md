@@ -1293,6 +1293,33 @@ function main() returns ExitCode
 end 'main'
 ```
 
+**`fmt.maxon`** — the DIVISION probe (`EC18`). ⚠ Neither benchmark's hot loop contains a division:
+nbody and fannkuch hold 11 `idiv` between them and every one is in cold or amortized code. The
+`idiv`-by-constant sites that a program actually pays are in shv2's **float formatting stdlib**
+(`__decimalWidthOf` and `__appendDecimalGroup`, four `idiv` by 10 per number) and in
+`graphemeBreakProperty` (`idiv` by 28 per grapheme). ⚠ The INT path is hand-emitted runtime
+(`__int_to_string`) and has no Maxon-level division at all, so an int-formatting probe measures
+nothing — this one formats floats deliberately. 300,000 numbers, **3,586 / 3,554 / 3,559 ms** at
+`24dfb88ed1`, carrying 8 of the corpus's 22 `idiv`:
+
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+function main() returns ExitCode
+	var sink = 0
+	var x = 1.0 as Real
+	for _ in 0 upto 300000 'fmt'
+		let s = "{x}"
+		sink = sink + s.byteLength()
+		x = x + 1.5
+	end 'fmt'
+	if sink < 0 'guard'
+		return 1
+	end 'guard'
+	return 0
+end 'main'
+```
+
 **`cse3.maxon`** — the CSE probe (`EC13`). ⚠ `cse2.maxon` STOPPED being a CSE probe when `EC12`
 landed: its operands are constant after inlining, so `foldConstants` now evaluates all three copies
 away and its `imul-imm` reads 0. `cse3` feeds the same expression a value the compiler cannot see
