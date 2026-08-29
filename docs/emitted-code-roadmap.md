@@ -1711,6 +1711,39 @@ function main() returns ExitCode
 end 'main'
 ```
 
+**`ec7.maxon`** — the probe for `A1`/`EC7`, the top remaining row. A callee taking a `RegNum`
+(`int(0 to 63)`) parameter, reached from `for r in 0 upto 64` — so the counter is PROVABLY in range
+and every guard it pays is dead. Measured at `beddff81f1`: **4 of the loop's 11 instructions are the
+dead guard**, and the `__il_slow` arm re-issues the CALL, defeating `EC5`'s inlining on this shape:
+
+```maxon
+typealias RegNum = int(0 to 63)
+typealias Word = int(i64.min to i64.max)
+
+function weigh(table Word, regNum RegNum) returns Word
+	return table + regNum
+end 'weigh'
+
+function scan(table Word) returns Word
+	var n = 0
+	for r in 0 upto 64 'scan'
+		n = n + weigh(table, regNum: r)
+	end 'scan'
+	return n
+end 'scan'
+
+function main() returns ExitCode
+	if scan(0) != 2016 'bad'
+		return 1
+	end 'bad'
+	return 0
+end 'main'
+```
+
+**`guard.maxon`** — the probe for `A2`, the bounds guard. An explicit `a.get(i)` in a loop (the
+`for`-in form uses `__managed_get_unchecked` and has no guard at all). Emits
+`cmp`/`setcc`/`cmp`/`setcc`/`or`/`cmp`/`jcc` — **7 instructions where `cmp idx,len` + `jae` is 2**.
+
 **`fmt.maxon`** — the DIVISION probe (`EC18`). ⚠ Neither benchmark's hot loop contains a division:
 nbody and fannkuch hold 11 `idiv` between them and every one is in cold or amortized code. The
 `idiv`-by-constant sites that a program actually pays are in shv2's **float formatting stdlib**

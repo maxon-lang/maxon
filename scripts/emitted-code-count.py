@@ -164,6 +164,8 @@ def main():
         os.path.join(REPO, "temp", "codegen-probe", "probe.maxon"),
         os.path.join(REPO, "temp", "codegen-probe", "leaf.maxon"),
         os.path.join(REPO, "temp", "codegen-probe", "fmt.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "ec7.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "guard.maxon"),
     ) if os.path.exists(p)]
 
     if not os.path.exists(SHV2):
