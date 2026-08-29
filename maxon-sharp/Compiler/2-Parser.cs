@@ -351,6 +351,27 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // _currentSelfParamResult.
   private readonly HashSet<string> _staleSelfFields = [];
 
+  /// <summary>
+  /// ⭐⭐ Every `u64.max` written in EXPRESSION position, by the id of the literal it materialized —
+  /// the ONE constant whose stored pattern is negative and whose value is not.
+  ///
+  /// `u64.max` does not fit a signed 64-bit field, so it rides as the wrapped `-1`
+  /// (<see cref="ResolveIntTypeBound"/>). Every reader that asks "is this operand non-negative?" by
+  /// testing the folded constant therefore answers NO for the largest non-negative number there is,
+  /// which is a wrong answer rather than a missed narrowing: with `x` declared `int(0 to u64.max)`,
+  /// `x &gt; u64.max` compiled to a SIGNED `jg` against `-1` and answered <b>true</b>.
+  ///
+  /// ⚠ It cannot be re-derived from the value, and must not be: a literal `-1` the author actually
+  /// wrote is the same 64 bits and is a genuinely negative operand — `x &gt; -1` is TRUE at every
+  /// value of `x`, and reading that `-1` as `u64.max` would answer false. Only the source tells them
+  /// apart, so the parse site records it and <see cref="ComparisonOperandIsUnsigned"/> reads it.
+  ///
+  /// Keyed by MaxonValue id, which is sound because every literal mints a fresh value (no interning).
+  /// shv2 carries the identical fact in `Parser.unsignedMaxLiterals`, marked and read at the same two
+  /// points, so the two compilers answer one question the same way.
+  /// </summary>
+  private readonly HashSet<int> _unsignedMaxLiterals = [];
+
   private readonly List<CompileError> _errors = [];
   private const int MaxErrorsPerFile = 20;
   public IReadOnlyList<CompileError> Errors => _errors;
@@ -18526,10 +18547,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       IrType? optimalType = null;
       if (kind == MaxonValueKind.Integer
-          && resolvedOp is not (MaxonBinOperator.Eq or MaxonBinOperator.Ne
-            or MaxonBinOperator.Lt or MaxonBinOperator.Gt
-            or MaxonBinOperator.Le or MaxonBinOperator.Ge)) {
-        // THREE OPERATOR FAMILIES, THREE READINGS, and the differences are all about what an
+          && resolvedOp is not (MaxonBinOperator.Eq or MaxonBinOperator.Ne)) {
+        // FOUR OPERATOR FAMILIES, FOUR READINGS, and the differences are all about what an
         // operand's ranged type is EVIDENCE OF.
         //
         //   • `+`, `-`, `*`, `and`, `or`, `xor` take the FIRST ranged type either operand offers.
@@ -18539,9 +18558,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         //     EmitBinaryOp), so the choice cannot change the answer. `GetOptimalType`'s blind spots
         //     make it answer null — "stay at i64", the wide and conservative reading.
         //
-        //   • `/` and `mod` may NOT. They are the one family whose width and signedness are REAL in
-        //     the emitted instruction, so they are the one family that shortcut could reach — see
+        //   • `/` and `mod` may NOT. Their WIDTH and their SIGNEDNESS are both real in the emitted
+        //     instruction, so they are the family that shortcut reaches hardest — see
         //     DivisionOptimalType.
+        //
+        //   • `<`, `>`, `<=`, `>=` may NOT EITHER, and until 2026-08-29 they had no optimal type at
+        //     all: this gate excluded all six comparisons, so the unsigned compare ops this compiler
+        //     already carries were unreachable and `three < big` answered FALSE for two operands
+        //     declared `int(0 to u64.max)`. Their WIDTH is not real (every backend compares at the
+        //     machine word), but their SIGNEDNESS is — `jl` reads OF/SF where `jb` reads CF — so they
+        //     take the two-sided rule with the width half dropped. See ComparisonOptimalType.
+        //     `==`/`!=` stay excluded: ZF is written the same way by both readings.
         //
         //   • A SHIFT is not symmetric at all: its right operand is a DISTANCE, not a value of the
         //     shifted type, and its ranged type describes neither the result's width nor its
@@ -18558,6 +18585,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           MaxonBinOperator.Shl or MaxonBinOperator.Shr => GetShiftOperandOptimalType(lhs),
           MaxonBinOperator.Div or MaxonBinOperator.Mod =>
             DivisionOptimalType(lhs, promotedLhs, rhs, promotedRhs),
+          MaxonBinOperator.Lt or MaxonBinOperator.Gt
+            or MaxonBinOperator.Le or MaxonBinOperator.Ge =>
+            ComparisonOptimalType(lhs, promotedLhs, rhs, promotedRhs),
           _ => GetOptimalType(promotedLhs) ?? GetOptimalType(promotedRhs),
         };
       }
@@ -19436,7 +19466,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             var keyword = Advance().Value; // consume 'min' or 'max'
             if (sizedType.IsFloat)
               return EmitConstantLiteral(ResolveFloatTypeBound(sizedType, keyword));
-            return EmitConstantLiteral(ResolveIntTypeBound(sizedType, keyword));
+            var boundValue = ResolveIntTypeBound(sizedType, keyword);
+            var boundExpr = EmitConstantLiteral(boundValue);
+            // The ONE extreme whose stored pattern disagrees with its value — see
+            // `_unsignedMaxLiterals`. Derived from the two facts in hand rather than by testing the
+            // spelling `u64`: any future sized type whose max passes `i64.max` needs the same mark,
+            // and this condition is what "its max does not fit a signed long" means.
+            if (sizedType.IsUnsigned && keyword == "max" && boundValue < 0)
+              _unsignedMaxLiterals.Add(boundExpr.Value.Id);
+            return boundExpr;
           }
         }
 
@@ -26906,6 +26944,105 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (UnionIntRange(dividendRange, divisorRange) is not { } union) return null;
 
     return IrRangedPrimitiveType.ComputeOptimalIntType(union.Low, union.InclusiveUpper);
+  }
+
+  /// <summary>
+  /// ⭐⭐ **THE ORDERING-COMPARISON SIGNEDNESS RULE: `&lt;`, `&gt;`, `&lt;=`, `&gt;=` RUN AT A SIGNEDNESS
+  /// VALID FOR BOTH OPERANDS** — the DIVIDE's rule (<see cref="DivisionOptimalType"/>) asked of the
+  /// second operator family whose ANSWER the reading changes, and shv2's
+  /// `TypeRules.comparisonOperandsAreUnsigned` written in this compiler's terms.
+  ///
+  /// ⚠ **THIS FAMILY HAD NO OPTIMAL TYPE AT ALL, AND THAT WAS THE BUG.** The gate at the assignment
+  /// excluded all six comparisons, so `optimalType` stayed null and the unsigned path
+  /// (<see cref="CreateUnsignedIntBinOp"/>, which already spells `ult`/`ugt`/`ule`/`uge`) was
+  /// unreachable for a comparison. MEASURED, with `big` and `three` both declared
+  /// `int(0 to u64.max)` and `big` holding `u64.max`: `three &lt; big` answered <b>false</b> in this
+  /// compiler and in shv2 — `jg`/`jl` reading `0xFFFF…FF` as `-1`.
+  ///
+  /// ⚠ **AND THE FALL-THROUGH ARM WOULD NOT HAVE FIXED IT — it would have been a DIFFERENT bug.**
+  /// `GetOptimalType(lhs) ?? GetOptimalType(rhs)` takes the FIRST ranged type either operand offers,
+  /// which its own comment licenses only for `+`/`-`/`*`/the bitwise family *"because the choice
+  /// cannot change the answer"*. For an ordering compare it changes the answer, so a one-sided type
+  /// would let an `int(0 to 100)` operand impose an unsigned reading on a plain `int` that admits
+  /// negatives. Both operands are asked, and either one may refuse.
+  ///
+  /// ⚠ **WIDTH IS NOT CHOSEN HERE, DELIBERATELY.** `DivisionOptimalType` returns the NARROWEST type
+  /// holding both operands because `idiv`'s width is real in the instruction; a comparison's is not —
+  /// every backend compares at the machine word over a value that sits extended in its register — so
+  /// narrowing would be codegen movement bought with no correctness, and it would part company with
+  /// shv2, which emits every compare at 64 bits. Only the SIGNEDNESS is decided, and `U64` is how this
+  /// conversion spells it (<see cref="MaxonToStandardConversion"/>'s `ot.IsUnsigned` arm).
+  ///
+  /// ⚠ **`==`/`!=` ARE NOT ROUTED HERE.** `cmp` writes the same ZF for the same two bit patterns in
+  /// either reading and `je`/`jne` read only ZF, so equality is already correct at every value; giving
+  /// it an optimal type would emit the byte-identical instruction and move every equality golden.
+  /// </summary>
+  private IrType? ComparisonOptimalType(ExprResult lhsExpr, MaxonValue lhs,
+      ExprResult rhsExpr, MaxonValue rhs) {
+    var lhsDeclared = OperandDeclaresNonNegative(lhsExpr, lhs);
+    var rhsDeclared = OperandDeclaresNonNegative(rhsExpr, rhs);
+    if (!lhsDeclared && !rhsDeclared) return null;
+    if (!ComparisonOperandIsUnsigned(lhsExpr, lhs)) return null;
+    if (!ComparisonOperandIsUnsigned(rhsExpr, rhs)) return null;
+    if (!ComparisonNeedsTheUnsignedReading(lhsExpr, lhs, rhsExpr, rhs)) return null;
+    return IrType.U64;
+  }
+
+  /// <summary>
+  /// ⭐⭐ **CAN THE TWO READINGS ACTUALLY DISAGREE HERE?** — shv2's
+  /// `Parser.comparisonNeedsTheUnsignedReading`, which carries the whole argument. In short:
+  ///
+  /// ⚠⚠ **A DECLARED RANGE IS NOT A PROOF, AND THIS LANGUAGE'S STANDARD LIBRARY RELIES ON THAT.**
+  /// Nothing range-checks an argument at a ranged parameter in either compiler, and `stdlib` BUILDS on
+  /// it: `Map.findSlot` encodes "not found" as `-(insertIndex + 1)` through a return type declared
+  /// `TableSlotIndex = int(0 to u64.max)`, and `if slotIndex &gt;= 0` is what decodes it. Read unsigned
+  /// that test is always true. MEASURED without this clause: <b>81 behaviour failures</b> in this
+  /// suite, nearly all one cause.
+  ///
+  /// ⇒ A folded constant that FITS the signed domain is evidence FOR the signed reading — against an
+  /// operand whose declared range reaches past `i64.max` it is the only thing in the expression that
+  /// says which reading the author meant. `u64.max` is excluded by name (see
+  /// <see cref="_unsignedMaxLiterals"/>), being the one constant whose pattern is negative and whose
+  /// value is not.
+  ///
+  /// ⚠ The price is named rather than hidden: `wide &gt; 100` keeps the signed reading and is WRONG for
+  /// a `wide` above `i64.max`. Closing that needs the ranges to become TRUE, not a wider rule here.
+  /// </summary>
+  private bool ComparisonNeedsTheUnsignedReading(ExprResult lhsExpr, MaxonValue lhs,
+      ExprResult rhsExpr, MaxonValue rhs) {
+    if (OperandFitsTheSignedDomain(lhs) || OperandFitsTheSignedDomain(rhs)) return false;
+    return OperandReachesAboveSignedMax(lhsExpr, lhs) || OperandReachesAboveSignedMax(rhsExpr, rhs);
+  }
+
+  /// A folded constant the signed domain holds — `u64.max` excluded by name, not by value.
+  private bool OperandFitsTheSignedDomain(MaxonValue operand) =>
+    !_unsignedMaxLiterals.Contains(operand.Id) && TryFoldIntConst(operand) is not null;
+
+  /// Can this operand hold a value the SIGNED reading gets wrong — one above `i64.max`? Only a DECLARED
+  /// range whose stored upper has wrapped negative (<see cref="IsAboveSignedMax"/>) or the `u64.max`
+  /// literal can say so.
+  private bool OperandReachesAboveSignedMax(ExprResult operandExpr, MaxonValue operand) =>
+    _unsignedMaxLiterals.Contains(operand.Id)
+    || (DeclaredIntRange(operandExpr, operand) is { } range && IsAboveSignedMax(range));
+
+  /// Does this operand's DECLARED type ask for the unsigned reading? Only a declaration can — the
+  /// `declaredNonNegative` third of shv2's `IntegerValueDomain`. A folded constant that merely FITS
+  /// one asks for nothing, which is what keeps `3 &lt; 4` (two constants, no ranged type anywhere) on
+  /// the signed compare this compiler has always emitted.
+  private bool OperandDeclaresNonNegative(ExprResult operandExpr, MaxonValue operand) =>
+    DeclaredIntRange(operandExpr, operand) is { } range && range.Low >= 0;
+
+  /// Does this operand ADMIT the unsigned reading — i.e. is it non-negative? The `signed` third of
+  /// shv2's `IntegerValueDomain`, inverted: a declared range that admits a negative, a negative
+  /// constant, and a value with NO range at all (which means the whole of `i64`, not "no constraint")
+  /// all answer false, and any one of them refuses the unsigned reading for the pair.
+  ///
+  /// ⚠ The `u64.max` arm is asked BEFORE the folded constant, because that constant is `-1`. See
+  /// <see cref="_unsignedMaxLiterals"/> for the wrong answer that ordering prevents.
+  private bool ComparisonOperandIsUnsigned(ExprResult operandExpr, MaxonValue operand) {
+    if (DeclaredIntRange(operandExpr, operand) is { } declared) return declared.Low >= 0;
+    if (_unsignedMaxLiterals.Contains(operand.Id)) return true;
+    return TryFoldIntConst(operand) is { } folded && folded.Value >= 0;
   }
 
   /// The two ranges' union, or null when no 64-bit reading holds both. A range whose low bound is

@@ -182,9 +182,17 @@ let opI64Eq = 0x51
 let opI64Ne = 0x52
 let opI64LtS = 0x53
 let opI64GtS = 0x55
-let opI64GeU = 0x5A  // i64.ge_u — the jump table's UNSIGNED 64-bit bounds check (wrapped-negative → out of range)
 let opI64LeS = 0x57
 let opI64GeS = 0x59
+// The UNSIGNED four. `ge_u` predates the others by a rung — the jump table's bounds check reached for it
+// alone — and the ordering-comparison rule needs the whole family, so the comment it carried now sits at
+// its emitter with the others rather than on the constant. They are contiguous in the encoding with their
+// signed twins (`lt_s` 0x53 / `lt_u` 0x54, and so on), which is the encoding's own statement that a
+// comparison's signedness is a property of the INSTRUCTION here rather than of the operands.
+let opI64LtU = 0x54
+let opI64GtU = 0x56
+let opI64LeU = 0x58
+let opI64GeU = 0x5A
 
 // ⚠ NO `i32.div_s`/`i32.rem_s`, and no i32 multiply, bitwise-and/or or shift either — the absence is
 // DELIBERATE (X5 and its review). `div`/`mod` are the two Std ops with no operand type, and the rest
@@ -546,9 +554,28 @@ export type WasmBody
 		self.buf.push(opI64GeS)
 	end 'i64GeS'
 
-	// i64.ge_u — the jump table's unsigned 64-bit bounds check: a wrapped-negative biased index reads as a
-	// huge unsigned value, so `biased u>= span` routes it to the default exactly as x64's `jae` / arm64's
-	// `b.hs` do (a plain `i32.wrap` + `br_table` would only bound-check the low 32 bits).
+	// ⭐ THE UNSIGNED FOUR — the family an ordering comparison takes when both operands' declared ranges
+	// say their top bit is a value bit (`TypeRules`' ⭐⭐ THE ORDERING-COMPARISON SIGNEDNESS RULE), and the
+	// exact counterpart of x64's `jb`/`ja` and arm64's `lo`/`hi`. Unlike those two targets, wasm has no
+	// flags: the signedness rides in the OPCODE, so there is nothing here to choose a condition code with
+	// and the whole decision is which of these eight functions the predicate maps to.
+	//
+	// ⚠ `i64.ge_u` HAS A SECOND, OLDER CALLER and it is not this rule: the jump table's unsigned 64-bit
+	// bounds check, where a wrapped-negative biased index reads as a huge unsigned value so `biased u>=
+	// span` routes it to the default exactly as x64's `jae` / arm64's `b.hs` do (a plain `i32.wrap` +
+	// `br_table` would only bound-check the low 32 bits). One encoder, two reasons to want it.
+	export function i64LtU()
+		self.buf.push(opI64LtU)
+	end 'i64LtU'
+
+	export function i64GtU()
+		self.buf.push(opI64GtU)
+	end 'i64GtU'
+
+	export function i64LeU()
+		self.buf.push(opI64LeU)
+	end 'i64LeU'
+
 	export function i64GeU()
 		self.buf.push(opI64GeU)
 	end 'i64GeU'

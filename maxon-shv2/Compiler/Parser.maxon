@@ -2344,6 +2344,11 @@ let sharedEmptyBufferSurfaceSlots = ValueSlotSurfaceMap.create()
 // pattern, for its reason and with its invariant.
 let sharedEmptyBufferSurfaceElements = ValueMarkSet.create()
 
+// The module-level shared EMPTY unsigned-extreme literal mark set — `sharedEmptyBufferSurfaceValues`'s
+// pattern, for its reason and with its invariant. Empty in every program that never writes `u64.max` in
+// expression position, which is very nearly all of them.
+let sharedEmptyUnsignedMaxLiterals = ValueMarkSet.create()
+
 // The module-level shared EMPTY SIZED-CONTAINER buffer mark set (W192) — `sharedEmptyBufferSurfaceValues`'s
 // pattern, for its reason and with its invariant. Its own anchor and not one of the three above, because
 // the `is` identity test that decides whether a column has been minted yet reads as a claim about WHICH
@@ -11964,6 +11969,31 @@ export type Parser
 	// names `__ManagedMemory` — sharing the same module-level empty anchor discipline. Reset per function and
 	// SWAPPED across a closure body, exactly like the sibling value marks.
 	var bufferSurfaceValues as ValueMarkSet
+	// ⭐⭐ **THE LITERALS WHOSE PATTERN IS NEGATIVE AND WHOSE VALUE IS NOT — every `u64.max` written in
+	// EXPRESSION position, and nothing else can be in it.**
+	//
+	// `u64.max` does not fit a signed 64-bit field and rides as the wrapped `-1` (`U64MaxBound`, and see
+	// `ParsedRangeBound.namesUnsignedMax`, which is where the fact is DERIVED — this set only carries it
+	// from the one site that materializes such a literal to the one site that asks). So the parser's
+	// constant column holds `-1` for it, and `integerValueDomain`'s `constOf(value) >= 0` test — which is
+	// a SIGNED read of a pattern — answers `signed` for a value the author wrote as the largest
+	// non-negative number there is.
+	//
+	// ⚠ **WITHOUT IT, `x > u64.max` IS A WRONG ANSWER AND NOT MERELY A MISSED OPTIMIZATION.** With `x`
+	// declared `int(0 to u64.max)` the pair reads (declaredNonNegative, signed), the ordering rule
+	// refuses the unsigned reading on the strength of the literal, and `3 > -1` answers **true** for a
+	// comparison against the maximum of the domain — the case this whole rule was reported for.
+	//
+	// ⚠ **AND IT MUST NOT BE WIDENED TO "ANY NEGATIVE CONSTANT", which is why it is a mark and not a
+	// test.** A literal `-1` the author actually wrote is a genuinely negative operand: `x > -1` for the
+	// same `x` is TRUE at every value, and reading that `-1` as `u64.max` would answer false. The two are
+	// the same 64 bits and are told apart only by what the source wrote, which is exactly what
+	// `namesUnsignedMax` records and nothing downstream can re-derive.
+	//
+	// A per-value mark is sound here for `emitLiteralIn`'s reason: every literal mints a FRESH ValueId
+	// (no interning), so a mark on one occurrence cannot reach another value. Sparse, reset per function
+	// and SWAPPED across a closure body, exactly like the sibling value marks.
+	var unsignedMaxLiterals as ValueMarkSet
 	// ⭐ **WHICH OF A TUPLE VALUE'S SLOTS DENOTE THE BUFFER (A2m)** — `bufferSurfaceValues` one container
 	// deeper, and a SEPARATE carrier because a tuple slot and a whole value are different facts: `p` is an
 	// ordinary tuple record whatever `p.0` denotes. Written where a declaration that spelled a tuple binds its
@@ -12815,6 +12845,7 @@ export type Parser
 			recordsHoldingReferencedOpaqueSlots: sharedEmptyReferencedOpaqueRecords,
 			callReferencedAnOpaqueFeedSlot: false,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
+			unsignedMaxLiterals: sharedEmptyUnsignedMaxLiterals,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
 			bufferSurfaceElements: sharedEmptyBufferSurfaceElements,
 			sizedContainerBufferValues: sharedEmptySizedContainerBufferValues,
@@ -24290,6 +24321,9 @@ export type Parser
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
 		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
 		self.sizedContainerBufferValues = sharedEmptySizedContainerBufferValues
+		// The unsigned-extreme literal marks are per-function for the same reason: ValueIds are
+		// function-local, so a mark left standing would name a DIFFERENT value in the next function.
+		self.unsignedMaxLiterals = sharedEmptyUnsignedMaxLiterals
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias name
 		// and the PARAMETER alias names are fixed by the DECLARED signature and known here, before the
 		// body is parsed and before `resolveTypes` erases either; the three site lists fill as the body
@@ -43602,10 +43636,17 @@ export type Parser
 	// `named` value, a boxed union's loaded i64 tag, a scalar int/char/bool, an `Ordering` case tag, or a
 	// minted error flag, and the literal is an i64. There is no operand type left to check, which is exactly
 	// what makes the bypass a narrowing of `emitCompare` rather than an evasion of it.
+	// ⭐ **SIGNED, AND THAT IS A STATEMENT ABOUT THE SUBJECTS RATHER THAN A DEFAULT.** Every operand this
+	// bypass compares is a COMPILER-MINTED SMALL NON-NEGATIVE NUMBER against an i64 literal — an enum's
+	// declaration-order tag, a boxed union's loaded tag, an `Ordering` case, a minted error flag, a
+	// binary-search pivot over those same tags. None is a value whose DECLARED RANGE reaches the top bit,
+	// so the two readings agree on every value any caller can produce, and `signed` is the answer rather
+	// than the absence of one. (A SOURCE comparison — the one place a declared range can say otherwise —
+	// goes through `emitCompare`, which asks `TypeRules`' ordering rule.)
 	function emitCompareAgainstLiteral(subject ValueId, literal ParsedInt, op MaxonCmpOp, opTok Token) returns ValueId
 		let rhs = self.emitLiteral(literal, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: subject, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: subject, rhs: rhs, op: op, signedness: IntegerSignedness.signed), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitCompareAgainstLiteral'
 
@@ -47105,6 +47146,17 @@ export type Parser
 			undeclared then break 'declaredType'
 		end 'declaredType'
 
+		// ⭐⭐ **`u64.max` IS A NON-NEGATIVE CONSTANT WHOSE PATTERN IS NEGATIVE, and the test below is a
+		// SIGNED read of a pattern.** Asked FIRST, because `constOf` would answer `-1` for it and send the
+		// whole comparison down the signed arm — see `unsignedMaxLiterals` for the wrong answer that is.
+		// It answers `provablyNonNegative` rather than `declaredNonNegative` for the same reason every
+		// other folded constant does: a LITERAL fits an unsigned reading and does not ASK for one, so
+		// `u64.max > u64.max` (two literals, no declared type anywhere) keeps the signed compare it has
+		// always emitted — and answers `false`, which is right in both readings.
+		if self.unsignedMaxLiterals.contains(value) 'theUnsignedExtreme'
+			return IntegerValueDomain.provablyNonNegative
+		end 'theUnsignedExtreme'
+
 		if self.constIsKnown(value) and self.constOf(value) >= 0 'fitsWithoutAsking'
 			return IntegerValueDomain.provablyNonNegative
 		end 'fitsWithoutAsking'
@@ -47632,9 +47684,109 @@ export type Parser
 		let right = rhs if identityEquality else self.floatBehindEnumValue(rhs, anchor: opTok)
 
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: left, rhs: right, op: op), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: left, rhs: right, op: op, signedness: self.comparisonSignedness(left, rhs: right, op: op, leftTag: leftNumberTag, rightTag: rightNumberTag)), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitCompare'
+
+	// ⭐⭐ **DOES THIS SOURCE COMPARISON RUN UNSIGNED?** — the parser's half of `TypeRules`' ⭐⭐ THE
+	// ORDERING-COMPARISON SIGNEDNESS RULE, and the exact shape of `divisionRunsUnsigned` one operator
+	// family over: it reads each operand's domain and hands the PAIR to the rule, which is stated once,
+	// there, over `IntegerValueDomain` alone.
+	//
+	// ⚠ **TWO GATES COME FIRST, AND NEITHER IS A SHORTCUT.**
+	//
+	//   • FLOAT. `ucomisd` has no signedness at all — it answers in ZF/PF/CF whatever the operands are —
+	//     and a float compare ALREADY uses the unsigned condition family for that reason
+	//     (`floatCondCodeForPred`). Asking the integer question of it would be asking which of two
+	//     readings a comparison has when it has one; `unsignedStdTypeOf` panics on a float precisely so
+	//     a future edit that dropped this gate is a loud failure rather than a wrong condition code.
+	//     Asked through `operandsAreFloat`, the same predicate `divisionRunsUnsigned` uses.
+	//   • ORDERING. `==`/`!=` read ZF alone, which `cmp` writes identically in both readings, so they
+	//     are already right at every value — and routing them through the rule would move every equality
+	//     golden in the corpus to emit the byte-identical instruction. See the rule's ⚠⚠ note.
+	//
+	// ⚠ **IT ASKS THE NUMBER TAGS, NOT THE RAW ONES, and that is `emitCompare`'s own float-backed-enum
+	// split arriving here.** By this point a float-backed enum operand has been decoded to its number
+	// (`floatBehindEnumValue`), so the tag that says whether this pair meets in the float domain is the
+	// NUMBER tag the caller already computed — the same pair it type-checked with. Reading the raw tags
+	// would ask about a `named` enum value that no longer reaches the compare.
+	function comparisonSignedness(lhs ValueId, rhs ValueId, op MaxonCmpOp, leftTag ValueTypeTag, rightTag ValueTypeTag) returns IntegerSignedness
+		if operandsAreFloat(leftTag, right: rightTag) 'floatCompare'
+			return IntegerSignedness.signed
+		end 'floatCompare'
+
+		if not comparisonReadsOrdering(op) 'equalityReadsOneFlag'
+			return IntegerSignedness.signed
+		end 'equalityReadsOneFlag'
+
+		if not comparisonOperandsAreUnsigned(self.integerValueDomain(lhs), right: self.integerValueDomain(rhs)) 'signedReading'
+			return IntegerSignedness.signed
+		end 'signedReading'
+
+		if not self.comparisonNeedsTheUnsignedReading(lhs, rhs: rhs) 'bothReadingsAgree'
+			return IntegerSignedness.signed
+		end 'bothReadingsAgree'
+
+		return IntegerSignedness.unsigned
+	end 'comparisonSignedness'
+
+	// ⭐⭐ **CAN THE TWO READINGS ACTUALLY DISAGREE HERE?** — the clause that keeps this rule off every
+	// comparison whose answer it would not change, and the one that makes it SAFE against a declared
+	// range the program does not keep.
+	//
+	// ⚠⚠ **A DECLARED RANGE IS NOT A PROOF, AND THIS LANGUAGE'S OWN STANDARD LIBRARY RELIES ON THAT.**
+	// Nothing range-checks an argument at a ranged parameter in either compiler (`Array.isOutsideLiveRange`
+	// states it outright), so a value OUTSIDE its declared range arrives intact — and `stdlib` does not
+	// merely tolerate that, it BUILDS ON IT: `Map.findSlot` returns `-(insertIndex + 1)` to encode "not
+	// found", through a return type declared `TableSlotIndex = int(0 to u64.max)`. The test that decodes
+	// that sentinel is `if slotIndex >= 0`. Read unsigned, it is ALWAYS TRUE — every insert takes the
+	// found path with a negative index, and `Array.set` panics.
+	//
+	// MEASURED without this clause: **81 behaviour failures** in the bootstrap's own suite, nearly all of
+	// them one cause — `map`, `array-slots`, `error-handling`, `string`… every cone that decodes a
+	// negative sentinel out of a non-negatively-declared type. A census found **72** comparisons against
+	// zero in `stdlib/` alone, and the ones that matter (`rawId < 0`, `owningP < 0`, `prior < 0`,
+	// `slotIndex >= 0`, `index < 0`) are all of exactly this shape.
+	//
+	// ⇒ **A FOLDED CONSTANT THAT FITS THE SIGNED DOMAIN IS EVIDENCE FOR THE SIGNED READING**, and the
+	// clause is stated that way rather than as a list of the idioms it protects. It is the same three-way
+	// distinction `IntegerValueDomain` already draws, one step further: a constant that FITS both readings
+	// does not merely fail to ask for the unsigned one — against an operand whose declared range reaches
+	// past `i64.max`, it is the only thing in the expression that says which reading the author meant.
+	//
+	// ⚠ **THE PRICE IS NAMED RATHER THAN HIDDEN: `wide > 100` KEEPS THE SIGNED READING and is WRONG for a
+	// `wide` above `i64.max`.** That is a real hole and it is the deliberate half of this trade — the
+	// alternative is believing a declaration the standard library contradicts on purpose. Closing it needs
+	// the ranges to become true (enforced parameters, and a signed `TableSlotIndex`), not a wider rule here.
+	function comparisonNeedsTheUnsignedReading(lhs ValueId, rhs ValueId) returns bool
+		if self.operandFitsTheSignedDomain(lhs) or self.operandFitsTheSignedDomain(rhs) 'aSignedConstantIsPresent'
+			return false
+		end 'aSignedConstantIsPresent'
+
+		return self.operandReachesAboveSignedMax(lhs) or self.operandReachesAboveSignedMax(rhs)
+	end 'comparisonNeedsTheUnsignedReading'
+
+	// Is this operand a FOLDED CONSTANT the signed domain holds? `u64.max` is excluded by name rather
+	// than by value: it is the one constant whose stored pattern is negative and whose value is not (see
+	// `unsignedMaxLiterals`), so a value test would answer this question about a number nobody wrote.
+	function operandFitsTheSignedDomain(value ValueId) returns bool
+		return self.constIsKnown(value) and not self.unsignedMaxLiterals.contains(value)
+	end 'operandFitsTheSignedDomain'
+
+	// Can this operand hold a value the SIGNED reading gets wrong — i.e. one above `i64.max`? Only two
+	// things can say so: a DECLARED range whose upper bound has wrapped past `i64.max`
+	// (`rangeIsUnsignedMaxUpper`, the same predicate the range declaration checks with), and the
+	// `u64.max` literal itself.
+	function operandReachesAboveSignedMax(value ValueId) returns bool
+		if self.unsignedMaxLiterals.contains(value) 'theUnsignedExtreme'
+			return true
+		end 'theUnsignedExtreme'
+
+		match self.domainDeclaringAlias(value) 'declaredType'
+			declared(alias) then return rangeIsUnsignedMaxUpper(alias.low, high: alias.high)
+			undeclared then return false
+		end 'declaredType'
+	end 'operandReachesAboveSignedMax'
 
 	// ⭐⭐ **`a is b` / `a is not b` — DO THESE TWO NAMES DENOTE ONE OBJECT?** (`specs/reference-identity.md`.)
 	// The deliberate opposite of `emitCompare`: that one answers about CONTENTS and dispatches a type's own
@@ -47673,8 +47825,11 @@ export type Parser
 			throw ParseError.refIdentityTypeMismatch(op, left: self.valueDisplayTypeName(lhs), right: self.valueDisplayTypeName(rhs), line: opTok.line, column: opTok.column)
 		end 'typeMismatch'
 
+		// SIGNED, and unconditionally: `is` is an EQUALITY of two addresses, and `cmp`+`je` answers the
+		// same for two bit patterns in either reading. There is no ordering spelling of this operator to
+		// which the question could apply.
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: MaxonCmpOp.ne if negate else MaxonCmpOp.eq), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: MaxonCmpOp.ne if negate else MaxonCmpOp.eq, signedness: IntegerSignedness.signed), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitReferenceIdentity'
 
@@ -49482,7 +49637,7 @@ export type Parser
 			return
 		end 'formatted'
 
-		let signedness = DivideSignedness.unsigned if valueRendersUnsigned(self.integerValueDomain(value)) else DivideSignedness.signed
+		let signedness = IntegerSignedness.unsigned if valueRendersUnsigned(self.integerValueDomain(value)) else IntegerSignedness.signed
 		self.materializeScratchPart(value, converter: integerToStringName(signedness), scratchBytes: integerToStringScratchBytes(signedness), partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 	end 'materializeIntegerPart'
 
@@ -66913,7 +67068,19 @@ export type Parser
 	function parseTypeQualifiedBoundExpression() returns ValueId throws ParseError
 		let boundTok = self.current()
 		let bound = try self.parseTypeQualifiedBound(false)
-		return self.emitLiteral(bound.value, valueType: MaxonType.integer, range: SourceRange.ofToken(boundTok))
+		let value = self.emitLiteral(bound.value, valueType: MaxonType.integer, range: SourceRange.ofToken(boundTok))
+
+		// ⭐ **THE ONE SITE THAT KNOWS, MARKING FOR THE ONE SITE THAT ASKS** (`unsignedMaxLiterals`). The
+		// bound already carries `namesUnsignedMax` — derived at construction from the qualifier and the
+		// value, for the range-declaration check — so this is a hand-off of an existing fact and not a
+		// second derivation of it. Every other extreme (`i64.max`, `u32.max`, `i8.min`) materializes a
+		// pattern whose signed reading IS its value, so none of them needs marking and none is marked.
+		if bound.namesUnsignedMax 'wroteTheUnsignedExtreme'
+			self.unsignedMaxLiterals = privateValueMarkSet(self.unsignedMaxLiterals, anchor: sharedEmptyUnsignedMaxLiterals)
+			self.unsignedMaxLiterals.insert(value)
+		end 'wroteTheUnsignedExtreme'
+
+		return value
 	end 'parseTypeQualifiedBoundExpression'
 
 	// Resolve a variable reference to the SSA value its binding aliases — M2's

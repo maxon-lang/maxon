@@ -2675,16 +2675,16 @@ function buildGtNowNs(module StdModule)
 	module.appendOp(entry, op: StdOp.const(billion, value: NanosPerSecond, valueType: StdType.i64))
 	// wholeSecs = ticks / freq ; wholeNs = wholeSecs * 1e9.
 	let wholeSecs = ids.mint()
-	module.appendOp(entry, op: StdOp.div(wholeSecs, lhs: ticks, rhs: freq, signedness: DivideSignedness.signed))
+	module.appendOp(entry, op: StdOp.div(wholeSecs, lhs: ticks, rhs: freq, signedness: IntegerSignedness.signed))
 	let wholeNs = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(wholeNs, lhs: wholeSecs, rhs: billion, opcode: StdBinOpcode.mul, operandType: StdType.i64))
 	// fracNs = ((ticks mod freq) * 1e9) / freq — the sub-second remainder, exact and overflow-free.
 	let rem = ids.mint()
-	module.appendOp(entry, op: StdOp.mod(rem, lhs: ticks, rhs: freq, signedness: DivideSignedness.signed))
+	module.appendOp(entry, op: StdOp.mod(rem, lhs: ticks, rhs: freq, signedness: IntegerSignedness.signed))
 	let remNs = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(remNs, lhs: rem, rhs: billion, opcode: StdBinOpcode.mul, operandType: StdType.i64))
 	let fracNs = ids.mint()
-	module.appendOp(entry, op: StdOp.div(fracNs, lhs: remNs, rhs: freq, signedness: DivideSignedness.signed))
+	module.appendOp(entry, op: StdOp.div(fracNs, lhs: remNs, rhs: freq, signedness: IntegerSignedness.signed))
 	let ns = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(ns, lhs: wholeNs, rhs: fracNs, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.setTerminator(entry, op: StdOp.ret(ns))
@@ -3098,7 +3098,7 @@ function emitCeilMs(module StdModule, block IrBlock, ids ValueMinter, earliest V
 	let milliConst = ids.mint()
 	module.appendOp(block, op: StdOp.const(milliConst, value: NanosPerMilli, valueType: StdType.i64))
 	let deltaMs = ids.mint()
-	module.appendOp(block, op: StdOp.div(deltaMs, lhs: deltaRounded, rhs: milliConst, signedness: DivideSignedness.signed))
+	module.appendOp(block, op: StdOp.div(deltaMs, lhs: deltaRounded, rhs: milliConst, signedness: IntegerSignedness.signed))
 	return deltaMs
 end 'emitCeilMs'
 

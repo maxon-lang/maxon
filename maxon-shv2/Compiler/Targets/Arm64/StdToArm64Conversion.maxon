@@ -256,14 +256,25 @@ end 'arm64IndirectResultRegister'
 //     in the direct then-branch sense used here, `gt`/`ge` are correct. `Arm64CondCode`'s header
 //     carries the same fact at the enum itself, where the wrong edit would be made.)
 //   • `==` → `eq`, `!=` → `ne`: correct with NO parity bit, because `fcmp` sets Z=0 on unordered.
-function arm64CondForPred(pred StdCmpPred, isFloat bool) returns Arm64CondCode
+//
+// ⭐⭐ **AND AN UNSIGNED INTEGER TAKES THE THIRD FAMILY — `hs`/`lo`/`hi`/`ls`, which read C where the
+// signed codes read N and V.** `cmp` is one subtraction that writes all four flags, so the instruction
+// is already both answers and only the CONDITION picks between them; an operand type of `u64` is what
+// says which. The x64 twin makes the identical split for the identical reason (`condCodeForPred`), and
+// the two must: a `<` that answered differently on the two targets for the same declared ranges is the
+// cross-target class this repository gates for.
+function arm64CondForPred(pred StdCmpPred, isFloat bool, isUnsigned bool) returns Arm64CondCode
 	if isFloat 'float'
 		return arm64FloatCondForPred(pred)
 	end 'float'
+	if isUnsigned 'unsignedInteger'
+		return arm64UnsignedCondForPred(pred)
+	end 'unsignedInteger'
 	return arm64SignedCondForPred(pred)
 end 'arm64CondForPred'
 
-// The SIGNED integer condition codes — every Std integer is a signed i64.
+// The SIGNED integer condition codes — the reading every Std integer compare had before the ordering
+// rule, and still the reading for every operand pair that admits a negative.
 function arm64SignedCondForPred(pred StdCmpPred) returns Arm64CondCode
 	return match pred 'map'
 		eq gives Arm64CondCode.eq
@@ -274,6 +285,26 @@ function arm64SignedCondForPred(pred StdCmpPred) returns Arm64CondCode
 		ge gives Arm64CondCode.ge
 	end 'map'
 end 'arm64SignedCondForPred'
+
+// The UNSIGNED integer condition codes — the exact mirror of `arm64SignedCondForPred`, over the four
+// codes that read the CARRY flag rather than N/V. `==`/`!=` are the same `eq`/`ne` in both families,
+// because Z is written identically by either reading; only the four ORDERING codes differ, which is the
+// whole of what the ordering rule decides.
+//
+// ⚠ NOT the float family, even though arm64 spells `<=` as `ls` in both. `ls` is C==0 ∨ Z==1 — unsigned
+// `<=` — and the float table reaches it for a DIFFERENT reason (it is false on unordered). The two
+// tables agree on that one entry and disagree on `lt` (`lo` here, `mi` there), so sharing them would be
+// a coincidence doing the work of a rule.
+function arm64UnsignedCondForPred(pred StdCmpPred) returns Arm64CondCode
+	return match pred 'map'
+		eq gives Arm64CondCode.eq
+		ne gives Arm64CondCode.ne
+		lt gives Arm64CondCode.lo
+		gt gives Arm64CondCode.hi
+		le gives Arm64CondCode.ls
+		ge gives Arm64CondCode.hs
+	end 'map'
+end 'arm64UnsignedCondForPred'
 
 // The NaN-safe FLOAT condition codes (see `arm64CondForPred`). `<`/`<=` take the N-flag / carry
 // conditions; `>`/`>=` the signed-shaped ones that `fcmp`'s N=0,V=1-on-NaN makes false on unordered.
@@ -311,11 +342,11 @@ function arm64ShiftInstrOf(opcode StdBinOpcode) returns Arm64ShiftInstr
 	end 'o'
 end 'arm64ShiftInstrOf'
 
-// The arm64 divide instruction a `DivideSignedness` names — `sdiv` or `udiv`, which differ in one
+// The arm64 divide instruction a `IntegerSignedness` names — `sdiv` or `udiv`, which differ in one
 // encoding bit and in nothing else (same 3-address shape, same non-trapping zero-divisor behaviour).
 // Beside `arm64ShiftInstrOf` because it is the same kind of mapping: a front-end signedness fact
 // turned into the one instruction that implements it, in the one place the answer is spelled.
-function arm64DivideOp(dest TargetVReg, lhs TargetVReg, rhs TargetVReg, signedness DivideSignedness) returns TargetOp
+function arm64DivideOp(dest TargetVReg, lhs TargetVReg, rhs TargetVReg, signedness IntegerSignedness) returns TargetOp
 	return match signedness 's'
 		signed gives TargetOp.arm64Sdiv(dest, lhs: lhs, rhs: rhs)
 		unsigned gives TargetOp.arm64Udiv(dest, lhs: lhs, rhs: rhs)
@@ -1076,7 +1107,7 @@ type StdToArm64Lowering
 	// adopts that — `a / 0` is 0, and the divide/modulo-by-zero tests are gated to x64-windows (see the
 	// file header / safety.md). So the division lowers straight into `dstRef` and never splits the block.
 	//
-	// ⭐ **THE SIGNEDNESS IS THE OP'S, NOT AN OPERAND'S** (X10, `DivideSignedness`). arm64 was the target
+	// ⭐ **THE SIGNEDNESS IS THE OP'S, NOT AN OPERAND'S** (X10, `IntegerSignedness`). arm64 was the target
 	// where the SIGNED reading happened to be harmless for the sibling operators — a "32-bit" binop is
 	// emitted at 64 bits here — but a divide's signedness is real on every target, and `udiv` was already
 	// declared, printed, coloured and encoded with only this isel never reaching for it.
@@ -1087,7 +1118,7 @@ type StdToArm64Lowering
 	// the value space), so it goes through the IP scratch x16: `sdiv x16, lhs, divisor; msub dest, x16,
 	// divisor, lhs`. x16 is non-allocatable, so no value is coloured into it across the pair — see
 	// `Arm64Scratch` for why "adjacent" is not the argument and what is.
-	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness DivideSignedness, dstRef BlockRef)
+	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness IntegerSignedness, dstRef BlockRef)
 		let divisor = TargetVReg.virtual(rhs)
 		let dest = TargetVReg.virtual(resultId)
 		let lhsReg = TargetVReg.virtual(lhs)
@@ -1110,7 +1141,7 @@ type StdToArm64Lowering
 		end 'float' else 'int'
 			self.emit(dstRef, op: TargetOp.arm64Cmp(TargetVReg.virtual(lhs), rhs: TargetVReg.virtual(rhs)))
 		end 'int'
-		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: isFloat)))
+		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: isFloat, isUnsigned: stdTypeIsUnsigned(operandType))))
 	end 'lowerCmp'
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, #imm` + `cset`. `cmpImm` is INTEGER by
@@ -1139,7 +1170,7 @@ type StdToArm64Lowering
 			self.emit(dstRef, op: TargetOp.arm64Cmp(lhsReg, rhs: scratch))
 		end 'materialise'
 
-		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: stdTypeIsFloat(operandType))))
+		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: stdTypeIsFloat(operandType), isUnsigned: stdTypeIsUnsigned(operandType))))
 	end 'lowerCmpImm'
 
 	// Lower a Std `condBranch` to `cbnz cond, <then>` + `b <else>`. The condition is always an ordinary

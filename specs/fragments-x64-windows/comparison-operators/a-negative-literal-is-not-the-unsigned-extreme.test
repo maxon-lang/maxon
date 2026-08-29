@@ -1,0 +1,46 @@
+// Test: a-negative-literal-is-not-the-unsigned-extreme
+typealias Wide = int(0 to u64.max)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function main() returns ExitCode
+	let three = wide(3 as Wide)
+
+	if three > 0 - 1 'aboveNegativeOne'
+		return 42
+	end 'aboveNegativeOne'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @wide(n: i64) -> u64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 3
+    x64.call wide
+    x64.xor ecx, ecx
+    x64.mov rdx, 1
+    x64.sub rcx, rdx
+    x64.cmp rax, rcx
+    x64.jle main.aboveNegativeOne_0.after
+  aboveNegativeOne_0:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  aboveNegativeOne_0.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

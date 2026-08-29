@@ -270,22 +270,22 @@ export let BoolToStringName = b"__bool_to_string"
 // ⭐ **WHICH DECIMAL RENDERER, AND WHAT SCRATCH IT NEEDS — the two halves of ONE choice.** The signed
 // budget is one byte wider (the sign), so the dangerous pairing is the signed renderer with the unsigned
 // budget: `i64.min` would write 21 bytes into a 20-byte scratch. Both are keyed off the same
-// `DivideSignedness` — the very enum the builder's own divides carry — and the one selection site
+// `IntegerSignedness` — the very enum the builder's own divides carry — and the one selection site
 // (`Parser.materializeInterpExpr`) reads both off ONE local, so the wrong pairing cannot be reached by
 // deciding twice.
 //
 // ⚠ It is not made UNREPRESENTABLE by the types, and saying so would be a claim the signatures do not
 // keep: `integerToStringName(unsigned)` and `integerToStringScratchBytes(signed)` type-check. What rules
 // it out is that no caller derives the signedness twice — so a SECOND selection site must take both from
-// one decision too, or pass the `DivideSignedness` itself rather than its two answers.
-export function integerToStringName(signedness DivideSignedness) returns ByteArray
+// one decision too, or pass the `IntegerSignedness` itself rather than its two answers.
+export function integerToStringName(signedness IntegerSignedness) returns ByteArray
 	return match signedness 'reading'
 		signed gives IntToStringName
 		unsigned gives UIntToStringName
 	end 'reading'
 end 'integerToStringName'
 
-export function integerToStringScratchBytes(signedness DivideSignedness) returns ParsedInt
+export function integerToStringScratchBytes(signedness IntegerSignedness) returns ParsedInt
 	return match signedness 'reading'
 		signed gives IntToStringScratchBytes
 		unsigned gives UIntToStringScratchBytes
@@ -657,10 +657,10 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 		buildStrCopy(module)
 	end 'strcopy'
 	if usage.usesIntToString 'inttostr'
-		buildIntegerToString(module, signedness: DivideSignedness.signed)
+		buildIntegerToString(module, signedness: IntegerSignedness.signed)
 	end 'inttostr'
 	if usage.usesUIntToString 'uinttostr'
-		buildIntegerToString(module, signedness: DivideSignedness.unsigned)
+		buildIntegerToString(module, signedness: IntegerSignedness.unsigned)
 	end 'uinttostr'
 	if usage.usesBoolToString 'booltostr'
 		buildBoolToString(module)
@@ -868,7 +868,7 @@ end 'RenderedSign'
 // Values dominating from `entry`/`setup` (`value`, `dest`, `neg`, `sign`) are read directly in the loop
 // blocks those dominate; only the loop-variant `digits`/`v`/`pos` ride block-args. `len` is computed once
 // in `writeSetup`, which dominates `done`.
-function buildIntegerToString(module StdModule, signedness DivideSignedness)
+function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	var func = IrFunction.createFromStd(integerToStringName(signedness), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
@@ -999,8 +999,8 @@ end 'buildIntegerToString'
 // `dest[0]`. The unsigned rendering emits NO OP AT ALL — not a `const 0` and a `const 1` for the shared
 // graph to multiply by, which would cost a needless multiply per digit and an add per call for two values
 // that are identities. See `RenderedSign`.
-function emitRenderedSign(module StdModule, block IrBlock, ids ValueMinter, value ValueId, dest ValueId, signedness DivideSignedness) returns RenderedSign
-	// A `match` rather than an equality test, so a third reading added to `DivideSignedness` fails to
+function emitRenderedSign(module StdModule, block IrBlock, ids ValueMinter, value ValueId, dest ValueId, signedness IntegerSignedness) returns RenderedSign
+	// A `match` rather than an equality test, so a third reading added to `IntegerSignedness` fails to
 	// compile here instead of silently taking the signed path and writing a `-` nothing asked for.
 	match signedness 'reading'
 		unsigned then return RenderedSign.unsigned

@@ -1,0 +1,86 @@
+// Test: wide-unsigned-ordering-against-a-narrow-range
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 100)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function narrow(n Narrow) returns Narrow
+	return n
+end 'narrow'
+
+function main() returns ExitCode
+	let big = wide(u64.max)
+	let small = narrow(3 as Narrow)
+
+	if big > small 'ordered'
+		return 42
+	end 'ordered'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @wide(n: i64) -> u64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @narrow(n: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov rdx, 100
+    x64.cmp rcx, rdx
+    x64.jg narrow.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl narrow.__range_panic_0
+    x64.jmp narrow.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.xor esi, esi
+    x64.mov rdi, 100
+    x64.cmp rbx, rdi
+    x64.jg narrow.__range_panic_1
+    x64.cmp rbx, rsi
+    x64.jl narrow.__range_panic_1
+    x64.jmp narrow.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, -1
+    x64.call wide
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 3
+    x64.call narrow
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jbe main.ordered_0.after
+  ordered_0:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  ordered_0.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

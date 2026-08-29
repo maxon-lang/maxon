@@ -1197,12 +1197,60 @@ end 'valueRendersUnsigned'
 // so the union's WIDTH has nothing to choose and only its SIGNEDNESS does. The two compilers therefore
 // pick the same instruction from the same two ranges.
 export function divisionOperandsAreUnsigned(dividend IntegerValueDomain, divisor IntegerValueDomain) returns bool
-	if dividend == IntegerValueDomain.signed or divisor == IntegerValueDomain.signed 'eitherAdmitsANegative'
+	return operandPairAsksForUnsigned(dividend, right: divisor)
+end 'divisionOperandsAreUnsigned'
+
+// ⭐⭐ **THE ORDERING-COMPARISON SIGNEDNESS RULE: `<`, `>`, `<=`, `>=` RUN AT A SIGNEDNESS VALID FOR BOTH
+// OPERANDS** — the DIVIDE's rule (above) asked of the second family whose answer the reading changes.
+//
+// ⚠ **IT IS THE SAME RULE AND THE SAME PAIR PREDICATE, DELIBERATELY.** `w < x` and `w / x` are refused
+// an unsigned reading by the same operand and licensed by the same one, and two spellings of that would
+// be free to disagree about the middle domain — which is the whole reason `IntegerValueDomain` has three
+// answers rather than two. So this is a NAME for the family it governs, over one shared body.
+//
+// ⚠⚠ **`==`/`!=` ARE NOT HERE, AND THAT IS A FACT ABOUT THE INSTRUCTION RATHER THAN A NARROWING.**
+// `cmp` writes the same ZF for the same two bit patterns however you read them, and `je`/`jne` read only
+// ZF — so equality is ALREADY correct at every value, in both compilers, and routing it through this
+// would move thousands of goldens to emit the identical instruction. The four ORDERING codes are the
+// ones that read OF/SF (signed) or CF (unsigned) and therefore answer differently: MEASURED before this
+// rule, with `big` and `three` both declared `int(0 to u64.max)` and `big` holding `u64.max`,
+// `three < big` answered **false** in BOTH compilers — `jl` reading `0xFFFF…FF` as `-1`.
+//
+// ⚠ **THE PAIR IS WHAT MAKES IT SOUND, and a one-sided reading is the bug the BOOTSTRAP had.** Its gate
+// excluded comparisons from an optimal type entirely (`2-Parser.cs`), and the arm it would otherwise have
+// fallen into takes *"the FIRST ranged type either operand offers"* — a reading whose own comment
+// licenses it only for `+`/`-`/`*`/the bitwise family, *"because the choice cannot change the answer"*.
+// For an ordering compare it changes the answer, so a one-sided type would let a `int(0 to 100)` operand
+// impose an unsigned reading on a plain `int` that admits negatives.
+export function comparisonOperandsAreUnsigned(left IntegerValueDomain, right IntegerValueDomain) returns bool
+	return operandPairAsksForUnsigned(left, right: right)
+end 'comparisonOperandsAreUnsigned'
+
+// ⭐ **THE SHARED BODY OF BOTH RULES ABOVE — asked of a PAIR, answered from the three domains.** Two
+// clauses, and each is one of the two halves `IntegerValueDomain`'s middle answer exists to separate:
+// a `signed` operand REFUSES the unsigned reading (its negatives would read as huge), and a
+// `declaredNonNegative` one ASKS for it (its declaration is the only thing that can). A pair of
+// `provablyNonNegative` constants neither refuses nor asks: both readings answer identically for them,
+// so the rule has nothing to say and the existing signed instruction stands — which is what keeps
+// `7 / 2` and `3 < 4` emitting exactly the code they emitted before either rule existed.
+function operandPairAsksForUnsigned(left IntegerValueDomain, right IntegerValueDomain) returns bool
+	if left == IntegerValueDomain.signed or right == IntegerValueDomain.signed 'eitherAdmitsANegative'
 		return false
 	end 'eitherAdmitsANegative'
 
-	return dividend == IntegerValueDomain.declaredNonNegative or divisor == IntegerValueDomain.declaredNonNegative
-end 'divisionOperandsAreUnsigned'
+	return left == IntegerValueDomain.declaredNonNegative or right == IntegerValueDomain.declaredNonNegative
+end 'operandPairAsksForUnsigned'
+
+// ⭐ **IS THIS SOURCE COMPARISON ONE OF THE FOUR WHOSE ANSWER SIGNEDNESS CHANGES?** — the operator half
+// of the rule above, stated here beside it so the two cannot come to disagree about which operators the
+// rule governs. `==`/`!=` read ZF alone and are identical in both readings; see the ⚠⚠ note.
+export function comparisonReadsOrdering(op MaxonCmpOp) returns bool
+	return match op 'o'
+		eq gives false
+		ne gives false
+		lt to ge gives true
+	end 'o'
+end 'comparisonReadsOrdering'
 
 // The opcode a SOURCE `/` or `mod` emits once its signedness is known — the DIVISION twin of
 // `shiftOpcodeFor`, and here for that function's reason: `infixMaxonOp` maps `/` to `MaxonBinOp.div`

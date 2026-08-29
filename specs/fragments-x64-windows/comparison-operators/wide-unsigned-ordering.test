@@ -1,0 +1,48 @@
+// Test: wide-unsigned-ordering
+typealias Wide = int(0 to u64.max)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function main() returns ExitCode
+	let big = wide(u64.max)
+	let three = wide(3 as Wide)
+
+	if three < big 'ordered'
+		return 42
+	end 'ordered'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @wide(n: i64) -> u64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, -1
+    x64.call wide
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 3
+    x64.call wide
+    x64.mov rcx, [rbp-8]
+    x64.cmp rax, rcx
+    x64.jae main.ordered_0.after
+  ordered_0:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  ordered_0.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

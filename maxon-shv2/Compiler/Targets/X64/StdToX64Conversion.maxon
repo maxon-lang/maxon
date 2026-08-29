@@ -549,20 +549,37 @@ let FloatInequalityUnorderedReg = X64Register.rdx
 // — so a float compare branches with the UNSIGNED JB/JA family, and the same `StdCmpPred.less`
 // lowers to `jl` for an i64 and (via the operand swap) `ja` for an f64. A float compare
 // lowered to `jl` would read flags `ucomisd` never wrote.
-// `isFloat` rather than the whole `StdType`, and the distinction is the ONLY thing the operand
-// type decides here — `cmp` vs `ucomisd` is a flag-semantics question, not a width one. Taking
-// the projection lets the FUSED-branch caller answer it from a dense bool column instead of
-// carrying a full type per compare that every reader would throw all but one bit of away (see
-// `fusedFloatCmps`). The contract's point stands unchanged: the family is chosen by the operand
-// type and never by the predicate.
-function condCodeForPred(pred StdCmpPred, isFloat bool) returns X64CondCode
+// ⭐⭐ **AND THE INTEGER FAMILY IS CHOSEN THE SAME WAY — the second reading of one `cmp`.** `cmp` on
+// two i64s writes OF/SF *and* CF, so the instruction is already both answers at once and only the
+// BRANCH picks: `jl` reads OF/SF (a signed subtraction's overflow) and `jb` reads CF (a borrow). That
+// is why the same `StdCmpPred.lt` lowers to `jl` for an `i64` operand type and `jb` for a `u64` one,
+// and why an unsigned ordering compare needs no different `cmp`. MEASURED before this arm existed,
+// with both operands declared `int(0 to u64.max)`: `three < big` for `big` holding `u64.max`
+// answered **false**, because `jl` read `0xFFFF…FF` as `-1`.
+//
+// TWO BITS rather than the whole `StdType`, and they are the ONLY things the operand type decides
+// here — `cmp` vs `ucomisd` is a flag-semantics question and signed-vs-unsigned is a flag-CHOICE
+// question, neither of them a width one. Taking the projections lets the FUSED-branch caller answer
+// from two dense bool columns instead of carrying a full type per compare that every reader would
+// throw all but two bits of away (see `fusedFloatCmps`). The contract's point stands unchanged: the
+// family is chosen by the operand type and never by the predicate.
+//
+// ⚠ FLOAT IS ASKED FIRST AND THE ORDER IS NOT ARBITRARY: a float compare ALREADY uses the unsigned
+// code family (that is `floatCondCodeForPred`'s whole subject), so the two questions would agree here
+// by accident and disagree the moment `floatCmpEmittedPred`'s operand swap mattered — the swap is
+// baked into the float table and not into the integer one.
+function condCodeForPred(pred StdCmpPred, isFloat bool, isUnsigned bool) returns X64CondCode
 	if isFloat 'float'
 		return floatCondCodeForPred(pred)
 	end 'float'
+	if isUnsigned 'unsignedInteger'
+		return unsignedCondCodeForPred(pred)
+	end 'unsignedInteger'
 	return signedCondCodeForPred(pred)
 end 'condCodeForPred'
 
-// The SIGNED integer condition codes — every Std integer is a signed i64.
+// The SIGNED integer condition codes — the reading every Std integer compare had before the ordering
+// rule, and still the reading for every operand pair that admits a negative.
 function signedCondCodeForPred(pred StdCmpPred) returns X64CondCode
 	return match pred 'map'
 		eq gives X64CondCode.equal
@@ -574,9 +591,16 @@ function signedCondCodeForPred(pred StdCmpPred) returns X64CondCode
 	end 'map'
 end 'signedCondCodeForPred'
 
-// The UNSIGNED condition codes — the family `ucomisd` answers in (ZF/PF/CF), and the exact
-// mirror of `signedCondCodeForPred`. `cmp`'s signed family reads OF/SF, which `ucomisd` leaves
-// at 0 always, so a float compare must read this one.
+// The UNSIGNED condition codes, and the exact mirror of `signedCondCodeForPred`. TWO readers, whose
+// reasons are different and both real:
+//
+//   • A FLOAT compare, because `ucomisd` answers in ZF/PF/CF and leaves OF/SF at 0 always — so the
+//     signed family would read flags it never wrote.
+//   • An UNSIGNED INTEGER ordering compare, because `cmp` writes CF as the borrow of an unsigned
+//     subtraction — the flag that orders two 64-bit patterns without a sign.
+//
+// One table for both: `jb`/`ja` are the same instructions either way, and a second copy per reader is
+// exactly what would let the two drift on a predicate.
 function unsignedCondCodeForPred(pred StdCmpPred) returns X64CondCode
 	return match pred 'map'
 		eq gives X64CondCode.equal
@@ -705,7 +729,7 @@ end 'parityTargetOf'
 // Both columns are written HERE, by this one call, which is what keeps them in lockstep — the
 // predicate and the float-ness of the compare carrying it can never disagree, because nothing
 // can write one without the other.
-function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, blockRef BlockRef, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
+function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet, blockRef BlockRef, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
 	if defId != condId 'someOtherCompare'
 		return
 	end 'someOtherCompare'
@@ -714,10 +738,22 @@ function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, blockRef Bloc
 	// flags does this jcc read?" is a question about a pair, so only a block can answer it; "is the
 	// compare defining v a float compare?" is a property of v's one defining op and cannot differ
 	// between readers. Every reader of the second column reaches it through a hit in the first.
+	//
+	// ⭐ **THE SIGNEDNESS IS THE THIRD COLUMN AND IT IS THE VALUE's FOR THE SAME REASON THE FLOAT-NESS
+	// IS.** Both are projections of the ONE `operandType` the defining op carries, taken here because
+	// this is the one place that op is in hand; both are read only after a `cmpPreds` hit; and both are
+	// dense bool columns rather than a stored `StdType` for `fusedFloatCmps`' measured reason — a
+	// program with no unsigned ordering compare inserts nothing and allocates no backing array.
+	//
+	// ⚠ THE TWO ARE DISJOINT BY CONSTRUCTION, not by a rule anyone maintains: `stdTypeIsUnsigned` is
+	// false for every float `StdType`, and `comparisonSignedness` never routes a float here at all.
 	fused.upsert(blockRef, value: pred)
 	if stdTypeIsFloat(operandType) 'float'
 		floatCmps.insert(condId)
 	end 'float'
+	if stdTypeIsUnsigned(operandType) 'unsigned'
+		unsignedCmps.insert(condId)
+	end 'unsigned'
 end 'fuseIfDefines'
 
 // The three group-2 shift instructions x64 has, and the whole of what the shift lowering needs
@@ -823,6 +859,10 @@ type StdToX64Lowering
 	// `remove` on a dense set): dropping the `cmpPreds` entry makes the entry here unreachable,
 	// because every reader gates on the predicate lookup first.
 	var fusedFloatCmps as StdValueUseSet
+	// ⭐ THE FUSED COMPARES THAT READ CF RATHER THAN OF/SF — `cmpPreds`' THIRD column, written at the
+	// same instant by the same call (`fuseIfDefines`), and a dense bool column for `fusedFloatCmps`'
+	// measured reason. A program whose every ordering compare is signed inserts nothing into it.
+	var fusedUnsignedCmps as StdValueUseSet
 	// The `ordered` block minted for each float-equality branch — see OrderedBlockIdMap and
 	// `reserveFloatEqualityBlocks`. Reset per function with the two columns above.
 	var orderedBlockIds as OrderedBlockIdMap
@@ -857,7 +897,7 @@ type StdToX64Lowering
 	var calleeParamClasses as CalleeParamClassMap
 
 	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns StdToX64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), fusedUnsignedCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
 	end 'create'
 
 	// The value-class column producer — the pass that answers "what register file does this op's
@@ -1071,7 +1111,8 @@ type StdToX64Lowering
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		self.cmpPreds = CmpPredMap.create()
 		self.fusedFloatCmps = StdValueUseSet.create()
-		self.computeFusedCmps(srcFunc, fused: self.cmpPreds, floatCmps: self.fusedFloatCmps)
+		self.fusedUnsignedCmps = StdValueUseSet.create()
+		self.computeFusedCmps(srcFunc, fused: self.cmpPreds, floatCmps: self.fusedFloatCmps, unsignedCmps: self.fusedUnsignedCmps)
 		self.valuesReadFromRegisters = self.computeValuesReadFromRegisters(srcFunc)
 	end 'prepareFunctionTables'
 
@@ -1157,10 +1198,10 @@ type StdToX64Lowering
 	// and the Std-tier scan cannot see it coming, because the op does not exist at Std tier.
 	// The likeliest candidate is a spill/reload growing an address computation, or a memzero
 	// (whose size ladder `cmp`s — see ARCHITECTURE.md). Re-check this list then.
-	// Fills BOTH fusion columns in one walk — see `fusedFloatCmps` for why the float-ness is a
-	// column beside the predicate rather than a field inside it. They are handed in rather than
-	// returned so the pair can only be created together.
-	function computeFusedCmps(func IrFunction, fused CmpPredMap, floatCmps StdValueUseSet)
+	// Fills ALL THREE fusion columns in one walk — see `fusedFloatCmps` for why the float-ness (and,
+	// beside it, the signedness) is a column rather than a field inside the predicate. They are handed
+	// in rather than returned so the three can only be created together.
+	function computeFusedCmps(func IrFunction, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try self.stdModule.blocks.get(blockRef) otherwise panic("computeFusedCmps: blockRef from func.blockRefs not in stdModule.blocks")
 			if not block.hasTerminatorOp() 'noTerm'
@@ -1168,7 +1209,7 @@ type StdToX64Lowering
 			end 'noTerm'
 			let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("computeFusedCmps: terminatorIndex not in stdModule.ops")
 			match term 'term'
-				condBranch(condId, _, _) then self.recordFusableCompare(block, blockRef: blockRef, condId: condId, fused: fused, floatCmps: floatCmps)
+				condBranch(condId, _, _) then self.recordFusableCompare(block, blockRef: blockRef, condId: condId, fused: fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps)
 				const to mod then break 'term'
 				branch to rdataAddr then break 'term'
 				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
@@ -1216,7 +1257,7 @@ type StdToX64Lowering
 	// Record `condId` as fusable iff the LAST flag-clobbering body op of `block` is a
 	// compare that DEFINES it. Walked backward from the end of the body, because that is
 	// the order the flags are overwritten in.
-	function recordFusableCompare(block IrBlock, blockRef BlockRef, condId ValueId, fused CmpPredMap, floatCmps StdValueUseSet)
+	function recordFusableCompare(block IrBlock, blockRef BlockRef, condId ValueId, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
 		var i = block.opRefs.count()
 		while i > 0 'scanBackward'
 			i = i - 1
@@ -1233,13 +1274,13 @@ type StdToX64Lowering
 			// identically: `foldConstOperands` moved the right operand into an immediate, which
 			// changed the instruction, not what the compare means.
 			match op 'isTheCompare'
-				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
+				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
 				// `cmpImm` is INTEGER BY CONSTRUCTION — no SSE form takes an immediate, so
 				// `foldConstOperands` refuses a float rhs and a float compare can never reach this
 				// variant. It used to be spelled `StdType.i64` HERE, which was the right answer to
 				// "is it a float?" and a guess at the width beside it; the op now carries its own
 				// `operandType` (X5) and this asks it rather than re-deciding.
-				cmpImm(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
+				cmpImm(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
 				const to unaryOp then break 'isTheCompare'
 				binOpImm then break 'isTheCompare'
 				// Extended past `retVoid` to take in the memory band, and past `storeIndirect` to take in
@@ -1892,7 +1933,7 @@ type StdToX64Lowering
 	// A signed divide sign-EXTENDS RAX into RDX (`cqo`), so a dividend with bit 63 set reads as a
 	// negative number; an unsigned one ZEROES RDX, so the same 64 bits read as a huge magnitude.
 	// Emit `cqo` for an unsigned divide and `u64.max / 3` computes `-1 / 3` = 0. The instruction's
-	// /ext field and this fill must therefore move TOGETHER — which is why one `DivideSignedness`
+	// /ext field and this fill must therefore move TOGETHER — which is why one `IntegerSignedness`
 	// decides both here rather than each being chosen where it is emitted.
 	//
 	// `mov edx, 0` is the zeroing form, not `xor edx, edx`: the ops this dialect has are a
@@ -1904,9 +1945,9 @@ type StdToX64Lowering
 	// the unsigned one cannot overflow at all, because a zeroed RDX makes every quotient fit. That
 	// trap is delivered by the runtime fault handler (a Workstream-R / M6 deliverable), NOT by a
 	// compiler guard — so `x / 0` here is correct-but-raw-#DE for now, by design.
-	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, signedness DivideSignedness, resultReg X64Register, dstBlock IrBlock)
+	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, signedness IntegerSignedness, resultReg X64Register, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rax), srcReg: TargetVReg.virtual(lhs)))
-		if signedness == DivideSignedness.signed 'signExtendIntoRdx'
+		if signedness == IntegerSignedness.signed 'signExtendIntoRdx'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.cqo)
 		end 'signExtendIntoRdx' else 'zeroRdx'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: UnsignedDividendHighHalf))
@@ -3614,7 +3655,7 @@ type StdToX64Lowering
 			self.materializeFloatEquality(resultId, pred: pred, dstBlock: dstBlock)
 			return
 		end 'floatEquality'
-		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(TargetVReg.virtual(resultId), cond: condCodeForPred(pred, isFloat: stdTypeIsFloat(operandType))))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(TargetVReg.virtual(resultId), cond: condCodeForPred(pred, isFloat: stdTypeIsFloat(operandType), isUnsigned: stdTypeIsUnsigned(operandType))))
 	end 'materializeCompareIfRead'
 
 	// MATERIALIZE a float `==`/`!=` — the one compare whose boolean a single `setcc` cannot write.
@@ -3770,7 +3811,7 @@ type StdToX64Lowering
 			self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(TargetVReg.virtual(condId), imm: BoolFalseImm))
 			return X64CondCode.notEqual
 		end 'notFused'
-		return condCodeForPred(pred, isFloat: self.fusedFloatCmps.contains(condId))
+		return condCodeForPred(pred, isFloat: self.fusedFloatCmps.contains(condId), isUnsigned: self.fusedUnsignedCmps.contains(condId))
 	end 'branchConditionCode'
 
 	// ==========================================================================

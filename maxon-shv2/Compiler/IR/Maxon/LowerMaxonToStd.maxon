@@ -232,7 +232,7 @@ function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
 		// The UNSIGNED divisions have no `binOp` opcode for the reason `mod` has none, twice over: they
 		// trap, so they need `StdOp.div`/`mod`'s `isPure: false`, and they are integer-only, so there is
 		// no float `binOp` for them to be. `lowerBinOp` routes both directly.
-		divUnsigned to modUnsigned then panic("maxonBinOpToStdOpcode: `{op.rawValue}` lowers to StdOp.div/mod with `DivideSignedness.unsigned` — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
+		divUnsigned to modUnsigned then panic("maxonBinOpToStdOpcode: `{op.rawValue}` lowers to StdOp.div/mod with `IntegerSignedness.unsigned` — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
 	end 'map'
 end 'maxonBinOpToStdOpcode'
 
@@ -1300,7 +1300,7 @@ type MaxonToStdLowering
 			retVoid then self.emitRetVoidOrErrorReturn(dstBlock, asTerminator: false)
 			binOp(result, lhs, rhs, op) then self.lowerBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			unaryOp(result, operand, op) then self.lowerUnaryOp(result, operand: operand, op: op, dstBlock: dstBlock)
-			compare(result, lhs, rhs, op) then self.lowerCompare(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
+			compare(result, lhs, rhs, op, signedness) then self.lowerCompare(result, lhs: lhs, rhs: rhs, op: op, signedness: signedness, dstBlock: dstBlock)
 			condBranch then panic("lowerMaxonToStd: a `condBranch` appeared as a body op (parser bug — a branch is always a block terminator)")
 			branch then panic("lowerMaxonToStd: a `branch` appeared as a body op (parser bug — a branch is always a block terminator)")
 			// The varAccess band lowers 1:1 into the Std memory band — the two are the same three ops
@@ -4291,7 +4291,7 @@ type MaxonToStdLowering
 		match op 'op'
 			add to mul then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			div then self.lowerDivision(result, lhs: lhs, rhs: rhs, dstBlock: dstBlock)
-			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs, signedness: DivideSignedness.signed))
+			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs, signedness: IntegerSignedness.signed))
 			bitAnd to shrLogical then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			// `min`/`max` need no `lowerDivision`-style fork the way `div` does: only ONE of the two
 			// divisions is a pure `binOp`, so `/` has to ask its operand type which op it becomes,
@@ -4302,8 +4302,8 @@ type MaxonToStdLowering
 			// that differs. They need no float fork: `divisionOpcodeFor` mints them only from two
 			// non-negative INTEGER ranges (a ranged float alias carries tag `float`, never `named`), so
 			// there is no unsigned float divide to be, and `lowerDivision`'s fork would have nothing to ask.
-			divUnsigned then self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs, signedness: DivideSignedness.unsigned))
-			modUnsigned then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs, signedness: DivideSignedness.unsigned))
+			divUnsigned then self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs, signedness: IntegerSignedness.unsigned))
+			modUnsigned then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs, signedness: IntegerSignedness.unsigned))
 		end 'op'
 	end 'lowerBinOp'
 
@@ -4323,7 +4323,7 @@ type MaxonToStdLowering
 			return
 		end 'float'
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs, signedness: DivideSignedness.signed))
+		self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs, signedness: IntegerSignedness.signed))
 	end 'lowerDivision'
 
 	// Append the `StdOp.binOp` a non-trapping Maxon binary operator lowers to. The one
@@ -4422,9 +4422,33 @@ type MaxonToStdLowering
 	// compare lowered to `jl` would read flags that were never written. The result is a bool, so
 	// the type must come from an OPERAND — `lhs`, which `emitCompare` has already required to
 	// agree with `rhs`. See specs-shv2/float-compare-branch.md.
-	function lowerCompare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp, dstBlock IrBlock)
+	//
+	// ⭐⭐ **AND THE INTEGER FAMILY IS CHOSEN THE SAME WAY, WHICH IS WHY THE VERDICT ARRIVES AS A TYPE
+	// AND NOT AS A SECOND FIELD.** `x64.cmp` over two i64s writes OF/SF/CF all three; which of them the
+	// branch reads is the whole of signed-vs-unsigned, and it is the identical question `isFloat` was
+	// already answering one domain over. So an unsigned ordering compare is lowered by RELABELLING the
+	// operand type (`unsignedStdTypeOf`) rather than by carrying a flag the three backends would each
+	// have to remember to consult beside the type they already consult.
+	//
+	// ⚠ **THE DECISION IS NOT MADE HERE AND CANNOT BE.** It reads BOTH operands' declared ranges, which
+	// this tier no longer has — the parser decided it (`comparisonSignedness`) and `MaxonOp.compare`
+	// carried it exactly this far. The relabelling preserves width, so a narrow operand stays narrow.
+	//
+	// ⚠⚠ **IT IS NORMALIZED IN BOTH DIRECTIONS, AND THE SIGNED ARM IS NOT A NO-OP.** `stdTypeOf` already
+	// answers `u32` for an `ExitCode` operand (`valueTagToStdType`) — a fact about ONE value's storage,
+	// decided long before any pair was considered. Passing that through unchanged would leave the backend
+	// reading a SECOND, one-sided answer out of the type: `e > n` with an `ExitCode` on the left and a
+	// plain `int` on the right has the pair verdict SIGNED (the right operand admits negatives) and an
+	// lhs type of `u32`, so the two would disagree, and the backend's copy would win. Spelling the
+	// verdict into the type in both directions is what keeps ONE answer in the program.
+	function lowerCompare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp, signedness IntegerSignedness, dstBlock IrBlock)
 		let pred = maxonCmpOpToStdPred(op)
-		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: lhs, rhs: rhs, pred: pred, operandType: self.stdTypeOf(lhs)))
+		let lhsType = self.stdTypeOf(lhs)
+		let operandType = match signedness 'family'
+			signed gives signedStdTypeOf(lhsType)
+			unsigned gives unsignedStdTypeOf(lhsType)
+		end 'family'
+		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType))
 	end 'lowerCompare'
 
 	// Lower a Maxon conditional branch to its Std counterpart, as the block's
@@ -4772,7 +4796,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(errorFlag, lhs: divisor, rhs: zero, pred: StdCmpPred.eq, operandType: operandType))
 	end 'emitDivisorZeroFlag'
 
-	function lowerDivisionExpansion(result ValueId, expansion DivisionExpansion, signedness DivideSignedness, args ValueIdArray, dstBlock IrBlock)
+	function lowerDivisionExpansion(result ValueId, expansion DivisionExpansion, signedness IntegerSignedness, args ValueIdArray, dstBlock IrBlock)
 		let kind = divisionExpansionKind(expansion)
 
 		let dividend = try args.get(0) otherwise panic("lowerDivisionExpansion: an expanded divide has two arguments — `emitDivOrMod` pushes the dividend first")
@@ -4825,7 +4849,7 @@ type MaxonToStdLowering
 			// ⚠ THERE IS NO UNSIGNED FLOAT DIVIDE, and the arm below would emit an INTEGER one over two
 			// IEEE bit patterns rather than fail. `Parser.emitDivOrMod` asks the signedness rule only of
 			// an integer pair, so this is unreachable — which is exactly why it must say so out loud.
-			if signedness == DivideSignedness.unsigned 'unsignedFloat'
+			if signedness == IntegerSignedness.unsigned 'unsignedFloat'
 				panic("lowerDivisionExpansion: an UNSIGNED float `/` — `divsd` has no signedness and `Parser.emitDivOrMod` asks the division signedness rule only of an integer operand pair, so the callee name that carried this here was minted for a float divide")
 			end 'unsignedFloat'
 
@@ -4854,7 +4878,7 @@ type MaxonToStdLowering
 		// ⭐ The KIND says WHICH division and the callee's SIGNEDNESS says at what reading — the two facts
 		// the name carries, rejoined through the same `divisionOpcodeFor` the bare route mints its opcode
 		// with, so an expanded divide and a bare one cannot pick different instructions from one source `/`.
-		self.lowerBinOp(result, lhs: safeDividend, rhs: safeDivisor, op: divisionOpcodeFor(divisionOperatorForKind(kind), unsigned: signedness == DivideSignedness.unsigned), dstBlock: dstBlock)
+		self.lowerBinOp(result, lhs: safeDividend, rhs: safeDivisor, op: divisionOpcodeFor(divisionOperatorForKind(kind), unsigned: signedness == IntegerSignedness.unsigned), dstBlock: dstBlock)
 	end 'lowerDivisionExpansion'
 
 	// A1's zero guard: the divisor the `idiv` actually reads. See `lowerDivisionExpansion`'s header for why

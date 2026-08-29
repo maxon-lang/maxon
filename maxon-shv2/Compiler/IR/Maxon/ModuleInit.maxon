@@ -981,9 +981,14 @@ export type SynthesizedFunction
 
 	// A two-operand comparison yielding an i1 — `Parser.emitCompareAgainstLiteral`'s twin on this carrier,
 	// minted at the `boolean` tag its `condBranch` consumer expects.
+	//
+	// ⭐ **SIGNED, AND THE CALLER HAS NO RANGED TYPE TO SAY OTHERWISE.** Every comparison this carrier
+	// builds is the lazy-static guard's `initialized == 0` — an EQUALITY over a flag the compiler mints
+	// itself, whose two readings are the same instruction. There is no source operand here whose declared
+	// range could ask for anything else, so the answer is stated rather than threaded.
 	export function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, range SourceRange) returns ValueId
 		let result = self.mint(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.emit(MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: range)
+		self.emit(MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op, signedness: IntegerSignedness.signed), range: range)
 		return result
 	end 'emitCompare'
 

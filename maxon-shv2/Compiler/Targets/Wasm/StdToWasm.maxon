@@ -2181,7 +2181,7 @@ type WasmFuncEmitter
 		end 'float'
 
 		self.pushBinaryOperands(lhs, rhs: rhs, opVt: wasmMachineValTypeOf(operandType))
-		self.emitCmpPred(pred)
+		self.emitCmpPred(pred, isUnsigned: stdTypeIsUnsigned(operandType))
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmp'
 
@@ -2221,16 +2221,38 @@ type WasmFuncEmitter
 		requireIntegerOperand(operandType, what: "cmpImm")
 		self.pushOperandAt(lhs, targetVt: wasmMachineValTypeOf(operandType))
 		self.body.i64Const(imm)
-		self.emitCmpPred(pred)
+		self.emitCmpPred(pred, isUnsigned: stdTypeIsUnsigned(operandType))
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmpImm'
 
 	// A wasm compare pops two operands and pushes an i32 (0/1) — exactly the i1→i32 bool the Std
-	// `cmp`/`cmpImm` result is typed as, so no extension is needed. Std compares are SIGNED (the
-	// native backends treat every Std integer as signed), so the signed family is used — over
-	// MACHINE-WORD operands, which is what makes the signed reading right for a `u32` too: it arrives
-	// zero-extended, so its top bit is a value bit at 64 and only a sign bit at 32.
-	function emitCmpPred(pred StdCmpPred)
+	// `cmp`/`cmpImm` result is typed as, so no extension is needed. Both families are emitted over
+	// MACHINE-WORD operands, which is what makes the answer right for a narrow value either way: it
+	// arrives zero-extended, so its top bit is a value bit at 64 and only a sign bit at 32.
+	//
+	// ⭐⭐ **THE SIGNEDNESS RIDES IN THE OPCODE HERE, WHERE THE NATIVE TARGETS PUT IT IN A CONDITION
+	// CODE.** wasm has no flags, so there is nothing for a second instruction to read: `i64.lt_s` and
+	// `i64.lt_u` are two whole comparisons, and the choice between them is the entirety of what the
+	// ordering rule decides on this target. The verdict arrives the same way it does on x64 and arm64 —
+	// as the compare's `operandType` (`LowerMaxonToStd.lowerCompare`) — so the three backends read ONE
+	// fact and cannot answer a `<` differently for the same two declared ranges.
+	//
+	// ⚠ `eq`/`ne` HAVE ONE OPCODE EACH AND TAKE IT IN BOTH FAMILIES, which is this target's own statement
+	// of why the rule governs ORDERING only: wasm does not define an `i64.eq_u`, because there would be
+	// nothing for it to do.
+	function emitCmpPred(pred StdCmpPred, isUnsigned bool)
+		if isUnsigned 'unsignedFamily'
+			match pred 'u'
+				eq then self.body.i64Eq()
+				ne then self.body.i64Ne()
+				lt then self.body.i64LtU()
+				gt then self.body.i64GtU()
+				le then self.body.i64LeU()
+				ge then self.body.i64GeU()
+			end 'u'
+			return
+		end 'unsignedFamily'
+
 		match pred 'w'
 			eq then self.body.i64Eq()
 			ne then self.body.i64Ne()
@@ -2242,7 +2264,7 @@ type WasmFuncEmitter
 	end 'emitCmpPred'
 
 	// Integer division / remainder, AT MACHINE WIDTH, at the signedness the front end decided from
-	// BOTH operands (`DivideSignedness`). wasm traps natively on a zero divisor and — for the SIGNED
+	// BOTH operands (`IntegerSignedness`). wasm traps natively on a zero divisor and — for the SIGNED
 	// pair only — on INT_MIN/-1, matching the intended semantics; the Tier-1 division specs all use
 	// non-zero divisors (CONTRACT §4.7). `i64.div_u`/`i64.rem_u` have no overflow trap at all, which
 	// is the same asymmetry x64's zeroed RDX gives and arm64's `udiv` gives.
@@ -2268,9 +2290,9 @@ type WasmFuncEmitter
 	// ⭐ THAT ARGUMENT IS NO LONGER THIS PAIR'S ALONE (X5 review): it is `wasmMachineValTypeOf`, and every
 	// integer op obeys it. `div`/`mod` were merely the two that could not have done otherwise, having
 	// no operand type to be misled by — the ops that HAVE one were being misled by it.
-	function emitDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness DivideSignedness)
+	function emitDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness IntegerSignedness)
 		self.pushBinaryOperands(lhs, rhs: rhs, opVt: WasmValType.i64)
-		let unsigned = signedness == DivideSignedness.unsigned
+		let unsigned = signedness == IntegerSignedness.unsigned
 		if isRemainder 'rem'
 			if unsigned 'remU'
 				self.body.i64RemU()

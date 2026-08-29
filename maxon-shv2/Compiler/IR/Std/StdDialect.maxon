@@ -49,6 +49,21 @@ end 'CastCategory'
 // --- StdTypeInfo: metadata carried by each StdType case ---
 export type StdTypeInfo
 	export let isFloat as bool
+	// ⭐⭐ **DOES THIS TYPE READ ITS TOP BIT AS A VALUE BIT RATHER THAN A SIGN?** — the fact that makes
+	// `StdType` able to answer a COMPARISON's condition-code family, which is the one question about a
+	// compare that this tier cannot re-derive (see `lowerCompare`, and `stdTypeIsUnsigned` below).
+	//
+	// ⚠ **IT IS NOT A WIDTH FACT AND IT IS NOT A STORAGE FACT.** Every integer here occupies a full GPR
+	// and every arithmetic op but four is bit-identical in both readings — `add`, `sub`, `mul`, and the
+	// bitwise family answer the same for `u64.max` whether you call it `-1` or `18446744073709551615`.
+	// The four that are NOT are the ORDERING comparisons, which is why this bit exists at all: `3 < -1`
+	// and `3 < 18446744073709551615` are opposite answers to one instruction pair, chosen by `jl` or
+	// `jb`. (Division reads its own `IntegerSignedness` field for the same reason one op earlier; the two
+	// are the same FACT arriving by two routes, because `div` carries no `operandType` to put it on.)
+	//
+	// It rides the per-case backing for the reason `storageBytes` does: a signedness table beside the
+	// enum would be a second declaration of the enum, free to omit a case the day one is appended.
+	export let isUnsigned as bool
 	export let castCategory as CastCategory
 	// The type's footprint IN MEMORY, in bytes — what a `.data` slot of it occupies and
 	// what `loadIndirect`/`storeIndirect` transfer. NOT its width in a register: an `i1`
@@ -67,28 +82,90 @@ end 'StdTypeInfo'
 // in a floating-point register, which cast family it belongs to, and how many
 // bytes it occupies in memory.
 export enum StdType
-	i1 = StdTypeInfo{isFloat: false, castCategory: CastCategory.bool, storageBytes: 1}
-	i8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 1}
-	i16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 2}
-	i32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 4}
-	i64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 8}
-	u8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 1}
-	u16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 2}
-	u32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 4}
-	u64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 8}
-	f32 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float, storageBytes: 4}
-	f64 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float, storageBytes: 8}
+	i1 = StdTypeInfo{isFloat: false, isUnsigned: false, castCategory: CastCategory.bool, storageBytes: 1}
+	i8 = StdTypeInfo{isFloat: false, isUnsigned: false, castCategory: CastCategory.int, storageBytes: 1}
+	i16 = StdTypeInfo{isFloat: false, isUnsigned: false, castCategory: CastCategory.int, storageBytes: 2}
+	i32 = StdTypeInfo{isFloat: false, isUnsigned: false, castCategory: CastCategory.int, storageBytes: 4}
+	i64 = StdTypeInfo{isFloat: false, isUnsigned: false, castCategory: CastCategory.int, storageBytes: 8}
+	u8 = StdTypeInfo{isFloat: false, isUnsigned: true, castCategory: CastCategory.int, storageBytes: 1}
+	u16 = StdTypeInfo{isFloat: false, isUnsigned: true, castCategory: CastCategory.int, storageBytes: 2}
+	u32 = StdTypeInfo{isFloat: false, isUnsigned: true, castCategory: CastCategory.int, storageBytes: 4}
+	u64 = StdTypeInfo{isFloat: false, isUnsigned: true, castCategory: CastCategory.int, storageBytes: 8}
+	f32 = StdTypeInfo{isFloat: true, isUnsigned: false, castCategory: CastCategory.float, storageBytes: 4}
+	f64 = StdTypeInfo{isFloat: true, isUnsigned: false, castCategory: CastCategory.float, storageBytes: 8}
 end 'StdType'
 
 export function stdTypeIsFloat(t StdType) returns bool
 	return t.rawValue.isFloat
 end 'stdTypeIsFloat'
 
-// ⭐⭐ **THE SIGNEDNESS A MACHINE DIVIDE RUNS AT — the ONE property of `/`/`mod` that is not derivable
-// from anything at this tier.** The Std tier is TYPELESS about signedness: an i64 here is 64 bits and
-// nothing more, so a pass that met a bare `div` would have no way left to ask which reading was meant.
-// The answer is a FRONT-END fact (`TypeRules`' ⭐⭐ THE DIVISION SIGNEDNESS RULE), decided once from
-// both operands' declared ranges and carried down on the op.
+// ⭐ **THE TWIN OF `stdTypeIsFloat`, AND THE COMPARISON LOWERING'S SECOND QUESTION.** Read where a
+// condition-code family is chosen (x64's `condCodeForPred`, arm64's `arm64CondForPred`, wasm's
+// `emitCmpPred`) and nowhere else: every other consumer of an integer `StdType` wants its WIDTH or its
+// storage, both of which the signed and unsigned spellings share. A float is never unsigned — the two
+// bits are disjoint, not a hierarchy — so a reader asking both questions gets `isFloat` first, exactly
+// as those three do.
+export function stdTypeIsUnsigned(t StdType) returns bool
+	return t.rawValue.isUnsigned
+end 'stdTypeIsUnsigned'
+
+// ⭐⭐ **THE UNSIGNED SPELLING OF AN INTEGER `StdType` — the ONE table that turns the front end's
+// signedness verdict into the `operandType` a compare carries** (`LowerMaxonToStd.lowerCompare`).
+//
+// ⚠ **IT IS A RELABELLING, NEVER A CONVERSION.** The value in the register does not move: `u64` and
+// `i64` are the same 64 bits and the same GPR, and what changes is only which condition codes read the
+// flags a `cmp` of them writes. That is why it must preserve WIDTH exactly — an `i32` operand relabelled
+// `u64` would compare a half-register against a whole one — and why the float arms panic rather than
+// answering: `ucomisd` has no signedness, so a caller that reached here with one has already decided
+// something this cannot express.
+// ⭐⭐ **THE SIGNED SPELLING OF AN INTEGER `StdType`, AND A FLOAT'S OWN TYPE UNCHANGED.**
+//
+// ⚠ **THE FLOAT ARM IS THE ASYMMETRY WITH `unsignedStdTypeOf`, AND IT IS DELIBERATE.** These two are
+// not a mirrored pair: `signed` is the answer `comparisonSignedness` gives a FLOAT compare — there is
+// no third verdict for "has no signedness", because the two families a float can take are already
+// decided by `isFloat` one question earlier — so every float compare arrives HERE and its type must
+// survive intact (arm64's `arm64RequireScalarDouble` and wasm's `requireF64` read it). Nothing can
+// arrive at `unsignedStdTypeOf` the same way, which is why that one panics on a float and this one
+// must not.
+export function signedStdTypeOf(t StdType) returns StdType
+	return match t 'u'
+		i1 to i64 gives t
+		u8 gives StdType.i8
+		u16 gives StdType.i16
+		u32 gives StdType.i32
+		u64 gives StdType.i64
+		f32 to f64 gives t
+	end 'u'
+end 'signedStdTypeOf'
+
+// The twin of the above. See `lowerCompare` for why BOTH exist rather than only this one: a compare's
+// `operandType` carries the PAIR's verdict, so it must be normalized in both directions — an operand
+// that already reads `u32` (every `ExitCode`) must be spelled `i32` when the pair's verdict is signed,
+// or the backend would read a second, one-sided answer out of the type and disagree with the front end.
+export function unsignedStdTypeOf(t StdType) returns StdType
+	match t 'u'
+		i1 then panic("unsignedStdTypeOf: i1 is a BOOL — it holds 0 or 1, so its two readings agree on every value and no rule can ask for one. Reaching here means a front end decided a bool comparison was unsigned, which `comparisonOperandsAreUnsigned` cannot say: a bool declares no ranged alias, so both its operands read `signed`")
+		i8 then return StdType.u8
+		i16 then return StdType.u16
+		i32 then return StdType.u32
+		i64 then return StdType.u64
+		u8 to u64 then return t
+		f32 to f64 then panic("unsignedStdTypeOf: a FLOAT compare has no signedness — `ucomisd` answers in ZF/PF/CF whatever the operands' signs — so the front end must never route one here (`comparisonSignedness` gates it)")
+	end 'u'
+end 'unsignedStdTypeOf'
+
+// ⭐⭐ **WHICH READING OF A 64-BIT PATTERN AN INSTRUCTION TAKES — the ONE property of the three operator
+// families whose answer it changes that is not derivable from anything at this tier.** The Std tier is
+// TYPELESS about signedness: an i64 here is 64 bits and nothing more, so a pass that met a bare `div`
+// would have no way left to ask which reading was meant. The answer is a FRONT-END fact, decided once
+// from both operands' declared ranges (`TypeRules`' ⭐⭐ THE DIVISION SIGNEDNESS RULE and its ⭐⭐
+// ORDERING-COMPARISON twin) and carried down on the op.
+//
+// ⚠ **IT WAS `DivideSignedness` AND THE DIVIDE IS NO LONGER ITS ONLY READER** — three families read it
+// now, and each is a place where one bit pattern has two honest answers: the DIVIDE (`idiv` vs `div`),
+// the DECIMAL RENDERER (`-1` vs `18446744073709551615`, X11), and the four ORDERING COMPARISONS (`jl`
+// vs `jb`). The renaming is not cosmetic: a reader of `MaxonOp.compare`'s field who found a type named
+// for division would reasonably conclude the field was in the wrong place.
 //
 // ⭐ **A FIELD ON `StdOp.div`/`mod`, NOT TWO MORE VARIANTS — and the reason is the band-append
 // invariant, not brevity.** `shr`/`shrLogical` split into two OPCODES one tier up because the Maxon
@@ -102,14 +179,14 @@ end 'stdTypeIsFloat'
 // identical RDX:RAX operand contract, so the allocator's `implicitDefs`, the prologue's clobber scan
 // and the splitter each go on seeing one op — a second variant would have had to be added to every
 // one of them, and a miss there is a miscoloured register rather than a compile error.
-export enum DivideSignedness
+export enum IntegerSignedness
 	// x64 `idiv`, arm64 `sdiv`, wasm `i64.div_s`/`i64.rem_s`. The reading every division in the
 	// language had before X10, and still the reading for every operand pair that admits a negative.
 	signed
 	// x64 `div` (with RDX ZEROED rather than sign-extended), arm64 `udiv`, wasm `i64.div_u`/`i64.rem_u`.
 	// Reached only when BOTH operands are non-negative and at least one says so by DECLARATION.
 	unsigned
-end 'DivideSignedness'
+end 'IntegerSignedness'
 
 // ⭐⭐ **THE CANONICAL `StdType` OF AN ABI CLASS — so that a backend which holds only the float BIT can
 // rejoin the one type→valtype door instead of restating it.** `stdTypeOfAbiClass(stdTypeIsFloat(t))` is `t`'s
@@ -803,7 +880,7 @@ export union StdOp
 	// See `specs-shv2/comparison-operators.md` `compare-against-a-literal-keeps-the-operand-width`.
 	cmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
 	// Integer division `resultId = lhs / rhs` (quotient), TRUNCATING toward
-	// zero, at the signedness `signedness` names (see `DivideSignedness` — the front end decides it
+	// zero, at the signedness `signedness` names (see `IntegerSignedness` — the front end decides it
 	// from BOTH operands' declared ranges, because a value's signedness is gone by this tier).
 	// SPLIT OUT of `binOp` — it does NOT ride the `StdBinOpcode` opcode field —
 	// because x64 `idiv` can FAULT (#DE on divide-by-zero and on INT_MIN / -1
@@ -814,13 +891,13 @@ export union StdOp
 	// TRAP itself is delivered by the runtime fault handler (a Workstream-R / M6
 	// deliverable), NOT guarded by the compiler. APPENDED at the END of the arith band,
 	// after `cmpImm`, honoring the band-append invariant.
-	div(resultId ValueId, lhs ValueId, rhs ValueId, signedness DivideSignedness) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	div(resultId ValueId, lhs ValueId, rhs ValueId, signedness IntegerSignedness) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
 	// Integer modulo `resultId = lhs mod rhs` (remainder), matching `div`'s
 	// truncation and reading its `signedness` the same way. Same `isPure: false` (idiv faults) +
 	// `clobbersFlags: true` profile as `div` — it is the SAME x64 instruction, reading the REMAINDER
 	// out of RDX instead of the quotient out of RAX. APPENDED at the END of the arith band, after
 	// `div`, honoring the band-append invariant.
-	mod(resultId ValueId, lhs ValueId, rhs ValueId, signedness DivideSignedness) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	mod(resultId ValueId, lhs ValueId, rhs ValueId, signedness IntegerSignedness) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
 	// --- band: control ---
 	// Two-way conditional branch terminator: transfer to `thenBlockId` if `condId`
 	// (an i1) holds, else to `elseBlockId`. M4's `if` lowers to this. Not pure (a

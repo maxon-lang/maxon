@@ -702,7 +702,7 @@ end 'MaxonOpMeta'
 //
 // Two opcodes rather than one opcode plus a flag, and here that is FORCED rather than chosen: this is
 // a bare enum value with nowhere for a flag to live. One tier down the operation is a VARIANT with
-// fields, so `StdOp.div`/`mod` carry a `DivideSignedness` instead — same fact, the home each tier's
+// fields, so `StdOp.div`/`mod` carry a `IntegerSignedness` instead — same fact, the home each tier's
 // representation actually has.
 //
 // ⚠ **THEY ARE THE ONE FAMILY WHOSE SIGNEDNESS IS REAL IN THE INSTRUCTION.** `+ - * and or xor` are
@@ -1099,7 +1099,23 @@ export union MaxonOp
 	// result feeds an `if`'s `condBranch`; the Std→x64 lowering FUSES the pair into
 	// `cmp` + `jcc` rather than materializing the bool. Category `plain` (it stands
 	// alone, matched by variant); appended at the END of the plain band after `unaryOp`.
-	compare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp) = MaxonOpMeta{category: OpCategory.plain}
+	//
+	// ⭐⭐ **`signedness` IS A FRONT-END FACT WITH NOWHERE ELSE TO LIVE — the compare twin of
+	// `StdOp.div`'s field, and it is here for that field's reason.** Which condition-code family the
+	// four ORDERING predicates read is decided from BOTH operands' DECLARED RANGES (`TypeRules`'
+	// ⭐⭐ THE ORDERING-COMPARISON SIGNEDNESS RULE), and a declared range does not survive lowering:
+	// by the Std tier a value is 64 typeless bits, so a pass that met a bare `compare` would have no
+	// way left to ask. `lowerCompare` spends it immediately, into the `operandType` `StdOp.cmp`
+	// already carries — so the fact rides an op field for exactly one tier and then becomes a type.
+	//
+	// ⚠ A FIELD, NOT FOUR MORE `MaxonCmpOp` CASES. `divisionOpcodeFor` mints `divUnsigned`/`modUnsigned`
+	// because `MaxonBinOp` rides as a bare enum value with nowhere to put a flag; `compare` is a
+	// VARIANT WITH FIELDS, so the fact has a home that no band-append invariant can swallow.
+	//
+	// ⚠ It is `signed` for every `eq`/`ne`, and that is not a default standing in for an unknown: the
+	// two readings are the SAME instruction there (see the rule's ⚠⚠ note), so `signed` is the answer
+	// rather than the absence of one.
+	compare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp, signedness IntegerSignedness) = MaxonOpMeta{category: OpCategory.plain}
 	// Two-way conditional branch terminator: if `cond` (an i1) holds, transfer to
 	// `thenBlockId`, else to `elseBlockId`. M4's `if` sets this as a block's
 	// terminator (via emitTerminator). `cond` is the SSA value a `compare` defined;
