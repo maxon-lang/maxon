@@ -52,6 +52,18 @@ bug in this primitive.
 The motivating consumer is unaffected, and that is the point of choosing a primitive that does not
 consume: a worker pool selecting over drains **awaits every drain eventually**.
 
+### A service REPLY is an ordinary promise, so it selects the same way
+
+There is no separate "channel select" in this design. A handler reply is a `Promise`, so it goes into the
+same array and this same primitive picks the first one to answer — `over-service-replies` is that case, and
+it is why `SERVICES_DESIGN.md` chose a waiting primitive rather than a mailbox-specific one.
+
+The storage must be `Promise with (T, ServiceError)`: a reply ALWAYS carries `ServiceError`, because the
+service can be gone whatever the message declares. A message that itself THROWS has a two-member reply error
+type no `throws` clause can name, and its reply may not be stored at all — both rules are pinned in
+`specs-shv2/services.md`, whose `awaitany-returns-the-completed-index` and
+`a-stored-reply-decodes-serviceerror-through-the-storage-road` carry them.
+
 ### The exit test is at the TOP of the drive loop, so an already-complete promise never parks
 
 `__gt_await_any` is the **shared** cooperative drive loop — the same body `await` and the exit teardown run
@@ -286,6 +298,72 @@ function main() returns ExitCode
 	if sum == 6 'everysleeperwasstillawaitable'
 		score = score + 4
 	end 'everysleeperwasstillawaitable'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: await-any.over-service-replies -->
+<!-- targets: x64-windows -->
+⭐⭐ **THE COMPOSITION THAT MAKES THE PRIMITIVE WORTH HAVING.** A handler reply is an ordinary `Promise`, so
+ONE waiting primitive covers service replies, file IO and subprocess drains — there is no separate "channel
+select" anywhere in the design. Two services are sent to; the first handler sleeps and the second answers at
+once, so the index that comes back is `1`: **reply order, not send order**, which is the whole point of
+selecting rather than awaiting slot 0.
+
+⚠ The storage names `ServiceError` because a reply always carries it (`services.md`'s
+`error.a-reply-stored-without-its-error-type-is-refused`), and both replies are awaited afterwards because
+`awaitAny` retires nothing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+type Slow
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function value() returns Integer
+		sleep(80)
+		return 1
+	end 'value'
+end 'Slow'
+
+type Quick
+	var n as int
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function value() returns Integer
+		return 2
+	end 'value'
+end 'Quick'
+
+function main() returns ExitCode
+	let slow = spawn Slow.create()
+	let quick = spawn Quick.create()
+	var ps = ReplyPromiseArray.create()
+	ps.push(slow.value())
+	ps.push(quick.value())
+	let ready = __Builtins.awaitAny(ps)
+	var score = 0
+	if ready == 1 'thequickreplywonthoughitwassentsecond'
+		score = score + 3
+	end 'thequickreplywonthoughitwassentsecond'
+	var sum = 0
+	for p in ps 'drainbothreplies'
+		sum = sum + (try await p otherwise 0)
+	end 'drainbothreplies'
+	if sum == 3 'bothrepliessurvivedtheselect'
+		score = score + 4
+	end 'bothrepliessurvivedtheselect'
 	return score as ExitCode
 end 'main'
 ```
