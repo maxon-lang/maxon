@@ -2870,6 +2870,17 @@ union ReceiverArg
 	value(id ValueId, immutableName ByteArray, subjectName ByteArray, anchor Token)
 end 'ReceiverArg'
 
+// The STORAGE a call's receiver denotes, or empty — `ReceiverArg.subjectName` read through the union.
+// `Parser.callReachesBorrowedArgumentStorage` needs it because the receiver is storage the callee is handed
+// exactly as an argument is, and it reaches `parseCallArgs` prepended into `args` with its spelling already
+// spent (see the union's `subjectName` note).
+function receiverArgSubjectName(receiver ReceiverArg) returns ByteArray
+	return match receiver 'subject'
+		none gives EmptySourceText
+		value(_, _, subjectName, _) gives subjectName
+	end 'subject'
+end 'receiverArgSubjectName'
+
 // ⭐ **THE CONCRETE GENERIC INSTANCE A STATIC CONSTRUCTOR CALL BUILDS (P1.6-B2)**, or `none`. Only a
 // generic-alias constructor (`StrBox.create(…)`) carries one — it is what tells the caller-side consume
 // which argument OWNS its box's managed content and must be MOVED in. Every other call (a plain free call,
@@ -5289,11 +5300,14 @@ let DebugStreamTextCallee = b"__DebugStream.text"
 // SemanticCheck's ordinary arity check to read, so the count IS the declaration and it belongs beside the
 // name it declares.
 let DebugStreamEnabledArity = 0 as ParamCount
+
 // `phaseBegin(nameId, unitId)` / `phaseEnd(nameId, unitId)` — the same two, which is why they share a
 // constant as they share an entry point.
 let DebugStreamPhaseArity = 2 as ParamCount
+
 // `event(nameId, category, level, unitId, arg0, arg1)`.
 let DebugStreamEventArity = 6 as ParamCount
+
 // `text(category, level, unitId, message)`.
 let DebugStreamTextArity = 4 as ParamCount
 
@@ -35852,16 +35866,23 @@ export type Parser
 			return value
 		end 'ownedTemporaryIsAdopted'
 
-		// The two retain protocols, and they are the SAME two `storeOwnedValueIntoDurableSink` routes
-		// between: a byte record through `__str_retain` (an incref on the heap branch, a copy of an immortal
-		// `.rdata` literal on the other, and the parser cannot know which), everything else through
-		// `__mm_retain`, which is also where an existential's witness-dispatched retain lives.
-		let retained = self.retainBorrowedByteRecord(value, range: range) if tagIsByteRecord(self.tagOf(value)) else self.retainBorrowedAggregate(value, range: range)
+		let retained = self.retainBorrowedManagedValue(value, range: range)
 
 		self.carryDeclaredSurface(retained, from: value)
 		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: value, to: retained)
 		return retained
 	end 'coOwnImmutableRebindSource'
+
+	// ⭐ **THE RETAIN PROTOCOL A BORROWED MANAGED VALUE TAKES, BY RECORD KIND — the ONE fork.** They are the
+	// SAME two routes `storeOwnedValueIntoDurableSink` chooses between: a byte record through `__str_retain`
+	// (an incref on the heap branch, a copy of an immortal `.rdata` literal on the other, and the parser
+	// cannot know which), everything else through `__mm_retain`, which is also where an existential's
+	// witness-dispatched retain lives. Written once because TWO doors make it — the immutable-rebind source
+	// above and the call-argument anchor (`anchorBorrowedArgument`) — and a door taught only one arm would
+	// `__mm_incref` a `.rdata` literal, which writes a refcount into a read-only image section.
+	function retainBorrowedManagedValue(value ValueId, range SourceRange) returns ValueId
+		return self.retainBorrowedByteRecord(value, range: range) if tagIsByteRecord(self.tagOf(value)) else self.retainBorrowedAggregate(value, range: range)
+	end 'retainBorrowedManagedValue'
 
 	function coOwnAggregateAsTemp(source ValueId, range SourceRange) returns ValueId
 		let owned = self.retainBorrowedAggregate(source, range: range)
@@ -35870,6 +35891,215 @@ export type Parser
 		self.trackOwnedTemp(owned, exclusivity: OwnedHeapExclusivity.coOwned)
 		return owned
 	end 'coOwnAggregateAsTemp'
+
+	// ⭐⭐⭐ **HOLD A REFERENCE TO A BORROWED MANAGED ARGUMENT FOR THE LENGTH OF THE STATEMENT — the door
+	// W41's mark was minted for and never reached, and its absence was a MEASURED USE-AFTER-FREE.**
+	//
+	// `emitFieldLoad` records that a managed value came out of a WRITABLE slot (`rebindableSlotReads`) and
+	// says of it: *"the mark rides the VALUE to `declareInitializedBinding`, which promotes it there … a
+	// receiver load, an ARGUMENT, a chain hop are all transient and owe nothing"*. **The argument clause was
+	// false.** An argument is transient in the CALLER's frame and not in the callee's: the callee runs with
+	// the pointer in hand and may drop the very slot it came out of, and then reads it.
+	//
+	// ⛔⛔ **THREE MEASURED SHAPES, ALL COMPILING CLEAN, AND THE REFERENCE COMPILER IS WRONG ON THEM TOO** —
+	// so this is a rule shv2 makes rather than a divergence it repairs:
+	//
+	//   • `a.replace(a.s)` — a METHOD whose body assigns `self.s` and then reads its argument.
+	//   • `clobber(b, borrowed: b.s)` — a FREE function handed the owner and the field separately.
+	//   • `clobber(a, borrowed: try a.get(0) otherwise "")` — the ARRAY-ELEMENT analogue, E3070's own subject.
+	//
+	// shv2 gave `panic: Range check failed` / exit 82 `slabOsAllocFailed` — two symptoms of one corruption.
+	// The bootstrap gave the RIGHT length and the WRONG BYTES: on `return "[{borrowed}]"` after the store it
+	// printed `[[[[[[[[[[[]` where the field held `xxxxxxxxxx`, exit 0, silent. Its `byteLength()` spelling
+	// survives only because the length word at `@8` outlives the free — which is why the roadmap's
+	// *"runs CORRECTLY on the bootstrap oracle"* held for one spelling of the program and no others.
+	//
+	// ⭐⭐ **IT ANCHORS RATHER THAN SUBSTITUTES: THE CALL STILL RECEIVES THE ORIGINAL VALUE.** The retain's
+	// result is a SECOND name for the same record (or, on `__str_retain`'s immortal arm, a clone of one that
+	// cannot be freed at all), enrolled as a statement-scoped temp and read by nothing. That is what keeps
+	// the change local: a CONSUMED position still moves the caller's own value
+	// (`moveElementIntoContainer`, `transferConsumedArg`), a FEED position still takes its own reference
+	// (`handleEscapingBorrowFeed`), and E3019's blame still names the argument the source wrote. Handing the
+	// retained name to the call instead would make an owned temporary of every such argument and hand the
+	// container a reference this statement also drops.
+	//
+	// ⚠ **WHY A RETAIN AND NOT AN E3070 REFUSAL.** The conflict E3070 reports is one the parser can PROVE —
+	// a named borrow live across a write whose callee the whole-program summary says writes that parameter.
+	// This one is not provable at the same width: the callee may reach the storage through a module-level
+	// `var` rather than through a parameter, in which case no mask carries the fact, and a rule that refuses
+	// only what it can prove would still leave a use-after-free behind it. The refusal also has no borrower
+	// NAME to blame — E3070's wire text names one — so it would need a second diagnostic for a hazard the
+	// retain simply removes. **Refusing where it is provable is unchanged; this is what it cannot see.**
+	//
+	// ⚠ **THE BOUND SPELLING IS STILL REFUSED, AND THAT IS NOT AN INCONSISTENCY.** `let s = try a.get(0)
+	// otherwise ""` + `clobber(a, borrowed: s)` is E3070 exactly as before: `s` is a name whose borrow
+	// outlives the statement, which is the fact E3070 is about, and no pending borrow or rebindable-slot
+	// mark rides the value a binding took. What this door anchors is precisely the borrows NO NAME holds.
+	function anchorBorrowedArguments(func IrFunction, args ValueIdArray, argRanges SourceRangeArray, argAnchors TokenIndexArray, receiverSubjectName ByteArray, receiverArgs ParamCount)
+		for i in 0 upto args.count() 'eachArgument'
+			let value = try args.get(i) otherwise panic("anchorBorrowedArguments: args.get OOB at {i} inside count()")
+			if not self.borrowedArgumentIsAtRisk(func, value: value, index: i, args: args, argAnchors: argAnchors, receiverSubjectName: receiverSubjectName, receiverArgs: receiverArgs) 'nothingTheCalleeCanFree'
+				continue
+			end 'nothingTheCalleeCanFree'
+
+			// `coOwned` for `coOwnAggregateAsTemp`'s reason: the record has another owner — the storage it
+			// came out of — and claiming `sole` here would let a later move steal a slot this frame does not own.
+			self.trackOwnedTemp(self.retainBorrowedManagedValue(value, range: try argRanges.get(i) otherwise panic("anchorBorrowedArguments: argRanges.get OOB at {i} — the argument columns are parallel by construction")), exclusivity: OwnedHeapExclusivity.coOwned)
+		end 'eachArgument'
+	end 'anchorBorrowedArguments'
+
+	// ⭐ **CAN THIS CALL FREE THE ARGUMENT AT `index` OUT FROM UNDER ITSELF?** Three producers hand out a
+	// managed value whose only owner is storage outside this frame, and each names its own storage:
+	//
+	//   • the RECEIVER, whose subject the caller derived before the prepend and handed over
+	//     (`ReceiverArg.subjectName`). It cannot be re-derived here: `prependReceiverArg` files the receiver's
+	//     `argAnchors` entry as the ARGUMENT LIST's first token, not the receiver's own.
+	//   • an element ACCESSOR whose borrow no NAME has claimed — still pending, because the claimant would be
+	//     a binding and there is none. It already CARRIES its subject (`mintPendingBorrow` resolved it at the
+	//     accessor, the only place the container's binding was in hand), which is read back rather than
+	//     re-derived from tokens that no longer spell a chain: `try a.get(0) otherwise ""` opens on `try`.
+	//     A CLAIMED borrow is a `BorrowRecord` and is not this door's business — E3070 already reports the
+	//     writes under it.
+	//   • a read out of a rebindable SLOT (`markRebindableSlotRead`'s three producers — a mutable field, a
+	//     `var` global, a cell), whose base is `borrowSubjectNameAt`: the ONE derivation the iteration lock
+	//     and every other E3070 door already share.
+	//
+	// ⚠⚠ **THE PENDING WALK RUNS PAST ITS FIRST MATCH, AND STOPPING THERE IS THE DEFECT
+	// `retargetPendingBorrow`'s OWN ⚠⚠ BLOCK RECORDS ONE DOOR OVER.** SEVERAL entries carry ONE value
+	// whenever a borrow COMPOSES (`BorrowCheck.composePendingBorrowOntoBases` files one per link of the
+	// chain, all keyed on the accessor's result) or a `match` merge retargets every arm onto one phi (one per
+	// SUBJECT). The storage this call can reach may be any of them, and which entry comes first is push
+	// order, which is not a rule. Caught at review, before it shipped.
+	//
+	// ⚠ **THE TWO CHEAP TESTS COME FIRST AND THEY ARE THE COST GATE.** A scalar argument owns no heap, and a
+	// value this frame OWNS (a literal, a call result, a binding that already promoted) cannot be freed by a
+	// callee at all — so both answer off one column read each and never hash, which is every argument of
+	// almost every call. Past them the pending walk is bounded by `pending.count()`, which is 0 in every
+	// statement that spells no element accessor.
+	//
+	// ⚠ **AN OPAQUE `T` IS NOT MANAGED HERE AND SO IS NEVER ANCHORED** — `valueIsNonTextAggregate` does not
+	// admit `typeParameter`, deliberately, because a trivial instantiation's `T` is a scalar and an
+	// `__mm_retain` of one writes through `<the value> - 24 + 16`. A shared body forwarding its own borrowed
+	// `T` is the shape `handleEscapingBorrowFeed`'s ⛔⛔ block already files as an open use-after-free; it
+	// needs `coOwnBorrowedOpaque`'s descriptor route and a seed that does not exist, and is not widened here.
+	function borrowedArgumentIsAtRisk(func IrFunction, value ValueId, index ParamCount, args ValueIdArray, argAnchors TokenIndexArray, receiverSubjectName ByteArray, receiverArgs ParamCount) returns bool
+		if not self.valueIsManagedHeap(value) 'ownsNoHeap'
+			return false
+		end 'ownsNoHeap'
+
+		if self.valueIsOwnedHeap(value) 'thisFrameOwnsIt'
+			return false
+		end 'thisFrameOwnsIt'
+
+		if index < receiverArgs 'thePrependedReceiver'
+			return self.callReachesBorrowedArgumentStorage(receiverSubjectName, borrower: index, args: args, argAnchors: argAnchors, receiverSubjectName: receiverSubjectName, receiverArgs: receiverArgs)
+		end 'thePrependedReceiver'
+
+		for k in 0 upto func.borrowFacts.pending.count() 'eachPendingBorrow'
+			if self.callReachesBorrowedArgumentStorage(pendingBorrowStorageOf(func.borrowFacts, index: k, value: value), borrower: index, args: args, argAnchors: argAnchors, receiverSubjectName: receiverSubjectName, receiverArgs: receiverArgs) 'anElementBorrowTheCalleeCanFree'
+				return true
+			end 'anElementBorrowTheCalleeCanFree'
+		end 'eachPendingBorrow'
+
+		if not self.rebindableSlotReads.contains(value) 'notReadOutOfARebindableSlot'
+			return false
+		end 'notReadOutOfARebindableSlot'
+
+		return self.callReachesBorrowedArgumentStorage(self.borrowSubjectNameAt(try argAnchors.get(index) otherwise panic("borrowedArgumentIsAtRisk: argAnchors.get OOB at {index} — the argument columns are parallel by construction")), borrower: index, args: args, argAnchors: argAnchors, receiverSubjectName: receiverSubjectName, receiverArgs: receiverArgs)
+	end 'borrowedArgumentIsAtRisk'
+
+	// ⭐⭐⭐ **CAN THE CALLEE REACH THE STORAGE THIS ARGUMENT WAS READ OUT OF? — the whole of the narrowing,
+	// and the reason an anchor is not paid at every managed field read a call is handed.**
+	//
+	// A callee sees exactly two things: what this call hands it, and MODULE storage. So:
+	//
+	//   • **MODULE STORAGE IS REACHABLE FROM EVERYWHERE** (`namesWritableModuleStorage`), and a top-level
+	//     `var` needs no second argument to be at risk: `f(g.s)` whose callee assigns `g` frees the very
+	//     record it is about to read, and `g.measure()` — a RECEIVER read out of one — is the same hazard
+	//     with the storage in argument 0. Both were measured, exit 82 and 0xC0000005 respectively.
+	//   • **OTHERWISE THE CALL MUST HAND THE STORAGE OVER ITSELF** — as the RECEIVER (whose subject the
+	//     caller derived, `ReceiverArg.subjectName`) or as another argument that is a BARE NAME. A bare name
+	//     hands the callee the binding's own value; a CHAIN (`b.s`) hands over the field's record and not
+	//     `b`, so it contributes no reach to its own base — which is what keeps `f(self.field)` free of an
+	//     anchor, and that shape is most of the calls a compiler writes.
+	//
+	// ⚠ **NOTHING SATISFIES ITSELF.** The borrower's own index is skipped, and a RECEIVER borrower does not
+	// match `receiverSubjectName` either. Without the first, a bare-name argument that is itself a borrowed
+	// read — a cell-resident `var` local, which `emitCellLoad` marks — would anchor on a call that cannot
+	// reach its cell; without the second, EVERY method call through a self field (`self.items.push(v)`)
+	// would anchor its own receiver, which is a refcount pair on the hottest shape in the corpus.
+	//
+	// ⚠ **NAMES ARE COMPARED, NOT BINDINGS, AND WITHIN ONE CALL THAT IS THE SAME KEY.** Every name here comes
+	// through `borrowSubjectNameAt`, so a self-field's two spellings have already collapsed onto the field's
+	// one name; and one spelling cannot denote two bindings inside a single call, because a local may not
+	// shadow a self-field (E3006) and nothing declares a binding between two arguments. Resolving each to its
+	// `VarInfo` would be two hash lookups per argument on the call path for an answer the bytes already give.
+	//
+	// ⚠ **WHAT IT DOES NOT SEE, STATED RATHER THAN NARROWED AWAY.** Each of these is a shape this rule leaves
+	// exactly as it found it, not one it claims to close:
+	//   • storage the callee reaches TRANSITIVELY through another argument's CONTENTS (`f(registry, r.name)`
+	//     where the registry owns `r`) — a reachability question no comparison of names can answer;
+	//   • a WITNESS dispatch, whose receiver this door is not given, for the reason `noteBorrowSubjectCallArg`
+	//     refuses an unnamed callee: under dictionary-passing there is no one impl to key on;
+	//   • a record freed while a LATER argument of the same call is being evaluated — the anchors are emitted
+	//     once the whole list is parsed, because reachability is a fact about the whole call and the argument
+	//     that supplies it may be written after the one at risk.
+	function callReachesBorrowedArgumentStorage(storage ByteArray, borrower ParamCount, args ValueIdArray, argAnchors TokenIndexArray, receiverSubjectName ByteArray, receiverArgs ParamCount) returns bool
+		if storage.isEmpty() 'namesNoStorage'
+			return false
+		end 'namesNoStorage'
+
+		if self.namesWritableModuleStorage(storage) 'everyCalleeCanNameIt'
+			return true
+		end 'everyCalleeCanNameIt'
+
+		if borrower >= receiverArgs and storage.equals(receiverSubjectName) 'handedOverAsTheReceiver'
+			return true
+		end 'handedOverAsTheReceiver'
+
+		for i in 0 upto args.count() 'eachOtherArgument'
+			if i == borrower 'itself'
+				continue
+			end 'itself'
+
+			// The RECEIVER answered above, through its own subject. Its `argAnchors` entry is the argument
+			// list's first token rather than its own (`prependReceiverArg`), so reading it here would ask
+			// `bareNameArgumentAt` about a different argument entirely.
+			if i < receiverArgs 'theReceiverAlreadyAnswered'
+				continue
+			end 'theReceiverAlreadyAnswered'
+
+			if storage.equals(self.bareNameArgumentAt(try argAnchors.get(i) otherwise panic("callReachesBorrowedArgumentStorage: argAnchors.get OOB at {i} — the argument columns are parallel by construction"))) 'handedOverAsAnArgument'
+				return true
+			end 'handedOverAsAnArgument'
+		end 'eachOtherArgument'
+
+		return false
+	end 'callReachesBorrowedArgumentStorage'
+
+	// The name of the storage an argument hands the callee, or empty. Exactly a bare identifier: anything
+	// else — a chain, a call, a literal, an operator expression — hands over a value read OUT of storage
+	// rather than the storage itself, and treating its base as reachable is what would make `f(self.field)`
+	// pay an anchor. It reads tokens BY INDEX and never the cursor, because it is asked once the whole
+	// argument list has been parsed.
+	//
+	// ⚠ **THE SHAPE TEST IS `argumentIsExactlyANameAt`, THE ONE HOME OF "is this argument exactly a name"**,
+	// shared with PBR-2's cell hand-over. Spelled here as `kind == identifier` it would have been the
+	// thirteenth copy of that question and the SECOND to get D8 wrong: a KEYWORD-named binding (`to`, `from`)
+	// is a name, and one passed beside a borrow out of itself would not have been seen to reach the callee.
+	// `argWasBareName`'s header carries the measurement that widening cost.
+	//
+	// ⚠ **THE PREPENDED RECEIVER'S ENTRY IS NOT ITS OWN TOKEN** (`prependReceiverArg` files the argument
+	// list's first token), so this must never be asked of it — `callReachesBorrowedArgumentStorage` reads
+	// the receiver through `receiverSubjectName` instead. A receiver index that reached here would answer
+	// about whatever the first argument happens to be.
+	function bareNameArgumentAt(index TokenIndex) returns ByteArray
+		if not self.argumentIsExactlyANameAt(index) 'notJustAName'
+			return EmptySourceText
+		end 'notJustAName'
+
+		return self.tokenAt(index).value
+	end 'bareNameArgumentAt'
 
 	// ⭐ **MAKE A BORROWED MANAGED VALUE OWNED — the ONE `String`-copy-vs-aggregate-retain decision every site
 	// that needs an owned value out of a borrowed one must make.** A borrowed value cannot be enrolled as
@@ -41220,7 +41450,7 @@ export type Parser
 			// chain's final `else` target IS that block (`currentTestBlock`). Either way the miss is
 			// unreachable (every value matches some arm).
 			if usePlan 'planDeadMiss'
-			planMissBlockId = self.newDeadBlock(func, label: b"matchdead", line: matchTok.line).id
+				planMissBlockId = self.newDeadBlock(func, label: b"matchdead", line: matchTok.line).id
 			end 'planDeadMiss' else 'chainDeadMiss'
 				currentTestBlock.terminator = Terminator.dead
 			end 'chainDeadMiss'
@@ -55202,7 +55432,6 @@ export type Parser
 		end 'reply'
 	end 'requireServiceSendResultUnused'
 
-
 	// Slot every source argument into the variant's payload column, through `argSlotPosition` — the one home
 	// of the label-to-position mapping, asked over the DECLARATION's own parameter names. A label naming no
 	// parameter lands past the end and is refused here rather than filling a slot it does not mean.
@@ -66865,8 +67094,18 @@ export type Parser
 		// items` followed by `items = fresh` leaves `old` naming freed memory (MEASURED 0xC0000005 where the
 		// oracle prints `sum 10`). The mark rides the VALUE to `declareInitializedBinding`, which promotes it
 		// there — see `rebindableSlotReads` for why the mark and not a token re-walk, and why the promotion
-		// belongs at the BINDING rather than here (a receiver load, an argument, a chain hop are all transient
-		// and owe nothing).
+		// belongs at the CONSUMER rather than here.
+		//
+		// ⛔⛔ **THE CONSUMER LIST SAID *"a receiver load, an ARGUMENT, a chain hop are all transient and owe
+		// nothing"*, AND THE ARGUMENT CLAUSE WAS A USE-AFTER-FREE.** An argument is transient in the CALLER's
+		// frame and not in the CALLEE's: the callee runs with the pointer in hand and may drop the very slot
+		// it came out of, and then read it. MEASURED on `clobber(b, borrowed: b.s)` whose body assigns `c.s`
+		// — exit **82 `slabOsAllocFailed`**, and `panic: Range check failed` on the `byteLength()` spelling of
+		// the same program. `Parser.anchorBorrowedArguments` is the second consumer this mark now has; it
+		// takes the reference only when the CALL can reach the storage, which is what keeps `f(self.field)`
+		// — most of the calls a compiler writes — paying nothing. A receiver load and a chain hop still owe
+		// nothing when the callee cannot reach their base, and the receiver reaches that same door prepended
+		// as argument 0.
 		//
 		// It sits at THIS mint rather than at the doors that reach it, for `markDeclaredSurface`'s reason
 		// stated two lines up: every field read in the language funnels through this line, and a per-door mark
@@ -67725,6 +67964,13 @@ export type Parser
 	// occupant it displaces exactly as the other two do). All three gate on the value being MANAGED, so a
 	// scalar field — which owns no heap and can be freed by nothing — never enters the set and never costs a
 	// hash.
+	//
+	// ⭐⭐ **AND IT HAS TWO READERS, NOT ONE — THE SECOND CLOSED A USE-AFTER-FREE.**
+	// `declareInitializedBinding` promotes a marked value a NAME takes; `anchorBorrowedArguments` holds a
+	// reference across a CALL the value is handed to, when that call can also reach the storage it came out
+	// of. Both are the same fact reaching a different consumer, which is exactly what a per-VALUE mark buys
+	// over a promotion written at the mint: the read stays a borrow for the chain hops and receiver loads
+	// that owe nothing.
 	//
 	// ⚠ **THE LIST WAS "TWO" FOR A RUNG AND A HALF WHILE THE THIRD SLOT KIND EXISTED AND DANGLED.** It is
 	// DERIVED by grepping `self.markRebindableSlotRead(` rather than remembered — the census
@@ -71556,7 +71802,7 @@ export type Parser
 		// door that asks which label regime the callee takes. The question is asked HERE, from the name
 		// alone, because the builtin check below runs only AFTER the arguments are parsed — and the label
 		// rule fires during that parse. See `argLabelRuleForCallee`.
-		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: argLabelRuleForCallee(callee))
+		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: argLabelRuleForCallee(callee), receiverSubjectName: receiverArgSubjectName(receiver))
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
@@ -72023,7 +72269,6 @@ export type Parser
 
 		return self.emitRuntimeCall(DsLogEnabledMarkerName, args: ValueIdArray.create(), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitDebugStreamEnabled'
-
 
 	// ⭐ **`__Builtins.currentTimeMs()` — THE NANOSECOND READING, SCALED. NOT the coarse tick.**
 	//
@@ -73102,104 +73347,118 @@ export type Parser
 	// whose argument names a borrowed collection is a mutation site only if the CALLEE writes
 	// that parameter's storage, so the site has to be recorded against a name, here, where the
 	// argument's own tokens are still in hand (`BorrowCheck.maxon`).
-	function parseCallArgs(func IrFunction, callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argAnchors TokenIndexArray, rule ArgLabelRule) throws ParseError
-		if self.at(TokenKind.rightParen) 'noArgs'
-			return
-		end 'noArgs'
+	function parseCallArgs(func IrFunction, callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argAnchors TokenIndexArray, rule ArgLabelRule, receiverSubjectName ByteArray = EmptySourceText) throws ParseError
+		// ⭐ **WHATEVER IS ALREADY IN `args` IS THE PREPENDED RECEIVER** — one entry, or none for a free call.
+		// Counted rather than passed: `prependReceiverArg` is the only thing that can have filled the column
+		// before this runs, so the count IS the fact, and a second parameter carrying it could disagree.
+		let receiverArgs = args.count()
+		// ⚠ **AN EMPTY ARGUMENT LIST STILL HAS A RECEIVER, AND THIS USED TO `return` ON IT.** A receiver is
+		// prepended as argument 0 (`prependReceiverArg`), so `g.measure()` reaches the anchor pass below
+		// with exactly one argument to consider — and a receiver read out of a `var` global is at risk from
+		// its own callee (MEASURED: 0xC0000005 before this ran, where the bootstrap oracle prints the value).
+		if not self.at(TokenKind.rightParen) 'hasArguments'
 
-		// ⚡ **THE CALLEE'S BY-REFERENCE FACTS ARE READ ONCE PER CALL, NOT ONCE PER ARGUMENT** — `byRefOf`
-		// returns a union (a heap box) and `forwardingIsLiveFor` is a map lookup, and neither answer can change
-		// between two arguments of one call. Asked inside the loop they were an allocation per argument of
-		// every call in the program; hoisted, a program that uses no pass-by-reference pays one `count()` per
-		// call and builds nothing.
-		// ⚡ ONE gate for BOTH, and the second half was ungated until the PBR-2 review: `forwardingIsLiveFor`
-		// is a `ByteArray`-keyed map lookup returning a boxed optional, so every call in every program paid it
-		// — while `calleeTakesArgumentByRef` cannot read it at all once `calleeByRef` is `allByValue`, which
-		// is exactly when the gate is shut. Hoisting it under the same `count()` is answer-preserving.
-		let programUsesByRef = self.signatures.programTakesAParamByRef()
-		let calleeByRef = self.signatures.byRefOf(callee) if programUsesByRef else CalleeByRefParams.allByValue
-		let calleeForwardingIsLive = programUsesByRef and self.signatures.forwardingIsLiveFor(callee)
+			// ⚡ **THE CALLEE'S BY-REFERENCE FACTS ARE READ ONCE PER CALL, NOT ONCE PER ARGUMENT** — `byRefOf`
+			// returns a union (a heap box) and `forwardingIsLiveFor` is a map lookup, and neither answer can change
+			// between two arguments of one call. Asked inside the loop they were an allocation per argument of
+			// every call in the program; hoisted, a program that uses no pass-by-reference pays one `count()` per
+			// call and builds nothing.
+			// ⚡ ONE gate for BOTH, and the second half was ungated until the PBR-2 review: `forwardingIsLiveFor`
+			// is a `ByteArray`-keyed map lookup returning a boxed optional, so every call in every program paid it
+			// — while `calleeTakesArgumentByRef` cannot read it at all once `calleeByRef` is `allByValue`, which
+			// is exactly when the gate is shut. Hoisting it under the same `count()` is answer-preserving.
+			let programUsesByRef = self.signatures.programTakesAParamByRef()
+			let calleeByRef = self.signatures.byRefOf(callee) if programUsesByRef else CalleeByRefParams.allByValue
+			let calleeForwardingIsLive = programUsesByRef and self.signatures.forwardingIsLiveFor(callee)
 
-		var argIndex = 0 as ParamCount
-		while true 'argLoop'
-			// The argument's leading token — the label token when labelled, else the
-			// value's first token — anchors this argument's diagnostic span.
-			let argFirstTok = self.current()
-			let label = try self.consumeArgLabel(argIndex, rule: rule)
-			let valueTok = self.current()
-			let valueStart = self.pos
-			// ⭐⭐ **PBR-2: DOES THIS POSITION TAKE ITS ARGUMENT BY REFERENCE?** Asked BEFORE the value is
-			// parsed, because the answer changes what the parse must produce — an address rather than a value —
-			// and a read that has already materialized the contents cannot be un-emitted. The label and the
-			// column are both in hand here, which is what makes the position answerable this early.
-			let byRefPosition = calleeTakesArgumentByRef(calleeByRef, argIndex: args.count(), label: label, forwardingIsLive: calleeForwardingIsLive)
-			// Only an argument that is EXACTLY a name can hand over a cell; anything else is an r-value and
-			// gets a scratch cell below. Requesting it here (rather than testing afterwards) is what lets the
-			// read door skip its load entirely.
-			var requestedTheCell = false
-			if byRefPosition and self.argumentIsExactlyANameAt(valueStart) 'mayHandOverACell'
-				self.cellArgumentTokenIndex = valueStart
-				requestedTheCell = true
-			end 'mayHandOverACell'
-			// ⚠ The blame name is CLEARED before the argument is parsed — by `parseValueExpression` itself,
-			// which is the one door every value expression comes through and therefore the one place that
-			// clear can be stated once. See `bareArgImmutableName` for what the clear is for.
-			// `parseValueExpression` (the climber plus a trailing ternary — `f(a if c else b)`), not
-			// `parseExpression`: an argument is parsed INSIDE an expression that has already seeded
-			// `currentBlock`, and re-seeding it would discard a short-circuit an EARLIER argument performed.
-			let value = try self.parseValueExpression(func)
-			// The read CLEARS the request when it takes it, so this is how the call site learns whether it was
-			// handed a cell. Cleared unconditionally either way: a request the read declined (the name was not
-			// cell-resident) must not outlive this argument.
-			let handedTheCell = requestedTheCell and self.cellArgumentTokenIndex == NoCellArgumentRequest
-			self.cellArgumentTokenIndex = NoCellArgumentRequest
+			var argIndex = 0 as ParamCount
+			while true 'argLoop'
+				// The argument's leading token — the label token when labelled, else the
+				// value's first token — anchors this argument's diagnostic span.
+				let argFirstTok = self.current()
+				let label = try self.consumeArgLabel(argIndex, rule: rule)
+				let valueTok = self.current()
+				let valueStart = self.pos
+				// ⭐⭐ **PBR-2: DOES THIS POSITION TAKE ITS ARGUMENT BY REFERENCE?** Asked BEFORE the value is
+				// parsed, because the answer changes what the parse must produce — an address rather than a value —
+				// and a read that has already materialized the contents cannot be un-emitted. The label and the
+				// column are both in hand here, which is what makes the position answerable this early.
+				let byRefPosition = calleeTakesArgumentByRef(calleeByRef, argIndex: args.count(), label: label, forwardingIsLive: calleeForwardingIsLive)
+				// Only an argument that is EXACTLY a name can hand over a cell; anything else is an r-value and
+				// gets a scratch cell below. Requesting it here (rather than testing afterwards) is what lets the
+				// read door skip its load entirely.
+				var requestedTheCell = false
+				if byRefPosition and self.argumentIsExactlyANameAt(valueStart) 'mayHandOverACell'
+					self.cellArgumentTokenIndex = valueStart
+					requestedTheCell = true
+				end 'mayHandOverACell'
+				// ⚠ The blame name is CLEARED before the argument is parsed — by `parseValueExpression` itself,
+				// which is the one door every value expression comes through and therefore the one place that
+				// clear can be stated once. See `bareArgImmutableName` for what the clear is for.
+				// `parseValueExpression` (the climber plus a trailing ternary — `f(a if c else b)`), not
+				// `parseExpression`: an argument is parsed INSIDE an expression that has already seeded
+				// `currentBlock`, and re-seeding it would discard a short-circuit an EARLIER argument performed.
+				let value = try self.parseValueExpression(func)
+				// The read CLEARS the request when it takes it, so this is how the call site learns whether it was
+				// handed a cell. Cleared unconditionally either way: a request the read declined (the name was not
+				// cell-resident) must not outlive this argument.
+				let handedTheCell = requestedTheCell and self.cellArgumentTokenIndex == NoCellArgumentRequest
+				self.cellArgumentTokenIndex = NoCellArgumentRequest
 
-			// ⭐⭐ **AN R-VALUE AT A BY-REFERENCE POSITION GETS A SCRATCH CELL** — a literal, an expression, a
-			// fresh call result, or a binding that is not cell-resident (a `let`, which `checkImmutableArgToMutatingParam`
-			// refuses with E3019 a phase later — the spill keeps the IR well-formed until that diagnostic is
-			// reported, exactly as every other recovery here does).
-			//
-			// ⚠⚠ **`let` IS NOT THE ONLY NON-CELL BINDING THAT LANDS HERE, AND THE OTHERS ARE NOT REFUSED —
-			// THEY LOSE THE WRITE SILENTLY.** A MODULE-LEVEL `var` and a SELF-FIELD alias are both mutable, so
-			// no diagnostic fires, and neither is cell-resident: `collectCellLocalNames` decides LOCAL names
-			// and `declareCellLocal` installs a cell only at a local `var`'s declaration. Each therefore
-			// spills its VALUE into a scratch cell the callee then writes and the caller never reads back.
-			// MEASURED on this tree: `var g = 0` at module level plus `setTo99(g)` prints `g=0`, and a
-			// `setTo99(count)` on a self field leaves the field 0.
-			//
-			// ⚠ **IT IS NOT A PBR-2 REGRESSION — the C# bootstrap answers `g=0` and `field=0` on the identical
-			// two programs**, so the gap is the language's, shared with the reference, and predates the cell
-			// design. It is recorded HERE because this is the line that decides it, and because the shape the
-			// two storage kinds need is a WRITE-BACK or a cell of their own — a rung, not a clause.
-			let passed = try self.byRefArgumentValue(value, byRefPosition: byRefPosition, handedTheCell: handedTheCell, anchor: valueTok)
+				// ⭐⭐ **AN R-VALUE AT A BY-REFERENCE POSITION GETS A SCRATCH CELL** — a literal, an expression, a
+				// fresh call result, or a binding that is not cell-resident (a `let`, which `checkImmutableArgToMutatingParam`
+				// refuses with E3019 a phase later — the spill keeps the IR well-formed until that diagnostic is
+				// reported, exactly as every other recovery here does).
+				//
+				// ⚠⚠ **`let` IS NOT THE ONLY NON-CELL BINDING THAT LANDS HERE, AND THE OTHERS ARE NOT REFUSED —
+				// THEY LOSE THE WRITE SILENTLY.** A MODULE-LEVEL `var` and a SELF-FIELD alias are both mutable, so
+				// no diagnostic fires, and neither is cell-resident: `collectCellLocalNames` decides LOCAL names
+				// and `declareCellLocal` installs a cell only at a local `var`'s declaration. Each therefore
+				// spills its VALUE into a scratch cell the callee then writes and the caller never reads back.
+				// MEASURED on this tree: `var g = 0` at module level plus `setTo99(g)` prints `g=0`, and a
+				// `setTo99(count)` on a self field leaves the field 0.
+				//
+				// ⚠ **IT IS NOT A PBR-2 REGRESSION — the C# bootstrap answers `g=0` and `field=0` on the identical
+				// two programs**, so the gap is the language's, shared with the reference, and predates the cell
+				// design. It is recorded HERE because this is the line that decides it, and because the shape the
+				// two storage kinds need is a WRITE-BACK or a cell of their own — a rung, not a clause.
+				let passed = try self.byRefArgumentValue(value, byRefPosition: byRefPosition, handedTheCell: handedTheCell, anchor: valueTok)
 
-			// ⭐ **E3077's ARGUMENT DOOR.** `f(x)` may write `x` — whether it does is the callee's
-			// `writtenParamMask`, a whole-program fact SemanticCheck settles a phase after this diagnostic is
-			// decided — so a `var` handed to a call has exercised its mutability. Asked HERE, with the
-			// argument's own tokens still in hand and before anything moves the cursor, for the reason
-			// `bareArgImmutableName` gives. See `VarInfo.mutabilityExercised` for why both references make
-			// the same conservative choice and why matching them is load-bearing.
-			if self.argWasBareName(valueTok, valueStart: valueStart) 'bareNameArgument'
-				self.markNameMutabilityExercised(valueTok.value)
-			end 'bareNameArgument'
+				// ⭐ **E3077's ARGUMENT DOOR.** `f(x)` may write `x` — whether it does is the callee's
+				// `writtenParamMask`, a whole-program fact SemanticCheck settles a phase after this diagnostic is
+				// decided — so a `var` handed to a call has exercised its mutability. Asked HERE, with the
+				// argument's own tokens still in hand and before anything moves the cursor, for the reason
+				// `bareArgImmutableName` gives. See `VarInfo.mutabilityExercised` for why both references make
+				// the same conservative choice and why matching them is load-bearing.
+				if self.argWasBareName(valueTok, valueStart: valueStart) 'bareNameArgument'
+					self.markNameMutabilityExercised(valueTok.value)
+				end 'bareNameArgument'
 
-			// A capturing closure handed DOWN to a direct callee is now SUPPORTED (P1.5-A2b-2): its environment
-			// travels as the companion argument the lowering appends at the function-typed parameter position
-			// (`LowerMaxonToStd.appendCalleeEnvArgs`), so the callee's `f(x)` reads the right env. No refusal
-			// here. (A capturing closure at a NON-function parameter is a type error caught by SemanticCheck.)
-			// ⭐ E3070's call-argument door, taken BEFORE the push so the column index it records is this
-			// argument's own — the receiver a method call prepended included, which is the index
-			// `argSlotPosition` maps to a parameter position (`noteBorrowSubjectCallArg`).
-			self.noteBorrowSubjectCallArg(func, callee: callee, anchor: anchor, argColumn: args.count(), argLabel: label, valueStart: valueStart)
+				// A capturing closure handed DOWN to a direct callee is now SUPPORTED (P1.5-A2b-2): its environment
+				// travels as the companion argument the lowering appends at the function-typed parameter position
+				// (`LowerMaxonToStd.appendCalleeEnvArgs`), so the callee's `f(x)` reads the right env. No refusal
+				// here. (A capturing closure at a NON-function parameter is a type error caught by SemanticCheck.)
+				// ⭐ E3070's call-argument door, taken BEFORE the push so the column index it records is this
+				// argument's own — the receiver a method call prepended included, which is the index
+				// `argSlotPosition` maps to a parameter position (`noteBorrowSubjectCallArg`).
+				self.noteBorrowSubjectCallArg(func, callee: callee, anchor: anchor, argColumn: args.count(), argLabel: label, valueStart: valueStart)
 
-			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: passed, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value), anchorIndex: valueStart)
-			argIndex = argIndex + 1
+				pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: passed, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value), anchorIndex: valueStart)
+				argIndex = argIndex + 1
 
-			if not self.at(TokenKind.comma) 'endArgs'
-				break
-			end 'endArgs'
-			try self.consume(TokenKind.comma)
-		end 'argLoop'
+				if not self.at(TokenKind.comma) 'endArgs'
+					break
+				end 'endArgs'
+				try self.consume(TokenKind.comma)
+			end 'argLoop'
+		end 'hasArguments'
+
+		// ⭐⭐⭐ **AND THE HALF `noteBorrowSubjectCallArg` CANNOT PROVE: A BORROWED MANAGED ARGUMENT IS HELD
+		// ACROSS THE CALL** — `anchorBorrowedArguments`, which carries the three measured use-after-frees.
+		// Asked HERE and not per argument because the answer is about the WHOLE call: an argument is at risk
+		// only when the same call also hands the callee the storage the value came out of, and the argument
+		// that does so may be written after the one at risk.
+		self.anchorBorrowedArguments(func, args: args, argRanges: argRanges, argAnchors: argAnchors, receiverSubjectName: receiverSubjectName, receiverArgs: receiverArgs)
 	end 'parseCallArgs'
 
 	// What this argument actually hands the callee: the value as parsed when the position takes it by value,

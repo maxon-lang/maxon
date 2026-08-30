@@ -48,10 +48,36 @@
 //   • **THROUGH A BORROW: closed here**, at `composePendingBorrowOntoBases`. An element read out of storage
 //     that is itself borrowed is a borrow of that storage's base too, to the root. It is a real
 //     use-after-free — measured `0xC0000005` — and the mint is the only place with the binding in hand.
-//   • **THROUGH A CALL: deliberately NOT modelled, and it is not a hazard.** `arr.last()` is served from
+//   • **THROUGH A CALL: still not modelled HERE — and it IS a hazard, closed at the argument door instead
+//     (`Parser.anchorBorrowedArguments`).**
+//
+//     ⛔⛔ **THIS BULLET USED TO OPEN *"deliberately NOT modelled, and it is not a hazard"*, AND THAT
+//     SENTENCE WAS FALSE FOR EVERY BORROW EXCEPT THE ONE IT ARGUED ABOUT.** Its argument is sound and is
+//     kept below, but it covers exactly `arr.last()` — an OWNED opaque return. It says nothing about
+//     `arr.get(0)`, which is a BORROW (`ContainerElementReference.borrowed`), and nothing at all about a
+//     managed FIELD read, which this file never modelled in the first place. Handed to a call that can also
+//     reach the storage they came out of, all three are use-after-frees. MEASURED on three shapes that
+//     compiled clean — `a.replace(a.s)`, `clobber(b, borrowed: b.s)` and
+//     `clobber(a, borrowed: try a.get(0) otherwise "")` — giving `panic: Range check failed`, exit **82
+//     `slabOsAllocFailed`** and **0xC0000005** on the module-storage spellings. **Two symptoms from one
+//     cause is corruption, not three bugs.** The bootstrap oracle is wrong on them too (it prints
+//     `[[[[[[[[[[[]` where the field held `xxxxxxxxxx`, exit 0), so there was no reference behaviour to
+//     match and the answer is a rule shv2 makes.
+//
+//     ⭐ **AND IT IS A RETAIN RATHER THAN AN E3070.** The conflict this file reports is one the parser can
+//     PROVE — a NAMED borrow live across a write whose callee the whole-program summary says writes that
+//     parameter. The argument shape is not provable at the same width: the callee may reach the storage
+//     through a module-level `var`, where no mask carries the fact, so a rule that refused only what it can
+//     prove would leave the rest as a use-after-free. It also has no borrower NAME to blame, and
+//     `borrowConflictMessage` names one. So the caller HOLDS A REFERENCE for the length of the statement and
+//     the program runs, which is the answer the oracle intends and fails to deliver. Refusing where it IS
+//     provable is unchanged: `specs-shv2/borrow-liveness.md`'s `mutating-callee-argument` still gets E3070,
+//     because there the borrow outlives the statement under a name.
+//
+//     The original argument, unchanged and still true of its own subject: `arr.last()` is served from
 //     `stdlib/Array.maxon`, whose `returns Element` is a borrowed opaque return, so the CALLEE discharges a
 //     real `+1` (`Parser.emitOwnedValueReturn` → `coOwnBorrowedOpaque`) and the caller holds an owned value
-//     that cannot dangle. What is missing is a LANGUAGE RULE rather than a reference: `/specs/borrow-checker.md`
+//     that cannot dangle. What is missing THERE is a LANGUAGE RULE rather than a reference: `/specs/borrow-checker.md`
 //     pins E3070 on that program and the runnable oracle raises it — the bootstrap RETAINS too and refuses
 //     anyway. shv2 therefore ACCEPTS `arr.last()` under a live write where the oracle refuses it, today,
 //     with no roster strike involved. `Parser.arraySurfaceMemberNames`' first bullet carries that
@@ -545,6 +571,37 @@ export function composePendingBorrowOntoBases(facts BorrowFacts, firstPending Pe
 		scan = scan + 1
 	end 'eachLinkOfTheChain'
 end 'composePendingBorrowOntoBases'
+
+// ⭐ **THE STORAGE THE PENDING BORROW AT `index` NAMES, or empty when that entry is not a borrow of
+// `value`** — the test that says an element accessor's result is being consumed by something no BINDING
+// will claim, which at a call argument means the callee is handed a pointer into a container nothing in
+// this frame is keeping alive (`Parser.borrowedArgumentIsAtRisk`).
+//
+// It is asked of the PENDING list rather than of `borrows`, and that is the whole distinction: a borrow a
+// name took is a `BorrowRecord` and E3070 already reports the writes under it; one still pending when the
+// value reaches a call has no borrower to blame and no diagnostic to raise — it is dropped unclaimed when
+// the statement ends (`Parser.dropUnclaimedPendingBorrows`).
+//
+// ⚠⚠ **IT ANSWERS FOR ONE ENTRY AND NOT FOR THE VALUE, ON PURPOSE: SEVERAL ENTRIES CARRY ONE VALUE.** A
+// composed borrow files one per link of the chain (`composePendingBorrowOntoBases`) and a `match` merge
+// retargets every arm onto one phi, all keyed on the same id — which is exactly why
+// `Parser.retargetPendingBorrow` and `attachPendingBorrows` both run past their first match, and why a
+// by-value spelling of this function would let its caller stop at whichever link push order happened to put
+// first. The caller walks the whole list; this answers the one question it cannot ask itself.
+//
+// An empty answer is unambiguous: a subject is minted only from a NON-EMPTY storage name
+// (`Parser.borrowSubjectNameAt` gates on it), so no live subject can be named by the empty string.
+//
+// ⚠ A function that borrowed nothing never enters the caller's loop at all — `pending.count()` is 0 — which
+// is the same reading every other gate over this list states, and the reason it can sit on the argument path.
+export function pendingBorrowStorageOf(facts BorrowFacts, index PendingBorrowCount, value ValueId) returns ByteArray
+	let pending = pendingAt(facts, index: index)
+	if pending.borrowValue != value 'someOtherValue'
+		return EmptySourceText
+	end 'someOtherValue'
+
+	return (try facts.subjects.get(pending.subject) otherwise panic("pendingBorrowStorageOf: subjects.get OOB at {pending.subject} — every pending borrow's subject is minted against this very column")).name
+end 'pendingBorrowStorageOf'
 
 // Does the chain built from `from` on already name `subject`? See the ⚠ block above — this is the
 // termination condition, not a tidiness check.

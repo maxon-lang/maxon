@@ -26,23 +26,36 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
     x64.prologue 40
     x64.leaRegRdata rbx, [rip + __str_rec_2]
     x64.leaRegGlobal rax, __data_m
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
     x64.leaRegRdata rax, [rip + __layout_Map_String_String]
     x64.leaRegRdata r9, [rip + __witness_String.Hashable]
     x64.leaRegRdata rsi, [rip + __witness_String.Equatable]
+    x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect Map.contains
-    x64.cmpRegImm32 r8, 0
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Map_String_String
+    x64.cmpRegImm32 r12, 0
     x64.jcc equal, ifcont
   has:
     x64.leaRegGlobal rax, __data_m
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
     x64.leaRegRdata rax, [rip + __layout_Map_String_String]
     x64.leaRegRdata r9, [rip + __witness_String.Hashable]
     x64.leaRegRdata rsi, [rip + __witness_String.Equatable]
+    x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect Map.get
     x64.cmpRegImm32 r10, 0
@@ -59,9 +72,13 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Map_String_String
   ifcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

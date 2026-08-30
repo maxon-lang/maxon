@@ -1694,17 +1694,50 @@ source, so its producers are only the passes); `EC21` (interval match dispatch �
   by win.**
 - **arm64** owes a golden mint and carries real `EC16`/`EC18` codegen **never executed on that lane**.
   `EC18`'s `SMULH` is all that lane needs for its half of strength reduction.
-- ⛔⛔ **A LIVE USE-AFTER-FREE, FOUND BY `A3` AND NOT FIXED — `f(obj.managedField)` WHERE THE CALLEE FREES
-  THAT FIELD.** shv2 hands a managed field read straight to a call with no refcount at all
-  (`emitFieldLoad`: *"a receiver load, an argument, a chain hop are all transient and owe nothing"*), and
-  nothing checks that the callee leaves the field alone — `BorrowCheck`'s own header says the borrow set
-  *"does not compose THROUGH A CALL"*. **MEASURED 2026-08-30**: a `type Cell` with a managed `String` field
-  and `cell.replace(cell.s)`, where `replace` reassigns `self.s` and then reads its argument, **compiles
-  clean and exits 82 (`slabOsAllocFailed`) on shv2 — and runs CORRECTLY on the bootstrap oracle, exit 0.**
-  So it is a wrong answer against a runnable reference, not a divergence. `A3` was going to cite this route
-  as the precedent licensing its elision; the precedent is itself broken, which is why the row is filed
-  here instead. The match-payload spelling one door over is protected TODAY — by the retain `A3` proposed
-  removing (`a-borrowed-payload-outlives-a-callee-that-frees-its-box`). **Rank by risk, not by win.**
+- ✅ **CLOSED 2026-08-30 — `f(obj.managedField)` WHERE THE CALLEE FREES THAT FIELD.** shv2 handed a managed
+  field read straight to a call with no refcount at all (`emitFieldLoad`: *"a receiver load, an argument, a
+  chain hop are all transient and owe nothing"* — the ARGUMENT clause was false), and nothing checked that
+  the callee left the field alone — `BorrowCheck`'s own header said the borrow set *"does not compose
+  THROUGH A CALL"* and, worse, that this *"is not a hazard"*. **Six shapes measured, all compiling clean:**
+  `a.replace(a.s)`, `clobber(b, borrowed: b.s)`, `clobber(a, borrowed: try a.get(0) otherwise "")`,
+  `clobber(g.s)` and `clobber(g)` reaching a module `var` by name, and `g.measure()` whose RECEIVER is read
+  out of one — giving `panic: Range check failed`, exit **82 `slabOsAllocFailed`** and **0xC0000005**.
+
+  ⛔⛔ **AND THE ROW'S OWN PREMISE WAS HALF FALSE: *"runs CORRECTLY on the bootstrap oracle"* HELD FOR ONE
+  SPELLING OF ONE PROGRAM.** The oracle is right on `borrowed.byteLength()` only because the length word at
+  `@8` outlives the free; spelled `"[{borrowed}]"` the SAME program prints `[[[[[[[[[[[]` where the field
+  held `xxxxxxxxxx`, exit 0, silent — and on the module-`var` route it is wrong on the length spelling too.
+  So there was no reference behaviour to match: **it is a rule shv2 makes, and shv2 is now right where both
+  references are wrong.**
+
+  **The fix is a RETAIN, not an E3070**, and the narrowing is the whole of its cost.
+  `Parser.anchorBorrowedArguments` holds a reference for the length of the statement when a call is handed a
+  borrowed managed value AND can reach the storage it came out of — which is module storage (reachable from
+  every callee), or storage this same call hands over as its receiver or as a bare-name argument. The mark it
+  reads is W41's own `rebindableSlotReads`, which had exactly one consumer and now has two. Refusing where
+  E3070 CAN prove a conflict is unchanged. **COST, and the narrowing is the whole of it: the rule fires at 62 CALL SITES in the
+  entire compiler + stdlib.** Counted off the two stage-2 IRs, same source, both compilers built in one
+  session: `__mm_retain` call sites **893 → 954 (+61)**, `__str_retain` **704 → 704**, total emitted ops
+  1,394,914 → 1,395,345 (**+431, +0.031%**). `emitted-code-count` reads **2,858 — identical**. A scale-test
+  A/B against the pre-change binary reads **+141 allocations FLAT at every rung** of the doubling ladder
+  (+0.000% at rung 5, so a constant and not a curve) with CPU inside the noise band, sign-flipping. The
+  stage-2 compiler grows 9,231,539 → 9,234,094 bytes (**+0.028%**) and self-compiles in 156,994/157,291 ms
+  against the control's 156,096/156,099 (**+0.67%**, inside EC7's ±3% band); stage-2 == stage-3 byte-identical.
+  Anchoring UNCONDITIONALLY instead — the first cut — put a pair at every `f(self.field)` in the tree and
+  pushed `Parser.foldFile`'s 24-argument call over the x64 register file (**E5001, 9 registers short**), so
+  shv2 stopped self-compiling; `borrow-liveness:a-field-handed-to-a-callee-that-cannot-reach-it` is the
+  committed guard on that. **Eight cases** in `specs-shv2/borrow-liveness.md`, seven of them RED on the pre-change binary; the eighth
+  is the over-anchoring guard, and it moves under a sabotage of the narrowing. One of the eight is a defect
+  the REVIEW found in this rule before it shipped: a value carries SEVERAL pending borrows when a borrow
+  composes or a `match` merges, and a walk that stopped at the first link missed the storage the callee could
+  actually reach — exit 82 under sabotage, `[xxxxxxxxxx]` whole. `EC2`'s door was probed and is SAFE (a fused wrapper's `managed.clear()` with the record solely
+  owned and `self` read twice after: `n=0 count=1 len=30`, exit 0, on all three compilers) — its callees are
+  `__managed_*` entries, none of which releases the record it is handed.
+
+  **What it does NOT close, stated rather than narrowed away**: storage the callee reaches TRANSITIVELY
+  through another argument's contents; a WITNESS dispatch, whose receiver the door is not given; and a record
+  freed while a LATER argument of the same call is being evaluated. See
+  `Parser.callReachesBorrowedArgumentStorage`.
 - ⛔ **THE THREE NON-HOST GOLDEN LANES ARE STALE AND `A2` ADDED TO ONE OF THEM.** `specs-shv2/fragments/`
   holds four lanes and only `x64-windows` is ever re-minted here. **All three others hold ZERO
   `__im_slow`**, so they predate `EC1`'s inline-primitives pass entirely — `x64-linux` 6,403 fragments,

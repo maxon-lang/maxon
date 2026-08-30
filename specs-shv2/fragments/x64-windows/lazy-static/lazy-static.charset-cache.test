@@ -36,14 +36,26 @@ func @WSCache.isWhitespace {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.callDirect __lazy_init#__data_WSCache.ws
     x64.leaRegGlobal rax, __data_WSCache.ws
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect CharacterSet.contains
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CharacterSet
+    x64.movRegReg r8, rbx
     x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

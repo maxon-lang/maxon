@@ -2056,3 +2056,391 @@ end 'main'
 ```stdout
 44 a third tag entirely
 ```
+
+<!-- test: a-managed-field-handed-to-the-method-that-reassigns-it -->
+### A borrowed argument is HELD across the call — the receiver and one of its fields, to one method
+E3070 refuses a write the parser can PROVE conflicts with a NAMED live borrow. A borrow that no name
+holds has no borrower to blame and no diagnostic to raise — and it was handed to the callee with no
+reference at all. `Parser.anchorBorrowedArguments` closes that: when a call is given both a value read
+out of storage and the storage itself, the caller holds a reference for the length of the statement.
+
+⛔⛔ **THREE MEASURED SYMPTOMS OF ONE CORRUPTION, ALL FROM PROGRAMS THAT COMPILED CLEAN.** shv2 gave
+`panic: Range check failed` on the `byteLength()` spelling and exit **82 `slabOsAllocFailed`** on the
+interpolating one; on `f(g.s)` reaching the field through a module `var` it gave **0xC0000005**.
+
+⚠⚠ **AND THE BOOTSTRAP ORACLE IS WRONG HERE TOO, WHICH IS WHY THIS IS A RULE shv2 MAKES RATHER THAN A
+DIVERGENCE IT REPAIRS.** On this very program spelled with `"[{other}]"` in place of the length, the
+bootstrap prints `[[[[[[[[[[[]` where the field held `xxxxxxxxxx` — exit 0, silent, the freed buffer
+read back after the interpolation reused it. Its `byteLength()` spelling survives only because the
+length word at `@8` outlives the free, which is exactly how *"runs correctly on the oracle"* came to
+be written down about one spelling of a broken program.
+
+⚠ **THE FIELD IS FILLED AT RUN TIME ON PURPOSE.** A literal would be an immortal `.rdata` record that
+survives a free it never had — a false negative. `fill` builds the bytes in a loop, so the record the
+cell holds is heap and solely the cell's.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Cell
+	export var s as String
+
+	export static function create() returns Cell
+		return Cell{s: ""}
+	end 'create'
+
+	export function fill(n Count)
+		var t = ""
+		for _ in 0 upto n 'grow'
+			t = "{t}x"
+		end 'grow'
+		self.s = t
+	end 'fill'
+
+	// The callee reassigns the very field its own argument was read out of.
+	export function replace(other String) returns String
+		self.s = "replaced"
+		return "[{other}]"
+	end 'replace'
+end 'Cell'
+
+function main() returns ExitCode
+	var a = Cell.create()
+	a.fill(10)
+	print("{a.replace(a.s)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[xxxxxxxxxx]
+```
+
+<!-- test: a-managed-field-handed-to-a-free-callee-beside-its-owner -->
+### The free-function spelling: the owner and its field, in two argument columns
+The same conflict with no receiver in it. `clobber` is handed `b` and `b.s`; the store through `b`
+drops the record `borrowed` names. This is the shape `Parser.callReachesBorrowedArgumentStorage`
+answers by finding the borrower's storage named by ANOTHER argument of the same call — the bare name
+`b` — rather than by the receiver.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Cell
+	export var s as String
+
+	export static function create() returns Cell
+		return Cell{s: ""}
+	end 'create'
+
+	export function fill(n Count)
+		var t = ""
+		for _ in 0 upto n 'grow'
+			t = "{t}x"
+		end 'grow'
+		self.s = t
+	end 'fill'
+end 'Cell'
+
+function clobber(c Cell, borrowed String) returns String
+	c.s = "clobbered"
+	return "[{borrowed}]"
+end 'clobber'
+
+function main() returns ExitCode
+	var b = Cell.create()
+	b.fill(10)
+	print("{clobber(b, borrowed: b.s)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[xxxxxxxxxx]
+```
+
+<!-- test: an-array-element-handed-to-a-callee-that-clears-the-array -->
+### The ARRAY-ELEMENT analogue — E3070's own subject, in the one shape it could not see
+`try a.get(0) otherwise ""` mints a pending borrow, and a pending borrow becomes a `BorrowRecord` only
+when a BINDING claims it (`Parser.attachPendingBorrows`). Written inline as an argument, no binding
+ever does — so the entry is dropped unclaimed at the statement's end and the write door's
+`functionHoldsABorrow` gate answers false. The element was handed to a callee that frees it with
+nothing anywhere recording that it had been borrowed.
+
+⚠ **THE BOUND SPELLING IS STILL REFUSED AND THAT IS NOT AN INCONSISTENCY** — see
+`mutating-callee-argument` above, where `let s = try arr.get(0) …` then `grow(arr)` is E3070. There
+the borrow outlives the statement under a name, which is the fact E3070 is about; here it cannot
+outlive the call it is an argument to.
+```maxon
+typealias Count = int(0 to 1000)
+typealias StringArray = Array with String
+
+function clobber(a StringArray, borrowed String) returns String
+	a.clear()
+	return "[{borrowed}]"
+end 'clobber'
+
+function build(n Count) returns String
+	var t = ""
+	for _ in 0 upto n 'grow'
+		t = "{t}x"
+	end 'grow'
+	return t
+end 'build'
+
+function main() returns ExitCode
+	var a = StringArray.create()
+	a.push(build(10))
+	print("{clobber(a, borrowed: try a.get(0) otherwise "")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[xxxxxxxxxx]
+```
+
+<!-- test: a-field-of-a-module-var-handed-to-a-callee-that-reaches-it-by-name -->
+### MODULE STORAGE is reachable from every callee, so it needs no second argument
+`clobber` is handed nothing but the string. It reaches the cell by NAME, which no argument list can
+show — so the reachability test that settles the two cases above cannot settle this one, and the rule
+answers it the other way: a top-level `var` is reachable from everywhere, so a borrow out of one is
+anchored unconditionally. **MEASURED before the anchor: exit 82 `slabOsAllocFailed`.** The oracle
+prints `[[[[[[[[[[[]` on this program.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Cell
+	export var s as String
+
+	export static function create() returns Cell
+		return Cell{s: ""}
+	end 'create'
+
+	export function fill(n Count)
+		var t = ""
+		for _ in 0 upto n 'grow'
+			t = "{t}x"
+		end 'grow'
+		self.s = t
+	end 'fill'
+end 'Cell'
+
+var g = Cell.create()
+
+function clobber(borrowed String) returns String
+	g.s = "clobbered"
+	return "[{borrowed}]"
+end 'clobber'
+
+function main() returns ExitCode
+	g.fill(10)
+	print("{clobber(g.s)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[xxxxxxxxxx]
+```
+
+<!-- test: a-bare-module-var-handed-to-a-callee-that-rebinds-it -->
+### The same rule at the simplest spelling: the global itself, rebound under its own argument
+No field and no container — the argument IS the global's value, and `emitCheckedGlobalStore` drops
+the record it displaces. `recordGlobalReadValue`'s writable arm is the second of
+`markRebindableSlotRead`'s three producers, so the read carries the mark exactly as a field read does.
+**MEASURED before the anchor: exit 82.**
+```maxon
+typealias Count = int(0 to 1000)
+
+var g = ""
+
+function grow(n Count)
+	var t = ""
+	for _ in 0 upto n 'grow'
+		t = "{t}x"
+	end 'grow'
+	g = t
+end 'grow'
+
+function clobber(borrowed String) returns String
+	g = "clobbered"
+	return "[{borrowed}]"
+end 'clobber'
+
+function main() returns ExitCode
+	grow(10)
+	print("{clobber(g)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[xxxxxxxxxx]
+```
+
+<!-- test: a-receiver-read-out-of-a-module-var-outlives-a-callee-that-replaces-it -->
+### The RECEIVER is an argument too, and a call with an EMPTY argument list still has one
+`parseCallArgs` used to `return` the moment it saw `)`, so a method call taking no arguments never
+reached the anchor pass at all — and the receiver is prepended into the same column an argument
+occupies (`prependReceiverArg`). `g.measure()` reads its receiver out of a module `var` and the body
+replaces that very global, so `self` dangles for the rest of the method.
+**MEASURED before the anchor: 0xC0000005.**
+
+⚠ The receiver does NOT satisfy its own reachability — only its being MODULE storage does. Were it to,
+every method call through a self field (`self.items.push(v)`) would anchor its own receiver, which is a
+refcount pair on the hottest shape in the corpus. `a-field-handed-to-a-callee-that-cannot-reach-it`
+below is the guard on that.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Inner
+	export var s as String
+
+	export static function create() returns Inner
+		return Inner{s: ""}
+	end 'create'
+
+	export function fill(n Count)
+		var t = ""
+		for _ in 0 upto n 'grow'
+			t = "{t}x"
+		end 'grow'
+		self.s = t
+	end 'fill'
+
+	export function measure() returns String
+		g = Inner.create()
+		return "[{self.s}]"
+	end 'measure'
+end 'Inner'
+
+var g = Inner.create()
+
+function main() returns ExitCode
+	g.fill(10)
+	print("{g.measure()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[xxxxxxxxxx]
+```
+
+<!-- test: a-field-handed-to-a-callee-that-cannot-reach-it -->
+### The over-anchoring guard: a callee handed only the VALUE takes no reference
+The narrowing is the whole reason this rule is affordable, so it needs a case that fails if the rule
+stops narrowing. `measure` is handed `b.s` and nothing else: it cannot name the cell, the cell is not
+module storage, and no other argument denotes it — so nothing it can do frees the record and the
+caller owes no reference. The committed fragment's `main` carries **no `__str_retain` at all**, against
+exactly one in the free-callee case above whose only difference is that the owner travels beside the
+field. Anchoring unconditionally instead was measured to put one at every `f(self.field)` in the tree
+— most of the calls a compiler writes — and to push `Parser.foldFile`'s 24-argument call over the x64
+register file (**E5001: needs 9 more registers than are available**), so shv2 stopped self-compiling.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Cell
+	export var s as String
+
+	export static function create() returns Cell
+		return Cell{s: ""}
+	end 'create'
+
+	export function fill(n Count)
+		var t = ""
+		for _ in 0 upto n 'grow'
+			t = "{t}x"
+		end 'grow'
+		self.s = t
+	end 'fill'
+end 'Cell'
+
+function measure(borrowed String) returns String
+	return "[{borrowed}]"
+end 'measure'
+
+function main() returns ExitCode
+	var b = Cell.create()
+	b.fill(10)
+	print("{measure(b.s)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[xxxxxxxxxx]
+```
+
+<!-- test: a-merged-borrow-carries-every-arms-storage-to-the-call -->
+### ONE value, TWO pending borrows — and the one the callee can reach is the SECOND
+`match-gives-merges-every-arms-borrow` above pins this for a BINDING: each arm retargets its own pending
+borrow onto the one phi, so the phi carries an entry per SUBJECT. Written inline as an ARGUMENT the same
+phi reaches `Parser.borrowedArgumentIsAtRisk`, which must ask its reachability question of **every** entry
+— `a` here, then `b`, and only `b` is what the call is handed. Which entry comes first is push order,
+which is not a rule.
+
+⛔ **CAUGHT AT REVIEW, BEFORE IT SHIPPED, AND IT IS THE DEFECT `Parser.retargetPendingBorrow`'s OWN ⚠⚠
+BLOCK RECORDS ONE DOOR OVER** — that walk was written to stop at its first match on the reasoning *"a value
+id is DEFINED ONCE, so at most one entry can carry it"*, true of the id and never the claim that mattered.
+**SABOTAGE-VERIFIED**: stop the walk at its first link and this program exits **82 `slabOsAllocFailed``**,
+exactly as it does on the pre-change binary; run it whole and it prints the bytes.
+
+⚠ A composed borrow reaches the same walk the same way — `composePendingBorrowOntoBases` files one entry
+per link of the chain, all keyed on the accessor's result — so this case guards both producers of the
+several-entries-one-value shape.
+```maxon
+typealias Count = int(0 to 1000)
+typealias StringArray = Array with String
+
+enum Mode
+	first
+	second
+end 'Mode'
+
+function clobber(target StringArray, borrowed String) returns String
+	target.clear()
+	return "[{borrowed}]"
+end 'clobber'
+
+function build(n Count) returns String
+	var t = ""
+	for _ in 0 upto n 'grow'
+		t = "{t}x"
+	end 'grow'
+	return t
+end 'build'
+
+function main() returns ExitCode
+	var a = StringArray.create()
+	var b = StringArray.create()
+	a.push(build(4))
+	b.push(build(10))
+	let m = Mode.second
+	let out = clobber(b, borrowed: match m 'pick'
+		first gives try a.get(0) otherwise ""
+		second gives try b.get(0) otherwise ""
+	end 'pick')
+	print("{out}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[xxxxxxxxxx]
+```

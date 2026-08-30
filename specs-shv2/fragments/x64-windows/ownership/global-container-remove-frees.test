@@ -76,15 +76,24 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.leaRegGlobal rax, __data_globalArr
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
     x64.leaRegRdata rax, [rip + __layout_Array_Item]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
     x64.callDirect Array.remove
-    x64.storeSlotReg slot0, r8
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.movRegImm32 r8, 99
+    x64.movRegImm32 rbx, 99
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -94,7 +103,9 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
