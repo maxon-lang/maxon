@@ -158,7 +158,7 @@ returning 0 gives `3·1 + 0·3 + 2·9 + 3·27 = 102`, the expected total, and th
 on two miscompiled arms. Any combining arithmetic has some cancellation; a separate check has
 none, and the failing exit code names the arm that broke.
 ```maxon
-function classify(x int) returns int
+function classify(x Integer) returns Integer
 	if x == 0 'zero'
 		return 0
 	end 'zero' else if x < 10 'small'
@@ -189,6 +189,7 @@ function main() returns ExitCode
 
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

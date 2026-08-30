@@ -97,7 +97,7 @@ each call takes its own and hands it back, and no two calls can share anything.
 
 The spawn is measured too: a GT struct is one of the regions the window takes and returns.
 ```maxon
-function child() returns int
+function child() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 3") otherwise 99
 end 'child'
 
@@ -124,6 +124,7 @@ function main() returns ExitCode
 	end 'andGaveItBack'
 	return score as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -140,12 +141,12 @@ go back to the span they came from, where any allocation of any size class can h
 Eight spawn/await pairs after a warm-up: `total` moves by at least one region per spawn, `live`
 does not move at all beyond the slack a single allocation would take.
 ```maxon
-function work(n int) returns int
+function work(n Integer) returns Integer
 	__Builtins.parallelBoundary()
 	return n + 1
 end 'work'
 
-function spawnAndAwait(seed int) returns int
+function spawnAndAwait(seed Integer) returns Integer
 	let p = async work(seed)
 	return await p
 end 'spawnAndAwait'
@@ -176,6 +177,7 @@ function main() returns ExitCode
 	end 'andEachAwaitGaveItBack'
 	return score as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7

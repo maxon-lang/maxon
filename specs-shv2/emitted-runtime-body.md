@@ -190,7 +190,7 @@ the program has to actually run a green thread. Gated to x64-windows for
 `VirtualAlloc`ed stack.
 
 ```maxon
-function deepRecurse(n int) returns int
+function deepRecurse(n Integer) returns Integer
 	Runtime.yield()
 	if n == 0 'base'
 		return 0
@@ -203,6 +203,7 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 200

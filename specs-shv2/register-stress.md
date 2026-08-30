@@ -80,7 +80,7 @@ PREHEADER and reloads them after the loop, adding nothing to the body. This has 
 it is here so the next test has something to be identical to.
 `k1..k15 = 1..15` sum to 120; the loop adds `0+1+2+3 = 6`. So `126`.
 ```maxon
-function idleLets(p int) returns int
+function idleLets(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -112,6 +112,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -137,7 +138,7 @@ the compiler refused a loop whose actual working set is `sum` and `i`:
 IS `k` — leaving ordinary values the splitter spills around the loop exactly as it does for `let`.
 Same answer, 126.
 ```maxon
-function idleVars(p int) returns int
+function idleVars(p Integer) returns Integer
 	var k1 = 0
 	k1 = p + 1
 	var k2 = 0
@@ -184,6 +185,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -197,7 +199,7 @@ sweep; one pass over the function would leave every inner phi in place.
 `k1..k12 = 1..12` sum to 78. The inner loop adds `j = 0,1` (so 1) per outer iteration, and the
 outer runs `i = 0,1,2` — so the loop contributes `3 · 1 = 3`. Total `78 + 3 = 81`.
 ```maxon
-function nestedIdle(p int) returns int
+function nestedIdle(p Integer) returns Integer
 	var k1 = 0
 	k1 = p + 1
 	var k2 = 0
@@ -242,6 +244,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -270,11 +273,11 @@ which is the same false E5001, from the same cause, arrived at down a longer cha
 must therefore RE-FILE a folded phi's readers onto the value it folded TO, so the next fold in the
 chain re-asks them; see `ElimTrivialBlockArgs.FeedTriggers`. Same fifteen vars, same answer, 126.
 ```maxon
-function gate(p int) returns bool
+function gate(p Integer) returns bool
 	return p >= 0
 end 'gate'
 
-function idleVarsPastABreak(p int) returns int
+function idleVarsPastABreak(p Integer) returns Integer
 	var k1 = 0
 	k1 = p + 1
 	var k2 = 0
@@ -326,6 +329,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -346,11 +350,11 @@ pins it: the program would still compute the right answer, and only the golden w
 `a1..a4 = 1..4`, each gaining `bump(i) = i + 1` for `i = 0,1,2`, i.e. `+6`. So they end at
 `7, 8, 9, 10`, summing to 34.
 ```maxon
-function bump(x int) returns int
+function bump(x Integer) returns Integer
 	return x + 1
 end 'bump'
 
-function fourAcross(p int) returns int
+function fourAcross(p Integer) returns Integer
 	var a1 = p + 1
 	var a2 = p + 2
 	var a3 = p + 3
@@ -374,6 +378,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -389,11 +394,11 @@ body are the correct answer here, and the golden pins them.
 `a1..a7 = 1..7`, each gaining `bump(i) = i + 1` for `i = 0,1,2`, i.e. `+6`. So they end at
 `7..13`, summing to 70.
 ```maxon
-function bump(x int) returns int
+function bump(x Integer) returns Integer
 	return x + 1
 end 'bump'
 
-function sevenAcross(p int) returns int
+function sevenAcross(p Integer) returns Integer
 	var a1 = p + 1
 	var a2 = p + 2
 	var a3 = p + 3
@@ -423,6 +428,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -442,11 +448,11 @@ matching, since these masks are pairwise incomparable rather than nested. One va
 with a forced bracket, which is NOT E5001: the program fits the machine.
 `pick(k) = (k + 11k) + sink(k)`, so the six arms give `13, 26, 39, 52, 65, 78`, summing to 273.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function pick(k int) returns int
+function pick(k Integer) returns Integer
 	let v1 = k + 11
 	let v2 = k + 22
 	let v3 = k + 33
@@ -483,6 +489,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -497,7 +504,7 @@ a loop that now has two ways out.
 `k1..k12 = 1..12` sum to 78. The loop breaks when `sum` first exceeds 6: `sum` goes 0, 1, 3, 6, 10
 — at `i = 4`, `sum = 10 > 6`, so it breaks with `sum = 10`. Total `10 + 78 = 88`.
 ```maxon
-function breakUnderPressure(p int) returns int
+function breakUnderPressure(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -529,6 +536,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -543,7 +551,7 @@ store landing at loop depth ≠ 0, so a placement bug here is a hard failure rat
 `k1..k12 = 1..12` sum to 78. The inner loop adds `j = 0,1,2` (so 3) per outer iteration; the outer
 runs `i = 0,1,2` — so `3 · 3 = 9`. Total `78 + 9 = 87`.
 ```maxon
-function depthTwo(p int) returns int
+function depthTwo(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -576,6 +584,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

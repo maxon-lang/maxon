@@ -73,7 +73,7 @@ the sequencer must recognise the second move as already delivered and emit nothi
 Three iterations (an ODD count, so the swap is observable — an even count would restore
 the original and prove nothing): `(1,2)` → `(2,1)` → `(1,2)` → `(2,1)`, so `a*10 + b = 21`.
 ```maxon
-function swapLoop(p int) returns int
+function swapLoop(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var i = 0
@@ -93,6 +93,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -107,7 +108,7 @@ still PENDING (rather than immediately self-satisfied, as in the 2-cycle above).
 observable): `(1,2,3)` → `(2,3,1)` → `(3,1,2)` → `(1,2,3)` → `(2,3,1)`, so
 `a*100 + b*10 + c = 231`.
 ```maxon
-function rotate3(p int) returns int
+function rotate3(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
@@ -129,6 +130,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -143,7 +145,7 @@ index after `removeMoveAt` shifts the columns) survives a 2-cycle and dies here.
 `(3,4,5,1,2)` → `(4,5,1,2,3)`, so the digits give
 `4*10000 + 5*1000 + 1*100 + 2*10 + 3 = 45123`.
 ```maxon
-function rotate5(p int) returns int
+function rotate5(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
@@ -169,6 +171,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -186,7 +189,7 @@ Four iterations from `(1,2,3)` with `d` trailing `a`: `d` takes 1, 2, 3, 1 while
 `(a,b,c)` goes `(2,3,1)` → `(3,1,2)` → `(1,2,3)` → `(2,3,1)`. Final `a=2, b=3, c=1, d=1`,
 so `a*1000 + b*100 + c*10 + d = 2311`.
 ```maxon
-function cycleAndLeaf(p int) returns int
+function cycleAndLeaf(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
@@ -210,6 +213,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -227,7 +231,7 @@ swap.
 `i=0` even, swap a/b → `(2,1,3)`; `i=1` odd, swap b/c → `(2,3,1)`; `i=2` even, swap a/b
 → `(3,2,1)`; `i=3` odd, swap b/c → `(3,1,2)`. So `a*100 + b*10 + c = 312`.
 ```maxon
-function twoPerms(p int) returns int
+function twoPerms(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
@@ -254,6 +258,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -270,7 +275,7 @@ rather than in the body next to the `xchg`.
 `p = 0`: three swaps leave `a = 2`, `b = 1`; `k1..k12` sum to 78. So
 `a*100 + b*10 + 78 = 200 + 10 + 78 = 288`.
 ```maxon
-function permutePressure(p int) returns int
+function permutePressure(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -302,6 +307,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -317,11 +323,11 @@ clobbers and stomps its caller's state on return.
 loop-carried and therefore live across the call each iteration. From `(1,2)`, three swaps
 give `a = 2`, `b = 1`, so `a*10 + b = 21`.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function swapAcrossCall(p int) returns int
+function swapAcrossCall(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var i = 0
@@ -341,6 +347,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

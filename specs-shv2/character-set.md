@@ -446,12 +446,13 @@ coincidence. A RANGED `typealias CharSet = int(0 to 5)` stays legal, as it does 
 registries.
 ```maxon
 type CharacterSet
-	export var x as int
+	export var x as Integer
 end 'CharacterSet'
 
 function main() returns ExitCode
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'CharacterSet', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and shv2 has no namespace to tell a user declaration of the name apart from that one

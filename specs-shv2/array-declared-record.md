@@ -1196,7 +1196,7 @@ end 'Array'
 
 typealias MyStrings = Array with String
 
-function takesMine(parts MyStrings) returns int
+function takesMine(parts MyStrings) returns Integer
 	return parts.count()
 end 'takesMine'
 
@@ -1204,6 +1204,7 @@ function main() returns ExitCode
 	let s = "a,b,c"
 	return takesMine(s.split(",")) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 3
@@ -1346,7 +1347,7 @@ type Array uses Element implements BuiltinArrayLiteral
 		return Self{}
 	end 'create'
 
-	export function at(i int) returns Element
+	export function at(i Integer) returns Element
 		return try managed.get(i) otherwise panic("at: the caller checked the bound")
 	end 'at'
 end 'Array'
@@ -1356,6 +1357,7 @@ function main() returns ExitCode
 	print(parts.at(1))
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:22:14: Unsupported: `Array` member 'at' — this value's type is the `Array` the standard library declares, and 'at' is declared on the `type Array` this program declares. Declaring an `Array` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides managed/get/set/first/count/push/resize/append/appendMemory
@@ -1462,7 +1464,7 @@ type Array uses Element implements BuiltinArrayLiteral
 		return Self{}
 	end 'create'
 
-	export function at(index int) returns Element throws ArrayError
+	export function at(index Integer) returns Element throws ArrayError
 		return try managed.get(index)
 	end 'at'
 end 'Array'
@@ -1488,6 +1490,7 @@ function main() returns ExitCode
 	b.push(7)
 	return b.at(0) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:39:11: Unsupported: `Bag` member 'at' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here

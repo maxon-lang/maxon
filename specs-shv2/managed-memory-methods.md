@@ -2013,7 +2013,7 @@ buffer, and the declaration is doing all the work.
 and refused it with the BUFFER's roster, which is the half that says the message answers for the type it is
 shown about. This program compiled, linked and ran (exit 13) before A2j.
 ```maxon
-function abuse(m __ManagedMemory) returns int
+function abuse(m __ManagedMemory) returns Integer
 	let n = m.count()
 	let e = m.capacity()
 	return n + e
@@ -2023,6 +2023,7 @@ function main() returns ExitCode
 	let bytes = "hello".toByteArray()
 	return abuse(bytes) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — shv2 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/fill/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
@@ -2034,7 +2035,7 @@ error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — 
 `length()` is the buffer roster's FIRST member, and a declared parameter was refused it as an unknown `Array`
 method. It now answers, through an argument that is an ordinary byte array at the call site.
 ```maxon
-function shown(m __ManagedMemory) returns int
+function shown(m __ManagedMemory) returns Integer
 	return m.length()
 end 'shown'
 
@@ -2042,6 +2043,7 @@ function main() returns ExitCode
 	let bytes = "hello".toByteArray()
 	return shown(bytes) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 5
@@ -2123,7 +2125,7 @@ type Holder
 		return Self{buf: buf}
 	end 'create'
 
-	export function size() returns int
+	export function size() returns Integer
 		return self.buf.length()
 	end 'size'
 end 'Holder'
@@ -2132,6 +2134,7 @@ function main() returns ExitCode
 	let h = Holder.create("hello".toByteArray())
 	return (h.buf.length() + h.size()) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 10
@@ -2637,7 +2640,7 @@ gate: a missed retain corrupts the allocator, a missed drop exits 101.
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
-function bufLength(m __ManagedMemory) returns int
+function bufLength(m __ManagedMemory) returns Integer
 	return m.length()
 end 'bufLength'
 
@@ -2659,6 +2662,7 @@ function main() returns ExitCode
 	print("{total}")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -2740,7 +2744,7 @@ says the buffer mark never reached it.
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
-function bufLength(m __ManagedMemory) returns int
+function bufLength(m __ManagedMemory) returns Integer
 	return m.length()
 end 'bufLength'
 
@@ -2768,6 +2772,7 @@ function main() returns ExitCode
 	print("{total}")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

@@ -641,7 +641,7 @@ public union Payloaded
 end 'Payloaded'
 
 export type Bag
-	export var n as int
+	export var n as Integer
 	export var u as Payloaded
 
 	export static function make() returns Bag
@@ -649,6 +649,7 @@ export type Bag
 	end 'make'
 end 'Bag'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let b = Bag.make()

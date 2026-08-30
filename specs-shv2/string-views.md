@@ -272,12 +272,13 @@ and shv2 cannot load that module — so a user `type Codepoint` would mean one t
 another to type resolution, which is the disagreement `HashValue` was measured to cause.
 ```maxon
 type Codepoint
-	export var value as int
+	export var value as Integer
 end 'Codepoint'
 
 function main() returns ExitCode
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Codepoint', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and shv2 has no namespace to tell a user declaration of the name apart from that one

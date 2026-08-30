@@ -125,7 +125,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		end then return 2
@@ -139,6 +139,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 1
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 20
@@ -152,7 +153,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		end then return 2
@@ -169,6 +170,7 @@ function main() returns ExitCode
 	end 'spin'
 	return acc as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 20
@@ -182,7 +184,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		end then return 2
@@ -197,6 +199,7 @@ function main() returns ExitCode
 	end 'each'
 	return acc as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 21
@@ -230,7 +233,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		end then return 2
@@ -238,7 +241,7 @@ function tagOf(k Kw) returns int
 	end 'm'
 end 'tagOf'
 
-function pick(n int) returns int
+function pick(n Integer) returns Integer
 	match n 'p'
 		0 then return tagOf(Kw.end) * 21
 		default then return 9
@@ -248,6 +251,7 @@ end 'pick'
 function main() returns ExitCode
 	return pick(0) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -261,7 +265,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		end then return 2
@@ -278,6 +282,7 @@ function main() returns ExitCode
 		return 3
 	end 'rest'
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -375,7 +380,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		while then return 2
@@ -389,6 +394,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 1
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 25
@@ -422,7 +428,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		for then return 2
@@ -437,6 +443,7 @@ function main() returns ExitCode
 	end 'each'
 	return acc as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 21
@@ -454,7 +461,7 @@ enum Kw
 	otherwise
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		if then return 1
 		else then return 2
@@ -473,6 +480,7 @@ function main() returns ExitCode
 	end 'guard'
 	return sum as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 127
@@ -486,7 +494,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		end then return 2
@@ -505,6 +513,7 @@ function main() returns ExitCode
 	end 'outer'
 	return total as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -518,7 +527,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		end then return 2
@@ -527,17 +536,17 @@ function tagOf(k Kw) returns int
 end 'tagOf'
 
 type Holder
-	export var base as int
+	export var base as Integer
 
 	export static function create() returns Holder
 		return Self{base: tagOf(Kw.end)}
 	end 'create'
 
-	export function total() returns int
+	export function total() returns Integer
 		return self.base + bonus()
 	end 'total'
 
-	export function bonus() returns int
+	export function bonus() returns Integer
 		return 40
 	end 'bonus'
 end 'Holder'
@@ -546,6 +555,7 @@ function main() returns ExitCode
 	let h = Holder.create()
 	return h.total() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -559,7 +569,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		while then return 2
@@ -568,18 +578,18 @@ function tagOf(k Kw) returns int
 end 'tagOf'
 
 type Holder
-	export var base as int
+	export var base as Integer
 
 	export static function create() returns Holder
 		return Self{base: tagOf(Kw.while)}
 	end 'create'
 
-	export function total() returns int
+	export function total() returns Integer
 		return self.base + helper()
 	end 'total'
 end 'Holder'
 
-function helper() returns int
+function helper() returns Integer
 	return 40
 end 'helper'
 
@@ -587,6 +597,7 @@ function main() returns ExitCode
 	let h = Holder.create()
 	return h.total() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -785,7 +796,7 @@ end 'Kw'
 
 var counter = 10
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		end then return 2
@@ -793,7 +804,7 @@ function tagOf(k Kw) returns int
 	end 'm'
 end 'tagOf'
 
-function shadowing() returns int
+function shadowing() returns Integer
 	let a = tagOf(Kw.end)
 	var counter = 100
 	counter = counter + 1
@@ -803,6 +814,7 @@ end 'shadowing'
 function main() returns ExitCode
 	return (shadowing() + counter) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 113

@@ -4,13 +4,13 @@ union Trouble implements Error
 end 'Trouble'
 
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function wipe() returns int throws Trouble
+	export function wipe() returns Integer throws Trouble
 		throw Trouble.detail("no")
 	end 'wipe'
 end 'Store'
@@ -19,6 +19,7 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 CompilerError:
 error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that throws `Trouble`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word already carries the fused ordinal that tells `ServiceError` apart from the message's own error, and a pointer is not an ordinal, and this `spawn` makes `Store` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry

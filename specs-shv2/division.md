@@ -233,13 +233,14 @@ range is doing all the work. `100 / 7 = 14`, `100 mod 7 = 2`, `14 + 2 = 16`.
 ```maxon
 typealias NonZero = int(1 to 1000)
 
-function divide(n int, d NonZero) returns int
+function divide(n Integer, d NonZero) returns Integer
 	return n / d + n mod d
 end 'divide'
 
 function main() returns ExitCode
 	return divide(100, d: 7) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 16
@@ -251,7 +252,7 @@ instructions and no branch (`flag = divisor == 0`, `safe = divisor or flag`) rat
 skipped divide. That is the whole reason the fixed-register cases in this file could have been
 written either way. `d` comes from an opaque call, so it cannot be folded; `100 / 7 = 14`.
 ```maxon
-function opaque(x int) returns int
+function opaque(x Integer) returns Integer
 	return x
 end 'opaque'
 
@@ -260,6 +261,7 @@ function main() returns ExitCode
 	let q = try (100 / d) otherwise 99
 	return q as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 14
@@ -272,7 +274,7 @@ iteration's worth of control flow, not per iteration, and the loop-carried `sum`
 both edges of every fork. Sum of `100 / i` for `i = 1..6` — the same 244 `div-in-loop` computes,
 reached the other way.
 ```maxon
-function opaque(x int) returns int
+function opaque(x Integer) returns Integer
 	return x
 end 'opaque'
 
@@ -285,6 +287,7 @@ function main() returns ExitCode
 	end 'loop'
 	return sum as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 244
@@ -300,7 +303,7 @@ alone would not catch it. The divisor is non-zero, so the OK edge is the one tak
 — correctly: the group's outermost operation there is `__str_*`, which cannot fail, so the `try` has
 nothing to attach to. The rule is `rewriteLastCallToTryCall`'s and it is not division-specific.
 ```maxon
-function opaque(x int) returns int
+function opaque(x Integer) returns Integer
 	return x
 end 'opaque'
 
@@ -312,6 +315,7 @@ function main() returns ExitCode
 	print("q={q}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 held d=4
@@ -327,7 +331,7 @@ the var held and taking a new one — inside the handler's own scope frame. The 
 discriminates `divisionByZero`, so the caught error's type is the one `runtimeThrowsClause` answers
 with and not an untyped flag.
 ```maxon
-function opaque(x int) returns int
+function opaque(x Integer) returns Integer
 	return x
 end 'opaque'
 
@@ -342,6 +346,7 @@ function main() returns ExitCode
 	print(label)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 caught divisionByZero
@@ -361,13 +366,14 @@ as "the range is positive" instead of "the range excludes `-1`". The golden hold
 ```maxon
 typealias BelowMinusOne = int(i64.min to -2)
 
-function remainder(n int, d BelowMinusOne) returns int
+function remainder(n Integer, d BelowMinusOne) returns Integer
 	return n mod d
 end 'remainder'
 
 function main() returns ExitCode
 	return (remainder(0 - 13, d: -5) + 45) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -380,7 +386,7 @@ way to know the SSA form is honest is to keep the divisor LIVE past the divide a
 paths are exercised: `d = 7` takes the ok edge and must still read 7, and `z = 0` takes the ERROR edge,
 where `safe` was forced to 1 and `z` must nonetheless still read 0. `14 + 7 + 0 + 0 = 21`.
 ```maxon
-function opaque(x int) returns int
+function opaque(x Integer) returns Integer
 	return x
 end 'opaque'
 
@@ -391,6 +397,7 @@ function main() returns ExitCode
 	let r = try (100 / z) otherwise 0
 	return (q + d + r + z) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 21

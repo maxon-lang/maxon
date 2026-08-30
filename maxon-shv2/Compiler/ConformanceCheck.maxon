@@ -274,7 +274,7 @@ end 'checkOneAssociatedPosition'
 // same slot walk the caller's gate already ran, and a second one is a second chance to disagree with it about
 // which requirements this program dispatches.
 function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount, isDispatchedResult bool)
-	match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
+	match associatedAbiBindingOf(project.conformances, signatures: signatures, interfaceName: iface.name, position: position) 'binding'
 		agreed(conformer, binding, _) then checkAgreedBindingIsCarryable(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, isDispatchedResult: isDispatchedResult)
 		unconformed then break 'binding'
 		disagreed(first, firstBinding, second, secondBinding) then reportAssociatedTypeBindingDisagreement(project, signatures: signatures, iface: iface, name: name, first: first, firstBinding: firstBinding, second: second, secondBinding: secondBinding)
@@ -841,7 +841,7 @@ function checkOneAssociatedBinding(project Project, signatures ProgramSignatures
 		return
 	end 'deferredToTheWidening'
 
-	match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
+	match associatedAbiBindingOf(project.conformances, signatures: signatures, interfaceName: iface.name, position: position) 'binding'
 		unconformed then break 'binding'
 		disagreed then break 'binding'
 		agreed(conformer, binding, _) then requireWrittenBindingMatchesConformers(project, signatures: signatures, site: site, iface: iface, position: position, conformer: conformer, binding: binding)

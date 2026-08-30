@@ -50,7 +50,7 @@ grow-and-relocate rounds — and the awaited sum is exact, proving the relocated
 partial result correctly.
 ```maxon
 
-function deepRecurse(n int) returns int
+function deepRecurse(n Integer) returns Integer
 	Runtime.yield()
 	if n == 0 'base'
 		return 0
@@ -63,6 +63,7 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 200
@@ -75,7 +76,7 @@ the deepest growth — the stress case for the chain walk across multiple reloca
 exact; `main` returns it less 250 to fit the exit code.
 ```maxon
 
-function deepRecurse(n int) returns int
+function deepRecurse(n Integer) returns Integer
 	Runtime.yield()
 	if n == 0 'base'
 		return 0
@@ -88,6 +89,7 @@ function main() returns ExitCode
 	let r = await p
 	return (r - 250) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 150
@@ -100,14 +102,14 @@ deep — so the growth happens on a stack the scheduler switched out and back in
 proving `gt.sp`/`gt.fp` and the saved-rbp chain are consistent across a yield followed by a relocation.
 ```maxon
 
-function deepRecurse(n int) returns int
+function deepRecurse(n Integer) returns Integer
 	if n == 0 'base'
 		return 0
 	end 'base'
 	return deepRecurse(n - 1) + 1
 end 'deepRecurse'
 
-function yieldThenRecurse() returns int
+function yieldThenRecurse() returns Integer
 	sleep(1)
 	return deepRecurse(200)
 end 'yieldThenRecurse'
@@ -117,6 +119,7 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 200
@@ -128,7 +131,7 @@ A thread grows, completes (its grown stack is released), then a SECOND thread sp
 grows in turn — proving free-on-complete leaves no corruption for the next spawn. Both awaited sums are exact.
 ```maxon
 
-function deepRecurse(n int) returns int
+function deepRecurse(n Integer) returns Integer
 	Runtime.yield()
 	if n == 0 'base'
 		return 0
@@ -143,6 +146,7 @@ function main() returns ExitCode
 	let r2 = await p2
 	return (r1 + r2) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 150

@@ -183,7 +183,7 @@ function base() returns ExitCode
 	return 5
 end 'base'
 
-function widen(j int) returns int
+function widen(j Integer) returns Integer
 	let r = base()
 	return r + j
 end 'widen'
@@ -191,6 +191,7 @@ end 'widen'
 function main() returns ExitCode
 	return widen(10)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 15

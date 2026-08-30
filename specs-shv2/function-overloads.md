@@ -250,7 +250,7 @@ function emit(flag bool)
 	print("flag {flag}\n")
 end 'emit'
 
-function emit(tag int) returns String
+function emit(tag Integer) returns String
 	return "tag{tag}"
 end 'emit'
 
@@ -258,6 +258,7 @@ function main() returns ExitCode
 	emit(true)
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -279,7 +280,7 @@ function 'emit$tag' must be used`, and it refuses the same program with `emit` d
 divergence is about discarded pure results and not about overloads. Reading the result keeps both compilers
 on one program. MEASURED against the bootstrap on the ranged-alias spelling: `tag1`, exit 0. -->
 ```maxon
-function emit(tag int) returns String
+function emit(tag Integer) returns String
 	return "tag{tag}"
 end 'emit'
 
@@ -291,6 +292,7 @@ function main() returns ExitCode
 	print("{emit(1)}\n")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

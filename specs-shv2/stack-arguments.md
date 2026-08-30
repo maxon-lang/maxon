@@ -143,7 +143,7 @@ end 'main'
 The float file overflows on its own counter: seven floats need one stack slot even though no integer
 argument exists. Both reference compilers refuse this case outright.
 ```maxon
-function sumf7(a float, b float, c float, d float, e float, f float, g float) returns float
+function sumf7(a Real, b Real, c Real, d Real, e Real, f Real, g Real) returns Real
 	return a + b + c + d + e + f + g
 end 'sumf7'
 
@@ -154,6 +154,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 1
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 0
@@ -166,7 +167,7 @@ counter, both would claim slot 0 and one would read the other's bits.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function mix(i1 Integer, i2 Integer, i3 Integer, i4 Integer, i5 Integer, i6 Integer, i7 Integer, f1 float, f2 float, f3 float, f4 float, f5 float, f6 float, f7 float) returns Integer
+function mix(i1 Integer, i2 Integer, i3 Integer, i4 Integer, i5 Integer, i6 Integer, i7 Integer, f1 Real, f2 Real, f3 Real, f4 Real, f5 Real, f6 Real, f7 Real) returns Integer
 	if f1 + f2 + f3 + f4 + f5 + f6 + f7 == 127.0 'floatsOk'
 		return i1 + i2 + i3 + i4 + i5 + i6 + i7
 	end 'floatsOk'
@@ -176,6 +177,7 @@ end 'mix'
 function main() returns ExitCode
 	return mix(1, i2: 2, i3: 4, i4: 8, i5: 16, i6: 32, i7: 64, f1: 1.0, f2: 2.0, f3: 4.0, f4: 8.0, f5: 16.0, f6: 32.0, f7: 64.0)
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 127

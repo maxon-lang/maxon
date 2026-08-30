@@ -406,13 +406,14 @@ An `f64` parameter and an `f64` return travel through the same column and the sa
 arg — whose TYPE is the callee's return type, which is what puts the value in the right register file.
 
 ```maxon
-function scale(x float) returns float
+function scale(x Real) returns Real
 	return x * 2.0
 end 'scale'
 
 function main() returns ExitCode
 	return trunc(scale(21.0))
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 42

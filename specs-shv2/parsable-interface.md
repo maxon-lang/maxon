@@ -518,9 +518,9 @@ precedence is asked as `declaresCallee` of the same mangled name the ordinary pa
 readings of one call site cannot come to disagree about what "the user declared it" means.
 ```maxon
 type byte
-	export let n as int
+	export let n as Integer
 
-	export static function fromString(_ String) returns int
+	export static function fromString(_ String) returns Integer
 		return 7
 	end 'fromString'
 end 'byte'
@@ -528,6 +528,7 @@ end 'byte'
 function main() returns ExitCode
 	return byte.fromString("41")
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -550,13 +551,13 @@ re-point is loud. (Either way of getting it wrong fails: the primitive reading o
 THROWING, so it cannot even be written without `try`.)
 ```maxon
 type Box
-	export let n as int
+	export let n as Integer
 
-	export static function create(n int) returns Box
+	export static function create(n Integer) returns Box
 		return Self{n: n}
 	end 'create'
 
-	export function fromString(_ String) returns int
+	export function fromString(_ String) returns Integer
 		return self.n
 	end 'fromString'
 end 'Box'
@@ -568,6 +569,7 @@ end 'f'
 function main() returns ExitCode
 	return f(Box.create(7))
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7

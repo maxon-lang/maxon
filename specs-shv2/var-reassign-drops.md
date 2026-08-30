@@ -256,9 +256,9 @@ because a struct box is never enrolled as a statement temporary to be drained).
 <!-- test: struct-reassign -->
 ```maxon
 type Point
-	var x as int
+	var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -268,6 +268,7 @@ function main() returns ExitCode
 	p = Point.create(2)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

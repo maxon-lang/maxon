@@ -77,7 +77,8 @@ esac
 
 {
   echo "// ladder: $SHAPE, constructs=$C, locals=$V"
-  echo "function scaleOpaque(a int) returns int"
+  echo "typealias LadderInt = int(i64.min to i64.max)"
+  echo "function scaleOpaque(a LadderInt) returns LadderInt"
   echo -e "\treturn a + 1"
   echo "end 'scaleOpaque'"
 
@@ -89,7 +90,7 @@ esac
     echo "end 'ScaleTag'"
   fi
 
-  echo "function big(a int) returns int"
+  echo "function big(a LadderInt) returns LadderInt"
   # The six working accumulators the constructs mutate — a BOUNDED set, so the carried set of
   # every construct is 2 however large V grows.
   w=0

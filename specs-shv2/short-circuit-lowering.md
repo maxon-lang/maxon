@@ -252,11 +252,11 @@ condition ended in, not the header — get that wrong and the post-loop value is
 one.
 
 ```maxon
-function positive(v int) returns bool
+function positive(v Integer) returns bool
 	return v > 0
 end 'positive'
 
-function underLimit(v int) returns bool
+function underLimit(v Integer) returns bool
 	return v < 4
 end 'underLimit'
 
@@ -272,6 +272,7 @@ function main() returns ExitCode
 	end 'loop'
 	return n * 10 + steps
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 43

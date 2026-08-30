@@ -285,7 +285,7 @@ Hello, World!
 ```maxon
 var total = 0
 
-function bump(n int) returns int
+function bump(n Integer) returns Integer
 	total = total + n
 	return total
 end 'bump'
@@ -298,6 +298,7 @@ function main() returns ExitCode
 	print("baz")
 	return b - a - 5
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1121,7 +1122,7 @@ be, which are the two directions a second instance would break as an `E3005`.
 ```maxon
 typealias Pieces = Array with String
 
-function takesPieces(p Pieces) returns int
+function takesPieces(p Pieces) returns Integer
 	return p.count()
 end 'takesPieces'
 
@@ -1136,6 +1137,7 @@ function main() returns ExitCode
 	print("{literal.count()}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

@@ -845,6 +845,18 @@ let GeneratedLoopTrips = 4
 typealias TrackedValue = int(i64.min to i64.max)
 typealias TrackedValueArray = Array with TrackedValue
 
+// ⭐ **THE FULL-RANGE INT ALIAS THE GENERATED CORPUS NAMES**, and the declaration `writeRungFile` prepends
+// to every generated file that mentions it. The corpus used to write the bare `int` keyword in its emitted
+// `returns`, parameter and field positions; the ranged-typealias rule makes that illegal, so the generated
+// programs need a name for the same domain. Full-range and SIGNED, so the corpus's arithmetic, shift fill
+// and division signedness are byte-for-byte what they were when it wrote `int`.
+//
+// ⚠ **DECLARED PER FILE, BY THE WRITER, AND ONLY WHERE IT IS USED** — a typealias is file-scoped, so every
+// generated file that names it must declare it; and an unused one is E3062, so a file that does not name it
+// must NOT. Both halves are `writeRungFile`'s, which is the single door every corpus file goes through.
+let ScaleIntAlias = "ScaleInt"
+let ScaleIntAliasDecl = "typealias ScaleInt = int(i64.min to i64.max)\n"
+
 // What `main` returns when every driver in the rung witnessed itself. SEVEN, the convention the hand
 // ladders already use (`Testing/ladders/README.md`) — a value nothing else in the process returns, so a
 // rung that crashed, leaked or exited on a diagnostic cannot be mistaken for one that passed.
@@ -1649,7 +1661,13 @@ end 'RungDriver'
 function writeRungFile(dir FilePath, name String, source String, written StringArray, drivers StringArray, driver RungDriver) returns SourceByteCount throws ScaleError
 	let fileName = "{name}{MaxonExtension}"
 	let path = dir.join(fileName)
-	try File.writeText(path, content: source) otherwise throw ScaleError.reason("could not write {path.toString()}")
+
+	// ⭐ **THE ONE PLACE `ScaleIntAlias`'S DECLARATION IS ADDED** — every corpus file is written here, so a
+	// generator that starts naming the alias gets its declaration without knowing it has to. Conditional in
+	// both directions, and both are compile errors otherwise: a file that names it and does not declare it is
+	// E3005 (the alias is file-scoped), and one that declares it without naming it is E3062.
+	let content = "{ScaleIntAliasDecl}{source}" if source.contains(ScaleIntAlias) else source
+	try File.writeText(path, content: content) otherwise throw ScaleError.reason("could not write {path.toString()}")
 	written.push(fileName)
 
 	match driver 'driver'
@@ -1657,7 +1675,7 @@ function writeRungFile(dir FilePath, name String, source String, written StringA
 		threadsNothing then break 'driver'
 	end 'driver'
 
-	return source.byteLength() as SourceByteCount
+	return content.byteLength() as SourceByteCount
 end 'writeRungFile'
 
 // Delete everything in the rung directory TREE that this run did not just generate — see the header.
@@ -1754,12 +1772,12 @@ let OpaqueCoreCalleeName = "scaleOpaqueCore"
 // ladder measures that pass's SEED WALK and its whole REFERENCE COLLECTION — which is the bulk — but not
 // its indexing or its emission. A regression confined to those two would read flat here.
 function exportedFunctionHeader(name String, parameters String) returns String
-	return "public function {name}({parameters}) returns int\n"
+	return "public function {name}({parameters}) returns {ScaleIntAlias}\n"
 end 'exportedFunctionHeader'
 
 // The shape every knob's DRIVER has: it takes the threaded accumulator and hands one back.
 function driverHeader(name String) returns String
-	return exportedFunctionHeader(name, parameters: "a int")
+	return exportedFunctionHeader(name, parameters: "a {ScaleIntAlias}")
 end 'driverHeader'
 
 function seedSource() returns String
@@ -1794,7 +1812,7 @@ function seedSource() returns String
 	// splice it into the loops after all. The rung that adds a cascade re-derives this knob, and the
 	// honest shape then is a callee the inliner must refuse for a reason a cascade cannot dissolve (past
 	// the op budget, or holding a store and a panic) — not a deeper stack of levels.
-	out.append(exportedFunctionHeader(OpaqueCoreCalleeName, parameters: "a int"))
+	out.append(exportedFunctionHeader(OpaqueCoreCalleeName, parameters: "a {ScaleIntAlias}"))
 	out.append("\tif a > {OpaqueBigThreshold} 'big'\n")
 	out.append("\t\treturn a - {OpaqueBigThreshold}\n")
 	out.append("\tend 'big'\n")
@@ -2686,15 +2704,15 @@ end 'globalVarsSource'
 function structTypeDecl(name String) returns String
 	var out = StringBuilder.create()
 	out.append("\ntype {name}\n")
-	out.append("\texport var x as int\n")
-	out.append("\texport var y as int\n")
+	out.append("\texport var x as {ScaleIntAlias}\n")
+	out.append("\texport var y as {ScaleIntAlias}\n")
 	out.append("\n")
-	out.append("\tstatic function create(x int, y int) returns Self\n")
+	out.append("\tstatic function create(x {ScaleIntAlias}, y {ScaleIntAlias}) returns Self\n")
 	out.append("\t\treturn Self\{x: x, y: y\}\n")
 	out.append("\tend 'create'\n")
 	out.append("end '{name}'\n")
 	out.append("\n")
-	out.append("function {structReaderName(name)}(p {name}) returns int\n")
+	out.append("function {structReaderName(name)}(p {name}) returns {ScaleIntAlias}\n")
 	out.append("\treturn p.x + p.y\n")
 	out.append("end '{structReaderName(name)}'\n")
 	return out.build()
@@ -3106,7 +3124,7 @@ function rangedReturnSource(siteCount KnobSize) returns String
 	// top rung adds past a bound written down as a constant.
 	out.append("typealias {RangedReturnNarrowAlias} = int(0 to {siteCount})\n")
 	out.append("\n")
-	out.append("function {RangedReturnPickName}(n int) returns {RangedReturnNarrowAlias}\n")
+	out.append("function {RangedReturnPickName}(n {ScaleIntAlias}) returns {RangedReturnNarrowAlias}\n")
 
 	for i in 0 upto siteCount 'eachSite'
 		out.append("\tif n == {i} 'rr{i}'\n")
@@ -3130,7 +3148,7 @@ function rangedReturnSource(siteCount KnobSize) returns String
 	// literal `return 0` that closes the body. Both outcomes are real at different rungs — the knob is 8
 	// wide at rung 0 and 256 at rung 5, and the seed is 19 — so this witness watches the guarded-return
 	// path AND the un-guarded literal path as the ladder climbs, without either being written down.
-	out.append(driverWitnessTail(RangedReturnDriver, valueExpr: "picked as int", expected: rangedReturnPicked(siteCount)))
+	out.append(driverWitnessTail(RangedReturnDriver, valueExpr: "picked", expected: rangedReturnPicked(siteCount)))
 	return out.build()
 end 'rangedReturnSource'
 
@@ -3175,26 +3193,26 @@ function shiftCoverageSource() returns String
 	// so it computed a ROUND TRIP and any defect that moved BOTH shifts by the same amount (both counts
 	// masked to 3 bits instead of 6, say) cancelled exactly and the witness read clean. A relational
 	// assertion cannot catch a bug that moves both of its operands, which is what a single `c` made this.
-	out.append("function scaleShiftDyn(v ScaleSigned, c ScaleSigned, d ScaleSigned) returns int\n")
+	out.append("function scaleShiftDyn(v ScaleSigned, c ScaleSigned, d ScaleSigned) returns {ScaleIntAlias}\n")
 	out.append("\tlet x = v shl c\n")
 	out.append("\treturn x shr d\n")
 	out.append("end 'scaleShiftDyn'\n")
 	out.append("\n")
 
 	// Constant count, ranged (unsigned) operand: zero-fill decided by the LEFT operand's range.
-	out.append("function scaleShiftWideConst(v ScaleWide) returns int\n")
+	out.append("function scaleShiftWideConst(v ScaleWide) returns {ScaleIntAlias}\n")
 	out.append("\treturn v shr {ShiftWideConstantCount}\n")
 	out.append("end 'scaleShiftWideConst'\n")
 	out.append("\n")
 
 	// Dynamic count, ranged operand: guarded, and the fill still decided by the operand's range.
-	out.append("function scaleShiftWideDyn(v ScaleWide, c ScaleSigned) returns int\n")
+	out.append("function scaleShiftWideDyn(v ScaleWide, c ScaleSigned) returns {ScaleIntAlias}\n")
 	out.append("\treturn v shr c\n")
 	out.append("end 'scaleShiftWideDyn'\n")
 	out.append("\n")
 
 	// Constant count, signed operand: arithmetic (sign) fill.
-	out.append("function scaleShiftSignedConst(v ScaleSigned) returns int\n")
+	out.append("function scaleShiftSignedConst(v ScaleSigned) returns {ScaleIntAlias}\n")
 	out.append("\treturn v shr {ShiftSignedConstantCount}\n")
 	out.append("end 'scaleShiftSignedConst'\n")
 	out.append("\n")
@@ -3362,7 +3380,7 @@ function scalarCoverageSource() returns String
 	out.append("\n")
 
 	// LOGICAL or / xor / not: `or` short-circuits (blocks + a merge phi), `xor` cannot, `not` inverts.
-	out.append("function {CoverageBoolName}(a int) returns int\n")
+	out.append("function {CoverageBoolName}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\tlet hi = a > {CoverageBoolHighBound}\n")
 	out.append("\tlet lo = a < {CoverageBoolLowBound}\n")
 	out.append("\tif hi or lo 'either'\n")
@@ -3379,7 +3397,7 @@ function scalarCoverageSource() returns String
 	out.append("\n")
 
 	// BITWISE or / xor / not: the same three keywords over ints, which is a different band.
-	out.append("function {CoverageBitsName}(a int) returns int\n")
+	out.append("function {CoverageBitsName}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\tlet m = a or {CoverageBitSetMask}\n")
 	out.append("\tlet x = m xor {CoverageBitFlipMask}\n")
 	out.append("\treturn x and not {CoverageBitClearMask}\n")
@@ -3390,14 +3408,14 @@ function scalarCoverageSource() returns String
 	// alias's range, but the compiler cannot prove that, so the guard is emitted either way. What is
 	// MEASURED is the guard's branch; what is now also CHECKED, because the rungs run, is that the mask
 	// really does keep the value inside the range — a guard that fired would abort the rung.
-	out.append("function {CoverageCastName}(a int) returns int\n")
+	out.append("function {CoverageCastName}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\tlet n = (a and {CoverageNarrowUpperBound}) as {CoverageNarrowAlias}\n")
-	out.append("\treturn n as int\n")
+	out.append("\treturn n\n")
 	out.append("end '{CoverageCastName}'\n")
 	out.append("\n")
 
 	// A loop that EXITS EARLY: the break's edge carries the loop-carried values into the exit phi.
-	out.append("function {CoverageBreakName}(a int) returns int\n")
+	out.append("function {CoverageBreakName}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\tvar total = a\n")
 	out.append("\tvar i = 0\n")
 	out.append("\twhile i < {CoverageBreakTrips} 'loop'\n")
@@ -3430,7 +3448,7 @@ function scalarCoverageSource() returns String
 	// — but it carries the same pair of accumulators and the same tail, because it has TWO expectations
 	// and two is all it takes to cancel. Its caller then expects it to hand back the argument, exactly as
 	// `main` expects of a driver.
-	out.append("function {CoverageNestedName}(a int) returns int\n")
+	out.append("function {CoverageNestedName}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\tvar acc = a\n")
 	out.append("\tvar wit = 0\n")
 	var nested = StringBuilder.create()
@@ -3704,7 +3722,7 @@ end 'enumTypesSource'
 // constant so the pickers are not textually identical, which would benchmark the parser's cache.
 function enumPickerSource(pickerName String, enumName String, casePrefix String, salt KnobIndex) returns String
 	var out = StringBuilder.create()
-	out.append("\nfunction {pickerName}(a int) returns {enumName}\n")
+	out.append("\nfunction {pickerName}(a {ScaleIntAlias}) returns {enumName}\n")
 	out.append("\tif a > {enumPickerThreshold(salt)} 'hi'\n")
 	out.append("\t\treturn {enumName}.{casePrefix}{EnumCasesPerType - 1}\n")
 	out.append("\tend 'hi'\n")
@@ -4890,7 +4908,7 @@ end 'tryCoOwnSource'
 // back out of it, and a second copy would be a second place for the `throws` shape to drift.
 function tryCoOwnConsumerDecl(name String, parameterTypeName String, valueText String) returns String
 	var out = StringBuilder.create()
-	out.append("\nfunction {name}(v {parameterTypeName}, live bool) returns int throws {TryCoOwnErrorName}\n")
+	out.append("\nfunction {name}(v {parameterTypeName}, live bool) returns {ScaleIntAlias} throws {TryCoOwnErrorName}\n")
 	out.append("\tif not live 'absent'\n")
 	out.append("\t\tthrow {TryCoOwnErrorName}.bad\n")
 	out.append("\tend 'absent'\n")
@@ -5083,7 +5101,7 @@ function namespacedModuleSource(m KnobIndex) returns String
 	out.append("\n")
 	// The `module` tier: nameable from this directory's SUBTREE and nowhere else. `ns{m}/inner/deep.maxon`
 	// is what names it, which is the subtree arm rather than the same-directory one.
-	out.append("module function {NsSharedPrefix}{m}(a int) returns int\n")
+	out.append("module function {NsSharedPrefix}{m}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\treturn a + {nsSharedIncrement(m)}\n")
 	out.append("end '{NsSharedPrefix}{m}'\n")
 	out.append("\n")
@@ -5091,13 +5109,13 @@ function namespacedModuleSource(m KnobIndex) returns String
 	// The file-private alias, named BARE from the file that declares it — the one door a file-private
 	// declaration has, and the arm `pushNamespaceQualifiedAlias` mints no mirror for.
 	out.append("\tlet v = (a and {NsAliasMask}) as {privateAlias}\n")
-	out.append("\treturn {NsHiddenPrefix}{m}(a) + (v as int)\n")
+	out.append("\treturn {NsHiddenPrefix}{m}(a) + v\n")
 	out.append("end '{NsHelperPrefix}{m}'\n")
 	out.append("\n")
 	// FILE-PRIVATE, and it still earns a `ns{m}.nsHidden{m}` entry in the namespace-qualified function set:
 	// that side does not gate on the tier, so a private helper is exactly as expensive to REGISTER as an
 	// exported one. Half the per-declaration cost this knob prices lives in functions nothing can call.
-	out.append("function {NsHiddenPrefix}{m}(a int) returns int\n")
+	out.append("function {NsHiddenPrefix}{m}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\treturn a + {nsHiddenIncrement(m)}\n")
 	out.append("end '{NsHiddenPrefix}{m}'\n")
 	return out.build()
@@ -5173,11 +5191,11 @@ function qualifiedReferenceGroup(m KnobIndex) returns String
 	out.append("\tlet ns{m}b = (a and {NsAliasMask}) as {innerNs}{NsQualifierSeparator}{NsDeepAliasName}\n")
 	// ONE-DOT qualified CALL — `parseQualifiedCall`'s door, which asks the namespace registry with the
 	// `Type.method` name it had already mangled.
-	out.append("\tacc = acc + {moduleNs}{NsQualifierSeparator}{NsHelperPrefix}{m}(a) + (ns{m}a as int){neutralizeText(nsHelperValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
+	out.append("\tacc = acc + {moduleNs}{NsQualifierSeparator}{NsHelperPrefix}{m}(a) + ns{m}a{neutralizeText(nsHelperValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
 	out.append(accProbe("\t"))
 	// TWO-DOT qualified CALL — `parseDottedPrimary`'s own arm, the one that WALKS the token chain and
 	// ASSEMBLES the name before probing.
-	out.append("\tacc = acc + {innerNs}{NsQualifierSeparator}{NsDeepFuncPrefix}{m}(a) + (ns{m}b as int){neutralizeText(nsDeepValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
+	out.append("\tacc = acc + {innerNs}{NsQualifierSeparator}{NsDeepFuncPrefix}{m}(a) + ns{m}b{neutralizeText(nsDeepValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
 	out.append(accProbe("\t"))
 	// A qualified call as a STATEMENT — the third door, and the one whose absence made a namespaced
 	// module's void function uncallable (`E2015: Unsupported: identifier statement`). Its result is
@@ -5479,7 +5497,7 @@ function bufferSurfacesSource(groupCount KnobSize) returns String
 	// The PARAMETER carrier of the declared surface, and the ARGUMENT door's callee. ONE function, because a
 	// parameter's spelling is read once per DECLARATION while the axis that has to double is the CALL — which
 	// the driver makes once per group.
-	out.append("\nfunction {BufferSurfaceReadName}(m {ManagedMemoryTypeSpelling}) returns int\n")
+	out.append("\nfunction {BufferSurfaceReadName}(m {ManagedMemoryTypeSpelling}) returns {ScaleIntAlias}\n")
 	out.append("\treturn m.length()\n")
 	out.append("end '{BufferSurfaceReadName}'\n")
 

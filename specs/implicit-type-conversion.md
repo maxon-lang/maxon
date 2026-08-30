@@ -40,13 +40,14 @@ The other direction is fine and needs no ceremony: every `int` is exactly repres
 ### This is the same rule as an explicit cast -- see `type-casting.md`
 
 **There is one conversion rule, and `as` does not change it.** `type-casting.md` rejects the
-explicit `5.0 as int` with the same E3009 and the same advice, and blesses the explicit
-`100 as float`. The implicit and explicit forms agree exactly, in both directions:
+explicit `5.0 as Count` (a declared int alias) with the same E3009 and the same advice, and blesses the explicit
+`100 as Real` (over a declared `typealias Real = float(...)` — the bare keyword is not a cast target).
+The implicit and explicit forms agree exactly, in both directions:
 
 | Conversion       | Explicit (`as`)          | Implicit (argument/return/assignment) |
 |------------------|--------------------------|----------------------------------------|
-| `int` -> `float` | `100 as float` -- OK     | `takeFloat(100)` -- OK                 |
-| `float` -> `int` | `5.0 as int` -- **E3009** | `takeInt(5.0)` -- **E3009**            |
+| `int` -> `float` | `100 as Real` -- OK      | `takeFloat(100)` -- OK                 |
+| `float` -> `int` | `5.0 as Count` -- **E3009** | `takeInt(5.0)` -- **E3009**          |
 
 That agreement is the point, and it was once broken: this file used to say `float` -> `int`
 truncated implicitly while `type-casting.md` rejected the identical explicit cast — so writing

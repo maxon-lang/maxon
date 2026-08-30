@@ -619,7 +619,7 @@ end 'main'
 
 <!-- test: dispatch.upto-i64min-empty -->
 ```maxon
-function classify(x int) returns int
+function classify(x Integer) returns Integer
 	return match x 'm'
 		0 upto -9223372036854775808 gives 1
 		default gives 0
@@ -644,6 +644,7 @@ function main() returns ExitCode
 	end 'd'
 	return n
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 4
@@ -651,7 +652,7 @@ end 'main'
 
 <!-- test: dispatch.upto-min-upto-min-empty -->
 ```maxon
-function classify(x int) returns int
+function classify(x Integer) returns Integer
 	return match x 'm'
 		-9223372036854775808 upto -9223372036854775808 gives 1
 		default gives 0
@@ -673,6 +674,7 @@ function main() returns ExitCode
 	end 'c'
 	return n
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 3
@@ -680,7 +682,7 @@ end 'main'
 
 <!-- test: dispatch.upto-exclusive-boundary -->
 ```maxon
-function classify(x int) returns int
+function classify(x Integer) returns Integer
 	return match x 'm'
 		10 upto 20 gives 1
 		20 upto 30 gives 2
@@ -709,6 +711,7 @@ function main() returns ExitCode
 	end 'e'
 	return n
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 5
@@ -762,7 +765,7 @@ end 'main'
 
 <!-- test: dispatch.dense-scalar-range-arm -->
 ```maxon
-function scalar(x int) returns int
+function scalar(x Integer) returns Integer
 	return match x 'm'
 		0 gives 100
 		1 gives 101
@@ -807,6 +810,7 @@ function main() returns ExitCode
 	end 'i'
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 9
@@ -814,7 +818,7 @@ end 'main'
 
 <!-- test: dispatch.negative-biased-dense -->
 ```maxon
-function classify(x int) returns int
+function classify(x Integer) returns Integer
 	return match x 'm'
 		-3 gives 1
 		-2 gives 2
@@ -849,6 +853,7 @@ function main() returns ExitCode
 	end 'f'
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 6
@@ -856,7 +861,7 @@ end 'main'
 
 <!-- test: dispatch.span-4096-boundary -->
 ```maxon
-function bucket(x int) returns int
+function bucket(x Integer) returns Integer
 	// 128 width-32 range arms cover [0, 4095] exactly -- span 4096, the WIDEST table admitted (and the arm64
 	// bounds-check imm12 boundary: 4096 does not fit a CMP immediate, so the count is materialised into a
 	// scratch register). A `cmp idx, #4096` that spilled into the LSL#12 bit would compare against 0 and
@@ -1020,6 +1025,7 @@ function main() returns ExitCode
 	end 'g'
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7

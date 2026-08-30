@@ -557,7 +557,7 @@ enum Boom implements Error
 	bad
 end 'Boom'
 
-function adoptThenThrow(fail bool) returns int throws Boom
+function adoptThenThrow(fail bool) returns Integer throws Boom
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
 	try mm.setLength(2) otherwise panic("setLength failed")
 	let a = ByteArray.init(mm)
@@ -577,6 +577,7 @@ function main() returns ExitCode
 	end 'spin'
 	return total as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 24
@@ -595,7 +596,7 @@ enum Boom implements Error
 	bad
 end 'Boom'
 
-function eat(xs ByteArray, fail bool) returns int throws Boom
+function eat(xs ByteArray, fail bool) returns Integer throws Boom
 	if fail 'boom'
 		throw Boom.bad
 	end 'boom'
@@ -614,6 +615,7 @@ function main() returns ExitCode
 	end 'spin'
 	return (total * 10 + mm.length()) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 242

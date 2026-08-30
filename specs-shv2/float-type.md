@@ -128,7 +128,7 @@ isolates the phi's class from the float-compare lowering, so a failure here can 
 phi. `float-compare-branch.md` puts a phi on a float compare's edges, but the value it carries
 is an `int` — so a float-TYPED phi was covered by nothing.
 ```maxon
-function work(a int) returns int
+function work(a Integer) returns Integer
 	var f = a + 0.0
 	if a > 5 'gt'
 		f = f + 1.5
@@ -139,6 +139,7 @@ end 'work'
 function main() returns ExitCode
 	return work(19)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 20
@@ -149,7 +150,7 @@ end 'main'
 Both arms assign the float, so the merge phi has two real incoming values rather than one
 incoming plus the fall-through definition.
 ```maxon
-function work(a int) returns int
+function work(a Integer) returns Integer
 	var f = a + 0.0
 	if a > 100 'big'
 		f = f * 2.0
@@ -162,6 +163,7 @@ end 'work'
 function main() returns ExitCode
 	return work(19)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 14
@@ -194,14 +196,14 @@ the field doors were the last place an int reached an f64 slot unconverted: ever
 floats in locals, parameters and returns.
 ```maxon
 type Particle
-	export var mass as float
-	export var velocity as float
+	export var mass as Real
+	export var velocity as Real
 
-	export static function make(mass float, velocity float) returns Self
+	export static function make(mass Real, velocity Real) returns Self
 		return Self{mass: mass, velocity: velocity}
 	end 'make'
 
-	export function momentum() returns float
+	export function momentum() returns Real
 		return self.mass * self.velocity
 	end 'momentum'
 end 'Particle'
@@ -211,6 +213,7 @@ function main() returns ExitCode
 	p.velocity = 6.0
 	return trunc(p.momentum())
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 15
@@ -402,7 +405,7 @@ parser's dead return is the same defect one door over, and now reads the same fa
 reached shv2 through `float.fromString` (A1s-prim) only because `stdlib/Builtins.maxon` happens to write
 that shape; the property is a float function's DEAD RETURN, which every `panic()` in one emits.
 ```maxon
-function scaled(x float) returns float
+function scaled(x Real) returns Real
 	if x < 0.0 'negative'
 		panic("scaled: negative input")
 	end 'negative'
@@ -412,6 +415,7 @@ end 'scaled'
 function main() returns ExitCode
 	return trunc(scaled(21.0))
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 42

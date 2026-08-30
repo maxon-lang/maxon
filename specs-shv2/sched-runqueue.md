@@ -141,21 +141,21 @@ var posA = 0
 var posB = 0
 var posC = 0
 
-function inner() returns int
+function inner() returns Integer
 	__Builtins.parallelBoundary()
 	order = order + 1
 	posC = order
 	return 1
 end 'inner'
 
-function sibling() returns int
+function sibling() returns Integer
 	__Builtins.parallelBoundary()
 	order = order + 1
 	posB = order
 	return 1
 end 'sibling'
 
-function outer() returns int
+function outer() returns Integer
 	__Builtins.parallelBoundary()
 	order = order + 1
 	posA = order
@@ -171,6 +171,7 @@ function main() returns ExitCode
 	print("ra={ra} rb={rb} posA={posA} posB={posB} posC={posC}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 ra=1 rb=1 posA=1 posB=2 posC=3
@@ -190,21 +191,21 @@ var a1 = 0
 var a2 = 0
 var a3 = 0
 
-function first() returns int
+function first() returns Integer
 	__Builtins.parallelBoundary()
 	order = order + 1
 	a1 = order
 	return 1
 end 'first'
 
-function second() returns int
+function second() returns Integer
 	__Builtins.parallelBoundary()
 	order = order + 1
 	a2 = order
 	return 1
 end 'second'
 
-function third() returns int
+function third() returns Integer
 	__Builtins.parallelBoundary()
 	order = order + 1
 	a3 = order
@@ -219,6 +220,7 @@ function main() returns ExitCode
 	print("s={s} a1={a1} a2={a2} a3={a3}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 s=3 a1=1 a2=2 a3=3
@@ -244,7 +246,7 @@ It reads the sibling's flag as its own result, so the assertion is what the YIEL
 ```maxon
 var siblingRan = 0
 
-function yielder() returns int
+function yielder() returns Integer
 	var i = 0
 	while i < 1000 'spin'
 		Runtime.yield()
@@ -254,7 +256,7 @@ function yielder() returns int
 	return siblingRan
 end 'yielder'
 
-function sibling() returns int
+function sibling() returns Integer
 	__Builtins.parallelBoundary()
 	siblingRan = 1
 	return 1
@@ -268,6 +270,7 @@ function main() returns ExitCode
 	print("seen={seen} done={done}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 seen=1 done=1
@@ -287,13 +290,13 @@ arrive. A scheduler that ran it would both set `ran` and leave a thread nobody a
 ```maxon
 var ran = 0
 
-function marker() returns int
+function marker() returns Integer
 	__Builtins.parallelBoundary()
 	ran = ran + 1
 	return 1
 end 'marker'
 
-function ok(v int) returns int
+function ok(v Integer) returns Integer
 	__Builtins.parallelBoundary()
 	return v
 end 'ok'
@@ -307,6 +310,7 @@ function main() returns ExitCode
 	print("ran={ran}")
 	return (a + b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 ran=0
@@ -326,7 +330,7 @@ to.
 ```maxon
 var ran = 0
 
-function neverRuns() returns int
+function neverRuns() returns Integer
 	__Builtins.parallelBoundary()
 	ran = ran + 1
 	return 1
@@ -347,6 +351,7 @@ function main() returns ExitCode
 
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 ran=0 live=bounded
@@ -365,7 +370,7 @@ iterations, and `mmRawAllocLive()` is identical before and after, so every struc
 `gtIsComplete` is what proves the case reached the order it names — a `p` that had NOT completed would be
 the tombstone order the two cases above cover instead.
 ```maxon
-function done() returns int
+function done() returns Integer
 	Runtime.yield()
 	return 1
 end 'done'
@@ -398,6 +403,7 @@ function main() returns ExitCode
 	print("total={total} finished={finished} liveGrew={liveGrew}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 total=4 finished=4 liveGrew=0
@@ -415,12 +421,12 @@ having done so, is the only holder left, so it performs the RUNNER's half (the s
 suspended on) and then the consumer's, which reclaims. Three iterations with no hang, because nothing ever
 waits on the 200 ms deadline, and `mmRawAllocLive()` returns to its baseline.
 ```maxon
-function done() returns int
+function done() returns Integer
 	Runtime.yield()
 	return 1
 end 'done'
 
-function sleeper() returns int
+function sleeper() returns Integer
 	sleep(200)
 	return 9
 end 'sleeper'
@@ -453,6 +459,7 @@ function main() returns ExitCode
 	print("total={total} stillParked={stillParked} liveGrew={liveGrew}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 total=4 stillParked=4 liveGrew=0
@@ -476,7 +483,7 @@ more. What the case still pins is that the QUERY works: the builtin, the `__sche
 roots and the per-P counter it reads are all still emitted and still answer. `track0/pin-matrix.sh`,
 which can raise `MAXON_MAX_PROCS`, is where the zero becomes a measurement of the pin.
 ```maxon
-function work(v int) returns int
+function work(v Integer) returns Integer
 	__Builtins.parallelBoundary()
 	return v
 end 'work'
@@ -487,6 +494,7 @@ function main() returns ExitCode
 	print("r={r} steals={__Builtins.schedStealCount()}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 r=5 steals=0
@@ -531,7 +539,7 @@ let drainSpinLimit = 200000
 var ran = 0
 
 type Sink
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -569,6 +577,7 @@ function main() returns ExitCode
 	print("ran={ran}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 beforeAnyRan=0
@@ -613,7 +622,7 @@ let settleSpinLimit = 200000
 var sum = 0
 
 type Step
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -643,6 +652,7 @@ function main() returns ExitCode
 	print("sum={sum}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 sum=6000
@@ -677,9 +687,9 @@ var runCount = 0
 var firstPos = 0
 
 type Leaf
-	var id as int
+	var id as Integer
 
-	static function create(id int) returns Self
+	static function create(id Integer) returns Self
 		return Self{id: id}
 	end 'create'
 
@@ -721,6 +731,7 @@ function main() returns ExitCode
 
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 runCount=300 oldest=early
@@ -764,7 +775,7 @@ var sPos = 0
 var yPos = 0
 
 type Spawnee
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -777,7 +788,7 @@ type Spawnee
 end 'Spawnee'
 
 type Spawner
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -790,7 +801,7 @@ type Spawner
 end 'Spawner'
 
 type Yielder
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -818,6 +829,7 @@ function main() returns ExitCode
 	print("sPos={sPos} yPos={yPos}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 sPos=1 yPos=2
@@ -849,7 +861,7 @@ let drainSpinLimit = 200000
 var done = 0
 
 type Work
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -889,6 +901,7 @@ function main() returns ExitCode
 	print("done={done} steals={__Builtins.schedStealCount()}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 done=1200 steals=0

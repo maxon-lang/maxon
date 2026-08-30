@@ -60,7 +60,7 @@ across this file, `async-subprocess`, `builtins-clock` and `builtins-sleep` unti
 A spawned green thread runs its function and `await` collects the result.
 ```maxon
 
-function compute() returns int
+function compute() returns Integer
 	Runtime.yield()
 	return 42
 end 'compute'
@@ -70,6 +70,7 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -80,12 +81,12 @@ end 'main'
 Two green threads are spawned before either is awaited; both run and their results sum.
 ```maxon
 
-function ten() returns int
+function ten() returns Integer
 	Runtime.yield()
 	return 10
 end 'ten'
 
-function twenty() returns int
+function twenty() returns Integer
 	Runtime.yield()
 	return 20
 end 'twenty'
@@ -97,6 +98,7 @@ function main() returns ExitCode
 	let rb = await b
 	return (ra + rb) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 30
@@ -107,7 +109,7 @@ end 'main'
 A spawn/await chain threads a value through two green threads.
 ```maxon
 
-function inc(x int) returns int
+function inc(x Integer) returns Integer
 	Runtime.yield()
 	return x + 1
 end 'inc'
@@ -119,6 +121,7 @@ function main() returns ExitCode
 	let r2 = await p2
 	return r2 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -129,7 +132,7 @@ end 'main'
 A scalar argument is spilled into the green thread's argument buffer and read back by the callee.
 ```maxon
 
-function sixtimes(x int) returns int
+function sixtimes(x Integer) returns Integer
 	Runtime.yield()
 	return x * 6
 end 'sixtimes'
@@ -139,6 +142,7 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -149,7 +153,7 @@ end 'main'
 Several scalar arguments (positional first, then labelled) fill the argument buffer in parameter order.
 ```maxon
 
-function combine(a int, b int, c int) returns int
+function combine(a Integer, b Integer, c Integer) returns Integer
 	Runtime.yield()
 	return a + b * c
 end 'combine'
@@ -159,6 +163,7 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -169,12 +174,12 @@ end 'main'
 A green thread can itself spawn and await another green thread — the current-GT tracking nests correctly.
 ```maxon
 
-function leaf() returns int
+function leaf() returns Integer
 	Runtime.yield()
 	return 20
 end 'leaf'
 
-function middle() returns int
+function middle() returns Integer
 	let inner = async leaf()
 	let got = await inner
 	return got + 22
@@ -185,6 +190,7 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -195,7 +201,7 @@ end 'main'
 `await async f()` — spawn and await in one expression — parses and runs.
 ```maxon
 
-function answer() returns int
+function answer() returns Integer
 	Runtime.yield()
 	return 42
 end 'answer'
@@ -204,6 +210,7 @@ function main() returns ExitCode
 	let r = await async answer()
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -216,7 +223,7 @@ buffer are slab/OS allocations invisible to the leak gate, so the program exits 
 rather than 101.
 ```maxon
 
-function compute() returns int
+function compute() returns Integer
 	Runtime.yield()
 	return 42
 end 'compute'
@@ -225,6 +232,7 @@ function main() returns ExitCode
 	_ = async compute()
 	return 7 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -245,7 +253,7 @@ clean exit (0) proves nothing leaked. Before that fix each iteration bump-leaked
 free-list did not — this same program exited 101.
 ```maxon
 
-function noop() returns int
+function noop() returns Integer
 	Runtime.yield()
 	return 0
 end 'noop'
@@ -261,6 +269,7 @@ function main() returns ExitCode
 	end 'loop'
 	return acc as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -276,7 +285,7 @@ so without the whole-struct memzero the second spawn would inherit `status == co
 short-circuit to the PRIOR result without ever running the new thread — a wrong sum, not 30.
 ```maxon
 
-function dbl(x int) returns int
+function dbl(x Integer) returns Integer
 	Runtime.yield()
 	return x * 2
 end 'dbl'
@@ -292,6 +301,7 @@ function main() returns ExitCode
 	end 'loop'
 	return acc as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 30
@@ -306,7 +316,7 @@ own `await` may. `p4` therefore gets a distinct struct, and `await p1` reads `p1
 (40). `10+20+30+40 = 100`. Reclaiming at completion instead of at await returned 130 here (a silent wrong answer).
 ```maxon
 
-function w(x int) returns int
+function w(x Integer) returns Integer
 	Runtime.yield()
 	return x * 10
 end 'w'
@@ -322,6 +332,7 @@ function main() returns ExitCode
 	let r1 = await p1
 	return (r1 + r2 + r3 + r4) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 100
@@ -345,7 +356,7 @@ so only a RUN can see this.
 100+…+1000 = 5500 plus 201 + 2001 = 2202, so 7702. `main`'s own two floats must also survive both
 awaits: 11 + 22 = 33. The exit code is 0 only if all three hold.
 ```maxon
-function threadA() returns int
+function threadA() returns Integer
 	let a0 = 1.5
 	let a1 = 2.5
 	let a2 = 3.5
@@ -364,7 +375,7 @@ function threadA() returns int
 	return s1 + s2 + s3
 end 'threadA'
 
-function threadB() returns int
+function threadB() returns Integer
 	let b0 = 100.5
 	let b1 = 200.5
 	let b2 = 300.5
@@ -396,6 +407,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 9
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -419,14 +431,14 @@ hand-assembled GT runtime.
 `scale(20.0, depth: n)` sums 20 + 40 + … + 20·2ⁿ, so the four depths are 20, 60, 140, 300; each
 mismatch returns its own exit code so a partial corruption names the level it started at.
 ```maxon
-function scale(x float, depth int) returns int
+function scale(x Real, depth Integer) returns Integer
 	if depth == 0 'base'
 		return trunc(x)
 	end 'base'
 	return trunc(x) + scale(x * 2.0, depth: depth - 1)
 end 'scale'
 
-function sweep() returns int
+function sweep() returns Integer
 	Runtime.yield()
 	let d0 = scale(20.0, depth: 0)
 	if d0 != 20 'bad0'
@@ -456,6 +468,8 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 0
@@ -472,7 +486,7 @@ Each level contributes `trunc(1.5)+trunc(2.5)+trunc(3.5)+trunc(4.5)+trunc(5.5)` 
 recursion runs while `a >= 1.0` from 6.0 down to 0.0 — seven levels, 105. A destroyed xmm0 ends the
 recursion at the first level (15); a destroyed xmm1–5 drops that register's term from every level.
 ```maxon
-function six(a float, b float, c float, d float, e float, f float) returns int
+function six(a Real, b Real, c Real, d Real, e Real, f Real) returns Integer
 	let sum = trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)
 	if a < 1.0 'base'
 		return sum
@@ -480,7 +494,7 @@ function six(a float, b float, c float, d float, e float, f float) returns int
 	return sum + six(a - 1.0, b: b, c: c, d: d, e: e, f: f)
 end 'six'
 
-function fpArgs() returns int
+function fpArgs() returns Integer
 	Runtime.yield()
 	return six(6.0, b: 1.5, c: 2.5, d: 3.5, e: 4.5, f: 5.5)
 end 'fpArgs'
@@ -493,6 +507,8 @@ function main() returns ExitCode
 	end 'ok'
 	return 1
 end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 0

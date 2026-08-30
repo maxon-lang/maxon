@@ -7064,12 +7064,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private object ApplyConstAsCasts(object value, bool writtenNegative) {
     while (Check(TokenType.As)) {
       var asToken = Advance(); // consume 'as'
-      // Attempt to recognize the target type. Built-in primitive keywords are
-      // accepted as identity casts (the runtime would emit a kind change, but
-      // a constant value carries the underlying type already). Identifier
-      // targets must resolve to a ranged primitive type for compile-time
-      // validation; anything else is a malformed const cast.
-      if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Bool) || Check(TokenType.Byte)) {
+      // ⛔⛔ A CAST TARGET IS WRITTEN IN TWO PLACES AND THIS ONE USED TO DISAGREE WITH THE OTHER.
+      // `ParseTypeKeyword` (the BODY cast's door) refuses a bare `int`/`float`/`byte` target with
+      // BarePrimitiveCastMessage; this walk accepted all three as identity casts. So
+      // `let X = 5 as int` at top level COMPILED while the identical `let x = 5 as int` inside a
+      // function did not — one mistake with two verdicts, decided by nothing but where the `let` was.
+      //
+      // That is the shape specs-shv2/cast-target-type-resolution.md was written to close for E3011:
+      // "half a fact, which is worse than none, because the half that works makes the other half look
+      // tested". Here the working half was the body cast, and it made this door look checked.
+      //
+      // `bool` still passes: it is unranged, and ParseTypeKeyword accepts it too, so after this the two
+      // doors agree arm for arm. Same code, same message, same anchor (the offending keyword) as the
+      // body cast's, so the two spellings of one mistake now report identically.
+      if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Byte)) {
+        var bad = Current();
+        throw new CompileError(ErrorCode.SemanticTypeMismatch, BarePrimitiveCastMessage(bad.Value), bad.Line, bad.Column);
+      }
+      if (Check(TokenType.Bool)) {
         Advance();
         // Identity cast at the const-eval level — the value stays as-is.
         continue;

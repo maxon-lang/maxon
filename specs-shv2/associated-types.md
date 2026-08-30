@@ -1682,7 +1682,7 @@ end 'Taker'
 type Runner implements Taker with float
 	let base as Integer
 
-	function take(e float) returns Integer
+	function take(e Real) returns Integer
 		return base + (20 if e > 19.0 else 0)
 	end 'take'
 
@@ -1708,6 +1708,7 @@ typealias RunnerBox = Box with Runner
 function main() returns ExitCode
 	return RunnerBox.create(Runner.create(20)).run() as ExitCode
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 40
@@ -1728,7 +1729,7 @@ end 'Taker'
 type Runner implements Taker with float
 	let base as Integer
 
-	function take(e float) returns Integer
+	function take(e Real) returns Integer
 		return base + (20 if e > 19.0 else 0)
 	end 'take'
 
@@ -1754,6 +1755,7 @@ typealias RunnerBox = Box with Runner
 function main() returns ExitCode
 	return RunnerBox.create(Runner.create(20)).run() as ExitCode
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 40
@@ -1880,7 +1882,7 @@ end 'Taker'
 type FloatRunner implements Taker with float
 	let base as Integer
 
-	function take(e float) returns Integer
+	function take(e Real) returns Integer
 		return base + (20 if e > 19.0 else 0)
 	end 'take'
 
@@ -1904,6 +1906,7 @@ end 'IntRunner'
 function main() returns ExitCode
 	return (FloatRunner.create(0).take(20.0) + IntRunner.create(11).take(20)) as ExitCode
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 51
@@ -1989,7 +1992,7 @@ end 'IntRunner'
 type FloatRunner implements Taker with float
 	let base as Integer
 
-	function take(e float) returns Integer
+	function take(e Real) returns Integer
 		return base + (20 if e > 19.0 else 0)
 	end 'take'
 
@@ -2005,6 +2008,7 @@ end 'useIt'
 function main() returns ExitCode
 	return (useIt(IntRunner.create(11)) + useIt(FloatRunner.create(0))) as ExitCode
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```maxoncstderr
 error E3119: specs/fragments/associated-types/error.dispatched-associated-type-bound-to-a-float-beside-an-int.test:20:6: 'FloatRunner' binds 'Taker's associated type 'Element' to 'float', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
@@ -2192,7 +2196,7 @@ end 'A'
 type B implements Derived with float
 	let base as Integer
 
-	function take(e float) returns Integer
+	function take(e Real) returns Integer
 		return base + (20 if e > 19.0 else 0)
 	end 'take'
 
@@ -2212,6 +2216,7 @@ end 'useIt'
 function main() returns ExitCode
 	return (useIt(A.create(10)) + useIt(B.create(9))) as ExitCode
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```maxoncstderr
 error E3119: specs/fragments/associated-types/error.extends-projected-associated-type-disagreement.test:28:6: 'B' binds 'Derived's associated type 'Element' to 'float', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Derived with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
@@ -2240,7 +2245,7 @@ end 'Derived'
 type FloatRunner implements Derived with float
 	let base as Integer
 
-	function take(e float) returns Integer
+	function take(e Real) returns Integer
 		return self.base + (20 if e > 19.0 else 0)
 	end 'take'
 
@@ -2260,6 +2265,7 @@ end 'useIt'
 function main() returns ExitCode
 	return useIt(FloatRunner.create(0)) as ExitCode
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 31

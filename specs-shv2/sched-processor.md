@@ -118,7 +118,7 @@ written by the lowering and read back by the trampoline. A slot missed, mis-stri
 was written shows up as a wrong sum rather than as a crash — which is exactly how the multi-M
 ordering bug presented.
 ```maxon
-function widest(a int, b int, c int, d int, e int, f int) returns int
+function widest(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	__Builtins.parallelBoundary()
 	return a + b * 2 + c * 4 + d * 8 + e * 16 + f * 32
 end 'widest'
@@ -127,6 +127,7 @@ function main() returns ExitCode
 	let p = async widest(1, b: 1, c: 1, d: 1, e: 1, f: 1)
 	return await p as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 63
@@ -180,7 +181,7 @@ thread's P, switch RSP to its stack, repoint the TIB, call, restore the TIB from
 switch back; a wrong offset anywhere in that chain corrupts the return path rather than producing a
 wrong number, so the assertion is that the thread returns AT ALL with its own value intact.
 ```maxon
-function napper(n int) returns int
+function napper(n Integer) returns Integer
 	__Builtins.sleep(2)
 	return n + 5
 end 'napper'
@@ -192,6 +193,7 @@ function main() returns ExitCode
 	let b = await second
 	return (a + b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 13
@@ -209,13 +211,14 @@ in an untraced build). So this asserts that the P indirection stayed behind `use
 other scalar spec in the suite also happens to assert, which is why this one is a control rather than a
 discovery.
 ```maxon
-function twice(n int) returns int
+function twice(n Integer) returns Integer
 	return n * 2
 end 'twice'
 
 function main() returns ExitCode
 	return twice(21) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42

@@ -13,7 +13,8 @@ The `byte` type represents a single 8-bit unsigned value (0-255).
 
 ### Creating Bytes
 
-Use the `as byte` cast to create byte values from integers:
+There is no `byte` type. A byte is a ranged typealias like any other narrow domain, and
+`as` casts into it:
 
 ```maxon
 typealias Pixel = int(0 to u8.max)

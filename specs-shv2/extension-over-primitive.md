@@ -75,7 +75,7 @@ end 'main'
 extension anywhere in sight, so the cast form would have tested that rule instead of this one.
 ```maxon
 extension float
-	export function tripled() returns float
+	export function tripled() returns Real
 		return self * 3.0
 	end 'tripled'
 end 'float'
@@ -84,6 +84,7 @@ function main() returns ExitCode
 	let x = 4.0
 	return trunc(x.tripled()) as ExitCode
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 12

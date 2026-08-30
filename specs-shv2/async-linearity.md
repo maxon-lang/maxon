@@ -54,7 +54,7 @@ moment one does.** Removing the marker before then re-creates the masking, silen
 <!-- targets: x64-windows -->
 `await` is linear: awaiting one promise twice in straight-line code is refused at the second await.
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 42
 end 'makeValue'
@@ -65,6 +65,7 @@ function main() returns ExitCode
 	let b = await p
 	return (a + b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3100: <fragment>:10:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
@@ -77,7 +78,7 @@ a "have I seen this promise awaited before?" check finds nothing — but it sits
 spawned OUTSIDE the loop, so it awaits the same green thread every iteration. Reachability catches it:
 the await is reachable from itself across the back-edge, without re-passing the `async` that would re-arm it.
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 42
 end 'makeValue'
@@ -93,6 +94,7 @@ function main() returns ExitCode
 	end 'loop'
 	return acc as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3100: <fragment>:12:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
@@ -104,7 +106,7 @@ Linearity is a property of the GREEN THREAD, not of the identifier text. `let q 
 thread a second name; awaiting through both names awaits it twice. In shv2 `q` and `p` are the SAME SSA
 value, so the second await is refused with no thread-id sidetable — the value IS the thread's identity.
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 42
 end 'makeValue'
@@ -116,6 +118,7 @@ function main() returns ExitCode
 	let b = await q
 	return (a + b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3100: <fragment>:11:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
@@ -127,7 +130,7 @@ The same alias, made in a DIFFERENT block from the `async` that spawned the thre
 of the promise resolves to the same SSA value it was spawned as (there is no re-tag), so `p` and `q`
 inside the branch name one thread — and awaiting both is the second await it is.
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 42
 end 'makeValue'
@@ -146,6 +149,7 @@ function main() returns ExitCode
 	end 'branch'
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3100: <fragment>:16:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
@@ -157,7 +161,7 @@ Re-arming `p` does NOT end the first thread's life while `q` still names it. The
 a path only when the promise's DEFINITION is re-passed (a re-arm); reassigning `p` mints a NEW value, so
 `q` still names the first thread when it is awaited — and that await is the second one, refused.
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 21
 end 'makeValue'
@@ -171,6 +175,7 @@ function main() returns ExitCode
 	let c = await p
 	return (a + b + c) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3100: <fragment>:12:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
@@ -182,7 +187,7 @@ An `await` in one ternary arm does NOT make the promise spent on the path where 
 but the await AFTER the ternary is reachable from the arm that WAS taken, so on that path the thread is
 awaited twice. Exclusivity buys the arms nothing here: reachability decides, and the arm reaches the tail.
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 21
 end 'makeValue'
@@ -197,6 +202,7 @@ function main() returns ExitCode
 	let w = await p
 	return (v + w) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3100: <fragment>:14:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
@@ -208,7 +214,7 @@ Two awaits of one promise in MUTUALLY EXCLUSIVE branches are each the only await
 are allowed. A lexical "already awaited" check would reject this valid program; reachability does not,
 because neither await can reach the other.
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 21
 end 'makeValue'
@@ -226,6 +232,7 @@ function main() returns ExitCode
 	let b = await p
 	return (b + 1) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 22
@@ -237,7 +244,7 @@ Reassigning a promise binding RE-ARMS it: `p` now names a new green thread, so a
 first await of that thread, not a second await of the old one. The linear check refuses a second await
 of one thread, not a second `await p` in the text.
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 21
 end 'makeValue'
@@ -249,6 +256,7 @@ function main() returns ExitCode
 	let b = await p
 	return (a + b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -261,7 +269,7 @@ fresh thread and awaits it exactly once through `q`, so the single `await q` is 
 not N awaits of one. This is the case an over-eager check breaks: the alias unifies `p` and `q`, and the
 re-arm — re-passing the promise's definition on the back-edge — is what keeps the single await legal.
 ```maxon
-function makeValue(i int) returns int
+function makeValue(i Integer) returns Integer
 	Runtime.yield()
 	return i
 end 'makeValue'
@@ -278,6 +286,7 @@ function main() returns ExitCode
 	end 'await'
 	return acc as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 3
@@ -289,7 +298,7 @@ The two arms of a ternary are MUTUALLY EXCLUSIVE — only the selected arm is ev
 each is the only await on its own path, exactly as in an `if`/`else`. The reachability check reads the
 arms as the separate branches they lower to, not as one straight-line block.
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 21
 end 'makeValue'
@@ -303,6 +312,7 @@ function main() returns ExitCode
 	let v = (await p) if no() else (await p)
 	return (v + 1) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 22
@@ -316,7 +326,7 @@ exclusive arms — one await per path, and legal. This is the intersection of th
 hold: the alias must UNIFY (or `await p; await q` in sequence would double-free), and the arms must stay
 EXCLUSIVE (or unifying them would reject this).
 ```maxon
-function makeValue() returns int
+function makeValue() returns Integer
 	Runtime.yield()
 	return 21
 end 'makeValue'
@@ -331,6 +341,7 @@ function main() returns ExitCode
 	let v = (await p) if no() else (await q)
 	return (v + 1) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 22

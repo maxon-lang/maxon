@@ -328,7 +328,7 @@ written — so a file-private `static function create` initializes a global in i
 control for the two cross-file refusals below.
 ```maxon
 type Database
-	export var n as int
+	export var n as Integer
 
 	static function create() returns Self
 		return Self{n: 7}
@@ -340,6 +340,7 @@ var db = Database.create()
 function main() returns ExitCode
 	return db.n
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -352,7 +353,7 @@ declaration of the same struct and both must reach the same one-word slot. There
 this program and no `int` in it either, which is what makes it the clean statement of rule 5.
 ```maxon
 type Inner
-	export var v as int
+	export var v as Integer
 
 	static function make() returns Self
 		return Self{v: 7}
@@ -370,6 +371,7 @@ var a = Outer.build()
 function main() returns ExitCode
 	return a.v
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -417,13 +419,14 @@ would be resolved under a key it had left.
 ```maxon
 // --- file: api/inner.maxon
 export type Inner
-	export var v as int
+	export var v as Integer
 
 	export static function make() returns Self
 		return Self{v: 7}
 	end 'make'
 end 'Inner'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: api/outer.maxon
 export type Outer
 	export static function build() returns Inner
@@ -613,8 +616,8 @@ this rule was written down. A generic alias is refused by the same sentence; a T
 the sentence used to say it was — see the two tuple cases above, which run.
 ```maxon
 union Shape
-	circle(r int)
-	square(s int)
+	circle(r Integer)
+	square(s Integer)
 end 'Shape'
 
 type Maker
@@ -631,6 +634,7 @@ function main() returns ExitCode
 		square(s) then return s
 	end 'kind'
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:13:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'Shape', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead
@@ -643,13 +647,14 @@ E3008.
 ```maxon
 // --- file: api/db.maxon
 export type Database
-	export var n as int
+	export var n as Integer
 
 	static function create() returns Self
 		return Self{n: 7}
 	end 'create'
 end 'Database'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: bin/main.maxon
 var db = Database.create()
 
@@ -658,7 +663,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: bin/<fragment>:12:19: function 'Database.create' is not exported
+error E3008: bin/<fragment>:13:19: function 'Database.create' is not exported
 ```
 
 <!-- test: error.cross-file-module-scoped-factory -->
@@ -667,13 +672,14 @@ code and the sentence a module-scoped callee gets at a call in a function body.
 ```maxon
 // --- file: api/db.maxon
 export type Database
-	export var n as int
+	export var n as Integer
 
 	module static function create() returns Self
 		return Self{n: 7}
 	end 'create'
 end 'Database'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: bin/main.maxon
 var db = Database.create()
 
@@ -682,7 +688,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: bin/<fragment>:12:19: function 'Database.create' is module-scoped and not visible from this directory
+error E3088: bin/<fragment>:13:19: function 'Database.create' is module-scoped and not visible from this directory
 ```
 
 <!-- test: stdlib-factory-reached-from-the-initializer -->

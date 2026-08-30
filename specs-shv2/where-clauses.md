@@ -295,7 +295,7 @@ actual is still passed through untouched (`promoteToFloat` is idempotent).
 typealias Coord = int(0 to 1000)
 
 interface Scaled
-	function scale(k float) returns float
+	function scale(k Real) returns Real
 end 'Scaled'
 
 type Point implements Scaled
@@ -303,7 +303,7 @@ type Point implements Scaled
 	export static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function scale(k float) returns float
+	export function scale(k Real) returns Real
 		return k * 2.0
 	end 'scale'
 end 'Point'
@@ -313,10 +313,10 @@ type Box uses T where T is Scaled
 	export static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function fromInt() returns float
+	export function fromInt() returns Real
 		return self.item.scale(2)
 	end 'fromInt'
-	export function fromFloat() returns float
+	export function fromFloat() returns Real
 		return self.item.scale(1.5)
 	end 'fromFloat'
 end 'Box'
@@ -330,6 +330,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 1
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 0
@@ -346,7 +347,7 @@ see. `1 + 3 + 5` reads `9.0`.
 typealias Coord = int(0 to 1000)
 
 interface Mixed
-	function combine(a int, k float, b int) returns float
+	function combine(a Integer, k Real, b Integer) returns Real
 end 'Mixed'
 
 type Point implements Mixed
@@ -354,8 +355,8 @@ type Point implements Mixed
 	export static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function combine(a int, k float, b int) returns float
-		return k + (a as float) + (b as float)
+	export function combine(a Integer, k Real, b Integer) returns Real
+		return k + a + b
 	end 'combine'
 end 'Point'
 
@@ -364,7 +365,7 @@ type Box uses T where T is Mixed
 	export static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns float
+	export function go() returns Real
 		return self.item.combine(1, k: 3, b: 5)
 	end 'go'
 end 'Box'
@@ -378,6 +379,8 @@ function main() returns ExitCode
 	end 'ok'
 	return 1
 end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 0

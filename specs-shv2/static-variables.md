@@ -1484,7 +1484,7 @@ what makes this a defect of the CELL and not of the capture.
 value lives cannot change what may be done through it.
 ```maxon
 typealias Names = Array with String
-typealias IntThunk = function() returns int
+typealias IntThunk = function() returns Integer
 
 let A = ["a", "b"]
 
@@ -1492,16 +1492,16 @@ function expose() returns Names
 	return A
 end 'expose'
 
-function size(xs Names) returns int
+function size(xs Names) returns Integer
 	return xs.count()
 end 'size'
 
-function grow(xs Names) returns int
+function grow(xs Names) returns Integer
 	xs.push("zz")
 	return xs.count()
 end 'grow'
 
-function callThunk(f IntThunk) returns int
+function callThunk(f IntThunk) returns Integer
 	return f()
 end 'callThunk'
 
@@ -1512,6 +1512,7 @@ function main() returns ExitCode
 	let n = grow(b)
 	return (A.count() + k + n) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3019: <fragment>:28:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)
@@ -1530,7 +1531,7 @@ what knows; the sentence is the one `bump(Box.get())` already uses. The FRAME na
 which is where the call is.
 ```maxon
 typealias Names = Array with String
-typealias IntThunk = function() returns int
+typealias IntThunk = function() returns Integer
 
 let A = ["a", "b"]
 
@@ -1538,12 +1539,12 @@ function expose() returns Names
 	return A
 end 'expose'
 
-function grow(xs Names) returns int
+function grow(xs Names) returns Integer
 	xs.push("zz")
 	return xs.count()
 end 'grow'
 
-function callThunk(f IntThunk) returns int
+function callThunk(f IntThunk) returns Integer
 	return f()
 end 'callThunk'
 
@@ -1553,6 +1554,7 @@ function main() returns ExitCode
 	let n = callThunk(function() gives grow(b))
 	return A.count() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3019: <fragment>:23:37: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'xs' (in main$closure_0)
@@ -1573,7 +1575,7 @@ function expose() returns Names
 	return A
 end 'expose'
 
-function grow(xs Names) returns int
+function grow(xs Names) returns Integer
 	xs.push("zz")
 	return xs.count()
 end 'grow'
@@ -1586,6 +1588,7 @@ function main() returns ExitCode
 	let n = grow(b)
 	return (A.count() + n) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)
@@ -1609,7 +1612,7 @@ function expose() returns Names
 	return A
 end 'expose'
 
-function grow(xs Names) returns int
+function grow(xs Names) returns Integer
 	xs.push("zz")
 	return xs.count()
 end 'grow'
@@ -1622,6 +1625,7 @@ function main() returns ExitCode
 	let n = grow(b)
 	return (A.count() + n) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)

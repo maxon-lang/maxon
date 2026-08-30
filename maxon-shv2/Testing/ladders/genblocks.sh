@@ -35,13 +35,14 @@ N="$1"; SHAPE="$2"; OUT="$3"
 
 {
   echo "// ladder: $SHAPE, n=$N"
-  echo "function scaleOpaque(a int) returns int"
+  echo "typealias LadderInt = int(i64.min to i64.max)"
+  echo "function scaleOpaque(a LadderInt) returns LadderInt"
   echo -e "\treturn a + 1"
   echo "end 'scaleOpaque'"
 
   case "$SHAPE" in
     blocks)
-      echo "function big(a int) returns int"
+      echo "function big(a LadderInt) returns LadderInt"
       echo -e "\tvar acc = scaleOpaque(a)"
       i=0
       while [ "$i" -lt "$N" ]; do
@@ -60,7 +61,7 @@ N="$1"; SHAPE="$2"; OUT="$3"
     funcs)
       i=0
       while [ "$i" -lt "$N" ]; do
-        echo "function f${i}(a int) returns int"
+        echo "function f${i}(a LadderInt) returns LadderInt"
         echo -e "\tvar acc = a"
         echo -e "\tif acc > 3 'g'"
         echo -e "\t\tacc = acc + 1"
@@ -81,7 +82,7 @@ N="$1"; SHAPE="$2"; OUT="$3"
       ;;
 
     straight)
-      echo "function big(a int) returns int"
+      echo "function big(a LadderInt) returns LadderInt"
       echo -e "\tvar acc = scaleOpaque(a)"
       i=0
       while [ "$i" -lt "$N" ]; do

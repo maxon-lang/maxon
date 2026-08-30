@@ -55,11 +55,11 @@ caller-saved from the call — leaving only the five callee-saved. The quotient 
 across the call too, so its `RAX` birth hint must MISS and it must land callee-saved as well.
 `a = 100`, `q = 100 / 7 = 14` (7·14 = 98), `s = sink(3) = 4`; `100 + 14 + 4 = 118`.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x + 1
 end 'sink'
 
-function f(p int) returns int
+function f(p Integer) returns Integer
 	let a = p + 100
 	let q = a / 7
 	let s = sink(3)
@@ -73,6 +73,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -88,7 +89,7 @@ the remainder before `mov rax, m` reads it, and the third argument silently beco
 `97 / 5 = 19` (5·19 = 95), `97 mod 5 = 2`, so `take3(1, 19, 2)` = `10000 + 1900 + 2` = 11902.
 (The clobber above would give `take3(1, 19, 19)` = 11919.)
 ```maxon
-function take3(p1 int, p2 int, p3 int) returns int
+function take3(p1 Integer, p2 Integer, p3 Integer) returns Integer
 	return p1 * 10000 + p2 * 100 + p3
 end 'take3'
 
@@ -101,6 +102,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -116,7 +118,7 @@ digit.
 `100/12 = 8`, `100 mod 12 = 4`; `45/7 = 6`, `45 mod 7 = 3`; `23/9 = 2`, `23 mod 9 = 5`.
 Digits `8,4,6,3,2,5` → `800000 + 40000 + 6000 + 300 + 20 + 5` = 846325.
 ```maxon
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
@@ -133,6 +135,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -159,11 +162,11 @@ callee-saved registers with no spill, which is the claim above and is what the g
 ```maxon
 typealias Positive = int(1 to i64.max)
 
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function divsAcross(p int) returns int
+function divsAcross(p Integer) returns Integer
 	let n1 = p + 100
 	let n2 = p + 45
 	let n3 = p + 23
@@ -187,6 +190,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -276,7 +280,7 @@ Its only home is the callee-saved set, and the prologue must push it.
 `bump(6) = 7`; `500 / 6 = 83` (498); `83 + 7 = 90`. Leave `d` in a caller-saved register and
 `bump` destroys it, so the divide runs on garbage.
 ```maxon
-function bump(x int) returns int
+function bump(x Integer) returns Integer
 	return x + 1
 end 'bump'
 
@@ -291,6 +295,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -303,7 +308,7 @@ the fixed hint MISSES, and `q` must land callee-saved. It is then argument 0, so
 is a real move out of a callee-saved register.
 `1000 / 7 = 142` (994); `twice(142) = 284`; `142 + 284 = 426`.
 ```maxon
-function twice(x int) returns int
+function twice(x Integer) returns Integer
 	return x + x
 end 'twice'
 
@@ -318,6 +323,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -347,7 +353,7 @@ bound. `i` runs 1..6, so the guard never fires.
 ```maxon
 typealias Positive = int(1 to i64.max)
 
-function press(p int) returns int
+function press(p Integer) returns Integer
 	let k1 = p + 11
 	let k2 = p + 12
 	let k3 = p + 13
@@ -374,6 +380,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

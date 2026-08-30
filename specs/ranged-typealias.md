@@ -1493,3 +1493,154 @@ end 'main'
 ```exitcode
 5
 ```
+
+## A bare `int`/`float` is not a type — the ranged-typealias rule at every position
+
+`int` and `float` name a DOMAIN and no RANGE, and every reader in this language asks a ranged alias for
+its bounds. So the keyword is legal in exactly one place — the RHS of a `typealias` — and every other
+type position must name a declared alias. `bool` and `cstring` are exempt: they are already constrained
+types with nothing to range.
+
+This is not a new rule. `docs/LANGUAGE_REFERENCE.md` has stated it since long before it was enforced
+everywhere, and the C# bootstrap has enforced it at every type position all along. What these cases pin
+is that **both** compilers now do, at **both** cast doors — the body cast and the top-level `let`'s,
+which are two different walks over two different code paths.
+
+<!-- test: error.bare-int-parameter -->
+A parameter is an ordinary type position, so the keyword is refused there and the diagnostic is anchored
+on the keyword itself — the token that has to change, not the name to its left.
+```maxon
+function add(a int, b int) returns ExitCode
+	return 0
+end 'add'
+
+function main() returns ExitCode
+	return add(1, b: 2)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.bare-int-parameter.test:2:16: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
+```
+
+<!-- test: error.bare-float-return -->
+The float half, which carries its own example range (`float(0.0 to 1.0)`) rather than the int's.
+```maxon
+function half() returns float
+	return 0.5
+end 'half'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.bare-float-return.test:2:25: Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)
+```
+
+<!-- test: error.bare-int-struct-field -->
+A struct field is the third spelling of a declared type, and it takes the same refusal. (`var x as int`
+is the FIELD form; a local is always `let x = expr` and has no annotation to refuse.)
+```maxon
+type Holder
+	export var v as int
+end 'Holder'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.bare-int-struct-field.test:3:18: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
+```
+
+<!-- test: error.cast-to-bare-int -->
+A CAST TARGET gets its own sentence, because the rewrite it needs is shaped differently: a declaration
+site is told to declare an alias, a cast site is shown the cast that would work.
+```maxon
+typealias Score = int(0 to 100)
+
+function main() returns ExitCode
+	let s = 5 as Score
+	let n = s as int
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.cast-to-bare-int.test:6:15: Cannot cast to bare 'int'. Define a typealias with range constraints, e.g., 'value as MyInt' where 'typealias MyInt = int(0 to 100)'
+```
+
+<!-- test: error.top-level-const-cast-to-bare-int -->
+⭐ **THE SECOND CAST DOOR, AND THE ONE THAT WAS WRONG IN THE BOOTSTRAP FOR MONTHS.** A top-level `let`'s
+initializer never reaches the expression path — it is folded by the const evaluator, a different walk
+over different code. The bootstrap's body cast refused the bare keyword while its const walk accepted it
+as an "identity cast", so this exact program COMPILED while the identical cast inside a function did not:
+one mistake with two verdicts, decided by nothing but where the `let` was written. Both doors now ask the
+same question and give the same sentence at the same anchor.
+```maxon
+let SENTINEL = 5 as int
+
+function main() returns ExitCode
+	return SENTINEL as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.top-level-const-cast-to-bare-int.test:2:21: Cannot cast to bare 'int'. Define a typealias with range constraints, e.g., 'value as MyInt' where 'typealias MyInt = int(0 to 100)'
+```
+
+<!-- test: the-typealias-rhs-admits-the-keyword -->
+⭐ **THE ONE POSITION THAT STAYS LEGAL, AND IT IS THE WHOLE RHS — not just the ranged form.** A FUNCTION
+alias's parameters and return and a TUPLE alias's elements are inside the RHS too, and all three are
+accepted. `bool` stays bare everywhere. Read this with the case below: the tuple spelling that is legal
+HERE is refused one position over, which is what says the exemption is the RHS rather than the construct.
+```maxon
+typealias Small = int(0 to 100)
+typealias IntOp = function(n int) returns int
+typealias Pair = (int, int)
+
+function dbl(n Small) returns Small
+	return n + n
+end 'dbl'
+
+function apply(f IntOp, p Pair, flag bool) returns Small
+	return f(p.0) + p.1 if flag else 0
+end 'apply'
+
+function main() returns ExitCode
+	let p = (3, 4)
+	return apply(dbl, p: p, flag: true)
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: error.a-tuple-in-a-parameter-is-not-an-rhs -->
+The negative half of the pair above, and the reason the exemption had to be stated as a POSITION rather
+than as a construct: the identical `(int, int)` that a `typealias` RHS accepts is refused in a parameter,
+because a parameter is not an RHS.
+```maxon
+typealias Small = int(0 to 100)
+
+function first(t (int, int)) returns Small
+	return t.0
+end 'first'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.a-tuple-in-a-parameter-is-not-an-rhs.test:4:19: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
+```
+
+<!-- test: sizeof-admits-the-keyword -->
+`sizeof` asks about a REPRESENTATION, not about a value's domain, so there is no range for an alias to
+carry and the keyword is admitted. 8 + 8 = 16.
+```maxon
+function main() returns ExitCode
+	return (sizeof(int) + sizeof(float)) as ExitCode
+end 'main'
+```
+```exitcode
+16
+```

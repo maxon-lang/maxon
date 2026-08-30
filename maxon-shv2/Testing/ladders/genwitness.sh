@@ -70,6 +70,7 @@ if [ "$METHODS" -lt 1 ]; then
 fi
 
 {
+  echo "typealias LadderInt = int(i64.min to i64.max)"
   # The mode is padded to a fixed width so `dispatch` and `inert` are BYTE-IDENTICAL in length: the pair
   # is only worth having if subtracting one from the other cancels everything but the dispatch.
   printf '// ladder: %s conformer(s) x %s method(s) = %s witness slot(s), mode %-8s\n' \
@@ -79,7 +80,7 @@ fi
   echo "interface Digest"
   m=0
   while [ "$m" -lt "$METHODS" ]; do
-    printf '\tfunction m%05d(other int) returns int\n' "$m"
+    printf '\tfunction m%05d(other LadderInt) returns LadderInt\n' "$m"
     m=$(( m + 1 ))
   done
   echo "end 'Digest'"
@@ -88,13 +89,13 @@ fi
   i=0
   while [ "$i" -lt "$CONFORMERS" ]; do
     printf 'type P%06d implements Digest\n' "$i"
-    printf '\texport var x as int\n'
-    printf '\texport static function create(x int) returns Self\n'
+    printf '\texport var x as LadderInt\n'
+    printf '\texport static function create(x LadderInt) returns Self\n'
     printf '\t\treturn Self{ x: x }\n'
     printf "\tend 'create'\n"
     m=0
     while [ "$m" -lt "$METHODS" ]; do
-      printf '\texport function m%05d(other int) returns int\n' "$m"
+      printf '\texport function m%05d(other LadderInt) returns LadderInt\n' "$m"
       printf '\t\treturn self.x + other\n'
       printf "\tend 'm%05d'\n" "$m"
       m=$(( m + 1 ))
@@ -110,7 +111,7 @@ fi
   echo -e "\texport static function create(item T) returns Self"
   echo -e "\t\treturn Self{ item: item }"
   echo -e "\tend 'create'"
-  echo -e "\texport function run() returns int"
+  echo -e "\texport function run() returns LadderInt"
   echo -e "\t\tvar acc = 0"
   m=0
   while [ "$m" -lt "$METHODS" ]; do

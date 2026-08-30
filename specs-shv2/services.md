@@ -154,30 +154,30 @@ case's gate is "the companions exist and the program runs"; the DIAGNOSTIC for a
 cross-file case's, and one claim may not be filed under both.**
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 
-	export function total() returns int
+	export function total() returns Integer
 		return self.count
 	end 'total'
 
-	function record(v int) returns int
+	function record(v Integer) returns Integer
 		return v
 	end 'record'
 end 'Calc'
 
-function serve(_ Calc.handle) returns int
+function serve(_ Calc.handle) returns Integer
 	return 1
 end 'serve'
 
-function describe(_ Calc.request) returns int
+function describe(_ Calc.request) returns Integer
 	return 2
 end 'describe'
 
@@ -185,6 +185,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	return serve(h) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 1
@@ -206,21 +207,22 @@ actually reached, which is precisely what a single-file case could not arrange w
 ```maxon
 // --- file: calc.maxon
 export type Calc
-	var count as int
+	var count as Integer
 
 	export static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 end 'Calc'
 
-export function serve(_ Calc.handle) returns int
+export function serve(_ Calc.handle) returns Integer
 	return 1
 end 'serve'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let h = spawn Calc.create()
@@ -249,30 +251,31 @@ references is E3092. Both would have made this case pass without ever building t
 ```maxon
 // --- file: calc.maxon
 export type Calc
-	var count as int
+	var count as Integer
 
 	export static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 end 'Calc'
 
-export function serve(_ Calc.handle) returns int
+export function serve(_ Calc.handle) returns Integer
 	return 1
 end 'serve'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: runner.maxon
 type Runner
-	var started as int
+	var started as Integer
 
 	static function create() returns Self
 		return Self{started: 0}
 	end 'create'
 
-	function start() returns int
+	function start() returns Integer
 		let h = spawn Calc.create()
 		return serve(h)
 	end 'start'
@@ -281,6 +284,7 @@ end 'Runner'
 function main() returns ExitCode
 	return Runner.create().start() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 1
@@ -290,7 +294,7 @@ end 'main'
 ⚖ There is no unstructured green thread in this language. `spawn work()` names no type, so it starts no
 service, and the refusal teaches the one form rather than reporting a syntax error.
 ```maxon
-function work() returns int
+function work() returns Integer
 	return 1
 end 'work'
 
@@ -298,6 +302,7 @@ function main() returns ExitCode
 	let h = spawn work()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3134: <fragment>:7:10: `spawn work…` does not start a service: `spawn` is followed by a STATIC CALL on a type, and there is no bare `spawn f()` green thread — the unit of concurrency is a service, whose message surface the compiler can check. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
@@ -320,13 +325,13 @@ error E3134: <fragment>:3:10: `spawn Calc.create(…)` does not start a service:
 message to reach — so the target must be a `static`.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 end 'Calc'
@@ -335,6 +340,7 @@ function main() returns ExitCode
 	let h = spawn Calc.bump()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3134: <fragment>:15:10: `spawn Calc.bump(…)` does not start a service: `Calc.bump` is an INSTANCE method, and a `spawn` calls its factory directly — there is no service yet for a message to reach. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
@@ -344,17 +350,17 @@ error E3134: <fragment>:15:10: `spawn Calc.bump(…)` does not start a service: 
 A static that does not hand back the type has produced no state for the message loop to own.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	static function version() returns int
+	static function version() returns Integer
 		return 3
 	end 'version'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 end 'Calc'
@@ -363,6 +369,7 @@ function main() returns ExitCode
 	let h = spawn Calc.version()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3134: <fragment>:19:10: `spawn Calc.version(…)` does not start a service: `Calc.version` does not hand back a `Calc` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
@@ -373,13 +380,13 @@ The whole-program walk that decides which types are services reads tokens with n
 resolves to nothing there. It is refused in its own words rather than dying as an unexpected token.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	static function start() returns int
+	static function start() returns Integer
 		let h = spawn Self.create()
 		return 0
 	end 'start'
@@ -388,6 +395,7 @@ end 'Calc'
 function main() returns ExitCode
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:10:11: Unsupported: `spawn Self.…` — the whole-program walk that decides which types are services reads tokens with no type scope, so `Self` names nothing there. Write the type outright (`spawn Calc.create()`)
@@ -400,7 +408,7 @@ diagnostic fires at the `spawn`, because that is what made `Calc` a service.
 typealias IntPromise = Promise with int
 
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
@@ -415,6 +423,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3135: <fragment>:17:10: parameter `p` of the message `Calc.hold` is a Promise, which is a green-thread handle its awaiter owns, and this `spawn` makes `Calc` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
@@ -424,10 +433,10 @@ error E3135: <fragment>:17:10: parameter `p` of the message `Calc.hold` is a Pro
 A function value reaches a captured environment block, which is a box with a second referent by
 construction.
 ```maxon
-typealias IntOp = function(n int) returns int
+typealias IntOp = function(n Integer) returns Integer
 
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
@@ -442,6 +451,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3135: <fragment>:17:10: parameter `op` of the message `Calc.apply` is a function value, whose captured environment is a box a second thread would share, and this `spawn` makes `Calc` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
@@ -454,19 +464,19 @@ name — it re-tags a struct FIELD and a RETURN type and never a parameter — s
 rule from being silently blind to the one shape whose two halves the request union cannot carry.
 ```maxon
 interface Shape
-	function area() returns int
+	function area() returns Integer
 end 'Shape'
 
 type Square implements Shape
-	var side as int
+	var side as Integer
 
-	function area() returns int
+	function area() returns Integer
 		return self.side * self.side
 	end 'area'
 end 'Square'
 
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
@@ -481,6 +491,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3135: <fragment>:27:10: parameter `s` of the message `Calc.measure` is a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry, and this `spawn` makes `Calc` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
@@ -490,17 +501,17 @@ error E3135: <fragment>:27:10: parameter `s` of the message `Calc.measure` is a 
 A message becomes ONE variant of the request union, and one variant carries one payload shape.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function add(n int)
+	export function add(n Integer)
 		self.count = self.count + n
 	end 'add'
 
-	export function add(a int, b int)
+	export function add(a Integer, b Integer)
 		self.count = self.count + a + b
 	end 'add'
 end 'Calc'
@@ -509,6 +520,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:19:10: Unsupported: `Calc.add` is a message of the service `Calc` and is declared 2 times. A message becomes ONE variant of the synthesized `Calc.request` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names
@@ -550,7 +562,7 @@ typealias Whole = int(i64.min to i64.max)
 typealias IntPromise = Promise with Whole
 
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
@@ -560,11 +572,11 @@ type Calc
 		return Self{count: 0}
 	end 'fromPromise'
 
-	function record(_ IntPromise) returns int
+	function record(_ IntPromise) returns Integer
 		return 1
 	end 'record'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 end 'Calc'
@@ -573,6 +585,7 @@ function main() returns ExitCode
 	spawn Calc.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -591,18 +604,18 @@ program the author did not write. The whole-program discovery walk had the ident
 must widen together or one accepts a spawn the other minted no companions for.
 ```maxon
 type Reader
-	var n as int
+	var n as Integer
 
-	static function from(path int) returns Self
+	static function from(path Integer) returns Self
 		return Self{n: path}
 	end 'from'
 
-	export function read() returns int
+	export function read() returns Integer
 		return self.n
 	end 'read'
 end 'Reader'
 
-function serve(_ Reader.handle) returns int
+function serve(_ Reader.handle) returns Integer
 	return 1
 end 'serve'
 
@@ -610,6 +623,7 @@ function main() returns ExitCode
 	spawn Reader.from(3)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -623,18 +637,18 @@ declarations in this tree depend on it (`specs-shv2/associated-types.md` declare
 `TokenKind` would have retokenized both.
 ```maxon
 type Job
-	var spawn as int
+	var spawn as Integer
 
-	static function spawn(n int) returns Self
+	static function spawn(n Integer) returns Self
 		return Self{spawn: n}
 	end 'spawn'
 
-	function tally() returns int
+	function tally() returns Integer
 		return self.spawn
 	end 'tally'
 end 'Job'
 
-function run(spawn int) returns int
+function run(spawn Integer) returns Integer
 	return spawn + 1
 end 'run'
 
@@ -643,6 +657,7 @@ function main() returns ExitCode
 	let spawn = 4
 	return (j.tally() + run(spawn) + spawn) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 12
@@ -653,7 +668,7 @@ end 'main'
 and name its case in a `match`. The runtime that produces it lands with the mailbox; the declaration is
 what a reply's synthesized error union will be built from.
 ```maxon
-function risky(n int) returns int throws ServiceError
+function risky(n Integer) returns Integer throws ServiceError
 	if n == 0 'gone'
 		throw ServiceError.stopped
 	end 'gone'
@@ -668,6 +683,7 @@ function main() returns ExitCode
 	end 'failed'
 	return v as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -686,7 +702,7 @@ ordered by nothing. Every expectation below is therefore built out of prints mad
 whose order is its own mailbox's FIFO.
 ```maxon
 type Counter
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -708,6 +724,7 @@ function main() returns ExitCode
 	h.report()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -721,13 +738,13 @@ n=2
 Handlers run one at a time, in send order — so three digits pushed in order read back as one number.
 ```maxon
 type Log
-	var acc as int
+	var acc as Integer
 
 	static function create() returns Self
 		return Self{acc: 0}
 	end 'create'
 
-	export function push(d int)
+	export function push(d Integer)
 		self.acc = self.acc * 10 + d
 	end 'push'
 
@@ -744,6 +761,7 @@ function main() returns ExitCode
 	h.read()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -763,10 +781,10 @@ services printing on two green threads with nothing between them would be ordere
 `a-handle-moved-into-another-service` pins on its own.
 ```maxon
 type Counter
-	var id as int
-	var n as int
+	var id as Integer
+	var n as Integer
 
-	static function create(id int) returns Self
+	static function create(id Integer) returns Self
 		return Self{id: id, n: 0}
 	end 'create'
 
@@ -793,6 +811,7 @@ function main() returns ExitCode
 	b.reportThen(a)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -809,13 +828,13 @@ impossible: one type, one method, reached both ways in one program. The direct c
 exists, so the two lines are ordered by the program rather than by the scheduler.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 
@@ -834,6 +853,7 @@ function main() returns ExitCode
 	h.total()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -847,13 +867,13 @@ total=3
 A private helper is not on the handle, which is what makes a self-send unspellable.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	function record(v int)
+	function record(v Integer)
 		self.count = v
 	end 'record'
 end 'Calc'
@@ -863,6 +883,7 @@ function main() returns ExitCode
 	h.record(1)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3136: <fragment>:16:4: `record` is declared on `type Calc` but is not a message: only its `export` INSTANCE methods are on `Calc.handle`. That is the isolation boundary, and it is what makes a self-send unspellable — a private helper can only ever be reached by a DIRECT call, from inside a message body or from a `Calc` value. Export it to make it a message, or call it on a `Calc` value
@@ -879,13 +900,13 @@ own WINS, and the compiler's pill is then unspellable for it — which leaves dr
 other road to the same drain.
 ```maxon
 type Log
-	var acc as int
+	var acc as Integer
 
 	static function create() returns Self
 		return Self{acc: 0}
 	end 'create'
 
-	export function push(d int)
+	export function push(d Integer)
 		self.acc = self.acc + d
 	end 'push'
 
@@ -902,6 +923,7 @@ function main() returns ExitCode
 	h.shutdown()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -920,7 +942,7 @@ it inline. **Both roads must print exactly the same thing and leak exactly nothi
 worth pinning — the drop of a moved-in payload nobody will ever handle.
 ```maxon
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -941,6 +963,7 @@ function main() returns ExitCode
 	h.keep(second)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -972,9 +995,9 @@ answer is to re-baseline it DELIBERATELY, with the reason in the commit** — ne
 never to read the red as a shutdown bug. What would be a shutdown bug is a line MISSING, or a non-zero exit.
 ```maxon
 type Beeper
-	var tag as int
+	var tag as Integer
 
-	static function create(tag int) returns Self
+	static function create(tag Integer) returns Self
 		return Self{tag: tag}
 	end 'create'
 
@@ -992,6 +1015,7 @@ function main() returns ExitCode
 	outer.beep()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1007,7 +1031,7 @@ A handle is an ordinary box, so `.clone()` reaches it — and on a handle the cl
 SAME service, not a second service. Dropping one leaves the mailbox open; the last one to go closes it.
 ```maxon
 type Counter
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1030,6 +1054,7 @@ function main() returns ExitCode
 	b.report()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1045,7 +1070,7 @@ DROPS it — the un-consumed payload drop the loop owes for every message it run
 last handle, so the logger shuts down without `main` ever naming it again.
 ```maxon
 type Logger
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1057,7 +1082,7 @@ type Logger
 end 'Logger'
 
 type Worker
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1074,6 +1099,7 @@ function main() returns ExitCode
 	worker.run(logger)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1088,7 +1114,7 @@ Handles are ordinary boxes and live in containers — which means the array's el
 and two services shut down when the array does.
 ```maxon
 type Counter
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1107,6 +1133,7 @@ function main() returns ExitCode
 	hs.push(spawn Counter.create())
 	return hs.count() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 2
@@ -1133,7 +1160,7 @@ carrier's own header records the lexer's keyword map having — *"a read that is
 independent insertion orders agree is a wrong answer waiting"*.
 ```maxon
 type Logger
-	var bytes as int
+	var bytes as Integer
 
 	static function create() returns Self
 		return Self{bytes: 0}
@@ -1149,7 +1176,7 @@ type Logger
 end 'Logger'
 
 type Worker
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1167,6 +1194,7 @@ function main() returns ExitCode
 	worker.run(logger.clone())
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1182,7 +1210,7 @@ box's one owner. Nothing is increfed at the send and nothing is dropped by the s
 the plain refcount correct across a green thread.
 ```maxon
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1203,6 +1231,7 @@ function main() returns ExitCode
 	h.keep("a literal")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1231,7 +1260,7 @@ enum StoreError
 end 'StoreError'
 
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1252,6 +1281,7 @@ function main() returns ExitCode
 	h.keep("b{2}")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1266,13 +1296,13 @@ The synthesized request union is an ordinary union, so its `.unionCases` compani
 holds variant 0, so the first message an author declares is variant 1.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 end 'Calc'
@@ -1281,6 +1311,7 @@ function main() returns ExitCode
 	spawn Calc.create()
 	return Calc.request.unionCases.bump.rawValue as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 1
@@ -1298,7 +1329,7 @@ rule for every binding and not a service question (`reportUnusedBindings` follow
 that wants a handle BOUND has to read it, which `dropping-the-last-handle-shuts-the-service-down` does.
 ```maxon
 type Idler
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1313,6 +1344,7 @@ function main() returns ExitCode
 	spawn Idler.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1325,7 +1357,7 @@ programs. `A` names `B`'s handle in a message and `B` names `A`'s, which is a cy
 cycle at all in the blocking one, because neither send waits.
 ```maxon
 type A
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1341,7 +1373,7 @@ type A
 end 'A'
 
 type B
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1358,6 +1390,7 @@ function main() returns ExitCode
 	a.ping(b)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1377,24 +1410,24 @@ a refusal of a program that cannot deadlock. It cannot deadlock because `A.kick`
 immediately, so `A` is free to serve `B`'s `ack` when it arrives.
 ```maxon
 type A
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function kick(peer B.handle, mine A.handle) returns int
+	export function kick(peer B.handle, mine A.handle) returns Integer
 		peer.work(mine.clone())
 		return 1
 	end 'kick'
 
-	export function ack() returns int
+	export function ack() returns Integer
 		return 7
 	end 'ack'
 end 'A'
 
 type B
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1405,7 +1438,7 @@ type B
 		print("acked {v}\n")
 	end 'work'
 
-	export function drain() returns int
+	export function drain() returns Integer
 		return 5
 	end 'drain'
 end 'B'
@@ -1417,6 +1450,7 @@ function main() returns ExitCode
 	let done = try await b.drain() otherwise 0
 	return (v + done) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 6
@@ -1433,17 +1467,18 @@ every service whose handle is the only caller. It is credited by the send op nam
 ```maxon
 // --- file: calc.maxon
 export type Calc
-	var count as int
+	var count as Integer
 
 	export static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 end 'Calc'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let h = spawn Calc.create()
@@ -1465,7 +1500,7 @@ given a copy and never the author's record. Only an OWNED String is moved, so on
 back too soon.
 ```maxon
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1483,6 +1518,7 @@ function main() returns ExitCode
 	print("{buf}")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3102: <fragment>:18:10: use of moved value 'buf': its ownership moved to another binding at an earlier bind or assignment
@@ -1493,7 +1529,7 @@ A value a closure captured has a second owner on this green thread, which is exa
 forbids across two. The send is refused rather than silently increfed, and `.clone()` is the fix.
 ```maxon
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1512,6 +1548,7 @@ function main() returns ExitCode
 	h.keep(buf)
 	return peek().byteLength() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3138: <fragment>:19:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
@@ -1523,7 +1560,7 @@ BORROWED struct parameter, the caller still holds it, and a struct has no static
 take. (A borrowed `String` is not in this class — it has a cheap owning copy and is promoted.)
 ```maxon
 type Payload
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1531,7 +1568,7 @@ type Payload
 end 'Payload'
 
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1552,6 +1589,7 @@ function main() returns ExitCode
 	forward(h, p: p)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it, and its type has no owning copy a send could take instead. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
@@ -1568,13 +1606,13 @@ different entries, and a program can contain either without the other — `an-id
 is exactly a spawn with no send.
 ```maxon
 type Plot
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function at(x int)
+	export function at(x Integer)
 		self.n = self.n + x
 	end 'at'
 end 'Plot'
@@ -1584,6 +1622,7 @@ function main() returns ExitCode
 	h.at(1)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3104: <fragment>:15:10: this construct is x64-windows only at this rung: 'spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
@@ -1598,13 +1637,13 @@ the gate, E3104 after) and is not pinned here only because two lanes already par
 construct.
 ```maxon
 type Plot
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function at(x int)
+	export function at(x Integer)
 		self.n = self.n + x
 	end 'at'
 end 'Plot'
@@ -1614,6 +1653,7 @@ function main() returns ExitCode
 	h.at(1)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3104: <fragment>:15:10: this construct is x64-windows only at this rung: 'spawn' lowers to the runtime entry '__svc_spawn', which has no arm64-macos implementation
@@ -1627,16 +1667,16 @@ every slot is a machine word holds no reference to anything, so moving it moves 
 send, so this frame gives up the only reference there was.
 ```maxon
 type Point
-	export var x as int
-	export var y as int
+	export var x as Integer
+	export var y as Integer
 
-	export static function create(x int, y int) returns Self
+	export static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 end 'Point'
 
 type Plot
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1654,6 +1694,7 @@ function main() returns ExitCode
 	h.at(Point.create(3, y: 4))
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1675,7 +1716,7 @@ observable at the SEND distinguishes this from the safe program. Before the rule
 and exited 0.
 ```maxon
 type Cell
-	export var n as int
+	export var n as Integer
 
 	export static function create() returns Self
 		return Self{n: 1}
@@ -1701,6 +1742,7 @@ function main() returns ExitCode
 	h.bump()
 	return cell.n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3138: <fragment>:25:21: the state `spawn Calc.create(…)` would start the service with is a `type Calc` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
@@ -1721,7 +1763,7 @@ worse than one they can, and this is the shape they would have written next.
 ```maxon
 type Holder
 	var held as String
-	var bytes as int
+	var bytes as Integer
 
 	static function create() returns Self
 		return Self{held: "", bytes: 0}
@@ -1737,6 +1779,7 @@ function main() returns ExitCode
 	h.keep("payload")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3138: <fragment>:16:23: the state `spawn Holder.create(…)` would start the service with is a `type Holder` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
@@ -1748,7 +1791,7 @@ scalar-ness is not the question: `push` INCREFS what it is handed, so `cell` is 
 at once. Sending `cs` would hand the second owner's record to another green thread.
 ```maxon
 type Cell
-	export var n as int
+	export var n as Integer
 
 	export static function create() returns Self
 		return Self{n: 1}
@@ -1758,7 +1801,7 @@ end 'Cell'
 typealias CellArray = Array with Cell
 
 type Svc
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1777,6 +1820,7 @@ function main() returns ExitCode
 	h.take(cs)
 	return cell.n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3138: <fragment>:29:9: argument `cs` of the message `Svc.take` is a container, whose elements a push increfs rather than moves — so this frame may still own what is in it (`cs`). This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
@@ -1793,7 +1837,7 @@ function work() returns Integer
 end 'work'
 
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1821,7 +1865,7 @@ Two services' handles are two nominal types, so handing one where the other is e
 struct-identity mismatch and needs no rule of its own.
 ```maxon
 type Calc
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1833,7 +1877,7 @@ type Calc
 end 'Calc'
 
 type Logger
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1850,6 +1894,7 @@ function main() returns ExitCode
 	l.say(l)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3005: <fragment>:29:8: argument type mismatch for 'peer': expected 'Calc.handle', got 'Logger.handle'
@@ -1862,7 +1907,7 @@ is no promise to bind — and the cure is on `bump` rather than at the call. Eve
 which is why this sentence names what would give this one a reply rather than naming a rung.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
@@ -1878,6 +1923,7 @@ function main() returns ExitCode
 	let n = h.bump()
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:16:12: Unsupported: the value of `Calc.bump` sent as a MESSAGE — it returns nothing and throws nothing, so it carries no reply slot and a send of it delivers no value. Give it a `returns` clause or a `throws` clause and `try await <handle>.bump(…)` resolves through a reply cell; otherwise send it as a statement
@@ -1889,7 +1935,7 @@ error. The refusal names the awaitable form rather than reporting a syntax fault
 returns nothing and throws nothing, it names the other cure too: there is no reply at all, so drop the `try`.
 ```maxon
 type Calc
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -1905,6 +1951,7 @@ function main() returns ExitCode
 	try h.bump()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:16:2: Unsupported: `try` on the message `Calc.bump` — a SEND is not the reply. It enqueues and returns, so it can fail at nothing; what carries an error is the reply, and awaiting it is what makes that error this frame's. Write `try await <handle>.<message>(…)`, or drop the `try` on a message that returns nothing and throws nothing
@@ -1915,17 +1962,17 @@ error E2015: <fragment>:16:2: Unsupported: `try` on the message `Calc.bump` — 
 A value-returning message is awaitable RPC.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by int)
+	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 
-	export function total() returns int
+	export function total() returns Integer
 		return self.count
 	end 'total'
 end 'Calc'
@@ -1936,6 +1983,7 @@ function main() returns ExitCode
 	let n = try await h.total() otherwise 0
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 3
@@ -1950,13 +1998,13 @@ enum MathError implements Error
 end 'MathError'
 
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function divide(n int, by int) returns int throws MathError
+	export function divide(n Integer, by Integer) returns Integer throws MathError
 		if by == 0 'zero'
 			throw MathError.divideByZero
 		end 'zero'
@@ -1974,6 +2022,7 @@ function main() returns ExitCode
 	end 'oops'
 	return v as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 71
@@ -1984,13 +2033,13 @@ end 'main'
 A stopped service resolves its pending replies rather than hanging their awaiters.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function total() returns int
+	export function total() returns Integer
 		return self.count
 	end 'total'
 end 'Calc'
@@ -2005,6 +2054,7 @@ function main() returns ExitCode
 	end 'gone'
 	return v as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 9
@@ -2022,7 +2072,7 @@ type is a service is a whole-program property, and the `spawn` deciding it may b
 from the method the rule fires on.
 ```maxon
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 1}
@@ -2037,6 +2087,7 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3137: <fragment>:10:3: `Store.itself` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, whose one reference the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
@@ -2054,7 +2105,7 @@ but it told them their value was reachable from `self` when it was not, and a re
 takes away.
 ```maxon
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 1}
@@ -2071,6 +2122,7 @@ function main() returns ExitCode
 	print("{r}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3137: <fragment>:10:3: `Store.echo` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, whose one reference the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
@@ -2082,29 +2134,29 @@ note: <fragment>:15:10: the `spawn` that makes `Store` a service
 Mutual reentrancy is made unrepresentable rather than diagnosed at run time.
 ```maxon
 type A
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function ping(b B.handle) returns int
+	export function ping(b B.handle) returns Integer
 		return try await b.pong() otherwise 0
 	end 'ping'
 
-	export function ack() returns int
+	export function ack() returns Integer
 		return 1
 	end 'ack'
 end 'A'
 
 type B
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function pong() returns int
+	export function pong() returns Integer
 		return try await spawnA().ack() otherwise 0
 	end 'pong'
 end 'B'
@@ -2118,6 +2170,7 @@ function main() returns ExitCode
 	let b = spawn B.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
@@ -2134,18 +2187,18 @@ error E3139: <fragment>:10:14: service call cycle — these messages can deadloc
 message that throws needs the two-member union, and that one has no spelling (see the case below).
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 7}
 	end 'create'
 
-	export function total() returns int
+	export function total() returns Integer
 		return self.count
 	end 'total'
 end 'Calc'
 
-function fetch(h Calc.handle) returns int throws ServiceError
+function fetch(h Calc.handle) returns Integer throws ServiceError
 	return try await h.total()
 end 'fetch'
 
@@ -2154,6 +2207,7 @@ function main() returns ExitCode
 	let v = try fetch(h) otherwise 1
 	return v as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -2169,13 +2223,13 @@ enum MathError implements Error
 end 'MathError'
 
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function divide(n int, by int) returns int throws MathError
+	export function divide(n Integer, by Integer) returns Integer throws MathError
 		if by == 0 'zero'
 			throw MathError.divideByZero
 		end 'zero'
@@ -2183,7 +2237,7 @@ type Calc
 	end 'divide'
 end 'Calc'
 
-function fetch(h Calc.handle) returns int throws MathError
+function fetch(h Calc.handle) returns Integer throws MathError
 	return try await h.divide(10, by: 2)
 end 'fetch'
 
@@ -2191,6 +2245,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3059: <fragment>:22:9: try propagates 'Calc.divide.errors' but enclosing function throws 'MathError' — add 'otherwise' to convert
@@ -2204,13 +2259,13 @@ after the mailbox is already closed and is abandoned by the send. Both answer `S
 case passes by TERMINATING at all.
 ```maxon
 type Slow
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function value() returns int
+	export function value() returns Integer
 		return self.n
 	end 'value'
 end 'Slow'
@@ -2231,6 +2286,7 @@ function main() returns ExitCode
 	end 'second'
 	return stops as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 2
@@ -2243,7 +2299,7 @@ handler's result is freshly minted in the handler's own frame, so the service gi
 the awaiter takes it — one owner throughout, which is what a plain refcount requires.
 ```maxon
 type Echo
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -2262,6 +2318,7 @@ function main() returns ExitCode
 	print("{out}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 [hi]
@@ -2275,7 +2332,7 @@ it — so it adds the consumer ticket only, and the reply's own completion suppl
 result nobody took is released by whichever arrives second.
 ```maxon
 type Echo
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -2292,6 +2349,7 @@ function main() returns ExitCode
 	h.say("b")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -2304,7 +2362,7 @@ replier writes into a cell its awaiter has already renounced. That is the orderi
 exists for, and freeing the cell at the drop is a clobbered green thread rather than a leak.
 ```maxon
 type Echo
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -2314,7 +2372,7 @@ type Echo
 		return "[{s}]"
 	end 'say'
 
-	export function count() returns int
+	export function count() returns Integer
 		return 5
 	end 'count'
 end 'Echo'
@@ -2325,6 +2383,7 @@ function main() returns ExitCode
 	let n = try await h.count() otherwise 0
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 5
@@ -2338,13 +2397,13 @@ already there and reclaims; an arm that took a completed cell as merely queued w
 invisibly, because the green-thread count the exit gate reads has already been debited.
 ```maxon
 type Echo
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 4}
 	end 'create'
 
-	export function count() returns int
+	export function count() returns Integer
 		return self.n
 	end 'count'
 end 'Echo'
@@ -2357,6 +2416,7 @@ function main() returns ExitCode
 	let m = try await p otherwise 0
 	return (n + m) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 8
@@ -2372,25 +2432,25 @@ managed at all (`error.a-record-with-a-managed-field-may-not-cross`), which is a
 rule rather than anything this rung changes.
 ```maxon
 type Inner
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 3}
 	end 'create'
 
-	export function value() returns int
+	export function value() returns Integer
 		return self.n
 	end 'value'
 end 'Inner'
 
 type Outer
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function doubled(inner Inner.handle) returns int
+	export function doubled(inner Inner.handle) returns Integer
 		let v = try await inner.value() otherwise 0
 		return v * 2
 	end 'doubled'
@@ -2402,6 +2462,7 @@ function main() returns ExitCode
 	let v = try await o.doubled(i) otherwise 0
 	return v as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 6
@@ -2413,13 +2474,13 @@ Per-await linearity composes for free, because it keys on the promise's own iden
 produced it — a reply cell is a `Promise` like any other.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function total() returns int
+	export function total() returns Integer
 		return self.count
 	end 'total'
 end 'Calc'
@@ -2431,6 +2492,7 @@ function main() returns ExitCode
 	let b = try await p otherwise 0
 	return (a + b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3100: <fragment>:18:14: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
@@ -2441,13 +2503,13 @@ A reply ALWAYS throws `ServiceError`, whatever the message itself declares — s
 E3057 by construction and there is no reply in the language that can be awaited without `try`.
 ```maxon
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function total() returns int
+	export function total() returns Integer
 		return self.count
 	end 'total'
 end 'Calc'
@@ -2457,6 +2519,7 @@ function main() returns ExitCode
 	let n = await h.total()
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3057: <fragment>:16:10: throwing function requires try: 'await' on a promise from a function that throws 'ServiceError' drops the error and leaks its payload — use 'try await'
@@ -2479,13 +2542,13 @@ union Trouble implements Error
 end 'Trouble'
 
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function wipe() returns int throws Trouble
+	export function wipe() returns Integer throws Trouble
 		throw Trouble.detail("no")
 	end 'wipe'
 end 'Store'
@@ -2494,6 +2557,7 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that throws `Trouble`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word already carries the fused ordinal that tells `ServiceError` apart from the message's own error, and a pointer is not an ordinal, and this `spawn` makes `Store` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry
@@ -2507,34 +2571,34 @@ edge `A → B` exists even though `A`'s own body names no `B` message.
 ⚠ The hop is anchored at `relay`'s `await` rather than at `A.ping` — that IS where the thread stops, and a
 message that blocks only through a helper has no await of its own to point at.
 ```maxon
-function relay(b B.handle, peer A.handle) returns int
+function relay(b B.handle, peer A.handle) returns Integer
 	return try await b.pong(peer.clone()) otherwise 0
 end 'relay'
 
 type A
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function ping(b B.handle, peer A.handle) returns int
+	export function ping(b B.handle, peer A.handle) returns Integer
 		return relay(b, peer: peer)
 	end 'ping'
 
-	export function ack() returns int
+	export function ack() returns Integer
 		return 1
 	end 'ack'
 end 'A'
 
 type B
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function pong(peer A.handle) returns int
+	export function pong(peer A.handle) returns Integer
 		return try await peer.ack() otherwise 0
 	end 'pong'
 end 'B'
@@ -2544,6 +2608,7 @@ function main() returns ExitCode
 	let b = spawn B.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3139: <fragment>:3:13: service call cycle — these messages can deadlock waiting on each other:
@@ -2559,17 +2624,17 @@ actually deadlock, but edges are by TYPE — which is what makes them statically
 analysis cannot tell the instances apart and must be conservative. The message says the workaround.
 ```maxon
 type Worker
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function ask(peer Worker.handle) returns int
+	export function ask(peer Worker.handle) returns Integer
 		return try await peer.answer() otherwise 0
 	end 'ask'
 
-	export function answer() returns int
+	export function answer() returns Integer
 		return 1
 	end 'answer'
 end 'Worker'
@@ -2579,6 +2644,7 @@ function main() returns ExitCode
 	w.ask(w.clone())
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
@@ -2597,43 +2663,43 @@ is the deadlock this rule exists to make unrepresentable. **Delete the `C` await
 which is the point: it must refuse WITH it.**
 ```maxon
 type A
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function ping(b B.handle, c C.handle) returns int
+	export function ping(b B.handle, c C.handle) returns Integer
 		let x = try await b.pong() otherwise 0
 		let y = try await c.tick() otherwise 0
 		return x + y
 	end 'ping'
 
-	export function ack() returns int
+	export function ack() returns Integer
 		return 1
 	end 'ack'
 end 'A'
 
 type B
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function pong() returns int
+	export function pong() returns Integer
 		return try await spawnA().ack() otherwise 0
 	end 'pong'
 end 'B'
 
 type C
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function tick() returns int
+	export function tick() returns Integer
 		return 2
 	end 'tick'
 end 'C'
@@ -2649,6 +2715,7 @@ function main() returns ExitCode
 	a.ping(b, c: c)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3139: <fragment>:10:15: service call cycle — these messages can deadlock waiting on each other:
@@ -2667,38 +2734,38 @@ handle it forwards has to be one this frame owns. The original is dropped by the
 payload, which is what shuts `C` down once the chain has answered.
 ```maxon
 type C
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 
-	export function value() returns int
+	export function value() returns Integer
 		return self.n
 	end 'value'
 end 'C'
 
 type B
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function value(next C.handle) returns int
+	export function value(next C.handle) returns Integer
 		let v = try await next.value() otherwise 0
 		return v + 10
 	end 'value'
 end 'B'
 
 type A
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function value(next B.handle, last C.handle) returns int
+	export function value(next B.handle, last C.handle) returns Integer
 		let v = try await next.value(last.clone()) otherwise 0
 		return v + 20
 	end 'value'
@@ -2711,6 +2778,7 @@ function main() returns ExitCode
 	let v = try await a.value(b, last: c) otherwise 0
 	return v as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 31
@@ -2736,7 +2804,7 @@ typealias ReplyPromise = Promise with (Integer, ServiceError)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 type Slow
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -2777,13 +2845,13 @@ typealias ReplyPromise = Promise with (Integer, ServiceError)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 type Calc
-	var count as int
+	var count as Integer
 
 	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function divide(n int, by int) returns Integer throws MathError
+	export function divide(n Integer, by Integer) returns Integer throws MathError
 		if by == 0 'zero'
 			throw MathError.divideByZero
 		end 'zero'
@@ -2819,7 +2887,7 @@ typealias ReplyPromise = Promise with (Integer, ServiceError)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 type Slow
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 7}
@@ -2861,7 +2929,7 @@ typealias BarePromise = Promise with Integer
 typealias BarePromiseArray = Array with BarePromise
 
 type Slow
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 7}
@@ -2919,7 +2987,7 @@ with. The struct shape, which has no owning copy to take, IS refused today and i
 copy per forwarded String), not about a hole in the safety rule.
 ```maxon
 type Store
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -2941,6 +3009,7 @@ function main() returns ExitCode
 	forward(h, buf: "hello")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3138: <fragment>:14:8: 'buf' arrived as a parameter and cannot be proven unique at the send

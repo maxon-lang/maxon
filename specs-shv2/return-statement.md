@@ -57,7 +57,7 @@ golden but never by an actual execution. Putting the branch in a helper and call
 sides of the condition makes each exit an executed path, and each is checked alone so neither can
 mask the other.
 ```maxon
-function firstOver(x int) returns int
+function firstOver(x Integer) returns Integer
 	if x > 3 'check'
 		return 1
 	end 'check'
@@ -75,6 +75,7 @@ function main() returns ExitCode
 
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

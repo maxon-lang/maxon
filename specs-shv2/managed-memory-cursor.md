@@ -491,7 +491,7 @@ type SeqIterator uses Element
 		return raw.current()
 	end 'current'
 
-	export function index() returns int
+	export function index() returns Integer
 		return raw.index()
 	end 'index'
 
@@ -516,6 +516,7 @@ function main() returns ExitCode
 	total = total + it.current()
 	return total + it.index()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 62

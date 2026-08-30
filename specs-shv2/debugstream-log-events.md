@@ -143,7 +143,7 @@ LINES BEING THERE AT ALL** — which is exactly right: what went wrong was not a
 the process dying while writing the entry. A run that survives to emit all three and then completes
 its `async` is the whole property.
 ```maxon
-function work(n int) returns int
+function work(n Integer) returns Integer
 	__Builtins.parallelBoundary()
 	return n * 2
 end 'work'
@@ -156,6 +156,7 @@ function main() returns ExitCode
 	let p = async work(21)
 	return await p as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```log-trace
 log_phase_begin early unit=1

@@ -292,20 +292,22 @@ declaration `lib.maxon` may actually NAME is the exported one, and that is the o
 export typealias Codepoint = int(0 to 1114111)
 
 // --- file: lib.maxon
-export function widen(c Codepoint) returns int
+export function widen(c Codepoint) returns Integer
 	return c / 1000
 end 'widen'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Codepoint = int(0 to 100)
 
-function narrow(c Codepoint) returns int
+function narrow(c Codepoint) returns Integer
 	return c
 end 'narrow'
 
 function main() returns ExitCode
 	return (widen(70000) - narrow(28)) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -336,7 +338,7 @@ function opaque(n Integer) returns Integer
 	return n
 end 'opaque'
 
-function narrow(c Codepoint) returns int
+function narrow(c Codepoint) returns Integer
 	return c
 end 'narrow'
 
@@ -360,23 +362,25 @@ nameable one.
 export typealias Codepoint = int(0 to 1114111)
 
 // --- file: lib.maxon
-export function widen(c Codepoint) returns int
+export function widen(c Codepoint) returns Integer
 	return c
 end 'widen'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Codepoint = int(0 to 100)
 
-function narrow(c Codepoint) returns int
+function narrow(c Codepoint) returns Integer
 	return c
 end 'narrow'
 
 function main() returns ExitCode
 	return (widen(70000) + narrow(150)) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:25: Value 150 is outside the range of 'Codepoint' (int(0 to 100))
+error E3005: <fragment>:19:25: Value 150 is outside the range of 'Codepoint' (int(0 to 100))
 ```
 
 ### ⛔⛔ AN ARM-SERVED DOOR RESOLVES ITS ALIAS IN THE *CALLEE'S* FILE, AND THE ANSWER HAS TO TRAVEL
@@ -907,13 +911,14 @@ typealias High = int(1000 to 2000)
 typealias Bag = Array with High
 typealias BB = Box with Bag
 
-export function fromHigh() returns int
+export function fromHigh() returns Integer
 	var b = Bag.create()
 	b.push(1500)
 	let box = BB.create(b)
 	return 1
 end 'fromHigh'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 typealias Low = int(0 to 100)
 typealias Bag = Array with Low
@@ -984,7 +989,7 @@ end 'Handle'
 typealias Bag = Array with Handle
 typealias NestedContainer = Container with Bag
 
-export function useHandles() returns int
+export function useHandles() returns Integer
 	var sa = Bag.create()
 	sa.push(Handle.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 0))
 	var nc = NestedContainer.create()
@@ -992,6 +997,7 @@ export function useHandles() returns int
 	return 1
 end 'useHandles'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 typealias Low = int(0 to 100)
 typealias Bag = Array with Low
@@ -1053,12 +1059,13 @@ end 'Box'
 typealias N0 = Box with S1
 typealias N1 = Box with N0
 
-export function useOther() returns int
+export function useOther() returns Integer
 	var w1 = N1.create(N0.create(S1.make("other")))
 	w1.swap(N0.create(S1.make("other2")))
 	return 1
 end 'useOther'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 typealias N0 = Box with S0
 typealias N1 = Box with N0
@@ -1109,12 +1116,13 @@ end 'Box'
 typealias N0 = Box with S1
 typealias N1 = Box with (Box with S1)
 
-export function useOther() returns int
+export function useOther() returns Integer
 	var w1 = N1.create(N0.create(S1.make("other")))
 	w1.swap(N0.create(S1.make("other2")))
 	return 1
 end 'useOther'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 typealias N0 = Box with S0
 typealias N1 = Box with (Box with S0)
@@ -1168,12 +1176,13 @@ end 'useA'
 // --- file: bother.maxon
 typealias Bag = Array with String
 
-export function useB() returns int
+export function useB() returns Integer
 	var b = Bag.create()
 	b.push("x")
-	return b.count() as int
+	return b.count()
 end 'useB'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 function main() returns ExitCode
 	return (useA() + useB()) as ExitCode
@@ -1253,11 +1262,12 @@ public type Holder
 	end 'make'
 end 'Holder'
 
-export function useB() returns int
+export function useB() returns Integer
 	let h = Holder.make()
-	return (try h.q.0.get(0) otherwise "").count() as int
+	return (try h.q.0.get(0) otherwise "").count()
 end 'useB'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 function main() returns ExitCode
 	return (useA() * 10 + useB()) as ExitCode
@@ -1277,10 +1287,11 @@ public type Keeper
 	end 'make'
 end 'Keeper'
 
-export function useA() returns int
+export function useA() returns Integer
 	var k = Keeper.make()
-	return (try k.p.0.get(0) otherwise 0) as int
+	return (try k.p.0.get(0) otherwise 0)
 end 'useA'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 72

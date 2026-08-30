@@ -3779,7 +3779,7 @@ type MaxonToStdLowering
 			return self.associatedFormalType(dispatched.name, position: position, formalName: formalName, receiver: receiver)
 		end 'aConformerBindsIt'
 
-		return renderedTypeNameAbiType(formalName)
+		return renderedTypeNameAbiType(formalName, signatures: self.signatures)
 	end 'witnessFormalType'
 
 	// ⭐⭐ **THE RESOLVED TYPE OF AN ASSOCIATED FORMAL — THE RECEIVER'S OWN CLAIM FIRST, THE WHOLE-PROGRAM FOLD
@@ -3804,10 +3804,10 @@ type MaxonToStdLowering
 	// conformers can arrive and cannot conjure one where there are none.
 	function associatedFormalType(interfaceName ByteArray, position ElementCount, formalName ByteArray, receiver ValueId) returns MaxonType
 		if let siteBinding = try self.receiverSiteBinding(receiver, position: position, interfaceName: interfaceName) 'theReceiverClaimsIt'
-			return renderedTypeNameAbiType(siteBinding)
+			return renderedTypeNameAbiType(siteBinding, signatures: self.signatures)
 		end 'theReceiverClaimsIt'
 
-		match associatedAbiBindingOf(self.conformances, interfaceName: interfaceName, position: position) 'binding'
+		match associatedAbiBindingOf(self.conformances, signatures: self.signatures, interfaceName: interfaceName, position: position) 'binding'
 			agreed(_, _, declaredType) then return declaredType
 			unconformed then return MaxonType.integer
 			disagreed(first, firstBinding, second, secondBinding) then panic("associatedFormalType: '{String.from(interfaceName)}' binds `{String.from(formalName)}` to `{String.from(firstBinding)}` in '{String.from(first.typeName)}' and to `{String.from(secondBinding)}` in '{String.from(second.typeName)}', while the receiver v{receiver} of this dispatch claims nothing at position {position} — which `ConformanceCheck.checkAssociatedTypeAbiAgreement` reports as E3119, so the pipeline's error gate must stop before lowering")

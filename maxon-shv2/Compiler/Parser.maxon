@@ -1371,6 +1371,34 @@ export union ParseError implements Error
 	// f64.max)`). That reads oddly and it is the reference oracle's exact text, byte for byte
 	// (`2-Parser.cs:4794`); the specs compare stderr exactly, so it is transcribed and not improved.
 	bareSizedTypeAlias(typeName String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ **A BARE `int`/`float` IN A TYPE POSITION — `function f(x int)`, `returns float`, `var v as int`.**
+	// Renders as **E3005**, positioned at the keyword. The rule is the ranged-typealias rule reaching every
+	// type position instead of only the one (`Base with Args`, E2061) that already had it: a numeric domain
+	// must be DECLARED, so the keyword is legal only as the RHS of a `typealias`.
+	//
+	// ⚠ **IT IS THE ORACLE'S RULE AND THE ORACLE'S EXACT TEXT** (`2-Parser.cs:9106-9111`, message at
+	// `:9146-9151`), transcribed rather than improved, because the specs compare stderr byte for byte.
+	// `docs/LANGUAGE_REFERENCE.md:438` has stated it since long before shv2 enforced it — shv2 simply never
+	// implemented it, which is why `specs-shv2` accumulated ~1200 sites the bootstrap would refuse and
+	// `stdlib/` (compiled BY the bootstrap) has none.
+	//
+	// ⚠ **`bool` AND `cstring` ARE DELIBERATELY ADMITTED, and it is the same reason E2061 admits `bool`:**
+	// they are already constrained types with no range to name. `String` and `Character` never reach here.
+	//
+	// shv2's set is `{int, float}` where the oracle's is `{int, float, byte}` — shv2 has no `byte` keyword.
+	barePrimitiveType(typeName String, line LineNumber, column ColumnNumber)
+	// ⭐ THE SAME RULE AT A CAST TARGET — `x as int`. A SEPARATE arm because the oracle gives it a
+	// SEPARATE SENTENCE (`BarePrimitiveCastMessage`, `2-Parser.cs:9153-9158`), naming the rewrite in the
+	// cast's own shape (`value as MyInt`) rather than a declaration's. One rule, two readers, two texts —
+	// and matching both byte for byte is what the ruling asked for.
+	//
+	// ⚠ **BOTH CAST SITES RAISE IT** — `parseCast` for a body cast and `applyConstCast` for a top-level
+	// `let X = 5 as int`, which the const evaluator folds on a different walk entirely. The oracle covers
+	// only the first: its `ApplyConstAsCasts` (`2-Parser.cs:7072-7076`) still ACCEPTS the bare keyword as an
+	// identity cast, so `let X = 5 as int` compiles there while `let x = 5 as int` in a body does not. That
+	// is the "half a fact" shape `specs-shv2/cast-target-type-resolution.md` was written to close, and it is
+	// fixed on the oracle in the same commit rather than mirrored here.
+	barePrimitiveCastTarget(typeName String, line LineNumber, column ColumnNumber)
 	// ⭐ TWO TYPE-QUALIFIED RANGE BOUNDS NAMING DIFFERENT TYPES — `int(i8.min to i32.max)`. Renders as
 	// **E3005**, positioned at the `int`/`float` keyword. A bound written as `<sized>.<min|max>` says
 	// which type's extreme it means, and a range whose two ends mean two different types is a mistake
@@ -2849,6 +2877,46 @@ enum ConformanceArgSpelling
 	asWritten
 end 'ConformanceArgSpelling'
 
+// ⭐⭐ **WHAT A BARE `int`/`float` MEANS AT THE TYPE POSITION BEING READ** — the argument every
+// `parseTypeReference` caller must answer, and the roster of the rule's exemptions.
+//
+// **THREE ARMS AND NOT A `bool` PLUS A SECOND FLAG.** *"The rule does not reach this position"* is a third
+// ANSWER to one question, not the absence of an answer to another; a pair would make
+// `(admitted, asACastTarget)` representable and meaningless.
+//
+// ⚠ **IT IS A PARAMETER RATHER THAN A PARSER FIELD, AND THAT IS THE WHOLE DESIGN.** The oracle spells the
+// same exemption as a mutable `_parsingTypeAliasRhs` set across the entire RHS — and that field leaking one
+// position too far is exactly what opened the two holes this rung also closes (its const-cast door, and
+// generic arguments, which needed `RejectBarePrimitiveTypeArgs` bolted on to plug what the field opened).
+// A parameter cannot leak past its callee.
+//
+// **THE EXEMPT POSITIONS, each with the reason it is exempt:**
+//   • a GENERIC TYPE ARGUMENT (`parseGenericArgNode`) — `checkGenericArgType` owns this position with TWO
+//     rules whose ORDER is load-bearing (E2062 before E2061). Refusing here would preempt both and hand a
+//     bare `float` type argument the "declare a ranged typealias" advice, which routes the reader into the
+//     very x64 cross-register-file panic E2062 exists to prevent.
+//   • a CONFORMANCE `with` ARGUMENT (`readConformanceWithArg`) — a conformance binding is monomorphized per
+//     conformer and gets a genuine f64 slot, so E2062's dictionary-passing reason does not apply;
+//     `specs-shv2/associated-types.md` binds an associated type to bare `float` in six live cases.
+//   • `sizeof` / `countof` (`parseSizeof`, `parseCountof`) — they ask about a REPRESENTATION, not about a
+//     value's domain, so there is no range for an alias to carry. The oracle admits them too
+//     (`ParseTypeQueryArg`), and `specs-shv2/sizeof.md` writes `sizeof(int)` and `sizeof(float)`.
+//   • ANYWHERE INSIDE A `typealias` RHS — the ranged form parses `int(`/`float(` itself and never reaches
+//     here, but a FUNCTION alias's parameters and return and a TUPLE alias's elements do. ⭐ MEASURED
+//     against the oracle, all four spellings: `typealias IntOp = function(n int) returns int` and
+//     `typealias Pair = (int, int)` COMPILE, while `var t as (int, int)` in a field position is REFUSED
+//     — so the exemption is the RHS, not the tuple. `typealias IntBox = Box with int` is refused too, by
+//     E2061, which is why the generic arm above is a separate exemption rather than a consequence of this
+//     one.
+//
+// `extension int` needs no arm: `typeBaseTokenAt` re-mints the keyword as an identifier-kinded token, so it
+// never reaches `parseTypeReference` at all, and the body names the primitive as `Self`.
+enum BarePrimitiveVoice
+	asAType
+	asACastTarget
+	admitted
+end 'BarePrimitiveVoice'
+
 // The receiver a call carries, if any. A union rather than a `ValueId` plus a bool, and rather
 // than a reserved id: `ValueId` has no empty value and a sentinel would be READ as a real argument
 // by everything downstream (`retVoid` exists in the Maxon dialect for precisely this reason).
@@ -3732,6 +3800,48 @@ end 'namesAPrimitiveType'
 function keywordNamesAPrimitiveType(tok Token) returns bool
 	return tok.kind != TokenKind.identifier and tokenCanBeAName(tok) and namesAPrimitiveType(tok.value)
 end 'keywordNamesAPrimitiveType'
+
+// ⭐⭐ **A PRIMITIVE THAT HAS A RANGE TO NAME** — `int` and `float`, and NOT `bool`. This is the set the
+// ranged-typealias rule reaches (`Parser.parseTypeReference`'s bare arm, `Parser.applyConstCast`), and it is
+// DERIVED from the name list above for the reason `keywordNamesAPrimitiveType`'s header gives: a keyword's
+// `value` IS its spelling, so a new primitive joins in one place instead of in a hand-copied `TokenKind` list.
+//
+// ⚠ **`bool` IS EXCLUDED BY THE RULE'S OWN REASON, not by taste** — it is already a constrained type with
+// nothing to range, which is the identical sentence E2061 uses to admit it as a type argument. `byte` is
+// excluded structurally: shv2 has no `TokenKind.byte` (see `ByteTypeName`), so it arrives as a plain
+// identifier and `keywordNamesAPrimitiveType`'s identifier exclusion has already dropped it.
+//
+// ⛔⛔ **IT ASKS THE TOKEN AND MUST NEVER BE RESTATED ON THE TAG.** `cstring` mints `MaxonType.integer` —
+// the SAME tag a bare `int` does (`parseTypeReference`'s `cstringPointer` arm says why) — so a tag-side
+// spelling of this rule (`tagIsBareNumericKeyword`, or a guard at `parseTypeReference`'s CALLERS) would
+// refuse `stdlib/String.maxon`'s `returns cstring`. The stdlib is in every build, so that compiler would
+// refuse to compile anything at all. The token is the only place the two are still distinguishable.
+function nameIsARangedPrimitive(name ByteArray) returns bool
+	return name.equals(IntConformerName) or name.equals(FloatConformerName)
+end 'nameIsARangedPrimitive'
+
+function keywordIsARangedPrimitive(tok Token) returns bool
+	return tok.kind != TokenKind.identifier and tokenCanBeAName(tok) and nameIsARangedPrimitive(tok.value)
+end 'keywordIsARangedPrimitive'
+
+// The VERDICT half, shared by the two doors that can meet a bare `int`/`float` — `parseTypeReference`'s
+// bare arm and `applyConstCast`'s cast target. One function because the two doors must refuse the same
+// token with the same sentence at the same anchor whichever met it; that is the whole lesson of
+// `specs-shv2/cast-target-type-resolution.md`, where fixing only the body cast left
+// `let X = 5 as Bogus` silently evaporating.
+//
+// ⚠ **THE ANCHOR IS THE KEYWORD, NOT THE `as`** — a deliberate difference from its neighbours. E3009,
+// E3010, E3011 and E3131 anchor on the `as`, because that is *"the only token certainly part of a cast
+// when the name denotes nothing anywhere"*. Here the offending token exists, is a keyword, and is the one
+// the author has to rewrite. It is also the oracle's anchor for BOTH of its messages
+// (`2-Parser.cs:9109` and `:9295` — MEASURED at column 15 of `\tlet n = s as int`, which is the `int`).
+function requireNotABarePrimitive(tok Token, voice BarePrimitiveVoice) throws ParseError
+	match voice 'position'
+		admitted then return
+		asAType then throw ParseError.barePrimitiveType(String.from(tok.value), line: tok.line, column: tok.column)
+		asACastTarget then throw ParseError.barePrimitiveCastTarget(String.from(tok.value), line: tok.line, column: tok.column)
+	end 'position'
+end 'requireNotABarePrimitive'
 
 // ⛔⛔ **AN UNRESOLVED MEMBER ON A PRIMITIVE IS REFUSED *HERE* WHEN THE QUALIFIER IS COMPILER-OWNED — AND
 // THE ASYMMETRY WITH `byte.` IS DERIVED, NOT CHOSEN.**
@@ -14092,7 +14202,7 @@ export type Parser
 					// The helper RETURNS the parameter's declared type, so the default expression is typed and
 					// range-checked against exactly what the parameter demands, by the ordinary `return` rules.
 					self.pos = typeStart
-					let paramType = try self.parseTypeReference() otherwise 'malformedType'
+					let paramType = try self.parseTypeReference(BarePrimitiveVoice.asAType) otherwise 'malformedType'
 						self.pos = resume
 						return
 					end 'malformedType'
@@ -17222,7 +17332,7 @@ export type Parser
 		self.pos = typeStart
 		// TOLERANT for `foldDeclaredSignaturesInto`'s reason: a type this reader cannot make sense of is the
 		// REAL parse's to report, with a position, and a sweep that vetoed would reject a correct program.
-		let swept = try self.parseTypeReference() otherwise sharedUnreadParamType
+		let swept = try self.parseTypeReference(BarePrimitiveVoice.asAType) otherwise sharedUnreadParamType
 		self.pos = saved
 		return swept
 	end 'sweptParamTypeAt'
@@ -19580,7 +19690,7 @@ export type Parser
 		// FIELD now carves out two slots for it (`Project.fieldSlotCount`), so it is the one declared place
 		// with somewhere to put both halves. The annotation's first token went with the call — nothing else
 		// anchored a diagnostic on it.
-		let fieldType = try self.parseTypeReference()
+		let fieldType = try self.parseTypeReference(BarePrimitiveVoice.asAType)
 
 		if not self.at(TokenKind.equals) 'noDefault'
 			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.none, declaredSurface: declaredSurface)
@@ -20321,7 +20431,7 @@ export type Parser
 		// no nominal identity — a `Pair` reference resolves straight through to the tuple's `structRef` — so
 		// `requireTypeNameNotCompilerOwned` does not apply to it either.
 		if self.at(TokenKind.leftParen) 'tupleAlias'
-			let tupleType = try self.parseTupleTypeReference()
+			let tupleType = try self.parseTupleTypeReference(BarePrimitiveVoice.admitted)
 			let target = try self.artifact.typeNames.nameOf(typeNameIdOf(tupleType)) otherwise panic("readTypeAliasDeclaration: the tuple type just minted for this alias carries an id that is not in this file's interner — `parseTupleTypeReference` interns its name into exactly that table")
 
 			// The KEY is the caller's, never this reader's (W43) — see `TupleAliasOwner`. The tuple itself is
@@ -21150,7 +21260,7 @@ export type Parser
 		end 'nested'
 
 		let argTok = self.current()
-		let argType = try self.parseTypeReference()
+		let argType = try self.parseTypeReference(BarePrimitiveVoice.admitted)
 		try self.requireCarryableGenericArg(argType, slot: slot, position: position, argTok: argTok)
 		self.checkGenericArgType(argType, argTok: argTok, inlineElement: inlineElement)
 		nodes.push(GenericArgNode.leaf(argType))
@@ -21503,7 +21613,7 @@ export type Parser
 		var returnForDisplay = MaxonReturnType.void
 		if self.at(TokenKind.returns) 'hasReturn'
 			let returnsTok = try self.consume(TokenKind.returns)
-			let returnType = try self.parseTypeReference()
+			let returnType = try self.parseTypeReference(BarePrimitiveVoice.admitted)
 			if recordSignature 'realParse'
 				// The RETURN half of this position, and since the return ABI landed it is its OWN position:
 				// a declared function's return now WRITES the second register, and a call through a function
@@ -21540,7 +21650,7 @@ export type Parser
 		if self.at(TokenKind.identifier) and self.peekStartsType() 'namedParam'
 			try self.consume(TokenKind.identifier)
 		end 'namedParam'
-		return try self.parseTypeReference()
+		return try self.parseTypeReference(BarePrimitiveVoice.admitted)
 	end 'readFunctionTypeParam'
 
 	// True when the token ONE past the cursor can BEGIN a type reference — an identifier (a named type
@@ -22608,7 +22718,7 @@ export type Parser
 		// Taken before the reader moves, because that is the only moment the WRITTEN form is in hand.
 		let firstTok = self.current()
 		let start = self.pos
-		let identity = renderDeclaredTypeName(try self.parseTypeReference(), declarationName: self.enclosingType, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
+		let identity = renderDeclaredTypeName(try self.parseTypeReference(BarePrimitiveVoice.admitted), declarationName: self.enclosingType, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
 
 		if spelling == ConformanceArgSpelling.identity 'theComparableIdentity'
 			return identity
@@ -23846,7 +23956,7 @@ export type Parser
 			// ROOT keeps asking, because `ProgramSignatures.payloadSurfaceOf` ORs in the complementary
 			// derivation; see `declaredSurfaceAt`.
 			let declaredSurface = self.declaredSurfaceAt(self.pos, slotElementsFromAliases: false)
-			let fieldType = try self.parseTypeReference()
+			let fieldType = try self.parseTypeReference(BarePrimitiveVoice.asAType)
 			try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.unionPayload, line: typeTok.line, column: typeTok.column)
 			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType, declaredSurface: declaredSurface))
 
@@ -25511,7 +25621,7 @@ export type Parser
 	// supplies anything here, and names the one construct that does.
 	function parameterTypeOrHinted(hint ClosureParamTypeHint, nameTok Token) returns MaxonType throws ParseError
 		if not (self.at(TokenKind.comma) or self.at(TokenKind.rightParen)) 'declaredType'
-			return try self.parseTypeReference()
+			return try self.parseTypeReference(BarePrimitiveVoice.asAType)
 		end 'declaredType'
 
 		match hint 'hinted'
@@ -26413,7 +26523,7 @@ export type Parser
 			return MaxonReturnType.void
 		end 'noReturns'
 		try self.consume(TokenKind.returns)
-		return MaxonReturnType.value(try self.parseTypeReference())
+		return MaxonReturnType.value(try self.parseTypeReference(BarePrimitiveVoice.asAType))
 	end 'parseOptionalReturnType'
 
 	// The `throws E` clause that follows a function's return type (P1.4b). `E` is a bare enum name — a
@@ -26621,12 +26731,12 @@ export type Parser
 	// A wrong REJECTION of a correct program, never a wrong answer, and the program it rejects is
 	// `struct-return` — still `disabled-test:`, deferred to P1.4's ownership ruling, which is what
 	// a struct crossing a call boundary needs before it can be right for any other reason.
-	function parseTypeReference() returns MaxonType throws ParseError
+	function parseTypeReference(voice BarePrimitiveVoice) returns MaxonType throws ParseError
 		// A TUPLE TYPE (P1.10) — `(Integer, Integer)`. Asked first because `(` opens nothing else in a type
 		// position: the one other parenthesized type form, `function(…)`, is introduced by its own keyword and
 		// is read by `readFunctionTypeAlias` before this is ever reached.
 		if self.at(TokenKind.leftParen) 'tupleType'
-			return try self.parseTupleTypeReference()
+			return try self.parseTupleTypeReference(voice)
 		end 'tupleType'
 
 		if self.at(TokenKind.selfType) 'selfType'
@@ -26964,18 +27074,32 @@ export type Parser
 
 			return MaxonType.named(self.artifact.typeNames.intern(name))
 		end 'named'
-		if self.at(TokenKind.int) 'primInt'
-			try self.consume(TokenKind.int)
-			return MaxonType.integer
-		end 'primInt'
+		// ⭐⭐ **THE RANGED-TYPEALIAS RULE'S ONE DOOR.** `int` and `float` name a DOMAIN and no RANGE, and every
+		// reader shv2 has asks a ranged alias for its bounds — so outside the positions `voice` admits, the
+		// keyword must travel through a named alias. `docs/LANGUAGE_REFERENCE.md:438` has said so since long
+		// before shv2 enforced it, and the oracle has enforced it at every type position all along; shv2
+		// checked only ONE position (a generic type argument, E2061) and let the keyword through everywhere
+		// else. `stdlib/` — compiled BY the oracle — has zero violations; `specs-shv2`, authored against the
+		// unenforced compiler, had ~1200.
+		//
+		// **ONE ARM FOR BOTH SPELLINGS**, where this replaced two: the set is then written once and no later
+		// edit can give the guard to `int` and not to `float`.
+		//
+		// ⚠ **`bool` AND `cstring` KEEP THEIR OWN ARMS BELOW, AND THAT SEPARATION IS WHAT SAYS THE RULE DOES
+		// NOT REACH THEM.** `bool` is already a constrained type with nothing to range. `cstring` mints
+		// `MaxonType.integer` — the same tag a bare `int` does — so this rule can only ever be asked of the
+		// TOKEN; see `keywordIsARangedPrimitive`'s header for what a tag-side spelling would cost.
+		if keywordIsARangedPrimitive(self.current()) 'aBareRangedPrimitive'
+			let tok = self.current()
+			try requireNotABarePrimitive(tok, voice: voice)
+			self.advance()
+
+			return MaxonType.float if tok.kind == TokenKind.float else MaxonType.integer
+		end 'aBareRangedPrimitive'
 		if self.at(TokenKind.bool) 'primBool'
 			try self.consume(TokenKind.bool)
 			return MaxonType.boolean
 		end 'primBool'
-		if self.at(TokenKind.float) 'primFloat'
-			try self.consume(TokenKind.float)
-			return MaxonType.float
-		end 'primFloat'
 		// ⭐⭐ **`cstring` — A NUL-TERMINATED BYTE POINTER, AND IT RESOLVES TO A MACHINE WORD RATHER THAN TO A
 		// TAG OF ITS OWN.** The Lexer has carried the keyword since P1.2 (its help text already tells an author
 		// to *"produce one with `String.cstr()` or `__ManagedMemory.toCString()`"*) while `parseTypeReference`
@@ -46250,7 +46374,7 @@ export type Parser
 			// `parseTypeReference` returns the cursor is past it. (For a two-token `Wrapper.Idx` target
 			// this is the first of the two, which is the one the reference blames.)
 			let targetTok = self.current()
-			let targetType = try self.parseTypeReference()
+			let targetType = try self.parseTypeReference(BarePrimitiveVoice.asACastTarget)
 			current = try self.applyCast(current, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: currentIsBareLocal)
 			currentIsBareLocal = false
 		end 'cast'
@@ -49258,7 +49382,7 @@ export type Parser
 	function parseSizeof() returns ValueId throws ParseError
 		let sizeofTok = try self.consume(TokenKind.sizeof)
 		try self.consume(TokenKind.leftParen)
-		let operand = self.resolveNamedStruct(try self.parseTypeReference())
+		let operand = self.resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted))
 		try self.consume(TokenKind.rightParen)
 
 		if maxonTypeTag(operand) == ValueTypeTag.typeParameter 'runtimeSize'
@@ -49364,7 +49488,7 @@ export type Parser
 	function parseCountof() returns ValueId throws ParseError
 		let countofTok = try self.consume(TokenKind.countof)
 		try self.consume(TokenKind.leftParen)
-		let operand = self.resolveNamedStruct(try self.parseTypeReference())
+		let operand = self.resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted))
 		try self.consume(TokenKind.rightParen)
 
 		// ⚠ **A COUNT IS A COORDINATE OF THE INSTANCE, SO ONLY AN INSTANCE CAN HAVE ONE.** A primitive, a
@@ -49507,14 +49631,14 @@ export type Parser
 	//
 	// Both element reads come through this one function so the first element and the rest cannot come to be
 	// checked differently, which is the shape the loop above already had for `parseTypeReference`.
-	function readTupleElementType() returns MaxonType throws ParseError
+	function readTupleElementType(voice BarePrimitiveVoice) returns MaxonType throws ParseError
 		let anchor = self.tokenAt(self.pos)
-		let element = try self.parseTypeReference()
+		let element = try self.parseTypeReference(voice)
 		try self.requireStorableDeclaredType(element, position: DeclaredStoragePosition.tupleElement, line: anchor.line, column: anchor.column)
 		return element
 	end 'readTupleElementType'
 
-	function parseTupleTypeReference() returns MaxonType throws ParseError
+	function parseTupleTypeReference(voice BarePrimitiveVoice) returns MaxonType throws ParseError
 		let openTok = try self.consume(TokenKind.leftParen)
 		// ⚠ `()` is not the empty tuple — shv2 has no unit type, and `void` is not a `MaxonType`
 		// (`MaxonReturnType.void` carries it). Reported before the element loop so the message names the
@@ -49524,10 +49648,10 @@ export type Parser
 		end 'emptyTuple'
 
 		var elements = MaxonTypeArray.create()
-		elements.push(try self.readTupleElementType())
+		elements.push(try self.readTupleElementType(voice))
 		while self.at(TokenKind.comma) 'eachElement'
 			try self.consume(TokenKind.comma)
-			elements.push(try self.readTupleElementType())
+			elements.push(try self.readTupleElementType(voice))
 		end 'eachElement'
 		try self.consume(TokenKind.rightParen)
 
@@ -61887,8 +62011,19 @@ export type Parser
 	// not in it. `named` is its answer for every name it does not own, which is exactly what
 	// `maxonTypeOfTag`'s `named` arm rebuilds from this file's interned id — and the intern is paid only on
 	// that answer, never for a builtin whose type carries no name at all.
+	// ⛔⛔ **THE RETURN COLUMN'S HALF OF THE FLOAT-ALIAS HOLE — the twin of `renderedTypeNameAbiType`'s, and it
+	// had to be fixed with it.** `builtinTypeNameTag` answers `named` for a ranged FLOAT alias, and a `named`
+	// result is read as an i64, so an interface method `returns Real` captured its result out of the INTEGER
+	// return register while the impl left it in XMM0. Invisible while `returns float` could be written bare;
+	// the ranged-typealias rule makes the alias the ONLY legal spelling, which is what put the hole on the
+	// only road left.
+	//
+	// ⚠ **IT FLOAT-RESOLVES AND NOTHING ELSE**, so the `named` identity a ranged INT alias carries — the
+	// range and the signedness the VALUE column reads off its name — survives exactly as this function's
+	// header insists it must. `floatResolvedTagOfName` is the one statement of that asymmetry; asking it here
+	// is what keeps the interface door and the two cast doors from answering it differently.
 	function interfaceReturnMaxonType(returnTypeName ByteArray) returns MaxonType
-		let tag = builtinTypeNameTag(returnTypeName)
+		let tag = self.floatResolvedTagOfName(builtinTypeNameTag(returnTypeName), name: returnTypeName)
 		return maxonTypeOfTag(tag, nameId: UnnamedTypeId if tag != ValueTypeTag.named else self.artifact.typeNames.intern(returnTypeName))
 	end 'interfaceReturnMaxonType'
 
@@ -71211,7 +71346,28 @@ export type Parser
 	function applyConstCast(value ConstValue) returns ConstValue throws ConstEvalError
 		let asTok = self.current()
 		try self.consumeConstToken(TokenKind.as)
-		if self.at(TokenKind.identifier) or self.at(TokenKind.int) or self.at(TokenKind.bool) or self.at(TokenKind.float) 'targetType'
+
+		// ⭐⭐ **THE RANGED-TYPEALIAS RULE'S SECOND CAST DOOR.** This walk is a SEPARATE token scan — a
+		// transient `Parser` with no artifact and no interner — so it cannot call `parseTypeReference`,
+		// which interns and records a type-name use. It therefore asks the same predicate and raises the
+		// same variant at the same anchor instead, which is the only thing that makes `let X = 5 as int`
+		// and `x as int` one mistake rather than two verdicts decided by whether the `let` was top-level.
+		//
+		// ⚠ **THE ORACLE STILL HAS THAT SPLIT AND IT IS FIXED IN THIS SAME CHANGE** — its
+		// `ApplyConstAsCasts` (`2-Parser.cs:7072`) accepts the bare keyword as an identity cast while its
+		// `ParseTypeKeyword` refuses it, so the bootstrap compiled `let X = 5 as int` and refused the body
+		// spelling. Asked BEFORE `recordConstInitializerTypeName`, so a refused keyword is not first
+		// recorded as an alias mention it never was.
+		if keywordIsARangedPrimitive(self.current()) 'aBareRangedPrimitiveCastTarget'
+			let bareTok = self.current()
+			try requireNotABarePrimitive(bareTok, voice: BarePrimitiveVoice.asACastTarget) otherwise (err) 'refused'
+				throw ConstEvalError.defective(err)
+			end 'refused'
+		end 'aBareRangedPrimitiveCastTarget'
+
+		// ⚠ `int`/`float` are gone from this set — the guard above owns them now — but `bool` stays,
+		// because `bool` is a legal bare cast target in both compilers (it has no range to name).
+		if self.at(TokenKind.identifier) or self.at(TokenKind.bool) 'targetType'
 			let targetTok = self.current()
 			self.advance()
 			// This walk is the ONLY reader of a top-level initializer's tokens — the real parse skips

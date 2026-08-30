@@ -1,28 +1,28 @@
 // Test: error.two-services-that-await-each-other-are-refused
 type A
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function ping(b B.handle) returns int
+	export function ping(b B.handle) returns Integer
 		return try await b.pong() otherwise 0
 	end 'ping'
 
-	export function ack() returns int
+	export function ack() returns Integer
 		return 1
 	end 'ack'
 end 'A'
 
 type B
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function pong() returns int
+	export function pong() returns Integer
 		return try await spawnA().ack() otherwise 0
 	end 'pong'
 end 'B'
@@ -36,6 +36,7 @@ function main() returns ExitCode
 	let b = spawn B.create()
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 CompilerError:
 error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:

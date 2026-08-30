@@ -9,14 +9,15 @@ TRIPS=4
 
 {
   echo "// loop ladder: $N loops x $FP cross-call floats"
-  echo "function scaleOpaque(a int) returns int"
+  echo "typealias LadderInt = int(i64.min to i64.max)"
+  echo "function scaleOpaque(a LadderInt) returns LadderInt"
   echo -e "\tif a > 100 'big'"
   echo -e "\t\treturn a - 100"
   echo -e "\tend 'big'"
   echo -e "\treturn a + 1"
   echo "end 'scaleOpaque'"
   echo ""
-  echo "function scaleFloatSpill(a int) returns int"
+  echo "function scaleFloatSpill(a LadderInt) returns LadderInt"
   echo -e "\tvar total = 0.0"
   i=0
   while [ "$i" -lt "$N" ]; do

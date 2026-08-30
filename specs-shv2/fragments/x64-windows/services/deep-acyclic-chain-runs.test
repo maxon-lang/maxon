@@ -1,37 +1,37 @@
 // Test: deep-acyclic-chain-runs
 type C
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 
-	export function value() returns int
+	export function value() returns Integer
 		return self.n
 	end 'value'
 end 'C'
 
 type B
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function value(next C.handle) returns int
+	export function value(next C.handle) returns Integer
 		let v = try await next.value() otherwise 0
 		return v + 10
 	end 'value'
 end 'B'
 
 type A
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function value(next B.handle, last C.handle) returns int
+	export function value(next B.handle, last C.handle) returns Integer
 		let v = try await next.value(last.clone()) otherwise 0
 		return v + 20
 	end 'value'
@@ -44,6 +44,7 @@ function main() returns ExitCode
 	let v = try await a.value(b, last: c) otherwise 0
 	return v as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 31
 ---

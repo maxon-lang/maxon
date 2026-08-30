@@ -136,7 +136,7 @@ must be recorded as dying exactly ONCE even though it appears twice in the op.
 `81·100 + 0·10 + 9 + 49 = 8100 + 0 + 9 + 49 = 8158`. (A clobbered `x` would make the tail
 `81` instead of `9`, giving 8230.)
 ```maxon
-function sameTwice(p int) returns int
+function sameTwice(p Integer) returns Integer
 	let x = p + 9
 	let y = p + 7
 	let sq = x * x
@@ -152,6 +152,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -166,11 +167,11 @@ sits on the second. The first call's result is live across the second call, so i
 additionally forced callee-saved.
 `diff(200, 137) = 63`; `chainDiff(90, 20, 5) = 90 − 20 − 5 = 65`; `63·1000 + 65 = 63065`.
 ```maxon
-function diff(a int, b int) returns int
+function diff(a Integer, b Integer) returns Integer
 	return a - b
 end 'diff'
 
-function chainDiff(a int, b int, c int) returns int
+function chainDiff(a Integer, b Integer, c Integer) returns Integer
 	return a - b - c
 end 'chainDiff'
 
@@ -181,6 +182,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -196,7 +198,7 @@ The operands are derived from a parameter so none folds to an immediate: a const
 operand lowers to a `lea` and never reaches the two-address path at all.
 `p = 0`: `a = 100`, `b..f = 1..5`; `r1..r5 = 99, 98, 97, 96, 95`, summing to 485; `+ a` = 585.
 ```maxon
-function chain(p int) returns int
+function chain(p Integer) returns Integer
 	let a = p + 100
 	let b = p + 1
 	let c = p + 2
@@ -218,6 +220,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -234,7 +237,7 @@ rather than `-(-(-x))`. The IR is the same: three `negReg` reuse-defs in a row.)
 clobbered `x` gives `(−7)·100 + 7 = −693`, which the self-check catches — a raw exit code from
 a wrong run could otherwise land on 0.
 ```maxon
-function negs(p int) returns int
+function negs(p Integer) returns Integer
 	let x = p + 7
 	let n1 = -x
 	let n2 = -n1
@@ -249,6 +252,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -269,7 +273,7 @@ lands in the loop body — still correct, but a golden mismatch.
 `p = 0`: `a = 20`, `b = 5`; the loop runs `i = 0, 1, 2` giving `b = 15, 5, 15`; `k1..k11 = 1..11`
 sum to 66. So `15 + 66 = 81`.
 ```maxon
-function loopReuse(p int) returns int
+function loopReuse(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -298,6 +302,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -332,11 +337,11 @@ register demand equal to the demand the pressure model counted.
 `p = 0`: `a = 100`, `b = 50`, `d = 50`; `k1..k12 = 1..12` sum to 78; `s = sink(78) = 78`. So
 `50 + 78 = 128`.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function tight(p int) returns int
+function tight(p Integer) returns Integer
 	let a = p + 100
 	let b = p + 50
 	let k1 = p + 1
@@ -364,6 +369,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

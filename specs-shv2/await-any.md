@@ -332,7 +332,7 @@ typealias ReplyPromise = Promise with (Integer, ServiceError)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 type Slow
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -345,7 +345,7 @@ type Slow
 end 'Slow'
 
 type Quick
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}

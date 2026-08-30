@@ -71,11 +71,12 @@ fi
 UNITS=$(( SITES / SITES_PER_UNIT ))
 
 {
+  echo "typealias LadderInt = int(i64.min to i64.max)"
   printf '// ladder: %s call site(s) in %s unit(s) of %s, mode %-8s\n' \
     "$SITES" "$UNITS" "$SITES_PER_UNIT" "$MODE"
   echo ""
 
-  echo "function scaleOpaque(a int) returns int"
+  echo "function scaleOpaque(a LadderInt) returns LadderInt"
   echo -e "\tif a > 100 'big'"
   echo -e "\t\treturn a - 100"
   echo -e "\tend 'big'"
@@ -85,7 +86,7 @@ UNITS=$(( SITES / SITES_PER_UNIT ))
 
   u=0
   while [ "$u" -lt "$UNITS" ]; do
-    printf 'function u%06d(s int) returns int\n' "$u"
+    printf 'function u%06d(s LadderInt) returns LadderInt\n' "$u"
     echo -e "\tvar acc = 0"
     j=0
     while [ "$j" -lt "$SITES_PER_UNIT" ]; do

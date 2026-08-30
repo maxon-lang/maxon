@@ -81,7 +81,7 @@ used once in the loop (their own update), so they rank first (cheapest to hoist 
 array); the counter `i`, read by all sixteen updates plus the condition plus its own
 increment, ranks last. Each value points at its declaration's source span.
 ```maxon
-function hot(_ int) returns int
+function hot(_ Integer) returns Integer
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -124,6 +124,7 @@ end 'hot'
 function main() returns ExitCode
 	return hot(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E5001: the loop at <fragment>:21 needs 3 more register(s) than are available
@@ -160,7 +161,7 @@ error E5001: the loop at <fragment>:21 needs 3 more register(s) than are availab
 <!-- targets: arm64-macos, arm64-linux -->
 arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), not x64's 14, so an overflow needs more live values than `hot-loop-overflow`. Twenty-eight accumulators `s1`..`s28` are all updated every iteration, plus the counter `i`, plus the loop condition's materialized boolean — arm64 lowers `i < N` to `cmp`+`cset` into a GPR, where x64 fuses `cmp`+`jcc` and materializes nothing — so thirty values are live at the loop header against a pool of twenty-six. The deficit is exactly 4 (30 − 26), reported against the FULL arm64 pool, and each accumulator points at its declaration span.
 ```maxon
-function hot(_ int) returns int
+function hot(_ Integer) returns Integer
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -227,6 +228,7 @@ end 'hot'
 function main() returns ExitCode
 	return hot(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E5001: the loop at <fragment>:32 needs 4 more register(s) than are available
@@ -296,7 +298,7 @@ No arm64 twin, and that is MEASURED rather than a missing golden: arm64 allocate
 seventeen live values fit and the same source compiles there (`--target=arm64-macos`, verified). The
 pool is the subject, exactly as this file's header says.
 ```maxon
-function parseFlags(argc int) returns int
+function parseFlags(argc Integer) returns Integer
 	var f0 = 0
 	var f1 = 0
 	var f2 = 0
@@ -353,6 +355,7 @@ end 'parseFlags'
 function main() returns ExitCode
 	return parseFlags(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E5001: the loop at <fragment>:21 needs 3 more register(s) than are available
@@ -404,11 +407,11 @@ a spilled value's branch-edge args are repointed at the reload alongside its op 
 
 `sink(i) = i`, so each `sk` accumulates `0+1+2+3+4 = 10`: `s1..s5 = 11,12,13,14,15`, summing to 65.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function hotCall(_ int) returns int
+function hotCall(_ Integer) returns Integer
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -430,6 +433,7 @@ end 'hotCall'
 function main() returns ExitCode
 	return hotCall(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 65
@@ -443,7 +447,7 @@ splitter stores the sixteen idle values around the loop. The loop body stays exa
 `sum = sum + i; i = i + 1` with NOTHING added (verify in the fragment: the `loop` block is
 two `lea`s and a `jmp`). No E5001. Result is `sum(0..4)=10 + sum(1..16)=136 = 146`.
 ```maxon
-function rescued(p int) returns int
+function rescued(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -472,6 +476,7 @@ end 'rescued'
 function main() returns ExitCode
 	return rescued(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 146
@@ -487,7 +492,7 @@ entry, ValueId 0), yet it must NOT trip the Rule-3 "compiler-introduced value" p
 resolved to its DECLARATION span in the signature (`<fragment>:2:14` — the `p` token) through
 the `ParamOriginTable`. It ranks first (used once in the loop); the counter `i` ranks last.
 ```maxon
-function hot(p int) returns int
+function hot(p Integer) returns Integer
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -524,6 +529,7 @@ end 'hot'
 function main() returns ExitCode
 	return hot(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E5001: the loop at <fragment>:18 needs 1 more register(s) than are available
@@ -575,11 +581,11 @@ cold-spillable, so the re-relief arm cannot reach it: `hot-loop-overflow`, `hot-
 other loop case above still raise E5001, byte for byte. What changed is only the case the cost argument never
 covered — straight-line code, where there is no iteration and no per-iteration cost.
 ```maxon
-function sink(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int, p7 int, p8 int, p9 int, p10 int, p11 int, p12 int, p13 int, p14 int, p15 int, p16 int, p17 int, p18 int, p19 int, p20 int, p21 int) returns int
+function sink(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer, p7 Integer, p8 Integer, p9 Integer, p10 Integer, p11 Integer, p12 Integer, p13 Integer, p14 Integer, p15 Integer, p16 Integer, p17 Integer, p18 Integer, p19 Integer, p20 Integer, p21 Integer) returns Integer
 	return p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 + p21
 end 'sink'
 
-function wide(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int, p7 int, p8 int, p9 int, p10 int, p11 int, p12 int, p13 int, p14 int, p15 int, p16 int, p17 int, p18 int, p19 int, p20 int, p21 int) returns int
+function wide(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer, p7 Integer, p8 Integer, p9 Integer, p10 Integer, p11 Integer, p12 Integer, p13 Integer, p14 Integer, p15 Integer, p16 Integer, p17 Integer, p18 Integer, p19 Integer, p20 Integer, p21 Integer) returns Integer
 	let a = sink(p1, p2: p2, p3: p3, p4: p4, p5: p5, p6: p6, p7: p7, p8: p8, p9: p9, p10: p10, p11: p11, p12: p12, p13: p13, p14: p14, p15: p15, p16: p16, p17: p17, p18: p18, p19: p19, p20: p20, p21: p21)
 	let b = sink(p1, p2: p2, p3: p3, p4: p4, p5: p5, p6: p6, p7: p7, p8: p8, p9: p9, p10: p10, p11: p11, p12: p12, p13: p13, p14: p14, p15: p15, p16: p16, p17: p17, p18: p18, p19: p19, p20: p20, p21: p21)
 	return a + b + p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 + p21
@@ -588,6 +594,7 @@ end 'wide'
 function main() returns ExitCode
 	return wide(1, p2: 1, p3: 1, p4: 1, p5: 1, p6: 1, p7: 1, p8: 1, p9: 1, p10: 1, p11: 1, p12: 1, p13: 1, p14: 1, p15: 1, p16: 1, p17: 1, p18: 1, p19: 1, p20: 1, p21: 1)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 63
@@ -597,7 +604,7 @@ end 'main'
 <!-- targets: arm64-macos, arm64-linux -->
 The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators, the counter, and the condition boolean it is one of twenty-nine values live against arm64's 26-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 3.
 ```maxon
-function hot(p int) returns int
+function hot(p Integer) returns Integer
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -660,6 +667,7 @@ end 'hot'
 function main() returns ExitCode
 	return hot(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E5001: the loop at <fragment>:30 needs 3 more register(s) than are available
@@ -714,7 +722,7 @@ to the `let d` literal (`<fragment>:24:11`). The remaining working set (thirteen
 plus the counter) still overflows by two, and the deficit (2) never exceeds the sixteen listed
 values. Regression for the fresh-rematerialized-id false panic.
 ```maxon
-function hot() returns int
+function hot() returns Integer
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -754,6 +762,7 @@ end 'hot'
 function main() returns ExitCode
 	return hot()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E5001: the loop at <fragment>:19 needs 2 more register(s) than are available
@@ -789,7 +798,7 @@ error E5001: the loop at <fragment>:19 needs 2 more register(s) than are availab
 <!-- targets: arm64-macos, arm64-linux -->
 The arm64 twin of `hot-loop-rematerialized-constant`: a constant the loop uses (`let d`, read by `s26 = d - s26`) is REMATERIALIZED by the splitter with a fresh ValueId that has no origin of its own, and must be chased through `SplitLineage` back to the `let d` literal (`<fragment>:56:11`) rather than trip the Rule-3 panic. Twenty-six accumulators plus the counter plus the rematerialized constant overflow arm64's 26-GPR pool by two.
 ```maxon
-function hot() returns int
+function hot() returns Integer
 	var s1 = 1
 	var s2 = 2
 	var s3 = 3
@@ -853,6 +862,7 @@ end 'hot'
 function main() returns ExitCode
 	return hot()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E5001: the loop at <fragment>:30 needs 2 more register(s) than are available
@@ -916,7 +926,7 @@ It really is one of the eighteen, and that is the point of keeping it in the set
 anchored at its def would land inside the first loop's body — the placement Rule 2 forbids. Nothing
 can move it, so it holds a register across the second loop and is counted.
 ```maxon
-function hot(_ int) returns int
+function hot(_ Integer) returns Integer
 	var pad = 0
 	while pad < 3 'pad'
 		pad = pad + 1
@@ -963,6 +973,7 @@ end 'hot'
 function main() returns ExitCode
 	return hot(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E5001: the loop at <fragment>:25 needs 4 more register(s) than are available
@@ -1013,7 +1024,7 @@ happen in the outer body either way. This case is the difference between those t
 line of it is identical under a whole-function anchor, so it also pins that restricting the scan to
 the peak's own nest changed nothing for a function that has only one.
 ```maxon
-function hot(_ int) returns int
+function hot(_ Integer) returns Integer
 	var acc = 0
 	var o = 0
 	while o < 2 'outer'
@@ -1056,6 +1067,7 @@ end 'hot'
 function main() returns ExitCode
 	return hot(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E5001: the loop at <fragment>:6 needs 2 more register(s) than are available
@@ -1095,7 +1107,7 @@ The sixteen `k` values and `p` are all idle across the loop, so the splitter sto
 around it and the body stays two `lea`s and a `jmp`. It compiles and runs. Result is
 `sum(0..4)=10 + sum(1..16)=136 + p=0 = 146`.
 ```maxon
-function relievable(p int) returns int
+function relievable(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -1124,6 +1136,7 @@ end 'relievable'
 function main() returns ExitCode
 	return relievable(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 146
@@ -1138,13 +1151,14 @@ single op. Before `addOpTransientPressure` counted it, the splitter found no ove
 declared the function relieved, and `chooseRegister` then panicked with every register blocked —
 the one demand a live-set model is structurally blind to. Result is `sum(1..14) = 105`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, _ int) returns int
+function f(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, _ Integer) returns Integer
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
 end 'f'
 
 function main() returns ExitCode
 	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, _: 15)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 105
@@ -1156,13 +1170,14 @@ caught from both sides. Thirteen live parameters plus one dead materialization i
 of fourteen: it fits, nothing is split, and the fragment must show no store and no reload. Result
 is `sum(1..13) = 91`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, _ int) returns int
+function f(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, _ Integer) returns Integer
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12
 end 'f'
 
 function main() returns ExitCode
 	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, _: 14)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 91
@@ -1175,7 +1190,7 @@ live across `unused` — and `unused` itself is read by nothing. Its `lea` still
 and with no operand of its own dying there (`a1` and `a2` are both read later) there is none to
 inherit, so the point genuinely wants fifteen. Result is `sum(1..14) = 105`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int) returns int
+function f(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer) returns Integer
 	let unused = a1 + a2
 	print("{unused}")
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
@@ -1184,6 +1199,7 @@ end 'f'
 function main() returns ExitCode
 	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 105
@@ -1202,7 +1218,7 @@ FLOAT `x`: fourteen live parameters plus that dead GPR def still want fifteen GP
 dying float as "this op frees a register" put the colorer back into `chooseRegister`'s panic — the
 dead-def correction's own wrong answer, one register file over. Result is `sum(1..14) = 105`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, x float) returns int
+function f(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, x Real) returns Integer
 	let unused = trunc(x)
 	print("{unused}")
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
@@ -1211,6 +1227,8 @@ end 'f'
 function main() returns ExitCode
 	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, x: 1.5)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 105
@@ -1228,8 +1246,9 @@ against the sixteen-register float pool. A class-blind "does this op free a regi
 GPR as relief and panicked the colorer in the XMM file. Gated to x64 because it counts against x64's
 sixteen-deep float pool. Every argument is `1.0`, so the sum is `16.0`.
 ```maxon
-function g(f0 float, f1 float, f2 float, f3 float, f4 float, f5 float, f6 float, f7 float, f8 float, f9 float, f10 float, f11 float, f12 float, f13 float, f14 float, f15 float, y int) returns float
-	let unused = y as float
+typealias SmallReal = float(0.0 to 1000.0)
+function g(f0 Real, f1 Real, f2 Real, f3 Real, f4 Real, f5 Real, f6 Real, f7 Real, f8 Real, f9 Real, f10 Real, f11 Real, f12 Real, f13 Real, f14 Real, f15 Real, y Integer) returns Real
+	let unused = y as SmallReal
 	print("{unused}")
 	return f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14 + f15
 end 'g'
@@ -1237,6 +1256,8 @@ end 'g'
 function main() returns ExitCode
 	return trunc(g(1.0, f1: 1.0, f2: 1.0, f3: 1.0, f4: 1.0, f5: 1.0, f6: 1.0, f7: 1.0, f8: 1.0, f9: 1.0, f10: 1.0, f11: 1.0, f12: 1.0, f13: 1.0, f14: 1.0, f15: 1.0, y: 3))
 end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 16
@@ -1254,7 +1275,7 @@ shared pressure model rather than on the one that happened to be probed. Ungated
 program is well past the pool and the splitter relieves it cold, which is worth pinning too. The
 trailing arguments are zero so the sum fits an exit code. Result is `sum(1..20) = 210`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, a24 int, a25 int, x float) returns int
+function f(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, a14 Integer, a15 Integer, a16 Integer, a17 Integer, a18 Integer, a19 Integer, a20 Integer, a21 Integer, a22 Integer, a23 Integer, a24 Integer, a25 Integer, x Real) returns Integer
 	let unused = trunc(x)
 	print("{unused}")
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
@@ -1263,6 +1284,8 @@ end 'f'
 function main() returns ExitCode
 	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, a14: 15, a15: 16, a16: 17, a17: 18, a18: 19, a19: 20, a20: 0, a21: 0, a22: 0, a23: 0, a24: 0, a25: 0, x: 1.5)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 210
@@ -1281,7 +1304,7 @@ arm and stops, rather than charging the copy and then charging the dead def agai
 not crash, it would over-split — a store and a reload this program does not need. Result is
 `sum(1..14) = 105`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int) returns int
+function f(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer) returns Integer
 	let unused = a1 * a2
 	print("{unused}")
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
@@ -1290,6 +1313,7 @@ end 'f'
 function main() returns ExitCode
 	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 105
@@ -1308,13 +1332,14 @@ splitter relieves it cold, which is worth pinning too. The trailing arguments ar
 fits an exit code while the first twenty stay distinct — a swapped register still changes the
 answer. Result is `sum(1..20) = 210`.
 ```maxon
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, a24 int, a25 int, _ int) returns int
+function f(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, a14 Integer, a15 Integer, a16 Integer, a17 Integer, a18 Integer, a19 Integer, a20 Integer, a21 Integer, a22 Integer, a23 Integer, a24 Integer, a25 Integer, _ Integer) returns Integer
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
 end 'f'
 
 function main() returns ExitCode
 	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, a14: 15, a15: 16, a16: 17, a17: 18, a18: 19, a19: 20, a20: 0, a21: 0, a22: 0, a23: 0, a24: 0, a25: 0, _: 0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 210
@@ -1453,7 +1478,7 @@ a fix that reads one file's pool size is a fix only one file ever tests.
 `n = 4.0`, so `a0`..`a31` are `5.0`..`36.0` summing to `656.0`; `c = 657.0`; `b0`..`b7` are
 `10.0`, `12.0`, … `24.0`, summing to `136.0`. Total `793.0`.
 ```maxon
-function fsink(x float) returns float
+function fsink(x Real) returns Real
 	return x + 1.0
 end 'fsink'
 
@@ -1504,6 +1529,7 @@ function main() returns ExitCode
 	let total = b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7 + c
 	return 0 if total == 793.0 else 99
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 0
@@ -1523,7 +1549,7 @@ the confinement and nothing else.
 `n = 4.0`, so `a0`..`a15` are `5.0`..`20.0` summing to `200.0`; `c = 201.0`; `b0`..`b3` are
 `10.0`, `12.0`, `14.0`, `16.0`. Total `253.0`.
 ```maxon
-function fsink(x float) returns float
+function fsink(x Real) returns Real
 	return x + 1.0
 end 'fsink'
 
@@ -1554,6 +1580,7 @@ function main() returns ExitCode
 	let total = b0 + b1 + b2 + b3 + c
 	return 0 if total == 253.0 else 99
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 0

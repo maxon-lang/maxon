@@ -405,12 +405,13 @@ Two typealiases in one file are E3061 whichever FORM they take — the code alre
 pair (`specs/export-keyword.md`'s `error.duplicate-typealias-same-file`), and a function alias
 declared twice is the same fact: no qualification could disambiguate two declarations in one file.
 ```maxon
-typealias Handler = function() returns int
-typealias Handler = function() returns int
+typealias Handler = function() returns Integer
+typealias Handler = function() returns Integer
 
 function main() returns ExitCode
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3061: <fragment>:3:11: Duplicate typealias 'Handler'
@@ -494,12 +495,13 @@ export function useA() returns ExitCode
 end 'useA'
 
 // --- file: b.maxon
-typealias Handler = function() returns int
+typealias Handler = function() returns Integer
 
 export function useB(h Handler) returns ExitCode
 	return h() as ExitCode
 end 'useB'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	return useA()

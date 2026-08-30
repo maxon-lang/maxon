@@ -83,7 +83,7 @@ A spawned green thread's frame survives the mid-body yield: a value live across 
 `base`) is intact after the context switch back into the thread, so `base + 2` is correct.
 ```maxon
 
-function worker(base int) returns int
+function worker(base Integer) returns Integer
 	sleep(30)
 	return base + 2
 end 'worker'
@@ -93,6 +93,7 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -106,13 +107,13 @@ records its completion order into a global (`order = order * 10 + tag`), so `21`
 ```maxon
 var order = 0
 
-function slow() returns int
+function slow() returns Integer
 	sleep(100)
 	order = order * 10 + 1
 	return 1
 end 'slow'
 
-function fast() returns int
+function fast() returns Integer
 	sleep(10)
 	order = order * 10 + 2
 	return 2
@@ -125,6 +126,7 @@ function main() returns ExitCode
 	_ = await p2
 	return order as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 21
@@ -149,7 +151,7 @@ Robustness: fifty spawned threads each sleep then complete, awaited in turn. Eac
 completed — its stack must NOT be recycled while parked) then resumes and completes (stack recycled onto the
 free-list). The sum proves all fifty ran to completion with no crash, no use-after-free, and no leak.
 ```maxon
-function sleeper() returns int
+function sleeper() returns Integer
 	sleep(2)
 	return 1
 end 'sleeper'
@@ -165,6 +167,7 @@ function main() returns ExitCode
 	end 'l'
 	return sum as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 50

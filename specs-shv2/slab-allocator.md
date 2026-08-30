@@ -232,7 +232,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 typealias Round = int(0 to 255)
 
-function roundTrip(r Round) returns int
+function roundTrip(r Round) returns Integer
 	var big = ByteArray.create()
 	big.reserve(300000)
 	for i in 0 upto 512 'fill'
@@ -260,6 +260,7 @@ function main() returns ExitCode
 	end 'corrupted'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -339,7 +340,7 @@ function dirty()
 	end 'fill'
 end 'dirty'
 
-function countNonZero() returns int
+function countNonZero() returns Integer
 	let mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return 1
 	try mm.setLength(4096) otherwise return 2
 	let arr = ByteArray.init(mm)
@@ -363,6 +364,7 @@ function main() returns ExitCode
 	end 'dirtySlot'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -389,7 +391,7 @@ function build(n Len, seed Len) returns ByteArray
 	return b
 end 'build'
 
-function verify(b ByteArray, n Len, seed Len) returns int
+function verify(b ByteArray, n Len, seed Len) returns Integer
 	if b.count() != n 'length'
 		return 1
 	end 'length'
@@ -429,6 +431,7 @@ function main() returns ExitCode
 	end 'corrupted'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -540,7 +543,7 @@ function build(n Len) returns ByteArray
 	return b
 end 'build'
 
-function sweep() returns int
+function sweep() returns Integer
 	var bufs = Bufs.create()
 	for k in 0 upto SweepCount 'alloc'
 		bufs.push(build((FirstLen + k * LenStep) as Len))
@@ -575,6 +578,7 @@ function main() returns ExitCode
 	end 'secondRound'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

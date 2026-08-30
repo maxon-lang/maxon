@@ -63,13 +63,14 @@ class shipped as a silent miscompile once, and it is a running test that catches
 <!-- test: add-labelled -->
 `add(2, b: 3)` binds `2` positionally to `a` and `3` (labelled) to `b`, returning 5.
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 	return a + b
 end 'add'
 
 function main() returns ExitCode
 	return add(2, b: 3)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 5
@@ -79,13 +80,14 @@ end 'main'
 The positional argument fills the first parameter and the labelled one the second, so
 `sub(20, b: 8)` is `20 - 8` = 12 — argument ORDER is preserved through the labelling.
 ```maxon
-function sub(a int, b int) returns int
+function sub(a Integer, b Integer) returns Integer
 	return a - b
 end 'sub'
 
 function main() returns ExitCode
 	return sub(20, b: 8)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 12
@@ -94,13 +96,14 @@ end 'main'
 <!-- test: zero-arg-call -->
 A call to a parameterless function.
 ```maxon
-function answer() returns int
+function answer() returns Integer
 	return 42
 end 'answer'
 
 function main() returns ExitCode
 	return answer()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -110,13 +113,14 @@ end 'main'
 Six arguments — the full register-argument set (`rcx`, `rdx`, `rax`, `r9`, `rsi`,
 `rdi`). Their sum is 1+2+3+4+5+6 = 21.
 ```maxon
-function sum6(a int, b int, c int, d int, e int, f int) returns int
+function sum6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	return a + b + c + d + e + f
 end 'sum6'
 
 function main() returns ExitCode
 	return sum6(1, b: 2, c: 3, d: 4, e: 5, f: 6)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 21
@@ -126,17 +130,18 @@ end 'main'
 `inc(inc(inc(zero())))` — each call's result is the next call's argument. `zero()` = 7,
 then +1 three times = 10.
 ```maxon
-function zero() returns int
+function zero() returns Integer
 	return 7
 end 'zero'
 
-function inc(x int) returns int
+function inc(x Integer) returns Integer
 	return x + 1
 end 'inc'
 
 function main() returns ExitCode
 	return inc(inc(inc(zero())))
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 10
@@ -147,13 +152,14 @@ Call results feed a larger expression, `add(2, b: 3) + add(10, b: 20) * 2` = 5 +
 65. The first call's result is live ACROSS the second call, so it lands in a callee-saved
 register.
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 	return a + b
 end 'add'
 
 function main() returns ExitCode
 	return add(2, b: 3) + add(10, b: 20) * 2
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 65
@@ -163,7 +169,7 @@ end 'main'
 Recursive `factorial(5)` = 120. The parameter `n` is live across the recursive call
 (`n * factorial(n - 1)`), so it is preserved in a callee-saved register across the call.
 ```maxon
-function factorial(n int) returns int
+function factorial(n Integer) returns Integer
 	if n <= 1 'base'
 		return 1
 	end 'base'
@@ -173,6 +179,7 @@ end 'factorial'
 function main() returns ExitCode
 	return factorial(5)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 120
@@ -182,7 +189,7 @@ end 'main'
 `fib(10)` = 55 — two recursive calls, where the first call's result is live across the
 second (`fib(n - 1) + fib(n - 2)`).
 ```maxon
-function fib(n int) returns int
+function fib(n Integer) returns Integer
 	if n <= 1 'base'
 		return n
 	end 'base'
@@ -192,6 +199,7 @@ end 'fib'
 function main() returns ExitCode
 	return fib(10)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 55
@@ -203,11 +211,11 @@ live across the call. It cannot stay in a caller-saved register — the allocato
 it into a callee-saved register the function push/pops. `compute(5)` = add(5, 100) + 5 =
 110.
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 	return a + b
 end 'add'
 
-function compute(n int) returns int
+function compute(n Integer) returns Integer
 	let y = add(n, b: 100)
 	return n + y
 end 'compute'
@@ -215,6 +223,7 @@ end 'compute'
 function main() returns ExitCode
 	return compute(5)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 110
@@ -229,11 +238,11 @@ be colored onto `c`'s incoming register (`rax`) — otherwise `a`'s capture woul
 `a` captured into a non-argument register (`rsi`), leaving `rax` intact for `c`'s capture.
 `combine(10, b: 20, c: 30)` computes `diff(20, y: 10)` = 10, then `+ c` = 10 + 30 = 40.
 ```maxon
-function diff(x int, y int) returns int
+function diff(x Integer, y Integer) returns Integer
 	return x - y
 end 'diff'
 
-function combine(a int, b int, c int) returns int
+function combine(a Integer, b Integer, c Integer) returns Integer
 	let r = diff(b, y: a)
 	return r + c
 end 'combine'
@@ -241,6 +250,7 @@ end 'combine'
 function main() returns ExitCode
 	return combine(10, b: 20, c: 30)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 40
@@ -252,7 +262,7 @@ live across the call — each is colored to a callee-saved register and push/pop
 with nothing added inside the loop but the argument move and the call. Sum of `dbl(i)`
 for `i = 1..4` is 2+4+6+8 = 20.
 ```maxon
-function dbl(x int) returns int
+function dbl(x Integer) returns Integer
 	return x + x
 end 'dbl'
 
@@ -265,6 +275,7 @@ function main() returns ExitCode
 	end 'loop'
 	return sum
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 20
@@ -274,7 +285,7 @@ end 'main'
 A call may stand alone as a statement, its result discarded. `noop(5)` runs for effect
 (none here); the program returns 0.
 ```maxon
-function noop(x int) returns int
+function noop(x Integer) returns Integer
 	return x
 end 'noop'
 
@@ -282,6 +293,7 @@ function main() returns ExitCode
 	noop(5)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -290,13 +302,14 @@ end 'main'
 <!-- test: first-arg-named -->
 The first argument is positional — a label on it is E2052.
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 	return a + b
 end 'add'
 
 function main() returns ExitCode
 	return add(a: 2, b: 3)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2052: <fragment>:7:13: the first argument cannot be named; only the second and later arguments take 'name:' labels
@@ -305,13 +318,14 @@ error E2052: <fragment>:7:13: the first argument cannot be named; only the secon
 <!-- test: second-arg-unnamed -->
 The second and later arguments must be labelled — a bare value there is E2053.
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 	return a + b
 end 'add'
 
 function main() returns ExitCode
 	return add(2, 3)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2053: <fragment>:7:16: the second and later arguments must be named ('name: value')
@@ -320,13 +334,14 @@ error E2053: <fragment>:7:16: the second and later arguments must be named ('nam
 <!-- test: arity-mismatch -->
 The argument count must match the callee's parameter count — E3036.
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 	return a + b
 end 'add'
 
 function main() returns ExitCode
 	return add(2)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3036: <fragment>:7:9: 'add' expects 2 argument(s) but 1 were provided
@@ -346,13 +361,14 @@ error E3004: <fragment>:3:9: call to undefined function 'frobnicate'
 <!-- test: unknown-label -->
 A `name:` label that matches no parameter is E3037.
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 	return a + b
 end 'add'
 
 function main() returns ExitCode
 	return add(2, zzz: 3)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3037: <fragment>:7:16: 'add' has no parameter named 'zzz'

@@ -354,7 +354,7 @@ is neither a String to promote nor an aggregate to refuse. The merge must DEFER 
 analysis reports the real `E3004`, never a parser panic. (Twin of the ternary regression guard:
 the shared `promoteBorrowedGive` must not crash on an unresolved give.)
 ```maxon
-function pick(x int, c bool) returns String
+function pick(x Integer, c bool) returns String
 	return match c 'm'
 		true gives "{x}"
 		default gives undefinedThing()
@@ -365,6 +365,7 @@ function main() returns ExitCode
 	let s = pick(5, c: true)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3004: specs/fragments/match-owned-value-flow/gives-owned-string-arm-undeclared-call.test:5:17: call to undefined function 'undefinedThing'

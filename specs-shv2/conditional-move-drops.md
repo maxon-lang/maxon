@@ -87,7 +87,7 @@ sensitive drops the field-consume's move flag persisted onto the fall-through pa
 type Named
 	export var name as String
 
-	static function create(f String, flag int) returns Named
+	static function create(f String, flag Integer) returns Named
 		if flag > 0 'g'
 			return Self{name: f}
 		end 'g'
@@ -101,6 +101,7 @@ function main() returns ExitCode
 	print("{n.name}")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

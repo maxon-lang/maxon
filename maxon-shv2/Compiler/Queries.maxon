@@ -2243,6 +2243,8 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// oracle's (2-Parser.cs:4794, :4831, :4838, :9840, :5782) — `ranged-typealias.md` and
 		// `export-keyword.md` compare this stderr exactly, in both suites.
 		bareSizedTypeAlias(typeName, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: "Bare sized type '{typeName}' is not allowed. Use explicit range syntax, e.g. 'int({typeName}.min to {typeName}.max)'", line: line, column: column, filePath: path)
+		barePrimitiveType(spelling, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: barePrimitiveTypeMessage(spelling), line: line, column: column, filePath: path)
+		barePrimitiveCastTarget(spelling, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: barePrimitiveCastMessage(spelling), line: line, column: column, filePath: path)
 		mismatchedRangeBoundTypes(low, high, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Mismatched type bounds: '{low}' and '{high}' must reference the same type", line: line, column: column, filePath: path)
 		unrepresentableIntegerRange(low, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Integer range cannot span both negative values and above i64.max: 'int({low} to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", line: line, column: column, filePath: path)
 		// Worded beside its narrowing twin (`otherwiseOutOfRangeMessage`, next to `literalOutOfRangeMessage`)

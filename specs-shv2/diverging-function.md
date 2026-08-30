@@ -206,11 +206,11 @@ Stack trace:
 A value-returning function whose last statement is a diverging call needs no `return` of its own:
 control cannot reach the end of the body. Without the fact this is `E3013 missing return statement`.
 ```maxon
-function fatal(tag int)
+function fatal(tag Integer)
 	panic("fatal {tag}")
 end 'fatal'
 
-function pick(b bool) returns int
+function pick(b bool) returns Integer
 	if b 'y'
 		return 6
 	end 'y'
@@ -220,6 +220,7 @@ end 'pick'
 function main() returns ExitCode
 	return pick(true) * 7
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -233,7 +234,7 @@ entered, so the dead tail is reached by nothing and `main` answers on the false 
 would panic the compiler at `emitTerminator`, and `return 7` below is a second one unless the dead
 block after the diverging call is a fresh block of its own.
 ```maxon
-function fatal(tag int)
+function fatal(tag Integer)
 	panic("fatal {tag}")
 end 'fatal'
 
@@ -244,6 +245,7 @@ function main() returns ExitCode
 	end 'never'
 	return 3
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 3
@@ -280,7 +282,7 @@ back in main
 above it, so it returns on that path. Its result is discarded here — a bare-call statement is a
 legal position for a value-returning function — and control must continue past it.
 ```maxon
-function maybeFatal(b bool) returns int
+function maybeFatal(b bool) returns Integer
 	if b 'y'
 		return 5
 	end 'y'
@@ -292,6 +294,7 @@ function main() returns ExitCode
 	print("back in main\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -373,7 +376,7 @@ The analysis asks nothing about a body's CALLEES, so a function that calls itsel
 round a loop and cannot conclude divergence by circular reasoning. This one recurses to a bottom
 that panics, and it is recognized on its own tail alone.
 ```maxon
-function fatal(n int)
+function fatal(n Integer)
 	if n > 0 'more'
 		fatal(n - 1)
 	end 'more'
@@ -384,6 +387,7 @@ function main() returns ExitCode
 	print("descending\n")
 	fatal(2)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 1

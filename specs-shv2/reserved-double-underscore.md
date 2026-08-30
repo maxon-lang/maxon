@@ -101,12 +101,13 @@ error E2051: specs/fragments/reserved-double-underscore/function-parameter.test:
 <!-- test: type-declaration -->
 ```maxon
 type __Hidden
-	export var x as int
+	export var x as Integer
 end '__Hidden'
 
 function main() returns ExitCode
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2051: specs/fragments/reserved-double-underscore/type-declaration.test:2:6: identifier '__Hidden' is reserved: declarations starting with '__' are reserved for compiler internals
@@ -115,13 +116,14 @@ error E2051: specs/fragments/reserved-double-underscore/type-declaration.test:2:
 <!-- test: type-field -->
 ```maxon
 type Point
-	export var __x as int
-	export var y as int
+	export var __x as Integer
+	export var y as Integer
 end 'Point'
 
 function main() returns ExitCode
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2051: specs/fragments/reserved-double-underscore/type-field.test:3:13: identifier '__x' is reserved: declarations starting with '__' are reserved for compiler internals

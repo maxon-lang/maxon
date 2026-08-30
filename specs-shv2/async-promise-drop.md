@@ -41,7 +41,7 @@ seed stack freed and its struct reclaimed, and `__gt_live_count` balances to zer
 `main`'s own code (0), not the GT-leak abort (75). Before #88 this spawn leaked its struct + stack silently.
 ```maxon
 
-function trivial() returns int
+function trivial() returns Integer
 	Runtime.yield()
 	return 0
 end 'trivial'
@@ -50,6 +50,7 @@ function main() returns ExitCode
 	_ = async trivial()
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -63,12 +64,12 @@ completion). `await b` drives the FIFO run queue and runs `a` to completion; `re
 completed-but-un-awaited `a`. The awaited sibling's result (20) is intact, and the live count balances to zero.
 ```maxon
 
-function ten() returns int
+function ten() returns Integer
 	Runtime.yield()
 	return 10
 end 'ten'
 
-function twenty() returns int
+function twenty() returns Integer
 	Runtime.yield()
 	return 20
 end 'twenty'
@@ -78,6 +79,7 @@ function main() returns ExitCode
 	let b = async twenty()
 	return (await b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 20
@@ -91,7 +93,7 @@ scheduled and the global stays 0. The drop cancels the never-run thread; it does
 ```maxon
 var flag = 0
 
-function incFlag() returns int
+function incFlag() returns Integer
 	Runtime.yield()
 	flag = 1
 	return 1
@@ -101,6 +103,7 @@ function main() returns ExitCode
 	_ = async incFlag()
 	return flag as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -115,7 +118,7 @@ drive) and its struct recycled onto the free-list, which the next spawn reuses. 
 and seed stack, invisible to `__mm_alloc_count`.
 ```maxon
 
-function trivial() returns int
+function trivial() returns Integer
 	Runtime.yield()
 	return 0
 end 'trivial'
@@ -128,6 +131,7 @@ function main() returns ExitCode
 	end 'loop'
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -143,12 +147,12 @@ the `waiting` arm removes it from the timer store, frees its stack and reclaims 
 count balances to zero.
 ```maxon
 
-function sleeper() returns int
+function sleeper() returns Integer
 	sleep(200)
 	return 99
 end 'sleeper'
 
-function fast() returns int
+function fast() returns Integer
 	Runtime.yield()
 	return 42
 end 'fast'
@@ -159,6 +163,7 @@ function main() returns ExitCode
 	let r = await q
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -181,12 +186,12 @@ the struct — with no hang (the 200 ms deadline is never waited on) and no use-
 `GtParkKindMailbox` and this exits **94** where it exits 42.
 ```maxon
 
-function sleeper() returns int
+function sleeper() returns Integer
 	sleep(200)
 	return 99
 end 'sleeper'
 
-function fast() returns int
+function fast() returns Integer
 	Runtime.yield()
 	return 42
 end 'fast'
@@ -199,6 +204,7 @@ function main() returns ExitCode
 	let s = await p
 	return (r + s - 42) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -214,15 +220,15 @@ NOT double-drop the awaited one. `pick(1)` returns 7 (awaited); `pick(0)` return
 sum is 7, and the live count balances to zero across both calls (no GT-leak abort 75).
 ```maxon
 
-function compute() returns int
+function compute() returns Integer
 	Runtime.yield()
 	return 7
 end 'compute'
 
-function pick(x int) returns int
+function pick(x Integer) returns Integer
 	let p = async compute()
 	if x > 0 'branch'
-		return (await p) as int
+		return (await p)
 	end 'branch'
 	return 0
 end 'pick'
@@ -232,6 +238,7 @@ function main() returns ExitCode
 	let b = pick(0)
 	return (a + b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -246,11 +253,11 @@ the WAIT, do not kill the child), swaps the entry out and frees the stack. The a
 independently; the program exits promptly with 42 and the live count balances to zero.
 ```maxon
 
-function slowProc() returns int
+function slowProc() returns Integer
 	return try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
 end 'slowProc'
 
-function fast() returns int
+function fast() returns Integer
 	Runtime.yield()
 	return 42
 end 'fast'
@@ -261,6 +268,7 @@ function main() returns ExitCode
 	let r = await q
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -274,7 +282,7 @@ scope exit — the live count balances to zero (exit 0). Before the fix the loop
 unmarked, so the re-arm saw no live thread to drop) and the scope-exit drop misrouted to `__mm_decref` on a GT
 pointer, corrupting the heap count (exit 101).
 ```maxon
-function trivial() returns int
+function trivial() returns Integer
 	Runtime.yield()
 	return 0
 end 'trivial'
@@ -288,6 +296,7 @@ function main() returns ExitCode
 	end 'loop'
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -299,7 +308,7 @@ Re-arming a promise `var` in ONE ARM OF A BRANCH is likewise not phi-blind (Find
 merges the re-armed thread and the untouched one, both marked promises, so the scope-exit drop cancels whichever
 the taken path holds — balanced on every path (exit 0). Before the fix this exited 101.
 ```maxon
-function trivial() returns int
+function trivial() returns Integer
 	Runtime.yield()
 	return 0
 end 'trivial'
@@ -315,6 +324,7 @@ function main() returns ExitCode
 	end 'b'
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -328,7 +338,7 @@ merge phi is recognised as a promise, and its awaited result type is recovered b
 accounted for (the original dropped at the re-arm, the re-armed one awaited). Before the fix `await p` on the
 phi was rejected E2015 ("not a promise").
 ```maxon
-function seven() returns int
+function seven() returns Integer
 	Runtime.yield()
 	return 7
 end 'seven'
@@ -345,6 +355,7 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -359,7 +370,7 @@ and awaited result type are recovered by tracing the phi's incoming `async` call
 result (5), every intermediate thread dropped and the live count balanced. Before #88 the phi-carried promise
 was rejected E2015 ("not a promise") at the `await`.
 ```maxon
-function five() returns int
+function five() returns Integer
 	Runtime.yield()
 	return 5
 end 'five'
@@ -373,6 +384,7 @@ function main() returns ExitCode
 	end 'loop'
 	return (await p) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 5
@@ -385,7 +397,7 @@ reclaim freed memory — a use-after-free E3100 cannot catch (it is not a double
 miscompile. (`double-await-alias-outlives-rebind` stays E3100 because there the thread is AWAITED before the
 re-arm, so the re-arm drops nothing.)
 ```maxon
-function compute() returns int
+function compute() returns Integer
 	return 7
 end 'compute'
 
@@ -396,6 +408,7 @@ function main() returns ExitCode
 	let r = await q
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:9:2: Unsupported: cannot re-arm the promise binding ('p'): its green thread is still named by an alias, so dropping it here would leave that alias dangling — `await` through one name before re-arming
@@ -408,7 +421,7 @@ Once a promise's thread has been AWAITED, its binding owns nothing, so reassigni
 binding owes nothing) nor use-after-move (a scalar binding is always readable), so `return p` is 5. Before the
 fix this was wrongly rejected E2015.
 ```maxon
-function nine() returns int
+function nine() returns Integer
 	Runtime.yield()
 	return 9
 end 'nine'
@@ -420,6 +433,7 @@ function main() returns ExitCode
 	p = 5
 	return p as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 5

@@ -378,7 +378,7 @@ each drop it once and the box is freed exactly once. This case used to pin the b
 whose sentence deferred the copy to "P1.4b" — a milestone that had already shipped.
 ```maxon
 union Boxed
-	one(v int)
+	one(v Integer)
 	two(s String)
 
 	export function giveBack() returns Boxed
@@ -394,6 +394,7 @@ function main() returns ExitCode
 		two then return 1
 	end 'k'
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 3
@@ -402,9 +403,9 @@ end 'main'
 <!-- test: error.static-method-on-a-union -->
 ```maxon
 union Shape
-	circle(r int)
+	circle(r Integer)
 
-	export static function unit() returns int
+	export static function unit() returns Integer
 		return 1
 	end 'unit'
 end 'Shape'
@@ -412,6 +413,7 @@ end 'Shape'
 function main() returns ExitCode
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:5:9: Unsupported: a `static function` on `union Shape` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)
@@ -422,7 +424,7 @@ error E2015: <fragment>:5:9: Unsupported: a `static function` on `union Shape` (
 enum Color
 	red
 
-	export static function best() returns int
+	export static function best() returns Integer
 		return 1
 	end 'best'
 end 'Color'
@@ -430,6 +432,7 @@ end 'Color'
 function main() returns ExitCode
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:5:9: Unsupported: a `static function` on `enum Color` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)
@@ -448,7 +451,7 @@ union Outcome
 		end 'p'
 	end 'isPass'
 
-	export function weight() returns float
+	export function weight() returns Real
 		return 2.5
 	end 'weight'
 end 'Outcome'
@@ -463,6 +466,7 @@ function main() returns ExitCode
 	end 'w'
 	return 2
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 7
@@ -473,14 +477,14 @@ end 'main'
 enum Order
 	alpha
 
-	export function bump() returns int
+	export function bump() returns Integer
 		return 1
 	end 'bump'
 
 	omega
 end 'Order'
 
-function tagOf(k Order) returns int
+function tagOf(k Order) returns Integer
 	return match k 'w'
 		alpha gives 1
 		omega gives 5
@@ -491,6 +495,7 @@ function main() returns ExitCode
 	let e = Order.omega
 	return tagOf(e) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 5
@@ -502,7 +507,7 @@ enum Weird
 	alpha
 	function
 
-	export function mid() returns int
+	export function mid() returns Integer
 		var total = 0
 		while total < 2 'spin'
 			total = total + 1
@@ -513,17 +518,17 @@ enum Weird
 	end
 	export
 
-	export function two() returns int
+	export function two() returns Integer
 		return 20
 	end 'two'
 
-	export function three() returns int
+	export function three() returns Integer
 		return 30
 	end 'three'
 
 	omega
 
-	export function tag() returns int
+	export function tag() returns Integer
 		return match self 'w'
 			alpha gives 1
 			function gives 2
@@ -552,6 +557,7 @@ function main() returns ExitCode
 	end 'badTwo'
 	return 7
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -564,11 +570,11 @@ enum Sib
 	end
 	omega
 
-	export function outer() returns int
+	export function outer() returns Integer
 		return inner() + 1
 	end 'outer'
 
-	export function inner() returns int
+	export function inner() returns Integer
 		return 6
 	end 'inner'
 end 'Sib'
@@ -577,6 +583,7 @@ function main() returns ExitCode
 	let a = Sib.alpha
 	return a.outer() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -588,20 +595,20 @@ enum Sib
 	alpha
 	while
 
-	export function outer() returns int
+	export function outer() returns Integer
 		return helper() + 1
 	end 'outer'
 end 'Sib'
 
 type Later
-	export var n as int
+	export var n as Integer
 
-	export function helper() returns int
+	export function helper() returns Integer
 		return 99
 	end 'helper'
 end 'Later'
 
-function helper() returns int
+function helper() returns Integer
 	return 6
 end 'helper'
 
@@ -609,6 +616,7 @@ function main() returns ExitCode
 	let a = Sib.alpha
 	return a.outer() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -667,11 +675,11 @@ enum Plat
 	alpha
 
 #if testing(true)
-	export function tag() returns int
+	export function tag() returns Integer
 		return 3
 	end 'tag'
 #else
-	export function tag() returns int
+	export function tag() returns Integer
 		return 7
 	end 'tag'
 #endif
@@ -686,6 +694,7 @@ function main() returns ExitCode
 		omega then return p.tag() as ExitCode
 	end 'k'
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -696,7 +705,7 @@ end 'main'
 enum Plat
 	alpha
 
-	export function tag() returns int
+	export function tag() returns Integer
 #if testing(true)
 		return 3
 #else
@@ -714,6 +723,7 @@ function main() returns ExitCode
 		omega then return p.tag() as ExitCode
 	end 'k'
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7

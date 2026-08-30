@@ -416,7 +416,7 @@ error E3104: <fragment>:3:16: this construct is x64-windows only at this rung: '
 A user's own function is not whitelisted, so the crossing is the call INSIDE it — code the user can
 actually change — rather than `main`'s call to the helper or anything in `stdlib/`.
 ```maxon
-function reader() returns int
+function reader() returns Integer
 	return Clock.nowMs()
 end 'reader'
 
@@ -427,6 +427,7 @@ function main() returns ExitCode
 	end 'chk'
 	return 5
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3104: <fragment>:3:15: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
@@ -439,13 +440,14 @@ called, so no path from `main` crosses into the whitelist and the program compil
 unchanged. This is the byte-neutrality guarantee stated as a run — attributing the refusal to the
 caller must not turn an untaken crossing into a refusal.
 ```maxon
-function reader() returns int
+function reader() returns Integer
 	return Clock.nowMs()
 end 'reader'
 
 function main() returns ExitCode
 	return 4
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 4

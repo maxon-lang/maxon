@@ -148,7 +148,7 @@ that is comfortably inside every other target's pool.
 `n = fsink(3.0) = 4.0`, so `a0`..`a9` are `5.0`..`14.0` and `s = 95.0`; `c = 96.0`; the
 eight `b` values are `10.0`..`24.0`, summing to `136.0`. Total `232.0`.
 ```maxon
-function fsink(x float) returns float
+function fsink(x Real) returns Real
 	return x + 1.0
 end 'fsink'
 
@@ -177,6 +177,7 @@ function main() returns ExitCode
 	let total = b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7 + c
 	return 0 if total == 232.0 else 99
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 0

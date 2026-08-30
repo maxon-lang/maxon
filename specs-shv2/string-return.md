@@ -21,9 +21,10 @@ literal (`return "hi"`) is promoted to a fresh owned heap copy, so the caller's
 unconditional drop is always sound and never touches read-only data.
 
 ```maxon
-function build(x int) returns String
+function build(x Integer) returns String
 	return "val {x}"
 end 'build'
+typealias Integer = int(i64.min to i64.max)
 ```
 
 ## Tests

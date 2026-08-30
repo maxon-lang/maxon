@@ -38,7 +38,7 @@ that fails to drop one fails the leak gate with exit 101, so a clean exit IS the
 the point is the allocation ledger, not the text.
 
 ```maxon
-function fallthroughTrips(s String) returns int
+function fallthroughTrips(s String) returns Integer
 	var n = 0
 	for c in s 'a'
 		n = n + 1 if c == c else n
@@ -46,7 +46,7 @@ function fallthroughTrips(s String) returns int
 	return n
 end 'fallthroughTrips'
 
-function continueTrips(s String) returns int
+function continueTrips(s String) returns Integer
 	var n = 0
 	for c in s 'b'
 		n = n + 1 if c == c else n
@@ -57,7 +57,7 @@ function continueTrips(s String) returns int
 	return n
 end 'continueTrips'
 
-function breakTrips(s String) returns int
+function breakTrips(s String) returns Integer
 	var n = 0
 	for c in s 'd'
 		n = n + 1 if c == c else n
@@ -68,7 +68,7 @@ function breakTrips(s String) returns int
 	return n
 end 'breakTrips'
 
-function returnFromLoop(s String) returns int
+function returnFromLoop(s String) returns Integer
 	var n = 0
 	for c in s 'e'
 		n = n + 1 if c == c else n
@@ -79,7 +79,7 @@ function returnFromLoop(s String) returns int
 	return n
 end 'returnFromLoop'
 
-function discardTrips(s String) returns int
+function discardTrips(s String) returns Integer
 	var n = 0
 	for _ in s 'f'
 		n = n + 1
@@ -100,6 +100,7 @@ function main() returns ExitCode
 	end 'wrongTotal'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -359,7 +360,7 @@ Before the element carried its owned-heap provenance, the reassignment saw a bor
 (a second allocation per trip) and left the original with no owner: exit 101.
 
 ```maxon
-function reassignInLoop(s String) returns int
+function reassignInLoop(s String) returns Integer
 	var n = 0
 	var found = 'é'
 	for c in s 'each'
@@ -390,6 +391,7 @@ function main() returns ExitCode
 	print("\nt={t}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -591,7 +593,7 @@ clone is `__str_clone`, and while the identical literal into a struct FIELD was 
 ```maxon
 typealias CharArray = Array with Character
 
-function build(s String) returns int
+function build(s String) returns Integer
 	var a = CharArray.create()
 	a.push('é')
 	for c in s 'each'
@@ -610,6 +612,7 @@ function main() returns ExitCode
 	print("{t}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

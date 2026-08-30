@@ -233,7 +233,7 @@ between a ladder and the `add` that reads it would overwrite the constant, givin
 SUM rather than a crash. `p = 0`: `k1`..`k30` are `1`..`30` (sum 465), and the four wide
 values are `1000000007`, `1000000009`, `2000000011` and `2000000013` (sum 6000000040). Total 6000000505.
 ```maxon
-function pressure(p int) returns int
+function pressure(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -279,6 +279,7 @@ function main() returns ExitCode
 	end 'total'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

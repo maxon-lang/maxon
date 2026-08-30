@@ -253,9 +253,9 @@ v2none
 <!-- test: owned-struct-in-block -->
 ```maxon
 type Box
-	var v as int
+	var v as Integer
 
-	static function create(v int) returns Box
+	static function create(v Integer) returns Box
 		return Self{v: v}
 	end 'create'
 end 'Box'
@@ -270,6 +270,7 @@ function main() returns ExitCode
 	end 'loop'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

@@ -458,9 +458,9 @@ one question rather than a guarantee.
 <!-- test: immutable-rebind-on-assign-is-a-second-name -->
 ```maxon
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -473,6 +473,7 @@ function main() returns ExitCode
 	print("{p.x}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -490,9 +491,9 @@ writes a box `p` no longer owns.
 <!-- test: field-store-after-move-on-assign -->
 ```maxon
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -504,6 +505,7 @@ function main() returns ExitCode
 	p.x = 99
 	return q.x
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3102: <fragment>:14:2: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
@@ -602,9 +604,9 @@ and the leak gate would fire (exit 101).
 <!-- test: struct-move-drop-skip -->
 ```maxon
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -614,6 +616,7 @@ function main() returns ExitCode
 	let q = p
 	return q.x
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -687,9 +690,9 @@ returned the moved struct's field: a latent use-after-free once the new owner dr
 <!-- test: field-read-after-move -->
 ```maxon
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -699,6 +702,7 @@ function main() returns ExitCode
 	let q = p
 	return p.x
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3102: <fragment>:13:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
@@ -715,9 +719,9 @@ observable wrong answer for a program shv2 must reject.
 <!-- test: field-store-after-move -->
 ```maxon
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -728,6 +732,7 @@ function main() returns ExitCode
 	p.x = 99
 	return q.x
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3102: <fragment>:13:2: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
@@ -741,13 +746,13 @@ as receiver. The receiver is a use of `p`, so it is rejected at the base before 
 <!-- test: method-call-after-move -->
 ```maxon
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 
-	function getX() returns int
+	function getX() returns Integer
 		return x
 	end 'getX'
 end 'Point'
@@ -757,6 +762,7 @@ function main() returns ExitCode
 	let q = p
 	return p.getX()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3102: <fragment>:17:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
@@ -773,9 +779,9 @@ not a stale one.
 <!-- test: reassign-revives-then-field-store -->
 ```maxon
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -788,6 +794,7 @@ function main() returns ExitCode
 	p.x = 5
 	return p.x
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 5
@@ -805,13 +812,13 @@ use-after-move guard fires ONLY when the base binding is moved-from. Reads back 
 <!-- test: field-access-on-live-struct -->
 ```maxon
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 
-	function getX() returns int
+	function getX() returns Integer
 		return x
 	end 'getX'
 end 'Point'
@@ -821,6 +828,7 @@ function main() returns ExitCode
 	p.x = 0
 	return p.getX()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

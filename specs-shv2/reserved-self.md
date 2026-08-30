@@ -27,13 +27,14 @@ If you need a name that suggests "this thing," pick `me`, `it`, `instance`, or a
 ### Free-function parameter named `self` is rejected
 Function parameter parsing accepts keyword-shaped tokens as names, so the rejection happens in the semantic-name check (`E2051`), not the lexer.
 ```maxon
-function configure(self int) returns ExitCode
+function configure(self Integer) returns ExitCode
 	return 0
 end 'configure'
 
 function main() returns ExitCode
 	return configure(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2051: specs/fragments/reserved-self/function-param-named-self.test:2:20: identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code

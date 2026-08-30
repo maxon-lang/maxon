@@ -61,11 +61,11 @@ every argument register and must be captured out to a non-argument one; `f` (inc
 dies at the FIRST move and may keep its own register.
 `reverse6(1,2,3,4,5,6)` → `digits6(6,5,4,3,2,1)` = `600000 + 50000 + 4000 + 300 + 20 + 1` = 654321.
 ```maxon
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function reverse6(a int, b int, c int, d int, e int, f int) returns int
+function reverse6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	return digits6(f, p2: e, p3: d, p4: c, p5: b, p6: a)
 end 'reverse6'
 
@@ -76,6 +76,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -89,11 +90,11 @@ decompose into, so every argument register is both a source and a destination of
 overwritten, which is the ONLY reason a naive in-order emit is legal at all.
 `rotate6(1,2,3,4,5,6)` → `digits6(2,3,4,5,6,1)` = `200000 + 30000 + 4000 + 500 + 60 + 1` = 234561.
 ```maxon
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function rotate6(a int, b int, c int, d int, e int, f int) returns int
+function rotate6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	return digits6(b, p2: c, p3: d, p4: e, p5: f, p6: a)
 end 'rotate6'
 
@@ -104,6 +105,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -124,11 +126,11 @@ physical DEF of `mov rdx, d`. Drop that one edge and `b` silently becomes `d`.
 `100000 + 40000 + 2000 + 600 + 50 + 3` = 142653. (The clobber above yields 144653 — one digit,
 and a raw exit code would never have shown it.)
 ```maxon
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function shuffle6(a int, b int, c int, d int, e int, f int) returns int
+function shuffle6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	return digits6(a, p3: b, p6: c, p2: d, p5: e, p4: f)
 end 'shuffle6'
 
@@ -139,6 +141,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -154,11 +157,11 @@ argument registers.
 `flip6(1, 20, 3, 30, 2, 40)` calls `mix6(40, 2, 30, 3, 20, 1)`:
 `40 − 2·2 + 30·3 − 3·4 + 20·5 − 1·6` = `40 − 4 + 90 − 12 + 100 − 6` = 208.
 ```maxon
-function mix6(a int, b int, c int, d int, e int, f int) returns int
+function mix6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	return a - b * 2 + c * 3 - d * 4 + e * 5 - f * 6
 end 'mix6'
 
-function flip6(a int, b int, c int, d int, e int, f int) returns int
+function flip6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	return mix6(f, b: e, c: d, d: c, e: b, f: a)
 end 'flip6'
 
@@ -169,6 +172,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -186,11 +190,11 @@ memory across the call, a fresh reload after.
 `keepAll(1..6)`: `digits6(6,5,4,3,2,1) = 654321`, plus the originals re-encoded as `123456`, so
 `654321 + 123456 = 777777`.
 ```maxon
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function keepAll(a int, b int, c int, d int, e int, f int) returns int
+function keepAll(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	let r = digits6(f, p2: e, p3: d, p4: c, p5: b, p6: a)
 	return r + a * 100000 + b * 10000 + c * 1000 + d * 100 + e * 10 + f
 end 'keepAll'
@@ -202,6 +206,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -218,11 +223,11 @@ to callee-saved.
 `divPermute(1..6)`: `sum = 21`, `q = 21 / 2 = 10` (2·10 = 20); `digits6(6,5,4,3,2,1) = 654321`;
 `654321 + 10 = 654331`.
 ```maxon
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function divPermute(a int, b int, c int, d int, e int, f int) returns int
+function divPermute(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	let sum = a + b + c + d + e + f
 	let q = sum / 2
 	let r = digits6(f, p2: e, p3: d, p4: c, p5: b, p6: a)
@@ -236,6 +241,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -250,7 +256,7 @@ file entirely, while `p2`..`p5` each die exactly one move before their own regis
 `rot(1,2,3,4,5, n:3)` → `rot(2,3,4,5,1, n:2)` → `rot(3,4,5,1,2, n:1)` → `rot(4,5,1,2,3, n:0)` →
 base: `4·10000 + 5·1000 + 1·100 + 2·10 + 3` = 45123.
 ```maxon
-function rot(p1 int, p2 int, p3 int, p4 int, p5 int, n int) returns int
+function rot(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, n Integer) returns Integer
 	if n <= 0 'base'
 		return p1 * 10000 + p2 * 1000 + p3 * 100 + p4 * 10 + p5
 	end 'base'
@@ -264,6 +270,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

@@ -431,9 +431,9 @@ type Cache
 	end 'get'
 end 'Cache'
 
-function deepThenRead(n int) returns int
+function deepThenRead(n Integer) returns Integer
 	if n == 0 'base'
-		return Cache.get() as int
+		return Cache.get()
 	end 'base'
 	return deepThenRead(n - 1)
 end 'deepThenRead'
@@ -446,6 +446,7 @@ function main() returns ExitCode
 	print("{r} {s}")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

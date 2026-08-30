@@ -1,0 +1,133 @@
+// Test: the-typealias-rhs-admits-the-keyword
+typealias Small = int(0 to 100)
+typealias IntOp = function(n int) returns int
+typealias Pair = (int, int)
+
+function dbl(n Small) returns Small
+	return n + n
+end 'dbl'
+
+function apply(f IntOp, p Pair, flag bool) returns Small
+	return f(p.0) + p.1 if flag else 0
+end 'apply'
+
+function main() returns ExitCode
+	let p = (3, 4)
+	return apply(dbl, p: p, flag: true)
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @dbl(n: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov rdx, 100
+    x64.cmp rcx, rdx
+    x64.jg dbl.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl dbl.__range_panic_0
+    x64.jmp dbl.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbp-8]
+    x64.add rbx, rsi
+    x64.xor esi, esi
+    x64.mov rdi, 100
+    x64.cmp rbx, rdi
+    x64.jg dbl.__range_panic_1
+    x64.cmp rbx, rsi
+    x64.jl dbl.__range_panic_1
+    x64.jmp dbl.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @apply(f: i64, __env_f: i64, p: i64, flag: i1) -> u8 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], r8
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-24], rcx
+    x64.mov [rbp-32], r9
+    x64.mov r10, rcx
+    x64.mov rcx, rbx
+    x64.call r10
+    x64.mov rcx, [rbp-32]
+    x64.test rcx, rcx
+    x64.mov [rbp-40], rax
+    x64.je apply.ternary_0.false
+  ternary_0.true:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.jmp apply.ternary_0.merge
+  ternary_0.false:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp apply.ternary_0.merge
+  ternary_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-40]
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov rbx, 100
+    x64.cmp rcx, rbx
+    x64.jg apply.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl apply.__range_panic_0
+    x64.jmp apply.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 3
+    x64.mov rcx, 4
+    x64.mov [rbp-16], rax
+    x64.mov [rbp-8], rcx
+    x64.lea_func rdx, [dbl]
+    x64.lea rbx, [rbp-16]
+    x64.mov rsi, rbx
+    x64.mov rcx, rdx
+    x64.mov r8, rsi
+    x64.xor edx, edx
+    x64.mov r9, 1
+    x64.call apply
+    x64.xor edi, edi
+    x64.mov r8, 4294967295
+    x64.cmp rax, r8
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rdi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -412,11 +412,11 @@ parameter is special.
 ```maxon
 typealias Ratio = float(0.0 to 1.0)
 
-function widen(x float) returns float
+function widen(x Real) returns Real
   return x * 4.0
 end 'widen'
 
-function scale(r Ratio) returns float
+function scale(r Ratio) returns Real
   return r * 100.0
 end 'scale'
 
@@ -424,6 +424,7 @@ function main() returns ExitCode
   let big = widen(0.5)
   return trunc(scale(big))
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 1

@@ -216,7 +216,7 @@ splitter stores several of them in the PREHEADER and reloads them after the loop
 `loop` body stays exactly `sum = sum + i; i = i + 1`, with no spill code. Result is
 `sum(0..3)=6 + sum(1..15)=120 = 126`.
 ```maxon
-function idleAcrossLoop(p int) returns int
+function idleAcrossLoop(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -244,6 +244,7 @@ end 'idleAcrossLoop'
 function main() returns ExitCode
 	return idleAcrossLoop(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 126
@@ -254,7 +255,7 @@ Eighteen live values with no loop: depth-0 Belady eviction stores the values use
 furthest in the future and reloads each right before its use. Result is
 `sum(1..18) = 171`.
 ```maxon
-function straightLine(p int) returns int
+function straightLine(p Integer) returns Integer
 	let a1 = p + 1
 	let a2 = p + 2
 	let a3 = p + 3
@@ -279,6 +280,7 @@ end 'straightLine'
 function main() returns ExitCode
 	return straightLine(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 171
@@ -291,7 +293,7 @@ its limit. Instead of spilling it, the splitter REMATERIALIZES it: the fragment
 re-emits `movRegImm32 …, 7` right before the `idiv`, with NO stack slot for it. Result
 is `sum(1..14)/7 = 105/7 = 15`.
 ```maxon
-function rematConstant(p int) returns int
+function rematConstant(p Integer) returns Integer
 	let c = 7
 	let a1 = p + 1
 	let a2 = p + 2
@@ -314,6 +316,7 @@ end 'rematConstant'
 function main() returns ExitCode
 	return rematConstant(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 15
@@ -329,7 +332,7 @@ leave the reloaded value spanning the peak, so pressure would never drop and the
 not converge — the bug this guards.) With `p = 0`: `a1 = 1`, `w = 1`, `peak = (1+2+…+15) + 1 =
 121`, `z = 1 + 121 = 122`.
 ```maxon
-function usedBeforeAndAfter(p int) returns int
+function usedBeforeAndAfter(p Integer) returns Integer
 	let a1 = p + 1
 	let w = a1 + p
 	let b1 = p + 1
@@ -355,6 +358,7 @@ end 'usedBeforeAndAfter'
 function main() returns ExitCode
 	return usedBeforeAndAfter(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 122
@@ -368,11 +372,11 @@ caller-saved` and spills one value ACROSS the call: a `storeSlotReg` BEFORE the 
 `loadRegSlot` AFTER it, with nothing added inside any loop. Without this the colorer would run out
 of callee-saved registers and panic. `caller(0) = (1+2+3+4+5+6) + sink(0) = 21 + 0 = 21`.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function caller(p int) returns int
+function caller(p Integer) returns Integer
 	let a1 = p + 1
 	let a2 = p + 2
 	let a3 = p + 3
@@ -386,6 +390,7 @@ end 'caller'
 function main() returns ExitCode
 	return caller(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 21
@@ -400,7 +405,7 @@ found as the peak and one value crossing it is spilled. Without the transient in
 the function would enter the splitter loop yet find no raw peak, and panic. `p = 0`: `a = 100`,
 `rhs = 50`, `d = 50`, and `(2+3+…+13) + d + a = 90 + 50 + 100 = 240`.
 ```maxon
-function reuseTransientOverflow(p int) returns int
+function reuseTransientOverflow(p Integer) returns Integer
 	let a = p + 100
 	let b1 = p + 2
 	let b2 = p + 3
@@ -423,6 +428,7 @@ end 'reuseTransientOverflow'
 function main() returns ExitCode
 	return reuseTransientOverflow(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 240
@@ -438,7 +444,7 @@ a wrong value (the historical multi-peak miscompile computed ≈ 226 here) retur
 instead. (The self-check avoids the exit-code's mod-256 wrap: `382 & 0xFF` is `126`, which
 would masquerade as a plausible direct exit code.)
 ```maxon
-function f(p int) returns int
+function f(p Integer) returns Integer
 	let a = p + 100
 	let b1 = p + 1
 	let b2 = p + 2
@@ -480,6 +486,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -490,7 +497,7 @@ end 'main'
 (`u1`, `u2`, `u3`), so its reload lineage is split three times — once per peak. `s1 = s2 =
 s3 = 91`, `u1 = u2 = u3 = 191`, `f(0) = 573`; `main` returns `0` iff correct.
 ```maxon
-function f(p int) returns int
+function f(p Integer) returns Integer
 	let a = p + 100
 	let b1 = p + 1
 	let b2 = p + 2
@@ -547,6 +554,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -558,7 +566,7 @@ between and after each — so the splitter maintains two separate reload lineage
 each split around both peaks. `u1 = a + s1 = 191`, `w1 = e + s1 = 141`, `u2 = 191`, `w2 =
 141`, `f(0) = 664`; `main` returns `0` iff correct.
 ```maxon
-function f(p int) returns int
+function f(p Integer) returns Integer
 	let a = p + 100
 	let e = p + 50
 	let b1 = p + 1
@@ -603,6 +611,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -615,11 +624,11 @@ after the peak (`u1 = a + s1`) and after the call (`u2 = a + d… + r`), so its 
 survive — or be split again — across the call. `s1 = sum(1..14) = 105`, `u1 = 205`; `u2 =
 100 + sum(1..6) + sink(0) = 121`; `f(0) = 326`; `main` returns `0` iff correct.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function f(p int) returns int
+function f(p Integer) returns Integer
 	let a = p + 100
 	let b1 = p + 1
 	let b2 = p + 2
@@ -655,6 +664,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -676,11 +686,11 @@ refused and the peak is relieved by a forced bracket on an accumulator instead.
 `loopDivisor(1)`: `a1..a6 = 2..7`, and the loop runs for `i = 0, 1, 2` (it exits at `i = 3`,
 where `3 mod 7 = 3` is not `< 3`), leaving `a1..a6 = 8, 19, 40, 76, 133, 218` — a sum of 494.
 ```maxon
-function leaf(x int) returns int
+function leaf(x Integer) returns Integer
 	return x + 1
 end 'leaf'
 
-function loopDivisor(p int) returns int
+function loopDivisor(p Integer) returns Integer
 	let c = 7
 	var a1 = p + 1
 	var a2 = p + 2
@@ -708,6 +718,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -736,11 +747,11 @@ the store sits, so it cannot see the bug at all; the `p <= 0` call is the one th
 `m` keeps its `0`, `r = leaf(0) = 1` — giving `36 + 0 + 1 + 2 = 39`. Each is checked alone, on its own
 exit code, so either path can fail on its own.
 ```maxon
-function leaf(x int) returns int
+function leaf(x Integer) returns Integer
 	return x + 1
 end 'leaf'
 
-function edgeAnchor(p int, q int) returns int
+function edgeAnchor(p Integer, q Integer) returns Integer
 	let t = p + q
 	let a1 = p + 1
 	let a2 = p + 2
@@ -767,6 +778,7 @@ function main() returns ExitCode
 	end 'skipped'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -806,11 +818,11 @@ Sum that over any bijection σ from arms to values and the total is `Σ (2k + 11
 of six confined values to five callee-saved registers produces, and it is invisible to the sum while
 being caught by any one of the six separate checks.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function pick(k int) returns int
+function pick(k Integer) returns Integer
 	let v1 = k + 11
 	let v2 = k + 22
 	let v3 = k + 33
@@ -861,6 +873,7 @@ function main() returns ExitCode
 	end 'a6'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -885,11 +898,11 @@ value, not a search: the fragment pins one `storeSlotReg` OUTSIDE the loop and e
 
 Each iteration adds `2 × (a1+…+a6) + i` = `42 + i` to `acc`, so `i = 0, 1, 2` gives `42 + 43 + 44 = 129`.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function invariantsAcrossCall(p int) returns int
+function invariantsAcrossCall(p Integer) returns Integer
 	let a1 = p + 1
 	let a2 = p + 2
 	let a3 = p + 3
@@ -910,6 +923,7 @@ end 'invariantsAcrossCall'
 function main() returns ExitCode
 	return invariantsAcrossCall(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 129
@@ -931,11 +945,11 @@ of them ordinary eviction-point splits.
 Each iteration adds `pre + d1 + d2 + r + (a1+…+a5)` to `acc`, with `d1 = d2 = 1000 - i` and
 `pre = acc + 15`: `i = 0, 1, 2` give `acc = 2030, 4059, 6087`.
 ```maxon
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function loopConst(p int) returns int
+function loopConst(p Integer) returns Integer
 	let c = 1000
 	let a1 = p + 1
 	let a2 = p + 2
@@ -962,6 +976,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -984,7 +999,7 @@ calls no longer adds a single instruction inside the body.
 
 `work` adds 1 and each round adds `trunc(1.5) + trunc(2.5)` = 3, so `acc` runs 0 → 1 → 4 → 5 → 8.
 ```maxon
-function work(x int) returns int
+function work(x Integer) returns Integer
 	return x + 1
 end 'work'
 
@@ -998,6 +1013,7 @@ function main() returns ExitCode
 	acc = acc + trunc(a) + trunc(b)
 	return acc
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 8
@@ -1013,7 +1029,7 @@ pre-run-break cascade it carried eight stores and eight slots as well.
 
 `acc` runs 0 → 1 → 4 → 5 → 8 → 9 → 12 → 13 → 16.
 ```maxon
-function work(x int) returns int
+function work(x Integer) returns Integer
 	return x + 1
 end 'work'
 
@@ -1031,6 +1047,7 @@ function main() returns ExitCode
 	acc = acc + trunc(a) + trunc(b)
 	return acc
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 16
@@ -1061,7 +1078,7 @@ no longer reachable through a call, and `noVictimAtPeak` explains what could sti
 Each round multiplies `1.5 × 2.5` = 3.75 into `s` and `work` adds 1 to `acc`, so two rounds give
 `trunc(7.5) + 2` = 9.
 ```maxon
-function work(x int) returns int
+function work(x Integer) returns Integer
 	return x + 1
 end 'work'
 
@@ -1076,6 +1093,7 @@ function main() returns ExitCode
 	s = s + a * b
 	return trunc(s) + acc
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 9
@@ -1183,11 +1201,11 @@ there the store count stays flat as the calls double, which a per-call spill bra
 
 `bump(0)` = 1 plus `trunc(1.0) + … + trunc(10.0)` = 55, so 56.
 ```maxon
-function bump(x int) returns int
+function bump(x Integer) returns Integer
 	return x + 1
 end 'bump'
 
-function pressure(k int) returns int
+function pressure(k Integer) returns Integer
 	let a = 1.0
 	let b = 2.0
 	let c = 3.0
@@ -1208,6 +1226,7 @@ end 'pressure'
 function main() returns ExitCode
 	return pressure(0) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 56
@@ -1234,18 +1253,18 @@ as its low word — zero — and this returned 3.
 
 `leaf(0)` = 1, plus `trunc(2.0)` = 2, plus `trunc(42.5)` = 42, so 45.
 ```maxon
-function leaf(x int) returns int
+function leaf(x Integer) returns Integer
 	return x + 1
 end 'leaf'
 
-function inner(k int) returns int
+function inner(k Integer) returns Integer
 	let p = 2.0
 	var acc = k
 	acc = leaf(acc)
 	return acc + trunc(p)
 end 'inner'
 
-function outer(k int) returns int
+function outer(k Integer) returns Integer
 	let a = 42.5
 	var acc = k
 	acc = inner(acc)
@@ -1255,6 +1274,7 @@ end 'outer'
 function main() returns ExitCode
 	return outer(0) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 45
@@ -1277,11 +1297,11 @@ ldr x0, [slot] / mov x3, x0 / bl sink4`.
 `a` must be evicted, so the straight-line peak has to exceed the pool of the WIDEST target — 26
 allocatable GPRs on arm64 against x64's 14 — and 28 is the first round number past it.
 ```maxon
-function sink4(a int, b int, c int, d int) returns int
+function sink4(a Integer, b Integer, c Integer, d Integer) returns Integer
 	return a * 1000 + b * 100 + c * 10 + d
 end 'sink4'
 
-function f(p int) returns int
+function f(p Integer) returns Integer
 	let a = p + 7
 	let b1 = p + 1
 	let b2 = p + 2
@@ -1326,6 +1346,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

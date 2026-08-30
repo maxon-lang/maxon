@@ -77,7 +77,7 @@ A spawned green thread runs a child that exits 3; the thread parks on the child 
 exits, and returns the exit code, which becomes the program's exit code. The spawn succeeds, so the
 `otherwise` fallback is never taken.
 ```maxon
-function runChild() returns int
+function runChild() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 3") otherwise 99
 end 'runChild'
 
@@ -86,6 +86,7 @@ function main() returns ExitCode
 	let code = await p
 	return code as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 3
@@ -96,11 +97,11 @@ end 'main'
 Two children run in sequence (spawn, await, spawn, await) with distinct exit codes; each thread's exit code is
 read back independently and combined, proving no cross-talk between the two parked-then-resumed threads.
 ```maxon
-function childA() returns int
+function childA() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 4") otherwise 99
 end 'childA'
 
-function childB() returns int
+function childB() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 5") otherwise 99
 end 'childB'
 
@@ -111,6 +112,7 @@ function main() returns ExitCode
 	let b = await pb
 	return (a * 10 + b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 45
@@ -124,15 +126,15 @@ a multi-entry store (the path `sequence`, `spawn-loop` and `interleave` never re
 time). Each exit code is read back into its own digit, so `123` proves all three resumed independently with the
 right handle-to-thread mapping and no cross-talk.
 ```maxon
-function c1() returns int
+function c1() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 1") otherwise 99
 end 'c1'
 
-function c2() returns int
+function c2() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 2") otherwise 99
 end 'c2'
 
-function c3() returns int
+function c3() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 3") otherwise 99
 end 'c3'
 
@@ -145,6 +147,7 @@ function main() returns ExitCode
 	let r3 = await p3
 	return (r1 * 100 + r2 * 10 + r3) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 123
@@ -160,13 +163,13 @@ that blocked the single thread on the child would instead produce `12`.
 ```maxon
 var order = 0
 
-function slow() returns int
+function slow() returns Integer
 	_ = try __Builtins.runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
 	order = order * 10 + 1
 	return 1
 end 'slow'
 
-function fast() returns int
+function fast() returns Integer
 	sleep(50)
 	order = order * 10 + 2
 	return 2
@@ -179,6 +182,7 @@ function main() returns ExitCode
 	_ = await p2
 	return order as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 21
@@ -190,7 +194,7 @@ Robustness: twenty-five spawned threads each run a child that exits 1, awaited i
 (waiting, NOT completed — its stack must NOT be recycled while parked) then resumes and completes (stack recycled
 onto the free-list). The sum proves all twenty-five ran to completion with no crash, no use-after-free, and no leak.
 ```maxon
-function child() returns int
+function child() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 1") otherwise 99
 end 'child'
 
@@ -205,6 +209,7 @@ function main() returns ExitCode
 	end 'l'
 	return sum as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 25
@@ -220,7 +225,7 @@ bump-leaking ~150 bytes per call. Reuse is only correct because PROCESS_INFORMAT
 before each spawn (the failure sentinel) and the exit-code slot is re-zeroed before each `GetExitCodeProcess`
 (a clean i64 read); the `__gt_live_count` gate stays clean, so a clean exit proves the reuse leaked nothing.
 ```maxon
-function child() returns int
+function child() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 1") otherwise 99
 end 'child'
 
@@ -235,6 +240,7 @@ function main() returns ExitCode
 	end 'l'
 	return sum as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 50
@@ -286,7 +292,7 @@ error, not a fatal abort. The other sixty-four promises are still parked at scop
 (#88), so the live count balances. This is heavier than the other cases (~64 real child spawns before the overflow)
 because it is the regression test for a memory-safety guard.
 ```maxon
-function child() returns int
+function child() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 1") otherwise 88
 end 'child'
 
@@ -423,6 +429,7 @@ function main() returns ExitCode
 	_ = await p63
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 88
@@ -487,13 +494,14 @@ reachability-AWARE; this entry has no stdlib declaration to move to (see the *Do
 keeps the property at the spelling that still has it, exactly as `builtins-sleep.rejected-on-wasm-when-unreached`
 does for `__Builtins.sleep`.
 ```maxon
-function spawner() returns int
+function spawner() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 1") otherwise 9
 end 'spawner'
 
 function main() returns ExitCode
 	return 4
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3104: <fragment>:3:24: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation
@@ -509,7 +517,7 @@ four-parameter `runProcess` hit, and G17 defect 1. Target-neutral: nothing here 
 The three arguments carry 1, 2 and 4 so their SUM names exactly which of them arrived: a dropped or
 transposed label changes the total to a different, distinguishable number rather than to another 7.
 ```maxon
-function runProcess(exe int, argv int, workingDirectory int) returns int
+function runProcess(exe Integer, argv Integer, workingDirectory Integer) returns Integer
 	return exe + argv + workingDirectory
 end 'runProcess'
 
@@ -517,6 +525,7 @@ function main() returns ExitCode
 	let n = runProcess(1, argv: 2, workingDirectory: 4)
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7

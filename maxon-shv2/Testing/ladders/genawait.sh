@@ -26,14 +26,15 @@ FUNCS="$1"; IFS_N="$2"; OUT="$3"
 
 {
   echo "// ladder: $FUNCS await-bearing functions, $IFS_N two-way branches each"
-  echo "function producer(x int) returns int"
+  echo "typealias LadderInt = int(i64.min to i64.max)"
+  echo "function producer(x LadderInt) returns LadderInt"
   echo -e "\treturn x + 1"
   echo "end 'producer'"
   echo ""
 
   f=0
   while [ "$f" -lt "$FUNCS" ]; do
-    echo "function heavy$f(seed int) returns int"
+    echo "function heavy$f(seed LadderInt) returns LadderInt"
     # The promise is spawned BEFORE the branch thicket and awaited AFTER it, so the reachability
     # walk from the await has to cross every block the thicket minted. An await at the top would
     # make the walk trivial and measure nothing.

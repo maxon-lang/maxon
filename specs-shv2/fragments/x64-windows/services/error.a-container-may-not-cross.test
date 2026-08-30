@@ -1,6 +1,6 @@
 // Test: error.a-container-may-not-cross
 type Cell
-	export var n as int
+	export var n as Integer
 
 	export static function create() returns Self
 		return Self{n: 1}
@@ -10,7 +10,7 @@ end 'Cell'
 typealias CellArray = Array with Cell
 
 type Svc
-	var n as int
+	var n as Integer
 
 	static function create() returns Self
 		return Self{n: 0}
@@ -29,6 +29,7 @@ function main() returns ExitCode
 	h.take(cs)
 	return cell.n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 CompilerError:
 error E3138: <fragment>:29:9: argument `cs` of the message `Svc.take` is a container, whose elements a push increfs rather than moves — so this frame may still own what is in it (`cs`). This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it

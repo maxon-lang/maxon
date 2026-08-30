@@ -710,9 +710,32 @@ end 'namesInclude'
 // so handing it a `maxonTypeOfTag(builtinTypeNameTag(name))` crashes the compiler on `with Integer` —
 // MEASURED, twice in one afternoon, at both sites that forgot it. `valueTagToStdType` makes the identical
 // reduction for the identical reason one column over; this is that rule for a NAME rather than a tag.
-export function renderedTypeNameAbiType(name ByteArray) returns MaxonType
+// ⛔⛔ **A RANGED FLOAT ALIAS HAD TO BE ASKED FOR SEPARATELY, AND UNTIL IT WAS THIS DOOR PANICKED THE x64
+// EMITTER.** `builtinTypeNameTag` answers `named` for every name it does not own, and this collapsed all of
+// them to the machine word — which is right for `Self`, a user type and a ranged INT alias, and WRONG for the
+// one `named` type whose value lives in the other register file. MEASURED, `interface Scaled { scale(k Real)
+// returns Real }` over `typealias Real = float(f64.min to f64.max)`: `argFloatMask` cleared the argument's
+// bit, so the fused `witnessCall` declared a GPR against an impl declaring XMM and the backend died —
+// *"a register-to-register move from xmm0 to rdx crosses register files"*.
+//
+// ⭐⭐ **AND THE PREMISE THAT MADE THAT SOUND WAS FALSIFIED BY A CHANGE IN ANOTHER FILE ENTIRELY.**
+// `builtinTypeNameTag`'s header says its answer is valid *"only at a door that holds a RENDERED type name"*,
+// resting on `bool`/`int`/`float` being unreachable as a `named` reference *"because the first three are
+// KEYWORDS"*. That was true while an interface could write `scale(k float)` — and the ranged-typealias rule
+// makes the bare keyword ILLEGAL in exactly that position, so a float formal can now ONLY arrive as an alias
+// NAME. The corpus had hidden the hole by writing the keyword everywhere the rule did not yet forbid it.
+//
+// ⚠ **AN INT ALIAS IS DELIBERATELY LEFT ALONE**, and `isFloatAlias`'s own header carries the reason: `named`
+// already reads as an integer everywhere, and its NAME is what carries the range and the signedness the range
+// checks read off it. A FLOAT alias is the ONE that cannot be left overloaded, because the overloading is a
+// register file rather than a range. Same asymmetry, same reason, as `Parser.floatResolvedTagOfName`.
+export function renderedTypeNameAbiType(name ByteArray, signatures ProgramSignatures) returns MaxonType
 	let tag = builtinTypeNameTag(name)
-	return MaxonType.integer if tag == ValueTypeTag.named else maxonTypeOfTag(tag, nameId: UnnamedTypeId)
+	if tag != ValueTypeTag.named 'aBuiltinSpelling'
+		return maxonTypeOfTag(tag, nameId: UnnamedTypeId)
+	end 'aBuiltinSpelling'
+
+	return MaxonType.float if signatures.isFloatAlias(name) else MaxonType.integer
 end 'renderedTypeNameAbiType'
 
 export union AssociatedAbiBinding
@@ -761,7 +784,7 @@ end 'unreadConformanceSeed'
 let NoSourceLine = 0 as LineNumber
 let NoSourceColumn = 0 as ColumnNumber
 
-export function associatedAbiBindingOf(conformances ConformanceDeclArray, interfaceName ByteArray, position ElementCount) returns AssociatedAbiBinding
+export function associatedAbiBindingOf(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementCount) returns AssociatedAbiBinding
 	// The pre-first-match seed. It is never READ — `sawOne` gates every use — and it exists because a `var`
 	// must hold something before the walk finds the first conformer. `CompilerOwnedDeclFilePath` is the empty
 	// path the other synthesized declarations use, so the seed names no file rather than a wrong one.
@@ -800,7 +823,7 @@ export function associatedAbiBindingOf(conformances ConformanceDeclArray, interf
 		return AssociatedAbiBinding.unconformed
 	end 'nothingConforms'
 
-	return AssociatedAbiBinding.agreed(seenDecl, binding: seenBinding, declaredType: renderedTypeNameAbiType(seenBinding))
+	return AssociatedAbiBinding.agreed(seenDecl, binding: seenBinding, declaredType: renderedTypeNameAbiType(seenBinding, signatures: signatures))
 end 'associatedAbiBindingOf'
 
 // ⭐ **WHAT *ONE NAMED CONFORMER* BINDS `interfaceName`'s associated type at `position` to — the per-conformer

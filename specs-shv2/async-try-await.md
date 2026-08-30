@@ -47,7 +47,7 @@ enum WorkError implements Error
 	failed
 end 'WorkError'
 
-function mayFail(succeed bool) returns int throws WorkError
+function mayFail(succeed bool) returns Integer throws WorkError
 	Runtime.yield()
 	if succeed 'ok'
 		return 42
@@ -62,6 +62,7 @@ function main() returns ExitCode
 	let r2 = try await p2 otherwise 80
 	return (r1 + r2) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 122
@@ -76,7 +77,7 @@ enum WorkError implements Error
 	failed
 end 'WorkError'
 
-function mayFail(succeed bool) returns int throws WorkError
+function mayFail(succeed bool) returns Integer throws WorkError
 	Runtime.yield()
 	if succeed 'ok'
 		return 10
@@ -84,7 +85,7 @@ function mayFail(succeed bool) returns int throws WorkError
 	throw WorkError.failed
 end 'mayFail'
 
-function inner() returns int throws WorkError
+function inner() returns Integer throws WorkError
 	let p = async mayFail(true)
 	let result = try await p
 	return result
@@ -94,6 +95,7 @@ function main() returns ExitCode
 	let r = try inner() otherwise 0
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 10
@@ -107,7 +109,7 @@ enum WorkError implements Error
 	failed
 end 'WorkError'
 
-function succeeds() returns int throws WorkError
+function succeeds() returns Integer throws WorkError
 	Runtime.yield()
 	return 7
 end 'succeeds'
@@ -117,6 +119,7 @@ function main() returns ExitCode
 	let r = try await p otherwise panic("should not fail")
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -162,7 +165,7 @@ enum TaskError implements Error
 	crashed
 end 'TaskError'
 
-function mayFail(mode int) returns int throws TaskError
+function mayFail(mode Integer) returns Integer throws TaskError
 	Runtime.yield()
 	if mode == 0 'ok'
 		return 1
@@ -183,6 +186,7 @@ function main() returns ExitCode
 	end 'failed'
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 9
@@ -196,10 +200,10 @@ or a double-free would surface under the runtime's allocation accounting (exit 1
 scalar `int`, which the B2b error channel carries.
 ```maxon
 union WorkError implements Error
-	refused(code int)
+	refused(code Integer)
 end 'WorkError'
 
-function work(shouldFail bool) returns int throws WorkError
+function work(shouldFail bool) returns Integer throws WorkError
 	if shouldFail 'fail'
 		throw WorkError.refused(5)
 	end 'fail'
@@ -216,6 +220,7 @@ function main() returns ExitCode
 	end 'failed'
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 5
@@ -231,7 +236,7 @@ enum WorkError implements Error
 	failed
 end 'WorkError'
 
-function work(shouldFail bool) returns int throws WorkError
+function work(shouldFail bool) returns Integer throws WorkError
 	Runtime.yield()
 	if shouldFail 'fail'
 		throw WorkError.failed
@@ -252,6 +257,7 @@ function main() returns ExitCode
 	end 'failed'
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -307,11 +313,11 @@ enum BError implements Error
 	gamma
 end 'BError'
 
-function throwsA() returns int throws AError
+function throwsA() returns Integer throws AError
 	throw AError.alpha
 end 'throwsA'
 
-function caller() returns int throws BError
+function caller() returns Integer throws BError
 	let p = async throwsA()
 	let r = try await p
 	return r
@@ -321,6 +327,7 @@ function main() returns ExitCode
 	let v = try caller() otherwise 0
 	return v as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3059: <fragment>:17:10: try propagates 'AError' but enclosing function throws 'BError' — add 'otherwise' to convert
@@ -337,7 +344,7 @@ enum WorkError implements Error
 	failed
 end 'WorkError'
 
-function compute() returns int throws WorkError
+function compute() returns Integer throws WorkError
 	Runtime.yield()
 	return 42
 end 'compute'
@@ -348,6 +355,7 @@ function main() returns ExitCode
 	let b = try await p otherwise 0
 	return (a + b) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3100: <fragment>:14:14: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice

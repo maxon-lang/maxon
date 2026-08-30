@@ -81,7 +81,7 @@ Two loops one after another, each with its own counter. The second loop's blocks
 only after the first loop's exit, so nothing from one is live in the other. `i0` counts to 3 and
 `i1` counts to 3, so `3 + 3 = 6`.
 ```maxon
-function big(n int) returns int
+function big(n Integer) returns Integer
 	var i0 = 0
 	while i0 < n 'L0'
 		i0 = i0 + 1
@@ -96,6 +96,7 @@ end 'big'
 function main() returns ExitCode
 	return big(3)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 6
@@ -120,11 +121,11 @@ header carries that argument and is the one place it is made.)
 `work(x) = x + 1`, so each loop adds `1+2+3 = 6` to its accumulator over three iterations:
 `a = 1 + 6 = 7`, `b = 1 + 6 = 7`, and `total = 0 + 7 + 7 = 14`.
 ```maxon
-function work(x int) returns int
+function work(x Integer) returns Integer
 	return x + 1
 end 'work'
 
-function big(n int) returns int
+function big(n Integer) returns Integer
 	var total = 0
 	var a = 1
 	var i0 = 0
@@ -148,6 +149,7 @@ end 'big'
 function main() returns ExitCode
 	return big(3)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 14
@@ -178,11 +180,11 @@ contract, not on one loop shape.
 Per loop the accumulators start at `1..6` and finish at `7..12`, summing to `21 + 36 = 57`; two
 loops give `total = 114`.
 ```maxon
-function work(x int) returns int
+function work(x Integer) returns Integer
 	return x + 1
 end 'work'
 
-function big(n int) returns int
+function big(n Integer) returns Integer
 	var total = 0
 	var a0 = 1
 	var a1 = 2
@@ -226,6 +228,7 @@ end 'big'
 function main() returns ExitCode
 	return big(3)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 114

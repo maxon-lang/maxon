@@ -569,7 +569,7 @@ typealias L5 = (L4, int)
 typealias L6 = (L5, int)
 typealias L7 = (L6, int)
 
-function readDeep(t L7) returns int
+function readDeep(t L7) returns Integer
 	return t.0.0.0.0.0.0.0.0 + t.1
 end 'readDeep'
 
@@ -577,6 +577,7 @@ function main() returns ExitCode
 	let t = ((((((((1, 2), 3), 4), 5), 6), 7), 8), 9)
 	return (readDeep(t) + t.0.0.0.0.0.0.0.1) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 12
@@ -590,9 +591,9 @@ literal, so the struct element is an ordinary managed field and the tuple's synt
 frees it. A leak exits 101 rather than 42.
 ```maxon
 type Point
-	export let x as int
+	export let x as Integer
 
-	export static function create(x int) returns Point
+	export static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -601,6 +602,7 @@ function main() returns ExitCode
 	let t = (1, Point.create(41))
 	return t.0 + t.1.x
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -614,42 +616,42 @@ then be resolved against `A_B`'s field table, which has no `gamma`. The join use
 name can hold, so the two stay distinct. Returns 3 + 34.
 ```maxon
 type A_B
-	export let alpha as int
+	export let alpha as Integer
 
-	export static function create(alpha int) returns Self
+	export static function create(alpha Integer) returns Self
 		return Self{alpha: alpha}
 	end 'create'
 end 'A_B'
 
 type A
-	export let gamma as int
+	export let gamma as Integer
 
-	export static function create(gamma int) returns Self
+	export static function create(gamma Integer) returns Self
 		return Self{gamma: gamma}
 	end 'create'
 end 'A'
 
 type C
-	export let beta as int
+	export let beta as Integer
 
-	export static function create(beta int) returns Self
+	export static function create(beta Integer) returns Self
 		return Self{beta: beta}
 	end 'create'
 end 'C'
 
 type B_C
-	export let delta as int
+	export let delta as Integer
 
-	export static function create(delta int) returns Self
+	export static function create(delta Integer) returns Self
 		return Self{delta: delta}
 	end 'create'
 end 'B_C'
 
-function first(t (A_B, C)) returns int
+function first(t (A_B, C)) returns Integer
 	return t.0.alpha + t.1.beta
 end 'first'
 
-function second(t (A, B_C)) returns int
+function second(t (A, B_C)) returns Integer
 	return t.0.gamma * 10 + t.1.delta
 end 'second'
 
@@ -658,14 +660,17 @@ function main() returns ExitCode
 	let q = (A.create(3), B_C.create(4))
 	return first(p) + second(q)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 37
 ```
 
 <!-- test: ranged-alias-elements-are-one-tuple-type -->
-`(Num, Num)` and `(int, int)` are ONE tuple type: a tuple's identity is its elements' UNDERLYING types,
-so a ranged alias collapses to the primitive it erases to. That is what lets a caller hand a bare
+`(Num, Num)` and `(Integer, Integer)` are ONE tuple type: a tuple's identity is its elements' UNDERLYING
+types, so two ranged aliases over the same primitive collapse alike. (The bare `(int, int)` this case used
+to write is no longer a legal parameter type — a numeric domain must be declared — so the widest DECLARED
+range stands in for it, which tests the same collapse.) That is what lets a caller hand a bare
 `(10, 32)` to a `(Num, Num)` parameter. Both functions therefore read the same record and return the
 same sum, so their difference is 0.
 ```maxon
@@ -675,7 +680,7 @@ function f(t (Num, Num)) returns Num
 	return t.0 + t.1
 end 'f'
 
-function g(t (int, int)) returns int
+function g(t (Integer, Integer)) returns Integer
 	return t.0 + t.1
 end 'g'
 
@@ -683,6 +688,7 @@ function main() returns ExitCode
 	let t = (10, 32)
 	return f(t) - g(t)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -850,7 +856,7 @@ type Box uses T
 		return Self{v: v}
 	end 'create'
 
-	export function pack() returns int
+	export function pack() returns Integer
 		let t = (self.v, 1)
 		return t.1
 	end 'pack'
@@ -860,6 +866,7 @@ function main() returns ExitCode
 	let b = Box.create(5)
 	return b.pack()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 1
@@ -876,7 +883,7 @@ type Box uses T
 		return Self{v: v}
 	end 'create'
 
-	export function pack() returns int
+	export function pack() returns Integer
 		let t = (self.v, 1)
 		return t.1
 	end 'pack'
@@ -888,6 +895,7 @@ function main() returns ExitCode
 	let b = StrBox.create("hello")
 	return b.pack() + 6
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7

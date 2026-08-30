@@ -492,7 +492,7 @@ enum Fault implements Error
 	broken
 end 'Fault'
 
-function doIt(n int) throws Fault
+function doIt(n Integer) throws Fault
 	if n > 5 'big'
 		throw Fault.broken
 	end 'big'
@@ -502,6 +502,7 @@ function main() returns ExitCode
 	try doIt(9) otherwise 0
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3059: <fragment>:13:2: type mismatch: 'a void `try` (its call returns nothing) cannot take an `otherwise <value>` fallback — the success path yields no value for the fallback to stand in for; use `otherwise ignore`, an `otherwise 'block' … end`, or a single-statement `otherwise return`/`throw`'
@@ -1854,7 +1855,7 @@ end 'MathError'
 
 typealias Float = float(f64.min to f64.max)
 
-function safeRoot(n int) returns Float throws MathError
+function safeRoot(n Integer) returns Float throws MathError
 	if n < 0 'neg'
 		throw MathError.negative
 	end 'neg'
@@ -1866,6 +1867,7 @@ function main() returns ExitCode
 	let ok = try safeRoot(5) otherwise 0.0
 	return trunc(bad) + trunc(ok)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 2

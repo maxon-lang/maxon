@@ -163,7 +163,7 @@ export function ready() returns bool
 	return false
 end 'ready'
 
-function opaqueZero() returns int
+function opaqueZero() returns Integer
 	return 0
 end 'opaqueZero'
 
@@ -172,6 +172,7 @@ export function enabled() returns bool
 	return (try (1 / zero) otherwise panic("`and` did not short-circuit: enabled() was evaluated")) == 0
 end 'enabled'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: b.maxon
 function main() returns ExitCode
 	if not (ready() and enabled()) 'skipped'

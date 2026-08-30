@@ -197,7 +197,7 @@ end 'helper'
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let s = 5 as lib.from.Score
-	return (lib.from.helper() + (s as int)) as ExitCode
+	return (lib.from.helper() + s) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1031,15 +1031,17 @@ enum Boom
 	bad
 end 'Boom'
 
-export function pick() returns int throws Boom
+export function pick() returns Integer throws Boom
 	throw Boom.bad
 end 'pick'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: rootpick.maxon
-export function pick() returns int
+export function pick() returns Integer
 	return 5
 end 'pick'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let v = try pick() otherwise 0
@@ -1047,7 +1049,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: app/<fragment>:18:10: try requires a throwing function: 'pick' does not throw'
+error E3055: app/<fragment>:20:10: try requires a throwing function: 'pick' does not throw'
 ```
 
 
@@ -1098,15 +1100,17 @@ enum Boom
 	case bad
 end 'Boom'
 
-export function pick() returns int throws Boom
+export function pick() returns Integer throws Boom
 	throw Boom.bad
 end 'pick'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: beta/b.maxon
-export function pick() returns int
+export function pick() returns Integer
 	return 5
 end 'pick'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let v = try beta.pick() otherwise 0
@@ -1114,7 +1118,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-throws-is-not-inherited.test:18:10: try requires a throwing function: 'beta.pick' does not throw'
+error E3055: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-throws-is-not-inherited.test:20:10: try requires a throwing function: 'beta.pick' does not throw'
 ```
 
 

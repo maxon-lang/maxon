@@ -547,7 +547,7 @@ the first time and `a.set(0, value: n)` — an `int` into a `Byte` slot — gets
 silently missing. The golden diff is a PURE INSERTION: nothing is removed, nothing reordered, and the
 original `movRegReg rcx, r12` / `__managed_set` sequence survives verbatim under the new `__rc_ok` label.
 ```maxon
-function detachAndRead(n int) returns int
+function detachAndRead(n Integer) returns Integer
 		var a = b"hi"
 		try a.set(0, value: n) otherwise panic("test invariant: index 0 is in bounds")
 		return try a.get(0) otherwise 0
@@ -563,6 +563,7 @@ function main() returns ExitCode
 		print("{total}")
 		return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

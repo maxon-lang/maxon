@@ -541,15 +541,16 @@ declaring file of whichever `Byte` was recorded last — gets one of the two wro
 // --- file: wide.maxon
 typealias Byte = int(0 to u8.max)
 
-export function anyByte(b Byte) returns int
+export function anyByte(b Byte) returns Integer
 	var a = b"\xdf"
 	return (try a.get(0) otherwise 0) - b
 end 'anyByte'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Byte = int(0 to 100)
 
-function narrow(b Byte) returns int
+function narrow(b Byte) returns Integer
 	return b
 end 'narrow'
 
@@ -557,6 +558,7 @@ function main() returns ExitCode
 	var mine = b"\x41"
 	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 158
@@ -569,15 +571,16 @@ The half that proves the case above is not simply a lost refusal. One program, t
 // --- file: wide.maxon
 typealias Byte = int(0 to u8.max)
 
-export function anyByte(b Byte) returns int
+export function anyByte(b Byte) returns Integer
 	var a = b"\xdf"
 	return (try a.get(0) otherwise 0) - b
 end 'anyByte'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Byte = int(0 to 100)
 
-function narrow(b Byte) returns int
+function narrow(b Byte) returns Integer
 	return b
 end 'narrow'
 
@@ -585,9 +588,10 @@ function main() returns ExitCode
 	var mine = b"\xdf"
 	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:13: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+error E3005: <fragment>:19:13: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
 ```
 
 ### ⚠ A ONE-BYTE SLOT IS NOT A BYTE — the stride is what the RECORD says, the RANGE is what it does not
@@ -987,10 +991,11 @@ breaks a file that never mentions it" failure the scoping exists to end, in its 
 // --- file: wide.maxon
 typealias Byte = int(0 to 1000)
 
-export function widen(b Byte) returns int
+export function widen(b Byte) returns Integer
 	return b
 end 'widen'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	var a = b"hi"
@@ -1012,11 +1017,12 @@ instances are distinct.
 // --- file: wide.maxon
 typealias Byte = int(0 to 1000)
 
-export function widen() returns int
+export function widen() returns Integer
 	var a = b"hi"
 	return try a.get(0) otherwise 0
 end 'widen'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	return widen() as ExitCode
@@ -1042,15 +1048,16 @@ export type Holder
 		return Holder{buf: t.toByteArray()}
 	end 'ofText'
 
-	export function first() returns int
+	export function first() returns Integer
 		return try self.buf.get(0) otherwise 0
 	end 'first'
 end 'Holder'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Byte = int(0 to 1000)
 
-function widen(b Byte) returns int
+function widen(b Byte) returns Integer
 	return b
 end 'widen'
 
@@ -1058,6 +1065,7 @@ function main() returns ExitCode
 	let h = Holder.ofText("ab")
 	return (h.first() - widen(50)) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 47
@@ -1085,15 +1093,16 @@ export type Holder
 		return Holder{buf: b}
 	end 'of'
 
-	export function first() returns int
+	export function first() returns Integer
 		return try self.buf.get(0) otherwise 0
 	end 'first'
 end 'Holder'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Byte = int(0 to 1000)
 
-function widen(b Byte) returns int
+function widen(b Byte) returns Integer
 	return b
 end 'widen'
 
@@ -1102,9 +1111,10 @@ function main() returns ExitCode
 	let h = Holder.of(c.bytes())
 	return (h.first() - widen(50)) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3005: <fragment>:24:17: argument type mismatch for 'b': expected 'ByteArray', got 'Array_Byte$0_1000'
+error E3005: <fragment>:25:17: argument type mismatch for 'b': expected 'ByteArray', got 'Array_Byte$0_1000'
 ```
 
 ### The MINT is an internal spelling, and a diagnostic quotes it only when nothing else can tell two types apart
@@ -1158,7 +1168,7 @@ cannot be refused under one spelling and panic under another.
 typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
-function feed(v int) returns int
+function feed(v Integer) returns Integer
 	var made = Bytes.create()
 	made.push(v)
 	return try made.get(0) otherwise 0
@@ -1167,6 +1177,7 @@ end 'feed'
 function main() returns ExitCode
 	return feed(2000) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 1
@@ -1251,7 +1262,7 @@ function alwaysFails() returns __ManagedMemory throws FileReadError
 	throw FileReadError.notFound
 end 'alwaysFails'
 
-function sizeOf(m __ManagedMemory) returns int
+function sizeOf(m __ManagedMemory) returns Integer
 	return m.length()
 end 'sizeOf'
 
@@ -1279,6 +1290,7 @@ function main() returns ExitCode
 
 	return 0 if sizeOf(viaReturn) > 0 and sizeOf(viaReassign) > 0 and sizeOf(viaOtherwise) > 0 and sizeOf(viaMatchArm) > 0 and sizeOf(viaFieldStore.mem) > 0 else 2
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -1349,11 +1361,11 @@ to `GetCurrentDirectoryA`. The `Ints` candidate is declared FIRST, so a resolver
 typealias Integer = int(i64.min to i64.max)
 typealias Ints = Array with Integer
 
-function which(x Ints) returns int
+function which(x Ints) returns Integer
 	return 11 if x.count() >= 0 else 12
 end 'which'
 
-function which(m __ManagedMemory) returns int
+function which(m __ManagedMemory) returns Integer
 	return 37 if m.length() > 0 else 12
 end 'which'
 
@@ -1656,7 +1668,7 @@ function main() returns ExitCode
 	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
 	try buf.setLength(4) otherwise return 2
 	let raw = try buf.byteAt(0) otherwise return 3
-	return 0 if raw == 0 and takes(buf) as int == 0 else 4
+	return 0 if raw == 0 and takes(buf) == 0 else 4
 end 'main'
 ```
 ```exitcode
@@ -1894,7 +1906,7 @@ function main() returns ExitCode
 	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
 	try buf.setLength(4) otherwise return 2
 	try buf.set(0, value: 200) otherwise return 3
-	return 0 if takes(buf) as int == 200 else 1
+	return 0 if takes(buf) == 200 else 1
 end 'main'
 ```
 ```exitcode
@@ -2180,7 +2192,7 @@ function main() returns ExitCode
 	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
 	try buf.setLength(4) otherwise return 2
 	try buf.setByte(0, 223) otherwise return 3
-	return 0 if takes(buf) as int == 223 else 4
+	return 0 if takes(buf) == 223 else 4
 end 'main'
 ```
 ```exitcode

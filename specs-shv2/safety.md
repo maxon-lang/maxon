@@ -682,7 +682,7 @@ being negative: `-13 mod -5` is `-3`, the remainder taking the DIVIDEND's sign.
 ```maxon
 typealias BelowMinusOne = int(i64.min to -2)
 
-function remainder(n int, d BelowMinusOne) returns int
+function remainder(n Integer, d BelowMinusOne) returns Integer
 	return n mod d
 end 'remainder'
 
@@ -690,6 +690,7 @@ function main() returns ExitCode
 	print("r={remainder(0 - 13, d: -5)}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 r=-3

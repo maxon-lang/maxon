@@ -62,7 +62,7 @@ The read runs inside a SPAWNED green thread (`stackBase != 0`), so its resume go
 path: the completion thread re-enqueues the reading thread onto the run queue under the run-queue lock, and
 the driver dequeues and switches back into it. Exercises the lock + cross-thread `__gt_enqueue`.
 ```maxon
-function reader() returns int
+function reader() returns Integer
 	return spawnReadLine("cmd /c echo hello")
 end 'reader'
 
@@ -71,6 +71,7 @@ function main() returns ExitCode
 	let n = await r
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -83,11 +84,11 @@ the single M, the sleeper could not run. Both a parked timer and an in-flight ov
 once, so the netpoll blocks on the wake event bounded by the timer delta. The read (7 bytes) plus the
 sleeper's `1` sum to 8.
 ```maxon
-function reader() returns int
+function reader() returns Integer
 	return spawnReadLine("cmd /c echo hello")
 end 'reader'
 
-function napper() returns int
+function napper() returns Integer
 	sleep(50)
 	return 1
 end 'napper'
@@ -99,6 +100,7 @@ function main() returns ExitCode
 	let n = await r
 	return (n + a) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 8
@@ -113,11 +115,11 @@ completion through the `ioParked` abandon/drain handshake so the completion thre
 closes the read handle, and only then frees. Five in-flight drops, then one clean read (7 bytes) — a recurrence
 of the bug crashes with 0xC0000005 instead of returning 7.
 ```maxon
-function reader() returns int
+function reader() returns Integer
 	return spawnReadLine("cmd /c echo hello")
 end 'reader'
 
-function dropInFlight() returns int
+function dropInFlight() returns Integer
 	_ = async reader()
 	sleep(1)
 	return 0
@@ -132,6 +134,7 @@ function main() returns ExitCode
 	let n = spawnReadLine("cmd /c echo hello")
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7

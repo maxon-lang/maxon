@@ -1765,8 +1765,33 @@ end 'literalInRange'
 // (`rangeIsUnsigned` holds inside the shape), so the lows decide under an ordinary signed compare.
 export function rangeCoversRange(target RangedTypeAlias, source RangedTypeAlias) returns bool
 	let targetIsFloat = aliasIsFloat(target)
+	// ⛔⛔ **THIS ARM USED TO ANSWER `true` FOR EVERY int→float PAIR, WHATEVER THE FLOAT'S RANGE — SO A
+	// GENUINELY NARROWING CONVERSION WAS REPORTED AS AN UNNEEDED ONE.** It rested on *"the declared float
+	// alias is the full `float(f64.min to f64.max)` in every use"* — a statement about the aliases the CORPUS
+	// happens to declare, not about the types. Its own sibling `rangeCoversIntBounds` already declined a float
+	// target rather than inherit that premise, and said so.
+	//
+	// ⚠ **THE FULL-RANGE ANSWER IS A LANGUAGE RULE AND IS KEPT.** `docs/LANGUAGE_REFERENCE.md:414-418`:
+	// *"The compiler auto-widens at use sites, so any explicit cast must actually narrow or refine."* An
+	// int→float widening into a full-range float IS reachable without writing the cast, so writing it is
+	// redundant — and `specs/type-casting.md`'s `error.unneeded.widening-int-to-float` pins exactly that
+	// (`Integer as JsonFloat` ⇒ E3010), in the CANONICAL corpus the oracle runs. What was wrong was applying
+	// that answer to a float alias the value provably does NOT fit in.
+	//
+	// ⚠ **WHAT MADE IT WORTH FIXING NOW: the ranged-typealias rule removed the last spelling that dodged it.**
+	// While `y as float` could be written bare the source named no alias, so E3010 stayed silent and every
+	// int→float conversion was spellable. With the bare keyword refused in every type position both ends
+	// necessarily name aliases, so a blanket `true` here left NO WAY AT ALL to write an explicit int→float
+	// conversion. MEASURED on `specs-shv2/register-pressure.md`'s
+	// `dead-def-inherits-only-its-own-register-file-float`, whose whole subject is the dead XMM def a
+	// `cvtsi2sd` produces: `let unused = y as Real` ⇒ *"unneeded cast: 'Integer' already fits in 'Real'"*.
+	//
+	// ⚠ Its OTHER reader is the guard elision (`valueIsProvablyInRange`), and the narrower answer is right
+	// there too: a full-range float target still elides, while one the source overflows now takes the check it
+	// always needed. The bootstrap's twin (`TargetCoversSource`) has the un-narrowed defect and is board row
+	// **G33**, which this does not close — it fixes shv2's half, the half this change makes reachable.
 	if targetIsFloat != aliasIsFloat(source) 'crossDomain'
-		return targetIsFloat
+		return targetIsFloat and rangeIsFull(target.low, high: target.high, isFloat: true)
 	end 'crossDomain'
 
 	if targetIsFloat 'float'

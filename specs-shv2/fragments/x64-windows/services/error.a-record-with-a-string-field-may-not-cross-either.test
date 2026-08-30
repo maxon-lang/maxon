@@ -1,7 +1,7 @@
 // Test: error.a-record-with-a-string-field-may-not-cross-either
 type Holder
 	var held as String
-	var bytes as int
+	var bytes as Integer
 
 	static function create() returns Self
 		return Self{held: "", bytes: 0}
@@ -17,6 +17,7 @@ function main() returns ExitCode
 	h.keep("payload")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 CompilerError:
 error E3138: <fragment>:16:23: the state `spawn Holder.create(…)` would start the service with is a `type Holder` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it

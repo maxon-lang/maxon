@@ -40,13 +40,14 @@ The other direction is fine and needs no ceremony: every `int` is exactly repres
 ### This is the same rule as an explicit cast -- see `type-casting.md`
 
 **There is one conversion rule, and `as` does not change it.** `type-casting.md` rejects the
-explicit `5.0 as int` with the same E3009 and the same advice, and blesses the explicit
-`100 as float`. The implicit and explicit forms agree exactly, in both directions:
+explicit `5.0 as Count` (a declared int alias) with the same E3009 and the same advice, and blesses the explicit
+`100 as Real` (over a declared `typealias Real = float(...)` — the bare keyword is not a cast target).
+The implicit and explicit forms agree exactly, in both directions:
 
 | Conversion       | Explicit (`as`)          | Implicit (argument/return/assignment) |
 |------------------|--------------------------|----------------------------------------|
-| `int` -> `float` | `100 as float` -- OK     | `takeFloat(100)` -- OK                 |
-| `float` -> `int` | `5.0 as int` -- **E3009** | `takeInt(5.0)` -- **E3009**            |
+| `int` -> `float` | `100 as Real` -- OK      | `takeFloat(100)` -- OK                 |
+| `float` -> `int` | `5.0 as Count` -- **E3009** | `takeInt(5.0)` -- **E3009**          |
 
 That agreement is the point, and it was once broken: this file used to say `float` -> `int`
 truncated implicitly while `type-casting.md` rejected the identical explicit cast — so writing
@@ -307,13 +308,14 @@ same rule, exactly as `expression-to-float-param` does at the argument site.
 
 typealias Float = float(f64.min to f64.max)
 
-function widen(a int, b int) returns Float
+function widen(a Integer, b Integer) returns Float
 	return a + b
 end 'widen'
 
 function main() returns ExitCode
 	return trunc(widen(20, b: 22) + 0.5)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
@@ -325,13 +327,13 @@ compiled and RAN before the conversion existed, storing the integer's raw bytes 
 `3` read back as 1.5e-323, so `r.raw() == 3.0` was false and the program returned 7.
 ```maxon
 type Reading
-	export var value as float
+	export var value as Real
 
 	export static function make() returns Self
 		return Self{value: 3}
 	end 'make'
 
-	export function raw() returns float
+	export function raw() returns Real
 		return self.value
 	end 'raw'
 end 'Reading'
@@ -343,6 +345,7 @@ function main() returns ExitCode
 	end 'exact'
 	return 7
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 42
@@ -353,7 +356,7 @@ The same field, reached by a WRITE rather than by construction. It is the same r
 answer differently for the way the source spelled it.
 ```maxon
 type Reading
-	export var value as float = 0.0
+	export var value as Real = 0.0
 
 	export static function make() returns Self
 		return Self{}
@@ -368,6 +371,7 @@ function main() returns ExitCode
 	end 'exact'
 	return 7
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 42
@@ -377,9 +381,9 @@ end 'main'
 And the third spelling of that one write: the bare field name inside an instance method.
 ```maxon
 type Reading
-	export var value as float = 0.0
+	export var value as Real = 0.0
 
-	export function bump() returns int
+	export function bump() returns Integer
 		value = 3
 		return 0
 	end 'bump'
@@ -397,6 +401,8 @@ function main() returns ExitCode
 	end 'exact'
 	return 7
 end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 42
@@ -407,7 +413,7 @@ A field DEFAULT is a coercion site too, and the one that holds a parse-time cons
 value: `as float = 3` records the f64 bit pattern of 3.0, not the integer 3.
 ```maxon
 type Reading
-	export var value as float = 3
+	export var value as Real = 3
 
 	export static function make() returns Self
 		return Self{}
@@ -421,6 +427,7 @@ function main() returns ExitCode
 	end 'exact'
 	return 7
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 42
@@ -469,7 +476,7 @@ widening above safe to add: a rule that promoted in both directions would be a f
 one it replaced. Seven rejections, one message.
 ```maxon
 type Reading
-	export var value as int
+	export var value as Integer
 
 	export static function make() returns Self
 		return Self{value: 3.7}
@@ -480,6 +487,7 @@ function main() returns ExitCode
 	let r = Reading.make()
 	return r.value
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-literal-rejected.test:6:15: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
@@ -488,7 +496,7 @@ error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-literal
 <!-- test: float-to-int-field-write-rejected -->
 ```maxon
 type Reading
-	export var value as int = 0
+	export var value as Integer = 0
 
 	export static function make() returns Self
 		return Self{}
@@ -500,6 +508,7 @@ function main() returns ExitCode
 	r.value = 3.7
 	return r.value
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-write-rejected.test:12:4: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
@@ -508,9 +517,9 @@ error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-write-r
 <!-- test: float-to-int-self-field-rejected -->
 ```maxon
 type Reading
-	export var value as int = 0
+	export var value as Integer = 0
 
-	export function bump() returns int
+	export function bump() returns Integer
 		value = 3.7
 		return 0
 	end 'bump'
@@ -524,6 +533,7 @@ function main() returns ExitCode
 	var r = Reading.make()
 	return r.bump()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3009: specs/fragments/implicit-type-conversion/float-to-int-self-field-rejected.test:6:3: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
@@ -532,7 +542,7 @@ error E3009: specs/fragments/implicit-type-conversion/float-to-int-self-field-re
 <!-- test: float-to-int-field-default-rejected -->
 ```maxon
 type Reading
-	export var value as int = 3.7
+	export var value as Integer = 3.7
 
 	export static function make() returns Self
 		return Self{}
@@ -543,6 +553,7 @@ function main() returns ExitCode
 	let r = Reading.make()
 	return r.value
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-default-rejected.test:3:13: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)

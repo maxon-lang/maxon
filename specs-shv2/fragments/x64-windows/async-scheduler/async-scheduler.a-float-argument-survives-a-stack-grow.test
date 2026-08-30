@@ -1,12 +1,12 @@
 // Test: async-scheduler.a-float-argument-survives-a-stack-grow
-function scale(x float, depth int) returns int
+function scale(x Real, depth Integer) returns Integer
 	if depth == 0 'base'
 		return trunc(x)
 	end 'base'
 	return trunc(x) + scale(x * 2.0, depth: depth - 1)
 end 'scale'
 
-function sweep() returns int
+function sweep() returns Integer
 	Runtime.yield()
 	let d0 = scale(20.0, depth: 0)
 	if d0 != 20 'bad0'
@@ -36,6 +36,8 @@ function main() returns ExitCode
 	let r = await p
 	return r as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
 ---
 ExitCode: 0
 ---

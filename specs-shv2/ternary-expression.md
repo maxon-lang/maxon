@@ -998,7 +998,7 @@ struct/union to refuse and not a String to promote — so the merge must DEFER, 
 undeclared call is a `E3004` from semantic analysis, and a `E3004` program must surface that, never
 a parser panic. (Regression guard: refusing the borrowed-aggregate merge must not swallow this arm.)
 ```maxon
-function pick(x int, c bool) returns String
+function pick(x Integer, c bool) returns String
 	return "{x}" if c else undefinedThing()
 end 'pick'
 
@@ -1006,6 +1006,7 @@ function main() returns ExitCode
 	let s = pick(5, c: true)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3004: specs/fragments/ternary-expression/ternary-expression.error.owned-string-arm-undeclared-call.test:3:25: call to undefined function 'undefinedThing'

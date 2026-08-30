@@ -447,7 +447,7 @@ type Label
 		return text.slice(text.startIndex(), length: 2)
 	end 'head'
 
-	export function width() returns int
+	export function width() returns Integer
 		let last = text.endIndex()
 		return last.charIndex()
 	end 'width'
@@ -464,6 +464,7 @@ function main() returns ExitCode
 	print("{l.head()} {l.width()} {l.upTo(needle)}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
@@ -555,13 +556,14 @@ so the reservation has to be the ordinary one every other corpus-declared builti
 tree before this rung: this program COMPILED.
 ```maxon
 type StringIndex
-	var a as int
+	var a as Integer
 end 'StringIndex'
 
 function main() returns ExitCode
 	print("{"hi".byteLength()}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'StringIndex', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and shv2 has no namespace to tell a user declaration of the name apart from that one

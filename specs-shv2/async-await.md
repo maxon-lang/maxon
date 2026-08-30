@@ -1648,7 +1648,7 @@ end 'DrainError'
 typealias DrainPromise = Promise with (StringArray, DrainError)
 typealias DrainPromiseArray = Array with DrainPromise
 
-function drainThunk(n int) returns StringArray throws DrainError
+function drainThunk(n Integer) returns StringArray throws DrainError
 	_ = File.exists(FilePath from "noyield.txt")
 	if n < 0 'bad'
 		throw DrainError.broken
@@ -1673,6 +1673,7 @@ function main() returns ExitCode
 	print("{total}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0

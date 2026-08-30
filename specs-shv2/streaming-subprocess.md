@@ -102,7 +102,7 @@ The read runs inside a SPAWNED green thread, so its resume goes through the cros
 completion thread re-enqueues the reading GT under the run-queue lock and the driver switches back into it.
 The reader returns the line's byte length (7); `main` awaits it.
 ```maxon
-function reader() returns int
+function reader() returns Integer
 	let h = subpSpawn("cmd /c echo hello")
 	let line = subpReadLine(h)
 	let n = line.byteLength()
@@ -117,6 +117,7 @@ function main() returns ExitCode
 	let n = await r
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
@@ -131,7 +132,7 @@ end 'main'
 A concurrent `async sleep` runs while the streaming read is in flight, PROVING the read yields: if the read
 blocked the single M, the sleeper could not run. The read (7 bytes) plus the sleeper's `1` sum to 8.
 ```maxon
-function reader() returns int
+function reader() returns Integer
 	let h = subpSpawn("cmd /c echo hello")
 	let line = subpReadLine(h)
 	let n = line.byteLength()
@@ -141,7 +142,7 @@ function reader() returns int
 	return n
 end 'reader'
 
-function napper() returns int
+function napper() returns Integer
 	sleep(50)
 	return 1
 end 'napper'
@@ -153,6 +154,7 @@ function main() returns ExitCode
 	let n = await r
 	return (n + a) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 8
@@ -230,12 +232,12 @@ drains but must NOT close it — so the follow-up `subpReadLine(h)` on the same 
 gets `hi\r\n` (4 bytes), and `subpRelease` is the sole pipe-closer (no double-close). Before the ownership
 marker, the drop closed the shared pipe and this returned 0 (EOF forever).
 ```maxon
-function reader(h int) returns int
+function reader(h Integer) returns Integer
 	let line = subpReadLine(h)
 	return line.byteLength()
 end 'reader'
 
-function dropIt(h int) returns int
+function dropIt(h Integer) returns Integer
 	_ = async reader(h)
 	sleep(200)
 	return 0
@@ -250,6 +252,7 @@ function main() returns ExitCode
 	subpRelease(h)
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 4
@@ -265,7 +268,7 @@ empty line (0) and writes NOTHING back — so `h2` still reads `second\r\n` (8 b
 8×10 + 0 = 80. Without the generation guard the stale reader stamped its EOF into `h2`'s stream and this
 returned 0.
 ```maxon
-function reader(h int) returns int
+function reader(h Integer) returns Integer
 	let line = subpReadLine(h)
 	return line.byteLength()
 end 'reader'
@@ -284,6 +287,7 @@ function main() returns ExitCode
 	subpRelease(h2)
 	return (n2 * 10 + rn) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 80

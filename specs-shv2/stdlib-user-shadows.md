@@ -191,7 +191,7 @@ end 'main'
 <!-- test: stdlib-user-shadows.user-type-shadows-a-listed-module -->
 ```maxon
 type Clock
-	export var x as int
+	export var x as Integer
 
 	static function make() returns Clock
 		return Clock{x: 9}
@@ -202,6 +202,7 @@ function main() returns ExitCode
 	let c = Clock.make()
 	return c.x as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 9
@@ -234,7 +235,7 @@ from a FREE function — a user `function sleep` is still `E3006` against `stdli
 free function has no type to shadow.
 ```maxon
 type Clock
-	export var x as int
+	export var x as Integer
 
 	export static function nowMs() returns ExitCode
 		return 11
@@ -244,6 +245,7 @@ end 'Clock'
 function main() returns ExitCode
 	return Clock.nowMs()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 11
@@ -257,7 +259,7 @@ prefix names a compiler intrinsic`, about a callee the author never wrote. `"alp
 the user's own `FilePath` supplies the other 4.
 ```maxon
 type FilePath
-	export var tag as int
+	export var tag as Integer
 
 	static function make() returns FilePath
 		return FilePath{tag: 4}
@@ -268,6 +270,7 @@ function main() returns ExitCode
 	let child = Directory.currentPath().join("alpha.txt")
 	return (FilePath.make().tag + child.filename().byteLength()) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 13
@@ -280,7 +283,7 @@ own: the user's answers 7, the corpus's answers `"alpha.txt"`. A rule that resol
 declaration program-wide could not produce 16.
 ```maxon
 type FilePath
-	export var tag as int
+	export var tag as Integer
 
 	static function make() returns FilePath
 		return FilePath{tag: 2}
@@ -296,6 +299,7 @@ function main() returns ExitCode
 	let child = Directory.currentPath().join("alpha.txt")
 	return (mine.filename() + child.filename().byteLength()) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 16
@@ -308,7 +312,7 @@ and pinned here so a future cure that reaches the method by disturbing the value
 is a directory, so `isDirectory` adds 1 to the user's own 5.
 ```maxon
 type FileInfo
-	export var tag as int
+	export var tag as Integer
 
 	static function make() returns FileInfo
 		return FileInfo{tag: 5}
@@ -321,6 +325,7 @@ function main() returns ExitCode
 	end 'missing'
 	return (FileInfo.make().tag + (1 if info.isDirectory else 0)) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 6
@@ -341,12 +346,13 @@ position aside, the very one a program with no shadow gets, which is the point: 
 `a-method-on-a-value-of-the-moved-declaration`.
 ```maxon
 type Clock
-	export var y as int
+	export var y as Integer
 end 'Clock'
 
 function main() returns ExitCode
 	return __Clock.nowMs() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3004: <fragment>:7:17: call to undefined function '__Clock.nowMs': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
@@ -361,11 +367,11 @@ instead of landing on it. MEASURED without that: the E2051 was suppressed and th
 inside a file the author never opened. The case below is the other half.
 ```maxon
 type __Clock
-	export var x as int
+	export var x as Integer
 end '__Clock'
 
 type Clock
-	export var y as int
+	export var y as Integer
 
 	static function make() returns Clock
 		return Clock{y: 6}
@@ -375,6 +381,7 @@ end 'Clock'
 function main() returns ExitCode
 	return Clock.make().y as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2051: <fragment>:2:6: identifier '__Clock' is reserved: declarations starting with '__' are reserved for compiler internals
@@ -391,7 +398,7 @@ reserved space accepted silently, which is the exact hole `requireUnreservedName
 class of defect its rung exists to close.
 ```maxon
 type Clock
-	export var y as int
+	export var y as Integer
 
 	static function make() returns Clock
 		return Clock{y: 6}
@@ -405,6 +412,7 @@ end '__Clock'
 function main() returns ExitCode
 	return (Clock.make().y + __Clock()) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2051: <fragment>:10:10: identifier '__Clock' is reserved: declarations starting with '__' are reserved for compiler internals
@@ -413,7 +421,7 @@ error E2051: <fragment>:10:10: identifier '__Clock' is reserved: declarations st
 <!-- test: stdlib-user-shadows.two-user-declarations-still-collide -->
 ```maxon
 type Clock
-	export var x as int
+	export var x as Integer
 end 'Clock'
 
 enum Clock
@@ -423,6 +431,7 @@ end 'Clock'
 function main() returns ExitCode
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3006: <fragment>:6:6: duplicate definition of 'Clock' — already declared as `type Clock`

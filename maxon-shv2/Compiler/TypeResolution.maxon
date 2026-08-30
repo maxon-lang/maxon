@@ -1199,6 +1199,53 @@ export function unknownTypeMessage(typeName String) returns String
 	return "Unknown type '{typeName}'"
 end 'unknownTypeMessage'
 
+// ⭐⭐ **THE TWO SENTENCES FOR A BARE `int`/`float`, IN THE ORACLE'S OWN WORDING, BYTE FOR BYTE**
+// (`maxon-sharp/Compiler/2-Parser.cs:9146-9158`). Transcribed rather than improved: the specs compare
+// stderr exactly, and the user ruling for this rule was to match the oracle rather than to write a
+// sharper shv2-specific code — so E3005 and these four strings are the contract.
+//
+// **TWO SENTENCES BECAUSE THE TWO POSITIONS HAVE DIFFERENT READERS**, and the rewrite each needs is
+// shaped differently: a declaration site is told to declare an alias, a cast site is shown the cast
+// that would work. **ONE PRODUCER EACH** because four bare literals is four places a rename half-lands.
+//
+// ⚠ **THE EXAMPLE RANGE IS PART OF THE CONTRACT AND DIFFERS PER PRIMITIVE** — `int(0 to 100)` against
+// `float(0.0 to 1.0)`, `MyInt` against `MyFloat` — so it is derived from the spelling in one place
+// rather than written into both sentences.
+//
+// ⚠ **THERE IS NO `byte` ARM, AND ITS ABSENCE IS DERIVED.** The oracle has a third case because it has
+// a `TokenType.Byte`; shv2 has no `byte` keyword at all (`Parser.ByteTypeName`), so `byte` reaches every
+// type position as a plain identifier and can never arrive here. A dead arm would be a second home for
+// a fact — and one that reads as though the set were a choice rather than a consequence.
+export function barePrimitiveAliasNameFor(spelling String) returns String
+	if spelling == "int" 'anInt'
+		return "MyInt"
+	end 'anInt'
+	if spelling == "float" 'aFloat'
+		return "MyFloat"
+	end 'aFloat'
+
+	panic("barePrimitiveAliasNameFor: '{spelling}' is not a ranged primitive — `keywordIsARangedPrimitive` admits only `int` and `float`, so a third spelling means that predicate and this table have drifted")
+end 'barePrimitiveAliasNameFor'
+
+export function barePrimitiveExampleRangeFor(spelling String) returns String
+	if spelling == "int" 'anInt'
+		return "0 to 100"
+	end 'anInt'
+	if spelling == "float" 'aFloat'
+		return "0.0 to 1.0"
+	end 'aFloat'
+
+	panic("barePrimitiveExampleRangeFor: '{spelling}' is not a ranged primitive — see `barePrimitiveAliasNameFor`")
+end 'barePrimitiveExampleRangeFor'
+
+export function barePrimitiveTypeMessage(spelling String) returns String
+	return "Cannot use bare '{spelling}' as a type. Define a typealias with range constraints, e.g., typealias {barePrimitiveAliasNameFor(spelling)} = {spelling}({barePrimitiveExampleRangeFor(spelling)})"
+end 'barePrimitiveTypeMessage'
+
+export function barePrimitiveCastMessage(spelling String) returns String
+	return "Cannot cast to bare '{spelling}'. Define a typealias with range constraints, e.g., 'value as {barePrimitiveAliasNameFor(spelling)}' where 'typealias {barePrimitiveAliasNameFor(spelling)} = {spelling}({barePrimitiveExampleRangeFor(spelling)})'"
+end 'barePrimitiveCastMessage'
+
 // `denotedNamedType` for the DECLARATION sites this pass walks — a parameter, a return type, a
 // struct field. Each reports and recovers rather than failing the pass, so a file with three
 // undeclared types reports three diagnostics.

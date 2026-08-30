@@ -459,7 +459,7 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
-function runEcho(word String, outKind int) returns int
+function runEcho(word String, outKind Integer) returns Integer
 	var argv = ByteArray.create()
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
@@ -481,6 +481,7 @@ function main() returns ExitCode
 	print("] inheritCollected={inherited} discardCollected={discarded}")
 	return 0 as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
