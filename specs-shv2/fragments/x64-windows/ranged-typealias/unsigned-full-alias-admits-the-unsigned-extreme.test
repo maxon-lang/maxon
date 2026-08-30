@@ -1,7 +1,7 @@
-// Test: unsigned-domain-negative-sentinel-cast
+// Test: unsigned-full-alias-admits-the-unsigned-extreme
 typealias Slot = int(0 to u64.max)
 
-let NO_SLOT = (-1) as Slot
+let NO_SLOT = u64.max as Slot
 
 function isSentinel(s Slot) returns bool
 	return s == NO_SLOT
@@ -16,12 +16,12 @@ end 'main'
 ---
 ExitCode: 7
 ---
-// CompiledIR
-module {
-  func @main() -> u8 {
+func @main {
   entry:
-    %2 = mir.mov_imm 7 : i64
-    mir.ret %2
-  }
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  yes:
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
 }
----

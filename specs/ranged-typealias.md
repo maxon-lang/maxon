@@ -1177,21 +1177,52 @@ end 'main'
 error E2003: specs/fragments/ranged-typealias/error.bare-shorthand.test:2:21: Bare sized type 'i64' is not allowed. Use explicit range syntax, e.g. 'int(i64.min to i64.max)'
 ```
 
-### Negative sentinel cast into an unsigned-domain alias
+### ⭐⭐ A DECLARED LOWER BOUND OF 0 REFUSES A WRITTEN NEGATIVE — the upper being `u64.max` does not repeal it
 
-A const-expression `(-1) as Alias` where `Alias = int(0 to u64.max)` is a
-deliberate sentinel: the unsigned upper bound is stored as a wrapped negative,
-so the cast wraps -1 to the max unsigned value (`u64.max`) rather than being
-out of range. The const-eval cast check must compare both bounds in unsigned
-space when `Alias`'s lower bound is non-negative, matching the runtime cast and
-the value-load range check. Mirrors the compiler's own
-`CONSUME_NO_VALUE = (-1) as ValueId` sentinel.
+`int(0 to u64.max)` admits every 64-bit PATTERN, so no RUNTIME guard on it can ever fail. It still
+declares `≥ 0`, and a literal the source wrote as a negative number is below that bound. The two
+questions are different and the compiler used to conflate them: the full-range test short-circuited
+the COMPILE-TIME literal check as well as the runtime one, so `take(-1)` compiled clean into such a
+parameter and printed **18446744073709551615**, on both compilers.
 
-<!-- test: unsigned-domain-negative-sentinel-cast -->
+⚠⚠ **NO TEST OF THE VALUE CAN DECIDE THIS.** `-1`, `u64.max` and `0xFFFFFFFFFFFFFFFE` are the SAME
+64 bits; the first denotes a negative number and the other two denote the two largest non-negative
+ones. The verdict therefore comes from what the SOURCE WROTE — `_writtenNegativeLiterals`, the
+companion of the `_unsignedMaxLiterals` mark the ordering rule already reads — and the two
+acceptances below are as load-bearing as the refusal: they are what says the check reads the source
+and not the bit pattern.
+
+⛔ **THIS SECTION USED TO PIN THE OPPOSITE.** `unsigned-domain-negative-sentinel-cast` asserted that
+`(-1) as Slot` "wraps to `u64.max` rather than being out of range" and was a deliberate sentinel
+idiom. It was the defect written down as the rule. The honest spelling of that sentinel is `u64.max`,
+which is what the source means and what the case below now writes.
+
+<!-- test: error.written-negative-into-unsigned-full-alias -->
 ```maxon
 typealias Slot = int(0 to u64.max)
 
-let NO_SLOT = (-1) as Slot
+function take(s Slot) returns Slot
+	return s
+end 'take'
+
+function main() returns ExitCode
+	return take(-1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.written-negative-into-unsigned-full-alias.test:9:9: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
+```
+
+### The unsigned extreme, written as `u64.max`, is admitted
+
+The half of the rule that stops it being too wide: `u64.max` rides as the same wrapped `-1` pattern
+the case above refuses, and it is in range.
+
+<!-- test: unsigned-full-alias-admits-the-unsigned-extreme -->
+```maxon
+typealias Slot = int(0 to u64.max)
+
+let NO_SLOT = u64.max as Slot
 
 function isSentinel(s Slot) returns bool
 	return s == NO_SLOT
@@ -1202,6 +1233,133 @@ function main() returns ExitCode
 		return 7
 	end 'yes'
 	return 0
+end 'main'
+```
+```exitcode
+7
+```
+
+### A bit-63-set HEX literal is admitted
+
+The other half. `0xFFFFFFFFFFFFFFFE` is 18446744073709551614 — a non-negative number whose stored
+pattern is the negative `-2`. Nothing about it was written with a sign, so it is in range.
+
+<!-- test: unsigned-full-alias-admits-a-bit-63-hex-literal -->
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function take(s Slot) returns Slot
+	return s
+end 'take'
+
+function main() returns ExitCode
+	if take(0xFFFFFFFFFFFFFFFE) == 0xFFFFFFFFFFFFFFFE 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+```
+```exitcode
+7
+```
+
+### The refusal is about the LOWER bound, not about the number 0
+
+A partial unsigned range refuses a written negative for the same reason, and its low bound is 5.
+
+<!-- test: error.written-negative-into-a-partial-unsigned-alias -->
+```maxon
+typealias Big = int(5 to u64.max)
+
+function main() returns ExitCode
+	let x = -1 as Big
+	return x as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.written-negative-into-a-partial-unsigned-alias.test:5:13: Value -1 is outside the range of 'Big' (int(5 to 18446744073709551615))
+```
+
+### Every door owes the same verdict — the RETURN, and a TOP-LEVEL `let`
+
+The compile-time half is one decision asked at every position that names a ranged alias, so a
+`return` into an unsigned-full alias refuses a written negative exactly as a call argument does.
+
+<!-- test: error.written-negative-returned-into-unsigned-full-alias -->
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function make() returns Slot
+	return -1
+end 'make'
+
+function main() returns ExitCode
+	return make() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.written-negative-returned-into-unsigned-full-alias.test:5:2: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
+```
+
+⛔ **THE TOP-LEVEL `let` DOOR REACHED THE SAME VERDICT BY A DIFFERENT REPAIR, AND IT WAS BROKEN FOR
+EVERY RANGE — not just the unsigned ones.** The constant evaluator bound a trailing `as` to the
+OPERAND of a unary minus (`-(1 as Narrow)`) where a body binds it to the whole negated literal
+(`(-1) as Narrow`, the `as` loop sitting outside `ParsePrimary`), so **`let A = -1 as int(0 to 100)`
+compiled clean and produced -1** while the identical cast inside a function was E3005. Both
+compilers agreed on the wrong answer, so no oracle could see it.
+
+<!-- test: error.written-negative-in-a-top-level-let -->
+```maxon
+typealias Slot = int(0 to u64.max)
+
+let NO_SLOT = -1 as Slot
+
+function main() returns ExitCode
+	let s = NO_SLOT
+	return s as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.written-negative-in-a-top-level-let.test:4:18: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
+```
+
+### A NARROW range's top-level `let` gets the same repair
+
+The precedence fix is not about the unsigned shape — it is about where the cast binds. `int(0 to 100)`
+refuses a written `-1` in a top-level `let` for the ordinary lower-bound reason.
+
+<!-- test: error.written-negative-in-a-top-level-let-narrow -->
+```maxon
+typealias Narrow = int(0 to 100)
+
+let LOW = -1 as Narrow
+
+function main() returns ExitCode
+	let n = LOW
+	return n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.written-negative-in-a-top-level-let-narrow.test:4:14: Value -1 is outside the range of 'Narrow' (int(0 to 100))
+```
+
+### A SIGNED range still takes its negatives
+
+The rule is the declared LOWER bound, and `int(-10 to 10)` declares one that admits `-5`.
+
+<!-- test: signed-range-admits-a-written-negative -->
+```maxon
+typealias Offset = int(-10 to 10)
+
+function take(o Offset) returns Offset
+	return o
+end 'take'
+
+function main() returns ExitCode
+	if take(-5) == -5 'ok'
+		return 7
+	end 'ok'
+	return 3
 end 'main'
 ```
 ```exitcode

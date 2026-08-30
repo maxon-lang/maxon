@@ -5,9 +5,18 @@ namespace MaxonSharp.Compiler.Ir.Core;
 
 public abstract class IrAttribute;
 
-public class IntegerAttr(long value, IrType type) : IrAttribute {
+public class IntegerAttr(long value, IrType type, bool writtenNegative = false) : IrAttribute {
   public long Value { get; } = value;
   public IrType Type { get; } = type;
+
+  /// ⭐⭐ Did the SOURCE write this number with a leading minus? — the one fact about the payload
+  /// that the payload cannot carry. `= -1` and `= 0xFFFFFFFFFFFFFFFE` both store a negative `long`,
+  /// and only the first is a negative NUMBER, which is what decides whether the default fits an
+  /// `int(0 to u64.max)` field. It travels from the declaration (which may be in another file) to
+  /// the site that materializes the default as a literal, where it is re-stamped onto the minted
+  /// value for `IntegerOutOfRange` to spend. False for every non-literal use of this attribute.
+  public bool WrittenNegative { get; } = writtenNegative;
+
   public override string ToString() => $"{Value} : {Type}";
 }
 

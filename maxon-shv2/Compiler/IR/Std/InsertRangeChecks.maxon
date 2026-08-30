@@ -301,6 +301,12 @@ let sharedEmptyGuardChainBase = BlockOpPosArray.create()
 // exactly as the two columns above are.
 let sharedEmptyGuardChainSource = PreSplitOpsByBlock.create()
 
+// The `writtenNegativeLiterals` an emitter starts with, before `run` swaps in the function's own — shared
+// and read-only for `sharedEmptyGuardChainTail`'s reason: an emitter is built for every function carrying
+// ANY range-check side data, and a `ValueMarkSet.create()` in `create` would be one allocation per such
+// function for a set that is replaced one line into `run`.
+let sharedEmptyWrittenNegatives = ValueMarkSet.create()
+
 // Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
 // ops draw from (seeded past every id the function already uses).
 type RangeCheckEmitter
@@ -315,6 +321,12 @@ type RangeCheckEmitter
 	// guard (which is also what the bootstrap does — see `needsRuntimeGuard`).
 	var intConsts as ConstValueMap
 	var floatConsts as ConstValueMap
+	// ⭐ **WHICH OF THIS FUNCTION'S CONSTANTS THE SOURCE WROTE AS NEGATIVE NUMBERS** — the one fact about a
+	// constant that this tier cannot recover from the constant, because `-1`, `u64.max` and
+	// `0xFFFFFFFFFFFFFFFE` are the same 64 bits. Handed over by the parser on `FunctionRangeChecks` and
+	// stashed in `run` beside `collectConsts`, for the same reason: `needsRuntimeGuard` asks it per value
+	// and does not otherwise hold the function's checks. See `Parser.writtenNegativeLiterals`.
+	var writtenNegativeLiterals as ValueMarkSet
 	// Where each of this function's blocks currently ENDS — a blockRef index (+1, `buildBlockIdIndex`'s
 	// sentinel encoding) per block id. It starts as the plain block-id => blockRef index (every block is
 	// its own chain end), and each guard MOVES its site block's entry to the continuation the split
@@ -344,7 +356,7 @@ type RangeCheckEmitter
 	var guardChainSource as PreSplitOpsByBlock
 
 	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: sharedEmptyWrittenNegatives, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -363,6 +375,10 @@ type RangeCheckEmitter
 	// are original, never the guard consts this pass appends afterward.
 	function run(checks FunctionRangeChecks)
 		self.collectConsts()
+		// The parser's answer to the one question a constant's 64 bits cannot answer — stashed beside the
+		// const maps because `needsRuntimeGuard` asks both per value and holds neither otherwise. See
+		// `writtenNegativeLiterals`.
+		self.writtenNegativeLiterals = checks.writtenNegativeLiterals
 		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
 		// and 0 is a legitimate one — so the promise is checked HERE, once per function, rather than
 		// per site: a function that reached this pass unlowered would otherwise anchor every one of its
@@ -768,9 +784,9 @@ type RangeCheckEmitter
 
 	// ---- the shared decision ----
 
-	// Whether a site needs a RUNTIME guard. A full-range alias never does; a literal of the alias's OWN
-	// domain never does (its out-of-range use is reported here as a compile-time E3005, its in-range use
-	// needs no code); everything else does.
+	// Whether a site needs a RUNTIME guard. A literal of the alias's OWN domain never does (its
+	// out-of-range use is reported here as a compile-time E3005, its in-range use needs no code); a
+	// full-range alias never does; everything else does.
 	//
 	// ⚠ THE DOMAIN TEST IS PART OF THE LITERAL TEST, not decoration. `collectConsts` records every
 	// `const`'s payload with no regard for its type, and a FLOAT const's payload is an IEEE-754 bit
@@ -778,20 +794,30 @@ type RangeCheckEmitter
 	// number it is not. Falling through to the runtime guard for a domain mismatch is also what the
 	// bootstrap does: `ValidateAndEmitRangeCheck` compile-time-checks a float ranged type only against a
 	// FLOAT literal and emits a runtime check otherwise.
+	//
+	// ⚠⚠ **THE LITERAL IS ASKED BEFORE `rangeIsFull`, AND THE OTHER ORDER WAS A SILENT WRONG ANSWER.** A
+	// full range admits every 64-bit PATTERN, which is the whole of what a RUNTIME guard could test — so
+	// eliding the guard is right. It is not the whole of what the COMPILE-TIME check tests: `int(0 to
+	// u64.max)` still declares a lower bound of 0, and a written `-1` is below it. With the full-range arm
+	// first this function returned before it could look at the constant at all, and `take(-1)` compiled
+	// clean into such a parameter and printed 18446744073709551615 — on BOTH compilers. Reordered, the
+	// signed-full `int(i64.min to i64.max)` is unaffected (every integer satisfies it, so the literal arm
+	// answers in-range for it and always will) and only the unsigned-full range gains a verdict.
 	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, aliasName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
 		let isFloat = aliasIsFloat(alias)
-		if rangeIsFull(alias.low, high: alias.high, isFloat: isFloat) 'full'
-			return false
-		end 'full'
 
 		let literals = self.floatConsts if isFloat else self.intConsts
 		if literals.contains(value) 'literal'
 			let v = literals.constantOf(value)
-			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat) 'outOfRange'
+			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: self.writtenNegativeLiterals.contains(value)) 'outOfRange'
 				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: String.from(aliasName), low: alias.low, high: alias.high, isFloat: isFloat), line: line, column: column, filePath: filePath)
 			end 'outOfRange'
 			return false
 		end 'literal'
+
+		if rangeIsFull(alias.low, high: alias.high, isFloat: isFloat) 'full'
+			return false
+		end 'full'
 
 		return true
 	end 'needsRuntimeGuard'

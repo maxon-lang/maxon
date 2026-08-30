@@ -280,6 +280,14 @@ let FieldShapeDefaulted = 19 as ContentHash
 // must hash differently from both. It rides ALONE — see `mixFieldDefault` for why the expression must not.
 let FieldShapeDefaultHelper = 75 as ContentHash
 
+// ⭐ Whether a LITERAL default's number was written with a leading minus — two constants beside the pair
+// above for their exact reason, one step further out: `= -1` and `= 0xFFFFFFFFFFFFFFFE` store the same kind
+// of negative `ParsedInt` and accept different programs (the first is E3005 in an `int(0 to u64.max)` field
+// and the second is not, `FieldDefault.literal`), so the payload alone cannot discriminate them and an edit
+// between the two spellings must move every reader's memo.
+let FieldDefaultWrittenNegative = 110 as ContentHash
+let FieldDefaultWrittenPlain = 111 as ContentHash
+
 // The two shapes a top-level constant's ANSWER hashes under: it evaluated to a value, or it did
 // not. Their own discriminators for `DeclShapeAlias`'s reason — a name that stops being a function
 // and starts being a constant must move the hash rather than collide.
@@ -1689,9 +1697,20 @@ export type ConstValue
 	// EMPTY for every other tag, which is the truth about them rather than a sentinel: an `integer`,
 	// `boolean` or `float` constant names no type.
 	export var typeName as ByteArray
+	// ⭐⭐ **DID THE SOURCE WRITE THIS PAYLOAD AS A NEGATIVE NUMBER?** — the const evaluator's spelling of
+	// `Parser.writtenNegativeLiterals`, and it is here for the same reason that is a mark rather than a
+	// test: `-1`, `u64.max` and `0xFFFFFFFFFFFFFFFE` are the same 64 bits, and only the source tells the
+	// negative one from the two largest non-negative ones. Without it `let A = -1 as Idx` folded clean into
+	// an `int(0 to u64.max)` alias whose declared lower bound is 0.
+	//
+	// A per-VALUE bit rather than a set, because this tier has no ValueIds to key one by — the evaluator
+	// "emits no ops and touches no artifact". It is set at the two shapes the BODY marks (`evalConstUnary`'s
+	// `neg`, a signed `.min` bound) and rides no fold: a payload that came out of an ADD is a computed
+	// number, not one the source wrote a minus in front of.
+	export var writtenNegative as bool
 
-	export static function create(payload ParsedInt, tag ValueTypeTag, typeName ByteArray = EmptySourceText) returns ConstValue
-		return Self{payload: payload, tag: tag, typeName: typeName}
+	export static function create(payload ParsedInt, tag ValueTypeTag, typeName ByteArray = EmptySourceText, writtenNegative bool = false) returns ConstValue
+		return Self{payload: payload, tag: tag, typeName: typeName, writtenNegative: writtenNegative}
 	end 'create'
 end 'ConstValue'
 
@@ -12858,7 +12877,7 @@ export type ProgramSignatures
 	function mixFieldDefault(state ContentHash, defaultValue FieldDefault) returns ContentHash
 		return match defaultValue 'shape'
 			none gives mix(state, value: FieldShapeNoDefault)
-			literal(payload, tag) gives self.mixDefaultLiteral(state, payload: payload, tag: tag)
+			literal(payload, tag, writtenNegative) gives self.mixDefaultLiteral(state, payload: payload, tag: tag, writtenNegative: writtenNegative)
 			helper gives mix(state, value: FieldShapeDefaultHelper)
 		end 'shape'
 	end 'mixFieldDefault'
@@ -12881,11 +12900,17 @@ export type ProgramSignatures
 	// the enum's ordinal — see the shape constants' own header: an ordinal is not a value in Maxon, and a
 	// hash that moved when `ValueTypeTag`'s arms were REORDERED would invalidate every parse memo in the
 	// project for a change that means nothing.
-	function mixDefaultLiteral(state ContentHash, payload ParsedInt, tag ValueTypeTag) returns ContentHash
+	// ⚠ **`writtenNegative` RIDES FOR THE TAG'S OWN REASON, and the payload cannot stand in for it either:**
+	// `= -1` and `= 0xFFFFFFFFFFFFFFFE` store the SAME KIND of negative `ParsedInt` and differ only in
+	// whether the source wrote a minus, which is what decides whether the default fits an
+	// `int(0 to u64.max)` field (`FieldDefault.literal`). Editing one spelling into the other must
+	// invalidate the memo, so it is mixed.
+	function mixDefaultLiteral(state ContentHash, payload ParsedInt, tag ValueTypeTag, writtenNegative bool) returns ContentHash
 		let payloadBits = payload as ContentHash
+		let sign = FieldDefaultWrittenNegative if writtenNegative else FieldDefaultWrittenPlain
 		// A field default names no TYPE — this door is the three-literal question its header describes, and
 		// the `named` arm `mixValueTag` grew is the top-level evaluator's alone.
-		return mix(self.mixValueTag(mix(state, value: FieldShapeDefaulted), tag: tag, typeName: EmptySourceText), value: payloadBits)
+		return mix(mix(self.mixValueTag(mix(state, value: FieldShapeDefaulted), tag: tag, typeName: EmptySourceText), value: payloadBits), value: sign)
 	end 'mixDefaultLiteral'
 
 	// Add one ranged typealias to the index AND fold it into the hash. The hash carries the RANGE

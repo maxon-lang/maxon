@@ -372,6 +372,30 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private readonly HashSet<int> _unsignedMaxLiterals = [];
 
+  /// <summary>
+  /// ⭐⭐ Every literal the SOURCE WROTE AS A NEGATIVE NUMBER, by the id of the literal it
+  /// materialized — <see cref="_unsignedMaxLiterals"/>'s companion, and the other half of what a
+  /// bit-63-set pattern's 64 bits cannot say.
+  ///
+  /// `-1`, `u64.max` and `0xFFFFFFFFFFFFFFFE` all ride as bit-63-set patterns. The first denotes a
+  /// NEGATIVE number; the other two denote the two largest non-negative ones.
+  /// <see cref="IntegerOutOfRange"/>'s unsigned reading — which is right for a range whose lower
+  /// bound is non-negative — therefore ADMITTED a written `-1` into `int(0 to u64.max)`, and
+  /// `take(-1)` compiled clean and printed 18446744073709551615. A declared lower bound of 0 says
+  /// `&gt;= 0` and does not stop saying it because the upper bound happens to be `u64.max`.
+  ///
+  /// ⚠ It is the NEGATIVE that is marked and not the non-negative, and the direction is a decision.
+  /// The dual — "prove a bit-63-set constant was written non-negative, else read it as negative" —
+  /// is complete in a way this is not, and would REFUSE every folded bit-63-set constant the tree
+  /// already passes (an FNV offset basis, a `1 shl 63`) on the strength of a spelling roster nobody
+  /// has enumerated. This direction's failure mode is a MISSED refusal, i.e. today's answer.
+  ///
+  /// Keyed by MaxonValue id, sound because every literal mints a fresh value (no interning). shv2
+  /// carries the identical fact in `Parser.writtenNegativeLiterals`, marked at the same two shapes
+  /// and spent by the same predicate, so the two compilers answer one question the same way.
+  /// </summary>
+  private readonly HashSet<int> _writtenNegativeLiterals = [];
+
   private readonly List<CompileError> _errors = [];
   private const int MaxErrorsPerFile = 20;
   public IReadOnlyList<CompileError> Errors => _errors;
@@ -6999,6 +7023,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private object EvalConstUnary(ConstantDeclSet decls, ConstFoldState state) {
     if (Check(TokenType.Minus)) {
       Advance();
+
+      // ⛔⛔ A NEGATED INT LITERAL IS ONE LITERAL, AND ITS ABSENCE HERE WAS A WRONG ANSWER FOR EVERY
+      // RANGE. Falling through to `EvalConstAsCast` binds the trailing `as` casts to the OPERAND, so
+      // `let A = -1 as Narrow` folded as `-(1 as Narrow)` where a body reads the same text as
+      // `(-1) as Narrow` (the runtime `as` loop sits outside `ParsePrimary`, after unary). MEASURED:
+      // `let A = -1 as int(0 to 100)` compiled clean and produced -1 at top level while the
+      // identical cast inside a function was E3005 — and shv2 agreed with the wrong answer, so no
+      // oracle could see it. The cast now applies to the whole negated literal.
+      if (Check(TokenType.IntegerLiteral))
+        return ApplyConstAsCasts(ParseNegatedIntegerLiteral(Advance()), writtenNegative: true);
+
       var val = EvalConstAsCast(decls, state);
       if (val is long l) return -l;
       if (val is double d) return -d;
@@ -7019,8 +7054,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // the value against a ranged-type bound (compile error on out-of-range), or
   // both. Mirrors the runtime parser's `as`-cast handling but operates on
   // already-evaluated constants instead of MaxonValues.
-  private object EvalConstAsCast(ConstantDeclSet decls, ConstFoldState state) {
-    var value = EvalConstPrimary(decls, state);
+  private object EvalConstAsCast(ConstantDeclSet decls, ConstFoldState state) =>
+    ApplyConstAsCasts(EvalConstPrimary(decls, state, out var primaryWrittenNegative),
+      primaryWrittenNegative);
+
+  /// The cast loop above, split from the primary so <see cref="EvalConstUnary"/> can hand it a
+  /// NEGATED literal — one value, with the fact that the source wrote a minus in front of it, which
+  /// <see cref="IntegerOutOfRange"/> needs and the `long` cannot carry.
+  private object ApplyConstAsCasts(object value, bool writtenNegative) {
     while (Check(TokenType.As)) {
       var asToken = Advance(); // consume 'as'
       // Attempt to recognize the target type. Built-in primitive keywords are
@@ -7072,7 +7113,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       } else {
         long numericVal = value is long lv ? lv : throw new CompileError(
           ErrorCode.SemanticTypeMismatch, $"Cannot cast non-integer value to '{ranged.Name}'", asToken.Line, asToken.Column);
-        if (IntegerOutOfRange(numericVal, ranged)) {
+        if (IntegerOutOfRange(numericVal, ranged, writtenNegative)) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Value {numericVal} is outside the range of '{ranged.Name}' ({ranged.FormatRange()})",
             asToken.Line, asToken.Column);
@@ -7082,7 +7123,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return value;
   }
 
-  private object EvalConstPrimary(ConstantDeclSet decls, ConstFoldState state) {
+  /// <param name="writtenNegative">
+  /// Set when the primary is a spelling that DENOTES a negative number — see
+  /// <see cref="_writtenNegativeLiterals"/> for what the fact decides. A `long` cannot carry it, and
+  /// `-1` and `u64.max` are the same `long`, so it comes out alongside the value. Only the signed
+  /// sized-type minima say yes here; the unary `-` is <see cref="EvalConstUnary"/>'s own arm.
+  /// </param>
+  private object EvalConstPrimary(ConstantDeclSet decls, ConstFoldState state,
+      out bool writtenNegative) {
+    writtenNegative = false;
     if (Check(TokenType.IntegerLiteral)) {
       var token = Advance();
       return ParseIntegerLiteral(token);
@@ -7122,7 +7171,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           var keyword = Advance().Value; // consume 'min' or 'max'
           if (sizedType.IsFloat)
             return ResolveFloatTypeBound(sizedType, keyword);
-          return ResolveIntTypeBound(sizedType, keyword);
+          var bound = ResolveIntTypeBound(sizedType, keyword);
+          // `i8.min` … `i64.min` name negative numbers, and for every extreme BUT ONE the stored
+          // pattern IS the value. The exception is `u64.max`, whose pattern is `-1` and whose value
+          // is the largest non-negative number there is — so the two are told apart the same way the
+          // expression parser tells them apart, by the sized type's own signedness.
+          writtenNegative = bound < 0 && !sizedType.IsUnsigned;
+          return bound;
         }
       }
       // Handle enum constant: EnumType.caseName. A foreign constant may name an enum PRIVATE to its
@@ -8658,8 +8713,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (Check(TokenType.Minus)) {
       Advance(); // consume '-'
       if (Check(TokenType.IntegerLiteral)) {
+        // The written sign travels with the number (`IntegerAttr.WrittenNegative`): a default is a
+        // value coming to rest in the field's declared range at every literal that omits it, so it
+        // meets the same door as `Self{v: -1}` and owes the same fact. `-0` denotes zero and is not
+        // marked, exactly as at every other minting site.
         var val = ParseNegatedIntegerLiteral(Advance());
-        return (IrType.I64, new IntegerAttr(val, IrType.I64));
+        return (IrType.I64, new IntegerAttr(val, IrType.I64, writtenNegative: val < 0));
       }
       if (Check(TokenType.FloatLiteral)) {
         var val = -ParseFloatLiteral(Advance());
@@ -10301,9 +10360,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (_currentFunction?.ReturnType is not IrRangedPrimitiveType rangedType)
       return value;
 
-    if (rangedType.IsFullBaseRange)
-      return value;
-
+    // ⛔ THE `IsFullBaseRange` EARLY-OUT USED TO STAND HERE, AND IT SKIPPED THE COMPILE-TIME HALF
+    // WITH THE RUNTIME ONE: `return -1` from a function declared `int(0 to u64.max)` compiled clean.
+    // The test now stands inside `ValidateAndEmitRangeCheck`, past the literal check, which is the
+    // only half it is about — see that function's remarks.
     var expectedKind = rangedType.BaseType.ToValueKind();
     return ValidateAndEmitRangeCheck(value, rangedType, expectedKind, returnToken);
   }
@@ -11384,7 +11444,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var litOp = _currentBlock!.Operations.OfType<MaxonLiteralOp>().LastOrDefault();
       if (litOp != null) {
         var val = litOp.IntValue;
-        if (IntegerOutOfRange(val, rangedRetType)) {
+        if (IntegerOutOfRange(val, rangedRetType, _writtenNegativeLiterals.Contains(defaultValue.Id))) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"otherwise value {val} is outside the range of '{rangedRetType.Name}' ({rangedRetType.FormatRange()})",
             tryToken.Line, tryToken.Column);
@@ -19145,8 +19205,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (Check(TokenType.Minus) || Check(TokenType.Not))
         throw new CompileError(ErrorCode.ParserExpectedExpression,
           $"Expected expression but got '{Current().Value}'", Current().Line, Current().Column);
-      if (Check(TokenType.IntegerLiteral))
-        return EmitConstantLiteral(ParseNegatedIntegerLiteral(Advance()));
+      if (Check(TokenType.IntegerLiteral)) {
+        // ⭐ THE SITE THAT MINTS A LITERAL THE SOURCE WROTE A MINUS IN FRONT OF, marking for the one
+        // predicate that asks (<see cref="_writtenNegativeLiterals"/>). `-0` denotes zero and is not
+        // marked: the fact wanted is "denotes a negative number", which is a test of the decoded
+        // value and not of the token.
+        var number = ParseNegatedIntegerLiteral(Advance());
+        var negatedLit = EmitConstantLiteral(number);
+        MarkWrittenNegative(negatedLit.Value, number);
+        return negatedLit;
+      }
       if (Check(TokenType.FloatLiteral))
         return EmitConstantLiteral(-ParseFloatLiteral(Advance()));
 
@@ -19164,7 +19232,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // `-(e)` desugars to `0 - e`, so it reaches EmitBinOp and folds with everything else. That
       // is what lets `x shl -(1)` be caught: the count is a `sub`, not a literal, and only a
       // folder — never a token-shape test — can see that it is -1.
-      return new ExprResult.Direct(EmitBinOp(MaxonBinOperator.Sub, EmitIntLiteral(0L), innerVal, kind, null));
+      var subtracted = EmitBinOp(MaxonBinOperator.Sub, EmitIntLiteral(0L), innerVal, kind, null);
+
+      // ⭐ A `-` OVER A FOLDABLE NON-LITERAL IS STILL A NEGATIVE THE SOURCE WROTE. `-K` for a
+      // top-level `let K = 1` folds to the same `-1` the literal arm above mints, and a mark on only
+      // one of the two would refuse `f(-1)` while accepting `f(-K)`. Only this `-` earns the mark,
+      // never `not`: `not 0` is `0xFFFFFFFFFFFFFFFF` written as an all-ones MASK, and reading it as
+      // `-1` would refuse a value `int(0 to u64.max)` exists to hold.
+      if (TryFoldIntConst(subtracted) is { } foldedNegation)
+        MarkWrittenNegative(subtracted, foldedNegation.Value);
+
+      return new ExprResult.Direct(subtracted);
     }
 
     if (Check(TokenType.LeftBracket)) {
@@ -19474,6 +19552,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             // and this condition is what "its max does not fit a signed long" means.
             if (sizedType.IsUnsigned && keyword == "max" && boundValue < 0)
               _unsignedMaxLiterals.Add(boundExpr.Value.Id);
+            // ⭐ THE SAME HAND-OFF, THE OTHER DIRECTION (`_writtenNegativeLiterals`): `i8.min` …
+            // `i64.min` name negative numbers, and for every extreme BUT ONE the stored pattern IS
+            // the value. The exception is `u64.max`, whose pattern is `-1` — which the line above
+            // has just claimed — so the two marks are made MUTUALLY EXCLUSIVE here rather than left
+            // to a value test that cannot tell them apart. Marking both would say one literal is the
+            // largest unsigned AND a negative number, and the two readers would answer opposite
+            // things about one value.
+            else
+              MarkWrittenNegative(boundExpr.Value, boundValue);
             return boundExpr;
           }
         }
@@ -21390,9 +21477,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Is <paramref name="candidate"/> outside <paramref name="rangedType"/>'s bounds? The signed and
   /// unsigned readings are NOT interchangeable — a lower bound of 0 makes the upper bound a `ulong`,
   /// so `int(0 to u64.max)` must compare unsigned or `u64.max` orders as -1.
+  ///
+  /// ⭐⭐ <paramref name="writtenNegative"/> IS WHAT THE 64 BITS CANNOT SAY, AND WITHOUT IT THE
+  /// UNSIGNED READING ADMITS A WRITTEN `-1` INTO A RANGE WHOSE LOWER BOUND IS 0. `-1`, `u64.max` and
+  /// `0xFFFFFFFFFFFFFFFE` are all bit-63-set patterns; the first denotes a NEGATIVE number and the
+  /// other two denote the two largest non-negative ones, and `(ulong)candidate` cannot tell them
+  /// apart. So the unsigned branch was right for the two and WRONG for the one, and `take(-1)`
+  /// compiled clean into an `int(0 to u64.max)` parameter and printed 18446744073709551615. The fact
+  /// comes from the SOURCE (<see cref="_writtenNegativeLiterals"/>), never from the value.
+  ///
+  /// ⚠ It only bites in the UNSIGNED branch. A signed range's lower bound is negative and its
+  /// ordinary compare already places a written negative correctly — `int(-10 to 10)` still admits
+  /// `-5`, and this rule is about the declared LOWER bound rather than about the number 0.
   /// </summary>
-  private static bool IntegerOutOfRange(long candidate, IrRangedPrimitiveType rangedType) {
+  private static bool IntegerOutOfRange(long candidate, IrRangedPrimitiveType rangedType,
+      bool writtenNegative) {
     if (rangedType.IntLower >= 0) {
+      // `-0` is written negative and denotes 0, which such a range may well admit — so the test is
+      // on the candidate's sign as well as on the mark, not on the mark alone.
+      if (writtenNegative && candidate < 0) return true;
+
       return (ulong)candidate < (ulong)rangedType.IntLower
         || (ulong)candidate > (ulong)rangedType.InclusiveIntUpper;
     }
@@ -21467,6 +21571,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// When false, a value the compiler cannot fold is left ALONE rather than guarded at run time.
   /// The compile-time half still throws. See the call-argument site for why one caller needs this.
   /// </param>
+  /// <remarks>
+  /// ⚠⚠ THE LITERAL IS ASKED BEFORE <see cref="IrRangedPrimitiveType.IsFullBaseRange"/>, AND THE
+  /// OTHER ORDER WAS A SILENT WRONG ANSWER. A full range admits every 64-bit PATTERN, which is the
+  /// whole of what a RUNTIME guard could test — so eliding the guard is right. It is not the whole
+  /// of what the COMPILE-TIME check tests: `int(0 to u64.max)` still declares a lower bound of 0,
+  /// and a written `-1` is below it. <see cref="CheckReturnRange"/> returned on that test before
+  /// reaching this function at all, so `return -1` from an `int(0 to u64.max)` function compiled
+  /// clean. The signed-full `int(i64.min to i64.max)` is unaffected either way: every integer
+  /// satisfies it, so the literal arm answers in-range for it and always will.
+  ///
+  /// The full-range test still gates the ENUM-constant scan and the runtime emit below, because
+  /// those are the halves it is genuinely about — and the enum scan walks the whole function, which
+  /// a full-range door must not start paying for.
+  /// </remarks>
   private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, IrRangedPrimitiveType rangedType,
       MaxonValueKind expectedKind, Token errorToken, bool emitRuntimeCheck = true) {
     bool isLiteral = false;
@@ -21492,7 +21610,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
       } else if (litOp.ValueKind is MaxonValueKind.Integer or MaxonValueKind.Byte) {
         isLiteral = true;
-        if (IntegerOutOfRange(litOp.IntValue, rangedType)) {
+        if (IntegerOutOfRange(litOp.IntValue, rangedType, _writtenNegativeLiterals.Contains(value.Id))) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Value {litOp.IntValue} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
             errorToken.Line, errorToken.Column);
@@ -21500,14 +21618,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
 
+    // Every 64-bit pattern is admissible, so nothing below can fire: the enum scan's verdict would
+    // be "in range" for any value it found, and there is no runtime check to emit. See the remarks
+    // for why this stands HERE and not in front of the literal check.
+    if (rangedType.IsFullBaseRange) return value;
+
     // A constants-enum case's raw value is every bit as constant as a literal, but it arrives as a
     // `MaxonEnumRawValueOp` rather than a `MaxonLiteralOp`, so the scan above cannot see it. Without
     // this, `takesByte(Ascii.underscore)` emitted a full runtime range check to prove 95 <= 255 — a
     // branch, two compares and a panic block, for a number the compiler was holding.
+    //
+    // ⚠ IT PASSES `writtenNegative: false`, AND THAT IS A GAP RATHER THAN A FACT. An enum case's raw
+    // value is written in the enum DECLARATION, and no provenance channel carries the minus from
+    // there to here — so a `case x = -1` reaching an `int(0 to u64.max)` door keeps today's answer
+    // and is admitted. Reading `enumConst < 0` instead would be the bit-pattern test this whole rule
+    // exists to refuse (a raw value written `0xFFFFFFFFFFFFFFFE` is not negative). shv2 has the same
+    // gap for the same reason: its `intConsts` carries a folded enum raw value with no mark on it.
     if (!isLiteral && !rangedType.IsFloatBased
         && TryResolveEnumRawConstant(value, out var enumConst)) {
       isLiteral = true;
-      if (IntegerOutOfRange(enumConst, rangedType)) {
+      if (IntegerOutOfRange(enumConst, rangedType, writtenNegative: false)) {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
           $"Value {enumConst} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
           errorToken.Line, errorToken.Column);
@@ -26432,6 +26562,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (attr is IntegerAttr intAttr2) {
       var defaultOp = new MaxonLiteralOp(intAttr2.Value);
       _currentBlock!.AddOp(defaultOp);
+      // ⭐ The default's WRITTEN sign, re-stamped onto the value this line just minted. The mark is
+      // keyed by MaxonValue id, and this id did not exist when the declaration was read — possibly
+      // in another file — so the fact travelled as `IntegerAttr.WrittenNegative` and lands here.
+      // Without it `var v as Idx = -1` filled an `int(0 to u64.max)` slot with 18446744073709551615
+      // while the identical `Self{v: -1}` one line away was E3005.
+      if (intAttr2.WrittenNegative) MarkWrittenNegative(defaultOp.Result, intAttr2.Value);
       return defaultOp.Result;
     }
     if (attr is FloatAttr floatAttr) {
@@ -26596,6 +26732,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _tokens = savedTokens;
       _pos = savedPos;
     }
+  }
+
+  /// Record that <paramref name="value"/> holds a number the SOURCE WROTE AS NEGATIVE — see
+  /// <see cref="_writtenNegativeLiterals"/> for what the mark decides. Every site that mints such a
+  /// value routes through here, so the `-0` exclusion is stated once: `-0` is written with a minus
+  /// and denotes ZERO, which `int(0 to u64.max)` admits, and marking it would refuse a value that is
+  /// in range.
+  private void MarkWrittenNegative(MaxonValue value, long number) {
+    if (number < 0) _writtenNegativeLiterals.Add(value.Id);
   }
 
   private static long ParseNegatedIntegerLiteral(Token token) {

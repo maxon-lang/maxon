@@ -32,6 +32,23 @@ export typealias BlockIdArray = Array with BlockId
 
 export typealias BlockIdSet = Set with BlockId
 
+// ⭐ **ONE PARSER MARK OVER ONE FUNCTION'S SSA VALUES — a set of the values that carry it.** The marks
+// that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's
+// slot, P1.7 slice 2b), `Parser.bufferSurfaceValues` (denotes a `__ManagedMemory` BUFFER rather than the
+// `Array` around it, R4.4), `Parser.unsignedMaxLiterals` and `Parser.writtenNegativeLiterals` (the two
+// halves of what a bit-63-set constant's 64 bits cannot say); each field's own header says what its mark
+// DECIDES and why a set rather than a list.
+//
+// ⭐ **ONE ALIAS RATHER THAN ONE PER MARK, BECAUSE THE PURPOSE IS THE SHARED ONE (review, R4.4).** What a
+// name has to describe here is the shape the copy-on-write discipline is written against — see
+// `Parser.privateValueMarkSet`, which is one function precisely because there is one type for it to take.
+// The per-mark purpose is carried by the FIELD name, which is where it varies.
+//
+// ⚠ **IT LIVES BESIDE `ValueId` RATHER THAN IN THE PARSER BECAUSE ONE OF THESE MARKS CROSSES THE TIER
+// BOUNDARY.** `writtenNegativeLiterals` is read by `InsertRangeChecks` at the Std tier, so it rides
+// `FunctionRangeChecks` (`Project.maxon`) — and a type three files must name is not the parser's to hold.
+export typealias ValueMarkSet = Set with ValueId
+
 // The DISTINCT case targets of a dense `switch`'s block-id table, in FIRST-APPEARANCE order, with
 // `exclude` (the default) removed — the "which successors does this table actually have?" question the
 // CFG asks at every tier (Maxon await-CFG walk, Target CFG build, wasm landing structure). A dense table

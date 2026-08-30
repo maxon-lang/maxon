@@ -2882,8 +2882,25 @@ export type FunctionRangeChecks
 	// EC7 — see `ProvenIntRangeMap`. Empty for a function with no counted loop over constant bounds.
 	export var provenValueRanges as ProvenIntRangeMap
 
-	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, valueInstanceAliases ValueInstanceAliasNameMap, provenValueRanges ProvenIntRangeMap) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramSites: paramSites, valueInstanceAliases: valueInstanceAliases, provenValueRanges: provenValueRanges}
+	// ⭐⭐ **WHICH OF THIS FUNCTION'S VALUES THE SOURCE WROTE AS NEGATIVE NUMBERS** — see
+	// `Parser.writtenNegativeLiterals` for what the mark decides and why the value's 64 bits cannot say it.
+	//
+	// It rides HERE because the party that KNOWS is the parser and the party that ASKS is
+	// `InsertRangeChecks` at the Std tier, and this is the one per-function side table that already crosses
+	// that boundary (`ValueInstanceAliasNameMap`'s header states the same reason for the same channel). It
+	// keys by `ValueId`, which survives the lowering verbatim, and it never travels between functions —
+	// each entry is stamped with the file's own parse.
+	//
+	// ⚠ It is a SECOND such table beside `provenValueRanges`, and they answer opposite questions about the
+	// same id space: that one says an interval a value is PROVEN to lie in, so a guard it covers is DEAD;
+	// this one says the source WROTE a negative, so a compile-time refusal is OWED. Neither can be derived
+	// from the other and neither may be read for the other's question.
+	//
+	// Empty (the parser's shared read-only anchor) for every function that writes no negative literal.
+	export var writtenNegativeLiterals as ValueMarkSet
+
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, valueInstanceAliases ValueInstanceAliasNameMap, provenValueRanges ProvenIntRangeMap, writtenNegativeLiterals ValueMarkSet) returns FunctionRangeChecks
+		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramSites: paramSites, valueInstanceAliases: valueInstanceAliases, provenValueRanges: provenValueRanges, writtenNegativeLiterals: writtenNegativeLiterals}
 	end 'create'
 end 'FunctionRangeChecks'
 
@@ -3220,7 +3237,13 @@ export union FieldDefault
 	// NOT the field's declared type, which `StructLayout.fieldTypes` holds and which may still be an
 	// unresolved alias name here. The pair travels together for `ConstValue`'s reason: a payload
 	// without its tag is a number whose meaning has been thrown away.
-	literal(payload ParsedInt, tag ValueTypeTag)
+	// ⚠ **`writtenNegative` IS THE THIRD MEMBER FOR THE REASON THE TAG IS THE SECOND**, one question
+	// further out: `= -1` and `= 0xFFFFFFFFFFFFFFFE` both store a negative `ParsedInt`, and only the first
+	// is a negative NUMBER — so whether a default fits an `int(0 to u64.max)` field cannot be judged from
+	// the payload at all. `ConstValue.writtenNegative` is where the fact is decided and `literalInRange` is
+	// what spends it; this member is how it reaches the reader, which may be another file entirely. It is a
+	// declaration's own fact and therefore rides the layout's content hash beside the pair.
+	literal(payload ParsedInt, tag ValueTypeTag, writtenNegative bool)
 	// ⭐⭐ **ANY OTHER DEFAULT IS A SYNTHESIZED NULLARY FUNCTION, AND THIS IS ITS NAME (S2f).**
 	// `export var items as IntArray = IntArray.create()` declares a second function,
 	// `__fieldDefault#Bag#items`, whose whole body is `return IntArray.create()`; a `Self{…}` that omits

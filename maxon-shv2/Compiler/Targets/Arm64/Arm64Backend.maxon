@@ -177,11 +177,25 @@ let Arm64WordBitMax = 63
 // The machine word is 64 bits wide — the iteration cap of the leading/trailing bit-count loops.
 let Arm64WordBits = 64
 
-// The 64-bit word's sign bit (bit 63), as an UNSIGNED `MachineWord`. Spelled `i64.min as MachineWord`
-// — the established idiom (see `FloatSignBit`) — NOT the hex literal `0x8000000000000000`: the
-// bootstrap types that `>i64.max` literal as a SIGNED i64, and a `shr` on a signed value is ARITHMETIC
-// (sign-filling), which is exactly the trap that made the old `arm64CountLeadingOnes` loop forever.
-let Arm64WordSignBit = i64.min as MachineWord
+// The 64-bit word's sign bit (bit 63), as an UNSIGNED `MachineWord` — the number 9223372036854775808,
+// which is what both readers below want: a mask to `and` against, and the threshold above which an
+// unsigned displacement denotes a negative one.
+//
+// ⛔ **IT WAS SPELLED `i64.min as MachineWord`, AND THAT IS THE ONE SPELLING THIS CONSTANT MAY NOT
+// HAVE.** `i64.min` denotes −9223372036854775808; `MachineWord` is `int(0 to u64.max)` and declares
+// `≥ 0`. The two share a bit pattern and nothing else, and the compile-time range check now says so
+// (E3005) — this was the ONE site in the whole tree the new refusal caught, and it was found by
+// shv2's self-compile rather than by any suite. The hex literal is the honest spelling: a
+// NON-NEGATIVE number whose pattern happens to have bit 63 set, which is exactly what it is.
+//
+// ⚠ The comment this replaces argued for `i64.min` on the grounds that "the bootstrap types that
+// `>i64.max` literal as a SIGNED i64, and a `shr` on a signed value is ARITHMETIC (sign-filling),
+// which is the trap that made the old `arm64CountLeadingOnes` loop forever". That trap is about a
+// value with NO declared range: the shift rule reads the DECLARED type, and `as MachineWord` supplies
+// a non-negative one whichever way the number is written. `arm64CountLeadingOnes` has since stopped
+// shifting a mask at all — it shifts the VALUE left, which is 0-filling — so neither half of the
+// argument reaches this line. MEASURED: the self-compile and both suites are green with the hex.
+let Arm64WordSignBit = 0x8000000000000000 as MachineWord
 
 // --- Move-wide immediate (movz/movk ladder) ---
 let Arm64OpMovz = 0xD2800000

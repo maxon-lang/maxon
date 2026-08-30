@@ -1556,8 +1556,16 @@ export function floatOrderKey(bits ParsedInt) returns ParsedInt
 	return i64.min - bits
 end 'floatOrderKey'
 
-// True when the alias covers every value its underlying type can hold, so no value can be out of
-// range and NO guard — nor compile-time literal check — is needed.
+// True when the alias covers every 64-bit PATTERN its underlying type can hold, so no RUNTIME guard is
+// needed.
+//
+// ⚠⚠ **IT DOES NOT EXEMPT THE COMPILE-TIME LITERAL CHECK, AND IT USED TO — WHICH IS HOW A WRITTEN `-1`
+// GOT INTO AN `int(0 to u64.max)` DOOR.** "Every pattern is admissible" is a statement about VALUES the
+// machine can hold, and a written `-1` is not refused for its pattern: it is refused because the source
+// wrote a number below a declared lower bound of 0. The two questions were conflated in one predicate,
+// so `needsRuntimeGuard` returned before it could look at the literal at all and `take(-1)` printed
+// 18446744073709551615 with no diagnostic. `needsRuntimeGuard` now asks the literal FIRST and this
+// second; see `literalInRange`'s `writtenNegative`.
 //
 // INTEGER: two spans cover the whole 64-bit space — the signed-full `int(i64.min to i64.max)` and
 // the unsigned-full `int(0 to u64.max)` (whose upper rides as the signed `-1`). A byte/u16/u32
@@ -1694,13 +1702,30 @@ end 'rangeNeedsUpperCheck'
 // the range admits, and a non-negative value is in range iff it is at least `low`. Every OTHER
 // integer range is the ordinary inclusive `[low, high]` — correct because a negative literal fails
 // the signed lower bound exactly as its huge unsigned image would fail a modest positive upper.
-export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, isFloat bool) returns bool
+//
+// ⭐⭐ **`writtenNegative` IS WHAT THE 64 BITS CANNOT SAY, AND WITHOUT IT THE UNSIGNED ARM ADMITS A
+// WRITTEN `-1` INTO A RANGE WHOSE LOWER BOUND IS 0.** `-1`, `u64.max` and `0xFFFFFFFFFFFFFFFE` are all
+// bit-63-set patterns; the first denotes a NEGATIVE number and the other two denote the two largest
+// non-negative ones, and no test of the pattern can tell them apart. So the arm above — which reads a
+// bit-63-set pattern as "a huge unsigned the range admits" — is right for the two and WRONG for the
+// one, and `take(-1)` compiled silently into an `int(0 to u64.max)` parameter and printed
+// 18446744073709551615. The fact comes from the SOURCE (`Parser.writtenNegativeLiterals`, the
+// companion of `unsignedMaxLiterals` and marked at the same kind of site), never from the value.
+//
+// ⚠ It is spelled as a written-NEGATIVE mark rather than a written-non-negative one on purpose: a
+// missed arrival then leaves today's answer standing, where the dual would REFUSE every folded
+// bit-63-set constant the corpus already passes (an FNV offset basis, a `1 shl 63`) on the strength of
+// a spelling nobody enumerated.
+//
+// ⚠ The `-0` case is why this is a CLAUSE and not an early `return false`: `-0` is written negative and
+// denotes 0, which `int(0 to u64.max)` admits — so the non-negative arm still decides it.
+export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, isFloat bool, writtenNegative bool) returns bool
 	if isFloat 'float'
 		let key = floatOrderKey(value)
 		return key >= floatOrderKey(low) and key <= floatOrderKey(high)
 	end 'float'
 	if rangeIsUnsignedMaxUpper(low, high: high) 'unsignedUpper'
-		return value < 0 or value >= low
+		return (value < 0 and not writtenNegative) or value >= low
 	end 'unsignedUpper'
 	return value >= low and value <= high
 end 'literalInRange'

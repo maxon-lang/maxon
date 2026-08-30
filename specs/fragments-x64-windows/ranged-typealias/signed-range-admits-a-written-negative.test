@@ -1,0 +1,70 @@
+// Test: signed-range-admits-a-written-negative
+typealias Offset = int(-10 to 10)
+
+function take(o Offset) returns Offset
+	return o
+end 'take'
+
+function main() returns ExitCode
+	if take(-5) == -5 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @take(o: i64) -> i8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, -10
+    x64.mov rdx, 10
+    x64.cmp rcx, rdx
+    x64.jg take.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl take.__range_panic_0
+    x64.jmp take.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, -10
+    x64.mov rdi, 10
+    x64.cmp rbx, rdi
+    x64.jg take.__range_panic_1
+    x64.cmp rbx, rsi
+    x64.jl take.__range_panic_1
+    x64.jmp take.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, -5
+    x64.call take
+    x64.mov rcx, -5
+    x64.cmp rax, rcx
+    x64.jne main.ok_0.after
+  ok_0:
+    x64.mov rax, 7
+    x64.epilogue
+    x64.ret
+  ok_0.after:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  }
+}
+---

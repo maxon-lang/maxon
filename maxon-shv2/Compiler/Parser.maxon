@@ -2349,6 +2349,11 @@ let sharedEmptyBufferSurfaceElements = ValueMarkSet.create()
 // expression position, which is very nearly all of them.
 let sharedEmptyUnsignedMaxLiterals = ValueMarkSet.create()
 
+// The module-level shared EMPTY written-negative literal mark set — `sharedEmptyBufferSurfaceValues`'s
+// pattern, for its reason and with its invariant. It is `sharedEmptyUnsignedMaxLiterals`' companion and
+// is empty in every function that writes no negative literal at all.
+let sharedEmptyWrittenNegativeLiterals = ValueMarkSet.create()
+
 // The module-level shared EMPTY SIZED-CONTAINER buffer mark set (W192) — `sharedEmptyBufferSurfaceValues`'s
 // pattern, for its reason and with its invariant. Its own anchor and not one of the three above, because
 // the `is` identity test that decides whether a column has been minted yet reads as a claim about WHICH
@@ -9162,17 +9167,6 @@ typealias CharLiteralOpMap = Map with (ValueId, OpIndex)
 // almost every stdlib one. Reset per function and SWAPPED across a closure body, exactly like the siblings.
 typealias StringBytesViewOpMap = Map with (ValueId, OpIndex)
 
-// ⭐ **ONE PARSER MARK OVER THIS FUNCTION'S SSA VALUES — a set of the values that carry it.** The two marks
-// that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's slot,
-// P1.7 slice 2b) and `Parser.bufferSurfaceValues` (denotes a `__ManagedMemory` BUFFER rather than the `Array`
-// around it, R4.4); each field's own header says what its mark DECIDES and why a set rather than a list.
-//
-// ⭐ **ONE ALIAS RATHER THAN ONE PER MARK, BECAUSE THE PURPOSE IS THE SHARED ONE (review, R4.4).** What a
-// name has to describe here is the shape the copy-on-write discipline is written against — see
-// `privateValueMarkSet`, which is one function precisely because there is one type for it to take. The
-// per-mark purpose is carried by the FIELD name, which is where it varies.
-typealias ValueMarkSet = Set with ValueId
-
 // ⭐⭐ **THE E3019 BLAME NAME A MERGE PHI INHERITS FROM ITS ARMS** — the binding a write through the merged
 // value would land in. Keyed by the phi's ValueId, and that is sound HERE where a per-value mark in general
 // is NOT: a phi is minted fresh at the merge and denotes nothing else, whereas an ordinary binding SHARES
@@ -12021,6 +12015,35 @@ export type Parser
 	// (no interning), so a mark on one occurrence cannot reach another value. Sparse, reset per function
 	// and SWAPPED across a closure body, exactly like the sibling value marks.
 	var unsignedMaxLiterals as ValueMarkSet
+	// ⭐⭐ **THE LITERALS THE SOURCE WROTE AS NEGATIVE NUMBERS — `unsignedMaxLiterals`' COMPANION, AND THE
+	// OTHER HALF OF WHAT 64 BITS CANNOT SAY.**
+	//
+	// `-1`, `u64.max` and `0xFFFFFFFFFFFFFFFE` all ride as bit-63-set patterns. The first denotes a
+	// NEGATIVE number; the other two denote the two largest non-negative ones. `literalInRange`'s unsigned
+	// arm — which reads a bit-63-set pattern as "a huge unsigned this range admits" — is right for the two
+	// and WRONG for the one, so **`take(-1)` compiled silently into an `int(0 to u64.max)` parameter and
+	// printed 18446744073709551615.** A declared lower bound of 0 says `≥ 0`, and it does not stop saying
+	// it because the upper bound happens to be `u64.max`.
+	//
+	// ⚠ **IT IS THE NEGATIVE THAT IS MARKED, NOT THE NON-NEGATIVE, AND THE DIRECTION IS A DECISION.** The
+	// dual — "prove a bit-63-set constant was WRITTEN non-negative, else read it as negative" — is complete
+	// in a way this is not, and it would REFUSE every folded bit-63-set constant the corpus already passes
+	// (an FNV offset basis, a `1 shl 63`, anything a `let` laundered) on the strength of a spelling roster
+	// nobody has enumerated. This direction's failure mode is a MISSED refusal — today's answer, standing —
+	// and its arrival roster is the two sites that mint a literal the source wrote a negative number for:
+	// `parseNegatedNumericLiteral` (`-<intLiteral>`) and `parseTypeQualifiedBoundExpression`
+	// (`i8.min` … `i64.min`, whose stored pattern IS its negative value).
+	//
+	// ⚠ **AND IT MUST NOT BE MERGED INTO `unsignedMaxLiterals`.** That set's meaning is "this pattern's
+	// value is the largest unsigned", and a written `-1` is genuinely `-1`: `x > -1` is TRUE at every `x`
+	// and must stay so.
+	//
+	// A per-value mark is sound here for `emitLiteralIn`'s reason: every literal mints a FRESH ValueId (no
+	// interning), so a mark on one occurrence cannot reach another value. Sparse, reset per function and
+	// SWAPPED across a closure body, exactly like the sibling value marks — and HANDED to the function's
+	// `FunctionRangeChecks`, because the reader that raises the E3005 is `InsertRangeChecks` at the Std
+	// tier and a parser field is not visible there.
+	var writtenNegativeLiterals as ValueMarkSet
 	// ⭐ **WHICH OF A TUPLE VALUE'S SLOTS DENOTE THE BUFFER (A2m)** — `bufferSurfaceValues` one container
 	// deeper, and a SEPARATE carrier because a tuple slot and a whole value are different facts: `p` is an
 	// ordinary tuple record whatever `p.0` denotes. Written where a declaration that spelled a tuple binds its
@@ -12874,6 +12897,7 @@ export type Parser
 			callReferencedAnOpaqueFeedSlot: false,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			unsignedMaxLiterals: sharedEmptyUnsignedMaxLiterals,
+			writtenNegativeLiterals: sharedEmptyWrittenNegativeLiterals,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
 			bufferSurfaceElements: sharedEmptyBufferSurfaceElements,
 			sizedContainerBufferValues: sharedEmptySizedContainerBufferValues,
@@ -19522,7 +19546,7 @@ export type Parser
 			let inferred = try self.readFieldDefaultLiteral()
 			// Shape 2 has no annotation at all, so no spelling can name the buffer alias (A2j); the type
 			// comes from a LITERAL, and no literal produces a `__ManagedMemory`.
-			layout.addField(nameTok.value, declaredType: self.constantValueTypeOf(inferred.tag, typeName: inferred.typeName), mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag), declaredSurface: sharedEmptyDeclaredSurface)
+			layout.addField(nameTok.value, declaredType: self.constantValueTypeOf(inferred.tag, typeName: inferred.typeName), mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag, writtenNegative: inferred.writtenNegative), declaredSurface: sharedEmptyDeclaredSurface)
 			return
 		end 'typeFromLiteral'
 
@@ -19596,7 +19620,7 @@ export type Parser
 		// decided blind for exactly the fields that need it, and written into the wrong copy besides.
 		let given = try self.readFieldDefaultLiteral()
 		try self.requireFieldDefaultType(nameTok, fieldType: fieldType, owner: layout.name, given: given)
-		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(given.payload, tag: given.tag), declaredSurface: declaredSurface)
+		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(given.payload, tag: given.tag, writtenNegative: given.writtenNegative), declaredSurface: declaredSurface)
 	end 'readStructFieldInto'
 
 	// ⛔⛔ **A FIELD DECLARED AT A TYPE PARAMETER MAY NOT CARRY A DEFAULT — OF EITHER FORM (S2f).** `type Box
@@ -19752,7 +19776,11 @@ export type Parser
 
 		if self.at(TokenKind.intLiteral) 'intLit'
 			let tok = try self.consume(TokenKind.intLiteral)
-			return ConstValue.create(try self.intLiteralValue(tok, negated: negated), tag: ValueTypeTag.integer)
+			// The written-negative mark a body's `-<intLiteral>` carries (`ConstValue.writtenNegative`): a
+			// default flows into the field's declared range at every struct literal that omits it, so it meets
+			// the same door and owes the same fact.
+			let value = try self.intLiteralValue(tok, negated: negated)
+			return ConstValue.create(value, tag: ValueTypeTag.integer, writtenNegative: negated and value < 0)
 		end 'intLit'
 
 		if self.at(TokenKind.floatLiteral) 'floatLit'
@@ -24350,9 +24378,10 @@ export type Parser
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
 		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
 		self.sizedContainerBufferValues = sharedEmptySizedContainerBufferValues
-		// The unsigned-extreme literal marks are per-function for the same reason: ValueIds are
+		// The two written-provenance literal marks are per-function for the same reason: ValueIds are
 		// function-local, so a mark left standing would name a DIFFERENT value in the next function.
 		self.unsignedMaxLiterals = sharedEmptyUnsignedMaxLiterals
+		self.writtenNegativeLiterals = sharedEmptyWrittenNegativeLiterals
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias name
 		// and the PARAMETER alias names are fixed by the DECLARED signature and known here, before the
 		// body is parsed and before `resolveTypes` erases either; the three site lists fill as the body
@@ -24667,7 +24696,7 @@ export type Parser
 			return
 		end 'noSideData'
 		let instanceAliases = self.packagedInstanceAliases() if hasInstanceAliases else sharedEmptyInstanceAliasNames
-		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.rangeCheckSites, argSites: self.rangeCheckArgSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, paramSites: self.rangeCheckParamSites, valueInstanceAliases: instanceAliases, provenValueRanges: self.countedValueRanges))
+		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.rangeCheckSites, argSites: self.rangeCheckArgSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, paramSites: self.rangeCheckParamSites, valueInstanceAliases: instanceAliases, provenValueRanges: self.countedValueRanges, writtenNegativeLiterals: self.writtenNegativeLiterals))
 	end 'commitRangeChecks'
 
 	// Package the parser's per-value instance-alias provenance (ValueId ⇒ interned alias id, file-local) into
@@ -32869,7 +32898,11 @@ export type Parser
 		end 'notAPlainLiteral'
 
 		let value = try self.intLiteralValue(self.tokenAt(literalIndex), negated: negated)
-		if literalInRange(value, low: alias.low, high: alias.high, isFloat: false) 'inRange'
+		// This door reads the `-` off the TOKEN STREAM rather than off `writtenNegativeLiterals`, and that is
+		// not a second derivation of the mark: no value is minted here at all (the handler's literal is not
+		// emitted until the branch is taken), so there is no ValueId to key one by. `negated` above IS the
+		// same fact from the same place — the minus the source wrote.
+		if literalInRange(value, low: alias.low, high: alias.high, isFloat: false, writtenNegative: negated and value < 0) 'inRange'
 			return
 		end 'inRange'
 
@@ -43434,7 +43467,9 @@ export type Parser
 	function zeroInhabitsPayloadType(slotType MaxonType) returns bool
 		if maxonTypeTag(slotType) == ValueTypeTag.named 'aNamedType'
 			return match self.declaredAliasOfNameId(typeNameIdOf(slotType)) 'a'
-				declared(alias) gives not aliasIsFloat(alias) and literalInRange(0 as ParsedInt, low: alias.low, high: alias.high, isFloat: false)
+				// `writtenNegative: false` is not a default taken for want of a better one: the subject is the
+				// literal ZERO this predicate is named for, and zero is not a negative number under any spelling.
+				declared(alias) gives not aliasIsFloat(alias) and literalInRange(0 as ParsedInt, low: alias.low, high: alias.high, isFloat: false, writtenNegative: false)
 				undeclared gives false
 			end 'a'
 		end 'aNamedType'
@@ -44800,10 +44835,16 @@ export type Parser
 		end 'denotesACoveredRange'
 
 		if aliasIsFloat(alias) 'floatAlias'
-			return self.floatConstIsKnown(value) and literalInRange(self.floatConstBitsOf(value), low: alias.low, high: alias.high, isFloat: true)
+			return self.floatConstIsKnown(value) and literalInRange(self.floatConstBitsOf(value), low: alias.low, high: alias.high, isFloat: true, writtenNegative: false)
 		end 'floatAlias'
 
-		return self.constIsKnown(value) and literalInRange(self.constOf(value), low: alias.low, high: alias.high, isFloat: false)
+		// ⚠ **THE WRITTEN-NEGATIVE MARK BELONGS HERE FOR THE SAME REASON IT BELONGS AT THE DOOR.** This arm
+		// PROVES an edge in range, and a proof made from the pattern alone would prove `-1` is in
+		// `int(0 to u64.max)` — the very claim `literalInRange`'s `writtenNegative` exists to refuse — and
+		// would then withhold the site whose E3005 says so. The float arm passes `false` because a float
+		// alias's bounds are IEEE-754 patterns that `floatOrderKey` already orders by VALUE, so there is no
+		// signed/unsigned ambiguity for a mark to resolve.
+		return self.constIsKnown(value) and literalInRange(self.constOf(value), low: alias.low, high: alias.high, isFloat: false, writtenNegative: self.writtenNegativeLiterals.contains(value))
 	end 'edgeProvesAlias'
 
 	// The phi a MERGED BINDING carries: its type is the binding's declared one, which the
@@ -46335,7 +46376,20 @@ export type Parser
 			// be a non-negative ranged alias. Latent while the divide was the domain's only consumer; X11's
 			// formatter is what reached it. Pinned by `enums-simple/float-backed-negation`, whose int-backed
 			// half is exactly this value.
-			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
+			let negated = self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
+
+			// ⭐ **A `-` OVER A FOLDABLE NON-LITERAL IS STILL A NEGATIVE THE SOURCE WROTE** — `-K` for a
+			// top-level `let K = 1` folds to the same `-1` the literal arm above mints, and a mark on only one
+			// of the two would refuse `f(-1)` while accepting `f(-K)`. The const evaluator marks the SAME two
+			// shapes (`evalConstUnary`), which is what keeps a top-level `let` and a body from answering
+			// differently about one line of source. ⚠ Only `neg` earns the mark, never `bitNot`: `~0` is
+			// `0xFFFFFFFFFFFFFFFF` written as an all-ones MASK, and reading it as `-1` would refuse a value
+			// `int(0 to u64.max)` exists to hold.
+			if self.constIsKnown(negated) 'foldedToAConstant'
+				self.markWrittenNegative(negated, value: self.constOf(negated))
+			end 'foldedToAConstant'
+
+			return negated
 		end 'neg'
 
 		if self.at(TokenKind.not) 'not'
@@ -49838,7 +49892,9 @@ export type Parser
 		var i = 0 as ByteOffset
 		while i < len 'eachByte'
 			let value = try bytes.get(i) otherwise panic("requireEveryByteInRange: i < len just held but get({i}) failed")
-			if not literalInRange(value, low: alias.low, high: alias.high, isFloat: isFloat) 'outsideTheElementsRange'
+			// A byte read out of a `b"…"` blob is a 0-255 number the source never spelled with a sign, so no
+			// written-negative mark can exist for it and `false` is the fact rather than a default.
+			if not literalInRange(value, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: false) 'outsideTheElementsRange'
 				throw ParseError.byteStringByteOutOfRange(value, offset: i as ParsedInt, aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, line: line, column: column)
 			end 'outsideTheElementsRange'
 			i = i + 1
@@ -51164,7 +51220,7 @@ export type Parser
 				// The literal did not fill this slot and the declaration offers nothing. That is
 				// E3086, and `requireAllFieldsInitialized` is what says so — not this function.
 				none then continue
-				literal(payload, tag) then self.fillFieldDefault(layout, index: i, given: ConstValue.create(payload, tag: tag), fieldValues: fieldValues, filled: filled, range: range)
+				literal(payload, tag, writtenNegative) then self.fillFieldDefault(layout, index: i, given: ConstValue.create(payload, tag: tag, writtenNegative: writtenNegative), fieldValues: fieldValues, filled: filled, range: range)
 				helper(helperName) then try self.fillFieldDefaultFromHelper(helperName, index: i, fieldValues: fieldValues, filled: filled, anchor: anchor)
 			end 'declared'
 		end 'eachField'
@@ -51225,6 +51281,16 @@ export type Parser
 		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 		let bits = self.constFloatBits(given) if tagIsFloat(maxonTypeTag(declared)) else given.payload
 		let value = self.emitLiteral(bits, valueType: self.fieldStorageType(declared), range: range)
+		// ⭐ **THE DEFAULT'S WRITTEN SIGN, RE-STAMPED ONTO THE VALUE THIS LINE JUST MINTED.** The mark is
+		// keyed by ValueId, and this id did not exist when the DECLARATION was read — possibly in another
+		// file — so the fact has travelled as `FieldDefault.literal`'s third member and lands here. Without
+		// it `export var v as Idx = -1` filled an `int(0 to u64.max)` slot with 18446744073709551615 while
+		// the identical `Self{v: -1}` one line away was E3005. The FLOAT arm above cannot reach it: a float
+		// default's payload is an IEEE-754 pattern and `markWrittenNegative` is asked about `bits`, so the
+		// fact is taken from the declaration rather than re-derived from the number.
+		if given.writtenNegative 'declaredNegative'
+			self.markWrittenNegative(value, value: bits)
+		end 'declaredNegative'
 		// A declared default is a value coming to rest in the slot exactly as a written one is, so the
 		// field's range binds it (P1.9) — `export var v as Percent = 500` is the same E3005 `Self{v: 500}`
 		// gets. It is always a LITERAL, so `InsertRangeChecks` settles it entirely at compile time and the
@@ -67533,6 +67599,16 @@ export type Parser
 			self.unsignedMaxLiterals.insert(value)
 		end 'wroteTheUnsignedExtreme'
 
+		// ⭐ **THE SAME HAND-OFF, THE OTHER DIRECTION** (`writtenNegativeLiterals`): `i8.min` … `i64.min` name
+		// negative numbers, and for every extreme BUT ONE the stored pattern IS the value, so the value test
+		// decides it. The one exception is `u64.max`, whose pattern is `-1` — which is exactly what the arm
+		// above records — so the two marks are made MUTUALLY EXCLUSIVE here rather than left to a value test
+		// that cannot tell them apart. Marking both would say a literal is the largest unsigned AND a
+		// negative number, and the two readers would then answer opposite things about one value.
+		if not bound.namesUnsignedMax 'notTheUnsignedExtreme'
+			self.markWrittenNegative(value, value: bound.value)
+		end 'notTheUnsignedExtreme'
+
 		return value
 	end 'parseTypeQualifiedBoundExpression'
 
@@ -68905,6 +68981,16 @@ export type Parser
 		let savedRangeCheckReturnSites = self.rangeCheckReturnSites
 		let savedRangeCheckReturnAlias = self.rangeCheckReturnAlias
 		let savedRangeCheckParamSites = self.rangeCheckParamSites
+		// ⛔ **THE TWO WRITTEN-PROVENANCE LITERAL MARKS WERE IN NEITHER LIST, AND BOTH FIELD HEADERS CLAIMED
+		// THEY WERE.** They are per-value marks over the SSA space of the function being parsed, and a
+		// closure gets its own `IrFunction` with its own dense numbering — so a `u64.max` or a `-1` written
+		// inside a closure body left a mark naming the CLOSURE's id standing in the ENCLOSING function's set,
+		// where the same number names an unrelated value. The consequences are a wrong ANSWER either way: an
+		// enclosing `a > b` would take the unsigned reading off a mark the closure made, and an enclosing
+		// `f(v)` would be refused E3005 for a negative the closure wrote. Found while adding
+		// `writtenNegativeLiterals`, whose header repeated the same false claim before it was true.
+		let savedUnsignedMaxLiterals = self.unsignedMaxLiterals
+		let savedWrittenNegativeLiterals = self.writtenNegativeLiterals
 
 		let paramCount = paramNames.count()
 		// ⭐ **RESERVE THE TRAILING `__env` PARAMETER'S ValueId UP FRONT (P1.5-A2b).** A capturing closure
@@ -69043,6 +69129,10 @@ export type Parser
 		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
 		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
 		self.rangeCheckReturnAlias = EmptySourceText
+		// Fresh per-closure literal-provenance marks, for the reason the save block gives: the closure body
+		// numbers its own values.
+		self.unsignedMaxLiterals = sharedEmptyUnsignedMaxLiterals
+		self.writtenNegativeLiterals = sharedEmptyWrittenNegativeLiterals
 		// No ranged parameter is the common case and it is now SAID rather than encoded in an empty list:
 		// the producer throws, and the column keeps the shared read-only empty this file already holds for it.
 		self.rangeCheckParamSites = try self.rangedParamSites(paramTypes, paramRanges: paramRanges) otherwise sharedEmptyParamSites
@@ -69245,6 +69335,8 @@ export type Parser
 		self.rangeCheckReturnSites = savedRangeCheckReturnSites
 		self.rangeCheckReturnAlias = savedRangeCheckReturnAlias
 		self.rangeCheckParamSites = savedRangeCheckParamSites
+		self.unsignedMaxLiterals = savedUnsignedMaxLiterals
+		self.writtenNegativeLiterals = savedWrittenNegativeLiterals
 
 		// In the ENCLOSING function's value space now: mint the closure VALUE — a `function`-tagged code
 		// pointer governed by the lifted name — and emit the `functionRef` A1 lowers to `funcAddr`.
@@ -70286,7 +70378,7 @@ export type Parser
 				// The literal did not fill this slot and the declaration offers nothing. That is E3086, and
 				// `requireAllFieldsInitialized` is what says so — not this function.
 				none then continue
-				literal(payload, tag) then try self.fillConstFieldDefault(calls, layout: layout, index: i, value: ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(payload, tag: tag))), fields: fields, filled: filled, anchor: anchor)
+				literal(payload, tag, writtenNegative) then try self.fillConstFieldDefault(calls, layout: layout, index: i, value: ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(payload, tag: tag, writtenNegative: writtenNegative))), fields: fields, filled: filled, anchor: anchor)
 				helper(helperName) then try self.fillConstFieldDefault(calls, layout: layout, index: i, value: ConstFactoryArgumentValue.call(self.pushConstNullaryCall(calls, callee: helperName)), fields: fields, filled: filled, anchor: anchor)
 			end 'declared'
 		end 'eachField'
@@ -70978,6 +71070,22 @@ export type Parser
 				return try self.applyConstCasts(try self.evalConstFloatLiteral(tok, negated: true))
 			end 'negatedFloatLiteral'
 
+			// ⛔⛔ **THE INT TWIN OF THE ARM ABOVE, AND ITS ABSENCE WAS TWO WRONG ANSWERS ON ONE LINE.** Without
+			// it a negated int literal fell to the general arm below, whose operand is `evalConstPostfix` —
+			// which CONSUMES the trailing `as` casts itself. So `let A = -1 as Narrow` folded as
+			// `-(1 as Narrow)`, and the body's `parseCast`-over-`parseUnary` reads the same text as
+			// `(-1) as Narrow`: **MEASURED, `let A = -1 as int(0 to 100)` compiled clean and produced -1 at
+			// top level while the identical cast in a body was E3005** (and the bootstrap agreed with the
+			// wrong answer, so no oracle could see it). The second is `intLiteralValue`'s own: reading the
+			// MAGNITUDE first makes `-9223372036854775808` an E2011 overflow on a literal that is exactly
+			// `i64.min`, which is the very trap `parseUnary`'s arm was written for.
+			//
+			// The cast therefore applies to the WHOLE negated literal, which is what `applyConstCasts` here
+			// says and what makes the top-level and body readings one reading.
+			if self.at(TokenKind.intLiteral) 'negatedIntLiteral'
+				return try self.applyConstCasts(try self.evalConstIntLiteral(true))
+			end 'negatedIntLiteral'
+
 			let operand = try self.evalConstPostfix(stack)
 			if not typeClassAdmits(TypeClass.numeric, tag: operand.tag) 'notANumber'
 				throw ConstEvalError.defective(ParseError.nonNumericNegation(typeTagName(operand.tag), line: opTok.line, column: opTok.column))
@@ -70995,7 +71103,11 @@ export type Parser
 				end 'negated'
 			end 'float'
 
-			return ConstValue.create(try self.foldConstUnary(MaxonUnaryOp.neg, operand: operand.payload, opTok: opTok), tag: operand.tag)
+			// ⭐ The mark `parseUnary`'s two integer neg arms make, made once here because this tier has ONE:
+			// a written `-` whose value is negative (`ConstValue.writtenNegative`). `-0` and `-(-1)` are not
+			// negative numbers and are not marked, which is the value test rather than the token.
+			let folded = try self.foldConstUnary(MaxonUnaryOp.neg, operand: operand.payload, opTok: opTok)
+			return ConstValue.create(folded, tag: operand.tag, writtenNegative: folded < 0)
 		end 'neg'
 
 		if self.at(TokenKind.not) 'not'
@@ -71140,7 +71252,7 @@ export type Parser
 			return
 		end 'domainMismatch'
 
-		if literalInRange(value.payload, low: alias.low, high: alias.high, isFloat: isFloat) 'inRange'
+		if literalInRange(value.payload, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: value.writtenNegative) 'inRange'
 			return
 		end 'inRange'
 
@@ -71227,14 +71339,17 @@ export type Parser
 		throw ConstEvalError.defective(ParseError.expectedExpression(expressionOperandDisplayText(tok), line: tok.line, column: tok.column))
 	end 'evalConstPrimary'
 
-	function evalConstIntLiteral() returns ConstValue throws ConstEvalError
+	// `negated` folds a leading `-` INTO the literal, exactly as its float twin below does and exactly as
+	// `parseNegatedNumericLiteral` does in a body — see `evalConstUnary`'s negated-literal arm for the two
+	// wrong answers that binding cures. The caller has already consumed nothing: this reads `current()`.
+	function evalConstIntLiteral(negated bool = false) returns ConstValue throws ConstEvalError
 		let tok = self.current()
 		self.advance()
-		let value = try self.intLiteralValue(tok, negated: false) otherwise (err) 'overflow'
+		let value = try self.intLiteralValue(tok, negated: negated) otherwise (err) 'overflow'
 			throw ConstEvalError.defective(err)
 		end 'overflow'
 
-		return ConstValue.create(value, tag: ValueTypeTag.integer)
+		return ConstValue.create(value, tag: ValueTypeTag.integer, writtenNegative: negated and value < 0)
 	end 'evalConstIntLiteral'
 
 	// A float literal in a constant initializer — `let PI = 3.14`, `var zeroA = 0.0`, and the operands
@@ -71328,7 +71443,11 @@ export type Parser
 			let bound = try self.parseTypeQualifiedBound(false) otherwise (err) 'badBound'
 				throw ConstEvalError.defective(err)
 			end 'badBound'
-			return ConstValue.create(bound.value, tag: ValueTypeTag.integer)
+			// ⭐ The `.min`/`.max` half of the written-negative mark, exactly as
+			// `parseTypeQualifiedBoundExpression` makes it in a body: for every extreme but one the stored
+			// pattern IS its value, and the exception is `u64.max`, whose pattern is `-1` and whose value is
+			// the largest non-negative number there is. `namesUnsignedMax` is the fact that tells them apart.
+			return ConstValue.create(bound.value, tag: ValueTypeTag.integer, writtenNegative: bound.value < 0 and not bound.namesUnsignedMax)
 		end 'qualifiedBound'
 
 		if self.peekKind() == TokenKind.dot 'dottedNonBound'
@@ -75875,8 +75994,27 @@ export type Parser
 		end 'float'
 
 		let tok = try self.consume(TokenKind.intLiteral)
-		return self.emitLiteral(try self.intLiteralValue(tok, negated: true), valueType: MaxonType.integer, range: SourceRange.ofToken(minusTok))
+		let value = try self.intLiteralValue(tok, negated: true)
+		let result = self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(minusTok))
+		self.markWrittenNegative(result, value: value)
+		return result
 	end 'parseNegatedNumericLiteral'
+
+	// ⭐ **THE ONE SITE THAT RECORDS "THE SOURCE WROTE A NEGATIVE NUMBER HERE"** — see
+	// `writtenNegativeLiterals` for what the mark decides. Both minting sites route through it, so the COW
+	// discipline and the `-0` exclusion are stated once.
+	//
+	// `-0` is written with a minus and denotes ZERO, which `int(0 to u64.max)` admits; marking it would
+	// refuse a value that is in range. The test is on the DECODED value rather than on the minus token,
+	// because "denotes a negative number" is the fact the reader needs.
+	function markWrittenNegative(result ValueId, value ParsedInt)
+		if value >= 0 'notNegative'
+			return
+		end 'notNegative'
+
+		self.writtenNegativeLiterals = privateValueMarkSet(self.writtenNegativeLiterals, anchor: sharedEmptyWrittenNegativeLiterals)
+		self.writtenNegativeLiterals.insert(result)
+	end 'markWrittenNegative'
 
 	// Append a `literal` op into the CURRENT block; return the ValueId it defines.
 	function emitLiteral(value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
